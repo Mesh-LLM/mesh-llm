@@ -217,6 +217,83 @@ default. Setting `MESH_LLM_REQUIRE_CHECKSUM=1` opts into fail-closed behavior fo
 missing release-archive sidecars. Do not rely on backfilling old release assets
 to make installer checksum verification safe.
 
+## Native Runtime Event Callback Contract
+
+This contract defines the native runtime event callback for Skippy v1. Keep it
+aligned with the Rust ABI source of truth in `crates/skippy-ffi/src/lib.rs`.
+The callback covers model-open lifecycle facts only: started, progress, success,
+and handled failure.
+
+Native emits facts only. Rust owns policy, state transitions, telemetry policy,
+JSONL formatting, routing, supervision, and user-facing output. The callback is
+an observation boundary, not a state machine.
+
+### Ownership Boundary
+
+- Native may report backend selection, progress, and handled native errors.
+- Rust decides how those facts affect mesh state, retries, and presentation.
+- The return value is authoritative.
+- Callback data never overrides the return path or process outcome.
+- Callbacks are not authoritative state transitions.
+
+### Callback Rules
+
+- Install the callback only for one active model-open operation.
+- Treat the callback as synchronous and best-effort.
+- Do not block, reenter Skippy, or assume thread affinity.
+- Native may invoke the callback from worker threads or the open thread during
+  that operation.
+- V1 guarantees no callback after the `_with_events` entrypoint returns.
+- Rust code that receives the callback must not unwind across FFI.
+- Rust must not call back into Skippy from inside the callback.
+- A panic in the Rust trampoline is a Rust bug, not a native failure signal.
+- Native may finish the open call without a terminal callback.
+- Callbacks cannot reliably report segfault, abort, or other process crashes.
+
+### Memory And Layout
+
+- Event structs are versioned and fixed width.
+- Each struct carries `abi_version` and `struct_size`.
+- Event kinds and categories use explicit integer values, not layout-dependent
+  enum assumptions.
+- Strings are `const char *` plus length, borrowed only for the callback duration, and copied immediately by Rust during the callback.
+- Optional monotonic timestamps, sequence numbers, progress counters, and
+  failure codes are explicit fields.
+
+### Reconciliation Rules
+
+- If a callback is missing, dropped, late, contradictory, or unsupported, Rust
+  still derives success or failure from the normal return path or process
+  outcome.
+- If a callback says success but the function returns error, the return error
+  wins.
+- If a callback says failure but the function returns success, the return value
+  still wins.
+- If the process crashes, the callback boundary is gone and recovery moves to
+  the supervisor or restart path.
+
+### Compatibility Matrix
+
+| Situation | Native callback | Rust result |
+| --- | --- | --- |
+| Callback delivered, return succeeds | Facts are translated into Rust events | Success comes from the return value |
+| Callback delivered, return fails | Facts are translated, including handled failure | Failure comes from the return value |
+| Callback missing or dropped | No reliable terminal fact | Rust falls back to the return value and process outcome |
+| Callback contradicts return path | Callback is only an observation | Return value is authoritative |
+| Segfault or abort | No reliable callback can be expected | Supervisor or restart handling owns recovery |
+
+### Non-Goals
+
+- No C++ orchestration.
+- No routing policy.
+- No telemetry policy.
+- No event bus.
+- No token or tensor stream in v1.
+
+V1 stays scoped to model-open lifecycle facts. Later event families can extend
+the append-only boundary, but they must keep the same ownership rule: native
+emits facts only, and Rust owns policy.
+
 ## Query And Management API
 
 Consumers need explicit runtime inventory and cache management. The Rust API

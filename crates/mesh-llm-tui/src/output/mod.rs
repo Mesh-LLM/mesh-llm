@@ -8639,6 +8639,8 @@ pub fn assert_tui_model_card_separates_name_from_metadata_columns() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod native_visibility;
+
     struct StaticDashboardSnapshotProvider {
         snapshot: DashboardSnapshot,
     }
@@ -12663,7 +12665,6 @@ mod tests {
         state.reduce(DashboardAction::OutputEvent(OutputEvent::LaunchPlan {
             plan: sample_launch_plan(),
         }));
-
         let rendered = render_tui_frame_snapshot(&state, 160, 32);
 
         assert!(
@@ -15687,31 +15688,6 @@ tail line"
         assert!(
             rendered.contains("stopped"),
             "dashboard should show the unloading model as stopped"
-        );
-    }
-
-    #[test]
-    fn llama_native_log_does_not_affect_dashboard_state() {
-        let mut state = DashboardState::default();
-
-        for (category, msg) in [
-            ("backend", "backend_init succeeded"),
-            ("model", "loading model from disk"),
-            ("memory", "VRAM used: 12 GB"),
-            ("kv_cache", "KV cache type: f16"),
-            ("tokenizer", "vocab loaded: 32000 tokens"),
-        ] {
-            state.reduce(DashboardAction::OutputEvent(OutputEvent::LlamaNativeLog {
-                message: msg.to_string(),
-                category,
-                params: Vec::new(),
-            }));
-        }
-
-        assert_eq!(
-            state.startup_lifecycle().phase,
-            StartupLifecyclePhase::Pending,
-            "LlamaNativeLog events should not change startup lifecycle phase"
         );
     }
 

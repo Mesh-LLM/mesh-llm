@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 
 mod devices;
 pub mod package;
+mod runtime_events;
 
 pub const MAX_LOGIT_BIAS: usize = 256;
 pub const GGML_TYPE_F16: u32 = 1;
@@ -54,6 +55,10 @@ pub enum FlashAttentionType {
 }
 
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
+pub use runtime_events::{
+    RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind, RuntimeEventFailureCode,
+    RuntimeEventKind, RuntimeEventProgressUnit,
+};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
 pub use skippy_ffi::{
     ActivationDType as RuntimeActivationDType, ActivationLayout as RuntimeActivationLayout,
@@ -1416,25 +1421,13 @@ impl StageModel {
         }
     }
 
-    pub fn open(path: impl AsRef<Path>, config: &RuntimeConfig) -> Result<Self> {
-        let path = path.as_ref();
-        write_native_log_note(format!(
-            "skippy_model_open begin path={} {}",
-            path.display(),
-            config.native_log_summary()
-        ));
-        let path = CString::new(path.to_string_lossy().as_bytes())
-            .context("model path contains an interior NUL byte")?;
-        let raw_config = config.as_raw()?;
-        let mut raw = ptr::null_mut();
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_model_open(path.as_ptr(), &raw_config.raw, &mut raw, &mut error)
-        };
-        write_native_log_note(format!("skippy_model_open returned status={status:?}"));
-        ensure_ok(status, error)?;
+    fn from_opened_raw(
+        raw: *mut RawModel,
+        config: &RuntimeConfig,
+        null_handle_message: &'static str,
+    ) -> Result<Self> {
         if raw.is_null() {
-            return Err(anyhow!("skippy_model_open returned a null handle"));
+            return Err(anyhow!(null_handle_message));
         }
         let media = config
             .projector_path
@@ -1444,17 +1437,110 @@ impl StageModel {
         Ok(Self { raw, media })
     }
 
-    pub fn open_from_parts(paths: &[impl AsRef<Path>], config: &RuntimeConfig) -> Result<Self> {
+    fn open_path_with_optional_event_reporter(
+        path: impl AsRef<Path>,
+        config: &RuntimeConfig,
+        event_reporter: Option<&mut dyn FnMut(RuntimeEvent)>,
+    ) -> Result<Self> {
+        let path = path.as_ref();
+        let use_events = event_reporter.is_some() && runtime_events::model_open_events_supported();
+        let begin_label = if use_events {
+            "skippy_model_open_with_events begin"
+        } else {
+            "skippy_model_open begin"
+        };
+        let end_label = if use_events {
+            "skippy_model_open_with_events returned"
+        } else {
+            "skippy_model_open returned"
+        };
+        let null_handle_message = if use_events {
+            "skippy_model_open_with_events returned a null handle"
+        } else {
+            "skippy_model_open returned a null handle"
+        };
+        write_native_log_note(format!(
+            "{begin_label} path={} {}",
+            path.display(),
+            config.native_log_summary()
+        ));
+        let path = CString::new(path.to_string_lossy().as_bytes())
+            .context("model path contains an interior NUL byte")?;
+        let raw_config = config.as_raw()?;
+        #[cfg(not(test))]
+        let (raw, status, error) = runtime_events::run_model_open(
+            |out_model, out_error| unsafe {
+                skippy_ffi::skippy_model_open(path.as_ptr(), &raw_config.raw, out_model, out_error)
+            },
+            |reporter, out_model, out_error| unsafe {
+                let open_with_events_symbol = runtime_events::model_open_with_events_symbol()
+                    .expect("runtime-event symbol availability checked before use");
+                open_with_events_symbol(
+                    path.as_ptr(),
+                    &raw_config.raw,
+                    reporter,
+                    out_model,
+                    out_error,
+                )
+            },
+            event_reporter,
+            use_events,
+        );
+        #[cfg(test)]
+        let (raw, status, error) = {
+            debug_assert!(event_reporter.is_none());
+            runtime_events::run_model_open(
+                |out_model, out_error| unsafe {
+                    skippy_ffi::skippy_model_open(
+                        path.as_ptr(),
+                        &raw_config.raw,
+                        out_model,
+                        out_error,
+                    )
+                },
+                |_reporter, _out_model, _out_error| {
+                    unreachable!("test builds do not link _with_events model-open symbols")
+                },
+                None,
+                false,
+            )
+        };
+        write_native_log_note(format!("{end_label} status={status:?}"));
+        ensure_ok(status, error)?;
+        Self::from_opened_raw(raw, config, null_handle_message)
+    }
+
+    fn open_parts_with_optional_event_reporter(
+        paths: &[impl AsRef<Path>],
+        config: &RuntimeConfig,
+        event_reporter: Option<&mut dyn FnMut(RuntimeEvent)>,
+    ) -> Result<Self> {
         if paths.is_empty() {
             return Err(anyhow!("at least one GGUF part path is required"));
         }
+        let use_events = event_reporter.is_some() && runtime_events::model_open_events_supported();
+        let begin_label = if use_events {
+            "skippy_model_open_from_parts_with_events begin"
+        } else {
+            "skippy_model_open_from_parts begin"
+        };
+        let end_label = if use_events {
+            "skippy_model_open_from_parts_with_events returned"
+        } else {
+            "skippy_model_open_from_parts returned"
+        };
+        let null_handle_message = if use_events {
+            "skippy_model_open_from_parts_with_events returned a null handle"
+        } else {
+            "skippy_model_open_from_parts returned a null handle"
+        };
         let path_list = paths
             .iter()
             .map(|path| path.as_ref().display().to_string())
             .collect::<Vec<_>>()
             .join(",");
         write_native_log_note(format!(
-            "skippy_model_open_from_parts begin parts={} {}",
+            "{begin_label} parts={} {}",
             path_list,
             config.native_log_summary()
         ));
@@ -1467,32 +1553,96 @@ impl StageModel {
             .collect::<Result<Vec<_>>>()?;
         let path_ptrs = paths.iter().map(|path| path.as_ptr()).collect::<Vec<_>>();
         let raw_config = config.as_raw()?;
-        let mut raw = ptr::null_mut();
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_model_open_from_parts(
-                path_ptrs.as_ptr(),
-                path_ptrs.len(),
-                &raw_config.raw,
-                &mut raw,
-                &mut error,
+        #[cfg(not(test))]
+        let (raw, status, error) = runtime_events::run_model_open(
+            |out_model, out_error| unsafe {
+                skippy_ffi::skippy_model_open_from_parts(
+                    path_ptrs.as_ptr(),
+                    path_ptrs.len(),
+                    &raw_config.raw,
+                    out_model,
+                    out_error,
+                )
+            },
+            |reporter, out_model, out_error| unsafe {
+                let open_from_parts_with_events_symbol =
+                    runtime_events::model_open_from_parts_with_events_symbol()
+                        .expect("runtime-event symbol availability checked before use");
+                open_from_parts_with_events_symbol(
+                    path_ptrs.as_ptr(),
+                    path_ptrs.len(),
+                    &raw_config.raw,
+                    reporter,
+                    out_model,
+                    out_error,
+                )
+            },
+            event_reporter,
+            use_events,
+        );
+        #[cfg(test)]
+        let (raw, status, error) = {
+            debug_assert!(event_reporter.is_none());
+            runtime_events::run_model_open(
+                |out_model, out_error| unsafe {
+                    skippy_ffi::skippy_model_open_from_parts(
+                        path_ptrs.as_ptr(),
+                        path_ptrs.len(),
+                        &raw_config.raw,
+                        out_model,
+                        out_error,
+                    )
+                },
+                |_reporter, _out_model, _out_error| {
+                    unreachable!(
+                        "test builds do not link _with_events model-open-from-parts symbols"
+                    )
+                },
+                None,
+                false,
             )
         };
-        write_native_log_note(format!(
-            "skippy_model_open_from_parts returned status={status:?}"
-        ));
+        write_native_log_note(format!("{end_label} status={status:?}"));
         ensure_ok(status, error)?;
-        if raw.is_null() {
-            return Err(anyhow!(
-                "skippy_model_open_from_parts returned a null handle"
-            ));
+        Self::from_opened_raw(raw, config, null_handle_message)
+    }
+
+    pub fn open(path: impl AsRef<Path>, config: &RuntimeConfig) -> Result<Self> {
+        Self::open_path_with_optional_event_reporter(path, config, None)
+    }
+
+    pub fn open_with_events(
+        path: impl AsRef<Path>,
+        config: &RuntimeConfig,
+        event_reporter: &mut dyn FnMut(RuntimeEvent),
+    ) -> Result<Self> {
+        #[cfg(test)]
+        {
+            let _ = event_reporter;
+            return Self::open_path_with_optional_event_reporter(path, config, None);
         }
-        let media = config
-            .projector_path
-            .as_deref()
-            .map(|projector_path| MediaProjector::open(projector_path, raw))
-            .transpose()?;
-        Ok(Self { raw, media })
+
+        #[cfg(not(test))]
+        Self::open_path_with_optional_event_reporter(path, config, Some(event_reporter))
+    }
+
+    pub fn open_from_parts(paths: &[impl AsRef<Path>], config: &RuntimeConfig) -> Result<Self> {
+        Self::open_parts_with_optional_event_reporter(paths, config, None)
+    }
+
+    pub fn open_from_parts_with_events(
+        paths: &[impl AsRef<Path>],
+        config: &RuntimeConfig,
+        event_reporter: &mut dyn FnMut(RuntimeEvent),
+    ) -> Result<Self> {
+        #[cfg(test)]
+        {
+            let _ = event_reporter;
+            return Self::open_parts_with_optional_event_reporter(paths, config, None);
+        }
+
+        #[cfg(not(test))]
+        Self::open_parts_with_optional_event_reporter(paths, config, Some(event_reporter))
     }
 
     pub fn create_session(&self) -> Result<StageSession> {
@@ -3630,6 +3780,16 @@ fn free_error(error: *mut RawError) {
 mod tests {
     use serde_json::Value;
 
+    use super::{
+        ChatTemplateMessage, FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0,
+        LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, ModelInfo,
+        NativeLogAggregator, NativeLogEvent, RuntimeConfig, RuntimeLoadMode,
+        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SamplingConfig, StageModel, Status, TensorRole,
+        flush_native_log_writer, format_skippy_error, parse_cache_type, parse_layer_assign_index,
+        redirect_native_logs_to_file, register_filtered_native_logs, restore_native_logs,
+        set_filtered_native_logs_enabled, unregister_filtered_native_logs, write_native_log,
+        write_native_log_note,
+    };
     use std::{
         env,
         ffi::CString,
@@ -3644,17 +3804,6 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
     use tokio::sync::mpsc::error::TryRecvError;
-
-    use super::{
-        ChatTemplateMessage, FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0,
-        LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, ModelInfo,
-        NativeLogAggregator, NativeLogEvent, RuntimeConfig, RuntimeLoadMode,
-        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SamplingConfig, StageModel, Status, TensorRole,
-        flush_native_log_writer, format_skippy_error, parse_cache_type, parse_layer_assign_index,
-        redirect_native_logs_to_file, register_filtered_native_logs, restore_native_logs,
-        set_filtered_native_logs_enabled, unregister_filtered_native_logs, write_native_log,
-        write_native_log_note,
-    };
 
     static NATIVE_LOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -4521,4 +4670,34 @@ mod tests {
         );
         Ok(())
     }
+}
+
+#[cfg(test)]
+#[test]
+fn model_open_events_success() {
+    runtime_events::tests::assert_model_open_events_success();
+}
+
+#[cfg(test)]
+#[test]
+fn model_open_events_handled_failure() {
+    runtime_events::tests::assert_model_open_events_handled_failure();
+}
+
+#[cfg(test)]
+#[test]
+fn model_open_events_missing_terminal_callback_uses_return() {
+    runtime_events::tests::assert_model_open_events_missing_terminal_callback_uses_return();
+}
+
+#[cfg(test)]
+#[test]
+fn model_open_events_receiver_dropped_does_not_corrupt_state() {
+    runtime_events::tests::assert_model_open_events_receiver_dropped_does_not_corrupt_state();
+}
+
+#[cfg(test)]
+#[test]
+fn model_open_events_feature_missing_falls_back() {
+    runtime_events::tests::assert_model_open_events_feature_missing_falls_back();
 }

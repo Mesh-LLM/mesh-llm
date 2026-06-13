@@ -4610,6 +4610,31 @@ pub(crate) fn assert_quitting_during_startup_cancels_without_late_ready_render()
 }
 
 #[cfg(test)]
+pub(crate) fn assert_startup_ready_reporter_waits_for_rust_owned_model_ready_edges() {
+    let models = vec!["model-a".to_string(), "model-b".to_string()];
+    let reporter = StartupReadyReporter::new(
+        &models,
+        "model-a".to_string(),
+        "http://127.0.0.1:9337".to_string(),
+        Some("http://127.0.0.1:3131".to_string()),
+        9337,
+        Some(3131),
+    );
+
+    assert!(
+        reporter.mark_ready_and_build_event("model-a").is_none(),
+        "one model-ready edge must not replace the remaining Rust-owned readiness edges"
+    );
+    assert!(
+        matches!(
+            reporter.mark_ready_and_build_event("model-b"),
+            Some(OutputEvent::RuntimeReady { .. })
+        ),
+        "RuntimeReady should appear only after every startup model hits the Rust-owned ready path"
+    );
+}
+
+#[cfg(test)]
 pub(crate) fn assert_startup_launch_plan_describes_planned_runtime_before_process_start() {
     let startup_models = startup_model_plan_fixture();
 
@@ -4865,6 +4890,11 @@ async fn startup_ready_reporter_uses_bound_urls_for_runtime_ready() {
     assert_eq!(reported_console_port, Some(console_port));
     assert_ne!(reported_api_url, "http://localhost:0");
     assert_ne!(reported_console_url.as_deref(), Some("http://localhost:0"));
+}
+
+#[test]
+fn startup_ready_reporter_waits_for_rust_owned_model_ready_edges() {
+    assert_startup_ready_reporter_waits_for_rust_owned_model_ready_edges();
 }
 
 #[cfg(test)]

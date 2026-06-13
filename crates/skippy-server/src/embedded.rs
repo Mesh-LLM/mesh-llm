@@ -15,6 +15,7 @@ use crate::{
     http::{StageHttpOptions, serve_stage_http_with_shutdown},
     runtime_state::{
         RuntimeLaunchOverrides, RuntimeSessionStats, RuntimeState, load_runtime_with_overrides,
+        load_runtime_with_overrides_and_open_events,
     },
     telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
 };
@@ -102,6 +103,50 @@ impl SkippyRuntimeHandle {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
             },
+        )?
+        .with_context(|| format!("stage {} requires model_path", options.config.stage_id))?;
+        telemetry.emit(
+            "stage.embedded_runtime_ready",
+            lifecycle_attrs(&options.config),
+        );
+        Ok(Self {
+            config: Arc::new(options.config),
+            topology: options.topology.map(Arc::new),
+            runtime,
+            telemetry,
+            status: Arc::new(Mutex::new(RuntimeHandleState {
+                state: EmbeddedState::Ready,
+                started_at_unix_nanos: now_unix_nanos(),
+                stopped_at_unix_nanos: None,
+                last_error: None,
+            })),
+        })
+    }
+
+    pub fn load_with_open_events(
+        options: EmbeddedRuntimeOptions,
+        mut model_open_event_reporter: Option<Box<dyn FnMut(skippy_runtime::RuntimeEvent) + Send>>,
+    ) -> Result<Self> {
+        validate_config(&options.config, options.topology.as_ref())?;
+        let telemetry = Telemetry::new(
+            options.metrics_otlp_grpc,
+            options.telemetry_queue_capacity,
+            options.config.clone(),
+            options.telemetry_level,
+        );
+        telemetry.emit(
+            "stage.embedded_runtime_load_start",
+            lifecycle_attrs(&options.config),
+        );
+        let runtime = load_runtime_with_overrides_and_open_events(
+            &options.config,
+            &RuntimeLaunchOverrides {
+                n_threads: options.n_threads,
+                n_threads_batch: options.n_threads_batch,
+            },
+            model_open_event_reporter.as_mut().map(|reporter| {
+                reporter.as_mut() as &mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)
+            }),
         )?
         .with_context(|| format!("stage {} requires model_path", options.config.stage_id))?;
         telemetry.emit(

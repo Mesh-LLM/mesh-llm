@@ -52,9 +52,24 @@ same Rust crate.
 
 ## ABI Contract
 
-The staged ABI is versioned as `0.1.18` in both this crate and the patched
-llama.cpp header. Version `0` is still experimental, so callers should treat the
-ABI as feature-probed rather than permanently stable.
+The staged ABI is versioned as `0.1.26`. The patch header in
+`third_party/llama.cpp/patches/0083-skippy-add-model-open-runtime-events-ABI.patch`
+and the Rust constants in `crates/skippy-ffi/src/lib.rs` are the source of
+truth, so keep this README aligned with those files instead of treating it as
+canonical prose.
+
+Version `0` is still experimental, so callers should treat the ABI as
+feature-probed rather than permanently stable.
+
+The runtime-event additions are part of that `0.1.26` bump. They add versioned
+`SkippyRuntimeEventV1` and `SkippyRuntimeEventReporterV1` structs, keep
+`detail_len` fixed-width as `u64`, and pass the reporter as a separate pointer
+argument on the `_with_events` model-open entrypoints instead of extending
+`RuntimeConfig`.
+
+The Rust FFI layer binds `skippy_abi_features`. This README records ABI intent
+and compatibility expectations only; higher-level gating belongs in
+`skippy-runtime` or later tasks.
 
 All `skippy_*` functions either return `skippy_status` or, for ABI
 discovery/error helpers, return plain values directly. Functions that accept
@@ -100,7 +115,10 @@ sequenceDiagram
 ## Feature Flags
 
 `skippy_abi_features` returns a bitmask of the capabilities compiled into
-the patched llama.cpp library:
+the patched llama.cpp library. The Rust FFI layer binds this function, and
+`skippy-runtime` uses it together with ABI and symbol checks to decide whether
+`_with_events` should be selected. Callers that want feature probing can still
+read it directly:
 
 | Feature | Bit | Surface |
 | --- | ---: | --- |
@@ -124,6 +142,25 @@ the patched llama.cpp library:
 | `EXTERNAL_MEDIA_PREFILL` | `1 << 20` | Multimodal prefill from externally materialized media chunks |
 | `CHAT_TEMPLATE_TOOLS` | `1 << 21` | llama.cpp OpenAI-compatible chat templating and tool-call response parsing |
 | `CHAT_SAMPLING_GRAMMAR` | `1 << 22` | Session-local llama.cpp grammar-constrained sampling from chat template metadata |
+| `RUNTIME_EVENTS` | `1 << 23` | `_with_events` model-open entrypoints and runtime-event callbacks |
+| `BACKEND_DEVICES` | `1 << 24` | Backend-device capability reporting |
+
+Runtime-event compatibility expectations are narrow on purpose:
+
+| Case | Shipped behavior |
+| --- | --- |
+| feature bit missing | If `FEATURE_RUNTIME_EVENTS` is absent, `skippy-runtime` falls back to `skippy_model_open` and `skippy_model_open_from_parts` without events. |
+| symbol missing | If the `_with_events` symbol is not available, `skippy-runtime` falls back to the legacy no-events open path. |
+| legacy runtime / older runtime without event support | Older or otherwise legacy runtimes that do not advertise the feature bit and `_with_events` entrypoints stay on the legacy no-events open path. |
+| null callback/reporter | A null reporter or null callback is treated as no reporter. Native open still proceeds, just without runtime-event delivery. |
+| smaller reporter struct | Native validates `abi_version` and `struct_size`. A smaller reporter struct returns `SKIPPY_STATUS_INVALID_ARGUMENT`, and a mismatched reporter ABI version returns `SKIPPY_STATUS_UNSUPPORTED`. |
+| native crash bypassing callback reporting | Callbacks cannot report process crashes. Segfaults and aborts still bypass the callback boundary. |
+
+- `skippy-runtime` also requires ABI/version checks before selecting the
+  `_with_events` entrypoints; failing those checks keeps the legacy no-events
+  path in charge.
+- Event callbacks stay operation-scoped, and v1 guarantees no callback after
+  the `_with_events` entrypoint returns.
 
 ## Function Surface
 
@@ -140,8 +177,8 @@ hook currently bound by this crate.
 
 | Function | Purpose |
 | --- | --- |
-| `skippy_abi_version` | Returns the compiled stage ABI version. The C header exports it; this Rust crate currently mirrors the version through constants instead of binding the function. |
-| `skippy_abi_features` | Returns the compiled feature bitmask. The C header exports it; this Rust crate does not currently bind it. |
+| `skippy_abi_version` | Returns the compiled stage ABI version. The C header exports it; this Rust crate mirrors the version through constants. |
+| `skippy_abi_features` | Returns the compiled feature bitmask. Rust binds this function in `skippy-ffi`; higher-level consumers can use it for feature probing or gating. |
 | `skippy_status_string` | Converts a status enum to a static C string. |
 | `skippy_error_free` | Frees an allocated `skippy_error`. |
 
@@ -149,7 +186,8 @@ hook currently bound by this crate.
 
 | Function | Purpose |
 | --- | --- |
-| `skippy_model_open` | Opens a GGUF model, runtime slice, layer package, or artifact slice using `RuntimeConfig`, including optional selected backend device placement. |
+| `skippy_model_open` | Opens a GGUF model, runtime slice, layer package, or artifact slice using `RuntimeConfig`, including optional selected backend device placement. This is the legacy no-events entrypoint. |
+| `skippy_model_open_with_events` | Opens a model with a runtime-event reporter. Requires the runtime-event feature bit and the native symbol. |
 | `skippy_model_free` | Releases a model handle. |
 | `skippy_session_create` | Creates a decode session/context from an opened model. |
 | `skippy_session_reset` | Clears session state so the session can be reused. |
@@ -158,6 +196,13 @@ hook currently bound by this crate.
 | `skippy_session_configure_chat_sampling` | Configures session-local sampling with llama.cpp chat metadata so tool-call grammars constrain generated tokens. |
 | `skippy_session_free` | Releases a session handle. |
 | `skippy_trim_session` | Trims session state to a token count. |
+
+### Model open from parts
+
+| Function | Purpose |
+| --- | --- |
+| `skippy_model_open_from_parts` | Opens a package-backed model from GGUF parts using the legacy no-events path. |
+| `skippy_model_open_from_parts_with_events` | Opens a package-backed model from GGUF parts with a runtime-event reporter. Requires the runtime-event feature bit and the native symbol. |
 
 ### Execution
 

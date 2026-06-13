@@ -1,11 +1,108 @@
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 25;
+pub const ABI_VERSION_PATCH: u32 = 26;
+pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 23;
 
 use std::ffi::{c_char, c_int, c_void};
 
 pub type LlamaLogCallback =
     Option<unsafe extern "C" fn(level: c_int, text: *const c_char, user_data: *mut c_void)>;
+pub type SkippyRuntimeEventCallback =
+    Option<unsafe extern "C" fn(event: *const SkippyRuntimeEventV1, user_data: *mut c_void)>;
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SkippyRuntimeEventCategory(pub u32);
+
+impl SkippyRuntimeEventCategory {
+    pub const MODEL_OPEN: Self = Self(1);
+    pub const BACKEND: Self = Self(2);
+    pub const SESSION: Self = Self(3);
+    pub const KV: Self = Self(4);
+    pub const WARNING: Self = Self(5);
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SkippyRuntimeEventKind(pub u32);
+
+impl SkippyRuntimeEventKind {
+    pub const MODEL_OPEN_STARTED: Self = Self(1);
+    pub const MODEL_OPEN_PROGRESS: Self = Self(2);
+    pub const BACKEND_DEVICE_SELECTED: Self = Self(3);
+    pub const MODEL_OPEN_FINISHED: Self = Self(4);
+    pub const MODEL_OPEN_FAILED_HANDLED: Self = Self(5);
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SkippyRuntimeEventEmitterKind(pub u32);
+
+impl SkippyRuntimeEventEmitterKind {
+    pub const UNKNOWN: Self = Self(0);
+    pub const OPEN_THREAD: Self = Self(1);
+    pub const WORKER_THREAD: Self = Self(2);
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SkippyRuntimeEventProgressUnit(pub u32);
+
+impl SkippyRuntimeEventProgressUnit {
+    pub const NONE: Self = Self(0);
+    pub const BYTES: Self = Self(1);
+    pub const ITEMS: Self = Self(2);
+    pub const TENSORS: Self = Self(3);
+    pub const STEPS: Self = Self(4);
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SkippyRuntimeEventFailureCode(pub u32);
+
+impl SkippyRuntimeEventFailureCode {
+    pub const NONE: Self = Self(0);
+    pub const INVALID_ARGUMENT: Self = Self(1);
+    pub const IO_ERROR: Self = Self(2);
+    pub const MODEL_ERROR: Self = Self(3);
+    pub const RUNTIME_ERROR: Self = Self(4);
+    pub const BACKEND_ERROR: Self = Self(5);
+    pub const CANCELLED: Self = Self(6);
+    pub const INTERNAL_ERROR: Self = Self(7);
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SkippyRuntimeEventV1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub category: SkippyRuntimeEventCategory,
+    pub kind: SkippyRuntimeEventKind,
+    pub emitter: SkippyRuntimeEventEmitterKind,
+    pub reserved0: u32,
+    pub sequence: u64,
+    pub timestamp_mono_ns: u64,
+    pub model_id: u64,
+    pub stage_id: u64,
+    pub session_id: u64,
+    pub progress_current: u64,
+    pub progress_total: u64,
+    pub progress_unit: SkippyRuntimeEventProgressUnit,
+    pub failure_code: SkippyRuntimeEventFailureCode,
+    pub status: Status,
+    pub reserved1: u32,
+    pub detail_ptr: *const c_char,
+    pub detail_len: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SkippyRuntimeEventReporterV1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub callback: SkippyRuntimeEventCallback,
+    pub user_data: *mut c_void,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
@@ -467,12 +564,15 @@ mod dynamic {
     dynamic_symbols! {
         llama_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
         ggml_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
+        skippy_abi_features() -> u64;
         skippy_status_string(status: Status) -> *const c_char;
         skippy_error_free(error: *mut Error);
         skippy_backend_device_count(out_count: *mut usize, out_error: *mut *mut Error) -> Status;
         skippy_backend_device_at(index: usize, out_device: *mut BackendDevice, out_error: *mut *mut Error) -> Status;
         skippy_model_open(path: *const c_char, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
         skippy_model_open_from_parts(paths: *const *const c_char, path_count: usize, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
+        skippy_model_open_with_events(path: *const c_char, config: *const RuntimeConfig, reporter: *const SkippyRuntimeEventReporterV1, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
+        skippy_model_open_from_parts_with_events(paths: *const *const c_char, path_count: usize, config: *const RuntimeConfig, reporter: *const SkippyRuntimeEventReporterV1, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
         skippy_model_free(model: *mut Model, out_error: *mut *mut Error) -> Status;
         skippy_model_llama_model(model: *const Model) -> *const Opaque;
         skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
@@ -564,6 +664,8 @@ unsafe extern "C" {
 
     pub fn ggml_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
 
+    pub fn skippy_abi_features() -> u64;
+
     pub fn skippy_status_string(status: Status) -> *const c_char;
     pub fn skippy_error_free(error: *mut Error);
 
@@ -587,6 +689,23 @@ unsafe extern "C" {
         paths: *const *const c_char,
         path_count: usize,
         config: *const RuntimeConfig,
+        out_model: *mut *mut Model,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_model_open_with_events(
+        path: *const c_char,
+        config: *const RuntimeConfig,
+        reporter: *const SkippyRuntimeEventReporterV1,
+        out_model: *mut *mut Model,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_model_open_from_parts_with_events(
+        paths: *const *const c_char,
+        path_count: usize,
+        config: *const RuntimeConfig,
+        reporter: *const SkippyRuntimeEventReporterV1,
         out_model: *mut *mut Model,
         out_error: *mut *mut Error,
     ) -> Status;
