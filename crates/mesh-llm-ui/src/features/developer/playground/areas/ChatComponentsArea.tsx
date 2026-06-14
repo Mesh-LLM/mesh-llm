@@ -290,7 +290,7 @@ export function ChatComponentsArea({ state }: { state: DeveloperPlaygroundState 
 
               <PlaygroundPanel
                 title="Message row states"
-                description="Queue removal, streaming stop, stopped stats, error copy, markdown, thinking traces, and attachment actions are visible without sending a live request."
+                description="Queue removal, streaming stop, stopped stats, error copy, markdown, thinking content, and attachment actions are visible without sending a live request."
               >
                 <div className="space-y-4">
                   <MessageRow

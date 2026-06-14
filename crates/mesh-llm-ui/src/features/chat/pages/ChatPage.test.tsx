@@ -904,7 +904,7 @@ describe('ChatPage', () => {
     await user.type(screen.getByLabelText('Prompt'), 'Show final answer formatting')
     await user.click(screen.getByRole('button', { name: 'Send' }))
 
-    expect(await screen.findByText('Thinking trace')).toBeInTheDocument()
+    expect(await screen.findByText('Thinking')).toBeInTheDocument()
     expect(screen.getByText('Reasoning text.')).toBeInTheDocument()
 
     const paris = screen.getByText('Paris')

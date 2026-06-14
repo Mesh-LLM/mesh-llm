@@ -220,7 +220,7 @@ describe('MessageRow', () => {
     expect(streamingControlRow).toHaveClass('mt-3', 'block')
   })
 
-  it('separates closed thinking traces from final assistant response text', () => {
+  it('separates closed thinking from final assistant response text', () => {
     render(
       <MessageRow
         messageRole="assistant"
@@ -230,9 +230,7 @@ describe('MessageRow', () => {
       />
     )
 
-    expect(screen.getByText('Thinking trace').closest('[data-thinking-state="complete"]')).toHaveTextContent(
-      'Thinking trace'
-    )
+    expect(screen.getByText('Thinking').closest('[data-thinking-state="complete"]')).toHaveTextContent('Thinking')
     expect(screen.getByText('Check geography facts before answering.').closest('.select-text')).toBeInTheDocument()
     expect(screen.getByText('The capital of France is Paris.').closest('.select-text')).toBeInTheDocument()
   })
@@ -247,7 +245,7 @@ describe('MessageRow', () => {
       />
     )
 
-    expect(screen.getByText('Thinking trace').closest('[data-thinking-state="complete"]')).toHaveTextContent(
+    expect(screen.getByText('Thinking').closest('[data-thinking-state="complete"]')).toHaveTextContent(
       'The user asked a simple factual question.'
     )
     expect(screen.getByText('The capital of France is Paris.')).toBeInTheDocument()
@@ -263,7 +261,7 @@ describe('MessageRow', () => {
       />
     )
 
-    expect(screen.getByText('Thinking trace').closest('[data-thinking-state="complete"]')).toHaveTextContent(
+    expect(screen.getByText('Thinking').closest('[data-thinking-state="complete"]')).toHaveTextContent(
       'Check whether the prompt is a test.'
     )
     expect(screen.getByText('Test received!').closest('.select-text')).toBeInTheDocument()
@@ -287,7 +285,7 @@ describe('MessageRow', () => {
     expect(screen.getByText('Paris').closest('.select-text')).toBeInTheDocument()
   })
 
-  it('formats thinking trace text as markdown', () => {
+  it('formats thinking text as markdown', () => {
     render(
       <MessageRow
         messageRole="assistant"
@@ -297,7 +295,7 @@ describe('MessageRow', () => {
       />
     )
 
-    const thinkingTrace = screen.getByText('Thinking trace').closest('[data-thinking-state="complete"]')
+    const thinkingTrace = screen.getByText('Thinking').closest('[data-thinking-state="complete"]')
 
     expect(thinkingTrace).toBeInstanceOf(HTMLElement)
     const thinkingTraceElement = thinkingTrace as HTMLElement

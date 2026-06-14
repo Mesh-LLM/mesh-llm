@@ -273,7 +273,7 @@ function AssistantMessageContent({
                 ) : (
                   <BrainCircuit className="size-3" aria-hidden={true} strokeWidth={1.7} />
                 )}
-                <span>{active ? 'Thinking' : 'Thinking trace'}</span>
+                <span>Thinking</span>
               </span>
               <AssistantMarkdown text={segment.text} linksEnabled={linksEnabled} variant="thinking" />
             </div>
