@@ -134,6 +134,7 @@ struct AutoRuntimeNodeSetup {
     channels: mesh::TunnelChannels,
     plugin_manager: plugin::PluginManager,
     survey_telemetry: survey::SurveyTelemetry,
+    lan_bootstrap_tasks: LanBootstrapTasks,
 }
 
 #[derive(Default)]
@@ -6157,7 +6158,7 @@ async fn build_run_auto_node_setup(
     node.start_rtt_refresh();
     node.start_direct_path_maintenance();
     start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);
-    spawn_mdns_reverse_dial(options, &node);
+    let lan_bootstrap_tasks = spawn_mdns_reverse_dial(options, &node);
 
     if !is_client {
         spawn_node_benchmark_task(&node, bin_dir);
@@ -6174,6 +6175,7 @@ async fn build_run_auto_node_setup(
         channels,
         plugin_manager,
         survey_telemetry,
+        lan_bootstrap_tasks,
     })
 }
 
@@ -6617,6 +6619,7 @@ struct RunAutoShutdownContext<'a> {
     api_proxy_handle: tokio::task::JoinHandle<()>,
     console_server_handle: Option<tokio::task::JoinHandle<()>>,
     discovery_publisher: Option<tokio::task::JoinHandle<()>>,
+    lan_bootstrap_tasks: LanBootstrapTasks,
     runtime_models: &'a mut HashMap<String, RuntimeModelHandleEntry>,
     runtime_survey_models: &'a mut HashMap<String, survey::SurveyLoadedModel>,
     managed_models: &'a mut HashMap<String, ManagedModelController>,
@@ -6649,6 +6652,7 @@ struct RunAutoRuntimeLifecycleContext<'a> {
     api_proxy_handle: tokio::task::JoinHandle<()>,
     console_server_handle: Option<tokio::task::JoinHandle<()>>,
     discovery_publisher: Option<tokio::task::JoinHandle<()>>,
+    lan_bootstrap_tasks: LanBootstrapTasks,
     runtime: Option<std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
 }
 
@@ -6965,6 +6969,7 @@ async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecycleContext<
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
+        lan_bootstrap_tasks,
         runtime,
     } = ctx;
     let mut loop_ctx = RunAutoRuntimeLoopContext {
@@ -7000,6 +7005,7 @@ async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecycleContext<
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
+        lan_bootstrap_tasks,
         runtime_models: &mut runtime_state.runtime_models,
         runtime_survey_models: &mut runtime_state.runtime_survey_models,
         managed_models: &mut runtime_state.managed_models,
@@ -7023,6 +7029,7 @@ async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
+        lan_bootstrap_tasks,
         runtime_models,
         runtime_survey_models,
         managed_models,
@@ -7041,6 +7048,9 @@ async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     if let Some(handle) = discovery_publisher {
         handle.abort();
     }
+    // Stop the relay-less LAN bootstrap loops (mDNS publisher, reverse-dial,
+    // and beacon) so they release their sockets and stop dialing on shutdown.
+    lan_bootstrap_tasks.abort();
 
     shutdown_run_auto_services(
         node,
@@ -7919,6 +7929,23 @@ async fn spawn_run_auto_nostr_publisher(
     }
 }
 
+/// Background tasks spawned by [`spawn_mdns_reverse_dial`] for relay-less LAN
+/// direct-path bootstrap. Aborted during runtime shutdown so these loops stop
+/// publishing, dialing, and holding the beacon UDP socket once the runtime is
+/// tearing down (mirrors the handling of `discovery_publisher`).
+#[derive(Default)]
+struct LanBootstrapTasks {
+    handles: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl LanBootstrapTasks {
+    fn abort(&self) {
+        for handle in &self.handles {
+            handle.abort();
+        }
+    }
+}
+
 /// Spawn the mDNS reverse-dial bootstrap (LAN dial-back) for relay-less direct
 /// paths. Runs on both host and joiner in mDNS mode.
 ///
@@ -7930,16 +7957,21 @@ async fn spawn_run_auto_nostr_publisher(
 /// Also ensures the node publishes its own `ep_addr` via mDNS when the standard
 /// publish path (gated on `--publish`) is not active, so peers can learn a
 /// dial-back address. Re-registering the same mDNS service is idempotent.
-fn spawn_mdns_reverse_dial(options: &RuntimeOptions, node: &mesh::Node) {
+///
+/// Returns a [`LanBootstrapTasks`] guard holding the spawned task handles so
+/// the runtime can abort them during shutdown.
+fn spawn_mdns_reverse_dial(options: &RuntimeOptions, node: &mesh::Node) -> LanBootstrapTasks {
     if options.mesh_discovery_mode != mesh_discovery::MeshDiscoveryMode::Mdns {
-        return;
+        return LanBootstrapTasks::default();
     }
+
+    let mut handles = Vec::new();
 
     // Ensure an mDNS advertisement (carrying our ep_addr) exists even without
     // --publish, so peers can discover a dial-back address. The standard
     // publish path only runs with --publish; spawn a publisher here otherwise.
     if !options.publish {
-        tokio::spawn(Box::pin(mesh_discovery::publish_lan_loop(
+        handles.push(tokio::spawn(Box::pin(mesh_discovery::publish_lan_loop(
             node.clone(),
             mesh_discovery::LanPublishConfig {
                 name: options.mesh_name.clone(),
@@ -7950,19 +7982,23 @@ fn spawn_mdns_reverse_dial(options: &RuntimeOptions, node: &mesh::Node) {
                 interval_secs: 30,
                 status_tx: None,
             },
-        )));
+        ))));
     }
 
-    tokio::spawn(Box::pin(crate::network::mdns_reverse_dial::run_loop(
-        node.clone(),
-        options.mesh_name.clone(),
-        options.region.clone(),
+    handles.push(tokio::spawn(Box::pin(
+        crate::network::mdns_reverse_dial::run_loop(
+            node.clone(),
+            options.mesh_name.clone(),
+            options.region.clone(),
+        ),
     )));
 
     // Raw-multicast LAN beacon: a mDNS-independent direct-path bootstrap that
     // works on multi-homed hosts where the mDNS service daemon's advertisement
     // does not reach the LAN. Uses a socket pinned to the bound LAN interface.
-    crate::network::lan_beacon::spawn(node.clone());
+    handles.push(crate::network::lan_beacon::spawn(node.clone()));
+
+    LanBootstrapTasks { handles }
 }
 
 fn spawn_run_auto_mdns_publisher(
@@ -8374,6 +8410,7 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         channels,
         plugin_manager,
         survey_telemetry,
+        lan_bootstrap_tasks,
     } = build_run_auto_node_setup(
         &options,
         &config,
@@ -8555,6 +8592,7 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
+        lan_bootstrap_tasks,
         runtime,
     })
     .await;

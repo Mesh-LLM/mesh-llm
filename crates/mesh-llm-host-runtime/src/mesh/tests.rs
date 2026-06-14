@@ -3282,6 +3282,44 @@ fn direct_path_request_keeps_only_previously_advertised_direct_candidates() {
     );
 }
 
+#[tokio::test]
+async fn remember_join_target_updates_address_on_peer_rebind() {
+    let node = make_test_node(super::NodeRole::Worker).await.unwrap();
+    let peer_id = make_test_endpoint_id(34);
+
+    let mut first = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    first
+        .addrs
+        .insert(TransportAddr::Ip("192.168.1.50:47916".parse().unwrap()));
+    node.remember_join_target(first).await;
+
+    assert_eq!(
+        node.join_target_lan_ipv4().await,
+        vec!["192.168.1.50:47916".parse().unwrap()],
+        "the first advertised LAN address should be recorded"
+    );
+
+    // The peer restarts/rebinds and re-advertises a new socket address under
+    // the same endpoint id. The stale address must be replaced, not retained.
+    let mut rebound = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    rebound
+        .addrs
+        .insert(TransportAddr::Ip("192.168.1.50:51000".parse().unwrap()));
+    node.remember_join_target(rebound).await;
+
+    assert_eq!(
+        node.join_target_lan_ipv4().await,
+        vec!["192.168.1.50:51000".parse().unwrap()],
+        "a rebind under the same peer id must replace the stale dial-back address"
+    );
+}
+
 #[test]
 fn stale_dispatcher_cannot_remove_replacement_connection() {
     assert!(

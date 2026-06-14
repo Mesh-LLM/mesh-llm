@@ -57,12 +57,15 @@ struct BeaconMessage {
 }
 
 /// Spawn the LAN beacon (sender + listener) for a node in mDNS mode.
-pub(crate) fn spawn(node: mesh::Node) {
+///
+/// Returns the spawned task's [`JoinHandle`](tokio::task::JoinHandle) so the
+/// runtime can abort the beacon (and release its UDP socket) during shutdown.
+pub(crate) fn spawn(node: mesh::Node) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if let Err(err) = run(node).await {
             tracing::debug!("LAN beacon stopped: {err:#}");
         }
-    });
+    })
 }
 
 async fn run(node: mesh::Node) -> Result<()> {

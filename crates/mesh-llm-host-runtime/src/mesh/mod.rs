@@ -4991,9 +4991,16 @@ impl Node {
 
     /// Record a join target address so the LAN beacon can unicast a dial-back
     /// hint to it even before a direct connection forms.
+    ///
+    /// If a target with the same endpoint id is already recorded, its address
+    /// is replaced with the newer one. A peer that restarts or rebinds to a new
+    /// QUIC port advertises a fresh `EndpointAddr` under the same id, and the
+    /// beacon must dial that rather than keep unicasting to the stale socket.
     async fn remember_join_target(&self, addr: EndpointAddr) {
         let mut targets = self.join_targets.lock().await;
-        if !targets.iter().any(|t| t.id == addr.id) {
+        if let Some(existing) = targets.iter_mut().find(|t| t.id == addr.id) {
+            *existing = addr;
+        } else {
             targets.push(addr);
         }
     }
