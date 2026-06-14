@@ -3987,6 +3987,7 @@ dependencies = [
  "http",
  "http-body-util",
  "httparse",
+ "if-addrs",
  "iroh",
  "iroh-relay",
  "json5",
