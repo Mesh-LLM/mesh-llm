@@ -1814,7 +1814,7 @@ fn check_windows_abi_cache_key_alignment(
         "'Justfile', '.github/cache-version.txt')",
     );
     let windows_cpu_abi_cache_key =
-        format!("windows-2025-skippy-abi-cpu--cpu-${{{{ {WINDOWS_ABI_CACHE_HASH_INPUTS} }}}}");
+        format!("windows-2022-skippy-abi-cpu--cpu-${{{{ {WINDOWS_ABI_CACHE_HASH_INPUTS} }}}}");
 
     ensure_contains(
         ci_workflow,
@@ -1828,7 +1828,7 @@ fn check_windows_abi_cache_key_alignment(
     )?;
     ensure_contains(
         pr_builds_workflow,
-        "windows-2025-skippy-abi-${{ matrix.backend }}-${{ matrix.build_args }}-",
+        "windows-2022-skippy-abi-${{ matrix.backend }}-${{ matrix.build_args }}-",
         "PR Builds Windows ABI cache key template",
     )?;
     ensure_contains(
