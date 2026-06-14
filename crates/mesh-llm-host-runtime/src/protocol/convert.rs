@@ -2,6 +2,9 @@
 use crate::mesh::RouteEntry;
 use crate::mesh::{ModelDemand, NodeRole, PeerAnnouncement, RoutingTable};
 use crate::protocol::NODE_PROTOCOL_GENERATION;
+pub(crate) use crate::protocol::config_diagnostic::{
+    config_diagnostic_to_proto, proto_config_diagnostic_to_local,
+};
 use anyhow::{Context, Result};
 use iroh::{EndpointAddr, EndpointId};
 use std::collections::{HashMap, HashSet};
@@ -1057,6 +1060,7 @@ fn legacy_proto_config_to_mesh(
             command: p.command.clone(),
             args: p.args.clone(),
             url: None,
+            settings: Default::default(),
             startup: Default::default(),
         })
         .collect();

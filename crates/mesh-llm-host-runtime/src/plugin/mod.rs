@@ -2,6 +2,7 @@ mod config;
 mod installed;
 pub(crate) mod mcp;
 mod runtime;
+mod schema_validation;
 pub(crate) mod stapler;
 mod startup;
 mod support;
@@ -32,7 +33,6 @@ use url::Url;
 
 #[allow(unused_imports)]
 pub use self::config::ExternalPluginSpec;
-pub(crate) use self::config::validate_config;
 #[allow(unused_imports)]
 pub(crate) use self::config::{
     BoolOrAuto, HardwareConfig, IntegerOrString, ModelConfigDefaults, ModelFitConfig,
@@ -46,7 +46,7 @@ pub use self::config::{
     ModelRuntimeKind, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PluginHostMode,
     PluginStartupConfig, ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig,
     bundled_cli_plugin_spec, config_path, config_to_toml, load_config, parse_config_toml,
-    resolve_plugins,
+    resolve_plugins, validate_config_file,
 };
 #[cfg(test)]
 pub(crate) use self::config::{
@@ -56,7 +56,7 @@ pub(crate) use self::config::{
 };
 pub(crate) use self::config::{
     mesh_requirements_config_from_runtime, mesh_requirements_config_to_runtime,
-    mesh_requirements_validation_error,
+    mesh_requirements_validation_error, validate_config_diagnostics_with_installed_plugin_schemas,
 };
 use self::runtime::ExternalPlugin;
 pub use self::startup::{PluginStartupOptions, PluginStartupSummary};
@@ -1957,6 +1957,7 @@ mod tests {
                 command: Some("mesh-llm-plugin-demo".into()),
                 args: vec!["--stdio".into()],
                 url: None,
+                settings: Default::default(),
                 startup: Default::default(),
             }],
             defaults: None,
@@ -1980,6 +1981,7 @@ mod tests {
                 command: Some("mesh-llm-plugin-metrics".into()),
                 args: Vec::new(),
                 url: None,
+                settings: Default::default(),
                 startup: PluginStartupConfig {
                     connect_timeout_secs: Some(75),
                     init_timeout_secs: Some(90),
@@ -2013,6 +2015,7 @@ mod tests {
                 command: None,
                 args: Vec::new(),
                 url: None,
+                settings: Default::default(),
                 startup: PluginStartupConfig {
                     optional: true,
                     ..PluginStartupConfig::default()
@@ -2060,6 +2063,7 @@ mod tests {
                 command: None,
                 args: Vec::new(),
                 url: None,
+                settings: Default::default(),
                 startup: Default::default(),
             }],
             defaults: None,
@@ -2079,6 +2083,7 @@ mod tests {
                 command: Some("endpoint-plugin".into()),
                 args: Vec::new(),
                 url: Some("http://gpu-box:8000/v1".into()),
+                settings: Default::default(),
                 startup: Default::default(),
             }],
             defaults: None,
@@ -2103,6 +2108,7 @@ mod tests {
                 command: Some("/opt/plugins/endpoint-plugin".into()),
                 args: vec!["--verbose".into()],
                 url: None,
+                settings: Default::default(),
                 startup: Default::default(),
             }],
             defaults: None,
@@ -2126,6 +2132,7 @@ mod tests {
                 command: None,
                 args: Vec::new(),
                 url: Some("http://gpu-box:8000/v1".into()),
+                settings: Default::default(),
                 startup: Default::default(),
             }],
             defaults: None,
@@ -2159,6 +2166,7 @@ mod tests {
                 command: Some("/tmp/demo".into()),
                 args: vec!["--flag".into()],
                 url: None,
+                settings: Default::default(),
                 startup: Default::default(),
             }],
             defaults: None,

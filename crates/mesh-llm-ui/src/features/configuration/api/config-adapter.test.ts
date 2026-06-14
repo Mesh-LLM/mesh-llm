@@ -1,12 +1,32 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   adaptStatusToConfiguration,
+  configurationDefaultsSchemaPathEntries,
   createConfigurationDefaultsValuesFromMeshConfig,
   mergeConfigurationDefaultsIntoMeshConfig,
   runtimeControlApplyErrorMessage,
   type RuntimeControlMeshConfig
 } from '@/features/configuration/api/config-adapter'
 import type { MeshModelRaw, StatusPayload } from '@/lib/api/types'
+
+const DEFAULTS_SCHEMA_REFERENCE = JSON.parse(
+  readFileSync(
+    resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      '../../../../../mesh-llm-host-runtime/tests/fixtures/config_schema_defaults_ui_reference.json'
+    ),
+    'utf8'
+  )
+) as {
+  settings: Array<{
+    canonical_path: string
+    support: string
+    source: { kind: string }
+  }>
+}
 
 const STATUS_PAYLOAD: StatusPayload = {
   node_id: 'self',
@@ -291,5 +311,60 @@ describe('adaptStatusToConfiguration', () => {
         error: { code: 'control_unavailable' }
       })
     ).toBe('control unavailable')
+
+    expect(
+      runtimeControlApplyErrorMessage({
+        success: false,
+        current_revision: 7,
+        config_hash: 'abc123',
+        apply_mode: 'unspecified',
+        diagnostics: [
+          {
+            code: 'invalid_value',
+            severity: 'error',
+            source: 'validation',
+            path: 'models[0].request_defaults.reasoning_format',
+            canonical_path: 'models.<model-ref>.request_defaults.reasoning_format',
+            message: 'reasoning_format must be one of: auto, none, deepseek, deepseek-legacy, hidden',
+            help: 'choose one of the supported reasoning formats'
+          }
+        ]
+      })
+    ).toBe('reasoning_format must be one of: auto, none, deepseek, deepseek-legacy, hidden')
+  })
+
+  it('projects every configuration defaults control onto a supported built-in schema path', () => {
+    const schemaByPath = new Map(DEFAULTS_SCHEMA_REFERENCE.settings.map((entry) => [entry.canonical_path, entry]))
+    const seenPaths = new Set<string>()
+
+    for (const projection of configurationDefaultsSchemaPathEntries()) {
+      expect(
+        seenPaths.has(projection.canonicalPath),
+        `duplicate defaults schema path ${projection.canonicalPath}`
+      ).toBe(false)
+      seenPaths.add(projection.canonicalPath)
+
+      const schemaEntry = schemaByPath.get(projection.canonicalPath)
+      expect(
+        schemaEntry,
+        `missing exported schema row for ${projection.id} -> ${projection.canonicalPath}`
+      ).toBeDefined()
+      expect(schemaEntry?.support).toBe('supported')
+      expect(schemaEntry?.source.kind).toBe('built_in')
+    }
+  })
+
+  it('keeps canonical nested defaults paths for alias-prone and rejected controls', () => {
+    const projections = new Map(
+      configurationDefaultsSchemaPathEntries().map((entry) => [entry.id, entry.canonicalPath])
+    )
+
+    expect(projections.get('parallel-slots')).toBe('defaults.throughput.parallel')
+    expect(projections.get('llamacpp-flavor')).toBe('defaults.hardware.model_runtime')
+    expect(projections.get('hardware-device')).toBe('defaults.hardware.device')
+    expect(projections.get('ctx-size')).toBe('defaults.model_fit.ctx_size')
+    expect(projections.get('server-alias')).toBe('defaults.advanced.server.alias')
+    expect(Array.from(projections.values())).not.toContain('defaults.request_defaults.json_schema')
+    expect(Array.from(projections.values())).not.toContain('defaults.hardware.rpc_backend')
   })
 })

@@ -51,13 +51,17 @@ pub mod events {
 }
 pub use manifest::{
     CompletionBuilder, EndpointBuilder, HttpBindingBuilder, ManifestEntry, OperationBuilder,
+    PluginConfigObjectPropertyBuilder, PluginConfigSchemaBuilder, PluginConfigSettingBuilder,
     PluginManifestBuilder, PromptBuilder, ResourceBuilder, ResourceTemplateBuilder, capability,
-    completion, http_binding, http_delete, http_get, http_patch, http_post, http_put,
-    mcp_http_endpoint, mcp_stdio_endpoint, mcp_tcp_endpoint, mcp_unix_socket_endpoint,
-    mesh_channel, mesh_event_local_accepting, mesh_event_local_standby, mesh_event_mesh_id_updated,
-    mesh_event_peer_down, mesh_event_peer_up, mesh_event_peer_updated, mesh_event_subscription,
-    openai_http_inference_endpoint, operation, plugin_manifest, prompt_service, resource,
-    resource_template_service,
+    completion, config_array, config_boolean, config_enum, config_float, config_integer,
+    config_object, config_object_property, config_path, config_schema, config_setting,
+    config_string, config_url, constraint_allowed_values, constraint_non_empty,
+    constraint_positive, constraint_range, constraint_requires, http_binding, http_delete,
+    http_get, http_patch, http_post, http_put, mcp_http_endpoint, mcp_stdio_endpoint,
+    mcp_tcp_endpoint, mcp_unix_socket_endpoint, mesh_channel, mesh_event_local_accepting,
+    mesh_event_local_standby, mesh_event_mesh_id_updated, mesh_event_peer_down, mesh_event_peer_up,
+    mesh_event_peer_updated, mesh_event_subscription, openai_http_inference_endpoint, operation,
+    package_manifest_json, plugin_manifest, prompt_service, resource, resource_template_service,
 };
 pub mod mcp {
     pub use crate::dsl::mcp::{

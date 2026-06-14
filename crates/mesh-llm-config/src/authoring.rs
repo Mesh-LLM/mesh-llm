@@ -1,6 +1,9 @@
 use crate::{
-    GpuAssignment, HardwareConfig, MeshConfig, ModelConfigDefaults, ModelConfigEntry,
-    ModelFitConfig, MultimodalConfig, PluginConfigEntry, RequestDefaultsConfig, ThroughputConfig,
+    ConfigAliasMode, ConfigApplyMode, ConfigConstraint, ConfigControlSurface, ConfigPath,
+    ConfigPathAlias, ConfigRestartScope, ConfigSchema, ConfigSettingOwner, ConfigSettingSchema,
+    ConfigSupportState, ConfigValueSchema, ConfigVisibility, GpuAssignment, HardwareConfig,
+    MeshConfig, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, MultimodalConfig,
+    PluginConfigEntry, RequestDefaultsConfig, ThroughputConfig,
 };
 use anyhow::{Result, bail};
 use mesh_llm_types::runtime::ModelRuntimeKind;
@@ -17,6 +20,109 @@ pub struct LocalServingNodeConfig {
     pub owner_control_bind: Option<SocketAddr>,
     pub owner_control_advertise_addr: Option<SocketAddr>,
     pub gpu_assignment: Option<GpuAssignment>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ConfigSchemaBuilder {
+    settings: Vec<ConfigSettingSchema>,
+}
+
+impl ConfigSchemaBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn setting(&mut self, setting: ConfigSettingSchema) -> &mut Self {
+        self.settings.push(setting);
+        self
+    }
+
+    pub fn build(self) -> ConfigSchema {
+        ConfigSchema {
+            settings: self.settings,
+        }
+    }
+}
+
+pub fn built_in_config_schema() -> ConfigSchema {
+    ConfigSchema {
+        settings: crate::built_in_config_settings(),
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ConfigSettingSchemaBuilder {
+    setting: ConfigSettingSchema,
+}
+
+impl ConfigSettingSchemaBuilder {
+    pub fn new(path: ConfigPath, value_schema: ConfigValueSchema) -> Self {
+        Self {
+            setting: ConfigSettingSchema {
+                path,
+                alias_policy: Default::default(),
+                owner: ConfigSettingOwner::BuiltIn,
+                value_schema,
+                support: ConfigSupportState::Supported,
+                control_surfaces: Vec::new(),
+                apply_mode: ConfigApplyMode::StaticOnLoad,
+                restart_scope: ConfigRestartScope::None,
+                visibility: ConfigVisibility::User,
+                constraints: Vec::new(),
+                description: None,
+            },
+        }
+    }
+
+    pub fn owner(&mut self, owner: ConfigSettingOwner) -> &mut Self {
+        self.setting.owner = owner;
+        self
+    }
+
+    pub fn support(&mut self, support: ConfigSupportState) -> &mut Self {
+        self.setting.support = support;
+        self
+    }
+
+    pub fn control_surface(&mut self, surface: ConfigControlSurface) -> &mut Self {
+        self.setting.control_surfaces.push(surface);
+        self
+    }
+
+    pub fn apply_mode(&mut self, apply_mode: ConfigApplyMode) -> &mut Self {
+        self.setting.apply_mode = apply_mode;
+        self
+    }
+
+    pub fn restart_scope(&mut self, restart_scope: ConfigRestartScope) -> &mut Self {
+        self.setting.restart_scope = restart_scope;
+        self
+    }
+
+    pub fn visibility(&mut self, visibility: ConfigVisibility) -> &mut Self {
+        self.setting.visibility = visibility;
+        self
+    }
+
+    pub fn description(&mut self, description: impl Into<String>) -> &mut Self {
+        self.setting.description = Some(description.into());
+        self
+    }
+
+    pub fn alias(&mut self, alias: ConfigPathAlias) -> &mut Self {
+        self.setting.alias_policy.mode = ConfigAliasMode::CanonicalWithLegacyAliases;
+        self.setting.alias_policy.aliases.push(alias);
+        self
+    }
+
+    pub fn constraint(&mut self, constraint: ConfigConstraint) -> &mut Self {
+        self.setting.constraints.push(constraint);
+        self
+    }
+
+    pub fn build(self) -> ConfigSettingSchema {
+        self.setting
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -181,6 +287,7 @@ impl ConfigEditor {
                     command: None,
                     args: Vec::new(),
                     url: None,
+                    settings: Default::default(),
                     startup: Default::default(),
                 });
                 self.config.plugins.len() - 1
@@ -411,4 +518,64 @@ fn normalize_non_empty(value: &str, label: &str) -> Result<String> {
         bail!("{label} cannot be empty");
     }
     Ok(value.to_string())
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+    use crate::{ConfigPathAliasKind, ConfigVisibility};
+
+    #[test]
+    fn schema_setting_builder_populates_control_surface_metadata() {
+        let mut setting = ConfigSettingSchemaBuilder::new(
+            ConfigPath::from_fields(["owner_control", "bind"]),
+            ConfigValueSchema::SocketAddr,
+        );
+        setting
+            .owner(ConfigSettingOwner::BuiltIn)
+            .support(ConfigSupportState::Supported)
+            .control_surface(ConfigControlSurface::ConfigFile)
+            .control_surface(ConfigControlSurface::OwnerControl)
+            .apply_mode(ConfigApplyMode::DynamicApply)
+            .restart_scope(ConfigRestartScope::ProcessRestart)
+            .visibility(ConfigVisibility::Advanced)
+            .description("Owner control listener bind address")
+            .constraint(ConfigConstraint::NonEmpty)
+            .alias(ConfigPathAlias {
+                path: ConfigPath::from_fields(["owner_control", "listen"]),
+                kind: ConfigPathAliasKind::LegacyKey,
+                note: Some("legacy naming preserved for diagnostics".into()),
+            });
+
+        let built = setting.build();
+
+        assert_eq!(built.path.render(), "owner_control.bind");
+        assert_eq!(
+            built.alias_policy.mode,
+            ConfigAliasMode::CanonicalWithLegacyAliases
+        );
+        assert_eq!(built.alias_policy.aliases.len(), 1);
+        assert_eq!(built.control_surfaces.len(), 2);
+        assert_eq!(built.apply_mode, ConfigApplyMode::DynamicApply);
+        assert_eq!(built.restart_scope, ConfigRestartScope::ProcessRestart);
+        assert_eq!(built.visibility, ConfigVisibility::Advanced);
+    }
+
+    #[test]
+    fn schema_builder_collects_settings() {
+        let mut schema = ConfigSchemaBuilder::new();
+        let mut setting = ConfigSettingSchemaBuilder::new(
+            ConfigPath::from_fields(["telemetry", "endpoint"]),
+            ConfigValueSchema::String,
+        );
+        setting
+            .owner(ConfigSettingOwner::BuiltIn)
+            .control_surface(ConfigControlSurface::ConfigFile);
+        schema.setting(setting.build());
+
+        let built = schema.build();
+
+        assert_eq!(built.settings.len(), 1);
+        assert_eq!(built.settings[0].path.render(), "telemetry.endpoint");
+    }
 }

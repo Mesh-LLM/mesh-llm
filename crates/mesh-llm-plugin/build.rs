@@ -28,7 +28,9 @@ fn compile_proto() {
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var("PROTOC", protoc) };
 
-    prost_build::Config::new()
+    let mut config = prost_build::Config::new();
+    config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
+    config
         .compile_protos(&["proto/plugin.proto"], &["proto"])
         .expect("compile plugin proto");
 }

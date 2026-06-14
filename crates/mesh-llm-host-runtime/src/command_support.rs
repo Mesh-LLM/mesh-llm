@@ -60,6 +60,14 @@ pub mod plugin {
     pub use crate::runtime::load_resolved_plugins;
 }
 
+pub mod config {
+    pub use crate::plugin::{config_path, validate_config_file};
+    pub use mesh_llm_config::{
+        ConfigDiagnostic, ConfigDiagnosticCode, ConfigDiagnosticSchemaSource,
+        ConfigDiagnosticSeverity, ConfigDiagnosticSource, ConfigPath,
+    };
+}
+
 pub mod runtime_instances {
     pub use crate::runtime::instance::{LocalInstanceSnapshot, runtime_root, scan_local_instances};
 }

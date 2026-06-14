@@ -253,6 +253,48 @@ Switches:
 
 Use this to inspect local GPU identity and capacity, including per-device VRAM, unified-memory state, and cached benchmark-derived bandwidth when present.
 
+### `config validate`
+
+Use this to validate a mesh-llm config file before starting a node or applying
+the file through owner-control.
+
+Usage:
+
+```bash
+mesh-llm config validate
+mesh-llm config validate --config-path ~/.mesh-llm/config.toml
+mesh-llm config validate --config-path ./mesh.toml --json
+```
+
+Switches:
+
+- `--config-path <CONFIG_PATH>`: config TOML file to validate. If omitted,
+  mesh-llm uses the global `--config` path, then `MESH_LLM_CONFIG`, then
+  `~/.mesh-llm/config.toml`.
+- `--json`: print a machine-readable validation report.
+
+The JSON report uses this shape:
+
+```json
+{
+  "ok": false,
+  "path": "./mesh.toml",
+  "diagnostics": [
+    {
+      "code": "missing_required_value",
+      "severity": "error",
+      "source": "schema",
+      "path": "plugin[\"example\"].settings.api_key",
+      "message": "required plugin setting is missing"
+    }
+  ]
+}
+```
+
+Validation checks built-in settings and installed plugin config schemas. Warning
+diagnostics are printed but do not make the command fail; error diagnostics and
+TOML load/parse failures exit nonzero.
+
 
 ### `load`
 

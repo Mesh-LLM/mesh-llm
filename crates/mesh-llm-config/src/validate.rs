@@ -1,63 +1,197 @@
+pub(crate) use crate::diagnostic::DiagnosticResult;
+pub use crate::diagnostic::{
+    ConfigDiagnostic, ConfigDiagnosticCode, ConfigDiagnosticSchemaSource, ConfigDiagnosticSeverity,
+    ConfigDiagnosticSource, alias_diagnostic, invalid_value_diagnostic,
+    legacy_validation_error_text, rejected_field_diagnostic, unsupported_field_diagnostic,
+};
 use crate::model::{merge_hardware, merge_model_fit, merge_multimodal, merge_throughput};
-use crate::plugin_validation::validate_plugin_entries;
+use crate::plugin_validation::{
+    PluginSchemaAvailability, validate_plugin_entries, validate_plugin_entries_strict,
+};
 use crate::*;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use semver::{BuildMetadata, Version};
 
-pub fn validate_config(config: &MeshConfig) -> Result<()> {
+fn parsed_config_path(raw_path: &str) -> Option<ConfigPath> {
+    ConfigPath::parse_rendered(raw_path).ok()
+}
+
+pub(crate) fn validation_diagnostic(
+    raw_path: &str,
+    message: impl Into<String>,
+) -> ConfigDiagnostic {
+    let message = message.into();
+    if let Some(diagnostic) = built_in_support_diagnostic(raw_path, message.clone()) {
+        return diagnostic;
+    }
+
+    let mut diagnostic = ConfigDiagnostic::error(
+        ConfigDiagnosticCode::InvalidValue,
+        ConfigDiagnosticSource::Validation,
+        message,
+    );
+    diagnostic.path = parsed_config_path(raw_path);
+    diagnostic
+}
+
+pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic> {
+    let mut diagnostics = Vec::new();
+
     if let Some(version) = config.version
         && version != 1
     {
-        bail!("unsupported config version {version}; expected version = 1");
+        diagnostics.push(validation_diagnostic(
+            "version",
+            format!("unsupported config version {version}; expected version = 1"),
+        ));
     }
     if let Some(bind) = config.owner_control.bind
         && bind.port() == 0
         && !bind.ip().is_loopback()
     {
-        bail!("owner_control.bind must use a concrete port when binding a non-loopback address");
+        diagnostics.push(validation_diagnostic(
+            "owner_control.bind",
+            "owner_control.bind must use a concrete port when binding a non-loopback address",
+        ));
     }
     if let Some(advertise_addr) = config.owner_control.advertise_addr {
         if advertise_addr.port() == 0 {
-            bail!("owner_control.advertise_addr must use a concrete port");
+            diagnostics.push(validation_diagnostic(
+                "owner_control.advertise_addr",
+                "owner_control.advertise_addr must use a concrete port",
+            ));
         }
         if advertise_addr.ip().is_unspecified() {
-            bail!("owner_control.advertise_addr must not use an unspecified IP address");
+            diagnostics.push(validation_diagnostic(
+                "owner_control.advertise_addr",
+                "owner_control.advertise_addr must not use an unspecified IP address",
+            ));
         }
     }
     if let Some(parallel) = config.gpu.parallel
         && parallel < 1
     {
-        bail!("gpu.parallel must be at least 1, got {parallel}");
+        diagnostics.push(validation_diagnostic(
+            "gpu.parallel",
+            format!("gpu.parallel must be at least 1, got {parallel}"),
+        ));
     }
-    validate_mesh_requirements_config(&config.mesh_requirements)?;
-    validate_telemetry_config(&config.telemetry)?;
-    validate_plugin_entries(&config.plugins)?;
+    if let Err(diagnostic) = validate_mesh_requirements_config(&config.mesh_requirements) {
+        diagnostics.push(diagnostic);
+    }
+    if let Err(diagnostic) = validate_telemetry_config(&config.telemetry) {
+        diagnostics.push(diagnostic);
+    }
+    if let Err(diagnostic) = validate_plugin_entries(&config.plugins) {
+        diagnostics.push(diagnostic);
+    }
     let defaults_hardware = config
         .defaults
         .as_ref()
         .and_then(|defaults| defaults.hardware.as_ref());
-    if let Some(defaults) = &config.defaults {
-        validate_model_defaults(defaults, "defaults", config.gpu.assignment)?;
+    if let Some(defaults) = &config.defaults
+        && let Err(diagnostic) =
+            validate_model_defaults(defaults, "defaults", config.gpu.assignment)
+    {
+        diagnostics.push(diagnostic);
     }
     for (index, model) in config.models.iter().enumerate() {
         if model.model.trim().is_empty() {
-            bail!("models[{index}].model must not be empty");
+            diagnostics.push(validation_diagnostic(
+                &format!("models[{index}].model"),
+                format!("models[{index}].model must not be empty"),
+            ));
         }
-        validate_model_entry(
+        if let Err(diagnostic) = validate_model_entry(
             model,
             &format!("models[{index}]"),
             config.gpu.assignment,
             defaults_hardware,
-        )?;
+        ) {
+            diagnostics.push(diagnostic);
+        }
     }
-    Ok(())
+
+    diagnostics
+}
+
+pub fn validate_config_diagnostics_with_plugin_schemas<F>(
+    config: &MeshConfig,
+    raw_toml: Option<&str>,
+    schema_for_plugin: F,
+) -> Vec<ConfigDiagnostic>
+where
+    F: FnMut(&str) -> PluginSchemaAvailability,
+{
+    let mut diagnostics = validate_config_diagnostics(config);
+    diagnostics.extend(validate_plugin_entries_strict(
+        &config.plugins,
+        raw_toml,
+        schema_for_plugin,
+    ));
+    diagnostics
+}
+
+pub fn canonical_builtin_diagnostic_path(raw_path: &str) -> Option<ConfigPath> {
+    canonicalize_built_in_config_identifier(raw_path)
+        .and_then(|path| ConfigPath::parse_rendered(&path).ok())
+}
+
+pub fn built_in_support_diagnostic(
+    raw_path: &str,
+    message: impl Into<String>,
+) -> Option<ConfigDiagnostic> {
+    let resolution = resolve_built_in_config_identifier(raw_path)?;
+    let message = message.into();
+    let mut diagnostic = match resolution.support {
+        ConfigSupportState::Rejected => {
+            rejected_field_diagnostic(resolution.canonical_path.clone(), message)
+        }
+        ConfigSupportState::Unsupported | ConfigSupportState::Unwired => {
+            unsupported_field_diagnostic(resolution.canonical_path.clone(), message)
+        }
+        _ => invalid_value_diagnostic(resolution.canonical_path.clone(), message),
+    };
+    diagnostic.path = Some(resolution.requested_path);
+    diagnostic.canonical_path = Some(resolution.canonical_path);
+    diagnostic.schema_source = Some(ConfigDiagnosticSchemaSource::BuiltIn);
+    Some(diagnostic)
+}
+
+pub fn validate_config(config: &MeshConfig) -> Result<()> {
+    let diagnostics = validate_config_diagnostics(config);
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(legacy_validation_error_text(&diagnostics)))
+    }
+}
+
+pub fn validate_config_with_plugin_schemas<F>(
+    config: &MeshConfig,
+    raw_toml: Option<&str>,
+    schema_for_plugin: F,
+) -> Result<()>
+where
+    F: FnMut(&str) -> PluginSchemaAvailability,
+{
+    let diagnostics =
+        validate_config_diagnostics_with_plugin_schemas(config, raw_toml, schema_for_plugin);
+    let has_errors = diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == ConfigDiagnosticSeverity::Error);
+    if has_errors {
+        Err(anyhow::anyhow!(legacy_validation_error_text(&diagnostics)))
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_model_defaults(
     defaults: &ModelConfigDefaults,
     base_path: &str,
     gpu_assignment: GpuAssignment,
-) -> Result<()> {
+) -> DiagnosticResult {
     if let Some(model_fit) = &defaults.model_fit {
         validate_model_fit(model_fit, &format!("{base_path}.model_fit"))?;
     }
@@ -96,7 +230,7 @@ fn validate_model_entry(
     base_path: &str,
     gpu_assignment: GpuAssignment,
     defaults_hardware: Option<&HardwareConfig>,
-) -> Result<()> {
+) -> DiagnosticResult {
     let model_fit = merge_model_fit(
         model.model_fit.clone(),
         model.ctx_size,
@@ -169,9 +303,12 @@ fn validate_gpu_assignment_constraints(
     legacy_gpu_id: Option<&str>,
     device_path: &str,
     gpu_assignment: GpuAssignment,
-) -> Result<()> {
+) -> DiagnosticResult {
     if matches!(gpu_assignment, GpuAssignment::Auto) && legacy_gpu_id.is_some() {
-        bail!("{device_path} must not be set when gpu.assignment = \"auto\"");
+        return Err(validation_diagnostic(
+            device_path,
+            format!("{device_path} must not be set when gpu.assignment = \"auto\""),
+        ));
     }
     if matches!(gpu_assignment, GpuAssignment::Pinned) {
         match hardware
@@ -180,23 +317,29 @@ fn validate_gpu_assignment_constraints(
         {
             Some(device) if !device.trim().is_empty() && !device.eq_ignore_ascii_case("auto") => {}
             _ => {
-                bail!(
-                    "{device_path} must be set to a non-empty value when gpu.assignment = \"pinned\""
-                );
+                return Err(validation_diagnostic(
+                    device_path,
+                    format!(
+                        "{device_path} must be set to a non-empty value when gpu.assignment = \"pinned\""
+                    ),
+                ));
             }
         }
     }
     Ok(())
 }
 
-fn validate_model_fit(config: &ModelFitConfig, base_path: &str) -> Result<()> {
+fn validate_model_fit(config: &ModelFitConfig, base_path: &str) -> DiagnosticResult {
     validate_optional_positive_u32(config.ctx_size, &format!("{base_path}.ctx_size"))?;
     validate_optional_positive_u32(config.batch, &format!("{base_path}.batch"))?;
     validate_optional_positive_u32(config.ubatch, &format!("{base_path}.ubatch"))?;
     if let (Some(batch), Some(ubatch)) = (config.batch, config.ubatch)
         && ubatch > batch
     {
-        bail!("{base_path}.ubatch must be less than or equal to {base_path}.batch");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.ubatch"),
+            format!("{base_path}.ubatch must be less than or equal to {base_path}.batch"),
+        ));
     }
     validate_optional_non_empty(
         config.cache_type_k.as_deref(),
@@ -231,7 +374,10 @@ fn validate_model_fit(config: &ModelFitConfig, base_path: &str) -> Result<()> {
         && cache_idle_slots > 0
         && matches!(config.prompt_cache, Some(BoolOrAuto::Bool(false)))
     {
-        bail!("{base_path}.cache_idle_slots requires {base_path}.prompt_cache = true");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.cache_idle_slots"),
+            format!("{base_path}.cache_idle_slots requires {base_path}.prompt_cache = true"),
+        ));
     }
     if let Some(prefix_cache) = &config.prefix_cache {
         validate_prefix_cache(prefix_cache, &format!("{base_path}.prefix_cache"))?;
@@ -239,7 +385,10 @@ fn validate_model_fit(config: &ModelFitConfig, base_path: &str) -> Result<()> {
     if let (Some(keep_tokens), Some(ctx_size)) = (config.keep_tokens, config.ctx_size)
         && keep_tokens > ctx_size
     {
-        bail!("{base_path}.keep_tokens must be less than or equal to {base_path}.ctx_size");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.keep_tokens"),
+            format!("{base_path}.keep_tokens must be less than or equal to {base_path}.ctx_size"),
+        ));
     }
     validate_optional_positive_u32(
         config.checkpoint_interval,
@@ -260,7 +409,7 @@ fn validate_model_fit(config: &ModelFitConfig, base_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_prefix_cache(config: &PrefixCacheConfig, base_path: &str) -> Result<()> {
+fn validate_prefix_cache(config: &PrefixCacheConfig, base_path: &str) -> DiagnosticResult {
     if config.enabled == Some(false) {
         return Ok(());
     }
@@ -288,20 +437,31 @@ fn validate_hardware(
     config: &HardwareConfig,
     base_path: &str,
     gpu_assignment: GpuAssignment,
-) -> Result<()> {
+) -> DiagnosticResult {
     if let Some(device) = &config.device {
         validate_non_empty(device, &format!("{base_path}.device"))?;
         if matches!(gpu_assignment, GpuAssignment::Pinned) && device.eq_ignore_ascii_case("auto") {
-            bail!("{base_path}.device must not be \"auto\" when gpu.assignment = \"pinned\"");
+            return Err(validation_diagnostic(
+                &format!("{base_path}.device"),
+                format!("{base_path}.device must not be \"auto\" when gpu.assignment = \"pinned\""),
+            ));
         }
     }
     if let Some(gpu_layers) = &config.gpu_layers {
         match gpu_layers {
             IntegerOrString::Integer(value) if *value >= -1 && *value <= i64::from(i32::MAX) => {}
             IntegerOrString::Integer(value) if *value > i64::from(i32::MAX) => {
-                bail!("{base_path}.gpu_layers must be at most {}", i32::MAX)
+                return Err(validation_diagnostic(
+                    &format!("{base_path}.gpu_layers"),
+                    format!("{base_path}.gpu_layers must be at most {}", i32::MAX),
+                ));
             }
-            IntegerOrString::Integer(_) => bail!("{base_path}.gpu_layers must be at least -1"),
+            IntegerOrString::Integer(_) => {
+                return Err(validation_diagnostic(
+                    &format!("{base_path}.gpu_layers"),
+                    format!("{base_path}.gpu_layers must be at least -1"),
+                ));
+            }
             IntegerOrString::String(value) => {
                 validate_allowed(value, &["auto"], &format!("{base_path}.gpu_layers"))?
             }
@@ -309,14 +469,29 @@ fn validate_hardware(
     }
     match (config.stage_layer_start, config.stage_layer_end) {
         (Some(start), Some(end)) if end <= start => {
-            bail!("{base_path}.stage_layer_end must be greater than {base_path}.stage_layer_start");
+            return Err(validation_diagnostic(
+                &format!("{base_path}.stage_layer_end"),
+                format!(
+                    "{base_path}.stage_layer_end must be greater than {base_path}.stage_layer_start"
+                ),
+            ));
         }
-        (Some(_), None) => bail!(
-            "{base_path}.stage_layer_end must be set when {base_path}.stage_layer_start is set"
-        ),
-        (None, Some(_)) => bail!(
-            "{base_path}.stage_layer_start must be set when {base_path}.stage_layer_end is set"
-        ),
+        (Some(_), None) => {
+            return Err(validation_diagnostic(
+                &format!("{base_path}.stage_layer_end"),
+                format!(
+                    "{base_path}.stage_layer_end must be set when {base_path}.stage_layer_start is set"
+                ),
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(validation_diagnostic(
+                &format!("{base_path}.stage_layer_start"),
+                format!(
+                    "{base_path}.stage_layer_start must be set when {base_path}.stage_layer_end is set"
+                ),
+            ));
+        }
         _ => {}
     }
     validate_optional_enum(
@@ -329,7 +504,12 @@ fn validate_hardware(
             TensorSplitConfig::Ratios(ratios) => {
                 for ratio in ratios {
                     if *ratio < 0.0 {
-                        bail!("{base_path}.tensor_split must contain only non-negative ratios");
+                        return Err(validation_diagnostic(
+                            &format!("{base_path}.tensor_split"),
+                            format!(
+                                "{base_path}.tensor_split must contain only non-negative ratios"
+                            ),
+                        ));
                     }
                 }
             }
@@ -347,7 +527,10 @@ fn validate_hardware(
         validate_bool_or_auto(Some(value), &format!("{base_path}.cpu_moe"))?;
     }
     if config.rpc_backend.is_some() {
-        bail!("{base_path}.rpc_backend is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.rpc_backend"),
+            format!("{base_path}.rpc_backend is documented-rejected and must not be set"),
+        ));
     }
     if let Some(fit_context) = &config.fit_context {
         validate_bool_or_auto(Some(fit_context), &format!("{base_path}.fit_context"))?;
@@ -381,11 +564,14 @@ fn validate_hardware(
     Ok(())
 }
 
-fn validate_throughput(config: &ThroughputConfig, base_path: &str) -> Result<()> {
+fn validate_throughput(config: &ThroughputConfig, base_path: &str) -> DiagnosticResult {
     if let Some(parallel) = config.parallel
         && parallel < 1
     {
-        bail!("{base_path}.parallel must be at least 1, got {parallel}");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.parallel"),
+            format!("{base_path}.parallel must be at least 1, got {parallel}"),
+        ));
     }
     validate_bool_or_auto(
         config.continuous_batching.as_ref(),
@@ -393,7 +579,10 @@ fn validate_throughput(config: &ThroughputConfig, base_path: &str) -> Result<()>
     )?;
     // `0` is a canonical auto/default sentinel for threads and threads_batch.
     if config.threads_http.is_some() {
-        bail!("{base_path}.threads_http is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.threads_http"),
+            format!("{base_path}.threads_http is documented-rejected and must not be set"),
+        ));
     }
     if let Some(BoolOrString::String(value)) = &config.poll {
         validate_allowed(
@@ -416,10 +605,16 @@ fn validate_throughput(config: &ThroughputConfig, base_path: &str) -> Result<()>
     if let Some(slot_prompt_similarity) = config.slot_prompt_similarity
         && slot_prompt_similarity < 0.0
     {
-        bail!("{base_path}.slot_prompt_similarity must be non-negative");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.slot_prompt_similarity"),
+            format!("{base_path}.slot_prompt_similarity must be non-negative"),
+        ));
     }
     if config.sleep_idle_seconds.is_some() {
-        bail!("{base_path}.sleep_idle_seconds is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.sleep_idle_seconds"),
+            format!("{base_path}.sleep_idle_seconds is documented-rejected and must not be set"),
+        ));
     }
     validate_optional_enum(
         config.tuning_profile.as_deref(),
@@ -429,7 +624,7 @@ fn validate_throughput(config: &ThroughputConfig, base_path: &str) -> Result<()>
     Ok(())
 }
 
-fn validate_skippy(config: &SkippyConfig, base_path: &str) -> Result<()> {
+fn validate_skippy(config: &SkippyConfig, base_path: &str) -> DiagnosticResult {
     validate_optional_non_empty(
         config.stage_model_path.as_deref(),
         &format!("{base_path}.stage_model_path"),
@@ -452,7 +647,10 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> Result<()> {
         &format!("{base_path}.binary_stage_transport"),
     )?;
     if config.openai_frontend_mode.is_some() {
-        bail!("{base_path}.openai_frontend_mode is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.openai_frontend_mode"),
+            format!("{base_path}.openai_frontend_mode is documented-rejected and must not be set"),
+        ));
     }
     validate_optional_positive_u64(
         config.lifecycle_startup_timeout_ms,
@@ -482,16 +680,19 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> Result<()> {
                     .filter(|value| *value > 0)
                     .is_none()
             {
-                bail!(
-                    "{base_path}.prefill_chunk_schedule must contain only comma-separated positive integers"
-                );
+                return Err(validation_diagnostic(
+                    &format!("{base_path}.prefill_chunk_schedule"),
+                    format!(
+                        "{base_path}.prefill_chunk_schedule must contain only comma-separated positive integers"
+                    ),
+                ));
             }
         }
     }
     Ok(())
 }
 
-fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<()> {
+fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> DiagnosticResult {
     validate_optional_enum(
         config.mode.as_deref(),
         &["auto", "disabled", "draft", "ngram"],
@@ -526,9 +727,12 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
     if let (Some(min), Some(max)) = (config.draft_min_tokens, config.draft_max_tokens)
         && min > max
     {
-        bail!(
-            "{base_path}.draft_min_tokens must be less than or equal to {base_path}.draft_max_tokens"
-        );
+        return Err(validation_diagnostic(
+            &format!("{base_path}.draft_min_tokens"),
+            format!(
+                "{base_path}.draft_min_tokens must be less than or equal to {base_path}.draft_max_tokens"
+            ),
+        ));
     }
     validate_probability(
         config.draft_acceptance_threshold,
@@ -541,7 +745,10 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
     if let Some(gpu_layers) = config.draft_gpu_layers
         && gpu_layers < -1
     {
-        bail!("{base_path}.draft_gpu_layers must be at least -1");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.draft_gpu_layers"),
+            format!("{base_path}.draft_gpu_layers must be at least -1"),
+        ));
     }
     validate_optional_non_empty(
         config.draft_device.as_deref(),
@@ -561,7 +768,10 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
     if let (Some(min), Some(max)) = (config.ngram_min, config.ngram_max)
         && max < min
     {
-        bail!("{base_path}.ngram_max must be greater than or equal to {base_path}.ngram_min");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.ngram_max"),
+            format!("{base_path}.ngram_max must be greater than or equal to {base_path}.ngram_min"),
+        ));
     }
     validate_bool_or_auto(
         config.spec_default.as_ref(),
@@ -572,14 +782,17 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
         && config.draft_hf_repo.is_none()
         && config.draft_selection_policy.is_none()
     {
-        bail!(
-            "{base_path}.draft_selection_policy must be set when {base_path}.mode = \"draft\" and no explicit draft model source is configured"
-        );
+        return Err(validation_diagnostic(
+            &format!("{base_path}.draft_selection_policy"),
+            format!(
+                "{base_path}.draft_selection_policy must be set when {base_path}.mode = \"draft\" and no explicit draft model source is configured"
+            ),
+        ));
     }
     Ok(())
 }
 
-fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) -> Result<()> {
+fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) -> DiagnosticResult {
     validate_optional_positive_u32(config.max_tokens, &format!("{base_path}.max_tokens"))?;
     if let Some(stop) = &config.stop {
         match stop {
@@ -596,7 +809,10 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
     if let Some(top_k) = config.top_k
         && top_k < 0
     {
-        bail!("{base_path}.top_k must be greater than or equal to 0");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.top_k"),
+            format!("{base_path}.top_k must be greater than or equal to 0"),
+        ));
     }
     validate_probability(config.min_p, &format!("{base_path}.min_p"))?;
     validate_probability(config.typical_p, &format!("{base_path}.typical_p"))?;
@@ -616,7 +832,10 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
     if let Some(repeat_last_n) = config.repeat_last_n
         && repeat_last_n < -1
     {
-        bail!("{base_path}.repeat_last_n must be greater than or equal to -1");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.repeat_last_n"),
+            format!("{base_path}.repeat_last_n must be greater than or equal to -1"),
+        ));
     }
     validate_non_negative_f64(
         config.presence_penalty,
@@ -634,7 +853,12 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
                 &["disabled", "1", "2"],
                 &format!("{base_path}.mirostat_mode"),
             )?,
-            _ => bail!("{base_path}.mirostat_mode must be one of: disabled, 1, 2"),
+            _ => {
+                return Err(validation_diagnostic(
+                    &format!("{base_path}.mirostat_mode"),
+                    format!("{base_path}.mirostat_mode must be one of: disabled, 1, 2"),
+                ));
+            }
         }
     }
     validate_positive_f64(
@@ -653,7 +877,10 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
         &format!("{base_path}.sampler_sequence"),
     )?;
     if config.backend_sampling.is_some() {
-        bail!("{base_path}.backend_sampling is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.backend_sampling"),
+            format!("{base_path}.backend_sampling is documented-rejected and must not be set"),
+        ));
     }
     validate_optional_enum(
         config.reasoning_format.as_deref(),
@@ -693,13 +920,22 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
         &format!("{base_path}.system_prompt"),
     )?;
     if config.grammar.is_some() {
-        bail!("{base_path}.grammar is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.grammar"),
+            format!("{base_path}.grammar is documented-rejected and must not be set"),
+        ));
     }
     if config.json_schema.is_some() {
-        bail!("{base_path}.json_schema is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.json_schema"),
+            format!("{base_path}.json_schema is documented-rejected and must not be set"),
+        ));
     }
     if config.logprobs.is_some() {
-        bail!("{base_path}.logprobs is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.logprobs"),
+            format!("{base_path}.logprobs is documented-rejected and must not be set"),
+        ));
     }
     Ok(())
 }
@@ -709,28 +945,36 @@ fn validate_multimodal_pair(
     multimodal: Option<&MultimodalConfig>,
     hardware_path: &str,
     multimodal_path: &str,
-) -> Result<()> {
+) -> DiagnosticResult {
     if let (Some(hardware), Some(multimodal)) = (hardware, multimodal) {
         if let (Some(hardware_mmproj), Some(multimodal_mmproj)) =
             (hardware.mmproj.as_deref(), multimodal.mmproj.as_deref())
             && hardware_mmproj != multimodal_mmproj
         {
-            bail!("{multimodal_path}.mmproj must match {hardware_path}.mmproj when both are set");
+            return Err(validation_diagnostic(
+                &format!("{multimodal_path}.mmproj"),
+                format!(
+                    "{multimodal_path}.mmproj must match {hardware_path}.mmproj when both are set"
+                ),
+            ));
         }
         if let (Some(hardware_offload), Some(multimodal_offload)) = (
             hardware.mmproj_offload.as_ref(),
             multimodal.mmproj_offload.as_ref(),
         ) && hardware_offload != multimodal_offload
         {
-            bail!(
-                "{multimodal_path}.mmproj_offload must match {hardware_path}.mmproj_offload when both are set"
-            );
+            return Err(validation_diagnostic(
+                &format!("{multimodal_path}.mmproj_offload"),
+                format!(
+                    "{multimodal_path}.mmproj_offload must match {hardware_path}.mmproj_offload when both are set"
+                ),
+            ));
         }
     }
     Ok(())
 }
 
-fn validate_multimodal(config: &MultimodalConfig, base_path: &str) -> Result<()> {
+fn validate_multimodal(config: &MultimodalConfig, base_path: &str) -> DiagnosticResult {
     validate_optional_non_empty(config.mmproj.as_deref(), &format!("{base_path}.mmproj"))?;
     validate_optional_non_empty(
         config.mmproj_url.as_deref(),
@@ -743,50 +987,89 @@ fn validate_multimodal(config: &MultimodalConfig, base_path: &str) -> Result<()>
     if let (Some(min), Some(max)) = (config.image_min_tokens, config.image_max_tokens)
         && min > max
     {
-        bail!(
-            "{base_path}.image_min_tokens must be less than or equal to {base_path}.image_max_tokens"
-        );
+        return Err(validation_diagnostic(
+            &format!("{base_path}.image_min_tokens"),
+            format!(
+                "{base_path}.image_min_tokens must be less than or equal to {base_path}.image_max_tokens"
+            ),
+        ));
     }
     if config.embeddings.is_some() {
-        bail!("{base_path}.embeddings is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.embeddings"),
+            format!("{base_path}.embeddings is documented-rejected and must not be set"),
+        ));
     }
     if config.reranking.is_some() {
-        bail!("{base_path}.reranking is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.reranking"),
+            format!("{base_path}.reranking is documented-rejected and must not be set"),
+        ));
     }
     if config.pooling.is_some() {
-        bail!("{base_path}.pooling is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.pooling"),
+            format!("{base_path}.pooling is documented-rejected and must not be set"),
+        ));
     }
     if config.vocoder.is_some() {
-        bail!("{base_path}.vocoder is documented-rejected and must not be set");
+        return Err(validation_diagnostic(
+            &format!("{base_path}.vocoder"),
+            format!("{base_path}.vocoder is documented-rejected and must not be set"),
+        ));
     }
     Ok(())
 }
 
-fn validate_advanced(config: &AdvancedConfig, base_path: &str) -> Result<()> {
+fn validate_advanced(config: &AdvancedConfig, base_path: &str) -> DiagnosticResult {
     if let Some(server) = &config.server {
         if server.host.is_some() {
-            bail!("{base_path}.server.host is documented-rejected and must not be set");
+            return Err(validation_diagnostic(
+                &format!("{base_path}.server.host"),
+                format!("{base_path}.server.host is documented-rejected and must not be set"),
+            ));
         }
         if server.port.is_some() {
-            bail!("{base_path}.server.port is documented-rejected and must not be set");
+            return Err(validation_diagnostic(
+                &format!("{base_path}.server.port"),
+                format!("{base_path}.server.port is documented-rejected and must not be set"),
+            ));
         }
         if server.reuse_port.is_some() {
-            bail!("{base_path}.server.reuse_port is documented-rejected and must not be set");
+            return Err(validation_diagnostic(
+                &format!("{base_path}.server.reuse_port"),
+                format!("{base_path}.server.reuse_port is documented-rejected and must not be set"),
+            ));
         }
         if server.timeout.is_some() {
-            bail!("{base_path}.server.timeout is documented-rejected and must not be set");
+            return Err(validation_diagnostic(
+                &format!("{base_path}.server.timeout"),
+                format!("{base_path}.server.timeout is documented-rejected and must not be set"),
+            ));
         }
         if server.metrics.is_some() {
-            bail!("{base_path}.server.metrics is documented-rejected and must not be set");
+            return Err(validation_diagnostic(
+                &format!("{base_path}.server.metrics"),
+                format!("{base_path}.server.metrics is documented-rejected and must not be set"),
+            ));
         }
         if server.slots.is_some() {
-            bail!("{base_path}.server.slots is documented-rejected and must not be set");
+            return Err(validation_diagnostic(
+                &format!("{base_path}.server.slots"),
+                format!("{base_path}.server.slots is documented-rejected and must not be set"),
+            ));
         }
         if server.props.is_some() {
-            bail!("{base_path}.server.props is documented-rejected and must not be set");
+            return Err(validation_diagnostic(
+                &format!("{base_path}.server.props"),
+                format!("{base_path}.server.props is documented-rejected and must not be set"),
+            ));
         }
         if server.api_prefix.is_some() {
-            bail!("{base_path}.server.api_prefix is documented-rejected and must not be set");
+            return Err(validation_diagnostic(
+                &format!("{base_path}.server.api_prefix"),
+                format!("{base_path}.server.api_prefix is documented-rejected and must not be set"),
+            ));
         }
         validate_optional_non_empty(
             server.alias.as_deref(),
@@ -796,89 +1079,113 @@ fn validate_advanced(config: &AdvancedConfig, base_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_optional_positive_u32(value: Option<u32>, path: &str) -> Result<()> {
+fn validate_optional_positive_u32(value: Option<u32>, path: &str) -> DiagnosticResult {
     if value == Some(0) {
-        bail!("{path} must be at least 1 when set");
+        return Err(validation_diagnostic(
+            path,
+            format!("{path} must be at least 1 when set"),
+        ));
     }
     Ok(())
 }
 
-fn validate_optional_positive_u64(value: Option<u64>, path: &str) -> Result<()> {
+fn validate_optional_positive_u64(value: Option<u64>, path: &str) -> DiagnosticResult {
     if value == Some(0) {
-        bail!("{path} must be at least 1 when set");
+        return Err(validation_diagnostic(
+            path,
+            format!("{path} must be at least 1 when set"),
+        ));
     }
     Ok(())
 }
 
-fn validate_optional_positive_usize(value: Option<usize>, path: &str) -> Result<()> {
+fn validate_optional_positive_usize(value: Option<usize>, path: &str) -> DiagnosticResult {
     if value == Some(0) {
-        bail!("{path} must be at least 1 when set");
+        return Err(validation_diagnostic(
+            path,
+            format!("{path} must be at least 1 when set"),
+        ));
     }
     Ok(())
 }
 
-fn validate_optional_non_empty(value: Option<&str>, path: &str) -> Result<()> {
+fn validate_optional_non_empty(value: Option<&str>, path: &str) -> DiagnosticResult {
     if let Some(value) = value {
         validate_non_empty(value, path)?;
     }
     Ok(())
 }
 
-fn validate_non_empty(value: &str, path: &str) -> Result<()> {
+fn validate_non_empty(value: &str, path: &str) -> DiagnosticResult {
     if value.trim().is_empty() {
-        bail!("{path} must not be empty when set");
+        return Err(validation_diagnostic(
+            path,
+            format!("{path} must not be empty when set"),
+        ));
     }
     Ok(())
 }
 
-fn validate_optional_enum(value: Option<&str>, allowed: &[&str], path: &str) -> Result<()> {
+fn validate_optional_enum(value: Option<&str>, allowed: &[&str], path: &str) -> DiagnosticResult {
     if let Some(value) = value {
         validate_allowed(value, allowed, path)?;
     }
     Ok(())
 }
 
-fn validate_allowed(value: &str, allowed: &[&str], path: &str) -> Result<()> {
+fn validate_allowed(value: &str, allowed: &[&str], path: &str) -> DiagnosticResult {
     validate_non_empty(value, path)?;
     if !allowed
         .iter()
         .any(|candidate| value.eq_ignore_ascii_case(candidate))
     {
-        bail!("{path} must be one of: {}", allowed.join(", "));
+        return Err(validation_diagnostic(
+            path,
+            format!("{path} must be one of: {}", allowed.join(", ")),
+        ));
     }
     Ok(())
 }
 
-fn validate_bool_or_auto(value: Option<&BoolOrAuto>, path: &str) -> Result<()> {
+fn validate_bool_or_auto(value: Option<&BoolOrAuto>, path: &str) -> DiagnosticResult {
     if let Some(BoolOrAuto::String(value)) = value {
         validate_allowed(value, &["auto"], path)?;
     }
     Ok(())
 }
 
-fn validate_probability(value: Option<f64>, path: &str) -> Result<()> {
+fn validate_probability(value: Option<f64>, path: &str) -> DiagnosticResult {
     if let Some(value) = value
         && !(0.0..=1.0).contains(&value)
     {
-        bail!("{path} must be between 0.0 and 1.0");
+        return Err(validation_diagnostic(
+            path,
+            format!("{path} must be between 0.0 and 1.0"),
+        ));
     }
     Ok(())
 }
 
-fn validate_non_negative_f64(value: Option<f64>, path: &str) -> Result<()> {
+fn validate_non_negative_f64(value: Option<f64>, path: &str) -> DiagnosticResult {
     if let Some(value) = value
         && value < 0.0
     {
-        bail!("{path} must be greater than or equal to 0.0");
+        return Err(validation_diagnostic(
+            path,
+            format!("{path} must be greater than or equal to 0.0"),
+        ));
     }
     Ok(())
 }
 
-fn validate_positive_f64(value: Option<f64>, path: &str) -> Result<()> {
+fn validate_positive_f64(value: Option<f64>, path: &str) -> DiagnosticResult {
     if let Some(value) = value
         && value <= 0.0
     {
-        bail!("{path} must be greater than 0.0");
+        return Err(validation_diagnostic(
+            path,
+            format!("{path} must be greater than 0.0"),
+        ));
     }
     Ok(())
 }
@@ -888,94 +1195,110 @@ fn validate_hf_pair(
     file: Option<&str>,
     repo_path: &str,
     file_path: &str,
-) -> Result<()> {
+) -> DiagnosticResult {
     validate_optional_non_empty(repo, repo_path)?;
     validate_optional_non_empty(file, file_path)?;
     match (repo, file) {
-        (Some(_), None) => bail!("{file_path} must be set when {repo_path} is set"),
-        (None, Some(_)) => bail!("{repo_path} must be set when {file_path} is set"),
+        (Some(_), None) => Err(validation_diagnostic(
+            file_path,
+            format!("{file_path} must be set when {repo_path} is set"),
+        )),
+        (None, Some(_)) => Err(validation_diagnostic(
+            repo_path,
+            format!("{repo_path} must be set when {file_path} is set"),
+        )),
         _ => Ok(()),
     }
 }
 
-fn validate_string_list(values: &[String], path: &str) -> Result<()> {
+fn validate_string_list(values: &[String], path: &str) -> DiagnosticResult {
     for value in values {
         validate_non_empty(value, path)?;
     }
     Ok(())
 }
 
-fn validate_mesh_requirements_config(config: &MeshRequirementsConfig) -> Result<()> {
+fn validate_mesh_requirements_config(config: &MeshRequirementsConfig) -> DiagnosticResult {
     let min_node_version = config
         .min_node_version
         .as_deref()
-        .map(parse_node_version)
+        .map(|value| parse_node_version(value, "mesh_requirements.min_node_version"))
         .transpose()?;
     let max_node_version = config
         .max_node_version
         .as_deref()
-        .map(parse_node_version)
+        .map(|value| parse_node_version(value, "mesh_requirements.max_node_version"))
         .transpose()?;
     if let (Some(min), Some(max)) = (&min_node_version, &max_node_version)
         && version_precedence_cmp(min, max).is_gt()
     {
-        bail!(
-            "mesh_requirements.min_node_version must be less than or equal to mesh_requirements.max_node_version"
-        );
+        return Err(validation_diagnostic(
+            "mesh_requirements.min_node_version",
+            "mesh_requirements.min_node_version must be less than or equal to mesh_requirements.max_node_version",
+        ));
     }
 
     if let (Some(min), Some(max)) = (config.min_protocol_version, config.max_protocol_version)
         && min > max
     {
-        bail!(
-            "mesh_requirements.min_protocol_version must be less than or equal to mesh_requirements.max_protocol_version"
-        );
+        return Err(validation_diagnostic(
+            "mesh_requirements.min_protocol_version",
+            "mesh_requirements.min_protocol_version must be less than or equal to mesh_requirements.max_protocol_version",
+        ));
     }
 
     for signer_key in &config.release_signer_keys {
-        validate_release_signer_key_shape(signer_key)?;
+        validate_release_signer_key_shape(signer_key, "mesh_requirements.release_signer_keys")?;
     }
     if config.require_release_attestation && config.release_signer_keys.is_empty() {
-        bail!(
-            "mesh_requirements.require_release_attestation is true but mesh_requirements.release_signer_keys is empty; certified-build admission is not remote runtime attestation, so trust must be anchored in at least one release signer key"
-        );
+        return Err(validation_diagnostic(
+            "mesh_requirements.require_release_attestation",
+            "mesh_requirements.require_release_attestation is true but mesh_requirements.release_signer_keys is empty; certified-build admission is not remote runtime attestation, so trust must be anchored in at least one release signer key",
+        ));
     }
 
     Ok(())
 }
 
-fn parse_node_version(raw: &str) -> Result<Version> {
+fn parse_node_version(raw: &str, path: &str) -> std::result::Result<Version, ConfigDiagnostic> {
     let normalized = raw.trim();
     if normalized.is_empty() {
-        bail!(
-            "mesh_requirements node version bounds must be valid semver strings (an optional leading 'v' is allowed)"
-        );
+        return Err(validation_diagnostic(
+            path,
+            "mesh_requirements node version bounds must be valid semver strings (an optional leading 'v' is allowed)",
+        ));
     }
     let normalized = normalized
         .strip_prefix('v')
         .or_else(|| normalized.strip_prefix('V'))
         .unwrap_or(normalized);
     Version::parse(normalized).map_err(|_| {
-        anyhow::anyhow!(
-            "mesh_requirements node version bounds must be valid semver strings (an optional leading 'v' is allowed)"
+        validation_diagnostic(
+            path,
+            "mesh_requirements node version bounds must be valid semver strings (an optional leading 'v' is allowed)",
         )
     })
 }
 
-fn validate_release_signer_key_shape(raw: &str) -> Result<()> {
+fn validate_release_signer_key_shape(raw: &str, path: &str) -> DiagnosticResult {
     let normalized = raw.trim();
     if normalized.is_empty() {
-        bail!("mesh_requirements.release_signer_keys entries must not be empty");
+        return Err(validation_diagnostic(
+            path,
+            "mesh_requirements.release_signer_keys entries must not be empty",
+        ));
     }
     let Some(encoded) = normalized.strip_prefix("ed25519:") else {
-        bail!(
-            "mesh_requirements.release_signer_keys entries must be of the form 'ed25519:<64-character-hex-public-key>'"
-        );
+        return Err(validation_diagnostic(
+            path,
+            "mesh_requirements.release_signer_keys entries must be of the form 'ed25519:<64-character-hex-public-key>'",
+        ));
     };
     if encoded.len() != 64 || !encoded.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        bail!(
-            "mesh_requirements.release_signer_keys entries must be of the form 'ed25519:<64-character-hex-public-key>'"
-        );
+        return Err(validation_diagnostic(
+            path,
+            "mesh_requirements.release_signer_keys entries must be of the form 'ed25519:<64-character-hex-public-key>'",
+        ));
     }
     Ok(())
 }
@@ -988,39 +1311,233 @@ fn version_precedence_cmp(left: &Version, right: &Version) -> std::cmp::Ordering
     left.cmp(&right)
 }
 
-fn validate_telemetry_config(config: &TelemetryConfig) -> Result<()> {
+fn validate_telemetry_config(config: &TelemetryConfig) -> DiagnosticResult {
     if let Some(service_name) = &config.service_name
         && service_name.trim().is_empty()
     {
-        bail!("telemetry.service_name must not be empty when set");
+        return Err(validation_diagnostic(
+            "telemetry.service_name",
+            "telemetry.service_name must not be empty when set",
+        ));
     }
     if let Some(endpoint) = &config.endpoint
         && endpoint.trim().is_empty()
     {
-        bail!("telemetry.endpoint must not be empty when set");
+        return Err(validation_diagnostic(
+            "telemetry.endpoint",
+            "telemetry.endpoint must not be empty when set",
+        ));
     }
     if let Some(endpoint) = &config.metrics.endpoint
         && endpoint.trim().is_empty()
     {
-        bail!("telemetry.metrics.endpoint must not be empty when set");
+        return Err(validation_diagnostic(
+            "telemetry.metrics.endpoint",
+            "telemetry.metrics.endpoint must not be empty when set",
+        ));
     }
     for key in config.headers.keys() {
         if key.trim().is_empty() {
-            bail!("telemetry.headers keys must not be empty");
+            return Err(validation_diagnostic(
+                "telemetry.headers",
+                "telemetry.headers keys must not be empty",
+            ));
         }
     }
     if let Some(export_interval_secs) = config.export_interval_secs
         && export_interval_secs < 1
     {
-        bail!("telemetry.export_interval_secs must be at least 1");
+        return Err(validation_diagnostic(
+            "telemetry.export_interval_secs",
+            "telemetry.export_interval_secs must be at least 1",
+        ));
     }
     if let Some(queue_size) = config.queue_size
         && queue_size < 1
     {
-        bail!("telemetry.queue_size must be at least 1");
+        return Err(validation_diagnostic(
+            "telemetry.queue_size",
+            "telemetry.queue_size must be at least 1",
+        ));
     }
     if config.prompt_shape_metrics {
-        bail!("telemetry.prompt_shape_metrics is not supported yet and must remain false");
+        return Err(validation_diagnostic(
+            "telemetry.prompt_shape_metrics",
+            "telemetry.prompt_shape_metrics is not supported yet and must remain false",
+        ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    fn schema_diagnostic_constructors_preserve_paths_and_legacy_message() {
+        let used_path = ConfigPath::from_fields(["models", "gpu_id"]);
+        let canonical_path = ConfigPath::from_fields(["models", "hardware", "device"]);
+        let diagnostic = alias_diagnostic(
+            used_path.clone(),
+            canonical_path.clone(),
+            "legacy gpu_id alias resolved to models.hardware.device",
+        )
+        .with_help("Use models.hardware.device for new config writes.");
+
+        assert_eq!(diagnostic.severity, ConfigDiagnosticSeverity::Warning);
+        assert_eq!(diagnostic.code, ConfigDiagnosticCode::AliasApplied);
+        assert_eq!(
+            diagnostic.schema_source,
+            Some(ConfigDiagnosticSchemaSource::BuiltIn)
+        );
+        assert_eq!(diagnostic.path, Some(used_path));
+        assert_eq!(diagnostic.canonical_path, Some(canonical_path));
+        assert_eq!(
+            diagnostic.legacy_message(),
+            "legacy gpu_id alias resolved to models.hardware.device"
+        );
+        assert_eq!(
+            diagnostic.help.as_deref(),
+            Some("Use models.hardware.device for new config writes.")
+        );
+    }
+
+    #[test]
+    fn schema_diagnostics_round_trip_via_toml() {
+        let diagnostic = rejected_field_diagnostic(
+            ConfigPath::from_fields(["defaults", "request_defaults", "json_schema"]),
+            "defaults.request_defaults.json_schema is documented-rejected and must not be set",
+        );
+
+        let encoded = toml::to_string(&diagnostic).expect("diagnostic should serialize");
+        let decoded: ConfigDiagnostic =
+            toml::from_str(&encoded).expect("diagnostic should deserialize");
+
+        assert_eq!(decoded, diagnostic);
+    }
+
+    #[test]
+    fn schema_diagnostic_helpers_cover_validation_and_support_cases() {
+        let invalid = invalid_value_diagnostic(
+            ConfigPath::from_fields(["gpu", "parallel"]),
+            "gpu.parallel must be at least 1, got 0",
+        );
+        let unsupported = unsupported_field_diagnostic(
+            ConfigPath::from_fields(["runtime", "sleep_idle_seconds"]),
+            "runtime.sleep_idle_seconds is not supported",
+        );
+
+        assert_eq!(invalid.code, ConfigDiagnosticCode::InvalidValue);
+        assert_eq!(invalid.severity, ConfigDiagnosticSeverity::Error);
+        assert_eq!(
+            invalid.schema_source,
+            Some(ConfigDiagnosticSchemaSource::BuiltIn)
+        );
+        assert_eq!(unsupported.code, ConfigDiagnosticCode::UnsupportedField);
+        assert_eq!(
+            unsupported.canonical_path.as_ref().map(ConfigPath::render),
+            Some("runtime.sleep_idle_seconds".to_string())
+        );
+    }
+
+    #[test]
+    fn canonical_path_aliases_use_stable_built_in_identifier() {
+        assert_eq!(
+            canonical_builtin_diagnostic_path("models[0].gpu_id")
+                .as_ref()
+                .map(ConfigPath::render),
+            Some("models.<model-ref>.hardware.device".to_string())
+        );
+
+        let diagnostic = built_in_support_diagnostic(
+            "models[0].gpu_id",
+            "legacy gpu_id should report the canonical device path",
+        )
+        .expect("legacy built-in alias should resolve");
+
+        assert_eq!(
+            diagnostic.path.as_ref().map(ConfigPath::render),
+            Some("models[0].gpu_id".to_string())
+        );
+        assert_eq!(
+            diagnostic.canonical_path.as_ref().map(ConfigPath::render),
+            Some("models.<model-ref>.hardware.device".to_string())
+        );
+    }
+
+    #[test]
+    fn structured_diagnostics_report_canonical_path_for_alias_backed_invalid_input() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[gpu]
+assignment = "auto"
+
+[[models]]
+model = "Qwen3-4B-Q4_K_M"
+gpu_id = "metal:0"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.canonical_path.as_ref().map(ConfigPath::render)
+                    == Some("models.<model-ref>.hardware.device".to_string())
+            })
+            .expect("legacy gpu_id path should yield a canonical device diagnostic");
+
+        assert_eq!(diagnostic.code, ConfigDiagnosticCode::InvalidValue);
+        assert_eq!(diagnostic.severity, ConfigDiagnosticSeverity::Error);
+        assert_eq!(
+            diagnostic.schema_source,
+            Some(ConfigDiagnosticSchemaSource::BuiltIn)
+        );
+        assert_eq!(
+            diagnostic.path.as_ref().map(ConfigPath::render),
+            Some("models[0].hardware.device".to_string())
+        );
+        assert_eq!(
+            diagnostic.canonical_path.as_ref().map(ConfigPath::render),
+            Some("models.<model-ref>.hardware.device".to_string())
+        );
+        assert_eq!(
+            diagnostic.message,
+            "models[0].hardware.device must not be set when gpu.assignment = \"auto\""
+        );
+    }
+
+    #[test]
+    fn legacy_validation_errors_derive_compatible_string_messages() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[[plugin]]
+name = "metrics"
+command = "mesh-llm-plugin-metrics"
+
+[plugin.startup]
+connect_timeout_secs = 0
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            legacy_validation_error_text(&diagnostics),
+            "plugin[0].startup.connect_timeout_secs must be at least 1 when set"
+        );
+
+        let err =
+            validate_config(&config).expect_err("legacy validation surface should still fail");
+        assert_eq!(
+            err.to_string(),
+            "plugin[0].startup.connect_timeout_secs must be at least 1 when set"
+        );
+    }
 }

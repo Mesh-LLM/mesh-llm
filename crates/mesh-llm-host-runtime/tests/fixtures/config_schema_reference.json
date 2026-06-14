@@ -1,0 +1,85 @@
+{
+  "settings": [
+    {
+      "canonical_path": "defaults.engine.vllm.temperature",
+      "owner": "engine",
+      "source": {
+        "kind": "engine",
+        "engine_id": "vllm"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "api",
+        "owner_control"
+      ],
+      "apply_mode": "dynamic_apply",
+      "restart_scope": "none",
+      "visibility": "advanced",
+      "description": "Engine temperature override."
+    },
+    {
+      "canonical_path": "defaults.request_defaults.dry",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "support": "unwired",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "model_reload",
+      "visibility": "advanced",
+      "description": "Reserved sampler object accepted for compatibility but not wired into the current runtime."
+    },
+    {
+      "canonical_path": "plugin.blackboard.settings.retention_days",
+      "owner": "plugin",
+      "source": {
+        "kind": "plugin",
+        "plugin_name": "blackboard",
+        "allow_unvalidated_config": false
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file",
+        "owner_control",
+        "plugin_manifest"
+      ],
+      "apply_mode": "dynamic_apply",
+      "restart_scope": "process_restart",
+      "visibility": "advanced",
+      "description": "Retention period in days"
+    },
+    {
+      "canonical_path": "telemetry.prompt_shape_metrics",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "support": "unsupported",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "none",
+      "visibility": "advanced",
+      "description": "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed."
+    },
+    {
+      "canonical_path": "version",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "model_reload",
+      "visibility": "internal",
+      "description": "version"
+    }
+  ]
+}

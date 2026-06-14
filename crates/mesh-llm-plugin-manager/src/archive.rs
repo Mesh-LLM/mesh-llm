@@ -6,14 +6,25 @@ use std::{
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 
-use crate::target::ArchiveExt;
+use crate::{
+    store::{InstalledPluginManifestMetadata, SUPPORTED_PLUGIN_SCHEMA_VERSION},
+    target::ArchiveExt,
+};
+
+const PACKAGED_MANIFEST_FILE: &str = "plugin-manifest.json";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedPluginArchive {
+    pub install_path: PathBuf,
+    pub manifest: Option<InstalledPluginManifestMetadata>,
+}
 
 pub fn extract_plugin_archive(
     archive_path: &Path,
     archive_ext: ArchiveExt,
     plugin_name: &str,
     install_dir: &Path,
-) -> Result<PathBuf> {
+) -> Result<ExtractedPluginArchive> {
     let staging = tempfile::Builder::new()
         .prefix("mesh-plugin-extract-")
         .tempdir()
@@ -26,11 +37,57 @@ pub fn extract_plugin_archive(
 
     let extracted_root = find_plugin_root(staging.path(), plugin_name)?;
     validate_plugin_root(&extracted_root, plugin_name)?;
+    let manifest = load_packaged_manifest(&extracted_root, plugin_name)?;
     let final_dir = install_dir.join(plugin_name);
     fs::create_dir_all(install_dir)
         .with_context(|| format!("create plugin install dir {}", install_dir.display()))?;
     replace_plugin_dir(&extracted_root, &final_dir, plugin_name)?;
-    Ok(final_dir)
+    Ok(ExtractedPluginArchive {
+        install_path: final_dir,
+        manifest,
+    })
+}
+
+fn load_packaged_manifest(
+    plugin_dir: &Path,
+    plugin_name: &str,
+) -> Result<Option<InstalledPluginManifestMetadata>> {
+    let manifest_path = plugin_dir.join(PACKAGED_MANIFEST_FILE);
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+
+    let contents = fs::read(&manifest_path)
+        .with_context(|| format!("read packaged plugin manifest {}", manifest_path.display()))?;
+    let manifest: InstalledPluginManifestMetadata = serde_json::from_slice(&contents)
+        .with_context(|| format!("parse packaged plugin manifest {}", manifest_path.display()))?;
+    validate_packaged_manifest(&manifest, plugin_name)?;
+    Ok(Some(manifest))
+}
+
+fn validate_packaged_manifest(
+    manifest: &InstalledPluginManifestMetadata,
+    plugin_name: &str,
+) -> Result<()> {
+    let Some(schema) = &manifest.config_schema else {
+        return Ok(());
+    };
+    if schema.plugin_name != plugin_name {
+        bail!(
+            "plugin manifest schema name '{}' does not match installed plugin '{}'",
+            schema.plugin_name,
+            plugin_name
+        );
+    }
+    if schema.schema_version != SUPPORTED_PLUGIN_SCHEMA_VERSION {
+        bail!(
+            "plugin config schema version {} is unsupported for '{}'; supported version is {}",
+            schema.schema_version,
+            plugin_name,
+            SUPPORTED_PLUGIN_SCHEMA_VERSION
+        );
+    }
+    Ok(())
 }
 
 fn replace_plugin_dir(from: &Path, to: &Path, plugin_name: &str) -> Result<()> {
@@ -162,6 +219,11 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::store::{
+        InstalledPluginApplyMode, InstalledPluginConfigSchema, InstalledPluginConstraint,
+        InstalledPluginRestartScope, InstalledPluginSettingSchema, InstalledPluginValueKind,
+        InstalledPluginValueSchema, InstalledPluginVisibility,
+    };
 
     fn write_tar_gz(archive_path: &Path, plugin_name: &str, files: &[(&str, &[u8])]) -> Result<()> {
         let archive_file = fs::File::create(archive_path)?;
@@ -210,5 +272,55 @@ mod tests {
             fs::read_to_string(existing.join("old-version.txt")).unwrap(),
             "keep me"
         );
+    }
+
+    #[test]
+    fn unsupported_plugin_schema_version() {
+        let temp = TempDir::new().unwrap();
+        let install_dir = temp.path().join("installed");
+        let archive_path = temp.path().join("demo.tar.gz");
+        let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
+        let manifest = serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
+            config_schema: Some(InstalledPluginConfigSchema {
+                plugin_name: "demo".to_string(),
+                schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION + 1,
+                allow_unvalidated_config: false,
+                settings: vec![InstalledPluginSettingSchema {
+                    key: "mode".to_string(),
+                    value_schema: InstalledPluginValueSchema {
+                        kind: InstalledPluginValueKind::String,
+                        enum_values: Vec::new(),
+                        items: None,
+                        object_properties: Vec::new(),
+                        allow_additional_properties: false,
+                    },
+                    required: false,
+                    default_json: Some("\"strict\"".to_string()),
+                    constraints: vec![InstalledPluginConstraint::AllowedValues {
+                        values: vec!["strict".to_string(), "relaxed".to_string()],
+                    }],
+                    apply_mode: InstalledPluginApplyMode::StaticOnLoad,
+                    restart_scope: InstalledPluginRestartScope::PluginProcess,
+                    visibility: InstalledPluginVisibility::User,
+                    description: None,
+                }],
+            }),
+        })
+        .unwrap();
+        write_tar_gz(
+            &archive_path,
+            "demo",
+            &[
+                ("plugin.toml", b"name = \"demo\""),
+                (executable_name.as_str(), b""),
+                (PACKAGED_MANIFEST_FILE, manifest.as_slice()),
+            ],
+        )
+        .unwrap();
+
+        let error = extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
+            .expect_err("unsupported schema version should fail install-time extraction");
+
+        assert!(error.to_string().contains("unsupported"));
     }
 }

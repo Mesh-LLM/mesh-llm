@@ -3861,6 +3861,7 @@ dependencies = [
  "json5",
  "mesh-llm-build-info",
  "mesh-llm-cli",
+ "mesh-llm-config",
  "mesh-llm-identity",
  "mesh-llm-native-runtime",
  "mesh-llm-plugin-manager",
@@ -3879,6 +3880,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "toml 0.9.12+spec-1.1.0",
  "url",
  "zeroize",
 ]

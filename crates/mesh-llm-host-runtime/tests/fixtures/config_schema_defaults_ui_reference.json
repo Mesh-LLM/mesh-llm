@@ -1,0 +1,928 @@
+{
+  "settings": [
+    {
+      "canonical_path": "defaults.advanced.server.alias",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.check_tensors",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.control_vectors",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.cpu_moe",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.device",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.direct_io",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.fit_context",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.fit_target_mib",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.gpu_layers",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.hf_file",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.hf_repo",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.lora_adapters",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.main_gpu",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.mlock",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.mmap",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.mmproj",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.mmproj_offload",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.model_path",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.model_runtime",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.n_cpu_moe",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.no_host_buffer",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.op_offload",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.placement",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.repack",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.safety_margin_gb",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.split_mode",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.stage_layer_end",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.stage_layer_start",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.tensor_split",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.warmup",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.batch",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.cache_idle_slots",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.cache_ram_mib",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.cache_type_k",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.cache_type_v",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.checkpoint_count",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.checkpoint_interval",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.context_shift",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.ctx_size",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.flash_attention",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.keep_tokens",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.kv_cache_policy",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.kv_offload",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.kv_unified",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.lookup_cache_dynamic",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.lookup_cache_static",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.prefix_cache.enabled",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.prefix_cache.max_bytes",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.prefix_cache.max_entries",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.prefix_cache.min_tokens",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.prefix_cache.payload_mode",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.prefix_cache.shared_record_limit",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.prefix_cache.shared_stride_tokens",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.prompt_cache",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.swa_full",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.ubatch",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.image_max_tokens",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.image_min_tokens",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.mmproj",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.mmproj_offload",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.mmproj_url",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.chat_template",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.chat_template_file",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.chat_template_kwargs",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.dynatemp_exponent",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.dynatemp_range",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.frequency_penalty",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.ignore_eos",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.jinja",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.logit_bias",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.max_tokens",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.min_p",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.mirostat_entropy",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.mirostat_learning_rate",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.mirostat_mode",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.prefill_assistant",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.presence_penalty",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.reasoning_budget",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.reasoning_enabled",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.reasoning_format",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.repeat_last_n",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.repeat_penalty",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.sampler_sequence",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.samplers",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.seed",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.skip_chat_parsing",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.stop",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.system_prompt",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.temperature",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.top_k",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.top_nsigma",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.top_p",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.typical_p",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.skippy.activation_wire_dtype",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.skippy.binary_stage_transport",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.skippy.lifecycle_health_interval_ms",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.skippy.lifecycle_readiness_interval_ms",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.skippy.lifecycle_startup_timeout_ms",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.skippy.prefill_chunk_schedule",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.skippy.prefill_chunk_size",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.skippy.prefill_chunking",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.skippy.stage_model_path",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.skippy.stage_role",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.skippy.stage_topology",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_acceptance_threshold",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_cache_type_k",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_cache_type_v",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_device",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_gpu_layers",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_hf_file",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_hf_repo",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_max_tokens",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_min_tokens",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_model_path",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_selection_policy",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_split_probability",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.draft_threads",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.mode",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.ngram_max",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.ngram_min",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.pairing_fault",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.spec_default",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.throughput.continuous_batching",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.throughput.cpu_affinity",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.throughput.numa",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.throughput.parallel",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.throughput.poll",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.throughput.priority",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.throughput.slot_prompt_similarity",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.throughput.threads",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.throughput.threads_batch",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.throughput.tuning_profile",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    }
+  ]
+}

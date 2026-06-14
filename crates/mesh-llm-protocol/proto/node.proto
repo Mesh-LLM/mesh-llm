@@ -418,6 +418,53 @@ enum ConfigApplyMode {
   CONFIG_APPLY_MODE_NOOP = 3;
 }
 
+enum ConfigDiagnosticSeverity {
+  CONFIG_DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0;
+  CONFIG_DIAGNOSTIC_SEVERITY_ERROR = 1;
+  CONFIG_DIAGNOSTIC_SEVERITY_WARNING = 2;
+  CONFIG_DIAGNOSTIC_SEVERITY_INFO = 3;
+}
+
+enum ConfigDiagnosticSource {
+  CONFIG_DIAGNOSTIC_SOURCE_UNSPECIFIED = 0;
+  CONFIG_DIAGNOSTIC_SOURCE_VALIDATION = 1;
+  CONFIG_DIAGNOSTIC_SOURCE_SCHEMA = 2;
+  CONFIG_DIAGNOSTIC_SOURCE_PLUGIN = 3;
+  CONFIG_DIAGNOSTIC_SOURCE_COMPATIBILITY = 4;
+}
+
+enum ConfigDiagnosticSchemaSource {
+  CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_UNSPECIFIED = 0;
+  CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_BUILT_IN = 1;
+  CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_ENGINE = 2;
+  CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_PLUGIN = 3;
+}
+
+enum ConfigDiagnosticCode {
+  CONFIG_DIAGNOSTIC_CODE_UNSPECIFIED = 0;
+  CONFIG_DIAGNOSTIC_CODE_INVALID_VALUE = 1;
+  CONFIG_DIAGNOSTIC_CODE_MISSING_REQUIRED_VALUE = 2;
+  CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_FIELD = 3;
+  CONFIG_DIAGNOSTIC_CODE_REJECTED_FIELD = 4;
+  CONFIG_DIAGNOSTIC_CODE_ALIAS_APPLIED = 5;
+  CONFIG_DIAGNOSTIC_CODE_MISPLACED_FIELD = 6;
+  CONFIG_DIAGNOSTIC_CODE_UNKNOWN_FIELD = 7;
+  CONFIG_DIAGNOSTIC_CODE_SCHEMA_UNAVAILABLE = 8;
+  CONFIG_DIAGNOSTIC_CODE_LEGACY_UNVALIDATED_CONFIG = 9;
+  CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_SCHEMA_VERSION = 10;
+}
+
+message ConfigDiagnostic {
+  ConfigDiagnosticCode code = 1;
+  ConfigDiagnosticSeverity severity = 2;
+  ConfigDiagnosticSource source = 3;
+  optional ConfigDiagnosticSchemaSource schema_source = 4;
+  optional string path = 5;
+  optional string canonical_path = 6;
+  string message = 7;
+  optional string help = 8;
+}
+
 message OwnerControlEnvelope {
   uint32 gen = 1;                         // must equal NODE_PROTOCOL_GENERATION
   OwnerControlHandshake handshake = 2;
@@ -505,6 +552,7 @@ message OwnerControlApplyConfigResponse {
   bytes config_hash = 3;
   optional string error = 4;
   ConfigApplyMode apply_mode = 5;
+  repeated ConfigDiagnostic diagnostics = 6;
 }
 
 message OwnerControlRefreshInventoryRequest {

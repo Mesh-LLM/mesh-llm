@@ -277,6 +277,7 @@ mod tests {
             downloaded_asset_name: "demo.tar.gz".to_string(),
             install_path,
             enabled: true,
+            manifest: None,
             last_protocol_version: None,
             last_status: None,
             last_error: None,

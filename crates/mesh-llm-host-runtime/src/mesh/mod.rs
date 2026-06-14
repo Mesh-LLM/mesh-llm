@@ -8610,36 +8610,24 @@ impl Node {
                 revision,
                 hash,
                 apply_mode,
+                diagnostics,
             } => {
                 if apply_mode == ConfigApplyMode::Staged {
                     let _ = self.config_revision_tx.send(revision);
                 }
-                crate::proto::node::OwnerControlEnvelope {
-                    r#gen: NODE_PROTOCOL_GENERATION,
-                    handshake: None,
-                    request: None,
-                    response: Some(crate::proto::node::OwnerControlResponse {
-                        request_id,
-                        get_config: None,
-                        watch_config: None,
-                        apply_config: Some(crate::proto::node::OwnerControlApplyConfigResponse {
-                            success: true,
-                            current_revision: revision,
-                            config_hash: hash.to_vec(),
-                            error: None,
-                            apply_mode: match apply_mode {
-                                ConfigApplyMode::Staged => {
-                                    crate::proto::node::ConfigApplyMode::Staged as i32
-                                }
-                                ConfigApplyMode::Noop => {
-                                    crate::proto::node::ConfigApplyMode::Noop as i32
-                                }
-                            },
-                        }),
-                        refresh_inventory: None,
-                    }),
-                    error: None,
-                }
+                owner_control_response::apply_response_envelope(
+                    request_id,
+                    crate::proto::node::OwnerControlApplyConfigResponse {
+                        success: true,
+                        current_revision: revision,
+                        config_hash: hash.to_vec(),
+                        error: None,
+                        apply_mode: owner_control_response::proto_apply_mode(apply_mode),
+                        diagnostics: owner_control_response::config_diagnostics_to_proto(
+                            &diagnostics,
+                        ),
+                    },
+                )
             }
             ApplyResult::RevisionConflict { current_revision } => owner_control_error_envelope(
                 crate::proto::node::OwnerControlErrorCode::RevisionConflict,
@@ -8651,49 +8639,49 @@ impl Node {
                 revision,
                 hash,
                 error,
+                diagnostics,
             } => {
                 let _ = self.config_revision_tx.send(revision);
-                crate::proto::node::OwnerControlEnvelope {
-                    r#gen: NODE_PROTOCOL_GENERATION,
-                    handshake: None,
-                    request: None,
-                    response: Some(crate::proto::node::OwnerControlResponse {
-                        request_id,
-                        get_config: None,
-                        watch_config: None,
-                        apply_config: Some(crate::proto::node::OwnerControlApplyConfigResponse {
-                            success: false,
-                            current_revision: revision,
-                            config_hash: hash.to_vec(),
-                            error: Some(error),
-                            apply_mode: crate::proto::node::ConfigApplyMode::Staged as i32,
-                        }),
-                        refresh_inventory: None,
-                    }),
-                    error: None,
-                }
+                owner_control_response::apply_response_envelope(
+                    request_id,
+                    crate::proto::node::OwnerControlApplyConfigResponse {
+                        success: false,
+                        current_revision: revision,
+                        config_hash: hash.to_vec(),
+                        error: Some(error),
+                        apply_mode: crate::proto::node::ConfigApplyMode::Staged as i32,
+                        diagnostics: owner_control_response::config_diagnostics_to_proto(
+                            &diagnostics,
+                        ),
+                    },
+                )
             }
-            ApplyResult::ValidationError(error) | ApplyResult::PersistError(error) => {
-                crate::proto::node::OwnerControlEnvelope {
-                    r#gen: NODE_PROTOCOL_GENERATION,
-                    handshake: None,
-                    request: None,
-                    response: Some(crate::proto::node::OwnerControlResponse {
-                        request_id,
-                        get_config: None,
-                        watch_config: None,
-                        apply_config: Some(crate::proto::node::OwnerControlApplyConfigResponse {
-                            success: false,
-                            current_revision,
-                            config_hash: current_hash.to_vec(),
-                            error: Some(error),
-                            apply_mode: crate::proto::node::ConfigApplyMode::Unspecified as i32,
-                        }),
-                        refresh_inventory: None,
-                    }),
-                    error: None,
-                }
+            ApplyResult::ValidationError { error, diagnostics } => {
+                owner_control_response::apply_response_envelope(
+                    request_id,
+                    crate::proto::node::OwnerControlApplyConfigResponse {
+                        success: false,
+                        current_revision,
+                        config_hash: current_hash.to_vec(),
+                        error: Some(error),
+                        apply_mode: crate::proto::node::ConfigApplyMode::Unspecified as i32,
+                        diagnostics: owner_control_response::config_diagnostics_to_proto(
+                            &diagnostics,
+                        ),
+                    },
+                )
             }
+            ApplyResult::PersistError(error) => owner_control_response::apply_response_envelope(
+                request_id,
+                crate::proto::node::OwnerControlApplyConfigResponse {
+                    success: false,
+                    current_revision,
+                    config_hash: current_hash.to_vec(),
+                    error: Some(error),
+                    apply_mode: crate::proto::node::ConfigApplyMode::Unspecified as i32,
+                    diagnostics: Vec::new(),
+                },
+            ),
         };
         self.send_owner_control_envelope(send, envelope).await
     }
@@ -10375,6 +10363,7 @@ mod artifact_transfer_io;
 mod direct_path;
 mod gossip;
 mod heartbeat;
+mod owner_control_response;
 mod plugin_streams;
 pub(crate) mod requirements;
 pub use gossip::backfill_legacy_descriptors;

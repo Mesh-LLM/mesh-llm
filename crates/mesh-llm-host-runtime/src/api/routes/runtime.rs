@@ -3,13 +3,19 @@ use super::super::{
     http::{respond_error, respond_json, respond_runtime_error},
     status::decode_runtime_model_path,
 };
+use super::control_apply_diagnostics::{
+    LocalControlApplyDiagnosticPayload, local_control_apply_diagnostic_payload,
+    local_control_apply_diagnostic_payload_from_local,
+};
 use crate::crypto::{
     OwnerKeychainLoadError, keystore_metadata, load_keystore, load_owner_keypair_from_keychain,
 };
+use crate::plugin::validate_config_diagnostics_with_installed_plugin_schemas;
 use mesh_client::{
     ClientBuilder, ControlPlaneBootstrapOptions, ControlPlaneClientError, ControlPlaneConnection,
     InviteToken, OwnerControlRemoteError,
 };
+use mesh_llm_config::{ConfigDiagnosticSeverity, legacy_validation_error_text};
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
 use openai_frontend::GuardrailMode;
 use serde::{Deserialize, Serialize};
@@ -108,6 +114,13 @@ struct ApplyConfigRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct RawApplyConfigRequest {
+    endpoint: Option<String>,
+    expected_revision: u64,
+    config: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
 struct OpenAiGuardrailsModeRequest {
     mode: String,
 }
@@ -130,6 +143,8 @@ struct LocalControlApplyPayload {
     apply_mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    diagnostics: Vec<LocalControlApplyDiagnosticPayload>,
 }
 
 #[derive(Debug, Serialize)]
@@ -217,14 +232,50 @@ async fn handle_control_apply_config(
     if !ensure_loopback_control_caller(stream).await? {
         return Ok(());
     }
-    let request: ApplyConfigRequest = match serde_json::from_str(body) {
+    let raw_request: RawApplyConfigRequest = match serde_json::from_str(body) {
         Ok(request) => request,
         Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
+    };
+    let raw_config_toml = toml::to_string(&raw_request.config).ok();
+    let request = ApplyConfigRequest {
+        endpoint: raw_request.endpoint,
+        expected_revision: raw_request.expected_revision,
+        config: match serde_json::from_value(raw_request.config) {
+            Ok(config) => config,
+            Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
+        },
     };
     let endpoint = match required_control_endpoint(request.endpoint) {
         Ok(endpoint) => endpoint,
         Err(error) => return respond_control_error(stream, error).await,
     };
+    let diagnostics = validate_config_diagnostics_with_installed_plugin_schemas(
+        &request.config,
+        raw_config_toml.as_deref(),
+    );
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == ConfigDiagnosticSeverity::Error)
+    {
+        return respond_json(
+            stream,
+            200,
+            &LocalControlApplyPayload {
+                success: false,
+                current_revision: request.expected_revision,
+                config_hash: hex::encode(crate::protocol::convert::canonical_config_hash(
+                    &crate::protocol::convert::mesh_config_to_proto(&request.config),
+                )),
+                apply_mode: "unspecified".to_string(),
+                error: Some(legacy_validation_error_text(&diagnostics)),
+                diagnostics: diagnostics
+                    .iter()
+                    .map(local_control_apply_diagnostic_payload_from_local)
+                    .collect(),
+            },
+        )
+        .await;
+    }
     match connect_owner_control_client(state, &endpoint).await {
         Ok(client) => {
             let result = client
@@ -245,6 +296,11 @@ async fn handle_control_apply_config(
                             config_hash: hex::encode(response.config_hash),
                             apply_mode: control_apply_mode_label(response.apply_mode),
                             error: response.error,
+                            diagnostics: response
+                                .diagnostics
+                                .iter()
+                                .map(local_control_apply_diagnostic_payload)
+                                .collect(),
                         },
                     )
                     .await

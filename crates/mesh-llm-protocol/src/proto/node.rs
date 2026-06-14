@@ -656,6 +656,27 @@ pub struct OwnerControlApplyConfigResponse {
     pub error: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(enumeration = "ConfigApplyMode", tag = "5")]
     pub apply_mode: i32,
+    #[prost(message, repeated, tag = "6")]
+    pub diagnostics: ::prost::alloc::vec::Vec<ConfigDiagnostic>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConfigDiagnostic {
+    #[prost(enumeration = "ConfigDiagnosticCode", tag = "1")]
+    pub code: i32,
+    #[prost(enumeration = "ConfigDiagnosticSeverity", tag = "2")]
+    pub severity: i32,
+    #[prost(enumeration = "ConfigDiagnosticSource", tag = "3")]
+    pub source: i32,
+    #[prost(enumeration = "ConfigDiagnosticSchemaSource", optional, tag = "4")]
+    pub schema_source: ::core::option::Option<i32>,
+    #[prost(string, optional, tag = "5")]
+    pub path: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "6")]
+    pub canonical_path: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag = "7")]
+    pub message: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "8")]
+    pub help: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlRefreshInventoryRequest {
@@ -1006,6 +1027,142 @@ impl ConfigApplyMode {
             "CONFIG_APPLY_MODE_STAGED" => Some(Self::Staged),
             "CONFIG_APPLY_MODE_LIVE" => Some(Self::Live),
             "CONFIG_APPLY_MODE_NOOP" => Some(Self::Noop),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ConfigDiagnosticSeverity {
+    Unspecified = 0,
+    Error = 1,
+    Warning = 2,
+    Info = 3,
+}
+impl ConfigDiagnosticSeverity {
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CONFIG_DIAGNOSTIC_SEVERITY_UNSPECIFIED",
+            Self::Error => "CONFIG_DIAGNOSTIC_SEVERITY_ERROR",
+            Self::Warning => "CONFIG_DIAGNOSTIC_SEVERITY_WARNING",
+            Self::Info => "CONFIG_DIAGNOSTIC_SEVERITY_INFO",
+        }
+    }
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CONFIG_DIAGNOSTIC_SEVERITY_UNSPECIFIED" => Some(Self::Unspecified),
+            "CONFIG_DIAGNOSTIC_SEVERITY_ERROR" => Some(Self::Error),
+            "CONFIG_DIAGNOSTIC_SEVERITY_WARNING" => Some(Self::Warning),
+            "CONFIG_DIAGNOSTIC_SEVERITY_INFO" => Some(Self::Info),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ConfigDiagnosticSource {
+    Unspecified = 0,
+    Validation = 1,
+    Schema = 2,
+    Plugin = 3,
+    Compatibility = 4,
+}
+impl ConfigDiagnosticSource {
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CONFIG_DIAGNOSTIC_SOURCE_UNSPECIFIED",
+            Self::Validation => "CONFIG_DIAGNOSTIC_SOURCE_VALIDATION",
+            Self::Schema => "CONFIG_DIAGNOSTIC_SOURCE_SCHEMA",
+            Self::Plugin => "CONFIG_DIAGNOSTIC_SOURCE_PLUGIN",
+            Self::Compatibility => "CONFIG_DIAGNOSTIC_SOURCE_COMPATIBILITY",
+        }
+    }
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CONFIG_DIAGNOSTIC_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
+            "CONFIG_DIAGNOSTIC_SOURCE_VALIDATION" => Some(Self::Validation),
+            "CONFIG_DIAGNOSTIC_SOURCE_SCHEMA" => Some(Self::Schema),
+            "CONFIG_DIAGNOSTIC_SOURCE_PLUGIN" => Some(Self::Plugin),
+            "CONFIG_DIAGNOSTIC_SOURCE_COMPATIBILITY" => Some(Self::Compatibility),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ConfigDiagnosticSchemaSource {
+    Unspecified = 0,
+    BuiltIn = 1,
+    Engine = 2,
+    Plugin = 3,
+}
+impl ConfigDiagnosticSchemaSource {
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_UNSPECIFIED",
+            Self::BuiltIn => "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_BUILT_IN",
+            Self::Engine => "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_ENGINE",
+            Self::Plugin => "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_PLUGIN",
+        }
+    }
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
+            "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_BUILT_IN" => Some(Self::BuiltIn),
+            "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_ENGINE" => Some(Self::Engine),
+            "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_PLUGIN" => Some(Self::Plugin),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ConfigDiagnosticCode {
+    Unspecified = 0,
+    InvalidValue = 1,
+    MissingRequiredValue = 2,
+    UnsupportedField = 3,
+    RejectedField = 4,
+    AliasApplied = 5,
+    MisplacedField = 6,
+    UnknownField = 7,
+    SchemaUnavailable = 8,
+    LegacyUnvalidatedConfig = 9,
+    UnsupportedSchemaVersion = 10,
+}
+impl ConfigDiagnosticCode {
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CONFIG_DIAGNOSTIC_CODE_UNSPECIFIED",
+            Self::InvalidValue => "CONFIG_DIAGNOSTIC_CODE_INVALID_VALUE",
+            Self::MissingRequiredValue => "CONFIG_DIAGNOSTIC_CODE_MISSING_REQUIRED_VALUE",
+            Self::UnsupportedField => "CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_FIELD",
+            Self::RejectedField => "CONFIG_DIAGNOSTIC_CODE_REJECTED_FIELD",
+            Self::AliasApplied => "CONFIG_DIAGNOSTIC_CODE_ALIAS_APPLIED",
+            Self::MisplacedField => "CONFIG_DIAGNOSTIC_CODE_MISPLACED_FIELD",
+            Self::UnknownField => "CONFIG_DIAGNOSTIC_CODE_UNKNOWN_FIELD",
+            Self::SchemaUnavailable => "CONFIG_DIAGNOSTIC_CODE_SCHEMA_UNAVAILABLE",
+            Self::LegacyUnvalidatedConfig => "CONFIG_DIAGNOSTIC_CODE_LEGACY_UNVALIDATED_CONFIG",
+            Self::UnsupportedSchemaVersion => "CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_SCHEMA_VERSION",
+        }
+    }
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CONFIG_DIAGNOSTIC_CODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "CONFIG_DIAGNOSTIC_CODE_INVALID_VALUE" => Some(Self::InvalidValue),
+            "CONFIG_DIAGNOSTIC_CODE_MISSING_REQUIRED_VALUE" => Some(Self::MissingRequiredValue),
+            "CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_FIELD" => Some(Self::UnsupportedField),
+            "CONFIG_DIAGNOSTIC_CODE_REJECTED_FIELD" => Some(Self::RejectedField),
+            "CONFIG_DIAGNOSTIC_CODE_ALIAS_APPLIED" => Some(Self::AliasApplied),
+            "CONFIG_DIAGNOSTIC_CODE_MISPLACED_FIELD" => Some(Self::MisplacedField),
+            "CONFIG_DIAGNOSTIC_CODE_UNKNOWN_FIELD" => Some(Self::UnknownField),
+            "CONFIG_DIAGNOSTIC_CODE_SCHEMA_UNAVAILABLE" => Some(Self::SchemaUnavailable),
+            "CONFIG_DIAGNOSTIC_CODE_LEGACY_UNVALIDATED_CONFIG" => {
+                Some(Self::LegacyUnvalidatedConfig)
+            }
+            "CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_SCHEMA_VERSION" => {
+                Some(Self::UnsupportedSchemaVersion)
+            }
             _ => None,
         }
     }

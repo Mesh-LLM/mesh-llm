@@ -178,6 +178,7 @@ async fn spawn_success_server(
                                         config_hash: vec![0x44; 32],
                                         error: None,
                                         apply_mode: ConfigApplyMode::Staged as i32,
+                                        diagnostics: Vec::new(),
                                     },
                                 ),
                                 refresh_inventory: None,

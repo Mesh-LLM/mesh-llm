@@ -707,6 +707,11 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<RuntimeCommand>,
     },
+    /// Inspect and validate mesh-llm configuration files.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Diagnose local mesh, runtime, and split-readiness problems.
     Doctor {
         /// Print machine-readable JSON for the default doctor report.
@@ -915,6 +920,19 @@ pub enum Command {
     /// Run a CLI command contributed by a configured plugin.
     #[command(external_subcommand)]
     ExternalPlugin(Vec<OsString>),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigCommand {
+    /// Validate a config TOML file without starting a node.
+    Validate {
+        /// Config TOML path to validate. Defaults to --config, MESH_LLM_CONFIG, or ~/.mesh-llm/config.toml.
+        #[arg(long = "config-path")]
+        config_path: Option<PathBuf>,
+        /// Print machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1520,6 +1538,27 @@ mod tests {
             }
             other => panic!("unexpected command for {args:?}: {other:?}"),
         }
+    }
+
+    #[test]
+    fn config_validate_command_parses_config_path_and_json() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "config",
+            "validate",
+            "--config-path",
+            "mesh.toml",
+            "--json",
+        ]);
+
+        let Some(Command::Config {
+            command: ConfigCommand::Validate { config_path, json },
+        }) = cli.command
+        else {
+            panic!("expected config validate command");
+        };
+        assert_eq!(config_path, Some(PathBuf::from("mesh.toml")));
+        assert!(json);
     }
 
     #[test]

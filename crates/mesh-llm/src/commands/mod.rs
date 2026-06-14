@@ -1,3 +1,4 @@
+mod config;
 mod discover;
 mod doctor;
 mod download;
@@ -8,6 +9,7 @@ mod runtime;
 use anyhow::Result;
 use mesh_llm_cli::{Cli, Command};
 
+use self::config::dispatch_config_command;
 use self::discover::{DiscoverOptions, run_discover, run_stop};
 use self::doctor::dispatch_doctor_command;
 use self::download::dispatch_download_command;
@@ -46,6 +48,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             Ok(())
         }
         Command::Runtime { command } => dispatch_runtime_command(command.as_ref()).await,
+        Command::Config { command } => dispatch_config_command(cli, command),
         Command::Doctor { command, json } => dispatch_doctor_command(command.as_ref(), *json).await,
         Command::Load { name, port } => run_load(name, *port).await,
         Command::Unload { name, port } => run_drop(name, *port).await,

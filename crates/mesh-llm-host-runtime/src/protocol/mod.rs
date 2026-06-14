@@ -4,6 +4,7 @@
 use crate::mesh::NodeRole;
 use crate::mesh::PeerAnnouncement;
 
+pub(crate) mod config_diagnostic;
 pub(crate) mod convert;
 use anyhow::Result;
 pub(crate) use convert::*;
@@ -2048,6 +2049,7 @@ alias = "model-alias"
                 command: Some("mesh-llm".to_string()),
                 args: vec!["--plugin".to_string()],
                 url: None,
+                settings: Default::default(),
                 startup: Default::default(),
             }],
             extra: Default::default(),

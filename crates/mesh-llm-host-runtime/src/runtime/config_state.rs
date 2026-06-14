@@ -1,8 +1,12 @@
 use anyhow::Result;
+use mesh_llm_config::{ConfigDiagnostic, ConfigDiagnosticSeverity, legacy_validation_error_text};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-use crate::plugin::{ConfigStore, MeshConfig, load_config, validate_config};
+use crate::plugin::{
+    ConfigStore, MeshConfig, config_to_toml, load_config,
+    validate_config_diagnostics_with_installed_plugin_schemas,
+};
 use crate::protocol::convert::{canonical_config_hash, mesh_config_to_proto};
 
 /// Mirrors the `ConfigApplyMode` proto enum; kept in the domain layer so
@@ -21,6 +25,7 @@ pub(crate) enum ApplyResult {
         revision: u64,
         hash: [u8; 32],
         apply_mode: ConfigApplyMode,
+        diagnostics: Vec<ConfigDiagnostic>,
     },
     RevisionConflict {
         current_revision: u64,
@@ -29,8 +34,12 @@ pub(crate) enum ApplyResult {
         revision: u64,
         hash: [u8; 32],
         error: String,
+        diagnostics: Vec<ConfigDiagnostic>,
     },
-    ValidationError(String),
+    ValidationError {
+        error: String,
+        diagnostics: Vec<ConfigDiagnostic>,
+    },
     PersistError(String),
 }
 
@@ -165,8 +174,19 @@ impl ConfigState {
     }
 
     pub(crate) fn apply(&mut self, new_config: MeshConfig, expected_revision: u64) -> ApplyResult {
-        if let Err(e) = validate_config(&new_config) {
-            return ApplyResult::ValidationError(e.to_string());
+        let raw_toml = config_to_toml(&new_config).ok();
+        let diagnostics = validate_config_diagnostics_with_installed_plugin_schemas(
+            &new_config,
+            raw_toml.as_deref(),
+        );
+        if diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == ConfigDiagnosticSeverity::Error)
+        {
+            return ApplyResult::ValidationError {
+                error: legacy_validation_error_text(&diagnostics),
+                diagnostics,
+            };
         }
 
         if expected_revision != self.revision {
@@ -184,6 +204,7 @@ impl ConfigState {
                 revision: self.revision,
                 hash: self.config_hash,
                 apply_mode: ConfigApplyMode::Noop,
+                diagnostics,
             };
         }
 
@@ -204,6 +225,7 @@ impl ConfigState {
                 error: format!(
                     "failed to write revision sidecar: {e}; config persisted and in-memory revision advanced, but on-disk revision tracking may be stale"
                 ),
+                diagnostics,
             };
         }
 
@@ -216,6 +238,7 @@ impl ConfigState {
             revision: self.revision,
             hash: self.config_hash,
             apply_mode: ConfigApplyMode::Staged,
+            diagnostics,
         }
     }
 }
@@ -224,6 +247,11 @@ impl ConfigState {
 mod tests {
     use super::*;
     use crate::plugin::{GpuAssignment, GpuConfig, MeshConfig};
+    use mesh_llm_config::ConfigDiagnosticCode;
+    use mesh_llm_plugin_manager::{
+        InstalledPluginConfigSchema, InstalledPluginManifestMetadata, InstalledPluginMetadata,
+        PluginStore, SUPPORTED_PLUGIN_SCHEMA_VERSION,
+    };
 
     const FULL_SURFACE_VALID_FIXTURE: &str =
         include_str!("../../tests/fixtures/skippy_full_surface_valid.toml");
@@ -251,6 +279,64 @@ mod tests {
             plugins: vec![],
             extra: Default::default(),
         }
+    }
+
+    fn installed_plugin_metadata(
+        name: &str,
+        schema: Option<InstalledPluginConfigSchema>,
+    ) -> InstalledPluginMetadata {
+        InstalledPluginMetadata {
+            name: name.to_string(),
+            source_repository: format!("https://github.com/mesh-llm/{name}"),
+            installed_version: "v1.0.0".to_string(),
+            target_triple: std::env::consts::ARCH.to_string(),
+            downloaded_asset_name: format!("{name}.tar.gz"),
+            install_path: std::env::temp_dir().join(format!("mesh-llm-plugin-{name}")),
+            enabled: true,
+            manifest: Some(InstalledPluginManifestMetadata {
+                config_schema: schema,
+            }),
+            last_protocol_version: Some(1),
+            last_status: Some("installed".to_string()),
+            last_error: None,
+        }
+    }
+
+    fn legacy_unvalidated_schema(plugin_name: &str) -> InstalledPluginConfigSchema {
+        InstalledPluginConfigSchema {
+            plugin_name: plugin_name.to_string(),
+            schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,
+            allow_unvalidated_config: true,
+            settings: Vec::new(),
+        }
+    }
+
+    fn with_plugin_store(metadata: &[InstalledPluginMetadata], test: impl FnOnce()) {
+        struct PluginDirRestoreGuard {
+            previous: Option<std::ffi::OsString>,
+        }
+
+        impl Drop for PluginDirRestoreGuard {
+            fn drop(&mut self) {
+                if let Some(previous) = self.previous.take() {
+                    unsafe { std::env::set_var("MESH_LLM_PLUGIN_DIR", previous) };
+                } else {
+                    unsafe { std::env::remove_var("MESH_LLM_PLUGIN_DIR") };
+                }
+            }
+        }
+
+        let temp = tempfile::TempDir::new().expect("plugin store temp dir");
+        let store = PluginStore::new(temp.path());
+        for entry in metadata {
+            store.save(entry).expect("save plugin metadata");
+        }
+
+        let previous = std::env::var_os("MESH_LLM_PLUGIN_DIR");
+        let _restore_plugin_dir = PluginDirRestoreGuard { previous };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("MESH_LLM_PLUGIN_DIR", temp.path()) };
+        test();
     }
 
     fn representative_nested_config() -> MeshConfig {
@@ -399,9 +485,11 @@ alias = "model-alias"
                 revision,
                 hash: _,
                 apply_mode,
+                diagnostics,
             } => {
                 assert_eq!(revision, 1);
                 assert_eq!(apply_mode, ConfigApplyMode::Staged);
+                assert!(diagnostics.is_empty());
             }
             other => panic!("expected Applied, got {other:?}"),
         }
@@ -647,9 +735,11 @@ reasoning_format = "qwen"
                 revision,
                 hash,
                 apply_mode,
+                diagnostics,
             } => {
                 assert_eq!(revision, 1);
                 assert_eq!(apply_mode, ConfigApplyMode::Staged);
+                assert!(diagnostics.is_empty());
                 hash
             }
             other => panic!("expected Applied, got {other:?}"),
@@ -722,6 +812,107 @@ reasoning_format = "mystery"
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn runtime_config_diagnostics_transport() {
+        let dir = test_dir();
+        let config_path = dir.join("config.toml");
+        let mut state = ConfigState::load(&config_path).expect("load");
+        let invalid: MeshConfig = toml::from_str(
+            r#"version = 1
+
+[gpu]
+assignment = "auto"
+
+[[models]]
+model = "Qwen3-8B-Q4_K_M"
+
+[models.request_defaults]
+reasoning_format = "mystery"
+"#,
+        )
+        .expect("invalid fixture should still deserialize");
+
+        match state.apply(invalid, 0) {
+            ApplyResult::ValidationError { error, diagnostics } => {
+                assert!(
+                    error.contains(
+                        "models[0].request_defaults.reasoning_format must be one of: auto, none, deepseek, deepseek-legacy, hidden"
+                    ),
+                    "unexpected legacy error: {error}"
+                );
+                assert!(diagnostics.iter().any(|diagnostic| {
+                    diagnostic.severity == ConfigDiagnosticSeverity::Error
+                        && diagnostic
+                            .message
+                            .contains("reasoning_format must be one of")
+                        && diagnostic
+                            .path
+                            .as_ref()
+                            .map(|path| path.render())
+                            .as_deref()
+                            == Some("models[0].request_defaults.reasoning_format")
+                        && diagnostic.help.is_none()
+                }));
+            }
+            other => panic!("expected ValidationError, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn runtime_config_success_preserves_warning_diagnostics() {
+        with_plugin_store(
+            &[installed_plugin_metadata(
+                "blackboard",
+                Some(legacy_unvalidated_schema("blackboard")),
+            )],
+            || {
+                let dir = test_dir();
+                let config_path = dir.join("config.toml");
+                let mut state = ConfigState::load(&config_path).expect("load");
+                let config: MeshConfig = toml::from_str(
+                    r#"
+version = 1
+
+[[plugin]]
+name = "blackboard"
+
+[plugin.settings]
+arbitrary = "kept"
+"#,
+                )
+                .expect("legacy plugin config should deserialize");
+
+                match state.apply(config, 0) {
+                    ApplyResult::Applied {
+                        revision,
+                        apply_mode,
+                        diagnostics,
+                        ..
+                    } => {
+                        assert_eq!(revision, 1);
+                        assert_eq!(apply_mode, ConfigApplyMode::Staged);
+                        assert!(diagnostics.iter().any(|diagnostic| {
+                            diagnostic.code == ConfigDiagnosticCode::LegacyUnvalidatedConfig
+                                && diagnostic.severity == ConfigDiagnosticSeverity::Warning
+                                && diagnostic
+                                    .canonical_path
+                                    .as_ref()
+                                    .map(|path| path.render())
+                                    .as_deref()
+                                    == Some("plugin.blackboard.settings")
+                        }));
+                    }
+                    other => panic!("expected Applied with warning diagnostics, got {other:?}"),
+                }
+
+                std::fs::remove_dir_all(&dir).ok();
+            },
+        );
     }
 
     #[test]
@@ -920,9 +1111,11 @@ temperature = 0.2
                 revision,
                 hash,
                 apply_mode,
+                diagnostics,
             } => {
                 assert_eq!(revision, 1);
                 assert_eq!(apply_mode, ConfigApplyMode::Staged);
+                assert!(diagnostics.is_empty());
                 hash
             }
             other => panic!("expected Applied, got {other:?}"),

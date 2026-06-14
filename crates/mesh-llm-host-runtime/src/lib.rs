@@ -3,6 +3,7 @@
 mod api;
 mod capture;
 pub mod command_support;
+pub mod config_schema;
 pub mod crypto;
 pub mod discovery;
 pub mod inference;

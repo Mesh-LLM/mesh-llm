@@ -1,4 +1,5 @@
 mod chat;
+mod control_apply_diagnostics;
 mod diagnostics;
 mod discover;
 mod mcp;

@@ -50,11 +50,31 @@ export type RuntimeControlApplyResponse = {
   config_hash: string
   apply_mode: string
   error?: unknown
+  diagnostics?: RuntimeControlDiagnostic[]
+}
+
+export type RuntimeControlDiagnostic = {
+  code: string
+  severity: string
+  source: string
+  schema_source?: string
+  path?: string
+  canonical_path?: string
+  message: string
+  help?: string
+}
+
+export type ConfigurationDefaultsSchemaPathEntry = {
+  id: string
+  canonicalPath: string
 }
 
 export function runtimeControlApplyErrorMessage(response: RuntimeControlApplyResponse | null | undefined) {
   if (!response) return undefined
-  return runtimeControlErrorMessage(response.error)
+  return (
+    runtimeControlErrorMessage(response.error) ??
+    response.diagnostics?.find((diagnostic) => diagnostic.severity === 'error')?.message
+  )
 }
 
 function runtimeControlErrorMessage(error: unknown): string | undefined {
@@ -154,6 +174,13 @@ function resolveControlDefaultsPath(setting: ConfigurationDefaultsSetting): stri
   const sectionPath = parseDefaultsSectionPath(setting.tomlSection ?? categorySection?.tomlSection)
 
   return [...sectionPath, key]
+}
+
+export function configurationDefaultsSchemaPathEntries(): ConfigurationDefaultsSchemaPathEntry[] {
+  return CONFIGURATION_DEFAULTS.settings.map((setting) => ({
+    id: setting.id,
+    canonicalPath: ['defaults', ...resolveControlDefaultsPath(setting)].join('.')
+  }))
 }
 
 function overlayDefaultsValues(

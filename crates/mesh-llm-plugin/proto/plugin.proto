@@ -185,6 +185,105 @@ message PluginManifest {
   repeated string capabilities = 8;
   repeated MeshChannelManifest mesh_channels = 9;
   repeated MeshEventSubscriptionManifest mesh_event_subscriptions = 10;
+  optional PluginConfigSchemaManifest config_schema = 11;
+}
+
+message PluginConfigSchemaManifest {
+  string plugin_name = 1;
+  uint32 schema_version = 2;
+  bool allow_unvalidated_config = 3;
+  repeated PluginConfigSettingManifest settings = 4;
+}
+
+message PluginConfigSettingManifest {
+  string key = 1;
+  PluginConfigValueSchema value_schema = 2;
+  bool required = 3;
+  optional string default_json = 4;
+  repeated PluginConfigConstraintManifest constraints = 5;
+  PluginConfigApplyMode apply_mode = 6;
+  PluginConfigRestartScope restart_scope = 7;
+  PluginConfigVisibility visibility = 8;
+  optional string description = 9;
+}
+
+message PluginConfigValueSchema {
+  PluginConfigValueKind kind = 1;
+  repeated string enum_values = 2;
+  optional PluginConfigValueSchema items = 3;
+  repeated PluginConfigObjectProperty object_properties = 4;
+  bool allow_additional_properties = 5;
+}
+
+message PluginConfigObjectProperty {
+  string key = 1;
+  PluginConfigValueSchema value_schema = 2;
+  bool required = 3;
+  optional string description = 4;
+}
+
+enum PluginConfigValueKind {
+  PLUGIN_CONFIG_VALUE_KIND_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_VALUE_KIND_BOOLEAN = 1;
+  PLUGIN_CONFIG_VALUE_KIND_INTEGER = 2;
+  PLUGIN_CONFIG_VALUE_KIND_FLOAT = 3;
+  PLUGIN_CONFIG_VALUE_KIND_STRING = 4;
+  PLUGIN_CONFIG_VALUE_KIND_PATH = 5;
+  PLUGIN_CONFIG_VALUE_KIND_URL = 6;
+  PLUGIN_CONFIG_VALUE_KIND_ENUM = 7;
+  PLUGIN_CONFIG_VALUE_KIND_ARRAY = 8;
+  PLUGIN_CONFIG_VALUE_KIND_OBJECT = 9;
+}
+
+enum PluginConfigApplyMode {
+  PLUGIN_CONFIG_APPLY_MODE_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_APPLY_MODE_STATIC_ON_LOAD = 1;
+  PLUGIN_CONFIG_APPLY_MODE_DYNAMIC_VALIDATION_ONLY = 2;
+  PLUGIN_CONFIG_APPLY_MODE_DYNAMIC_APPLY = 3;
+}
+
+enum PluginConfigRestartScope {
+  PLUGIN_CONFIG_RESTART_SCOPE_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_RESTART_SCOPE_NONE = 1;
+  PLUGIN_CONFIG_RESTART_SCOPE_MODEL_RELOAD = 2;
+  PLUGIN_CONFIG_RESTART_SCOPE_PROCESS_RESTART = 3;
+  PLUGIN_CONFIG_RESTART_SCOPE_MESH_RESTART = 4;
+  PLUGIN_CONFIG_RESTART_SCOPE_PLUGIN_PROCESS = 5;
+}
+
+enum PluginConfigVisibility {
+  PLUGIN_CONFIG_VISIBILITY_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_VISIBILITY_USER = 1;
+  PLUGIN_CONFIG_VISIBILITY_ADVANCED = 2;
+  PLUGIN_CONFIG_VISIBILITY_HIDDEN = 3;
+  PLUGIN_CONFIG_VISIBILITY_INTERNAL = 4;
+}
+
+message PluginConfigConstraintManifest {
+  oneof constraint {
+    PluginConfigNonEmptyConstraint non_empty = 1;
+    PluginConfigPositiveConstraint positive = 2;
+    PluginConfigRangeConstraint range = 3;
+    PluginConfigAllowedValuesConstraint allowed_values = 4;
+    PluginConfigRequiresConstraint requires = 5;
+  }
+}
+
+message PluginConfigNonEmptyConstraint {}
+
+message PluginConfigPositiveConstraint {}
+
+message PluginConfigRangeConstraint {
+  optional string min = 1;
+  optional string max = 2;
+}
+
+message PluginConfigAllowedValuesConstraint {
+  repeated string values = 1;
+}
+
+message PluginConfigRequiresConstraint {
+  string key = 1;
 }
 
 message MeshChannelManifest {

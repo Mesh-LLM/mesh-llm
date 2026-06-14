@@ -1,3 +1,13 @@
+mod built_in_schema;
+mod schema_types;
+
+pub use built_in_schema::{
+    BuiltInConfigPathResolution, built_in_config_schema_descriptor, built_in_config_settings,
+    canonicalize_built_in_config_identifier, canonicalize_built_in_config_path,
+    resolve_built_in_config_identifier, resolve_built_in_config_path,
+};
+pub use schema_types::*;
+
 pub use mesh_llm_types::runtime::ModelRuntimeKind;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
@@ -978,6 +988,8 @@ pub struct PluginConfigEntry {
     /// Optional URL passed to the plugin as `MESH_LLM_PLUGIN_URL`.
     #[serde(default)]
     pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, toml::Value>,
     #[serde(default, skip_serializing_if = "PluginStartupConfig::is_default")]
     pub startup: PluginStartupConfig,
 }

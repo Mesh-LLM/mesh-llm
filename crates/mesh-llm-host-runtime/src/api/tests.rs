@@ -23,6 +23,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
+mod apply_config_diagnostics;
+
 fn qwen_coder_remote_catalog_entry() -> crate::models::remote_catalog::CatalogEntry {
     use crate::models::remote_catalog::{
         CatalogCurated, CatalogEntry, CatalogSource, CatalogVariant,
@@ -1267,6 +1269,7 @@ async fn control_plane_api_apply_config_uses_full_mesh_config_contract() {
             config_hash: vec![0xab; 32],
             error: None,
             apply_mode: ConfigApplyMode::Staged as i32,
+            diagnostics: Vec::new(),
         },
     ))
     .await;
