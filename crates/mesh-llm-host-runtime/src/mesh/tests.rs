@@ -395,6 +395,7 @@ async fn make_test_node_with_requirements(
         genesis_policy: Arc::new(Mutex::new(None)),
         signed_genesis_policy: Arc::new(Mutex::new(None)),
         bootstrap_token: Arc::new(Mutex::new(None)),
+        join_targets: Arc::new(Mutex::new(Vec::new())),
         first_joined_mesh_ts: Arc::new(Mutex::new(None)),
         accepting: Arc::new((
             tokio::sync::Notify::new(),
@@ -3149,6 +3150,44 @@ fn relay_reconnect_controller_applies_cooldown_after_attempt_and_prunes_gone_pee
     assert!(
         controller.peer_health(peer).is_none(),
         "controller should prune peers that are no longer active"
+    );
+}
+
+#[tokio::test]
+async fn remember_join_target_updates_address_on_peer_rebind() {
+    let node = make_test_node(super::NodeRole::Worker).await.unwrap();
+    let peer_id = make_test_endpoint_id(34);
+
+    let mut first = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    first
+        .addrs
+        .insert(TransportAddr::Ip("192.168.1.50:47916".parse().unwrap()));
+    node.remember_join_target(first).await;
+
+    assert_eq!(
+        node.join_target_lan_ipv4().await,
+        vec!["192.168.1.50:47916".parse().unwrap()],
+        "the first advertised LAN address should be recorded"
+    );
+
+    // The peer restarts/rebinds and re-advertises a new socket address under
+    // the same endpoint id. The stale address must be replaced, not retained.
+    let mut rebound = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    rebound
+        .addrs
+        .insert(TransportAddr::Ip("192.168.1.50:51000".parse().unwrap()));
+    node.remember_join_target(rebound).await;
+
+    assert_eq!(
+        node.join_target_lan_ipv4().await,
+        vec!["192.168.1.50:51000".parse().unwrap()],
+        "a rebind under the same peer id must replace the stale dial-back address"
     );
 }
 

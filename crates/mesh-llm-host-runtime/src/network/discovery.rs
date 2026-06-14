@@ -42,6 +42,12 @@ pub(crate) struct LanMeshAdvertisement {
     pub(crate) proof_challenge: Option<String>,
     pub(crate) app_version: Option<String>,
     pub join_material: LanJoinMaterial,
+    /// Base64url-encoded JSON of the publisher's own [`iroh::EndpointAddr`],
+    /// filtered to its bound LAN interface. Additive (TXT key `ep_addr`):
+    /// older nodes ignore it. Lets a peer dial the publisher back directly,
+    /// which is the working direction when a multi-homed node cannot initiate
+    /// a relay-less direct connection itself.
+    pub(crate) endpoint_addr_b64: Option<String>,
 }
 
 impl LanMeshAdvertisement {
@@ -88,7 +94,23 @@ impl LanMeshAdvertisement {
             proof_challenge,
             app_version: app_version.map(str::to_owned),
             join_material: LanJoinMaterial::RequiresSuppliedToken,
+            endpoint_addr_b64: None,
         }
+    }
+
+    /// Attach the publisher's own reachable [`EndpointAddr`] so peers can dial
+    /// it back directly (mDNS reverse-dial). Encoded as base64url JSON under the
+    /// additive `ep_addr` TXT key.
+    pub(crate) fn with_endpoint_addr(mut self, addr: &iroh::EndpointAddr) -> Self {
+        self.endpoint_addr_b64 = encode_endpoint_addr_b64(addr);
+        self
+    }
+
+    /// Decode the publisher's advertised [`EndpointAddr`], if present and valid.
+    pub(crate) fn endpoint_addr(&self) -> Option<iroh::EndpointAddr> {
+        self.endpoint_addr_b64
+            .as_deref()
+            .and_then(decode_endpoint_addr_b64)
     }
 
     pub(crate) fn matches_supplied_token(&self, supplied_invite_token: Option<&str>) -> bool {
@@ -122,6 +144,7 @@ impl LanMeshAdvertisement {
         push_optional_txt(&mut txt, "details", self.details_path.as_deref());
         push_optional_txt(&mut txt, "proof_challenge", self.proof_challenge.as_deref());
         push_optional_txt(&mut txt, "version", self.app_version.as_deref());
+        push_optional_txt(&mut txt, "ep_addr", self.endpoint_addr_b64.as_deref());
 
         for (key, value) in &txt {
             anyhow::ensure!(
@@ -161,6 +184,7 @@ impl LanMeshAdvertisement {
             "details",
             "proof_challenge",
             "version",
+            "ep_addr",
         ]
         .into_iter()
         .filter_map(|key| service.get_property_val_str(key).map(|value| (key, value)))
@@ -207,11 +231,20 @@ pub struct LanDiscoveredMesh {
     pub discovered_at: u64,
     #[serde(skip)]
     join_token: Option<String>,
+    /// Publisher's own dial-back [`EndpointAddr`] (from the additive `ep_addr`
+    /// TXT key), if advertised. Used by mDNS reverse-dial.
+    #[serde(skip)]
+    endpoint_addr: Option<iroh::EndpointAddr>,
 }
 
 impl LanDiscoveredMesh {
     pub fn join_token(&self) -> Option<&str> {
         self.join_token.as_deref()
+    }
+
+    /// The publisher's advertised dial-back address, if present.
+    pub fn endpoint_addr(&self) -> Option<&iroh::EndpointAddr> {
+        self.endpoint_addr.as_ref()
     }
 
     pub(crate) fn to_join_candidate(&self) -> Option<(String, nostr::DiscoveredMesh)> {
@@ -287,7 +320,17 @@ impl LanDetailsResponse {
 }
 
 pub(crate) async fn publish_lan_loop(node: crate::mesh::Node, config: LanPublishConfig) {
-    let Some(daemon) = create_lan_publish_daemon(&config.status_tx) else {
+    // Restrict the mDNS daemon to the bound LAN interface when known. On
+    // multi-homed hosts (e.g. many utun/VPN interfaces) advertising on every
+    // interface can prevent the advertisement from reaching the LAN peers
+    // listen on. Pinning to the LAN address keeps mDNS on the same interface
+    // QUIC is bound to.
+    let lan_ip = node
+        .advertised_endpoint_addr()
+        .ip_addrs()
+        .map(|addr| addr.ip())
+        .find(|ip| ip.is_ipv4());
+    let Some(daemon) = create_lan_publish_daemon(&config.status_tx, lan_ip) else {
         return;
     };
 
@@ -317,9 +360,15 @@ pub(crate) async fn publish_lan_loop(node: crate::mesh::Node, config: LanPublish
 
 fn create_lan_publish_daemon(
     status_tx: &Option<tokio::sync::watch::Sender<Option<nostr::PublishStateUpdate>>>,
+    lan_ip: Option<std::net::IpAddr>,
 ) -> Option<ServiceDaemon> {
     match ServiceDaemon::new() {
-        Ok(daemon) => Some(daemon),
+        Ok(daemon) => {
+            // When bound to a specific LAN interface, advertise only there so
+            // the advertisement reaches LAN peers on multi-homed hosts.
+            restrict_daemon_to_interface(&daemon, lan_ip);
+            Some(daemon)
+        }
         Err(err) => {
             tracing::warn!("Failed to create mDNS daemon: {err}");
             let _ = send_publish_state(status_tx, nostr::PublishStateUpdate::PublishFailed);
@@ -362,7 +411,8 @@ async fn publish_lan_advertisement(attempt: LanPublishAttempt<'_>) {
         Some(&listing.invite_token),
         Some(crate::VERSION),
         details_reachable,
-    );
+    )
+    .with_endpoint_addr(&node.advertised_endpoint_addr());
     let Some(service_info) = encode_lan_service_info(
         &advert,
         instance_name,
@@ -419,12 +469,56 @@ fn register_lan_service(
     }
 }
 
+/// Restrict an mDNS daemon to only the interface owning `lan_ip`.
+///
+/// `enable_interface` is additive on top of the default (all interfaces
+/// enabled), so to actually pin to one interface we must first disable all,
+/// then enable the LAN one. On multi-homed hosts (many utun/VPN interfaces)
+/// this keeps mDNS traffic on the same interface QUIC is bound to, so
+/// advertisements and queries reach LAN peers instead of being flooded onto
+/// interfaces the peers cannot see.
+fn restrict_daemon_to_interface(daemon: &ServiceDaemon, lan_ip: Option<std::net::IpAddr>) {
+    // On multi-homed hosts (many utun/VPN interfaces) mdns-sd's default of
+    // advertising on every interface can mean the advertisement is multicast on
+    // an interface LAN peers cannot see, while the real LAN interface is starved
+    // or never picked. A raw `IP_MULTICAST_IF`-pinned socket on the LAN address
+    // reaches LAN peers reliably, so we pin the mDNS daemon to the LAN interface
+    // the same way: disable all interfaces, then re-enable just the LAN address.
+    //
+    // Selections apply in order with last-match-wins (see mdns-sd's
+    // `apply_intf_selections`), so the LAN `enable` after `disable(All)` keeps
+    // exactly that interface active.
+    let Some(ip) = lan_ip else {
+        return;
+    };
+    if let Err(err) = daemon.disable_interface(mdns_sd::IfKind::All) {
+        tracing::debug!("mDNS: could not disable interfaces before pinning to {ip}: {err}");
+        return;
+    }
+    if let Err(err) = daemon.enable_interface(mdns_sd::IfKind::Addr(ip)) {
+        tracing::debug!("mDNS: could not pin daemon to {ip}: {err}");
+    }
+}
+
 pub async fn discover_lan(
     filter: &nostr::MeshFilter,
     supplied_invite_token: Option<&str>,
     timeout: Duration,
 ) -> Result<Vec<LanDiscoveredMesh>> {
+    discover_lan_on_interface(filter, supplied_invite_token, timeout, None).await
+}
+
+/// Like [`discover_lan`] but, when `lan_ip` is set, restricts the browse to the
+/// matching interface. On multi-homed hosts this keeps mDNS on the same
+/// interface QUIC is bound to so LAN advertisements are seen.
+pub async fn discover_lan_on_interface(
+    filter: &nostr::MeshFilter,
+    supplied_invite_token: Option<&str>,
+    timeout: Duration,
+    lan_ip: Option<std::net::IpAddr>,
+) -> Result<Vec<LanDiscoveredMesh>> {
     let daemon = ServiceDaemon::new().context("create mDNS daemon")?;
+    restrict_daemon_to_interface(&daemon, lan_ip);
     let receiver = match daemon.browse(LAN_SERVICE_TYPE) {
         Ok(receiver) => receiver,
         Err(err) => {
@@ -696,6 +790,7 @@ fn lan_discovered_mesh(
     supplied_invite_token: Option<&str>,
     joinable: bool,
 ) -> LanDiscoveredMesh {
+    let endpoint_addr = advert.endpoint_addr();
     LanDiscoveredMesh {
         mode: MeshDiscoveryMode::Mdns.as_str(),
         scope: MeshDiscoveryMode::Mdns.scope(),
@@ -718,6 +813,7 @@ fn lan_discovered_mesh(
         published_version: advert.app_version,
         discovered_at: current_unix_secs(),
         join_token: joinable.then(|| supplied_invite_token.unwrap_or_default().to_string()),
+        endpoint_addr,
     }
 }
 
@@ -800,11 +896,11 @@ fn lan_serving_node_count(peers: &[crate::mesh::PeerInfo]) -> usize {
 }
 
 async fn lan_instance_name(node: &crate::mesh::Node) -> String {
-    let identity = node
-        .mesh_id()
-        .await
-        .unwrap_or_else(|| node.id().fmt_short().to_string());
-    let suffix = sanitize_dns_label(&identity);
+    // The mDNS instance name must be unique per node, not per mesh: every node
+    // in a mesh advertises its own record (carrying its own `ep_addr`), and two
+    // nodes sharing an instance name would clobber each other in mDNS, hiding
+    // peers from reverse-dial. Use the node's endpoint id, which is unique.
+    let suffix = sanitize_dns_label(&node.id().fmt_short().to_string());
     format!("mesh-llm-{suffix}")
 }
 
@@ -861,7 +957,27 @@ fn parse_txt_properties(props: &HashMap<&str, &str>) -> Result<LanMeshAdvertisem
         proof_challenge: optional_txt(props, "proof_challenge"),
         app_version: optional_txt(props, "version"),
         join_material: LanJoinMaterial::RequiresSuppliedToken,
+        endpoint_addr_b64: optional_txt(props, "ep_addr"),
     })
+}
+
+/// Encode an [`iroh::EndpointAddr`] as base64url JSON for an mDNS TXT value.
+/// Returns `None` if it would exceed the DNS-SD TXT value limit.
+fn encode_endpoint_addr_b64(addr: &iroh::EndpointAddr) -> Option<String> {
+    use base64::Engine;
+    let json = serde_json::to_vec(addr).ok()?;
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json);
+    // Key "ep_addr" (7) + value must stay under the DNS-SD 255 limit; keep margin.
+    (encoded.len() < TXT_VALUE_LIMIT).then_some(encoded)
+}
+
+/// Decode a base64url-JSON [`iroh::EndpointAddr`] from an mDNS TXT value.
+fn decode_endpoint_addr_b64(value: &str) -> Option<iroh::EndpointAddr> {
+    use base64::Engine;
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(value)
+        .ok()?;
+    serde_json::from_slice(&raw).ok()
 }
 
 fn parse_txt_number<T>(props: &HashMap<&str, &str>, key: &str) -> Result<T>
@@ -1061,6 +1177,42 @@ mod tests {
             decoded.join_material,
             LanJoinMaterial::RequiresSuppliedToken
         );
+    }
+
+    #[test]
+    fn lan_advertisement_endpoint_addr_txt_round_trips() {
+        use iroh::{EndpointAddr, SecretKey};
+        let secret = SecretKey::from_bytes(&[7u8; 32]);
+        let mut addr = EndpointAddr::from(secret.public());
+        addr = addr.with_ip_addr("192.168.1.50:9555".parse().unwrap());
+
+        let listing = sample_listing("tok");
+        let advert =
+            LanMeshAdvertisement::from_listing(&listing, Some("tok"), Some(crate::VERSION), false)
+                .with_endpoint_addr(&addr);
+
+        let txt = advert.to_txt_properties().expect("txt should encode");
+        assert!(txt.iter().any(|(k, _)| k == "ep_addr"));
+
+        let decoded = LanMeshAdvertisement::from_txt_properties(&txt).expect("txt should decode");
+        let decoded_addr = decoded.endpoint_addr().expect("ep_addr should decode");
+        assert_eq!(decoded_addr.id, addr.id);
+        assert!(
+            decoded_addr
+                .ip_addrs()
+                .any(|a| a.to_string() == "192.168.1.50:9555")
+        );
+    }
+
+    #[test]
+    fn lan_advertisement_without_endpoint_addr_decodes_none() {
+        let listing = sample_listing("tok");
+        let advert =
+            LanMeshAdvertisement::from_listing(&listing, Some("tok"), Some(crate::VERSION), false);
+        let txt = advert.to_txt_properties().expect("txt should encode");
+        assert!(!txt.iter().any(|(k, _)| k == "ep_addr"));
+        let decoded = LanMeshAdvertisement::from_txt_properties(&txt).expect("txt should decode");
+        assert!(decoded.endpoint_addr().is_none());
     }
 
     #[test]
