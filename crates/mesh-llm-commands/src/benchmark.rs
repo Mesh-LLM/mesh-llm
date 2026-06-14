@@ -16,7 +16,7 @@ pub async fn dispatch_benchmark_command(command: &BenchmarkCommand) -> Result<()
                 limit: *limit,
                 max_tokens: *max_tokens,
                 output: output.clone(),
-                user_agent_version: env!("CARGO_PKG_VERSION"),
+                user_agent_version: mesh_llm_build_info::BUILD_VERSION,
             };
             benchmark_prompts::import_prompt_corpus(args).await
         }

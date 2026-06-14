@@ -458,6 +458,15 @@ pub async fn build_moa_config(
         // is the dominant chat path, so a tighter default is the right
         // default.
         first_answer_grace: std::time::Duration::from_secs(3),
+        // Tier-gate patience: how long small-tier-only answers/consensus
+        // are held when a big-tier strong worker (e.g. MiniMax) is still
+        // running. 20s covers the strong worker's typical first-token
+        // latency on agent-sized prompts over the public mesh without
+        // approaching worker_timeout (60s). Hard-bounded: at expiry all
+        // decision rules revert to ungated behavior. Same-tier pools are
+        // unaffected, so "many small models lift each other" keeps its
+        // current latency profile.
+        strong_patience: std::time::Duration::from_secs(20),
         // Defaults to leaving each model's thinking behavior alone.
         // `try_handle_moa` overrides this from the inbound request body
         // when the caller has expressed a preference

@@ -92,7 +92,7 @@ use crate::network::proxy;
 #[cfg(test)]
 use crate::runtime::wakeable::{WakeableInventoryEntry, WakeableState};
 
-const MESH_LLM_VERSION: &str = crate::VERSION;
+const MESH_LLM_BUILD_VERSION: &str = crate::BUILD_VERSION;
 
 async fn external_inference_models(plugin_manager: &plugin::PluginManager) -> Vec<String> {
     plugin_manager
@@ -908,7 +908,7 @@ impl MeshApi {
 
         let mut payload = runtime_data::status_payload(runtime_data_collector.build_status_view(
             runtime_data::StatusViewInput {
-                version: MESH_LLM_VERSION.to_string(),
+                version: MESH_LLM_BUILD_VERSION.to_string(),
                 latest_version,
                 node_id,
                 owner: node.owner_summary().await,

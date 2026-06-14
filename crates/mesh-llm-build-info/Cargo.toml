@@ -1,0 +1,16 @@
+[package]
+name = "mesh-llm-build-info"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Build and release version constants for mesh-llm"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+keywords = ["llm", "mesh", "version"]
+categories = ["development-tools"]
+
+build = "build.rs"
+
+[lints]
+workspace = true

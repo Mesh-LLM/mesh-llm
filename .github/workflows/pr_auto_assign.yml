@@ -1,0 +1,19 @@
+name: PR Auto Assign
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - ready_for_review
+
+jobs:
+  auto_assign:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      # This privileged workflow must not check out or run pull request code.
+      - name: Auto assign reviewers and assignees
+        uses: kentaro-m/auto-assign-action@0a2c53d3721e4c5cfcce6afd4014aecc337979f6 # v2.0.2

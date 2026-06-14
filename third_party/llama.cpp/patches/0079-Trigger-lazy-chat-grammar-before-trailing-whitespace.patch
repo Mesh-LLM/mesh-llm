@@ -1,7 +1,7 @@
-From cf1520162510de775c302081f46b2a00d4e039d9 Mon Sep 17 00:00:00 2001
+From be80f7b40b3caee64f3f6d42ce1d431fb212eb3f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 9 May 2026 13:58:47 +1000
-Subject: [PATCH 79/81] Trigger lazy chat grammar before trailing whitespace
+Subject: [PATCH 79/82] Trigger lazy chat grammar before trailing whitespace
 
 ---
  common/chat-auto-parser-generator.cpp | 14 +++++++++++++-
@@ -9,7 +9,7 @@ Subject: [PATCH 79/81] Trigger lazy chat grammar before trailing whitespace
  2 files changed, 39 insertions(+), 2 deletions(-)
 
 diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
-index db3a6cc6..bdebc8f0 100644
+index db3a6cc6f..bdebc8f01 100644
 --- a/common/chat-auto-parser-generator.cpp
 +++ b/common/chat-auto-parser-generator.cpp
 @@ -23,6 +23,18 @@ static void foreach_function(const json & tools, const std::function<void(const
@@ -41,7 +41,7 @@ index db3a6cc6..bdebc8f0 100644
          }
      }
 diff --git a/tests/test-chat-auto-parser.cpp b/tests/test-chat-auto-parser.cpp
-index 1d96de71..e6f20521 100644
+index 6f8e95748..812a1e475 100644
 --- a/tests/test-chat-auto-parser.cpp
 +++ b/tests/test-chat-auto-parser.cpp
 @@ -57,6 +57,7 @@ static void test_seed_oss_tool_with_reasoning(testing & t);
@@ -52,7 +52,7 @@ index 1d96de71..e6f20521 100644
  
  // CohereForAI template analysis tests
  static void test_cohere_reasoning_detection(testing & t);
-@@ -1303,6 +1304,7 @@ static common_chat_template load_nemotron_template(testing & t) {
+@@ -1306,6 +1307,7 @@ static common_chat_template load_nemotron_template(testing & t) {
  static void test_nemotron_analysis(testing & t) {
      t.test("Nemotron reasoning detection", test_nemotron_reasoning_detection);
      t.test("Nemotron tool format", test_nemotron_tool_format);
@@ -60,7 +60,7 @@ index 1d96de71..e6f20521 100644
  }
  
  static void test_nemotron_reasoning_detection(testing & t) {
-@@ -1375,6 +1377,30 @@ static void test_nemotron_tool_format(testing & t) {
+@@ -1378,6 +1380,30 @@ static void test_nemotron_tool_format(testing & t) {
      t.assert_true("should support tools", analysis.jinja_caps.supports_tools);
  }
  
@@ -91,11 +91,11 @@ index 1d96de71..e6f20521 100644
  static common_chat_template load_cohere_template(testing & t) {
      return load_template(t, "models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja");
  }
-@@ -1966,4 +1992,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
+@@ -2091,4 +2117,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
          }
      }
  }
 -
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

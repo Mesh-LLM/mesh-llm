@@ -1,31 +1,33 @@
-From dfbc8a4eb62f8064ae6e775abc576ca5e21bf321 Mon Sep 17 00:00:00 2001
+From 033783d94fb69eb735759435e2c8bfa4bebfaedd Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 08:42:26 +1000
-Subject: [PATCH 49/81] Avoid rescaling staged activation inputs
+Subject: [PATCH 49/82] Avoid rescaling staged activation inputs
 
 ---
- src/llama-graph.cpp | 8 ++++++--
- 1 file changed, 6 insertions(+), 2 deletions(-)
+ src/llama-graph.cpp | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index d339ffce..846c5abf 100644
+index fee74df01..8e0a52bc0 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -1843,8 +1843,12 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+@@ -1938,10 +1938,15 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
  
      res->t_inp_embd = cur;
  
--    // For Granite architecture
--    if (hparams.f_embedding_scale != 0.0f) {
 +    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
 +    const bool skippy_mid_stage_input = stage_filter.enabled && stage_filter.layer_start > 0;
 +
-+    // For Granite architecture. A skippy mid-stage vector input is already a
-+    // post-layer activation, not a raw embedding, so do not scale it again.
-+    if (!skippy_mid_stage_input && hparams.f_embedding_scale != 0.0f) {
-         cur = ggml_scale(ctx0, cur, hparams.f_embedding_scale);
-     }
- 
+     // For Granite architecture
+     // NOTE: For deepstack models, only apply scale to token inputs (ie text-only input).
+     //  Raw embeddings are assumed to be multimodal inputs that should not be scaled.
+-    if (hparams.f_embedding_scale != 0.0f && (ubatch.token || hparams.n_deepstack_layers == 0)) {
++    // A skippy mid-stage vector input is already a post-layer activation, not a
++    // raw embedding, so do not scale it again.
++    if (!skippy_mid_stage_input && hparams.f_embedding_scale != 0.0f && (ubatch.token || hparams.n_deepstack_layers == 0)) {
+         if (!ggml_is_contiguous(cur)) {
+             cur = ggml_cont(ctx0, cur);
+         }
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

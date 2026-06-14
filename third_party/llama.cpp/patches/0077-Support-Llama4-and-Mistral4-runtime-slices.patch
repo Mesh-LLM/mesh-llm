@@ -1,7 +1,7 @@
-From a16d1f2f15bf1a0d0bb668b8ec719ab9e85dcd43 Mon Sep 17 00:00:00 2001
+From 1c0852d25759b12d2e507fbf1ef477b97592a257 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 8 May 2026 05:58:50 +1000
-Subject: [PATCH 77/81] Support Llama4 and Mistral4 runtime slices
+Subject: [PATCH 77/82] Support Llama4 and Mistral4 runtime slices
 
 ---
  src/llama-graph.cpp    | 50 ++++++++++++++++++++++++++++--------------
@@ -11,10 +11,10 @@ Subject: [PATCH 77/81] Support Llama4 and Mistral4 runtime slices
  4 files changed, 83 insertions(+), 21 deletions(-)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 5c67d271..e36af917 100644
+index 5e8bf4835..50b9edd44 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -608,19 +608,19 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
+@@ -674,19 +674,19 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
          mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
      }
  
@@ -38,7 +38,7 @@ index 5c67d271..e36af917 100644
          mctx->get_swa()->set_input_v_rot(self_v_rot_swa);
      }
  }
-@@ -701,7 +701,7 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
+@@ -778,7 +778,7 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
  
      const int64_t n_rs = mctx->get_recr()->get_n_rs();
  
@@ -47,7 +47,7 @@ index 5c67d271..e36af917 100644
          GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
          int32_t * data = (int32_t *) inp_rs->s_copy->data;
  
-@@ -724,10 +724,16 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
+@@ -801,10 +801,16 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
  
      res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
  
@@ -67,7 +67,7 @@ index 5c67d271..e36af917 100644
  
      res &= inp_rs->head == mctx->get_recr()->get_head();
      res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
-@@ -750,7 +756,7 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
+@@ -827,7 +833,7 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
  
      const int64_t n_rs = mctx->get_recr()->get_n_rs();
  
@@ -76,7 +76,7 @@ index 5c67d271..e36af917 100644
          GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
          int32_t * data = (int32_t *) inp_rs->s_copy->data;
  
-@@ -772,10 +778,16 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
+@@ -849,10 +855,16 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
  
      res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
  
@@ -96,7 +96,7 @@ index 5c67d271..e36af917 100644
  
      res &= inp_rs->head == mctx->get_recr()->get_head();
      res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
-@@ -820,7 +832,7 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
+@@ -901,7 +913,7 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
  
      const int64_t n_rs = mctx->get_recr()->get_n_rs();
  
@@ -105,9 +105,9 @@ index 5c67d271..e36af917 100644
          GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
          int32_t * data = (int32_t *) inp_rs->s_copy->data;
  
-@@ -856,10 +868,16 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
-         res &= can_reuse_kq_mask(inp_attn->self_kq_mask_swa, attn_ctx->get_swa(), params.ubatch, params.cparams);
-     }
+@@ -937,10 +949,16 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
+ 
+     res &= can_reuse_kq_mask(inp_attn->self_kq_mask_swa, attn_ctx->get_swa(), params.ubatch, params.cparams);
  
 -    res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
 +    if (inp_rs->s_copy && inp_rs->s_copy->buffer) {
@@ -126,7 +126,7 @@ index 5c67d271..e36af917 100644
      res &= inp_rs->head == mctx->get_recr()->get_head();
      res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
 diff --git a/src/models/gemma3n.cpp b/src/models/gemma3n.cpp
-index 625de79d..454977b1 100644
+index c1f6a3f61..8e712f757 100644
 --- a/src/models/gemma3n.cpp
 +++ b/src/models/gemma3n.cpp
 @@ -112,6 +112,25 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
@@ -156,10 +156,10 @@ index 625de79d..454977b1 100644
          inpL = build_inp_embd(model.tok_embd);
  
 diff --git a/src/models/llama4.cpp b/src/models/llama4.cpp
-index 0ff5376d..2f47caa0 100644
+index 7194c72a5..1f3f1c358 100644
 --- a/src/models/llama4.cpp
 +++ b/src/models/llama4.cpp
-@@ -112,14 +112,30 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
+@@ -113,14 +113,30 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -192,7 +192,7 @@ index 0ff5376d..2f47caa0 100644
  
      using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
      inp_attn_type * inp_attn = nullptr;
-@@ -132,9 +148,9 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
+@@ -133,9 +149,9 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
  
      const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
  
@@ -204,7 +204,7 @@ index 0ff5376d..2f47caa0 100644
          const float freq_base_l  = model.get_rope_freq_base (cparams, il);
          const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
  
-@@ -190,7 +206,7 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
+@@ -191,7 +207,7 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
              cb(cur, "attn_out", il);
          }
@@ -213,7 +213,7 @@ index 0ff5376d..2f47caa0 100644
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -252,6 +268,13 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
+@@ -253,6 +269,13 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
      }
      cur = inpL;
  
@@ -228,7 +228,7 @@ index 0ff5376d..2f47caa0 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 75479955..925ecc70 100644
+index d61f922c9..27dc78b07 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1764,12 +1764,14 @@ static enum skippy_status skippy_finish_model_open(
@@ -247,5 +247,5 @@ index 75479955..925ecc70 100644
              model->arch != LLM_ARCH_NEMOTRON &&
              model->arch != LLM_ARCH_OLMO2 &&
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

@@ -1,7 +1,7 @@
-From caa81624eedcb7950e3fbaae7f5417472bc98bb2 Mon Sep 17 00:00:00 2001
+From bf86aed60149b250dbfe20d84d0a5d624a1d71d9 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 29 Apr 2026 11:45:50 +1000
-Subject: [PATCH 28/81] Load stage models from ordered GGUF parts
+Subject: [PATCH 28/82] Load stage models from ordered GGUF parts
 
 ---
  include/llama.h            |   7 ++
@@ -14,10 +14,10 @@ Subject: [PATCH 28/81] Load stage models from ordered GGUF parts
  7 files changed, 186 insertions(+), 50 deletions(-)
 
 diff --git a/include/llama.h b/include/llama.h
-index 75095b22..a8ee860c 100644
+index 27e480674..f9e4f4019 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -497,6 +497,13 @@ extern "C" {
+@@ -502,6 +502,13 @@ extern "C" {
                                   size_t    n_paths,
                struct llama_model_params    params);
  
@@ -32,7 +32,7 @@ index 75095b22..a8ee860c 100644
              const struct llama_model * model,
                          const char * path_model);
 diff --git a/include/skippy.h b/include/skippy.h
-index 69293d6d..4dd985da 100644
+index 69293d6d3..4dd985da2 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -67,10 +67,10 @@ index 69293d6d..4dd985da 100644
          struct skippy_model * model,
          struct skippy_error ** out_error);
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 4928506a..c8713d4f 100644
+index 622b228e6..16cc0b06e 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -523,6 +523,7 @@ llama_model_loader::llama_model_loader(
+@@ -525,6 +525,7 @@ llama_model_loader::llama_model_loader(
          void * set_tensor_data_ud,
          const std::string & fname,
          std::vector<std::string> & splits,
@@ -78,7 +78,7 @@ index 4928506a..c8713d4f 100644
          FILE * file,
          bool use_mmap,
          bool use_direct_io,
-@@ -591,11 +592,50 @@ llama_model_loader::llama_model_loader(
+@@ -593,11 +594,50 @@ llama_model_loader::llama_model_loader(
              n_bytes    += ggml_nbytes(cur);
              weights_map.emplace(tensor_name, llama_tensor_weight(files.back().get(), 0, metadata, cur));
          }
@@ -131,7 +131,7 @@ index 4928506a..c8713d4f 100644
              uint16_t idx = 0;
              const std::string kv_split_no = llm_kv(LLM_KV_SPLIT_NO);
 diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
-index 3fb84fdd..d889c99d 100644
+index 3fb84fdd2..d889c99d2 100644
 --- a/src/llama-model-loader.h
 +++ b/src/llama-model-loader.h
 @@ -136,6 +136,7 @@ struct llama_model_loader {
@@ -143,7 +143,7 @@ index 3fb84fdd..d889c99d 100644
          bool use_mmap,
          bool use_direct_io,
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 43e05c3d..ad99e726 100644
+index cf92ce4bb..d4e7738a9 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -879,7 +879,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
@@ -156,10 +156,10 @@ index 43e05c3d..ad99e726 100644
  
      auto mparams = llama_model_default_params();
 diff --git a/src/llama.cpp b/src/llama.cpp
-index dfe30ce8..7ec64767 100644
+index a67fa8039..e39854377 100644
 --- a/src/llama.cpp
 +++ b/src/llama.cpp
-@@ -274,9 +274,9 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
+@@ -277,9 +277,9 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
  
  // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
  static std::pair<int, llama_model *> llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
@@ -171,7 +171,7 @@ index dfe30ce8..7ec64767 100644
              params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
  
          ml.print_info();
-@@ -341,6 +341,7 @@ static struct llama_model * llama_model_load_from_file_impl(
+@@ -344,6 +344,7 @@ static struct llama_model * llama_model_load_from_file_impl(
          void * set_tensor_data_ud,
          const std::string & path_model,
          std::vector<std::string> & splits,
@@ -179,7 +179,7 @@ index dfe30ce8..7ec64767 100644
          FILE * file,
          struct llama_model_params params) {
      {
-@@ -383,7 +384,7 @@ static struct llama_model * llama_model_load_from_file_impl(
+@@ -386,7 +387,7 @@ static struct llama_model * llama_model_load_from_file_impl(
          };
      }
  
@@ -188,7 +188,7 @@ index dfe30ce8..7ec64767 100644
      GGML_ASSERT(status <= 0);
      if (status < 0) {
          if (status == -1) {
-@@ -411,7 +412,7 @@ struct llama_model * llama_model_init_from_user(
+@@ -414,7 +415,7 @@ struct llama_model * llama_model_init_from_user(
      std::vector<std::string> splits = {};
      params.use_mmap = false;
      params.use_extra_bufts = false;
@@ -197,7 +197,7 @@ index dfe30ce8..7ec64767 100644
  }
  // deprecated
  struct llama_model * llama_load_model_from_file(
-@@ -424,7 +425,7 @@ struct llama_model * llama_model_load_from_file(
+@@ -427,7 +428,7 @@ struct llama_model * llama_model_load_from_file(
          const char * path_model,
          struct llama_model_params params) {
      std::vector<std::string> splits = {};
@@ -206,7 +206,7 @@ index dfe30ce8..7ec64767 100644
  }
  
  struct llama_model * llama_model_load_from_splits(
-@@ -440,7 +441,27 @@ struct llama_model * llama_model_load_from_splits(
+@@ -443,7 +444,27 @@ struct llama_model * llama_model_load_from_splits(
      for (size_t i = 0; i < n_paths; ++i) {
          splits.push_back(paths[i]);
      }
@@ -235,7 +235,7 @@ index dfe30ce8..7ec64767 100644
  }
  
  struct llama_model * llama_model_load_from_file_ptr(FILE * file, struct llama_model_params params) {
-@@ -450,7 +471,7 @@ struct llama_model * llama_model_load_from_file_ptr(FILE * file, struct llama_mo
+@@ -453,7 +474,7 @@ struct llama_model * llama_model_load_from_file_ptr(FILE * file, struct llama_mo
      }
      std::string path_model;
      std::vector<std::string> splits = {};
@@ -244,13 +244,13 @@ index dfe30ce8..7ec64767 100644
  }
  
  void llama_model_save_to_file(const struct llama_model * model, const char * path_model) {
-@@ -575,4 +596,3 @@ const char * llama_print_system_info(void) {
+@@ -578,4 +599,3 @@ const char * llama_print_system_info(void) {
  
      return s.c_str();
  }
 -
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 5abc8776..ab5a147c 100644
+index 5abc8776d..ab5a147c0 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1005,7 +1005,8 @@ uint64_t skippy_abi_features(void) {
@@ -416,5 +416,5 @@ index 5abc8776..ab5a147c 100644
          struct skippy_model * model,
          struct skippy_error ** out_error) {
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

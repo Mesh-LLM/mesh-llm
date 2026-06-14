@@ -14,6 +14,8 @@ use skippy_protocol::proto::stage as skippy_stage_proto;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::{mpsc, watch};
 
+mod direct_path;
+
 #[test]
 fn quic_bind_addr_uses_explicit_port_on_all_platforms() {
     assert_eq!(
@@ -223,7 +225,7 @@ fn endpoint_addr_filter_for_bind_ip_keeps_selected_ip_relay_and_public_candidate
         "https://relay.example.com".parse().unwrap(),
     ));
 
-    let filtered = filter_endpoint_addr_for_bind_ip(addr, Some("10.1.2.3".parse().unwrap()));
+    let filtered = filter_endpoint_addr_for_bind_ip(addr, Some("10.1.2.3".parse().unwrap()), true);
     let ip_addrs: HashSet<_> = filtered
         .addrs
         .iter()
@@ -238,6 +240,40 @@ fn endpoint_addr_filter_for_bind_ip_keeps_selected_ip_relay_and_public_candidate
     assert!(!ip_addrs.contains("172.23.0.1:47916"));
     assert!(!ip_addrs.contains("100.107.22.123:47916"));
     assert!(!ip_addrs.contains("192.168.1.20:47916"));
+    assert!(
+        filtered
+            .addrs
+            .iter()
+            .any(|addr| matches!(addr, iroh::TransportAddr::Relay(_)))
+    );
+}
+
+#[test]
+fn endpoint_addr_filter_for_lan_only_bind_ip_strips_public_candidates() {
+    let mut addr = EndpointAddr {
+        id: make_test_endpoint_id(0x42),
+        addrs: Default::default(),
+    };
+    addr.addrs
+        .insert(iroh::TransportAddr::Ip("10.1.2.3:47916".parse().unwrap()));
+    addr.addrs.insert(iroh::TransportAddr::Ip(
+        "35.199.1.10:47916".parse().unwrap(),
+    ));
+    addr.addrs.insert(iroh::TransportAddr::Relay(
+        "https://relay.example.com".parse().unwrap(),
+    ));
+
+    let filtered = filter_endpoint_addr_for_bind_ip(addr, Some("10.1.2.3".parse().unwrap()), false);
+    let ip_addrs: HashSet<_> = filtered
+        .addrs
+        .iter()
+        .filter_map(|addr| match addr {
+            iroh::TransportAddr::Ip(socket) => Some(socket.to_string()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(ip_addrs, HashSet::from(["10.1.2.3:47916".to_string()]));
     assert!(
         filtered
             .addrs
@@ -326,6 +362,7 @@ async fn make_test_node_with_requirements(
         endpoint_secret_key,
         public_addr: None,
         quic_bind: QuicBindSelection::default(),
+        relay_policy: RelayPolicy::DefaultPublic,
         owner_keypair: None,
         local_mesh_requirements,
         state: Arc::new(Mutex::new(MeshState {
@@ -334,6 +371,7 @@ async fn make_test_node_with_requirements(
             remote_tunnel_maps: HashMap::new(),
             dead_peers: HashMap::new(),
             peer_down_rejections: HashMap::new(),
+            direct_path_request_last_at: HashMap::new(),
             seen_plugin_messages: HashMap::new(),
             seen_plugin_message_order: VecDeque::new(),
             policy_rejected_peers: HashMap::new(),

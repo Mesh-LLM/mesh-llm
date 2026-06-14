@@ -1,7 +1,7 @@
-From 184ad208c7576a353bbbd753a95e9e90148b7266 Mon Sep 17 00:00:00 2001
+From 7a250f18b0d1d054eba91e529299b4e70a0b3bbf Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 18 May 2026 14:57:16 +1000
-Subject: [PATCH 81/81] Add min-p sampler to skippy sampling chain
+Subject: [PATCH 81/82] Add min-p sampler to skippy sampling chain
 
 Insert llama_sampler_init_min_p between top_p and temperature in both
 skippy_build_sampling_chain (chat sampler) and skippy_sample_token (legacy
@@ -19,7 +19,7 @@ unchanged; only the field meaning changes. Bump SKIPPY_ABI_VERSION_PATCH
  3 files changed, 8 insertions(+), 2 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 486e95dc..84173c02 100644
+index 486e95dc7..84173c028 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -111,7 +111,7 @@ struct skippy_sampling_config {
@@ -30,22 +30,22 @@ index 486e95dc..84173c02 100644
 +    float min_p;
      llama_logit_bias logit_bias[SKIPPY_MAX_LOGIT_BIAS];
  };
-
+ 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index afef2749..26e944d8 100644
+index afef27491..26e944d8b 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -26,7 +26,7 @@ extern "C" {
-
+ 
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
 -#define SKIPPY_ABI_VERSION_PATCH 23
 +#define SKIPPY_ABI_VERSION_PATCH 24
-
+ 
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index f12e7d9f..f9e65718 100644
+index 35e426717..f0f14820e 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1283,6 +1283,9 @@ static llama_sampler * skippy_build_sampling_chain(
@@ -68,5 +68,6 @@ index f12e7d9f..f9e65718 100644
      if (sampling->temperature != 1.0f) {
          llama_sampler_chain_add(sampler, llama_sampler_init_temp(sampling->temperature));
      }
---
-2.50.1 (Apple Git-155)
+-- 
+2.54.0 (Apple Git-156)
+

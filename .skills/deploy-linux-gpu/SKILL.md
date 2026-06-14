@@ -1,6 +1,6 @@
 ---
 name: deploy-linux-gpu
-description: Use this skill when deploying, installing, launching, or serving mesh-llm on a remote Linux GPU node (rented GPUs like Vast.ai or RunPod, or a self-managed CUDA server), including installing the CUDA build, choosing a model and running
+description: Use this skill when deploying, installing, launching, or serving mesh-llm on a remote Linux GPU node (rented GPUs like Vast.ai or RunPod, or a self-managed CUDA server), including installing the CUDA build, choosing a model, keeping it alive under a supervisor, and verifying it serves.
 metadata:
   short-description: Deploy mesh-llm on a remote Linux GPU node
 ---
@@ -11,12 +11,19 @@ Use this when standing up mesh-llm on a remote Linux GPU box (rented GPU like
 Vast.ai / RunPod, or your own server) to serve a specific model and join the
 mesh.
 
-This is the Linux/CUDA counterpart to the macOS `deploy` skill. It does NOT use
+This is the Linux/CUDA counterpart to the `deploy-macos` skill. It does NOT use
 the old `llama-server`/`rpc-server` lane — the current binary embeds the staged
 runtime. There are no `.dylib`/`codesign`/quarantine steps on Linux.
 
 note --auto flag tells it to join the public mesh. serve command with --model tells it to run a specific model.
-Example here are for solo serving, don't read this in isolation without other docs and skills.
+Examples here are for solo serving — don't read this in isolation:
+
+- `deploy-macos` / `deploy-windows` — other platforms
+- `mesh-join` — creating/joining private and public meshes (tokens, NAT, multi-node)
+- `connect-agents` — pointing Goose/Claude Code/OpenCode/Pi at a running mesh
+- `docs/USAGE.md` — install details, service mode, model storage
+- `docs/CLI.md` — full command and model-ref reference
+- `docs/SKIPPY_SPLITS.md` — splitting big models across nodes
 
 ## The one rule that matters most
 
@@ -109,9 +116,13 @@ supervisorctl reread && supervisorctl update && supervisorctl start mesh-llm
 supervisorctl status mesh-llm
 ```
 
-If there is no supervisor, run it under `systemd --user`, `tmux new -d`, or as a
-foreground process in a held SSH session for first-run debugging (allocate a TTY
-with `ssh -tt host 'bash -lc "..."'`).
+If there is no supervisor, the installer can set up a `systemd --user` service
+for you (`curl -fsSL .../install.sh | sh -s -- --service` installs
+`~/.config/systemd/user/mesh-llm.service`; startup models go in
+`~/.mesh-llm/config.toml`, and `sudo loginctl enable-linger "$USER"` makes it
+survive reboot before login). Otherwise use `tmux new -d`, or a foreground
+process in a held SSH session for first-run debugging (allocate a TTY with
+`ssh -tt host 'bash -lc "..."'`).
 
 ## Verify it's actually serving
 

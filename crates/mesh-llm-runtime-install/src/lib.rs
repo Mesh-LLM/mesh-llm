@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
-pub const CURRENT_MESH_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const CURRENT_MESH_VERSION: &str = mesh_llm_build_info::RELEASE_VERSION;
 pub const NATIVE_RUNTIME_CACHE_DIR_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR";
 pub const NATIVE_RUNTIME_MANIFEST_URL_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL";
 
@@ -113,6 +113,26 @@ pub fn default_release_manifest_url(mesh_version: &str) -> String {
     )
 }
 
+pub fn default_manifest_url(build_version: &str, release_version: &str) -> String {
+    if mesh_llm_build_info::is_sha_build(build_version) {
+        "https://github.com/Mesh-LLM/mesh-llm/releases/latest/download/native-runtimes.json"
+            .to_string()
+    } else {
+        default_release_manifest_url(release_version)
+    }
+}
+
+fn request_default_manifest_url(mesh_version: &str) -> String {
+    if mesh_version == mesh_llm_build_info::RELEASE_VERSION {
+        default_manifest_url(
+            mesh_llm_build_info::BUILD_VERSION,
+            mesh_llm_build_info::RELEASE_VERSION,
+        )
+    } else {
+        default_release_manifest_url(mesh_version)
+    }
+}
+
 pub fn current_skippy_abi_version() -> String {
     format!(
         "{}.{}.{}",
@@ -156,7 +176,7 @@ pub async fn load_release_manifest(
         mesh_version = manifest.mesh_version.clone();
         skippy_abi = manifest.skippy_abi.clone();
         artifacts.extend(manifest.artifacts);
-    } else if let Some(url) = manifest_url(&mesh_version, &options) {
+    } else if let Some(url) = manifest_url(&options) {
         let manifest = download_release_manifest(&url).await?;
         mesh_version = manifest.mesh_version.clone();
         skippy_abi = manifest.skippy_abi.clone();
@@ -398,7 +418,7 @@ fn emit_download_progress(
     });
 }
 
-fn manifest_url(mesh_version: &str, options: &NativeRuntimeManifestOptions) -> Option<String> {
+fn manifest_url(options: &NativeRuntimeManifestOptions) -> Option<String> {
     options
         .manifest_url
         .clone()
@@ -409,7 +429,7 @@ fn manifest_url(mesh_version: &str, options: &NativeRuntimeManifestOptions) -> O
         })
         .or_else(|| {
             (options.allow_default_manifest_url && options.bundle_dirs.is_empty())
-                .then(|| default_release_manifest_url(mesh_version))
+                .then(|| request_default_manifest_url(&options.mesh_version))
         })
 }
 
@@ -490,6 +510,9 @@ fn collect_runtime_manifest_dirs(dir: &Path, matches: &mut Vec<PathBuf>) -> Resu
 mod tests {
     use super::*;
     use mesh_llm_native_runtime::{NativeRuntimeBackend, NativeRuntimePlatform};
+    use std::sync::Mutex;
+
+    static MANIFEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn artifact_with_sha(signature: Option<&str>) -> NativeRuntimeArtifact {
         NativeRuntimeArtifact {
@@ -546,11 +569,155 @@ mod tests {
 
     #[test]
     fn default_manifest_url_is_skipped_for_bundle_only_resolution() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+
         let options = NativeRuntimeManifestOptions {
             bundle_dirs: vec![PathBuf::from("runtime-bundle")],
             ..Default::default()
         };
 
-        assert!(manifest_url(CURRENT_MESH_VERSION, &options).is_none());
+        assert!(manifest_url(&options).is_none());
+    }
+
+    #[test]
+    fn explicit_manifest_url_wins_over_env_and_default() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var(
+                NATIVE_RUNTIME_MANIFEST_URL_ENV,
+                "https://example.invalid/from-env.json",
+            );
+        }
+
+        let options = NativeRuntimeManifestOptions {
+            manifest_url: Some("https://example.invalid/from-arg.json".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            manifest_url(&options).as_deref(),
+            Some("https://example.invalid/from-arg.json")
+        );
+
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+    }
+
+    #[test]
+    fn env_manifest_url_wins_over_default() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var(
+                NATIVE_RUNTIME_MANIFEST_URL_ENV,
+                "https://example.invalid/from-env.json",
+            );
+        }
+
+        let url = manifest_url(&NativeRuntimeManifestOptions::default());
+
+        assert_eq!(
+            url.as_deref(),
+            Some("https://example.invalid/from-env.json")
+        );
+
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+    }
+
+    #[test]
+    fn default_manifest_url_uses_release_download_for_release_builds() {
+        assert_eq!(
+            default_manifest_url("0.68.0", "0.68.0"),
+            "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.68.0/native-runtimes.json"
+        );
+    }
+
+    #[test]
+    fn default_manifest_url_uses_latest_download_for_sha_builds() {
+        assert_eq!(
+            default_manifest_url("0.68.0+gAB131C", "0.68.0"),
+            "https://github.com/Mesh-LLM/mesh-llm/releases/latest/download/native-runtimes.json"
+        );
+        assert_eq!(
+            default_manifest_url("0.68.0+gAB131C.dirty", "0.68.0"),
+            "https://github.com/Mesh-LLM/mesh-llm/releases/latest/download/native-runtimes.json"
+        );
+    }
+
+    #[test]
+    fn non_default_mesh_version_request_uses_versioned_release_url() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+
+        let options = NativeRuntimeManifestOptions {
+            mesh_version: "0.67.0".to_string(),
+            allow_default_manifest_url: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            manifest_url(&options).as_deref(),
+            Some(
+                "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.67.0/native-runtimes.json"
+            )
+        );
+    }
+
+    #[test]
+    fn current_mesh_version_uses_release_version() {
+        assert_eq!(CURRENT_MESH_VERSION, mesh_llm_build_info::RELEASE_VERSION);
+    }
+
+    #[test]
+    fn load_release_manifest_prefers_explicit_path_over_env_and_default() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var(
+                NATIVE_RUNTIME_MANIFEST_URL_ENV,
+                "https://example.invalid/should-not-be-fetched.json",
+            );
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("native-runtimes.json");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{
+  "mesh_version": "0.68.0",
+  "skippy_abi": "{}",
+  "artifacts": []
+}}"#,
+                current_skippy_abi_version()
+            ),
+        )
+        .unwrap();
+
+        let manifest = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(load_release_manifest(NativeRuntimeManifestOptions {
+                mesh_version: "0.0.0+gLOCAL".to_string(),
+                manifest_path: Some(path),
+                manifest_url: Some("https://example.invalid/from-arg.json".to_string()),
+                bundle_dirs: Vec::new(),
+                allow_default_manifest_url: true,
+            }))
+            .unwrap();
+
+        assert_eq!(manifest.mesh_version, "0.68.0");
+        assert!(manifest.artifacts.is_empty());
+
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
     }
 }

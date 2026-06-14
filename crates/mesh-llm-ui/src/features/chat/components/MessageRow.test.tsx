@@ -220,7 +220,7 @@ describe('MessageRow', () => {
     expect(streamingControlRow).toHaveClass('mt-3', 'block')
   })
 
-  it('separates closed thinking traces from final assistant response text', () => {
+  it('separates closed thinking from final assistant response text', () => {
     render(
       <MessageRow
         messageRole="assistant"
@@ -230,10 +230,8 @@ describe('MessageRow', () => {
       />
     )
 
-    expect(screen.getByText('Thinking trace').closest('[data-thinking-state="complete"]')).toHaveTextContent(
-      'Thinking trace'
-    )
-    expect(screen.getByText('Check geography facts before answering.')).toHaveClass('select-text')
+    expect(screen.getByText('Thinking').closest('[data-thinking-state="complete"]')).toHaveTextContent('Thinking')
+    expect(screen.getByText('Check geography facts before answering.').closest('.select-text')).toBeInTheDocument()
     expect(screen.getByText('The capital of France is Paris.').closest('.select-text')).toBeInTheDocument()
   })
 
@@ -247,10 +245,28 @@ describe('MessageRow', () => {
       />
     )
 
-    expect(screen.getByText('Thinking trace').closest('[data-thinking-state="complete"]')).toHaveTextContent(
+    expect(screen.getByText('Thinking').closest('[data-thinking-state="complete"]')).toHaveTextContent(
       'The user asked a simple factual question.'
     )
     expect(screen.getByText('The capital of France is Paris.')).toBeInTheDocument()
+  })
+
+  it('moves Gemma channel thinking into the trace before rendering the final response', () => {
+    render(
+      <MessageRow
+        messageRole="assistant"
+        body="<|channel|>thoughtCheck whether the prompt is a test.<channel|>Test received!"
+        timestamp="12:11"
+        model="unsloth/gemma-4-31B-it-GGUF:UD-Q8_K_XL"
+      />
+    )
+
+    expect(screen.getByText('Thinking').closest('[data-thinking-state="complete"]')).toHaveTextContent(
+      'Check whether the prompt is a test.'
+    )
+    expect(screen.getByText('Test received!').closest('.select-text')).toBeInTheDocument()
+    expect(screen.queryByText(/<\|channel\|>thought/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/<channel\|>/)).not.toBeInTheDocument()
   })
 
   it('formats final assistant response text as markdown', () => {
@@ -267,6 +283,30 @@ describe('MessageRow', () => {
     expect(screen.getByText('Verified').tagName.toLowerCase()).toBe('em')
     expect(screen.getByText('Concise').tagName.toLowerCase()).toBe('code')
     expect(screen.getByText('Paris').closest('.select-text')).toBeInTheDocument()
+  })
+
+  it('formats thinking text as markdown', () => {
+    render(
+      <MessageRow
+        messageRole="assistant"
+        body={'<think>1. **Analyze input**\n   - Check the `route`\n   - Keep it *brief*</think> Final response.'}
+        timestamp="12:11"
+        model="Qwen3-8B"
+      />
+    )
+
+    const thinkingTrace = screen.getByText('Thinking').closest('[data-thinking-state="complete"]')
+
+    expect(thinkingTrace).toBeInstanceOf(HTMLElement)
+    const thinkingTraceElement = thinkingTrace as HTMLElement
+
+    expect(screen.queryByText(/\*\*Analyze input\*\*/)).not.toBeInTheDocument()
+    expect(within(thinkingTraceElement).getByText('Analyze input').tagName.toLowerCase()).toBe('strong')
+    expect(within(thinkingTraceElement).getByText('route').tagName.toLowerCase()).toBe('code')
+    expect(within(thinkingTraceElement).getByText('brief').tagName.toLowerCase()).toBe('em')
+    expect(thinkingTraceElement.querySelector('ol')).toHaveClass('list-decimal')
+    expect(thinkingTraceElement.querySelector('ul')).toHaveClass('list-disc')
+    expect(screen.getByText('Final response.')).toBeInTheDocument()
   })
 
   it('renders assistant markdown tables with semantic compact cell styling', () => {
@@ -320,7 +360,7 @@ describe('MessageRow', () => {
     )
 
     expect(container.querySelector('.whitespace-pre-wrap')).not.toBeInTheDocument()
-    expect(screen.getByText('First item').parentElement).toHaveClass('[&>span]:my-0', '[&>span]:inline')
+    expect(screen.getByText('First item').parentElement).toHaveClass('marker:text-fg-faint', '[&>p]:my-0')
   })
 
   it('marks an open thinking segment as in progress while streaming', () => {
@@ -335,7 +375,7 @@ describe('MessageRow', () => {
     )
 
     expect(screen.getByText('Thinking').closest('[data-thinking-state="active"]')).toHaveTextContent('Thinking')
-    expect(screen.getByText('Checking the current capital from memory')).toHaveClass('select-text')
+    expect(screen.getByText('Checking the current capital from memory').closest('.select-text')).toBeInTheDocument()
     expect(screen.getByText('Streaming response...')).toBeInTheDocument()
   })
 
@@ -353,7 +393,9 @@ describe('MessageRow', () => {
     const thinkingContainer = screen.getByText('Thinking').closest('[data-thinking-state="active"]')
 
     expect(thinkingContainer).toHaveTextContent('The user asked for a long story, so plan the structure first.')
-    expect(screen.getByText('The user asked for a long story, so plan the structure first.')).toHaveClass('select-text')
+    expect(
+      screen.getByText('The user asked for a long story, so plan the structure first.').closest('.select-text')
+    ).toBeInTheDocument()
     expect(screen.getByText('Streaming response...')).toBeInTheDocument()
   })
 

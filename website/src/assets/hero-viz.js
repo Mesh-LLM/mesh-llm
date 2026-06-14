@@ -22,7 +22,8 @@
   var SUBTITLE_CHAR_IN_DURATION = 150;
   var SUBTITLE_DOT_LERP = 0.84;
   var SUBTITLE_DOT_SNAP = 0.35;
-  var NODE_ICON_SCALE = 0.9;
+  var NODE_PLATE_RATIO = 0.48;
+  var NODE_ICON_DIAMETER_RATIO = 0.576;
   var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var isSafari = /^((?!chrome|android|crios|fxios).)*safari/i.test(window.navigator.userAgent);
 
@@ -307,7 +308,7 @@
   }
 
   function iconScaleFor(item) {
-    return (item.r >= 42 ? 0.86 : item.r >= 36 ? 0.82 : item.r <= 28 ? 0.68 : 0.74) * NODE_ICON_SCALE;
+    return ((item.r * NODE_PLATE_RATIO * 2) * NODE_ICON_DIAMETER_RATIO) / 24;
   }
 
   function setCircle(circle, attrs) {
@@ -343,7 +344,7 @@
       if (!scene || !item.group) return;
       item.group.setAttribute('transform', 'translate(' + item.x + ' ' + item.y + ')');
       item.halo.setAttribute('r', item.r);
-      item.plate.setAttribute('r', roundSvg(item.r * 0.48));
+      item.plate.setAttribute('r', roundSvg(item.r * NODE_PLATE_RATIO));
       item.icon.setAttribute('transform', 'scale(' + roundSvg(iconScaleFor(item)) + ')');
       item.labelEl.setAttribute('y', roundSvg(item.r * 0.92));
       item.typeEl.setAttribute('y', roundSvg(item.r * 0.92 + 13));
@@ -710,6 +711,38 @@
     updatePanelConnector(viz, svg, scene, left, top, width, height);
   }
 
+  function titleTextRect(scene) {
+    var headingRect = scene.titleHeading ? scene.titleHeading.getBoundingClientRect() : null;
+    var subtitleRect = scene.subtitle ? scene.subtitle.getBoundingClientRect() : null;
+
+    if (!headingRect && !subtitleRect) {
+      return scene.title ? scene.title.getBoundingClientRect() : null;
+    }
+
+    if (!headingRect) return subtitleRect;
+    if (!subtitleRect) return headingRect;
+
+    return {
+      left: Math.min(headingRect.left, subtitleRect.left),
+      right: Math.max(headingRect.right, subtitleRect.right),
+      top: Math.min(headingRect.top, subtitleRect.top),
+      bottom: Math.max(headingRect.bottom, subtitleRect.bottom),
+      width: Math.max(headingRect.right, subtitleRect.right) - Math.min(headingRect.left, subtitleRect.left),
+      height: Math.max(headingRect.bottom, subtitleRect.bottom) - Math.min(headingRect.top, subtitleRect.top),
+    };
+  }
+
+  function shortPhoneTitleFooterReserve(viewportWidth, stageHeight, footerGap, isTouchLandscape) {
+    var shortStageProgress;
+
+    if (isTouchLandscape || viewportWidth > 390) return 0;
+
+    shortStageProgress = clamp((660 - stageHeight) / 48, 0, 1);
+    if (shortStageProgress <= 0) return 0;
+
+    return Math.round(clamp(footerGap * 0.5 + shortStageProgress * 8, 14, 20));
+  }
+
   function positionTitle(viz, svg, scene) {
     var fallbackFooterTop;
     var footer;
@@ -733,9 +766,12 @@
     var targetY;
     var titleHeight;
     var titleMin;
+    var titleRect;
     var titleVizClearance;
     var top;
     var vizRect;
+    var viewportWidth;
+    var titleFooterReserve;
 
     if (!scene.title || !scene.target) return;
 
@@ -749,19 +785,22 @@
     footer = section.querySelector('.hero-footer');
     stageRect = stage ? stage.getBoundingClientRect() : sectionRect;
     stageHeight = stage ? stage.clientHeight : section.clientHeight;
+    viewportWidth = window.innerWidth;
     isTouchLandscape = window.matchMedia && window.matchMedia('(pointer: coarse) and (orientation: landscape)').matches;
     targetY = vizRect.top - stageRect.top + layout.padY + scene.target.y * layout.scale;
     targetRadius = scene.target.r * layout.scale;
-    responsive = clamp((window.innerWidth - 360) / 760, 0, 1);
+    responsive = clamp((viewportWidth - 360) / 760, 0, 1);
     titleVizClearance = clamp(viz.clientWidth * 0.014, 10, 18);
     top = targetY + Math.max(70, targetRadius + 54) + 22 * responsive + titleVizClearance;
-    titleHeight = scene.title.offsetHeight || 124;
+    titleRect = titleTextRect(scene);
+    titleHeight = titleRect && titleRect.height > 0 ? titleRect.height : scene.title.offsetHeight || 124;
     titleMin = isTouchLandscape ? clamp(stageHeight * 0.28, 120, 220) : clamp(stageHeight * 0.34, 220, 292);
     fallbackFooterTop = stageHeight - clamp(stageHeight * 0.16, 128, 160);
     footerRect = footer ? footer.getBoundingClientRect() : null;
     footerTop = footerRect && footerRect.height > 0 ? footerRect.top - stageRect.top : fallbackFooterTop;
     footerGap = clamp(stageHeight * 0.04, 24, 42);
-    maxTop = Math.max(18, footerTop - footerGap - titleHeight);
+    titleFooterReserve = shortPhoneTitleFooterReserve(viewportWidth, stageHeight, footerGap, isTouchLandscape);
+    maxTop = Math.max(18, footerTop - footerGap - titleHeight - titleFooterReserve);
 
     if (scene.panel) {
       panelRect = scene.panel.getBoundingClientRect();
@@ -784,6 +823,8 @@
       if (child.tagName.toLowerCase() !== 'defs') child.remove();
     });
     var defs = svg.querySelector('defs') || el('defs', {}, svg);
+    var meshGridPattern = defs.querySelector('#mesh-grid');
+    if (meshGridPattern) meshGridPattern.setAttribute('patternTransform', 'translate(18 18)');
 
     var bg = el('g', { class: 'mesh-bg' }, svg);
     var bgPlane = el('rect', { class: 'mesh-grid-plane', width: roundSvg(layout.width), height: roundSvg(layout.height), fill: 'url(#mesh-grid)' }, bg);
@@ -828,7 +869,7 @@
       var glowId = ensureGlow(defs, item);
       var group = el('g', { class: 'mesh-node', 'data-node-id': item.id, transform: 'translate(' + item.x + ' ' + item.y + ')', opacity: 0 }, nodeGroup);
       var halo = el('circle', { class: 'node-halo', r: item.r, fill: 'url(#' + glowId + ')', opacity: 1 }, group);
-      var plate = el('circle', { class: 'node-plate', r: item.r * 0.48, fill: '#0e1014', stroke: item.color, 'stroke-opacity': 0.72, 'stroke-width': 1.2 }, group);
+      var plate = el('circle', { class: 'node-plate', r: item.r * NODE_PLATE_RATIO, fill: '#0e1014', stroke: item.color, 'stroke-opacity': 0.72, 'stroke-width': 1.2 }, group);
       var iconScale = iconScaleFor(item);
       var icon = el('g', { class: 'node-icon', transform: 'scale(' + iconScale + ')', fill: 'none', stroke: item.color, 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, group);
       drawLucideIcon(item.icon, icon);

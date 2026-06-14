@@ -11,6 +11,7 @@
 //! 5. All uncertainty → escalate to reducer
 
 use crate::normalize::{OutputKind, WorkerOutput};
+use crate::worker::WorkerRole;
 use serde_json::Value;
 
 /// Pick the best tool proposal: prefer proposals that have arguments,
@@ -176,6 +177,25 @@ pub fn arbitrate(outputs: &[WorkerOutput], has_tools: bool) -> Decision {
     }
 }
 
+/// Tier-gap gating for early decisions.
+///
+/// When the worker pool mixes a big-tier Strong worker with small-tier
+/// workers (the "MiniMax + small Qwens" shape), small-tier-only
+/// consensus must not finalize *against* the strong worker while it is
+/// still running — two fast small models agreeing on a wrong answer
+/// would otherwise outvote the model most likely to be right. The
+/// fan-out loop bounds how long the gate can hold via `strong_patience`,
+/// so this never becomes an unbounded wait.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StrongGate {
+    /// No quality gap, patience disabled, or patience expired: decide
+    /// on count and confidence alone (previous behavior).
+    Off,
+    /// Quality gap active. `strong_pending` is true while the Strong
+    /// worker has not yet finished (succeeded or failed).
+    Active { strong_pending: bool },
+}
+
 /// Try to decide early with a partial set of worker outputs.
 ///
 /// Returns `Some(decision)` if we can confidently resolve without waiting
@@ -189,6 +209,7 @@ pub fn try_early_decision(
     total_workers: usize,
     total_finished: usize,
     has_tools: bool,
+    strong_gate: StrongGate,
 ) -> Option<Decision> {
     if outputs.is_empty() {
         // All workers finished but none succeeded
@@ -199,6 +220,12 @@ pub fn try_early_decision(
     }
 
     let remaining = total_workers.saturating_sub(total_finished);
+    let strong_pending = matches!(
+        strong_gate,
+        StrongGate::Active {
+            strong_pending: true
+        }
+    );
 
     // ── Only one worker will ever respond ───────────────────────────
     // If we have 1 successful output and no more workers are coming,
@@ -215,6 +242,17 @@ pub fn try_early_decision(
         let failed_count = total_finished - outputs.len();
         let majority_failed = failed_count > 0 && failed_count >= total_workers / 2;
         if !majority_failed {
+            return None;
+        }
+        // Tier gate: a small-tier sole-survivor *answer* must not
+        // finalize while the strong worker is still running. The
+        // fan-out loop bounds this wait via `strong_patience`. Tool
+        // proposals are exempt — they are schema-verified and holding
+        // them would slow agent loops.
+        if strong_pending
+            && outputs[0].role != WorkerRole::Strong
+            && outputs[0].kind == OutputKind::Answer
+        {
             return None;
         }
         // Majority failed — return the sole survivor
@@ -244,15 +282,14 @@ pub fn try_early_decision(
     };
     if let Some((cluster_size, best)) = agreeing_cluster {
         let majority = cluster_size * 2 >= answers.len();
-        if majority && best.confidence >= 0.5 {
-            tracing::info!(
-                "moa: early exit — {}/{} workers agree on answer (conf={:.2}), {} still pending",
-                cluster_size,
-                answers.len(),
-                best.confidence,
-                remaining,
-            );
-            return Some(Decision::Answer(best.payload.clone()));
+        let qualifies = majority && best.confidence >= 0.5;
+        if let Some(decision) = qualifies
+            .then(|| {
+                tier_aware_consensus_decision(&answers, cluster_size, best, strong_gate, remaining)
+            })
+            .flatten()
+        {
+            return Some(decision);
         }
     }
 
@@ -300,6 +337,75 @@ pub fn try_early_decision(
 
     // Not enough signal yet — keep waiting
     None
+}
+
+/// Resolve a majority answer cluster against the strong-worker tier gate.
+///
+/// Consensus that includes the strong worker's answer passes through —
+/// that is agreement *with* the strong model, not against it. Small-tier-
+/// only consensus is held back (returns `None`) while the strong worker
+/// is still pending so the model most likely to be right gets to weigh
+/// in. The fan-out loop bounds how long the hold can last.
+fn tier_aware_consensus_decision(
+    answers: &[&WorkerOutput],
+    cluster_size: usize,
+    best: &WorkerOutput,
+    strong_gate: StrongGate,
+    remaining: usize,
+) -> Option<Decision> {
+    let strong_pending = matches!(
+        strong_gate,
+        StrongGate::Active {
+            strong_pending: true
+        }
+    );
+    let strong_answer = answers
+        .iter()
+        .find(|a| a.role == WorkerRole::Strong && is_usable_answer(a));
+    if strong_pending && strong_answer.is_none() {
+        tracing::info!(
+            "moa: consensus held — {}/{} small-tier workers agree but strong worker \
+             still pending (patience window active)",
+            cluster_size,
+            answers.len(),
+        );
+        return None;
+    }
+
+    // Strong landed but does NOT share the small-tier cluster: prefer the
+    // strong worker's answer over small-model consensus. Holding for the
+    // strong worker only buys it a seat; this is what makes its answer
+    // actually win on disagreement. When the strong worker IS in the
+    // cluster (its content agrees with the representative under the same
+    // bidirectional-subset rule the clusterer uses), the cluster
+    // representative already reflects its content, so ship that.
+    if let Some(strong) = strong_answer {
+        let strong_tokens = content_tokens(&strong.payload);
+        let best_tokens = content_tokens(&best.payload);
+        let in_cluster = !strong_tokens.is_empty()
+            && !best_tokens.is_empty()
+            && !has_negation_mismatch(&strong_tokens, &best_tokens)
+            && (strong_tokens.is_subset(&best_tokens) || best_tokens.is_subset(&strong_tokens));
+        if !in_cluster {
+            tracing::info!(
+                "moa: strong worker dissents from {}/{} small-tier consensus — preferring \
+                 strong answer (conf={:.2})",
+                cluster_size,
+                answers.len(),
+                strong.confidence,
+            );
+            return Some(Decision::Answer(strong.payload.clone()));
+        }
+    }
+
+    tracing::info!(
+        "moa: early exit — {}/{} workers agree on answer (conf={:.2}), {} still pending",
+        cluster_size,
+        answers.len(),
+        best.confidence,
+        remaining,
+    );
+    Some(Decision::Answer(best.payload.clone()))
 }
 
 /// Tokens that flip meaning. Always preserved as content (even if they'd
@@ -482,7 +588,6 @@ fn is_usable_answer(output: &WorkerOutput) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker::WorkerRole;
 
     fn make_output(kind: OutputKind, confidence: f32, payload: &str) -> WorkerOutput {
         WorkerOutput {
@@ -564,7 +669,7 @@ mod tests {
     fn early_decision_none_with_one_of_three() {
         let outputs = vec![make_output(OutputKind::Answer, 0.9, "Paris")];
         // 1 of 3 — too early to decide
-        assert!(try_early_decision(&outputs, 3, outputs.len(), false).is_none());
+        assert!(try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off).is_none());
     }
 
     #[test]
@@ -574,7 +679,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "Paris is the capital"),
         ];
         // 2 of 3 agree — early exit
-        match try_early_decision(&outputs, 3, outputs.len(), false) {
+        match try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off) {
             Some(Decision::Answer(text)) => assert!(text.contains("Paris")),
             other => panic!("expected early Answer, got {other:?}"),
         }
@@ -586,7 +691,7 @@ mod tests {
             make_tool_output(0.8, "read_file", serde_json::json!({"path": "a.rs"})),
             make_tool_output(0.7, "read_file", serde_json::json!({"path": "a.rs"})),
         ];
-        match try_early_decision(&outputs, 3, outputs.len(), true) {
+        match try_early_decision(&outputs, 3, outputs.len(), true, StrongGate::Off) {
             Some(Decision::ToolCall { name, .. }) => assert_eq!(name, "read_file"),
             other => panic!("expected early ToolCall, got {other:?}"),
         }
@@ -598,7 +703,7 @@ mod tests {
             make_tool_output(0.7, "read_file", serde_json::json!({})),
             make_output(OutputKind::Answer, 0.8, "I know the answer"),
         ];
-        match try_early_decision(&outputs, 3, outputs.len(), true) {
+        match try_early_decision(&outputs, 3, outputs.len(), true, StrongGate::Off) {
             Some(Decision::NeedsReducer { .. }) => {}
             other => panic!("expected early NeedsReducer, got {other:?}"),
         }
@@ -614,7 +719,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "The capital of France is Paris"),
             make_output(OutputKind::Answer, 0.8, "The capital of France is Berlin"),
         ];
-        let res = try_early_decision(&outputs, 3, outputs.len(), false);
+        let res = try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off);
         assert!(
             res.is_none(),
             "disagreeing answers should not trigger early-exit, got {res:?}"
@@ -630,7 +735,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.7, "Paris"),
             make_output(OutputKind::Answer, 0.9, "Paris is the capital of France"),
         ];
-        match try_early_decision(&outputs, 3, outputs.len(), false) {
+        match try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off) {
             // Representative picks the most complete (most tokens) member.
             Some(Decision::Answer(text)) => {
                 let lower = text.to_lowercase();
@@ -653,7 +758,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.8, "Paris is the capital"),
             make_output(OutputKind::Answer, 0.6, "I think it's Lyon"),
         ];
-        match try_early_decision(&outputs, 4, outputs.len(), false) {
+        match try_early_decision(&outputs, 4, outputs.len(), false, StrongGate::Off) {
             Some(Decision::Answer(text)) => assert!(
                 text.to_lowercase().contains("paris"),
                 "should pick from the agreeing cluster, got {text:?}"
@@ -673,7 +778,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "The capital of France is Berlin"),
             make_output(OutputKind::Answer, 0.5, "The capital of France is Madrid"),
         ];
-        let res = try_early_decision(&outputs, 4, outputs.len(), false);
+        let res = try_early_decision(&outputs, 4, outputs.len(), false, StrongGate::Off);
         assert!(
             res.is_none(),
             "three disagreeing answers should not early-exit, got {res:?}"
@@ -689,7 +794,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "You should use grep"),
             make_output(OutputKind::Answer, 0.8, "You should not use grep"),
         ];
-        let res = try_early_decision(&outputs, 3, outputs.len(), false);
+        let res = try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off);
         assert!(
             res.is_none(),
             "affirmative vs negated answer should not cluster, got {res:?}"
@@ -704,7 +809,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "Do that"),
             make_output(OutputKind::Answer, 0.8, "Don't do that"),
         ];
-        let res = try_early_decision(&outputs, 3, outputs.len(), false);
+        let res = try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off);
         assert!(
             res.is_none(),
             "affirmative vs negated should not cluster, got {res:?}"
@@ -718,7 +823,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "42"),
             make_output(OutputKind::Answer, 0.8, "The answer is 42"),
         ];
-        match try_early_decision(&outputs, 3, outputs.len(), false) {
+        match try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off) {
             Some(Decision::Answer(text)) => assert!(text.contains("42")),
             other => panic!("expected numeric agreement, got {other:?}"),
         }
@@ -729,7 +834,7 @@ mod tests {
         // 1 success out of 3, other 2 failed — should return the single answer
         let outputs = vec![make_output(OutputKind::Answer, 0.8, "Paris")];
         // total_workers=3, total_finished=3 (1 success + 2 failures), remaining=0
-        match try_early_decision(&outputs, 3, 3, false) {
+        match try_early_decision(&outputs, 3, 3, false, StrongGate::Off) {
             Some(Decision::Answer(text)) => assert!(text.contains("Paris")),
             other => panic!("expected early Answer for sole survivor, got {other:?}"),
         }
@@ -742,7 +847,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.4, "could be Paris"),
         ];
         // Both answers but low confidence — should wait for more
-        assert!(try_early_decision(&outputs, 3, outputs.len(), false).is_none());
+        assert!(try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off).is_none());
     }
 
     #[test]
@@ -785,7 +890,7 @@ mod tests {
         // 1 success, 3 failures, 1 still pending — majority failed, return sole survivor
         let outputs = vec![make_output(OutputKind::Answer, 0.8, "Paris")];
         // total_workers=5, total_finished=4 (1 success + 3 failures), remaining=1
-        match try_early_decision(&outputs, 5, 4, false) {
+        match try_early_decision(&outputs, 5, 4, false, StrongGate::Off) {
             Some(Decision::Answer(text)) => assert!(text.contains("Paris")),
             other => {
                 panic!("expected early Answer for sole survivor (majority failed), got {other:?}")
@@ -798,7 +903,7 @@ mod tests {
         // 1 success, 1 failure, 3 still pending — minority failed, wait for more
         let outputs = vec![make_output(OutputKind::Answer, 0.8, "Paris")];
         // total_workers=5, total_finished=2 (1 success + 1 failure), remaining=3
-        assert!(try_early_decision(&outputs, 5, 2, false).is_none());
+        assert!(try_early_decision(&outputs, 5, 2, false, StrongGate::Off).is_none());
     }
 
     #[test]
@@ -855,5 +960,147 @@ mod tests {
         let best = best_tool_proposal(&proposals);
         // Both have args, so confidence wins
         assert_eq!(best.model, "model-b");
+    }
+
+    // ── Tier gate (StrongGate) ───────────────────────────────────────
+
+    fn make_role_output(
+        kind: OutputKind,
+        confidence: f32,
+        payload: &str,
+        role: WorkerRole,
+    ) -> WorkerOutput {
+        WorkerOutput {
+            role,
+            ..make_output(kind, confidence, payload)
+        }
+    }
+
+    const GATE_PENDING: StrongGate = StrongGate::Active {
+        strong_pending: true,
+    };
+
+    #[test]
+    fn gate_holds_small_tier_consensus_while_strong_pending() {
+        // Two small-tier workers agree — without the gate this would
+        // early-exit. With the strong worker still running, hold.
+        let outputs = vec![
+            make_role_output(OutputKind::Answer, 0.8, "Paris", WorkerRole::Fast),
+            make_role_output(
+                OutputKind::Answer,
+                0.9,
+                "Paris is the capital",
+                WorkerRole::Specialist,
+            ),
+        ];
+        assert!(
+            try_early_decision(&outputs, 3, outputs.len(), false, GATE_PENDING).is_none(),
+            "small-tier consensus must be held while the strong worker is pending"
+        );
+        // Same outputs, gate off → previous behavior (early exit).
+        assert!(
+            try_early_decision(&outputs, 3, outputs.len(), false, StrongGate::Off).is_some(),
+            "gate off must preserve pre-gate early-exit behavior"
+        );
+    }
+
+    #[test]
+    fn gate_passes_consensus_that_includes_strong_worker() {
+        // Strong worker has answered and agrees — that's agreement WITH
+        // the strong model. Ship it even though another worker is pending.
+        let outputs = vec![
+            make_role_output(OutputKind::Answer, 0.8, "Paris", WorkerRole::Fast),
+            make_role_output(
+                OutputKind::Answer,
+                0.9,
+                "Paris is the capital",
+                WorkerRole::Strong,
+            ),
+        ];
+        let gate = StrongGate::Active {
+            strong_pending: false,
+        };
+        match try_early_decision(&outputs, 3, outputs.len(), false, gate) {
+            Some(Decision::Answer(text)) => assert!(text.contains("Paris")),
+            other => panic!("expected early Answer with strong agreement, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gate_holds_small_tier_sole_survivor_answer() {
+        // Majority failed, sole survivor is a small-tier Answer, strong
+        // still pending → hold (the fan-out patience timer bounds this).
+        let outputs = vec![make_role_output(
+            OutputKind::Answer,
+            0.9,
+            "Tokyo",
+            WorkerRole::Fast,
+        )];
+        // 3 dispatched, 2 finished (1 ok + 1 failed) → majority_failed
+        assert!(
+            try_early_decision(&outputs, 3, 2, false, GATE_PENDING).is_none(),
+            "small-tier sole-survivor answer must be held while strong is pending"
+        );
+        // Gate off → pre-gate behavior: sole survivor ships.
+        assert!(try_early_decision(&outputs, 3, 2, false, StrongGate::Off).is_some());
+    }
+
+    #[test]
+    fn gate_does_not_hold_tool_proposals() {
+        // Tool proposals are schema-verified and exempt from the gate —
+        // agent loops must stay snappy.
+        let outputs = vec![WorkerOutput {
+            role: WorkerRole::Fast,
+            ..make_tool_output(0.9, "read_file", serde_json::json!({"path": "x"}))
+        }];
+        // Majority failed → sole-survivor path, but it's a ToolProposal.
+        match try_early_decision(&outputs, 3, 2, true, GATE_PENDING) {
+            Some(Decision::ToolCall { name, .. }) => assert_eq!(name, "read_file"),
+            other => panic!("tool proposals must not be gated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strong_dissent_wins_over_small_consensus() {
+        // Two small workers agree on "Sydney"; the strong worker landed
+        // with a different answer ("Canberra"). Gate no longer pending.
+        // The strong worker's answer must win, not the small consensus.
+        let outputs = vec![
+            make_role_output(OutputKind::Answer, 0.9, "Sydney", WorkerRole::Fast),
+            make_role_output(OutputKind::Answer, 0.9, "Sydney", WorkerRole::Specialist),
+            make_role_output(OutputKind::Answer, 0.7, "Canberra", WorkerRole::Strong),
+        ];
+        let gate = StrongGate::Active {
+            strong_pending: false,
+        };
+        match try_early_decision(&outputs, 3, outputs.len(), false, gate) {
+            Some(Decision::Answer(text)) => assert!(
+                text.contains("Canberra"),
+                "strong dissent must win over small consensus, got {text:?}"
+            ),
+            other => panic!("expected strong's Answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gate_releases_when_strong_finished() {
+        // Strong worker finished (failed or succeeded without usable
+        // answer) — gate no longer pending, consensus ships.
+        let outputs = vec![
+            make_role_output(OutputKind::Answer, 0.8, "Paris", WorkerRole::Fast),
+            make_role_output(
+                OutputKind::Answer,
+                0.9,
+                "Paris is the capital",
+                WorkerRole::Specialist,
+            ),
+        ];
+        let gate = StrongGate::Active {
+            strong_pending: false,
+        };
+        assert!(
+            try_early_decision(&outputs, 4, outputs.len(), false, gate).is_some(),
+            "consensus must ship once the strong worker has finished"
+        );
     }
 }

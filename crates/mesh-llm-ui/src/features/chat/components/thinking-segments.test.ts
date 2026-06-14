@@ -22,6 +22,22 @@ describe('splitAssistantThinking', () => {
     ])
   })
 
+  it('splits Gemma channel thinking from final response text', () => {
+    expect(
+      splitAssistantThinking('<|channel|>thoughtCheck whether the prompt is a test.<channel|>Test received!')
+    ).toEqual([
+      { kind: 'thinking', text: 'Check whether the prompt is a test.', open: false },
+      { kind: 'response', text: 'Test received!' }
+    ])
+  })
+
+  it('splits Gemma channel thinking when the thought marker is missing the leading pipe', () => {
+    expect(splitAssistantThinking('<channel|>thoughtCheck facts.<channel|>Final answer.')).toEqual([
+      { kind: 'thinking', text: 'Check facts.', open: false },
+      { kind: 'response', text: 'Final answer.' }
+    ])
+  })
+
   it('keeps an unclosed think segment open for live streams', () => {
     expect(splitAssistantThinking('<think>Checking facts')).toEqual([
       { kind: 'thinking', text: 'Checking facts', open: true }

@@ -1,7 +1,7 @@
-From 09dda4035d347bd8ef77afa60fb4d21e3d8f1813 Mon Sep 17 00:00:00 2001
+From 08f5e8ebf4116f1fe150e9742039009ac5cc63da Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 18:45:41 +1000
-Subject: [PATCH 75/81] Carry activation frame position sideband
+Subject: [PATCH 75/82] Carry activation frame position sideband
 
 ---
  include/skippy.h |  30 +++++++++++
@@ -9,7 +9,7 @@ Subject: [PATCH 75/81] Carry activation frame position sideband
  2 files changed, 145 insertions(+), 12 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index c588c862..eb6da73e 100644
+index c588c8624..eb6da73ef 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -365,6 +365,36 @@ LLAMA_API enum skippy_status skippy_prefill_chunk_frame_sampled(
@@ -50,7 +50,7 @@ index c588c862..eb6da73e 100644
          struct skippy_session * session,
          llama_token token_id,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index be8e5719..e6cca846 100644
+index aa48c9a89..3f7571691 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1455,6 +1455,8 @@ static enum skippy_status skippy_decode_activation_frame(
@@ -134,7 +134,7 @@ index be8e5719..e6cca846 100644
      return status;
  }
  
-@@ -2344,6 +2377,8 @@ static enum skippy_status skippy_prefill_chunk_frame_impl(
+@@ -2342,6 +2375,8 @@ static enum skippy_status skippy_prefill_chunk_frame_impl(
          struct skippy_session * session,
          const llama_token * token_ids,
          size_t token_count,
@@ -143,7 +143,7 @@ index be8e5719..e6cca846 100644
          bool request_logits,
          const struct skippy_sampling_config * sampling,
          const struct skippy_activation_desc * input_desc,
-@@ -2390,7 +2425,7 @@ static enum skippy_status skippy_prefill_chunk_frame_impl(
+@@ -2388,7 +2423,7 @@ static enum skippy_status skippy_prefill_chunk_frame_impl(
      }
  
      if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
@@ -152,7 +152,7 @@ index be8e5719..e6cca846 100644
      } else {
          status = skippy_decode_tokens(session, token_ids, token_count, request_logits, out_error);
      }
-@@ -2421,6 +2456,8 @@ enum skippy_status skippy_prefill_chunk_frame(
+@@ -2419,6 +2454,8 @@ enum skippy_status skippy_prefill_chunk_frame(
              session,
              token_ids,
              token_count,
@@ -161,7 +161,7 @@ index be8e5719..e6cca846 100644
              false,
              nullptr,
              input_desc,
-@@ -2450,6 +2487,72 @@ enum skippy_status skippy_prefill_chunk_frame_sampled(
+@@ -2448,6 +2485,72 @@ enum skippy_status skippy_prefill_chunk_frame_sampled(
              session,
              token_ids,
              token_count,
@@ -234,7 +234,7 @@ index be8e5719..e6cca846 100644
              true,
              sampling,
              input_desc,
-@@ -2523,7 +2626,7 @@ enum skippy_status skippy_decode_step_frame_sampled(
+@@ -2521,7 +2624,7 @@ enum skippy_status skippy_decode_step_frame_sampled(
      }
  
      if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
@@ -243,7 +243,7 @@ index be8e5719..e6cca846 100644
      } else {
          status = skippy_decode_tokens(session, &token_id, 1, true, out_error);
      }
-@@ -2606,7 +2709,7 @@ enum skippy_status skippy_verify_tokens_frame(
+@@ -2604,7 +2707,7 @@ enum skippy_status skippy_verify_tokens_frame(
      if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
          status = session->stage_model->config.include_output ?
                  skippy_verify_activation_frame(session, input_desc, input_payload, token_count, out_error) :
@@ -253,5 +253,5 @@ index be8e5719..e6cca846 100644
          status = session->stage_model->config.include_output ?
                  skippy_verify_token_batch(session, token_ids, token_count, out_error) :
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

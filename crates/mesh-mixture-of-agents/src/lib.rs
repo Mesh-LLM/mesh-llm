@@ -86,6 +86,15 @@ pub struct GatewayConfig {
     /// (conf >= 0.5) is in, accept it instead of waiting for consensus.
     /// Disabled for tool turns. Zero disables entirely.
     pub first_answer_grace: Duration,
+    /// Tier-gate patience: when the worker pool mixes a big-tier Strong
+    /// worker with small-tier workers, small-tier-only answers and
+    /// consensus are held for up to this long after dispatch to give the
+    /// strong worker a chance to weigh in. A hard bound — once it lapses,
+    /// all decision rules revert to ungated behavior, so a stuck strong
+    /// worker can never hold the turn hostage. Zero disables the gate.
+    /// Has no effect when all workers are the same tier. Tool proposals
+    /// are never held.
+    pub strong_patience: Duration,
     /// Override for whether reasoning workers should think. Propagated to
     /// every worker and the reducer as `chat_template_kwargs.enable_thinking`
     /// (and `reasoning_effort: "none"` when disabled).
@@ -297,8 +306,11 @@ async fn handle_query(
         query_uses_tools,
         allowed_tools,
         session.tools(),
-        config.first_answer_grace,
-        grace_mode,
+        fanout::GatherPolicy {
+            first_answer_grace: config.first_answer_grace,
+            grace_mode,
+            strong_patience: config.strong_patience,
+        },
     )
     .await;
 
@@ -1531,6 +1543,7 @@ mod response_builder_tests {
             reducer_timeout: Duration::from_secs(1),
             hedge_delay: Duration::from_millis(10),
             first_answer_grace: Duration::from_millis(10),
+            strong_patience: Duration::ZERO,
             enable_thinking: Some(false),
         };
         let forced_tool = ForcedToolChoice {

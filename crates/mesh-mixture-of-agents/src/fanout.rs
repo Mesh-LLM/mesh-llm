@@ -26,6 +26,18 @@ pub(crate) enum GraceMode {
     Tool,
 }
 
+/// Time-based decision policy for a single fan-out: how long to wait
+/// before shipping a partial result, and how long to hold small-tier
+/// decisions for a pending big-tier strong worker.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GatherPolicy {
+    /// See [`crate::GatewayConfig::first_answer_grace`].
+    pub first_answer_grace: Duration,
+    pub grace_mode: GraceMode,
+    /// See [`crate::GatewayConfig::strong_patience`].
+    pub strong_patience: Duration,
+}
+
 /// Identifier for a worker we dispatched. Used to reconcile the
 /// per-worker accounting at the end of fan-out so the — possibly
 /// aborted or panicked — task's existence still shows up in
@@ -41,19 +53,42 @@ pub(crate) async fn gather_workers_incremental(
     has_tools: bool,
     allowed_tools: &[String],
     tools: Option<&Value>,
-    first_answer_grace: Duration,
-    grace_mode: GraceMode,
+    policy: GatherPolicy,
 ) -> (
     Vec<WorkerOutput>,
     Vec<WorkerSummary>,
     Option<arbiter::Decision>,
 ) {
+    let GatherPolicy {
+        first_answer_grace,
+        grace_mode,
+        strong_patience,
+    } = policy;
     let total_workers = dispatched.len();
     let mut outputs = Vec::new();
     let mut summaries = Vec::new();
     let mut total_finished: usize = 0;
     let dispatched_at = Instant::now();
     let grace_enabled = grace_mode != GraceMode::Disabled && !first_answer_grace.is_zero();
+
+    // Tier gate: when the pool mixes a big-tier Strong worker with
+    // small-tier workers, small-tier-only consensus is held until the
+    // strong worker finishes OR the patience window expires. The window
+    // is a hard bound — when it lapses the gate switches off entirely
+    // and every decision rule reverts to pre-gate behavior, so a stuck
+    // strong worker can never hold the turn hostage (the failure mode
+    // that sank PR #820).
+    let mut strong_finished = false;
+    let gate_enabled = !strong_patience.is_zero()
+        && crate::worker::has_quality_gap(dispatched.iter().map(|d| (d.model.as_str(), d.role)));
+    let strong_gate = |strong_finished: bool, elapsed: Duration| -> arbiter::StrongGate {
+        if !gate_enabled || elapsed >= strong_patience {
+            return arbiter::StrongGate::Off;
+        }
+        arbiter::StrongGate::Active {
+            strong_pending: !strong_finished,
+        }
+    };
 
     // Grace eligibility: once the grace window has elapsed and a qualifying
     // partial decision exists, ship it instead of waiting for the slow tail.
@@ -83,7 +118,23 @@ pub(crate) async fn gather_workers_incremental(
         } else {
             Duration::from_secs(60 * 60)
         };
-        let armed = grace_eligible(&outputs);
+        // While the tier gate is actively holding (strong worker pending,
+        // patience not yet expired), arm a wake-up at patience expiry so a
+        // held consensus decision is re-evaluated even if no further worker
+        // event arrives. Without this, a stuck strong worker would mean the
+        // next re-check only happens at worker_timeout.
+        let gate_holding = gate_enabled
+            && !strong_finished
+            && dispatched_at.elapsed() < strong_patience
+            && !outputs.is_empty();
+        let patience_remaining = strong_patience.saturating_sub(dispatched_at.elapsed());
+
+        // The answer grace is also tier-gated: a single small-tier answer
+        // must not ship at grace expiry while the strong worker is still
+        // inside its patience window — that was the dominant path where a
+        // small model's answer pre-empted the strong one. Tool grace is
+        // exempt (schema-verified proposals; agent loops stay snappy).
+        let armed = grace_eligible(&outputs) && !(gate_holding && grace_mode == GraceMode::Answer);
 
         let join_result = tokio::select! {
             biased;
@@ -104,6 +155,26 @@ pub(crate) async fn gather_workers_incremental(
                 reconcile_dispatched(dispatched, &mut summaries);
                 return (outputs, summaries, Some(decision));
             }
+            _ = tokio::time::sleep(patience_remaining), if gate_holding => {
+                tracing::info!(
+                    "moa: strong patience expired after {}ms — re-evaluating held outputs",
+                    dispatched_at.elapsed().as_millis(),
+                );
+                // Gate is now Off (elapsed >= strong_patience); re-run the
+                // early-decision check over what we already have.
+                if let Some(decision) = arbiter::try_early_decision(
+                    &outputs,
+                    total_workers,
+                    total_finished,
+                    has_tools,
+                    arbiter::StrongGate::Off,
+                ) {
+                    drain_after_early_exit(join_set, &mut summaries).await;
+                    reconcile_dispatched(dispatched, &mut summaries);
+                    return (outputs, summaries, Some(decision));
+                }
+                continue;
+            }
         };
 
         let Some(join_result) = join_result else {
@@ -113,6 +184,9 @@ pub(crate) async fn gather_workers_incremental(
         match join_result {
             Ok((model, role, Ok(text), elapsed)) => {
                 total_finished += 1;
+                if role == WorkerRole::Strong {
+                    strong_finished = true;
+                }
                 let mut normalized =
                     normalize::normalize_worker_output(&text, &model, role, elapsed);
                 enforce_tool_call_contract(&mut normalized, allowed_tools, tools, &model);
@@ -135,9 +209,13 @@ pub(crate) async fn gather_workers_incremental(
                 });
                 outputs.push(normalized);
 
-                if let Some(decision) =
-                    arbiter::try_early_decision(&outputs, total_workers, total_finished, has_tools)
-                {
+                if let Some(decision) = arbiter::try_early_decision(
+                    &outputs,
+                    total_workers,
+                    total_finished,
+                    has_tools,
+                    strong_gate(strong_finished, dispatched_at.elapsed()),
+                ) {
                     drain_after_early_exit(join_set, &mut summaries).await;
                     reconcile_dispatched(dispatched, &mut summaries);
                     return (outputs, summaries, Some(decision));
@@ -145,6 +223,9 @@ pub(crate) async fn gather_workers_incremental(
             }
             Ok((model, role, Err(e), elapsed)) => {
                 total_finished += 1;
+                if role == WorkerRole::Strong {
+                    strong_finished = true;
+                }
                 tracing::warn!(
                     "moa: worker {} ({}) failed after {}ms: {}",
                     model,
@@ -161,9 +242,13 @@ pub(crate) async fn gather_workers_incremental(
                     confidence: None,
                 });
 
-                if let Some(decision) =
-                    arbiter::try_early_decision(&outputs, total_workers, total_finished, has_tools)
-                {
+                if let Some(decision) = arbiter::try_early_decision(
+                    &outputs,
+                    total_workers,
+                    total_finished,
+                    has_tools,
+                    strong_gate(strong_finished, dispatched_at.elapsed()),
+                ) {
                     drain_after_early_exit(join_set, &mut summaries).await;
                     reconcile_dispatched(dispatched, &mut summaries);
                     return (outputs, summaries, Some(decision));
@@ -173,9 +258,15 @@ pub(crate) async fn gather_workers_incremental(
                 total_finished += 1;
                 tracing::warn!("moa: worker task panicked or was cancelled: {e}");
                 // No (model, role) payload available from a JoinError, so
-                // we cannot attribute this slot here. `reconcile_dispatched`
-                // at the end picks up any dispatched worker that has not
-                // produced a summary by name.
+                // we cannot attribute this slot here — including whether it
+                // was the Strong worker. If a panicking Strong leaves
+                // `strong_finished` false, the tier gate simply holds until
+                // `strong_patience` expires (its bounded fallback) rather
+                // than releasing immediately. Panicking workers are rare and
+                // the worst case is one extra patience window of latency, so
+                // we don't add fragile JoinError↔slot correlation to shave
+                // it. `reconcile_dispatched` still attributes the slot by
+                // name at the end for accounting.
             }
         }
     }
@@ -185,15 +276,27 @@ pub(crate) async fn gather_workers_incremental(
 }
 
 fn grace_answer_decision(outputs: &[WorkerOutput]) -> arbiter::Decision {
-    let answer = outputs
-        .iter()
-        .filter(|o| o.kind == normalize::OutputKind::Answer)
-        .max_by(|a, b| {
-            a.confidence
-                .partial_cmp(&b.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .expect("answer grace requires at least one Answer");
+    // Prefer the Strong worker's qualifying answer when it has landed:
+    // if the biggest model already answered, shipping a smaller model's
+    // marginally-higher-confidence answer instead would defeat the point
+    // of waiting for it. Confidence is self-reported and not comparable
+    // across models, so role is the better tie-breaker here.
+    let strong = outputs.iter().find(|o| {
+        o.kind == normalize::OutputKind::Answer
+            && o.role == WorkerRole::Strong
+            && o.confidence >= GRACE_MIN_CONFIDENCE
+    });
+    let answer = strong.unwrap_or_else(|| {
+        outputs
+            .iter()
+            .filter(|o| o.kind == normalize::OutputKind::Answer)
+            .max_by(|a, b| {
+                a.confidence
+                    .partial_cmp(&b.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .expect("answer grace requires at least one Answer")
+    });
     let answer_count = outputs
         .iter()
         .filter(|o| o.kind == normalize::OutputKind::Answer)
@@ -370,8 +473,11 @@ mod tests {
             false, // has_tools
             &[],
             None,
-            Duration::from_millis(50),
-            GraceMode::Answer,
+            GatherPolicy {
+                first_answer_grace: Duration::from_millis(50),
+                grace_mode: GraceMode::Answer,
+                strong_patience: Duration::ZERO,
+            },
         )
         .await;
         let elapsed = started.elapsed();
@@ -423,8 +529,11 @@ mod tests {
             true, // has_tools
             &[],
             None,
-            Duration::from_millis(50),
-            GraceMode::Answer,
+            GatherPolicy {
+                first_answer_grace: Duration::from_millis(50),
+                grace_mode: GraceMode::Answer,
+                strong_patience: Duration::ZERO,
+            },
         )
         .await;
         let elapsed = started.elapsed();
@@ -471,8 +580,11 @@ mod tests {
             true,
             &[],
             None,
-            Duration::from_millis(50),
-            GraceMode::Disabled,
+            GatherPolicy {
+                first_answer_grace: Duration::from_millis(50),
+                grace_mode: GraceMode::Disabled,
+                strong_patience: Duration::ZERO,
+            },
         )
         .await;
         let elapsed = started.elapsed();
@@ -511,8 +623,11 @@ mod tests {
             true,
             &["read".to_string()],
             None,
-            Duration::from_millis(50),
-            GraceMode::Tool,
+            GatherPolicy {
+                first_answer_grace: Duration::from_millis(50),
+                grace_mode: GraceMode::Tool,
+                strong_patience: Duration::ZERO,
+            },
         )
         .await;
         let elapsed = started.elapsed();
@@ -566,8 +681,11 @@ mod tests {
             false, // has_tools
             &[],
             None,
-            Duration::ZERO,
-            GraceMode::Answer,
+            GatherPolicy {
+                first_answer_grace: Duration::ZERO,
+                grace_mode: GraceMode::Answer,
+                strong_patience: Duration::ZERO,
+            },
         )
         .await;
         let elapsed = started.elapsed();
@@ -614,8 +732,11 @@ mod tests {
             false,
             &[],
             None,
-            Duration::from_millis(50),
-            GraceMode::Answer,
+            GatherPolicy {
+                first_answer_grace: Duration::from_millis(50),
+                grace_mode: GraceMode::Answer,
+                strong_patience: Duration::ZERO,
+            },
         )
         .await;
         let elapsed = started.elapsed();
@@ -667,8 +788,11 @@ mod tests {
             false,
             &[],
             None,
-            Duration::from_millis(50),
-            GraceMode::Answer,
+            GatherPolicy {
+                first_answer_grace: Duration::from_millis(50),
+                grace_mode: GraceMode::Answer,
+                strong_patience: Duration::ZERO,
+            },
         )
         .await;
         let elapsed = started.elapsed();
@@ -728,8 +852,11 @@ mod tests {
             false,
             &[],
             None,
-            Duration::from_millis(100),
-            GraceMode::Answer,
+            GatherPolicy {
+                first_answer_grace: Duration::from_millis(100),
+                grace_mode: GraceMode::Answer,
+                strong_patience: Duration::ZERO,
+            },
         )
         .await;
         let decision = decision.expect("grace must yield a Decision");

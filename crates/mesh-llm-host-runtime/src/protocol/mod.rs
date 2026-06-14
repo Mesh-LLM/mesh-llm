@@ -38,11 +38,13 @@ pub(crate) const STREAM_CONFIG_SUBSCRIBE: u8 = 0x0b;
 /// keep 0x0c reserved so old wire values are not accidentally reused.
 pub(crate) const STREAM_CONFIG_PUSH: u8 = 0x0c;
 pub(crate) const STREAM_SUBPROTOCOL: u8 = 0x0d;
+pub(crate) const STREAM_DIRECT_PATH_REQUEST: u8 = 0x0e;
 const _: () = {
     let _ = ALPN_CONTROL_V1;
     let _ = STREAM_CONFIG_SUBSCRIBE;
     let _ = STREAM_CONFIG_PUSH;
     let _ = STREAM_SUBPROTOCOL;
+    let _ = STREAM_DIRECT_PATH_REQUEST;
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,6 +67,7 @@ pub(crate) enum ControlFrameError {
     InvalidSenderId {
         got: usize,
     },
+    MissingDirectPathAddress,
     MissingHttpPort,
     MissingControlOwnerId,
     InvalidConfigHashLength {
@@ -116,6 +119,9 @@ impl std::fmt::Display for ControlFrameError {
             }
             ControlFrameError::InvalidSenderId { got } => {
                 write!(f, "invalid sender_id length: expected 32, got {}", got)
+            }
+            ControlFrameError::MissingDirectPathAddress => {
+                write!(f, "direct path request missing endpoint address")
             }
             ControlFrameError::MissingHttpPort => {
                 write!(f, "HOST-role peer annotation missing http_port")
@@ -270,6 +276,23 @@ impl ValidateControlFrame for crate::proto::node::PeerLeaving {
             return Err(ControlFrameError::InvalidEndpointId {
                 got: self.peer_id.len(),
             });
+        }
+        Ok(())
+    }
+}
+
+impl ValidateControlFrame for crate::proto::node::DirectPathRequest {
+    fn validate_frame(&self) -> Result<(), ControlFrameError> {
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
+        }
+        if self.requester_id.len() != 32 {
+            return Err(ControlFrameError::InvalidEndpointId {
+                got: self.requester_id.len(),
+            });
+        }
+        if self.serialized_addr.is_empty() {
+            return Err(ControlFrameError::MissingDirectPathAddress);
         }
         Ok(())
     }

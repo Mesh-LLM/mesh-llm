@@ -1,9 +1,9 @@
 //! Mesh membership via iroh QUIC connections.
 //!
 //! Mesh control traffic uses QUIC ALPN `mesh-llm/1` and multiplexes bi-streams
-//! by first byte. Mesh-owned subsystem streams use `STREAM_SUBPROTOCOL` on the
-//! admitted mesh connection; Skippy activation transport remains on the
-//! latency-sensitive `skippy-stage/2` ALPN.
+//! by first byte. Latency-sensitive and path-maintenance flows keep dedicated
+//! stream bytes. Skippy activation transport remains on the latency-sensitive
+//! `skippy-stage/2` ALPN.
 
 pub use mesh_llm_types::mesh::{
     DEMAND_TTL_SECS, MAX_SPLIT_RTT_MS, ModelDemand, ModelRuntimeDescriptor, ModelSourceKind,
@@ -541,17 +541,22 @@ fn endpoint_addr_has_public_ipv4(addr: &EndpointAddr) -> bool {
 }
 
 // Host-network Docker and CNI bridges commonly reuse the same 172.* addresses
-// on every host. When a node selects a bind IP, only advertise that direct IP
-// while preserving relay and public candidates for non-LAN reachability.
+// on every host. When a node selects a bind IP, only advertise that direct IP.
+// Public discovery keeps public candidates for non-LAN reachability; LAN-only
+// discovery strips them so peers try the selected lab interface directly.
 fn filter_endpoint_addr_for_bind_ip(
     mut addr: EndpointAddr,
     bind_ip: Option<IpAddr>,
+    preserve_public_ipv4_candidates: bool,
 ) -> EndpointAddr {
     let Some(bind_ip) = bind_ip else {
         return addr;
     };
     addr.addrs.retain(|candidate| match candidate {
-        TransportAddr::Ip(socket) => socket.ip() == bind_ip || is_public_ipv4_candidate(socket),
+        TransportAddr::Ip(socket) => {
+            socket.ip() == bind_ip
+                || (preserve_public_ipv4_candidates && is_public_ipv4_candidate(socket))
+        }
         _ => true,
     });
     addr
@@ -2238,6 +2243,7 @@ pub struct Node {
     endpoint_secret_key: SecretKey,
     public_addr: Option<std::net::SocketAddr>,
     quic_bind: QuicBindSelection,
+    relay_policy: RelayPolicy,
     owner_keypair: Option<crate::crypto::OwnerKeypair>,
     local_mesh_requirements: crate::MeshRequirements,
     state: Arc<Mutex<MeshState>>,
@@ -2452,6 +2458,9 @@ struct MeshState {
     /// (target was still reachable). Used to suppress repeated false reports
     /// from unreliable reporters (e.g. relay-partitioned nodes).
     peer_down_rejections: HashMap<(EndpointId, EndpointId), std::time::Instant>,
+    /// Last accepted direct-path dial-back request per peer. This keeps path
+    /// maintenance targeted even if a peer repeatedly asks us to reverse-dial.
+    direct_path_request_last_at: HashMap<EndpointId, std::time::Instant>,
     seen_plugin_messages: HashMap<String, std::time::Instant>,
     seen_plugin_message_order: VecDeque<(std::time::Instant, String)>,
     /// Last policy-rejection status per peer — used to suppress duplicate log lines.
@@ -3718,6 +3727,7 @@ impl Node {
             endpoint_secret_key: secret_key.clone(),
             public_addr,
             quic_bind,
+            relay_policy: relay.policy,
             owner_keypair,
             local_mesh_requirements,
             state: Arc::new(Mutex::new(MeshState {
@@ -3726,6 +3736,7 @@ impl Node {
                 remote_tunnel_maps: HashMap::new(),
                 dead_peers: HashMap::new(),
                 peer_down_rejections: HashMap::new(),
+                direct_path_request_last_at: HashMap::new(),
                 seen_plugin_messages: HashMap::new(),
                 seen_plugin_message_order: VecDeque::new(),
                 policy_rejected_peers: HashMap::new(),
@@ -3878,6 +3889,7 @@ impl Node {
             endpoint_secret_key: secret_key,
             public_addr: None,
             quic_bind: QuicBindSelection::default(),
+            relay_policy: RelayPolicy::Disabled,
             owner_keypair: None,
             local_mesh_requirements: crate::MeshRequirements::unrestricted(),
             state: Arc::new(Mutex::new(MeshState {
@@ -3886,6 +3898,7 @@ impl Node {
                 remote_tunnel_maps: HashMap::new(),
                 dead_peers: HashMap::new(),
                 peer_down_rejections: HashMap::new(),
+                direct_path_request_last_at: HashMap::new(),
                 seen_plugin_messages: HashMap::new(),
                 seen_plugin_message_order: VecDeque::new(),
                 policy_rejected_peers: HashMap::new(),
@@ -4512,7 +4525,11 @@ impl Node {
         {
             addr.addrs.insert(TransportAddr::Ip(pub_addr));
         }
-        addr = filter_endpoint_addr_for_bind_ip(addr, self.quic_bind.ip);
+        addr = filter_endpoint_addr_for_bind_ip(
+            addr,
+            self.quic_bind.ip,
+            self.relay_policy.uses_raw_stun(),
+        );
         let mesh_id = self.mesh_id.lock().await.clone();
         let policy_hash = self.mesh_policy_hash.lock().await.clone();
         let policy = self.genesis_policy.lock().await.clone();
@@ -4650,7 +4667,11 @@ impl Node {
     fn endpoint_addr_for_advertisement(&self) -> EndpointAddr {
         let mut addr = self.endpoint.addr();
         if self.quic_bind.ip.is_some() {
-            addr = filter_endpoint_addr_for_bind_ip(addr, self.quic_bind.ip);
+            addr = filter_endpoint_addr_for_bind_ip(
+                addr,
+                self.quic_bind.ip,
+                self.relay_policy.uses_raw_stun(),
+            );
         }
         addr
     }
@@ -7214,6 +7235,7 @@ impl Node {
             STREAM_ROUTE_REQUEST => self.spawn_route_request_stream(remote, protocol, send, recv),
             STREAM_PEER_DOWN => self.spawn_peer_down_stream(remote, recv),
             STREAM_PEER_LEAVING => self.spawn_peer_leaving_stream(remote, recv),
+            STREAM_DIRECT_PATH_REQUEST => self.spawn_direct_path_request_stream(remote, recv),
             STREAM_PLUGIN_CHANNEL => self.spawn_plugin_channel_stream(remote, send, recv),
             STREAM_PLUGIN_BULK_TRANSFER => self.spawn_plugin_bulk_stream(remote, send, recv),
             STREAM_PLUGIN_MESH_STREAM => self.spawn_plugin_mesh_stream(remote, send, recv),
@@ -10350,6 +10372,7 @@ pub fn save_node_key_to_path(path: &std::path::Path, key: &SecretKey) -> Result<
 }
 
 mod artifact_transfer_io;
+mod direct_path;
 mod gossip;
 mod heartbeat;
 mod plugin_streams;

@@ -1,7 +1,7 @@
-From 2dded3ed3373791deebc5ee14503c8ae8288731d Mon Sep 17 00:00:00 2001
+From dfcb1e6a28d849225b3875ec095856327b397adc Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 5 May 2026 19:20:00 +1000
-Subject: [PATCH 40/81] Add borrowed resident prefix session ABI
+Subject: [PATCH 40/82] Add borrowed resident prefix session ABI
 
 ---
  include/skippy.h |  10 ++++-
@@ -9,7 +9,7 @@ Subject: [PATCH 40/81] Add borrowed resident prefix session ABI
  2 files changed, 107 insertions(+), 6 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index b051b66c..fe166e3d 100644
+index b051b66c6..fe166e3d6 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -37,7 +37,7 @@ index b051b66c..fe166e3d 100644
          struct skippy_session * session);
  
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index d3d47b9f..dccea7d4 100644
+index 30f538a7d..bea61d65c 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -45,6 +45,8 @@ struct skippy_session {
@@ -58,7 +58,7 @@ index d3d47b9f..dccea7d4 100644
      session->n_past = 0;
      session->checkpoint_valid = false;
      session->checkpoint_n_past = 0;
-@@ -1746,15 +1750,26 @@ enum skippy_status skippy_session_reset(
+@@ -1744,15 +1748,26 @@ enum skippy_status skippy_session_reset(
          return SKIPPY_STATUS_RUNTIME_ERROR;
      }
  
@@ -89,7 +89,7 @@ index d3d47b9f..dccea7d4 100644
      session->signal_history.clear();
      skippy_clear_chat_sampling(session);
      session->ctx->synchronize();
-@@ -1768,7 +1783,7 @@ enum skippy_status skippy_session_free(
+@@ -1766,7 +1781,7 @@ enum skippy_status skippy_session_free(
          if (session->ctx != nullptr) {
              skippy_session_reset(session, nullptr);
          }
@@ -98,7 +98,7 @@ index d3d47b9f..dccea7d4 100644
              const size_t lane = static_cast<size_t>(session->seq_id);
              if (lane < session->stage_model->lane_in_use.size()) {
                  session->stage_model->lane_in_use[lane] = false;
-@@ -2718,6 +2733,16 @@ static bool skippy_is_reserved_sequence_id(
+@@ -2716,6 +2731,16 @@ static bool skippy_is_reserved_sequence_id(
      return seq_id < reserved;
  }
  
@@ -115,7 +115,7 @@ index d3d47b9f..dccea7d4 100644
  static enum skippy_status skippy_get_resident_prefix_memory(
          skippy_session * session,
          llama_memory_t * out_memory,
-@@ -2840,6 +2865,74 @@ enum skippy_status skippy_session_restore_prefix(
+@@ -2838,6 +2863,74 @@ enum skippy_status skippy_session_restore_prefix(
      return skippy_success(out_error);
  }
  
@@ -191,5 +191,5 @@ index d3d47b9f..dccea7d4 100644
          struct skippy_session * session,
          int32_t seq_id,
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

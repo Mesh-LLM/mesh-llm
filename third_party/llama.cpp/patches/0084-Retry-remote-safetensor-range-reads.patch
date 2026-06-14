@@ -1,0 +1,59 @@
+From e74383485f22d7458e6e97848269daa8a93d5274 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Thu, 11 Jun 2026 09:20:58 +1000
+Subject: [PATCH 84/89] Retry remote safetensor range reads
+
+---
+ gguf-py/gguf/utility.py | 28 ++++++++++++++++++++++++----
+ 1 file changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/gguf-py/gguf/utility.py b/gguf-py/gguf/utility.py
+index 154351d8..ec44e55f 100644
+--- a/gguf-py/gguf/utility.py
++++ b/gguf-py/gguf/utility.py
+@@ -224,6 +224,8 @@ class SafetensorRemote:
+         If size is not specified, it will read the entire file.
+         """
+         import requests
++        import sys
++        import time
+         from urllib.parse import urlparse
+ 
+         parsed_url = urlparse(url)
+@@ -233,11 +235,29 @@ class SafetensorRemote:
+         headers = cls._get_request_headers()
+         if size > -1:
+             headers["Range"] = f"bytes={start}-{start + size}"
+-        response = requests.get(url, allow_redirects=True, headers=headers)
+-        response.raise_for_status()
++        max_attempts = 8
++        for attempt in range(max_attempts):
++            try:
++                response = requests.get(url, allow_redirects=True, headers=headers, timeout=120)
++                response.raise_for_status()
++                content = response.content[slice(size if size > -1 else None)]
++                if size < 0 or len(content) == size:
++                    return content
++                raise requests.ConnectionError(
++                    f"short read for range {start}+{size}: got {len(content)} bytes",
++                )
++            except requests.RequestException as e:
++                if attempt + 1 >= max_attempts:
++                    raise
++                sleep_s = min(2 ** attempt, 30)
++                print(
++                    f"warning: retrying remote safetensor range read after error: {e} "
++                    f"(attempt {attempt + 1}/{max_attempts}, sleep {sleep_s}s)",
++                    file=sys.stderr,
++                )
++                time.sleep(sleep_s)
+ 
+-        # Get raw byte data
+-        return response.content[slice(size if size > -1 else None)]
++        raise RuntimeError("unreachable")
+ 
+     @classmethod
+     def check_file_exist(cls, url: str) -> bool:
+-- 
+2.54.0 (Apple Git-156)
+

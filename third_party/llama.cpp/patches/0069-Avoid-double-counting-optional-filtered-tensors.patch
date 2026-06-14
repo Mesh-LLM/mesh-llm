@@ -1,7 +1,7 @@
-From 3d976e1bf5eb8bf57d251e297bfa931b291539d1 Mon Sep 17 00:00:00 2001
+From 144d9a16600e69c85a59899a324dfb395cd3b183 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 17:34:50 +1000
-Subject: [PATCH 69/81] Avoid double-counting optional filtered tensors
+Subject: [PATCH 69/82] Avoid double-counting optional filtered tensors
 
 ---
  src/llama-model-loader.cpp | 30 ++++++++++++++++++++++++++----
@@ -9,10 +9,10 @@ Subject: [PATCH 69/81] Avoid double-counting optional filtered tensors
  2 files changed, 28 insertions(+), 4 deletions(-)
 
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 396af7c4..0d6792fb 100644
+index 38e0bc2ad..8bfc15b2a 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1130,6 +1130,19 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1132,6 +1132,19 @@ struct ggml_tensor * llama_model_loader::create_tensor(
          return it->second.get();
      };
  
@@ -32,7 +32,7 @@ index 396af7c4..0d6792fb 100644
      auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
          // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
          // the tensor is duplicated
-@@ -1173,15 +1186,24 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1175,15 +1188,24 @@ struct ggml_tensor * llama_model_loader::create_tensor(
  
              if (!keep) {
                  if (t_meta) {
@@ -62,7 +62,7 @@ index 396af7c4..0d6792fb 100644
                      g_skippy_last_tensor_filtered = true;
                  } else {
 diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
-index d85aa85d..6876262d 100644
+index d85aa85d2..6876262da 100644
 --- a/src/llama-model-loader.h
 +++ b/src/llama-model-loader.h
 @@ -14,6 +14,7 @@
@@ -82,5 +82,5 @@ index d85aa85d..6876262d 100644
  
      gguf_context_ptr metadata_ptr;
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

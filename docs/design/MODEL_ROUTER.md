@@ -1,5 +1,14 @@
 # Model Router Design
 
+## Status: Phase 1 implemented — historical design
+
+The heuristic router shipped: request classification (`Category`) and model
+scoring live in `crates/mesh-llm-host-runtime/src/network/router.rs`. Later
+phases remain partly aspirational; see `ROUTER_V2.md` for the follow-on design.
+References below to per-model `llama-server` processes predate the embedded
+staged runtime — today multiple local models run inside the single `mesh-llm`
+process.
+
 ## Overview
 
 mesh-llm becomes a smart routing layer: multiple models across the mesh, requests classified and routed to the best model for the job.

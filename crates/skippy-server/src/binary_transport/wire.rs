@@ -24,25 +24,13 @@ impl WireCondition {
         let delay_seconds = self.delay_ms / 1000.0;
         let bandwidth_seconds = self
             .mbps
-            .map(|mbps| conditioned_wire_bytes(message) as f64 / (mbps * 125_000.0))
+            .map(|mbps| message.estimated_wire_bytes() as f64 / (mbps * 125_000.0))
             .unwrap_or(0.0);
         let seconds = delay_seconds + bandwidth_seconds;
         if seconds > 0.0 {
             thread::sleep(Duration::from_secs_f64(seconds));
         }
     }
-}
-
-fn conditioned_wire_bytes(message: &StageWireMessage) -> usize {
-    let header_bytes: usize = 4 * 4 + 9 * 4;
-    let token_bytes = message
-        .tokens
-        .len()
-        .saturating_mul(std::mem::size_of::<i32>());
-    header_bytes
-        .saturating_add(token_bytes)
-        .saturating_add(message.activation.len())
-        .saturating_add(message.raw_bytes.len())
 }
 
 pub(crate) fn write_stage_message_conditioned(

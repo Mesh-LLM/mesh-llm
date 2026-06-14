@@ -1,7 +1,7 @@
-From 34233fb978475ed226f64f7f91df01cf656d171b Mon Sep 17 00:00:00 2001
+From 07b1ff0732a61ffd76d6e274758cdfa5f88e83ee Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 16:31:35 +1000
-Subject: [PATCH 68/81] Support DeepSeek OCR and Qwen3-VL-MoE runtime slices
+Subject: [PATCH 68/82] Support DeepSeek OCR and Qwen3-VL-MoE runtime slices
 
 ---
  src/models/qwen3vlmoe.cpp | 22 +++++++++++++++++-----
@@ -9,10 +9,10 @@ Subject: [PATCH 68/81] Support DeepSeek OCR and Qwen3-VL-MoE runtime slices
  2 files changed, 19 insertions(+), 5 deletions(-)
 
 diff --git a/src/models/qwen3vlmoe.cpp b/src/models/qwen3vlmoe.cpp
-index 5b77df57..7c10f0cd 100644
+index 7c41592f7..33c961a41 100644
 --- a/src/models/qwen3vlmoe.cpp
 +++ b/src/models/qwen3vlmoe.cpp
-@@ -72,7 +72,12 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_
+@@ -73,7 +73,12 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -26,7 +26,7 @@ index 5b77df57..7c10f0cd 100644
  
      int sections[4];
      std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
-@@ -82,9 +87,9 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_
+@@ -83,9 +88,9 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_
  
      auto * inp_attn = build_attn_inp_kv();
  
@@ -38,7 +38,7 @@ index 5b77df57..7c10f0cd 100644
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -126,7 +131,7 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_
+@@ -127,7 +132,7 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
          }
  
@@ -47,7 +47,7 @@ index 5b77df57..7c10f0cd 100644
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -160,7 +165,7 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_
+@@ -161,7 +166,7 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_
          cur = build_cvec(cur, il);
          cb(cur, "l_out", il);
  
@@ -56,7 +56,7 @@ index 5b77df57..7c10f0cd 100644
              ggml_tensor * ds = ggml_view_2d(ctx0, res->t_inp_embd, n_embd, n_tokens, res->t_inp_embd->nb[1], (il + 1) * n_embd * sizeof(float));
              cur = ggml_add(ctx0, cur, ds);
              cb(cur, "deepstack_out", il);
-@@ -172,6 +177,13 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_
+@@ -173,6 +178,13 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_
  
      cur = inpL;
  
@@ -71,7 +71,7 @@ index 5b77df57..7c10f0cd 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 05aa0d18..584c90a6 100644
+index f49e0623e..0290f045b 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1638,6 +1638,7 @@ static enum skippy_status skippy_finish_model_open(
@@ -91,5 +91,5 @@ index 05aa0d18..584c90a6 100644
              model->arch != LLM_ARCH_KIMI_LINEAR &&
              model->arch != LLM_ARCH_LFM2MOE &&
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 
