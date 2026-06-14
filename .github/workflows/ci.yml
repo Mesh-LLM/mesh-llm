@@ -787,7 +787,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Windows CPU
-    runs-on: windows-2025
+    runs-on: windows-2022
     env:
       RUN_WINDOWS_CPU_FULL: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true' }}
       LLAMA_STAGE_BACKEND: cpu
@@ -827,7 +827,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .deps/llama.cpp/build-stage-abi-cpu
-          key: ${{ env.CACHE_NAMESPACE }}-windows-2025-skippy-abi-cpu--cpu-${{ hashFiles('scripts/build-windows.ps1', 'scripts/install-windows-sdk.ps1', '.github/actions/setup-windows-rocm-sdk/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-windows-2022-skippy-abi-cpu--cpu-${{ hashFiles('scripts/build-windows.ps1', 'scripts/install-windows-sdk.ps1', '.github/actions/setup-windows-rocm-sdk/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
       - name: Build Windows CPU backend
         if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' && steps.llama_cache.outputs.cache-hit != 'true' }}
         shell: pwsh
@@ -858,7 +858,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Windows ${{ matrix.name }}
-    runs-on: windows-2025
+    runs-on: windows-2022
     env:
       RUN_WINDOWS_GPU: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_gpu == 'true' }}
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-${{ matrix.backend }}
@@ -920,7 +920,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .deps/llama.cpp/build-stage-abi-${{ matrix.backend }}
-          key: ${{ env.CACHE_NAMESPACE }}-windows-2025-skippy-abi-${{ matrix.backend }}-${{ matrix.build_args }}-${{ matrix.backend == 'cuda' && format('cuda-{0}-Jimver-v0.2.35', env.WINDOWS_CUDA_VERSION) || matrix.backend == 'vulkan' && format('vulkan-{0}-jakoch-v1.5.2', env.WINDOWS_VULKAN_SDK_VERSION) || format('rocm-{0}', env.ROCM_HIP_SDK_FILENAME) }}-${{ hashFiles('scripts/build-windows.ps1', 'scripts/install-windows-sdk.ps1', '.github/actions/setup-windows-rocm-sdk/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-windows-2022-skippy-abi-${{ matrix.backend }}-${{ matrix.build_args }}-${{ matrix.backend == 'cuda' && format('cuda-{0}-Jimver-v0.2.35', env.WINDOWS_CUDA_VERSION) || matrix.backend == 'vulkan' && format('vulkan-{0}-jakoch-v1.5.2', env.WINDOWS_VULKAN_SDK_VERSION) || format('rocm-{0}', env.ROCM_HIP_SDK_FILENAME) }}-${{ hashFiles('scripts/build-windows.ps1', 'scripts/install-windows-sdk.ps1', '.github/actions/setup-windows-rocm-sdk/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
       - name: Install CUDA toolkit
         if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'cuda' && steps.llama_cache.outputs.cache-hit != 'true' }}
         uses: Jimver/cuda-toolkit@v0.2.35

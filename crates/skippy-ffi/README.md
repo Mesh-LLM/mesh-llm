@@ -142,8 +142,8 @@ read it directly:
 | `EXTERNAL_MEDIA_PREFILL` | `1 << 20` | Multimodal prefill from externally materialized media chunks |
 | `CHAT_TEMPLATE_TOOLS` | `1 << 21` | llama.cpp OpenAI-compatible chat templating and tool-call response parsing |
 | `CHAT_SAMPLING_GRAMMAR` | `1 << 22` | Session-local llama.cpp grammar-constrained sampling from chat template metadata |
-| `RUNTIME_EVENTS` | `1 << 23` | `_with_events` model-open entrypoints and runtime-event callbacks |
-| `BACKEND_DEVICES` | `1 << 24` | Backend-device capability reporting |
+| `BACKEND_DEVICES` | `1 << 23` | Backend-device capability reporting |
+| `RUNTIME_EVENTS` | `1 << 24` | `_with_events` model-open entrypoints and runtime-event callbacks |
 
 Runtime-event compatibility expectations are narrow on purpose:
 

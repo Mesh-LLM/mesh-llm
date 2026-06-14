@@ -4693,8 +4693,8 @@ fn model_open_events_missing_terminal_callback_uses_return() {
 
 #[cfg(test)]
 #[test]
-fn model_open_events_receiver_dropped_does_not_corrupt_state() {
-    runtime_events::tests::assert_model_open_events_receiver_dropped_does_not_corrupt_state();
+fn model_open_events_forwarded_before_open_returns() {
+    runtime_events::tests::assert_model_open_events_forwarded_before_open_returns();
 }
 
 #[cfg(test)]

@@ -150,6 +150,7 @@ struct BinaryStateHandoffConfig {
     binary_control: bool,
     child_logs: bool,
     startup_timeout_secs: u64,
+    max_inflight: usize,
     model_identity: ModelIdentity,
 }
 
@@ -502,6 +503,7 @@ pub fn state_handoff(args: StateHandoffArgs) -> Result<()> {
         binary_control: args.binary_control,
         child_logs: args.server.child_logs,
         startup_timeout_secs: args.server.startup_timeout_secs,
+        max_inflight: args.server.max_inflight,
         model_identity: model_identity.clone(),
     })?;
     let report = StateHandoffReport {
@@ -1408,6 +1410,8 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         &stage_activation_width.to_string(),
         "--activation-wire-dtype",
         &args.activation_wire_dtype,
+        "--max-inflight",
+        &args.max_inflight.to_string(),
     ]);
     configure_child_logs(&mut source_command, args.child_logs);
     let _source = ChildGuard::spawn(source_command)?;
@@ -1460,6 +1464,8 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         &stage_activation_width.to_string(),
         "--activation-wire-dtype",
         &args.activation_wire_dtype,
+        "--max-inflight",
+        &args.max_inflight.to_string(),
     ]);
     configure_child_logs(&mut restore_command, args.child_logs);
     let _restore = ChildGuard::spawn(restore_command)?;

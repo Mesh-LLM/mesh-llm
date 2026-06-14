@@ -1,7 +1,8 @@
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
 pub const ABI_VERSION_PATCH: u32 = 26;
-pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 23;
+pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
+pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 
 use std::ffi::{c_char, c_int, c_void};
 

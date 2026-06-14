@@ -1,6 +1,6 @@
 use std::ptr;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 
@@ -14,9 +14,8 @@ use skippy_ffi::{
 };
 
 use super::{
-    ModelOpenEventReporterRegistration, RuntimeEvent, RuntimeEventCategory,
-    RuntimeEventEmitterKind, RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit,
-    Status, collect_model_open_events, run_model_open,
+    RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind, RuntimeEventFailureCode,
+    RuntimeEventKind, RuntimeEventProgressUnit, Status, collect_model_open_events, run_model_open,
 };
 
 fn make_raw_runtime_event(
@@ -335,70 +334,58 @@ pub(crate) fn assert_model_open_events_missing_terminal_callback_uses_return() {
     );
 }
 
-pub(crate) fn assert_model_open_events_receiver_dropped_does_not_corrupt_state() {
-    let mut registration = ModelOpenEventReporterRegistration::new();
-    let reporter = registration.reporter_ptr();
-    let callback = unsafe { (*reporter).callback.expect("callback") };
+pub(crate) fn assert_model_open_events_forwarded_before_open_returns() {
+    let forwarded_sequences = Arc::new(Mutex::new(Vec::new()));
+    let sink_sequences = Arc::clone(&forwarded_sequences);
+    let open_sequences = Arc::clone(&forwarded_sequences);
+    let (raw, status, error) = collect_model_open_events(
+        |reporter, out_model, _out_error| {
+            let callback = unsafe { (*reporter).callback.expect("callback") };
+            let started = make_raw_runtime_event(
+                RawRuntimeEventKind::MODEL_OPEN_STARTED,
+                1,
+                Status::Ok,
+                b"started",
+            );
+            unsafe {
+                callback(&started, (*reporter).user_data);
+            }
+            assert_eq!(open_sequences.lock().expect("event lock").as_slice(), &[1]);
 
-    for sequence in 1..=(super::MODEL_OPEN_EVENT_CHANNEL_CAPACITY as u64 + 1) {
-        let progress = make_raw_runtime_event(
-            RawRuntimeEventKind::MODEL_OPEN_PROGRESS,
-            sequence,
-            Status::Ok,
-            b"progress",
-        );
-        unsafe {
-            callback(&progress, (*reporter).user_data);
-        }
-    }
+            let finished = make_raw_runtime_event(
+                RawRuntimeEventKind::MODEL_OPEN_FINISHED,
+                2,
+                Status::Ok,
+                b"finished",
+            );
+            unsafe {
+                callback(&finished, (*reporter).user_data);
+            }
+            assert_eq!(
+                open_sequences.lock().expect("event lock").as_slice(),
+                &[1, 2]
+            );
 
-    let mut buffered_events = Vec::new();
-    registration.drain_into(|event| buffered_events.push(event));
-    assert_eq!(
-        buffered_events.len(),
-        super::MODEL_OPEN_EVENT_CHANNEL_CAPACITY
+            unsafe {
+                *out_model = ptr::NonNull::<skippy_ffi::Model>::dangling().as_ptr();
+            }
+            Status::Ok
+        },
+        |event| {
+            sink_sequences
+                .lock()
+                .expect("event lock")
+                .push(event.sequence);
+        },
     );
-    assert_eq!(buffered_events.first().map(|event| event.sequence), Some(1));
-    assert_eq!(
-        buffered_events.last().map(|event| event.sequence),
-        Some(super::MODEL_OPEN_EVENT_CHANNEL_CAPACITY as u64)
-    );
-    assert_eq!(registration.dropped_event_count(), 1);
-
-    let closed_receiver =
-        std::mem::replace(&mut registration.receiver, tokio::sync::mpsc::channel(1).1);
-    drop(closed_receiver);
-
-    let error: *mut skippy_ffi::Error = ptr::null_mut();
-    let (status, raw) = {
-        let started = make_raw_runtime_event(
-            RawRuntimeEventKind::MODEL_OPEN_STARTED,
-            1,
-            Status::Ok,
-            b"started",
-        );
-        unsafe {
-            callback(&started, (*reporter).user_data);
-        }
-        let finished = make_raw_runtime_event(
-            RawRuntimeEventKind::MODEL_OPEN_FINISHED,
-            2,
-            Status::Ok,
-            b"finished",
-        );
-        unsafe {
-            callback(&finished, (*reporter).user_data);
-        }
-        (
-            Status::Ok,
-            ptr::NonNull::<skippy_ffi::Model>::dangling().as_ptr(),
-        )
-    };
 
     assert_eq!(status, Status::Ok);
     assert!(error.is_null());
     assert_eq!(raw, ptr::NonNull::<skippy_ffi::Model>::dangling().as_ptr());
-    assert_eq!(registration.dropped_event_count(), 3);
+    assert_eq!(
+        forwarded_sequences.lock().expect("event lock").as_slice(),
+        &[1, 2]
+    );
 }
 
 pub(crate) fn assert_model_open_events_feature_missing_falls_back() {

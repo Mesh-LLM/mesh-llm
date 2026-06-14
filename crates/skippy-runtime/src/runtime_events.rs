@@ -2,7 +2,6 @@ use std::ffi::{c_char, c_void};
 use std::mem;
 use std::ptr;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use skippy_ffi::{
     Error as RawError, Model as RawModel, SkippyRuntimeEventCategory as RawRuntimeEventCategory,
@@ -13,10 +12,8 @@ use skippy_ffi::{
     SkippyRuntimeEventReporterV1 as RawRuntimeEventReporter,
     SkippyRuntimeEventV1 as RawRuntimeEvent, Status,
 };
-use tokio::sync::mpsc;
 
 const RUNTIME_EVENT_V1_ABI_VERSION: u32 = 1;
-const MODEL_OPEN_EVENT_CHANNEL_CAPACITY: usize = 64;
 
 pub(crate) type RawModelOpenWithEventsFn = unsafe extern "C" fn(
     path: *const c_char,
@@ -207,50 +204,32 @@ impl RuntimeEvent {
     }
 }
 
-struct ModelOpenEventBridge {
-    tx: mpsc::Sender<RuntimeEvent>,
-    dropped_events: AtomicUsize,
+struct ModelOpenEventBridge<'a> {
+    event_reporter: &'a mut dyn FnMut(RuntimeEvent),
 }
 
-struct ModelOpenEventReporterRegistration {
-    _bridge: Box<ModelOpenEventBridge>,
+struct ModelOpenEventReporterRegistration<'a> {
+    _bridge: Box<ModelOpenEventBridge<'a>>,
     reporter: RawRuntimeEventReporter,
-    receiver: mpsc::Receiver<RuntimeEvent>,
 }
 
-impl ModelOpenEventReporterRegistration {
-    fn new() -> Self {
-        let (tx, rx) = mpsc::channel(MODEL_OPEN_EVENT_CHANNEL_CAPACITY);
-        let mut bridge = Box::new(ModelOpenEventBridge {
-            tx,
-            dropped_events: AtomicUsize::new(0),
-        });
+impl<'a> ModelOpenEventReporterRegistration<'a> {
+    fn new(event_reporter: &'a mut dyn FnMut(RuntimeEvent)) -> Self {
+        let mut bridge = Box::new(ModelOpenEventBridge { event_reporter });
         let reporter = RawRuntimeEventReporter {
             abi_version: RUNTIME_EVENT_V1_ABI_VERSION,
             struct_size: mem::size_of::<RawRuntimeEventReporter>() as u32,
             callback: Some(model_open_event_trampoline),
-            user_data: bridge.as_mut() as *mut ModelOpenEventBridge as *mut c_void,
+            user_data: bridge.as_mut() as *mut ModelOpenEventBridge<'a> as *mut c_void,
         };
         Self {
             _bridge: bridge,
             reporter,
-            receiver: rx,
         }
     }
 
     fn reporter_ptr(&self) -> *const RawRuntimeEventReporter {
         &self.reporter
-    }
-
-    fn drain_into(&mut self, mut sink: impl FnMut(RuntimeEvent)) {
-        while let Ok(event) = self.receiver.try_recv() {
-            sink(event);
-        }
-    }
-
-    #[cfg(test)]
-    fn dropped_event_count(&self) -> usize {
-        self._bridge.dropped_events.load(Ordering::Relaxed)
     }
 }
 
@@ -265,10 +244,8 @@ unsafe extern "C" fn model_open_event_trampoline(
         let Some(event) = RuntimeEvent::from_raw_ptr(event) else {
             return;
         };
-        let bridge = unsafe { &*(user_data as *const ModelOpenEventBridge) };
-        if bridge.tx.try_send(event).is_err() {
-            bridge.dropped_events.fetch_add(1, Ordering::Relaxed);
-        }
+        let bridge = unsafe { &mut *(user_data as *mut ModelOpenEventBridge<'_>) };
+        (bridge.event_reporter)(event);
     }));
 }
 
@@ -281,11 +258,10 @@ where
         FnOnce(*const RawRuntimeEventReporter, *mut *mut RawModel, *mut *mut RawError) -> Status,
     EventFn: FnMut(RuntimeEvent),
 {
-    let mut registration = ModelOpenEventReporterRegistration::new();
+    let registration = ModelOpenEventReporterRegistration::new(&mut event_reporter);
     let mut raw = ptr::null_mut();
     let mut error = ptr::null_mut();
     let status = open_fn(registration.reporter_ptr(), &mut raw, &mut error);
-    registration.drain_into(&mut event_reporter);
     (raw, status, error)
 }
 
