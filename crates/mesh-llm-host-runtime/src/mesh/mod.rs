@@ -3930,7 +3930,7 @@ impl Node {
             endpoint_secret_key: secret_key,
             public_addr: None,
             quic_bind: QuicBindSelection::default(),
-            relay_policy: RelayPolicy::DefaultPublic,
+            relay_policy: RelayPolicy::Disabled,
             owner_keypair: None,
             local_mesh_requirements: crate::MeshRequirements::unrestricted(),
             state: Arc::new(Mutex::new(MeshState {
@@ -4570,7 +4570,7 @@ impl Node {
         addr = filter_endpoint_addr_for_bind_ip(
             addr,
             self.quic_bind.ip,
-            self.relay_policy.uses_relay(),
+            self.relay_policy.uses_raw_stun(),
         );
         let mesh_id = self.mesh_id.lock().await.clone();
         let policy_hash = self.mesh_policy_hash.lock().await.clone();
@@ -4712,7 +4712,7 @@ impl Node {
             addr = filter_endpoint_addr_for_bind_ip(
                 addr,
                 self.quic_bind.ip,
-                self.relay_policy.uses_relay(),
+                self.relay_policy.uses_raw_stun(),
             );
         }
         addr

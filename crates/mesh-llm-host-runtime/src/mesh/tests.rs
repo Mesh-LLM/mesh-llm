@@ -19,6 +19,8 @@ use skippy_protocol::proto::stage as skippy_stage_proto;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::{mpsc, watch};
 
+mod direct_path;
+
 #[test]
 fn quic_bind_addr_uses_explicit_port_on_all_platforms() {
     assert_eq!(

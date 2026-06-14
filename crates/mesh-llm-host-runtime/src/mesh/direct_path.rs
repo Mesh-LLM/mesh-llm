@@ -202,6 +202,9 @@ impl Node {
             .peers
             .iter()
             .filter_map(|(peer_id, peer)| {
+                if !peer.is_admitted() {
+                    return None;
+                }
                 let conn = state.connections.get(peer_id)?;
                 Some(DirectPathObservation {
                     peer_id: *peer_id,

@@ -67,6 +67,7 @@ pub(crate) enum ControlFrameError {
     InvalidSenderId {
         got: usize,
     },
+    MissingDirectPathAddress,
     MissingHttpPort,
     MissingControlOwnerId,
     InvalidConfigHashLength {
@@ -118,6 +119,9 @@ impl std::fmt::Display for ControlFrameError {
             }
             ControlFrameError::InvalidSenderId { got } => {
                 write!(f, "invalid sender_id length: expected 32, got {}", got)
+            }
+            ControlFrameError::MissingDirectPathAddress => {
+                write!(f, "direct path request missing endpoint address")
             }
             ControlFrameError::MissingHttpPort => {
                 write!(f, "HOST-role peer annotation missing http_port")
@@ -288,7 +292,7 @@ impl ValidateControlFrame for crate::proto::node::DirectPathRequest {
             });
         }
         if self.serialized_addr.is_empty() {
-            return Err(ControlFrameError::InvalidEndpointId { got: 0 });
+            return Err(ControlFrameError::MissingDirectPathAddress);
         }
         Ok(())
     }
