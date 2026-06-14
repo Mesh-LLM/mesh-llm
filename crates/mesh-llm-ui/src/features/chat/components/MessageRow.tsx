@@ -75,9 +75,22 @@ function AttachmentIcon({ kind }: { kind: MessageAttachmentAction['kind'] }) {
   return <FileIcon className="size-3.5" aria-hidden={true} />
 }
 
-function AssistantMarkdown({ text, linksEnabled }: { text: string; linksEnabled: boolean }) {
+function AssistantMarkdown({
+  text,
+  linksEnabled,
+  variant = 'default'
+}: {
+  text: string
+  linksEnabled: boolean
+  variant?: 'default' | 'thinking'
+}) {
   return (
-    <div className="block select-text break-words [&_code]:rounded-[calc(var(--radius)-2px)] [&_code]:bg-panel-strong [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.93em] [&_em]:text-fg-dim [&_strong]:font-semibold [&_strong]:text-foreground">
+    <div
+      className={cn(
+        'block select-text break-words [&_code]:rounded-[calc(var(--radius)-2px)] [&_code]:bg-panel-strong [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.93em] [&_em]:text-fg-dim [&_strong]:font-semibold [&_strong]:text-foreground',
+        variant === 'thinking' && '[&_strong]:text-fg-muted'
+      )}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -138,19 +151,12 @@ function AssistantMarkdown({ text, linksEnabled }: { text: string; linksEnabled:
           li(props) {
             const { node, ...itemProps } = props
             void node
-            return (
-              <li {...itemProps} className="my-0.5 block pl-1">
-                <span aria-hidden={true} className="mr-2 text-fg-faint">
-                  •
-                </span>
-                <span className="inline [&>span]:my-0 [&>span]:inline">{itemProps.children}</span>
-              </li>
-            )
+            return <li {...itemProps} className="my-0.5 pl-1 marker:text-fg-faint [&>p]:my-0" />
           },
           ol(props) {
             const { node, ...listProps } = props
             void node
-            return <ol {...listProps} className="my-2 block list-none pl-4" />
+            return <ol {...listProps} className="my-2 list-decimal pl-5" />
           },
           p(props) {
             const { node, ...paragraphProps } = props
@@ -220,7 +226,7 @@ function AssistantMarkdown({ text, linksEnabled }: { text: string; linksEnabled:
           ul(props) {
             const { node, ...listProps } = props
             void node
-            return <ul {...listProps} className="my-2 block list-none pl-4" />
+            return <ul {...listProps} className="my-2 list-disc pl-5" />
           }
         }}
       >
@@ -267,9 +273,9 @@ function AssistantMessageContent({
                 ) : (
                   <BrainCircuit className="size-3" aria-hidden={true} strokeWidth={1.7} />
                 )}
-                <span>{active ? 'Thinking' : 'Thinking trace'}</span>
+                <span>Thinking</span>
               </span>
-              <span className="block select-text whitespace-pre-wrap break-words">{segment.text}</span>
+              <AssistantMarkdown text={segment.text} linksEnabled={linksEnabled} variant="thinking" />
             </div>
           )
         }
