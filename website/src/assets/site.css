@@ -453,6 +453,7 @@ td strong { color: var(--text); }
   .catalog .table-card .col-size { width: 18%; }
   .catalog .table-card .col-ref { width: 50%; }
 }
+
 .table-card .ref-copy .copy.copied { border-color: rgba(34, 197, 94, 0.3); }
 .table-link-actions { display: flex; align-items: center; gap: 6px; min-width: max-content; }
 .catalog .table-card .table-link-actions {
@@ -787,6 +788,281 @@ td strong { color: var(--text); }
   .doc .code-copy-frame { margin-left: -2px; margin-right: -2px; }
   .doc .code-copy-frame pre { margin-left: 0; margin-right: 0; padding-right: 72px; }
   table { min-width: 760px; }
+}
+
+@media (max-width: 374px) {
+  .catalog .table-card {
+    display: grid;
+    gap: 12px;
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .catalog .table-card table,
+  .catalog .table-card tbody {
+    display: grid;
+    gap: 12px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .catalog .table-card table {
+    border-collapse: separate;
+    border-spacing: 0;
+    table-layout: auto;
+  }
+
+  .catalog .table-card .col-model,
+  .catalog .table-card .col-size,
+  .catalog .table-card .col-run,
+  .catalog .table-card .col-package,
+  .catalog .table-card .col-ref,
+  .catalog .table-card .col-links {
+    width: 100%;
+  }
+
+  .catalog .table-card thead,
+  .catalog .table-card colgroup {
+    display: none;
+  }
+
+  .catalog .table-card tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 0.12fr) auto;
+    grid-template-areas:
+      "model model model layers"
+      "ref ref ref ref"
+      "meta meta meta meta"
+      "mode mode . links";
+    gap: 12px 8px;
+    width: 100%;
+    min-width: 0;
+    padding: 14px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-lg);
+    background: linear-gradient(180deg, var(--surface-2), var(--surface));
+    overflow: visible;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .catalog .table-card tr:hover {
+    border-color: var(--line-3);
+    background: linear-gradient(180deg, var(--surface-3), var(--surface-2));
+  }
+
+  .catalog .table-card td,
+  .catalog .table-card td.col-run,
+  .catalog .table-card td.col-package,
+  .catalog .table-card td.col-links {
+    display: block;
+    width: auto;
+    min-width: 0;
+    padding: 0;
+    border-bottom: 0;
+    text-align: left;
+    overflow: visible;
+  }
+
+  .catalog .table-card .model-cell {
+    display: block;
+    grid-area: model;
+    min-width: 0;
+  }
+
+  .catalog .table-card .model-cell strong {
+    display: block;
+    color: var(--fg);
+    font-size: 16px;
+    font-weight: 650;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+  }
+
+  .catalog .table-card .model-cell br {
+    display: none;
+  }
+
+  .catalog .table-card .model-cell span {
+    display: block;
+    margin-top: 5px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .catalog .table-card .size-cell {
+    grid-area: meta;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+
+  .catalog .table-card .size-cell::before,
+  .catalog .table-card .run-cell::before,
+  .catalog .table-card .ref-cell::before,
+  .catalog .table-card .size-cell .badge::before {
+    color: var(--subtle);
+    font-family: var(--mono);
+    font-size: 9.5px;
+    line-height: 1;
+    letter-spacing: 0.1em;
+  }
+
+  .catalog .table-card .size-cell::before {
+    content: "SIZE";
+  }
+
+  .catalog .table-card .size-cell br {
+    display: none;
+  }
+
+  .catalog .table-card .size-cell .badge {
+    min-height: 20px;
+    padding-inline: 6px;
+    border-radius: 5px;
+    font-family: var(--mono);
+    font-size: 10px;
+  }
+
+  .catalog .table-card .size-cell .badge::before {
+    content: "QUANT";
+    margin-right: 6px;
+  }
+
+  .catalog .table-card .run-cell {
+    grid-area: mode;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+
+  .catalog .table-card .run-cell::before {
+    content: "MODE";
+  }
+
+  .catalog .table-card .run-mode {
+    min-height: 22px;
+    padding: 0 7px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--line);
+    font-size: 0;
+  }
+
+  .catalog .table-card .run-mode::after {
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  .catalog .table-card .run-mode.run-multi::after {
+    content: "Multi";
+    color: var(--green-3);
+  }
+
+  .catalog .table-card .run-mode.run-single::after {
+    content: "Single";
+    color: var(--blue-3);
+  }
+
+  .catalog .table-card .package-cell {
+    grid-area: layers;
+    justify-self: end;
+    align-self: start;
+    text-align: right;
+  }
+
+  .catalog .table-card .package-cell .badge:not(.green) {
+    display: none;
+  }
+
+  .catalog .table-card .package-cell .badge.green {
+    min-height: 24px;
+    padding: 0 9px;
+    border-color: var(--line-2);
+    background: var(--line);
+    color: var(--fg-2);
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .catalog .table-card .ref-cell {
+    grid-area: ref;
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .catalog .table-card .ref-cell::before {
+    content: "MODEL REF";
+    display: block;
+    margin-bottom: 0;
+  }
+
+  .catalog .table-card .model-cell strong,
+  .catalog .table-card .model-cell span,
+  .catalog .table-card .size-cell,
+  .catalog .table-card .run-cell,
+  .catalog .table-card .package-cell,
+  .catalog .table-card .ref-cell,
+  .catalog .table-card .links-cell {
+    min-width: 0;
+  }
+
+  .catalog .table-card .ref-copy {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 24px;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    min-height: 0;
+    padding: 10px 10px 10px 12px;
+    border-radius: 8px;
+  }
+
+  .catalog .table-card .ref-copy code {
+    padding: 0;
+  }
+
+  .catalog .table-card .badge-row {
+    margin-top: 0;
+  }
+
+  .catalog .table-card .ref-copy .copy {
+    width: 24px;
+    height: 24px;
+    min-height: 24px;
+    margin-right: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+  }
+
+  .catalog .table-card .links-cell {
+    grid-area: links;
+    justify-self: end;
+  }
+
+  .catalog .table-card .table-link-actions {
+    justify-content: flex-end;
+  }
+
+  .catalog .table-card .table-link-action {
+    width: 28px;
+    height: 28px;
+  }
 }
 
 /* ============================================================
