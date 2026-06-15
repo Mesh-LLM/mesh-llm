@@ -1159,12 +1159,25 @@ fn prompt_cache_retention_label(retention: openai_frontend::PromptCacheRetention
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct GenerationCacheStats {
+    status: &'static str,
     cached_prompt_tokens: u32,
     matched_prefix_tokens: u32,
     suffix_prefill_tokens: u32,
     hit_kind: Option<&'static str>,
+}
+
+impl Default for GenerationCacheStats {
+    fn default() -> Self {
+        Self {
+            status: "disabled",
+            cached_prompt_tokens: 0,
+            matched_prefix_tokens: 0,
+            suffix_prefill_tokens: 0,
+            hit_kind: None,
+        }
+    }
 }
 
 struct ChainPrefixRestore {
@@ -2051,6 +2064,7 @@ where
         Ok(GeneratedText {
             prompt_tokens: saturating_u32(prompt_token_count),
             completion_tokens: saturating_u32(self.completion_tokens),
+            cache_status: cache_stats.status,
             cached_prompt_tokens: cache_stats.cached_prompt_tokens,
             matched_prefix_tokens: cache_stats.matched_prefix_tokens,
             suffix_prefill_tokens: cache_stats.suffix_prefill_tokens,
@@ -2067,6 +2081,7 @@ where
 struct GeneratedText {
     prompt_tokens: u32,
     completion_tokens: u32,
+    cache_status: &'static str,
     cached_prompt_tokens: u32,
     matched_prefix_tokens: u32,
     suffix_prefill_tokens: u32,

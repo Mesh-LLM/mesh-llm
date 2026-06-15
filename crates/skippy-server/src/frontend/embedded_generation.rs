@@ -70,6 +70,9 @@ impl StageOpenAiBackend {
             }
             if prefill_token_count > 0 {
                 let prefill_tokens = &request.prompt_token_ids[..prefill_token_count];
+                if self.kv.is_some() {
+                    cache_stats.status = "miss";
+                }
                 if request.max_tokens > 0 && request.draft.is_none() {
                     let current = *request
                         .prompt_token_ids
@@ -91,6 +94,7 @@ impl StageOpenAiBackend {
                         cache_stats.matched_prefix_tokens =
                             saturating_u32(request.prompt_token_ids.len());
                         cache_stats.suffix_prefill_tokens = 0;
+                        cache_stats.status = "hit";
                         cache_stats.hit_kind = Some("chain_exact_replay");
                         fused_first_decode = Some(cached);
                     } else if let Some(cached) = self
@@ -108,6 +112,7 @@ impl StageOpenAiBackend {
                         cache_stats.matched_prefix_tokens =
                             saturating_u32(request.prompt_token_ids.len());
                         cache_stats.suffix_prefill_tokens = 0;
+                        cache_stats.status = "hit";
                         cache_stats.hit_kind = Some("chain_full_prompt_first_token");
                         fused_first_decode = Some(cached);
                     } else if let Some(fused) = self.try_restore_embedded_split_prefill_and_decode(
@@ -124,6 +129,7 @@ impl StageOpenAiBackend {
                         cache_stats.cached_prompt_tokens = saturating_u32(prefill_token_count);
                         cache_stats.matched_prefix_tokens = saturating_u32(prefill_token_count);
                         cache_stats.suffix_prefill_tokens = 0;
+                        cache_stats.status = "hit";
                         cache_stats.hit_kind = Some("chain_fused_exact_prefix");
                         fused_first_decode = Some(fused);
                     }
@@ -149,6 +155,7 @@ impl StageOpenAiBackend {
                             .len()
                             .saturating_sub(prefill_chain_restored_tokens),
                     );
+                    cache_stats.status = "hit";
                     cache_stats.hit_kind = Some("chain_prefix");
                 }
                 let mut pos_start = prefill_chain_restored_tokens.min(prefill_tokens.len());

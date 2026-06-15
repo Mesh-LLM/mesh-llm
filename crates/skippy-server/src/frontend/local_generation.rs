@@ -25,6 +25,7 @@ impl StageOpenAiBackend {
                 let runtime_lock_hold_timer = PhaseTimer::start();
                 let runtime_sessions_before = runtime.session_stats();
                 if let Some(kv) = self.kv.as_ref() {
+                    cache_stats.status = "miss";
                     let base = self.local_kv_message_base(&session_id, request.ids);
                     let kv_identity_timer = PhaseTimer::start();
                     let identities = kv.lookup_identities(&self.config, &base, 0, prefill_tokens);
@@ -33,6 +34,7 @@ impl StageOpenAiBackend {
                     match kv.restore_exact_state(&mut runtime, &session_id, &identities) {
                         Ok(Some(restored)) => {
                             restored_prefill = true;
+                            cache_stats.status = "hit";
                             cache_stats.hit_kind = Some("exact_prefix");
                             let mut attrs = self.openai_attrs(request.ids);
                             attrs.insert("skippy.kv.decision".to_string(), json!("exact_hit"));
@@ -90,6 +92,7 @@ impl StageOpenAiBackend {
                         ) {
                             Ok(Some(restored)) => {
                                 restored_prefill = true;
+                                cache_stats.status = "hit";
                                 cache_stats.hit_kind = Some("resident_prefix");
                                 let mut attrs = self.openai_attrs(request.ids);
                                 attrs.insert(

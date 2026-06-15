@@ -2,7 +2,7 @@ use super::*;
 use crate::inference::skippy::{SkippyPackageIdentity, SkippyTelemetryOptions, StageWireDType};
 use crate::plugin::{MeshConfig, ReasoningBudget, RequestDefaultsConfig};
 use serde_json::Value;
-use skippy_protocol::{LoadMode, StageKvCachePayload};
+use skippy_protocol::{LoadMode, StageKvCacheMode, StageKvCachePayload};
 use skippy_server::{EmbeddedReasoningEnabled, EmbeddedReasoningFormat};
 use std::{
     io::Write,
@@ -622,6 +622,32 @@ fn family_policy_beats_builtin_wire_dtype_when_config_is_unset() {
     .unwrap();
 
     assert_eq!(resolved.skippy.activation_wire_dtype, StageWireDType::F32);
+}
+
+#[test]
+fn family_policy_wires_prefix_cache_by_default_for_supported_models() {
+    let model_file = temp_model_file();
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &MeshConfig::default(),
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+    })
+    .expect("config should resolve");
+
+    let stage_config = resolved
+        .to_stage_config(Some(fake_package_identity(24)), LoadMode::RuntimeSlice)
+        .expect("stage config should build");
+    let kv_cache = stage_config
+        .kv_cache
+        .expect("supported family should enable prefix cache by default");
+
+    assert_eq!(kv_cache.mode, StageKvCacheMode::LookupRecord);
+    assert_eq!(kv_cache.payload, StageKvCachePayload::ResidentKv);
+    assert!(kv_cache.max_entries > 0);
+    assert!(kv_cache.max_bytes > 0);
 }
 
 #[test]

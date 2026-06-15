@@ -150,6 +150,7 @@ impl StageOpenAiBackend {
             "llama_stage.completion_token_count".to_string(),
             json!(output.completion_tokens),
         );
+        summary_attrs.insert("skippy.kv.status".to_string(), json!(output.cache_status));
         summary_attrs.insert(
             "skippy.kv.cached_prompt_tokens".to_string(),
             json!(output.cached_prompt_tokens),
@@ -162,9 +163,10 @@ impl StageOpenAiBackend {
             "skippy.kv.suffix_prefill_tokens".to_string(),
             json!(output.suffix_prefill_tokens),
         );
-        if let Some(hit_kind) = output.cache_hit_kind {
-            summary_attrs.insert("skippy.kv.hit_kind".to_string(), json!(hit_kind));
-        }
+        summary_attrs.insert(
+            "skippy.kv.hit_kind".to_string(),
+            json!(output.cache_hit_kind.unwrap_or("none")),
+        );
         summary_attrs.insert(
             "llama_stage.detokenize_ms".to_string(),
             json!(output.detokenize_ms),
