@@ -449,8 +449,10 @@ Before committing, run the local checks most likely to fail in CI for the files 
 
 ### Rust changes
 
-- Format only the changed Rust files from the repo root, for example with `cargo fmt --all -- path/to/file.rs`, and include those formatting changes in the commit.
-- Before committing Rust changes, ensure the formatting check passes with `cargo fmt --all -- --check`.
+- The preferred Rust edition for this workspace is Rust 2024. Determine the edition from the owning crate's `Cargo.toml`; if it uses `edition.workspace = true`, read `workspace.package.edition` from the root `Cargo.toml`. Most crates inherit `edition = "2024"` from the root; any crate that opts out declares its own edition in its `Cargo.toml`.
+- Format Rust files in a way that preserves the owning crate's edition metadata. Prefer `cargo fmt -p <crate> -- path/to/file.rs` for a narrow edit, or `cargo fmt --all` when changes span packages. Do not use `cargo fmt --all -- path/to/file.rs`: workspace-level file arguments can be parsed without the owning crate's Rust 2024 edition metadata and fail on let-chains.
+- If you must invoke `rustfmt` directly on a standalone file, pass the edition resolved from that manifest lookup, for example `--edition 2024` for the current workspace default; otherwise use `cargo fmt` through the owning package.
+- Before committing Rust changes, ensure the formatting check passes with `cargo fmt --all --check`.
 - After Rust changes, run `cargo check` and `cargo clippy --all-targets -- -D warnings` for each touched crate (`-p <crate>`), and at least `cargo check -p mesh-llm` plus `cargo clippy -p mesh-llm --all-targets -- -D warnings` if the change is reachable from the shipped binary.
 - Treat Clippy as a required local gate, not a CI-only cleanup step. `cargo check`, `just build`, and formatter success do not catch lints such as `clippy::collapsible-if`; run the warning-denying Clippy command before opening or updating a PR.
 - If you touched tests, public APIs, routing, inference, gossip, plugin protocol, skippy ABI, or CLI behavior, run the relevant tests before committing.
@@ -488,6 +490,7 @@ Do not leave Rust compiler warnings behind in code you touched.
 
 Pull request titles and descriptions should be user-focused by default.
 
+- Prefer the GitHub CLI (`gh`) for GitHub operations in this repo, including inspecting issues/PRs, editing PR descriptions, pushing branches, and opening PRs. Use built-in MCP/GitHub connector tools only as a fallback or for read-only lookup when `gh` cannot provide the needed data.
 - Title PRs around the user-visible change or capability, not the implementation detail.
 - Start the description with what the user can now do, see, or understand after the change.
 - Keep architectural refactors, internal state reshaping, and code-organization notes out of the opening summary unless they directly change user behavior.
