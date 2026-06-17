@@ -18,6 +18,9 @@ use skippy_ffi::TensorRole;
 use skippy_runtime::{ModelInfo, TensorInfo, write_gguf_from_parts};
 
 mod preflight;
+mod progress;
+
+use progress::{PackageProgress, format_bytes};
 
 #[derive(Debug, Parser)]
 #[command(name = "skippy-model-package")]
@@ -499,7 +502,9 @@ fn write_package(
     let layer_count = layer_count(tensors)?;
     let activation_width = activation_width(&input.model_path)?;
     let source_sha256 = file_sha256(&input.model_path)?;
+    let mut progress = PackageProgress::new(3 + layer_count as usize + projectors.len() + 1);
 
+    progress.start_step("shared/metadata.gguf")?;
     let metadata = write_package_artifact(
         &source,
         tensors,
@@ -514,6 +519,8 @@ fn write_package(
         &out_dir,
         &artifact_hook,
     )?;
+    progress.finish_step(&artifact_progress_detail(&metadata))?;
+    progress.start_step("shared/embeddings.gguf")?;
     let embeddings = write_package_artifact(
         &source,
         tensors,
@@ -528,6 +535,8 @@ fn write_package(
         &out_dir,
         &artifact_hook,
     )?;
+    progress.finish_step(&artifact_progress_detail(&embeddings))?;
+    progress.start_step("shared/output.gguf")?;
     let output = write_package_artifact(
         &source,
         tensors,
@@ -542,10 +551,12 @@ fn write_package(
         &out_dir,
         &artifact_hook,
     )?;
+    progress.finish_step(&artifact_progress_detail(&output))?;
 
     let mut layers = Vec::new();
     for layer_index in 0..layer_count {
         let relative = PathBuf::from(format!("layers/layer-{layer_index:03}.gguf"));
+        progress.start_step(&relative.display().to_string())?;
         let artifact = write_package_artifact(
             &source,
             tensors,
@@ -560,6 +571,7 @@ fn write_package(
             &out_dir,
             &artifact_hook,
         )?;
+        progress.finish_step(&artifact_progress_detail(&artifact))?;
         layers.push(PackageLayer {
             layer_index,
             path: artifact.path,
@@ -570,13 +582,14 @@ fn write_package(
         });
     }
 
-    let projectors = projectors
-        .iter()
-        .enumerate()
-        .map(|(index, projector)| {
-            copy_projector_artifact(projector, index, &out_dir, &artifact_hook)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut package_projectors = Vec::new();
+    for (index, projector) in projectors.iter().enumerate() {
+        progress.start_step(&projector.display().to_string())?;
+        let package_projector =
+            copy_projector_artifact(projector, index, &out_dir, &artifact_hook)?;
+        progress.finish_step(&projector_progress_detail(&package_projector))?;
+        package_projectors.push(package_projector);
+    }
 
     let manifest = PackageManifest {
         schema_version: 1,
@@ -599,7 +612,7 @@ fn write_package(
             embeddings,
             output,
         },
-        projectors,
+        projectors: package_projectors,
         layers,
         skippy_abi_version: format!(
             "{}.{}.{}",
@@ -614,9 +627,34 @@ fn write_package(
     };
 
     let manifest_path = out_dir.join("model-package.json");
+    progress.start_step("model-package.json")?;
     write_json_file(&manifest_path, &manifest)?;
+    let manifest_bytes = fs::metadata(&manifest_path)
+        .with_context(|| format!("read manifest metadata {}", manifest_path.display()))?
+        .len();
+    progress.finish_step(&format!(
+        "model-package.json {}",
+        format_bytes(manifest_bytes)
+    ))?;
+    progress.finish()?;
     println!("{}", serde_json::to_string_pretty(&manifest)?);
     Ok(())
+}
+
+fn artifact_progress_detail(artifact: &PackageArtifact) -> String {
+    format!(
+        "{} {}",
+        artifact.path,
+        format_bytes(artifact.artifact_bytes)
+    )
+}
+
+fn projector_progress_detail(projector: &PackageProjector) -> String {
+    format!(
+        "{} {}",
+        projector.path,
+        format_bytes(projector.artifact_bytes)
+    )
 }
 
 fn resolve_package_input(model: String, explicit: ExplicitSourceIdentity) -> Result<PackageInput> {
