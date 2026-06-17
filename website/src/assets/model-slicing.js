@@ -10,9 +10,15 @@
   var heroViz = null;
   var heroTitle = null;
   var heroFooter = null;
+  var modelBlock = null;
+  var phaseTitleSplit = null;
+  var phaseTitleNodes = null;
+  var phaseTitlePlace = null;
+  var finalHook = null;
   var finalHookLines = [];
   var finalHookBiggerWords = [];
   var finalHookPulseTimeline = null;
+  var finalHookPulseTimer = null;
   var finalHookWordAnimationPlayed = false;
   var finalHookPreviousStageProgress = 0;
   var serverPlate = null;
@@ -30,8 +36,11 @@
   var layoutClearTimers = [];
   var phaseName = null;
   var phaseIndex = null;
+  var scrubberDebugToggle = null;
   var scrubInput = null;
   var phasePanels = [];
+  var nodeSlotsById = {};
+  var nodeColorsById = {};
   var timeline = null;
   var scrollObserver = null;
   var timelineState = { progress: 0 };
@@ -49,6 +58,11 @@
   var cachedServer = null;
   var cachedApertureMaxRadius = null;
   var cachedMeshGeometry = null;
+  var cachedStickyMetrics = null;
+  var cachedHeroVizOrigin = null;
+  var heroVizTransformCache = '';
+  var cachedScrollBounds = null;
+  var cachedFlightLayerRect = null;
   var cachedTitleSnapY = null;
   var currentMeshGeometryScale = 1;
   var currentMeshGeometryOriginX = 0;
@@ -58,12 +72,17 @@
   var placementStarted = false;
   var placementMotionActive = false;
   var placementSettleBarrier = false;
+  var idleSourceLayerClearTimer = null;
+  var meshNodeTransformClearTimer = null;
+  var settledLayerTransformClearTimer = null;
   var isScrubbing = false;
   var scrubberPointerId = null;
   var latestScrollProgress = 0;
   var usesScrollObserver = false;
   var manualStageSeekActive = false;
   var manualStageSeekScrollY = 0;
+  var scrubberDebugView = false;
+  var scrubberDebugVisible = false;
   var titleSnapState = { progress: 0 };
   var titleSnapTarget = 0;
   var titleSnapPrimed = false;
@@ -72,53 +91,74 @@
   var titleScrollProgress = 0;
   var titleFadeProgress = 0;
   var heroVizStableRequested = false;
-  var STAGE_INTRO_PROGRESS = 0.16;
+  var heroSvgMotionActive = null;
+  var heroSvgMotionResumeTimer = null;
+  var apertureSettledActive = null;
+  var apertureVisualImmediateSeek = false;
+  var apertureVisual = {
+    radius: 0,
+    ringOpacity: 0,
+    targetAperture: 0,
+    targetRadius: 0,
+    targetRingOpacity: 0,
+    serverRadius: 34,
+    maxRadius: 1200,
+    initialized: false,
+    lastFrameTime: 0,
+    raf: null,
+  };
+  var STAGE_INTRO_PROGRESS = 0.04;
   // Leaves the final slice of the stage as a settled hold after the aperture closes.
-  var STAGE_ANIMATION_END_PROGRESS = 0.955;
-  var APERTURE_OPEN_START = 0.245;
-  var APERTURE_OPEN_END = 0.380;
-  var APERTURE_CLOSE_START = 1.095;
+  var STAGE_ANIMATION_END_PROGRESS = 0.86;
+  var APERTURE_OPEN_START = 0.190;
+  var APERTURE_OPEN_END = 0.310;
+  var APERTURE_CLOSE_START = 1.075;
   var APERTURE_CLOSE_END = 1.153;
-  var APERTURE_FADE_START = 1.125;
-  var APERTURE_FADE_END = 1.155;
+  var APERTURE_FADE_START = 1.132;
+  var APERTURE_FADE_END = 1.158;
   var APERTURE_DETAIL_FADE_END = 1.146;
   var APERTURE_WORKBENCH_EXIT_END = 1.148;
   var APERTURE_RING_RETURN_END = 1.125;
-  var APERTURE_SCRUBBER_EXIT_END = 1.142;
-  var DESKTOP_APERTURE_ENTRY_SCROLL_FACTOR = 0.5;
-  var FINAL_HOOK_FADE_START = 1.136;
-  var FINAL_HOOK_FADE_END = 1.153;
-  var FINAL_HOOK_PULSE_TRIGGER_PROGRESS = 1.154;
+  var DESKTOP_APERTURE_ENTRY_SCROLL_FACTOR = 0.34;
+  var FINAL_HOOK_FADE_START = 1.108;
+  var FINAL_HOOK_FADE_END = 1.140;
+  var FINAL_HOOK_PULSE_TRIGGER_PROGRESS = 1.142;
   var FINAL_HOOK_PULSE_SCALE = 1.1125;
   var FINAL_HOOK_PULSE_DURATION = 920;
   var FINAL_HOOK_PULSE_PEAK_DURATION = 310;
   var FINAL_HOOK_PULSE_GAP = 1500;
-  var TITLE_SNAP_LEAD_START_PROGRESS = 0.035;
-  var TITLE_SNAP_FORWARD_PROGRESS = 0.085;
-  var TITLE_SNAP_REVERSE_PROGRESS = 0.065;
-  var TOUCH_LANDSCAPE_TITLE_SNAP_REVERSE_PROGRESS = 0.155;
+  var FINAL_HOOK_PULSE_IDLE_DELAY = 1100;
+  var HERO_SVG_MOTION_RESUME_DELAY = 900;
+  var SCRUBBER_DEBUG_VIEW_STORAGE_KEY = 'meshStage2DebugView';
+  var SCRUBBER_DEBUG_VISIBLE_STORAGE_KEY = 'meshStage2DebugScrubberVisible';
+  var TITLE_SNAP_LEAD_START_PROGRESS = 0.012;
+  var TITLE_SNAP_FORWARD_PROGRESS = 0.045;
+  var TITLE_SNAP_REVERSE_PROGRESS = 0.045;
+  var TOUCH_LANDSCAPE_TITLE_SNAP_REVERSE_PROGRESS = 0.105;
   var TITLE_SNAP_LEAD_PROGRESS = 0;
   var TITLE_SNAP_Y = -570;
-  var TITLE_CLEAR_START_STAGE_PROGRESS = 0.205;
-  var TITLE_CLEAR_END_STAGE_PROGRESS = 0.245;
-  var FOOTER_CLEAR_START_STAGE_PROGRESS = 0.245;
-  var FOOTER_CLEAR_END_STAGE_PROGRESS = 0.405;
+  var TITLE_CLEAR_START_STAGE_PROGRESS = 0.160;
+  var TITLE_CLEAR_END_STAGE_PROGRESS = 0.215;
+  var FOOTER_CLEAR_START_STAGE_PROGRESS = 0.205;
+  var FOOTER_CLEAR_END_STAGE_PROGRESS = 0.325;
 
   var PHASES = [
-    { id: 'phase-1', label: 'materialize model', start: 0.385, end: 0.465, apply: applyPhaseOne },
-    { id: 'phase-2', label: 'slice layers', start: 0.465, end: 0.575, apply: applyPhaseTwo },
-    { id: 'phase-3', label: 'compact model', start: 0.575, end: 0.655, apply: applyPhaseThree },
-    { id: 'phase-4', label: 'materialize nodes', start: 0.655, end: 0.775, apply: applyPhaseFour },
-    { id: 'phase-5', label: 'distribute layers', start: 0.775, end: 0.955, apply: applyPhaseFive },
-    { id: 'phase-6', label: 'lock split', start: 0.955, end: 1.015, apply: applyPhaseSix },
-    { id: 'phase-7', label: 'align nodes', start: 1.015, end: 1.095, apply: applyPhaseSeven },
-    { id: 'phase-8', label: 'aperture close', start: 1.095, end: 1.155, apply: applyPhaseEight },
+    { id: 'phase-1', label: 'materialize model', start: 0.230, end: 0.325, apply: applyPhaseOne },
+    { id: 'phase-2', label: 'slice layers', start: 0.325, end: 0.450, apply: applyPhaseTwo },
+    { id: 'phase-3', label: 'compact model', start: 0.450, end: 0.545, apply: applyPhaseThree },
+    { id: 'phase-4', label: 'materialize nodes', start: 0.545, end: 0.675, apply: applyPhaseFour },
+    { id: 'phase-5', label: 'distribute layers', start: 0.675, end: 0.895, apply: applyPhaseFive },
+    { id: 'phase-6', label: 'lock split', start: 0.895, end: 0.975, apply: applyPhaseSix },
+    { id: 'phase-7', label: 'align nodes', start: 0.985, end: 1.075, apply: applyPhaseSeven },
+    { id: 'phase-8', label: 'aperture close', start: 1.075, end: 1.155, apply: applyPhaseEight },
   ];
   var SHRINK_PHASE_INDEX = 2;
   var NODE_PHASE_INDEX = 3;
   var MESH_PHASE_INDEX = 4;
   var LOCK_PHASE_INDEX = 5;
   var ALIGN_PHASE_INDEX = 6;
+  var MODEL_DETAIL_REVEAL_START = PHASES[0].start + 0.002;
+  var MODEL_DETAIL_REVEAL_END = PHASES[0].start + 0.028;
   var SCRUBBER_START = PHASES[0].start;
   var SCRUBBER_END = PHASES[PHASES.length - 1].end;
   var LEARN_MORE_TARGET_PROGRESS = SCRUBBER_END;
@@ -150,10 +190,24 @@
   var PLACEMENT_LAYER_WINDOW = 0.095;
   var PLACEMENT_LAYER_END = PLACEMENT_LAYER_START + PLACEMENT_LAYER_WINDOW * 10;
   var PLACEMENT_PROGRESS_EPSILON = 0.001;
-  var SCROLL_SMOOTH_SYNC = 0.9;
-  var SCROLL_SMOOTH_STEP = 0.181;
+  var PLACEMENT_EXTRACT_HOLD = 0.18;
+  var SCROLL_SMOOTH_SYNC = 0.94;
+  var SCROLL_SMOOTH_STEP = 0.42;
+  var SCROLL_SMOOTH_JUMP_THRESHOLD = 0.018;
   var TOUCH_SCROLL_SMOOTH_SYNC = 1;
   var TOUCH_SCROLL_SMOOTH_STEP = 0.44;
+  var USE_ANIME_SCROLL_OBSERVER = true;
+  var APERTURE_OPEN_SMOOTH_MS = 115;
+  var APERTURE_CLOSE_SMOOTH_MS = 92;
+  var APERTURE_RING_SMOOTH_MS = 88;
+  var APERTURE_RADIUS_OPEN_MAX_STEP = 82;
+  var APERTURE_RADIUS_CLOSE_MAX_STEP = 96;
+  var APERTURE_RADIUS_EPSILON = 0.45;
+  var APERTURE_RING_EPSILON = 0.003;
+  var APERTURE_SETTLED_BUFFER = 0.018;
+  var CSS_NUMBER_QUANTUM = 1000;
+  var CSS_PX_QUANTUM = 10;
+  var CSS_PERCENT_QUANTUM = 20;
   var TOUCH_MODEL_MIN_SCALE = 0.018;
   var TOUCH_PLACEMENT_SNAP_PROGRESS = 0.12;
 
@@ -173,13 +227,24 @@
     return useTouchScrollProfile() ? TOUCH_SCROLL_SMOOTH_STEP : SCROLL_SMOOTH_STEP;
   }
 
+  function stickyMetrics() {
+    if (cachedStickyMetrics) return cachedStickyMetrics;
+
+    cachedStickyMetrics = {
+      width: sticky ? sticky.clientWidth : window.innerWidth,
+      height: sticky ? sticky.clientHeight : window.innerHeight,
+    };
+    return cachedStickyMetrics;
+  }
+
   function useLiteStage2Motion() {
     return useTouchScrollProfile();
   }
 
   function useTouchLandscapeStage() {
-    var width = sticky ? sticky.clientWidth : window.innerWidth;
-    var height = sticky ? sticky.clientHeight : window.innerHeight;
+    var metrics = stickyMetrics();
+    var width = metrics.width;
+    var height = metrics.height;
     return useTouchScrollProfile() && width > height;
   }
 
@@ -188,35 +253,41 @@
   }
 
   function useLandscapeStage() {
-    var width = sticky ? sticky.clientWidth : window.innerWidth;
-    var height = sticky ? sticky.clientHeight : window.innerHeight;
+    var metrics = stickyMetrics();
+    var width = metrics.width;
+    var height = metrics.height;
     return width > height;
   }
 
   function landscapeVizStageY() {
+    var metrics = stickyMetrics();
     if (!sticky || !useLandscapeStage()) return 0;
-    return clamp(sticky.clientHeight * 0.18, 150, 190);
+    return clamp(metrics.height * 0.18, 150, 190);
   }
 
   function shortLandscapeVizBaseY() {
-    if (!sticky || !useLandscapeStage() || sticky.clientHeight > 480) return 0;
-    return -clamp(sticky.clientHeight * 0.32, 90, 120);
+    var metrics = stickyMetrics();
+    if (!sticky || !useLandscapeStage() || metrics.height > 480) return 0;
+    return -clamp(metrics.height * 0.32, 90, 120);
   }
 
   function usePhonePortraitStage() {
-    var width = sticky ? sticky.clientWidth : window.innerWidth;
-    var height = sticky ? sticky.clientHeight : window.innerHeight;
+    var metrics = stickyMetrics();
+    var width = metrics.width;
+    var height = metrics.height;
     return width <= 640 && height > width;
   }
 
   function phonePortraitVizStageY() {
+    var metrics = stickyMetrics();
     if (!sticky || !usePhonePortraitStage()) return 0;
-    return clamp(sticky.clientHeight * 0.16, 96, 150);
+    return clamp(metrics.height * 0.16, 96, 150);
   }
 
   function phonePortraitTitleLift() {
+    var metrics = stickyMetrics();
     if (!sticky || !usePhonePortraitStage()) return 0;
-    return clamp(sticky.clientHeight * 0.055, 34, 58);
+    return clamp(metrics.height * 0.055, 34, 58);
   }
 
   function heroVizStageY() {
@@ -336,8 +407,28 @@
     return clamp(value, 0, 1);
   }
 
+  function quantizeNumber(value, quantum) {
+    if (!Number.isFinite(value)) return value;
+    return Math.round(value * quantum) / quantum;
+  }
+
+  function normalizeCssValue(value) {
+    var numeric;
+
+    if (typeof value === 'number') return String(quantizeNumber(value, CSS_NUMBER_QUANTUM));
+    if (typeof value !== 'string') return value;
+
+    numeric = Number.parseFloat(value);
+    if (!Number.isFinite(numeric)) return value;
+    if (/^-?\d*\.?\d+px$/.test(value)) return quantizeNumber(numeric, CSS_PX_QUANTUM) + 'px';
+    if (/^-?\d*\.?\d+%$/.test(value)) return quantizeNumber(numeric, CSS_PERCENT_QUANTUM) + '%';
+    if (/^-?\d*\.?\d+$/.test(value)) return String(quantizeNumber(numeric, CSS_NUMBER_QUANTUM));
+
+    return value;
+  }
+
   function setVar(name, value) {
-    var nextValue = typeof value === 'number' ? String(Math.round(value * 10000) / 10000) : value;
+    var nextValue = normalizeCssValue(value);
 
     if (sectionVarCache[name] === nextValue) return;
     sectionVarCache[name] = nextValue;
@@ -351,6 +442,105 @@
     section.style.removeProperty(name);
   }
 
+  function apertureVisualStep(deltaMs, durationMs) {
+    if (durationMs <= 0) return 1;
+    return 1 - Math.exp(-Math.max(0, deltaMs) / durationMs);
+  }
+
+  function writeApertureVisual() {
+    var apertureScale;
+
+    setVar('--stage2-aperture-ring-opacity', apertureVisual.ringOpacity);
+    setVar('--stage2-aperture-max-radius', Math.round(apertureVisual.maxRadius * 100) / 100 + 'px');
+
+    apertureScale = apertureVisual.maxRadius > 0 ? clamp(apertureVisual.radius / apertureVisual.maxRadius, 0, 1) : 0;
+
+    setVar('--stage2-aperture-radius', Math.round(apertureVisual.radius * 100) / 100 + 'px');
+    setVar('--stage2-aperture-scale', Math.round(apertureScale * 10000) / 10000);
+    setVar('--stage2-aperture-inverse-scale', apertureScale > 0.001 ? Math.round((1 / apertureScale) * 10000) / 10000 : 1);
+  }
+
+  function apertureVisualSettled() {
+    return Math.abs(apertureVisual.targetRadius - apertureVisual.radius) < APERTURE_RADIUS_EPSILON
+      && Math.abs(apertureVisual.targetRingOpacity - apertureVisual.ringOpacity) < APERTURE_RING_EPSILON;
+  }
+
+  function snapApertureVisualToTarget() {
+    apertureVisual.radius = apertureVisual.targetRadius;
+    apertureVisual.ringOpacity = apertureVisual.targetRingOpacity;
+    apertureVisual.lastFrameTime = 0;
+    writeApertureVisual();
+  }
+
+  function advanceApertureVisual(now) {
+    var deltaMs;
+    var radiusDuration;
+    var radiusStep;
+    var radiusDelta;
+    var radiusMaxStep;
+    var ringStep;
+
+    deltaMs = apertureVisual.lastFrameTime ? clamp(now - apertureVisual.lastFrameTime, 0, 64) : 16;
+    apertureVisual.lastFrameTime = now;
+    radiusDuration = apertureVisual.targetRadius >= apertureVisual.radius
+      ? APERTURE_OPEN_SMOOTH_MS
+      : APERTURE_CLOSE_SMOOTH_MS;
+    radiusStep = apertureVisualStep(deltaMs, radiusDuration);
+    ringStep = apertureVisualStep(deltaMs, APERTURE_RING_SMOOTH_MS);
+    radiusDelta = (apertureVisual.targetRadius - apertureVisual.radius) * radiusStep;
+    radiusMaxStep = apertureVisual.targetRadius >= apertureVisual.radius
+      ? APERTURE_RADIUS_OPEN_MAX_STEP
+      : APERTURE_RADIUS_CLOSE_MAX_STEP;
+
+    apertureVisual.radius += clamp(radiusDelta, -radiusMaxStep, radiusMaxStep);
+    apertureVisual.ringOpacity += (apertureVisual.targetRingOpacity - apertureVisual.ringOpacity) * ringStep;
+
+    if (apertureVisualSettled()) {
+      snapApertureVisualToTarget();
+      return false;
+    }
+
+    writeApertureVisual();
+    return true;
+  }
+
+  function scheduleApertureVisual() {
+    if (apertureVisual.raf) return;
+    apertureVisual.raf = window.requestAnimationFrame(function renderApertureVisual(now) {
+      apertureVisual.raf = null;
+      if (advanceApertureVisual(now)) scheduleApertureVisual();
+    });
+  }
+
+  function resetApertureVisual() {
+    if (apertureVisual.raf) window.cancelAnimationFrame(apertureVisual.raf);
+    apertureVisual.raf = null;
+    apertureVisual.initialized = false;
+    apertureVisual.lastFrameTime = 0;
+  }
+
+  function syncApertureVisual(targetAperture, targetRingOpacity, server, maxRadius, immediate) {
+    apertureVisual.targetAperture = clamp(targetAperture, 0, 1);
+    apertureVisual.targetRingOpacity = clamp(targetRingOpacity, 0, 1);
+    apertureVisual.serverRadius = Math.max(1, server && server.radius ? server.radius : 34);
+    apertureVisual.maxRadius = Math.max(1, maxRadius || apertureVisual.maxRadius);
+    apertureVisual.targetRadius = lerp(
+      apertureVisual.serverRadius * 1.14,
+      apertureVisual.maxRadius,
+      easeInOut(apertureVisual.targetAperture)
+    );
+
+    if (!apertureVisual.initialized || immediate || reduceMotion) {
+      apertureVisual.initialized = true;
+      if (apertureVisual.raf) window.cancelAnimationFrame(apertureVisual.raf);
+      apertureVisual.raf = null;
+      snapApertureVisualToTarget();
+      return;
+    }
+
+    if (advanceApertureVisual(performance.now())) scheduleApertureVisual();
+  }
+
   function syncHeroChromeMetrics() {
     var chromeHeight = nav ? nav.getBoundingClientRect().height : 0;
 
@@ -362,8 +552,10 @@
   }
 
   function syncCompletedGridClip() {
+    var bounds;
     if (!section) return;
-    var heroBottom = section.getBoundingClientRect().bottom;
+    bounds = scrollBounds();
+    var heroBottom = bounds.bottom - window.scrollY;
     var clipBottom = clamp(heroBottom, 0, window.innerHeight);
     setVar('--stage2-grid-clip-bottom', Math.round(clipBottom) + 'px');
   }
@@ -376,6 +568,83 @@
       completedGridClipRaf = null;
       syncCompletedGridClip();
     });
+  }
+
+  function isHeroInViewport() {
+    var bounds;
+    var scrollY;
+
+    if (!section) return false;
+
+    bounds = scrollBounds();
+    scrollY = window.scrollY || window.pageYOffset || 0;
+    return bounds.bottom > scrollY && bounds.start < scrollY + window.innerHeight;
+  }
+
+  function clearHeroSvgMotionResume() {
+    if (!heroSvgMotionResumeTimer) return;
+    window.clearTimeout(heroSvgMotionResumeTimer);
+    heroSvgMotionResumeTimer = null;
+  }
+
+  function setHeroSvgMotionActive(active, stageProgress) {
+    if (heroSvgMotionActive === active) return;
+    heroSvgMotionActive = active;
+    window.dispatchEvent(new CustomEvent('mesh:hero-viz:svg-motion', {
+      detail: {
+        active: active,
+        stageProgress: stageProgress,
+      },
+    }));
+  }
+
+  function canRunHeroSvgMotion(stageProgress) {
+    var apertureOpen = stageProgress >= APERTURE_OPEN_START && stageProgress < APERTURE_CLOSE_END;
+    return !reduceMotion && !apertureOpen && isHeroInViewport();
+  }
+
+  function syncHeroSvgMotion(stageProgress) {
+    var active = canRunHeroSvgMotion(stageProgress);
+    var deferCloseResume = active
+      && stageProgress >= APERTURE_CLOSE_END
+      && stageProgress < SCRUBBER_END;
+
+    if (!active) {
+      clearHeroSvgMotionResume();
+      setHeroSvgMotionActive(false, stageProgress);
+      return;
+    }
+
+    if (deferCloseResume && heroSvgMotionActive !== true) {
+      if (!heroSvgMotionResumeTimer) {
+        heroSvgMotionResumeTimer = window.setTimeout(function () {
+          var nextStageProgress;
+
+          heroSvgMotionResumeTimer = null;
+          nextStageProgress = stageProgressFromScrollProgress(latestScrollProgress);
+          if (canRunHeroSvgMotion(nextStageProgress)) {
+            setHeroSvgMotionActive(true, nextStageProgress);
+          }
+        }, HERO_SVG_MOTION_RESUME_DELAY);
+      }
+      return;
+    }
+
+    clearHeroSvgMotionResume();
+    setHeroSvgMotionActive(true, stageProgress);
+  }
+
+  function isApertureSettledState(stageProgress, aperture) {
+    return !reduceMotion
+      && aperture > 0.995
+      && stageProgress > APERTURE_OPEN_END + APERTURE_SETTLED_BUFFER
+      && stageProgress < APERTURE_CLOSE_START - APERTURE_SETTLED_BUFFER;
+  }
+
+  function syncApertureSettledState(settled) {
+    if (apertureSettledActive === settled) return;
+    apertureSettledActive = settled;
+    section.classList.toggle('is-stage2-aperture-settled', settled);
   }
 
   function readSectionNumber(name, fallback) {
@@ -415,12 +684,43 @@
     return 'translateX(-50%) translateY(' + stageY + 'px) scale(' + meshScale + ')';
   }
 
-  function applyHeroVizTransform(meshScale, syncGeometry) {
+  function writeHeroVizTransform(stageY, meshScale) {
+    var transform = heroVizTransform(stageY, meshScale);
+
+    if (heroVizTransformCache === transform) return;
+    heroVizTransformCache = transform;
+    heroViz.style.transform = transform;
+  }
+
+  function syncHeroVizOrigin() {
     var heroVizLeft;
     var originX;
     var originY;
     var server;
+    var origin;
 
+    if (cachedHeroVizOrigin) {
+      currentMeshGeometryOriginX = cachedHeroVizOrigin.x;
+      currentMeshGeometryOriginY = cachedHeroVizOrigin.y;
+      return;
+    }
+
+    if (!cachedServer) writeHeroVizTransform(currentHeroVizStageY, 1);
+
+    server = syncServerGeometry();
+    heroVizLeft = heroViz.offsetLeft - heroViz.offsetWidth / 2;
+    originX = server.baseX - heroVizLeft;
+    originY = server.baseY - heroViz.offsetTop;
+    origin = Math.round(originX * 100) / 100 + 'px ' + Math.round(originY * 100) / 100 + 'px';
+
+    cachedHeroVizOrigin = { x: server.baseX, y: server.baseY };
+    currentMeshGeometryOriginX = cachedHeroVizOrigin.x;
+    currentMeshGeometryOriginY = cachedHeroVizOrigin.y;
+
+    if (heroViz.style.transformOrigin !== origin) heroViz.style.transformOrigin = origin;
+  }
+
+  function applyHeroVizTransform(meshScale, syncGeometry) {
     if (!heroViz) return;
     syncGeometry = syncGeometry !== false;
 
@@ -428,23 +728,12 @@
     currentHeroVizStageY = Math.round(lerp(heroVizBaseStageY(), heroVizStageY(), titleSnapState.progress));
 
     if (!syncGeometry) {
-      heroViz.style.transform = heroVizTransform(currentHeroVizStageY, meshScale);
+      writeHeroVizTransform(currentHeroVizStageY, meshScale);
       return;
     }
 
-    if (!cachedServer) {
-      heroViz.style.transform = heroVizTransform(currentHeroVizStageY, 1);
-    }
-    server = syncServerGeometry();
-    heroVizLeft = heroViz.offsetLeft - heroViz.offsetWidth / 2;
-    originX = server.baseX - heroVizLeft;
-    originY = server.baseY - heroViz.offsetTop;
-    currentMeshGeometryOriginX = server.baseX;
-    currentMeshGeometryOriginY = server.baseY;
-    heroViz.style.transformOrigin = Math.round(originX * 100) / 100 + 'px ' + Math.round(originY * 100) / 100 + 'px';
-    heroViz.style.transform = heroVizTransform(currentHeroVizStageY, meshScale);
-    syncServerGeometry();
-    syncMeshGeometry();
+    syncHeroVizOrigin();
+    writeHeroVizTransform(currentHeroVizStageY, meshScale);
   }
 
   function cancelTitleSnapAnimation() {
@@ -589,6 +878,39 @@
     return Math.round(snapped * (scrubberTickCount - 1)) * 4 + 'px';
   }
 
+  function readStoredFlag(key) {
+    try {
+      return window.localStorage && window.localStorage.getItem(key) === '1';
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function writeStoredFlag(key, enabled) {
+    try {
+      if (!window.localStorage) return;
+      if (enabled) {
+        window.localStorage.setItem(key, '1');
+      } else {
+        window.localStorage.removeItem(key);
+      }
+    } catch (_error) {
+      // Private browsing can reject localStorage writes.
+    }
+  }
+
+  function queryFlag(name) {
+    var value;
+
+    try {
+      value = new URLSearchParams(window.location.search).get(name);
+    } catch (_error) {
+      return false;
+    }
+
+    return value === '1' || value === 'true' || value === '';
+  }
+
   function phaseForProgress(progress) {
     var i;
 
@@ -608,8 +930,9 @@
   }
 
   function phaseTitleModelOffset(titleOpacity) {
-    var width = window.innerWidth || (sticky ? sticky.clientWidth : 1440);
-    var height = window.innerHeight || (sticky ? sticky.clientHeight : 900);
+    var metrics = stickyMetrics();
+    var width = window.innerWidth || metrics.width || 1440;
+    var height = window.innerHeight || metrics.height || 900;
     var offset = 64;
 
     if (height <= 480 && width > height) {
@@ -705,10 +1028,13 @@
   }
 
   function setFinalHookWordGlow(word, state) {
+    var sweep;
+
     if (!word || !state) return;
+    sweep = 12 + clamp(state.sweep, 0, 1) * 76;
     word.style.setProperty('--stage2-final-word-glow', String(Math.round(state.glow * 1000) / 1000));
     word.style.setProperty('--stage2-final-word-core', String(Math.round(state.core * 1000) / 1000));
-    word.style.setProperty('--stage2-final-word-glow-x', Math.round(state.sweep * 100) + '%');
+    word.style.setProperty('--stage2-final-word-glow-x', Math.round(sweep * 100) / 100 + '%');
     word.style.setProperty('--stage2-final-word-glow-stretch', String(Math.round(state.stretch * 1000) / 1000));
   }
 
@@ -730,6 +1056,10 @@
 
   function resetFinalHookWordPulse() {
     finalHookWordAnimationPlayed = false;
+    if (finalHookPulseTimer) {
+      window.clearTimeout(finalHookPulseTimer);
+      finalHookPulseTimer = null;
+    }
     clearFinalHookPulseTimeline();
     if (window.anime && typeof window.anime.remove === 'function') {
       window.anime.remove(finalHookBiggerWords);
@@ -749,7 +1079,7 @@
         { to: FINAL_HOOK_PULSE_SCALE, duration: FINAL_HOOK_PULSE_PEAK_DURATION, ease: riseEase },
         { to: 1, duration: releaseDuration, ease: releaseEase },
       ],
-      '--stage2-final-word-glow-x': ['0%', '100%'],
+      '--stage2-final-word-glow-x': ['12%', '88%'],
       '--stage2-final-word-glow': [
         { to: 1, duration: FINAL_HOOK_PULSE_PEAK_DURATION, ease: riseEase },
         { to: 0, duration: releaseDuration, ease: releaseEase },
@@ -810,13 +1140,26 @@
     finalHookPulseTimeline.play();
   }
 
+  function queueFinalHookWordPulseTimeline() {
+    if (finalHookWordAnimationPlayed || finalHookPulseTimer) return;
+
+    finalHookPulseTimer = window.setTimeout(function () {
+      finalHookPulseTimer = null;
+      playFinalHookWordPulseTimeline();
+    }, FINAL_HOOK_PULSE_IDLE_DELAY);
+  }
+
   function syncFinalHookWordPulse(stageProgress) {
     var crossedForward = finalHookPreviousStageProgress < FINAL_HOOK_PULSE_TRIGGER_PROGRESS && stageProgress >= FINAL_HOOK_PULSE_TRIGGER_PROGRESS;
 
     if (crossedForward) {
-      playFinalHookWordPulseTimeline();
+      queueFinalHookWordPulseTimeline();
     } else if (stageProgress < FINAL_HOOK_PULSE_TRIGGER_PROGRESS - 0.012) {
       finalHookWordAnimationPlayed = false;
+      if (finalHookPulseTimer) {
+        window.clearTimeout(finalHookPulseTimer);
+        finalHookPulseTimer = null;
+      }
     }
 
     if (stageProgress <= FINAL_HOOK_FADE_START - 0.02) resetFinalHookWordPulse();
@@ -824,24 +1167,27 @@
   }
 
   function setStage2TitleProgress(stageProgress) {
-    var split = titlePresence(stageProgress, 0.486, 0.522, 0.622, 0.662);
-    var nodes = titlePresence(stageProgress, 0.666, 0.704, 0.754, 0.810);
-    var place = titlePresence(stageProgress, 0.794, 0.836, 0.948, 1.012);
+    var split = titlePresence(stageProgress, 0.342, 0.382, 0.456, 0.512);
+    var nodes = titlePresence(stageProgress, 0.565, 0.606, 0.668, 0.728);
+    var place = titlePresence(stageProgress, 0.720, 0.766, 0.910, 0.992);
     var phaseTitle = Math.max(split, nodes, place);
+    var lockOffsetRelease = easeOutQuart(ramp(stageProgress, PHASES[LOCK_PHASE_INDEX].start - 0.018, PHASES[LOCK_PHASE_INDEX].start + 0.018));
+    var modelTitleOffset = phaseTitleModelOffset(phaseTitle) * (1 - lockOffsetRelease);
     var final = easeOut(ramp(stageProgress, FINAL_HOOK_FADE_START, FINAL_HOOK_FADE_END));
 
-    setVar('--stage2-title-split-opacity', Math.round(split * 10000) / 10000);
-    setVar('--stage2-title-nodes-opacity', Math.round(nodes * 10000) / 10000);
-    setVar('--stage2-title-place-opacity', Math.round(place * 10000) / 10000);
-    setVar('--stage2-title-final-opacity', Math.round(final * 10000) / 10000);
-    setVar('--stage2-title-model-offset', phaseTitleModelOffset(phaseTitle) + 'px');
+    setElementVar(phaseTitleSplit, '--stage2-title-opacity', split);
+    setElementVar(phaseTitleNodes, '--stage2-title-opacity', nodes);
+    setElementVar(phaseTitlePlace, '--stage2-title-opacity', place);
+    setElementVar(finalHook, '--stage2-title-final-opacity', final);
+    setElementVar(modelBlock, '--stage2-title-model-offset', modelTitleOffset + 'px');
     syncFinalHookWordPulse(stageProgress);
     if (section) section.classList.toggle('is-stage2-final-hook-visible', final > 0.02);
   }
 
   function modelTargetSize() {
-    var width = sticky ? sticky.clientWidth : window.innerWidth;
-    var height = window.innerHeight || (sticky ? sticky.clientHeight : 720);
+    var metrics = stickyMetrics();
+    var width = metrics.width || window.innerWidth;
+    var height = window.innerHeight || metrics.height || 720;
 
     if (width <= 640) {
       return {
@@ -957,6 +1303,11 @@
     var lock = Math.max(lockMark, lockText, lockRoute);
 
     setVar('--stage2-phase-6', progress);
+    if (context.progress >= context.phase.start) {
+      settleAllPlacementTargets();
+      setVar('--stage2-placement-progress', 1);
+    }
+
     if (!isPlacementSettled()) {
       setVar('--stage2-lock-card-progress', 0);
       setVar('--stage2-lock-progress', 0);
@@ -975,7 +1326,6 @@
     setVar('--stage2-lock-text-progress', clamp(lockText, 0, 1));
     setVar('--stage2-lock-route-progress', clamp(lockRoute, 0, 1));
     setVar('--stage2-lock-node-progress', clamp(lockNodes, 0, 1));
-    if (context.progress >= context.phase.start) setVar('--stage2-placement-progress', 1);
   }
 
   function applyPhaseSeven(context) {
@@ -1002,11 +1352,13 @@
   function applyPhaseScaffold(stageProgress) {
     PHASES.forEach(function (phase, index) {
       var localProgress = phaseProgress(phase, stageProgress);
-      var panel = section.querySelector('[data-stage2-phase-panel="' + phase.id + '"]');
+      var panel = phasePanels[index] || null;
+      var panelActive = index === activePhase;
 
-      if (panel) {
-        panel.style.opacity = String(index === activePhase ? 1 : 0);
-        panel.style.pointerEvents = 'none';
+      if (panel && panel.__stage2PanelActive !== panelActive) {
+        panel.__stage2PanelActive = panelActive;
+        panel.style.opacity = panelActive ? '1' : '0';
+        if (panel.style.pointerEvents !== 'none') panel.style.pointerEvents = 'none';
       }
 
       phase.apply({
@@ -1028,7 +1380,13 @@
     cachedServer = null;
     cachedApertureMaxRadius = null;
     cachedMeshGeometry = null;
+    cachedStickyMetrics = null;
+    cachedHeroVizOrigin = null;
+    heroVizTransformCache = '';
+    cachedScrollBounds = null;
+    cachedFlightLayerRect = null;
     cachedTitleSnapY = null;
+    resetApertureVisual();
   }
 
   function setElementVar(element, name, value) {
@@ -1036,7 +1394,7 @@
 
     if (!element) return;
 
-    nextValue = typeof value === 'number' ? String(Math.round(value * 10000) / 10000) : value;
+    nextValue = normalizeCssValue(value);
     element.__stage2VarCache = element.__stage2VarCache || {};
     if (element.__stage2VarCache[name] === nextValue) return;
     element.__stage2VarCache[name] = nextValue;
@@ -1051,20 +1409,26 @@
   }
 
   function nodeCardSize(id, scale) {
-    var width = sticky ? sticky.clientWidth : window.innerWidth;
+    var width = stickyMetrics().width || window.innerWidth;
     var mobile = width <= 640;
     var compact = width <= 900;
-    var baseWidth = mobile ? 116 : compact ? 132 : 152;
-    var baseHeight = mobile ? 86 : compact ? 100 : 116;
-    var capacityBoost = id === 'server' ? 30 : id === 'cloud' ? 16 : id === 'workstation' ? 10 : 0;
+    var baseWidth = mobile ? 104 : compact ? 132 : 152;
+    var baseHeight = mobile ? 78 : compact ? 100 : 116;
+    var capacityBoost = id === 'server'
+      ? mobile ? 18 : 30
+      : id === 'cloud'
+        ? mobile ? 10 : 16
+        : id === 'workstation'
+          ? mobile ? 6 : 10
+          : 0;
     var layerCount = nodeTargetLayerCount(id);
-    var rowHeight = mobile ? 22 : 24;
-    var rowGap = 5;
-    var hostChrome = mobile ? 84 : 96;
+    var rowHeight = mobile ? 18 : 24;
+    var rowGap = mobile ? 4 : 5;
+    var hostChrome = mobile ? 68 : 96;
     var requiredHeight = hostChrome + (layerCount * rowHeight) + (Math.max(0, layerCount - 1) * rowGap);
 
     return {
-      width: Math.max(Math.round((baseWidth + capacityBoost) * scale), mobile ? 112 : 124),
+      width: Math.max(Math.round((baseWidth + capacityBoost) * scale), mobile ? 98 : 124),
       height: Math.max(Math.round((baseHeight + capacityBoost * 0.42) * scale), requiredHeight),
     };
   }
@@ -1078,7 +1442,7 @@
   }
 
   function nodeCardOffset(id) {
-    var width = sticky ? sticky.clientWidth : window.innerWidth;
+    var width = stickyMetrics().width || window.innerWidth;
     var factor = width <= 640 ? 0.46 : width <= 900 ? 0.72 : 1;
     var offset = NODE_CARD_OFFSETS[id] || { x: 0, y: 0 };
     var serverReturn = id === 'server' ? readSectionNumber('--stage2-server-return-progress', 0) : 0;
@@ -1100,8 +1464,28 @@
     item.radius = item.baseRadius * scale;
   }
 
+  function clampNodeCardTarget(item, x, y) {
+    var metrics = stickyMetrics();
+    var width = metrics.width || window.innerWidth;
+    var height = metrics.height || window.innerHeight;
+    var margin = width <= 640 ? 14 : width <= 900 ? 18 : 0;
+    var halfWidth;
+    var halfHeight;
+
+    if (!margin || !item || !item.size) return { x: x, y: y };
+
+    halfWidth = item.size.width / 2;
+    halfHeight = item.size.height / 2;
+
+    return {
+      x: clamp(x, margin + halfWidth, width - margin - halfWidth),
+      y: clamp(y, margin + halfHeight, height - margin - halfHeight),
+    };
+  }
+
   function writeMeshNodeGeometry(id, item) {
     var offset;
+    var cardTarget;
     var cardX;
     var cardY;
     var scale;
@@ -1115,6 +1499,9 @@
     offset = nodeCardOffset(id);
     cardX = item.x + offset.x;
     cardY = item.y + offset.y;
+    cardTarget = clampNodeCardTarget(item, cardX, cardY);
+    cardX = cardTarget.x;
+    cardY = cardTarget.y;
 
     setElementVar(item.stage2Node, '--stage2-node-x', Math.round(item.x * 100) / 100 + 'px');
     setElementVar(item.stage2Node, '--stage2-node-y', Math.round(item.y * 100) / 100 + 'px');
@@ -1224,7 +1611,7 @@
   function maxRadiusFrom(point) {
     if (cachedApertureMaxRadius !== null) return cachedApertureMaxRadius;
 
-    var w = sticky ? sticky.clientWidth : window.innerWidth;
+    var w = stickyMetrics().width || window.innerWidth;
     var h = sticky ? sticky.clientHeight : window.innerHeight;
     var corners = [
       [0, 0],
@@ -1350,11 +1737,15 @@
     var nodeShapeProgress;
     var nodePositionProgress;
     var nodeContentOpacity;
+    var nodeIconShapeFade;
+    var nodeCloseIconFade;
     var nodeIconOpacity;
     var modelShrinkProgress;
+    var modelDetailProgress;
     var serverReturnProgress;
+    var heroVizDim;
+    var heroVizOpacity;
     var apertureMaxRadius;
-    var apertureScale;
 
     progress = clamp(progress, 0, SCRUBBER_END);
     var stageProgress = stageProgressFromScrollProgress(progress);
@@ -1363,22 +1754,17 @@
     var apertureCloseRaw = ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_CLOSE_END);
     var apertureClose = fastCloseEase(apertureCloseRaw);
     var aperture = clamp(apertureOpen - apertureClose, 0, 1);
-    var apertureFadeIn = easeOut(ramp(stageProgress, APERTURE_OPEN_START, 0.292));
+    var apertureFadeIn = easeOut(ramp(stageProgress, APERTURE_OPEN_START, 0.246));
     var apertureFadeOut = easeInOut(ramp(stageProgress, APERTURE_FADE_START, APERTURE_FADE_END));
     var light = clamp(apertureFadeIn - apertureFadeOut, 0, 1);
     var closeDetailFade = easeOut(ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_DETAIL_FADE_END));
-    var workbench = clamp(ramp(stageProgress, 0.360, 0.435) - easeInOut(ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_WORKBENCH_EXIT_END)), 0, 1);
+    var workbench = clamp(ramp(stageProgress, 0.212, 0.292) - easeInOut(ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_WORKBENCH_EXIT_END)), 0, 1);
     var heroGridRetreat = easeInOut(ramp(stageProgress, PHASES[LOCK_PHASE_INDEX].end, APERTURE_CLOSE_END));
     var heroGrid = 1 - (heroGridRetreat * 0.46);
-    var apertureRadius;
-    var ringOpacity = clamp(ramp(stageProgress, 0.235, 0.270) - ramp(stageProgress, 0.365, 0.430) + ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_RING_RETURN_END) - ramp(stageProgress, APERTURE_FADE_START, APERTURE_CLOSE_END), 0, 1);
+    var apertureSettled = isApertureSettledState(stageProgress, aperture);
+    var ringOpacity = clamp(ramp(stageProgress, 0.188, 0.232) - ramp(stageProgress, 0.286, 0.350) + ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_RING_RETURN_END) - ramp(stageProgress, APERTURE_FADE_START, APERTURE_CLOSE_END), 0, 1);
     var meshZoom = clamp(ramp(stageProgress, 0.165, APERTURE_OPEN_END) - easeInOut(ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_CLOSE_END)), 0, 1);
     var meshScale = lerp(1, 1.115, easeInOut(meshZoom));
-    var scrubberEnter = ramp(stageProgress, 0.360, 0.435);
-    var scrubberExit = easeInOut(ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_SCRUBBER_EXIT_END));
-    var scrubberPresence = clamp(scrubberEnter - scrubberExit, 0, 1);
-    var scrubberEnterY = (1 - scrubberEnter) * 16;
-    var scrubberExitY = scrubberExit * 112;
     shrinkPhaseProgress = phaseProgress(PHASES[SHRINK_PHASE_INDEX], stageProgress);
     meshPhaseProgress = phaseProgress(PHASES[NODE_PHASE_INDEX], stageProgress);
     alignPhaseProgress = phaseProgress(PHASES[ALIGN_PHASE_INDEX], stageProgress);
@@ -1388,13 +1774,15 @@
     nodeShapeProgress = easeInOut(ramp(meshPhaseProgress, 0.30, 0.58)) * (1 - easeInOut(ramp(alignPhaseProgress, 0.28, 0.56)));
     nodePositionProgress = easeInOut(ramp(meshPhaseProgress, 0.40, 0.66)) * (1 - easeInOut(ramp(alignPhaseProgress, 0.58, 0.92)));
     nodeContentOpacity = nodeShapeProgress * easeOutQuart(ramp(meshPhaseProgress, 0.52, 0.70)) * (1 - easeOutQuart(ramp(alignPhaseProgress, 0.04, 0.24)));
-    nodeIconOpacity = nodeRevealProgress * (1 - nodeShapeProgress) * (1 - closeDetailFade);
+    nodeIconShapeFade = easeInOut(ramp(meshPhaseProgress, 0.66, 0.90)) * (1 - easeOutQuart(ramp(alignPhaseProgress, 0.04, 0.24)));
+    nodeCloseIconFade = easeOut(ramp(stageProgress, APERTURE_FADE_START, APERTURE_DETAIL_FADE_END));
+    nodeIconOpacity = nodeRevealProgress * (1 - nodeIconShapeFade) * (1 - (nodeCloseIconFade * 0.55));
+    modelDetailProgress = easeOut(ramp(stageProgress, MODEL_DETAIL_REVEAL_START, MODEL_DETAIL_REVEAL_END));
 
     setStage2TitleProgress(stageProgress);
     setVar('--stage2-p', stageProgress);
     setVar('--stage2-pct', Math.round((stageProgress / SCRUBBER_END) * 10000) / 100 + '%');
     setVar('--stage2-scrubber-pct', Math.round(scrubberProgressFromProgress(stageProgress) * 10000) / 100 + '%');
-    setVar('--stage2-aperture-ring-opacity', ringOpacity);
     setVar('--stage2-light-opacity', light);
     setVar('--stage2-workbench-opacity', workbench);
     setVar('--stage2-aperture-detail-fade', closeDetailFade);
@@ -1404,32 +1792,38 @@
     setVar('--stage2-node-content-opacity', nodeContentOpacity);
     setVar('--stage2-node-icon-opacity', nodeIconOpacity);
     setVar('--stage2-model-shrink-progress', modelShrinkProgress);
+    setVar('--stage2-model-detail-opacity', modelDetailProgress);
     setVar('--stage2-server-return-progress', serverReturnProgress);
-    setVar('--stage2-scrubber-y', Math.round((scrubberEnterY + scrubberExitY) * 100) / 100 + 'px');
-    setVar('--stage2-scrubber-opacity', scrubberPresence);
-    syncScrubberAccessibility(scrubberPresence);
     syncPlacedLayerAccessibility(nodeShapeProgress);
+    heroVizDim = clamp(
+      easeOut(ramp(stageProgress, APERTURE_OPEN_START - 0.012, APERTURE_OPEN_END))
+      - easeOut(ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_CLOSE_END)),
+      0,
+      1
+    );
+    heroVizOpacity = lerp(1, 0.18, heroVizDim);
+    setVar('--stage2-hero-opacity', heroVizOpacity);
     setVar('--stage2-grid-opacity', heroGrid);
     setVar('--stage2-grid-mask-solid', Math.round(lerp(78, 28, heroGridRetreat) * 100) / 100 + '%');
     setVar('--stage2-grid-mask-end', Math.round(lerp(100, 38, heroGridRetreat) * 100) / 100 + '%');
     setVar('--stage2-aperture-blue-alpha', lerp(0.08, 0.014, closeDetailFade));
     setVar('--stage2-aperture-grid-alpha', lerp(0.045, 0.006, closeDetailFade));
-    if (!heroVizStableRequested && stageProgress >= APERTURE_CLOSE_END) {
+    if (!heroVizStableRequested && stageProgress >= APERTURE_OPEN_START) {
       heroVizStableRequested = true;
       window.dispatchEvent(new CustomEvent('mesh:hero-viz:stable'));
     }
-    section.classList.toggle('is-stage2-scrubbable', scrubberPresence > 0.12);
-
     setChromeProgress(progress, stageProgress);
     applyHeroVizTransform(meshScale);
     server = syncServerGeometry();
     apertureMaxRadius = maxRadiusFrom(server);
-    apertureRadius = lerp(server.radius * 1.14, apertureMaxRadius, easeInOut(aperture));
-    apertureScale = apertureMaxRadius > 0 ? clamp(apertureRadius / apertureMaxRadius, 0, 1) : 0;
-    setVar('--stage2-aperture-radius', Math.round(apertureRadius * 100) / 100 + 'px');
-    setVar('--stage2-aperture-max-radius', Math.round(apertureMaxRadius * 100) / 100 + 'px');
-    setVar('--stage2-aperture-scale', Math.round(apertureScale * 10000) / 10000);
-    setVar('--stage2-aperture-inverse-scale', apertureScale > 0.001 ? Math.round((1 / apertureScale) * 10000) / 10000 : 1);
+    syncApertureVisual(
+      aperture,
+      ringOpacity,
+      server,
+      apertureMaxRadius,
+      apertureVisualImmediateSeek || isScrubbing
+    );
+    syncApertureSettledState(apertureSettled);
 
     syncMeshGeometry();
     clearMeshNodeLayoutTransforms();
@@ -1447,38 +1841,47 @@
     }
 
     if (!reduceMotion) {
+      var stageComplete = stageProgress >= SCRUBBER_END;
+      var wasStageComplete = document.body.classList.contains('is-stage2-complete');
       document.body.classList.toggle('is-stage2-active', stageProgress > 0.002 && stageProgress < SCRUBBER_END);
       document.body.classList.toggle('is-stage2-aperture-active', stageProgress >= APERTURE_CLOSE_START && stageProgress < SCRUBBER_END);
-      document.body.classList.toggle('is-stage2-complete', stageProgress >= SCRUBBER_END);
+      document.body.classList.toggle('is-stage2-complete', stageComplete);
+      if (stageComplete && !wasStageComplete) syncCompletedGridClip();
     } else {
       document.body.classList.remove('is-stage2-aperture-active');
     }
+    syncHeroSvgMotion(stageProgress);
+  }
 
-    if (stageProgress >= SCRUBBER_END - 0.01) syncCompletedGridClip();
+  function scrollBounds() {
+    if (cachedScrollBounds) return cachedScrollBounds;
+
+    cachedScrollBounds = {
+      start: section.offsetTop,
+      range: Math.max(1, section.offsetHeight - window.innerHeight),
+      bottom: section.offsetTop + section.offsetHeight,
+    };
+    return cachedScrollBounds;
   }
 
   function progressFromScroll() {
-    var start = section.offsetTop;
-    var range = Math.max(1, section.offsetHeight - window.innerHeight);
-    return clamp((window.scrollY - start) / range, 0, 1);
+    var bounds = scrollBounds();
+    return clamp((window.scrollY - bounds.start) / bounds.range, 0, 1);
   }
 
   function scrollToProgress(progress) {
-    var start = section.offsetTop;
-    var range = Math.max(1, section.offsetHeight - window.innerHeight);
-    window.scrollTo({ top: start + range * scrollProgressFromStageProgress(progress), behavior: 'auto' });
+    var bounds = scrollBounds();
+    window.scrollTo({ top: bounds.start + bounds.range * scrollProgressFromStageProgress(progress), behavior: 'auto' });
   }
 
   function scrollTopForScrollProgress(progress) {
-    var start = section.offsetTop;
-    var range = Math.max(1, section.offsetHeight - window.innerHeight);
-    return start + range * clamp(progress, 0, 1);
+    var bounds = scrollBounds();
+    return bounds.start + bounds.range * clamp(progress, 0, 1);
   }
 
   function scrollTopForStageProgress(progress) {
-    var start = section.offsetTop;
-    var range = Math.max(1, section.offsetHeight - window.innerHeight);
-    return start + range * scrollProgressFromStageProgress(progress);
+    var bounds = scrollBounds();
+    return bounds.start + bounds.range * scrollProgressFromStageProgress(progress);
   }
 
   function forceInstantScrollBehavior() {
@@ -1622,6 +2025,7 @@
 
   function seekStageProgressImmediate(progress) {
     var scrollProgress = scrollProgressFromStageProgress(progress);
+    var previousImmediateAperture = apertureVisualImmediateSeek;
 
     cancelScrollSmoothing();
     if (window.anime && window.anime.remove) window.anime.remove(smoothState);
@@ -1631,39 +2035,49 @@
     smoothState.progress = scrollProgress;
     timelineState.progress = scrollProgress;
     beginManualStageSeekOverride();
-    applyProgress(scrollProgress);
+    apertureVisualImmediateSeek = true;
+    try {
+      applyProgress(scrollProgress);
+    } finally {
+      apertureVisualImmediateSeek = previousImmediateAperture;
+    }
   }
 
-  function seek(progress) {
-    progress = clamp(progress, 0, 1);
+  function seek(progress, immediateAperture) {
+    var previousImmediateAperture = apertureVisualImmediateSeek;
 
-    if (timeline && timeline.seek) {
-      try {
-        timeline.seek(progress * 1000);
-      } catch (_error) {
-        applyProgress(progress);
-      }
-    } else {
+    progress = clamp(progress, 0, 1);
+    apertureVisualImmediateSeek = Boolean(immediateAperture);
+    timelineState.progress = progress;
+
+    try {
       applyProgress(progress);
+    } finally {
+      apertureVisualImmediateSeek = previousImmediateAperture;
     }
   }
 
   function smoothTo(progress, immediate) {
     var delta;
+    var incomingDelta;
     var snap;
 
     progress = clamp(progress, 0, 1);
+    incomingDelta = Math.abs(progress - latestScrollProgress);
     latestScrollProgress = progress;
 
-    if (immediate || reduceMotion || useTouchScrollProfile() || !window.anime || !window.anime.animate) {
+    if (
+      immediate
+      || reduceMotion
+      || useTouchScrollProfile()
+      || scrollSmoothStep() >= 1
+      || (!scrollSmoothRaf && incomingDelta < SCROLL_SMOOTH_JUMP_THRESHOLD)
+    ) {
       cancelScrollSmoothing();
-      if (window.anime && window.anime.remove) window.anime.remove(smoothState);
       smoothState.progress = progress;
-      seek(progress);
+      seek(progress, immediate || isScrubbing);
       return;
     }
-
-    if (window.anime.remove) window.anime.remove(smoothState);
 
     if (scrollSmoothRaf) return;
 
@@ -1681,6 +2095,7 @@
       snap = smoothState.progress > latestScrollProgress && latestScrollProgress === 0 ? -0.0001 : snap;
       smoothState.progress = clamp(smoothState.progress + delta * scrollSmoothStep() + snap, 0, 1);
       seek(smoothState.progress);
+      if (Math.abs(latestScrollProgress - smoothState.progress) < 0.0006) return;
       scrollSmoothRaf = window.requestAnimationFrame(renderSmoothedProgress);
     }
 
@@ -1778,6 +2193,7 @@
       var impact = easeOutQuart(ramp(layerLocal, 0.02, 0.34)) * (1 - easeOutQuart(ramp(layerLocal, 0.42, 0.92)));
       var residue = easeOutQuart(ramp(layerLocal, 0.34, 0.68)) * (1 - easeOutQuart(ramp(layerLocal, 0.88, 1.34)));
       var cutFront = easeOutQuart(ramp(layerLocal, 0.02, 0.58));
+      var layerCutterOpacity = cutterVisible && index === cutIndex ? 1 : 0;
       var shear = useLiteStage2Motion() ? 0 : impact * (index % 2 === 0 ? -1 : 1) * 1.8;
 
       setElementVar(layer, '--stage2-layer-slice-progress', String(Math.round(release * 10000) / 10000));
@@ -1785,6 +2201,9 @@
       setElementVar(layer, '--stage2-layer-cut-energy', String(Math.round(impact * 10000) / 10000));
       setElementVar(layer, '--stage2-layer-cut-residue', String(Math.round(residue * 10000) / 10000));
       setElementVar(layer, '--stage2-layer-cut-front', String(Math.round(cutFront * 10000) / 10000));
+      setElementVar(layer, '--stage2-layer-cutter-opacity', String(layerCutterOpacity));
+      setElementVar(layer, '--stage2-layer-cutter-left', String(Math.round(cutterLeft * 10000) / 10000));
+      setElementVar(layer, '--stage2-layer-cutter-right', String(Math.round(cutterRight * 10000) / 10000));
       setElementVar(layer, '--stage2-layer-cut-shear', Math.round(shear * 100) / 100 + 'px');
       setElementVar(layer, '--stage2-layer-cut-skew', Math.round(shear * -0.32 * 100) / 100 + 'deg');
       if (layer.parentElement === tensorStack) cumulativeGap += layerGap;
@@ -1792,17 +2211,7 @@
 
     setVar('--stage2-stack-extra-height', Math.round(cumulativeGap * 100) / 100 + 'px');
 
-    if (useLiteStage2Motion()) {
-      cancelSliceCutterRetarget();
-      setVar('--stage2-cutter-y', cutterY + '%');
-      return;
-    }
-
-    if (retargetSliceCutter(cutIndex)) {
-      if (!isScrubbing) scheduleSliceCutterRetarget(cutIndex);
-      return;
-    }
-
+    cancelSliceCutterRetarget();
     setVar('--stage2-cutter-y', cutterY + '%');
   }
 
@@ -1832,28 +2241,16 @@
   function syncSliceTimeline(progress) {
     progress = clamp(progress, 0, 1);
     sliceTimelineState.progress = progress;
-
-    if (sliceTimeline && typeof sliceTimeline.seek === 'function') {
-      try {
-        sliceTimeline.seek(progress * 1000, true);
-        paintSliceTimeline(progress);
-      } catch (_error) {
-        paintSliceTimeline(progress);
-      }
-      return;
-    }
-
+    sliceTimelinePainted = true;
     paintSliceTimeline(progress);
   }
 
   function syncLayerCompaction(stageProgress) {
     var phaseLocal = phaseProgress(PHASES[SHRINK_PHASE_INDEX], stageProgress);
-    var placementPhaseStarted = stageProgress >= PHASES[MESH_PHASE_INDEX].start;
 
     modelLayers.forEach(function (layer, index) {
       var compact = phaseLocal > 0 ? easeOutQuart(ramp(phaseLocal, 0.04 + index * 0.035, 0.18 + index * 0.035)) : 0;
       if (layer.getAttribute('data-stage2-assigned-node')) compact = 1;
-      else if (placementPhaseStarted && !layer.classList.contains('is-stage2-layer-in-flight')) compact = 0;
       setElementVar(layer, '--stage2-layer-compact-progress', String(Math.round(compact * 10000) / 10000));
     });
   }
@@ -1898,8 +2295,17 @@
 
   function clearMeshNodeLayoutTransforms() {
     meshNodes.forEach(function (node) {
-      node.style.transform = '';
-      node.style.translate = '';
+      if (node.style.transform) node.style.transform = '';
+      if (node.style.translate) node.style.translate = '';
+    });
+  }
+
+  function cancelLayoutTimer(timerId) {
+    if (!timerId) return;
+
+    window.clearTimeout(timerId);
+    layoutClearTimers = layoutClearTimers.filter(function (candidate) {
+      return candidate !== timerId;
     });
   }
 
@@ -1908,6 +2314,9 @@
       window.clearTimeout(timerId);
     });
     layoutClearTimers = [];
+    idleSourceLayerClearTimer = null;
+    meshNodeTransformClearTimer = null;
+    settledLayerTransformClearTimer = null;
   }
 
   function scheduleLayoutClear(callback, delay) {
@@ -1919,6 +2328,7 @@
     }, Math.max(0, delay || 0));
 
     layoutClearTimers.push(timerId);
+    return timerId;
   }
 
   function hasActivePlacementSourceMotion() {
@@ -1933,31 +2343,46 @@
 
     modelLayers.forEach(function (layer) {
       if (layer.getAttribute('data-stage2-assigned-node')) return;
-      layer.style.transform = '';
-      layer.style.translate = '';
+      if (layer.style.transform) layer.style.transform = '';
+      setLayerTranslate(layer, '');
     });
   }
 
   function scheduleIdleSourceLayerTransformClear() {
     clearIdleSourceLayerTransforms();
-    scheduleLayoutClear(clearIdleSourceLayerTransforms, 40);
+    if (idleSourceLayerClearTimer) return;
+
+    idleSourceLayerClearTimer = scheduleLayoutClear(function () {
+      idleSourceLayerClearTimer = null;
+      clearIdleSourceLayerTransforms();
+    }, 40);
   }
 
   function clearSettledLayerTransforms() {
     modelLayers.forEach(function (layer) {
-      layer.style.transform = '';
-      layer.style.translate = '';
+      if (layer.classList.contains('is-stage2-layer-in-flight')) return;
+      if (layer.style.transform) layer.style.transform = '';
+      setLayerTranslate(layer, '');
     });
   }
 
   function scheduleSettledLayerTransformClear(duration) {
     var delay = Number(duration) || 0;
-    scheduleLayoutClear(clearSettledLayerTransforms, delay + 50);
+
+    cancelLayoutTimer(settledLayerTransformClearTimer);
+    settledLayerTransformClearTimer = scheduleLayoutClear(function () {
+      settledLayerTransformClearTimer = null;
+      clearSettledLayerTransforms();
+    }, delay + 50);
   }
 
   function scheduleMeshNodeTransformClear(duration) {
     clearMeshNodeLayoutTransforms();
-    scheduleLayoutClear(clearMeshNodeLayoutTransforms, Math.max(0, duration || 0) + 40);
+    cancelLayoutTimer(meshNodeTransformClearTimer);
+    meshNodeTransformClearTimer = scheduleLayoutClear(function () {
+      meshNodeTransformClearTimer = null;
+      clearMeshNodeLayoutTransforms();
+    }, Math.max(0, duration || 0) + 40);
   }
 
   function runLayoutMutation(mutation, options) {
@@ -1997,52 +2422,51 @@
   }
 
   function slotForNode(nodeId) {
-    return section.querySelector('[data-stage2-node-slots="' + nodeId + '"]');
+    if (!nodeSlotsById[nodeId]) {
+      nodeSlotsById[nodeId] = section.querySelector('[data-stage2-node-slots="' + nodeId + '"]');
+    }
+    return nodeSlotsById[nodeId] || null;
   }
 
   function colorForNode(nodeId) {
-    var node = nodeId && section.querySelector('[data-stage2-node="' + nodeId + '"]');
-    var color;
-
-    if (!node) return '';
-    color = window.getComputedStyle(node).getPropertyValue('--stage2-node-color').trim();
-    return color || '';
+    return nodeColorsById[nodeId] || '';
   }
 
   function layerIdFor(layer) {
     return layer ? layer.getAttribute('data-stage2-model-layer') : '';
   }
 
+  function clearLayerInteractiveAttrs(layer) {
+    if (layer.hasAttribute('aria-disabled')) layer.removeAttribute('aria-disabled');
+    if (layer.hasAttribute('aria-label')) layer.removeAttribute('aria-label');
+    if (layer.hasAttribute('title')) layer.removeAttribute('title');
+    if (layer.hasAttribute('tabindex')) layer.removeAttribute('tabindex');
+  }
+
+  function setLayerState(layer, state) {
+    if (layer.getAttribute('data-stage2-layer-state') !== state) {
+      layer.setAttribute('data-stage2-layer-state', state);
+    }
+  }
+
   function setLayerSourceSemantics(layer) {
-    layer.removeAttribute('aria-disabled');
-    layer.removeAttribute('aria-label');
-    layer.removeAttribute('title');
-    layer.removeAttribute('tabindex');
-    layer.setAttribute('data-stage2-layer-state', 'source');
+    clearLayerInteractiveAttrs(layer);
+    setLayerState(layer, 'source');
   }
 
   function setLayerPlacedSemantics(layer, nodeId) {
-    layer.removeAttribute('aria-disabled');
-    layer.removeAttribute('aria-label');
-    layer.removeAttribute('title');
-    layer.removeAttribute('tabindex');
-    layer.setAttribute('data-stage2-layer-state', 'placed');
+    clearLayerInteractiveAttrs(layer);
+    setLayerState(layer, 'placed');
   }
 
   function setLayerReducedSemantics(layer, nodeId) {
-    layer.removeAttribute('aria-disabled');
-    layer.removeAttribute('aria-label');
-    layer.removeAttribute('title');
-    layer.removeAttribute('tabindex');
-    layer.setAttribute('data-stage2-layer-state', 'summary');
+    clearLayerInteractiveAttrs(layer);
+    setLayerState(layer, 'summary');
   }
 
   function setLayerCollapsedSemantics(layer, nodeId) {
-    layer.removeAttribute('aria-disabled');
-    layer.removeAttribute('aria-label');
-    layer.removeAttribute('title');
-    layer.removeAttribute('tabindex');
-    layer.setAttribute('data-stage2-layer-state', 'collapsed');
+    clearLayerInteractiveAttrs(layer);
+    setLayerState(layer, 'collapsed');
   }
 
   function syncPlacedLayerAccessibility(nodeCardProgress) {
@@ -2061,15 +2485,56 @@
     });
   }
 
-  function syncScrubberAccessibility(scrubberPresence) {
+  function syncScrubberAccessibility() {
     var scrubber = section.querySelector('.stage2-scrubber');
-    var isVisible = scrubberPresence > 0.12;
 
-    if (scrubber) scrubber.setAttribute('aria-hidden', isVisible ? 'false' : 'true');
+    if (scrubber) scrubber.setAttribute('aria-hidden', scrubberDebugVisible ? 'false' : 'true');
     if (!scrubInput) return;
 
-    scrubInput.disabled = !isVisible;
-    scrubInput.tabIndex = isVisible ? 0 : -1;
+    scrubInput.disabled = !scrubberDebugVisible;
+    scrubInput.tabIndex = scrubberDebugVisible ? 0 : -1;
+  }
+
+  function setScrubberDebugVisible(enabled, persist) {
+    var scrubber = section.querySelector('.stage2-scrubber');
+
+    scrubberDebugVisible = scrubberDebugView && Boolean(enabled);
+    document.body.classList.toggle('is-stage2-debug-scrubber-visible', scrubberDebugVisible);
+    section.classList.toggle('is-stage2-scrubbable', scrubberDebugVisible);
+
+    if (scrubberDebugToggle) scrubberDebugToggle.setAttribute('aria-checked', scrubberDebugVisible ? 'true' : 'false');
+    if (persist) writeStoredFlag(SCRUBBER_DEBUG_VISIBLE_STORAGE_KEY, scrubberDebugVisible);
+    if (!scrubberDebugVisible) {
+      isScrubbing = false;
+      scrubberPointerId = null;
+      if (scrubber) scrubber.classList.remove('is-scrubbing');
+    }
+    syncScrubberAccessibility();
+  }
+
+  function setScrubberDebugView(enabled, persist) {
+    scrubberDebugView = Boolean(enabled);
+    document.body.classList.toggle('is-stage2-debug-view', scrubberDebugView);
+    if (scrubberDebugToggle) scrubberDebugToggle.hidden = !scrubberDebugView;
+    if (persist) writeStoredFlag(SCRUBBER_DEBUG_VIEW_STORAGE_KEY, scrubberDebugView);
+    setScrubberDebugVisible(scrubberDebugView && scrubberDebugVisible, false);
+  }
+
+  function initScrubberDebugControls() {
+    var visibleByQuery = queryFlag('stage2Scrubber') || queryFlag('scrubber');
+    var viewByQuery = visibleByQuery || queryFlag('stage2Debug');
+
+    scrubberDebugToggle = section.querySelector('.stage2-debug-toggle');
+    scrubberDebugView = viewByQuery || readStoredFlag(SCRUBBER_DEBUG_VIEW_STORAGE_KEY);
+    scrubberDebugVisible = visibleByQuery || readStoredFlag(SCRUBBER_DEBUG_VISIBLE_STORAGE_KEY);
+
+    setScrubberDebugView(scrubberDebugView, false);
+    setScrubberDebugVisible(scrubberDebugVisible, false);
+
+    if (!scrubberDebugToggle) return;
+    scrubberDebugToggle.addEventListener('click', function () {
+      setScrubberDebugVisible(!scrubberDebugVisible, true);
+    });
   }
 
   function insertLayerInTensorOrder(layer) {
@@ -2128,14 +2593,62 @@
     if (!layoutRoot) return null;
 
     stage2FlightLayer = layoutRoot.querySelector('[data-stage2-flight-layer]');
-    if (stage2FlightLayer) return stage2FlightLayer;
+    if (stage2FlightLayer) {
+      cachedFlightLayerRect = null;
+      return stage2FlightLayer;
+    }
 
     stage2FlightLayer = document.createElement('div');
     stage2FlightLayer.className = 'stage2-flight-layer';
     stage2FlightLayer.setAttribute('data-stage2-flight-layer', 'true');
     stage2FlightLayer.setAttribute('aria-hidden', 'true');
     layoutRoot.appendChild(stage2FlightLayer);
+    cachedFlightLayerRect = null;
     return stage2FlightLayer;
+  }
+
+  function flightLayerRectFor(flightLayer) {
+    if (!flightLayer) return { left: 0, top: 0 };
+    if (!cachedFlightLayerRect) cachedFlightLayerRect = flightLayer.getBoundingClientRect();
+    return cachedFlightLayerRect;
+  }
+
+  function setLayerTranslate(layer, value) {
+    value = value || '';
+    if (!layer || layer.__stage2Translate === value) return;
+
+    layer.__stage2Translate = value;
+    layer.style.translate = value;
+  }
+
+  function setLayerFlightMotion(layer, x, y) {
+    if (!layer) return;
+
+    setElementVar(layer, '--stage2-flight-x', Math.round(x * 100) / 100 + 'px');
+    setElementVar(layer, '--stage2-flight-y', Math.round(y * 100) / 100 + 'px');
+  }
+
+  function setLayerFlightSize(layer, width) {
+    if (!layer || !Number.isFinite(width)) return;
+
+    layer.style.width = Math.round(width * 100) / 100 + 'px';
+  }
+
+  function applyLayerFlightBox(layer, left, top, width, height) {
+    if (!layer) return;
+
+    layer.style.position = 'absolute';
+    layer.style.left = Math.round(left * 100) / 100 + 'px';
+    layer.style.top = Math.round(top * 100) / 100 + 'px';
+    layer.style.width = Math.round(width * 100) / 100 + 'px';
+    layer.style.height = Math.round(height * 100) / 100 + 'px';
+    layer.style.minHeight = Math.round(height * 100) / 100 + 'px';
+    layer.style.marginTop = '0px';
+    layer.style.transform = 'translate3d(var(--stage2-flight-x, 0px), calc(var(--stage2-flight-y, 0px) + var(--stage2-flight-lift-y, 0px)), 0)';
+    layer.style.transformOrigin = '0 0';
+    setLayerTranslate(layer, 'none');
+    layer.style.willChange = 'transform';
+    setLayerFlightMotion(layer, 0, 0);
   }
 
   function clearLayerFlightStyles(layer) {
@@ -2145,16 +2658,17 @@
     layer.style.top = '';
     layer.style.width = '';
     layer.style.height = '';
+    layer.style.minHeight = '';
     layer.style.marginTop = '';
     layer.style.transform = '';
-    layer.style.translate = '';
+    layer.style.transformOrigin = '';
+    setLayerTranslate(layer, '');
     layer.style.willChange = '';
-    clearElementVar(layer, '--stage2-flight-shadow-y');
-    clearElementVar(layer, '--stage2-flight-shadow-blur');
-    clearElementVar(layer, '--stage2-flight-shadow-spread');
-    clearElementVar(layer, '--stage2-flight-shadow-alpha');
+    clearElementVar(layer, '--stage2-flight-x');
+    clearElementVar(layer, '--stage2-flight-y');
     clearElementVar(layer, '--stage2-flight-lift-y');
-    clearElementVar(layer, '--stage2-flight-scale');
+    clearElementVar(layer, '--stage2-layer-extract-progress');
+    clearElementVar(layer, '--stage2-layer-highlight-progress');
   }
 
   function clearLayerPlacementStyles(layer) {
@@ -2168,17 +2682,31 @@
   }
 
   function setLayerFlightVisuals(layer, progress) {
-    var crisp = easeInOut(progress);
-    var lift = 1 - easeOutQuart(progress);
+    var travel = placementTravelProgress(progress);
+    var liftY = -4 * Math.sin(travel * Math.PI);
+    var extract = easeOutQuart(ramp(progress, 0, 0.38));
+    var highlight = easeInOut(ramp(progress, 0.06, 0.34));
 
     if (!layer) return;
 
-    setElementVar(layer, '--stage2-flight-shadow-y', Math.round(lerp(24, 2, crisp) * 100) / 100 + 'px');
-    setElementVar(layer, '--stage2-flight-shadow-blur', Math.round(lerp(30, 3, crisp) * 100) / 100 + 'px');
-    setElementVar(layer, '--stage2-flight-shadow-spread', Math.round(lerp(-5, 0, crisp) * 100) / 100 + 'px');
-    setElementVar(layer, '--stage2-flight-shadow-alpha', String(Math.round(lerp(0.24, 0.08, crisp) * 10000) / 10000));
-    setElementVar(layer, '--stage2-flight-lift-y', Math.round(lerp(-5, 0, crisp) * lift * 100) / 100 + 'px');
-    setElementVar(layer, '--stage2-flight-scale', String(Math.round(lerp(1.012, 1, crisp) * 10000) / 10000));
+    setElementVar(layer, '--stage2-flight-lift-y', Math.round(liftY * 100) / 100 + 'px');
+    setElementVar(layer, '--stage2-layer-extract-progress', String(Math.round(extract * 10000) / 10000));
+    setElementVar(layer, '--stage2-layer-highlight-progress', String(Math.round(highlight * 10000) / 10000));
+  }
+
+  function setLayerFlightFrame(layer, state, progress) {
+    var eased;
+
+    if (!layer || !state) return;
+
+    eased = placementTravelProgress(progress);
+    setLayerFlightMotion(
+      layer,
+      lerp(0, state.toLeft - state.fromLeft, eased),
+      lerp(0, state.toTop - state.fromTop, eased)
+    );
+    setLayerFlightSize(layer, lerp(state.fromWidth, state.toWidth, eased));
+    setLayerFlightVisuals(layer, progress);
   }
 
   function hasActiveLayerFlight() {
@@ -2373,24 +2901,24 @@
   function clearSourceMagazineMotion() {
     modelLayers.forEach(function (layer) {
       if (layer.parentElement !== tensorStack) return;
-      layer.style.translate = '';
+      setLayerTranslate(layer, '');
     });
   }
 
   function createPlacementReservation(layer, fromRect) {
     var reservation;
-    var layerStyle;
+    var layerGap;
 
     if (!layer || layer.parentElement !== tensorStack) return null;
 
-    layerStyle = window.getComputedStyle(layer);
+    layerGap = layer.style.getPropertyValue('--stage2-layer-gap-before') || '0px';
     reservation = document.createElement('div');
     reservation.className = 'stage2-layer-slot-reservation';
     reservation.setAttribute('data-stage2-placement-reservation', layerIdFor(layer));
     reservation.style.flex = '0 0 ' + Math.round(fromRect.height * 100) / 100 + 'px';
     reservation.style.height = Math.round(fromRect.height * 100) / 100 + 'px';
     reservation.style.minHeight = Math.round(fromRect.height * 100) / 100 + 'px';
-    reservation.style.marginTop = layerStyle.marginTop;
+    reservation.style.marginTop = layerGap;
 
     tensorStack.insertBefore(reservation, layer);
     return reservation;
@@ -2422,7 +2950,7 @@
 
     modelLayers.forEach(function (layer, index) {
       if (layer.parentElement !== tensorStack) return;
-      layer.style.translate = index > sourceIndex ? '0 ' + offset + 'px' : '';
+      setLayerTranslate(layer, index > sourceIndex ? '0 ' + offset + 'px' : '');
     });
   }
 
@@ -2473,6 +3001,10 @@
     return clamp(progress, 0, 1);
   }
 
+  function placementTravelProgress(progress) {
+    return easeInOut(ramp(progress, PLACEMENT_EXTRACT_HOLD, 1));
+  }
+
   function restoreSettledSourceLayersBeforeActivePlacement(phaseLocal, flightLayer) {
     var restored = false;
 
@@ -2516,6 +3048,8 @@
     var fromTop;
     var toLeft;
     var toTop;
+    var targetX;
+    var targetY;
 
     if (!layer || !fromRect) return;
 
@@ -2524,17 +3058,23 @@
 
     toRect = options && options.toRect ? options.toRect : layer.getBoundingClientRect();
     targetParent = layer.parentElement;
-    flightRect = flightLayer.getBoundingClientRect();
+    flightRect = flightLayerRectFor(flightLayer);
     fromLeft = fromRect.left - flightRect.left;
     fromTop = fromRect.top - flightRect.top;
     toLeft = toRect.left - flightRect.left;
     toTop = toRect.top - flightRect.top;
+    targetX = toLeft - fromLeft;
+    targetY = toTop - fromTop;
 
     if (window.anime && window.anime.remove && layer.__stage2MoveState) {
       window.anime.remove(layer.__stage2MoveState);
     }
 
-    if (Math.abs(fromLeft - toLeft) < 0.5 && Math.abs(fromTop - toTop) < 0.5) {
+    if (
+      Math.abs(fromLeft - toLeft) < 0.5
+      && Math.abs(fromTop - toTop) < 0.5
+      && Math.abs(fromRect.width - toRect.width) < 0.5
+    ) {
       clearLayerFlightStyles(layer);
       layer.__stage2MoveState = null;
       requestPlacementContinuation();
@@ -2542,10 +3082,9 @@
     }
 
     state = {
-      left: fromLeft,
-      top: fromTop,
+      x: 0,
+      y: 0,
       width: fromRect.width,
-      height: fromRect.height,
       visualProgress: 0,
     };
     layer.__stage2MoveState = state;
@@ -2553,15 +3092,7 @@
     flightLayer.appendChild(layer);
     setLayerFlightVisuals(layer, 0);
     layer.classList.add('is-stage2-layer-in-flight');
-    layer.style.position = 'absolute';
-    layer.style.left = Math.round(fromLeft * 100) / 100 + 'px';
-    layer.style.top = Math.round(fromTop * 100) / 100 + 'px';
-    layer.style.width = Math.round(fromRect.width * 100) / 100 + 'px';
-    layer.style.height = Math.round(fromRect.height * 100) / 100 + 'px';
-    layer.style.marginTop = '0px';
-    layer.style.transform = 'translate3d(0, var(--stage2-flight-lift-y, 0px), 0) scale(var(--stage2-flight-scale, 1))';
-    layer.style.translate = 'none';
-    layer.style.willChange = 'left, top, width, height, transform, box-shadow';
+    applyLayerFlightBox(layer, fromLeft, fromTop, fromRect.width, fromRect.height);
 
     if (!window.anime || typeof window.anime.animate !== 'function' || !duration) {
       settleLayerInMoveTarget(layer, targetParent);
@@ -2573,20 +3104,17 @@
     }
 
     window.anime.animate(state, {
-      left: toLeft,
-      top: toTop,
+      x: targetX,
+      y: targetY,
       width: toRect.width,
-      height: fromRect.height,
       visualProgress: 1,
       duration: duration,
       delay: delay || 0,
       ease: ease,
       onUpdate: function () {
         if (layer.__stage2MoveState !== state) return;
-        layer.style.left = Math.round(state.left * 100) / 100 + 'px';
-        layer.style.top = Math.round(state.top * 100) / 100 + 'px';
-        layer.style.width = Math.round(state.width * 100) / 100 + 'px';
-        layer.style.height = Math.round(state.height * 100) / 100 + 'px';
+        setLayerFlightMotion(layer, state.x, state.y);
+        setLayerFlightSize(layer, state.width);
         setLayerFlightVisuals(layer, state.visualProgress);
       },
       onComplete: function () {
@@ -2648,17 +3176,13 @@
       hasActiveTransition = true;
 
       progress = placementProgressForLayer(i, phaseLocal);
-      eased = easeInOut(progress);
+      eased = placementTravelProgress(progress);
 
-      layer.style.left = Math.round(lerp(state.fromLeft, state.toLeft, eased) * 100) / 100 + 'px';
-      layer.style.top = Math.round(lerp(state.fromTop, state.toTop, eased) * 100) / 100 + 'px';
-      layer.style.width = Math.round(lerp(state.fromWidth, state.toWidth, eased) * 100) / 100 + 'px';
-      layer.style.height = Math.round(state.fromHeight * 100) / 100 + 'px';
-      setLayerFlightVisuals(layer, progress);
+      setLayerFlightFrame(layer, state, progress);
 
       if (typeof state.sourceIndex === 'number') {
         if (manualStageSeekActive) clearSourceMagazineMotion();
-        else applySourceMagazineMotion(state.sourceIndex, state.sourceStep, progress);
+        else applySourceMagazineMotion(state.sourceIndex, state.sourceStep, eased);
       }
 
       if (progress >= 1) {
@@ -2680,7 +3204,6 @@
         return;
       } else {
         placementMotionActive = true;
-        rebuildLayerAssignments();
         return;
       }
     }
@@ -2721,8 +3244,10 @@
         continue;
       }
 
-      flightRect = flightLayer.getBoundingClientRect();
-      settleLayerPlacementState(layer, tensorStack, null);
+      flightRect = flightLayerRectFor(flightLayer);
+      if (currentNode || layer.parentElement !== tensorStack) {
+        settleLayerPlacementState(layer, tensorStack, null);
+      }
       fromRect = layer.getBoundingClientRect();
       syncSourceLayerHeightFromRect(fromRect);
       sourceStep = sourceStepForLayer(i, fromRect);
@@ -2741,15 +3266,7 @@
 
       flightLayer.appendChild(layer);
       setLayerFlightVisuals(layer, progress);
-      layer.style.position = 'absolute';
-      layer.style.left = Math.round(fromLeft * 100) / 100 + 'px';
-      layer.style.top = Math.round(fromTop * 100) / 100 + 'px';
-      layer.style.width = Math.round(fromRect.width * 100) / 100 + 'px';
-      layer.style.height = Math.round(fromRect.height * 100) / 100 + 'px';
-      layer.style.marginTop = '0px';
-      layer.style.transform = 'translate3d(0, var(--stage2-flight-lift-y, 0px), 0) scale(var(--stage2-flight-scale, 1))';
-      layer.style.translate = 'none';
-      layer.style.willChange = 'left, top, width, height, transform, box-shadow';
+      applyLayerFlightBox(layer, fromLeft, fromTop, fromRect.width, fromRect.height);
       layer.classList.add('is-stage2-layer-in-flight');
 
       layer.__stage2PlacementData = {
@@ -2768,14 +3285,10 @@
         reservation: reservation,
       };
 
-      eased = easeInOut(progress);
-      layer.style.left = Math.round(lerp(fromLeft, toLeft, eased) * 100) / 100 + 'px';
-      layer.style.top = Math.round(lerp(fromTop, toTop, eased) * 100) / 100 + 'px';
-      layer.style.width = Math.round(lerp(fromRect.width, toWidth, eased) * 100) / 100 + 'px';
-      layer.style.height = Math.round(fromRect.height * 100) / 100 + 'px';
-      setLayerFlightVisuals(layer, progress);
+      eased = placementTravelProgress(progress);
+      setLayerFlightFrame(layer, layer.__stage2PlacementData, progress);
       if (manualStageSeekActive) clearSourceMagazineMotion();
-      else applySourceMagazineMotion(i, sourceStep, progress);
+      else applySourceMagazineMotion(i, sourceStep, eased);
 
       hasActiveTransition = true;
       cancelLayoutClearTimers();
@@ -2846,7 +3359,7 @@
       },
     }, 0);
 
-    if (window.anime.onScroll) {
+    if (USE_ANIME_SCROLL_OBSERVER && window.anime.onScroll) {
       try {
         scrollObserver = window.anime.onScroll({
           target: section,
@@ -2956,7 +3469,7 @@
     }
 
     function setScrubberFromClientX(clientX, immediate) {
-      if (!track) return;
+      if (!track || !scrubberDebugVisible) return;
       scheduleScrubberProgress(progressFromClientX(clientX), immediate);
     }
 
@@ -2970,12 +3483,14 @@
 
     if (scrubInput) {
       scrubInput.addEventListener('input', function () {
+        if (!scrubberDebugVisible) return;
         scheduleScrubberProgress(Number(scrubInput.value) / 1000, false);
       });
     }
 
     if (scrubber && window.PointerEvent) {
       scrubber.addEventListener('pointerdown', function (event) {
+        if (!scrubberDebugVisible) return;
         if (event.button !== undefined && event.button !== 0) return;
 
         isScrubbing = true;
@@ -3076,9 +3591,16 @@
   }
 
   function lockCompletedStageAtAnchor(target) {
+    var previousImmediateAperture = apertureVisualImmediateSeek;
+
     scrollToAnchorTarget(target);
     beginManualStageSeekOverride();
-    applyProgress(1);
+    apertureVisualImmediateSeek = true;
+    try {
+      applyProgress(1);
+    } finally {
+      apertureVisualImmediateSeek = previousImmediateAperture;
+    }
   }
 
   function initLearnMore() {
@@ -3129,9 +3651,20 @@
       scrubToPhaseTwo: function () {
         scrubToStageProgress(LEARN_MORE_TARGET_PROGRESS);
       },
+      setDebugView: function (enabled) {
+        setScrubberDebugView(Boolean(enabled), true);
+        return scrubberDebugView;
+      },
+      setTimelineScrubber: function (enabled) {
+        if (enabled && !scrubberDebugView) setScrubberDebugView(true, true);
+        setScrubberDebugVisible(Boolean(enabled), true);
+        return scrubberDebugVisible;
+      },
       debug: function () {
         return {
           hasLayout: Boolean(stage2Layout),
+          debugView: scrubberDebugView,
+          timelineScrubber: scrubberDebugVisible,
           assignments: Object.assign({}, layerAssignments),
           placedCount: modelLayers.filter(function (layer) {
             return Boolean(layer.getAttribute('data-stage2-assigned-node'));
@@ -3150,6 +3683,11 @@
     heroViz = section.querySelector('.hero-viz');
     heroTitle = section.querySelector('.hero-title-loop');
     heroFooter = section.querySelector('.hero-footer');
+    modelBlock = section.querySelector('.stage2-model-block');
+    phaseTitleSplit = section.querySelector('.stage2-phase-title--split');
+    phaseTitleNodes = section.querySelector('.stage2-phase-title--nodes');
+    phaseTitlePlace = section.querySelector('.stage2-phase-title--place');
+    finalHook = section.querySelector('.stage2-final-hook');
     finalHookLines = Array.prototype.slice.call(section.querySelectorAll('[data-stage2-final-line]'));
     serverPlate = section.querySelector('.hero-viz [data-node-id="server"] .node-plate');
     tensorStack = section.querySelector('[data-stage2-tensor-stack]');
@@ -3158,6 +3696,15 @@
     phaseName = section.querySelector('.stage2-phase-name');
     phaseIndex = section.querySelector('.stage2-phase-index');
     phasePanels = Array.prototype.slice.call(section.querySelectorAll('.stage2-phase-panel'));
+    nodeSlotsById = {};
+    nodeColorsById = {};
+    meshNodes.forEach(function (node) {
+      var nodeId = node.getAttribute('data-stage2-node');
+
+      if (!nodeId) return;
+      nodeSlotsById[nodeId] = section.querySelector('[data-stage2-node-slots="' + nodeId + '"]');
+      nodeColorsById[nodeId] = (node.style.getPropertyValue('--stage2-node-color') || '').trim();
+    });
 
     if (!reduceMotion && typeof window.anime === 'undefined') {
       window.requestAnimationFrame(init);
@@ -3171,6 +3718,7 @@
     initFinalHookWords();
     renderStage2NodeIcons();
     initScrubber();
+    initScrubberDebugControls();
     initLayerInteractions();
     initLearnMore();
     exposeStage2DebugControls();
@@ -3187,7 +3735,7 @@
       setVar('--stage2-lock-route-progress', 1);
       setVar('--stage2-lock-node-progress', 1);
       applyReducedStaticPlacement();
-      syncScrubberAccessibility(0);
+      setScrubberDebugVisible(false, false);
       document.body.classList.remove('is-stage2-active');
       section.classList.add('is-stage2-reduced-summary');
       section.classList.remove('is-stage2-title-cleared', 'is-stage2-footer-cleared');

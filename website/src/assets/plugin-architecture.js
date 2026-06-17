@@ -9,6 +9,7 @@
   var IN_VIEW_DELAY = 650;
   var DRAW_DELAY = 520;
   var DRAW_DURATION = 820;
+  var MOTION_ACTIVE_CLASS = "is-motion-active";
 
   var desktopMedia = window.matchMedia(DESKTOP_QUERY);
   var reduceMotion = window.matchMedia(REDUCE_QUERY);
@@ -71,8 +72,12 @@
   }
 
   function clearDiagram(diagram) {
+    if (diagram.__pluginArchitectureTimeline && typeof diagram.__pluginArchitectureTimeline.pause === "function") {
+      diagram.__pluginArchitectureTimeline.pause();
+    }
+    diagram.__pluginArchitectureTimeline = null;
     getAllSvgs(diagram).forEach(clearSvg);
-    diagram.classList.remove("is-clicked");
+    diagram.classList.remove("is-clicked", MOTION_ACTIVE_CLASS);
     delete diagram.dataset.pluginArchitectureState;
   }
 
@@ -232,9 +237,42 @@
 
     timeline.call(function () {
       diagram.dataset.pluginArchitectureState = "complete";
+      diagram.__pluginArchitectureTimeline = null;
+      if (diagram.__pluginArchitectureObserver) {
+        diagram.__pluginArchitectureObserver.disconnect();
+        diagram.__pluginArchitectureObserver = null;
+      }
     }, drawAt + DRAW_DURATION + 340);
 
     return timeline;
+  }
+
+  function pauseTimeline(timeline) {
+    if (timeline && typeof timeline.pause === "function") timeline.pause();
+  }
+
+  function resumeTimeline(timeline) {
+    if (timeline && typeof timeline.resume === "function") {
+      timeline.resume();
+    } else if (timeline && typeof timeline.play === "function") {
+      timeline.play();
+    }
+  }
+
+  function pauseDiagram(diagram) {
+    if (diagram.dataset.pluginArchitectureState !== "running") return;
+
+    pauseTimeline(diagram.__pluginArchitectureTimeline);
+    diagram.classList.remove(MOTION_ACTIVE_CLASS);
+    diagram.dataset.pluginArchitectureState = "paused";
+  }
+
+  function resumeDiagram(diagram) {
+    if (diagram.dataset.pluginArchitectureState !== "paused") return;
+
+    diagram.dataset.pluginArchitectureState = "running";
+    diagram.classList.add(MOTION_ACTIVE_CLASS);
+    resumeTimeline(diagram.__pluginArchitectureTimeline);
   }
 
   function animateDiagram(diagram) {
@@ -259,6 +297,8 @@
     }
 
     diagram.dataset.pluginArchitectureState = "running";
+    diagram.__pluginArchitectureTimeline = timeline;
+    diagram.classList.add(MOTION_ACTIVE_CLASS);
     timeline.play();
   }
 
@@ -276,8 +316,11 @@
         if (!entry.isIntersecting) {
           window.clearTimeout(startTimer);
           startTimer = null;
+          pauseDiagram(diagram);
           return;
         }
+
+        resumeDiagram(diagram);
 
         if (startTimer || diagram.dataset.pluginArchitectureState === "running" || diagram.classList.contains("is-clicked")) {
           return;
@@ -285,12 +328,12 @@
 
         startTimer = window.setTimeout(function () {
           startTimer = null;
-          observer.disconnect();
           animateDiagram(diagram);
         }, IN_VIEW_DELAY);
       });
     }, { threshold: 0.38 });
 
+    diagram.__pluginArchitectureObserver = observer;
     observer.observe(diagram);
   }
 
@@ -300,7 +343,7 @@
       toArray(document.querySelectorAll(DIAGRAM_SELECTOR)).forEach(function (diagram) {
         if (diagram.classList.contains("is-clicked")) {
           setSeated(diagram);
-        } else if (diagram.dataset.pluginArchitectureState !== "running") {
+        } else if (diagram.dataset.pluginArchitectureState !== "running" && diagram.dataset.pluginArchitectureState !== "paused") {
           clearDiagram(diagram);
         }
       });

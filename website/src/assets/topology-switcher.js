@@ -6,6 +6,7 @@
   var PANEL_SELECTOR = "[data-topology-panel]";
   var MAP_SELECTOR = "[data-topology-map]";
   var REDUCE_QUERY = "(prefers-reduced-motion: reduce)";
+  var MOTION_ACTIVE_CLASS = "is-motion-active";
 
   var reduceMotion = window.matchMedia(REDUCE_QUERY);
 
@@ -112,6 +113,35 @@
     });
   }
 
+  function bindMotionVisibility(root) {
+    if (reduceMotion.matches) {
+      root.classList.remove(MOTION_ACTIVE_CLASS);
+      return;
+    }
+
+    if (!("IntersectionObserver" in window)) {
+      root.classList.add(MOTION_ACTIVE_CLASS);
+      return;
+    }
+
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        root.classList.toggle(MOTION_ACTIVE_CLASS, entry.isIntersecting);
+      });
+    }, {
+      rootMargin: "180px 0px",
+      threshold: 0.01,
+    });
+
+    observer.observe(root);
+
+    if (reduceMotion.addEventListener) {
+      reduceMotion.addEventListener("change", function (event) {
+        root.classList.toggle(MOTION_ACTIVE_CLASS, !event.matches);
+      });
+    }
+  }
+
   function init(root) {
     var tabs = toArray(root.querySelectorAll(TAB_SELECTOR));
     if (!tabs.length) return;
@@ -123,6 +153,7 @@
     });
 
     bindKeyboard(root, tabs);
+    bindMotionVisibility(root);
     setMode(root, root.getAttribute("data-topology-active") || "route");
   }
 

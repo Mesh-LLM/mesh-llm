@@ -60,7 +60,11 @@
 }
 
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+html {
+  min-height: 100%;
+  scroll-behavior: smooth;
+  background: var(--background);
+}
 body {
   margin: 0;
   overflow-x: hidden;
@@ -381,6 +385,14 @@ td strong { color: var(--text); }
 .catalog .table-card td {
   overflow: hidden;
   padding: 12px 10px;
+}
+.catalog .table-card th.col-size,
+.catalog .table-card .size-cell {
+  text-align: center;
+}
+.catalog .table-card .size-cell .badge {
+  justify-content: center;
+  margin-top: 6px;
 }
 .catalog .table-card .links-cell { text-align: right; }
 .catalog .table-card td:nth-child(5),
@@ -787,10 +799,13 @@ td strong { color: var(--text); }
   .doc pre { margin-left: -2px; margin-right: -2px; padding: 14px; font-size: 12px; }
   .doc .code-copy-frame { margin-left: -2px; margin-right: -2px; }
   .doc .code-copy-frame pre { margin-left: 0; margin-right: 0; padding-right: 72px; }
+  .catalog .table-card .col-ref { display: none; }
+  .catalog .table-card .col-model { width: 68%; }
+  .catalog .table-card .col-size { width: 32%; }
   table { min-width: 760px; }
 }
 
-@media (max-width: 374px) {
+@media (max-width: 399px) {
   .catalog .table-card {
     display: grid;
     gap: 12px;
@@ -854,6 +869,7 @@ td strong { color: var(--text); }
   .catalog .table-card td,
   .catalog .table-card td.col-run,
   .catalog .table-card td.col-package,
+  .catalog .table-card td.col-ref,
   .catalog .table-card td.col-links {
     display: block;
     width: auto;
@@ -903,6 +919,7 @@ td strong { color: var(--text); }
     font-family: var(--mono);
     font-size: 11px;
     letter-spacing: 0.02em;
+    text-align: left;
     white-space: nowrap;
   }
 
@@ -927,6 +944,7 @@ td strong { color: var(--text); }
 
   .catalog .table-card .size-cell .badge {
     min-height: 20px;
+    margin-top: 0;
     padding-inline: 6px;
     border-radius: 5px;
     font-family: var(--mono);
@@ -1115,8 +1133,13 @@ td strong { color: var(--text); }
   --radius-xl:    20px;
 }
 *, *::before, *::after { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+html {
+  min-height: 100%;
+  scroll-behavior: smooth;
+  background: var(--bg);
+}
 body {
+  min-height: 100%;
   margin: 0;
   overflow-x: hidden;
   background: var(--bg);
@@ -1146,6 +1169,18 @@ body::before {
   opacity: var(--page-atmosphere-opacity, 1);
   transition: opacity 0.8s cubic-bezier(0.22, 1, 0.36, 1);
   z-index: 0;
+}
+
+body:not(.docs-body)::after {
+  content: "";
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 60;
+  height: env(safe-area-inset-bottom);
+  pointer-events: none;
+  background: #08090b;
 }
 .js body.home-intro {
   --page-atmosphere-opacity: 0;
@@ -1186,6 +1221,13 @@ nav.top {
     opacity 420ms cubic-bezier(0.22, 1, 0.36, 1),
     transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: opacity, transform;
+}
+
+body.is-stage2-active:not(.is-stage2-complete) nav.top {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: translateY(-100%) !important;
+  border-bottom: 0 !important;
 }
 .js body.home-intro nav.top,
 .js body.home-intro .hero-footer {
@@ -2244,6 +2286,9 @@ h2.title .title-line {
   stroke-linejoin: round;
   stroke-dasharray: 7 9;
   vector-effect: non-scaling-stroke;
+  animation: none;
+}
+.topology.is-motion-active .topology-map.is-active .topology-edge {
   animation: topology-dash 18s linear infinite;
 }
 .topology-edge--active {
@@ -2333,6 +2378,9 @@ h2.title .title-line {
   background: linear-gradient(180deg, rgba(15,25,40,0.98), rgba(7,10,15,0.98));
   box-shadow: 0 0 0 0 rgba(96,165,250,0.1), 0 0 18px rgba(59,130,246,0.12);
   text-align: center;
+  animation: none;
+}
+.topology.is-motion-active .topology-map.is-active .mesh-core {
   animation: topology-core-breathe 4.8s ease-in-out infinite;
 }
 .mesh-core > span {
@@ -2631,6 +2679,9 @@ h2.title .title-line {
   .topology-map--split .topology-edge--return {
     stroke: rgba(34,197,94,0.5);
     stroke-dasharray: 4 10;
+    animation: none;
+  }
+  .topology.is-motion-active .topology-map--split.is-active .topology-edge--return {
     animation: topology-return-flow 5.6s linear infinite;
   }
   .topology-map--split .split-client,
@@ -3327,6 +3378,9 @@ h2.title .title-line {
     stroke: rgba(34,197,94,0.62);
     stroke-dasharray: 4 9;
     stroke-linejoin: round;
+    animation: none;
+  }
+  .topology.is-motion-active .topology-map--split.is-active .topology-edge--mobile-return {
     animation: topology-return-flow 4.8s linear infinite;
   }
   .topology .mesh-node,
@@ -5383,16 +5437,18 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   border-radius: calc(10px - (var(--stage2-lock-card-progress, 0) * 2px));
   background: transparent;
   color: #18181b;
-  opacity: calc(var(--stage2-model-opacity, 0) * (1 - var(--stage2-collapse-progress, 0)));
+  opacity: max(0.001, calc(var(--stage2-model-opacity, 0) * (1 - var(--stage2-collapse-progress, 0))));
   transform:
+    translateZ(0)
     translate(-50%, -50%)
     translateY(calc(var(--stage2-model-y, 22px) + var(--stage2-title-model-offset, 0px) + (var(--stage2-model-shrink-progress, 0) * 210px)))
     scale(var(--stage2-model-scale, 1))
     scale(calc(1 - (var(--stage2-collapse-progress, 0) * 0.08)));
   transform-origin: center;
   filter: blur(var(--stage2-model-blur, 7px));
-  contain: layout;
-  will-change: transform, opacity, filter;
+  backface-visibility: hidden;
+  contain: layout paint;
+  will-change: transform, opacity;
 }
 
 .stage2-model-shell {
@@ -5406,16 +5462,12 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   padding: clamp(14px, calc(2vw + (var(--stage2-lock-card-progress, 0) * 12px)), 34px);
   overflow: hidden;
   border-radius: inherit;
-  background:
-    linear-gradient(135deg, rgba(34,197,94,calc(var(--stage2-lock-card-progress, 0) * 0.13)), rgba(34,197,94,0) calc(38% + (var(--stage2-lock-card-progress, 0) * 12%))),
-    linear-gradient(90deg, rgba(59,130,246,calc(var(--stage2-lock-route-progress, 0) * 0.055)), rgba(59,130,246,0) 38%),
-    linear-gradient(180deg, rgba(255,255,255,1), rgba(247,248,251,0.98));
-  box-shadow:
-    0 calc(12px - (var(--stage2-lock-card-progress, 0) * 2px)) 0 rgba(9,9,11,0.1),
-    0 0 0 1px rgba(39,39,42,calc(0.16 - (var(--stage2-lock-card-progress, 0) * 0.03)));
-  opacity: calc(1 - (var(--stage2-collapse-progress, 0) * 0.72));
+  background: transparent;
+  box-shadow: none;
+  opacity: 1;
   transform: scale(calc(1 - (var(--stage2-placement-progress, 0) * 0.018)));
   transform-origin: center;
+  backface-visibility: hidden;
 }
 
 .stage2-model-lock {
@@ -5614,9 +5666,35 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   content: "";
   position: absolute;
   inset: 0;
+  z-index: 0;
   border-radius: inherit;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.88), inset 0 -1px 0 rgba(39,39,42,0.08);
+  background:
+    linear-gradient(135deg, rgba(34,197,94,calc(var(--stage2-lock-card-progress, 0) * 0.13)), rgba(34,197,94,0) calc(38% + (var(--stage2-lock-card-progress, 0) * 12%))),
+    linear-gradient(90deg, rgba(59,130,246,calc(var(--stage2-lock-route-progress, 0) * 0.055)), rgba(59,130,246,0) 38%),
+    linear-gradient(180deg, rgba(255,255,255,1), rgba(247,248,251,0.98));
+  box-shadow:
+    0 calc(12px - (var(--stage2-lock-card-progress, 0) * 2px)) 0 rgba(9,9,11,0.1),
+    0 0 0 1px rgba(39,39,42,calc(0.16 - (var(--stage2-lock-card-progress, 0) * 0.03))),
+    inset 0 0 0 1px rgba(255,255,255,0.88),
+    inset 0 -1px 0 rgba(39,39,42,0.08);
+  opacity: max(
+    var(--stage2-lock-card-progress, 0),
+    calc(
+      var(--stage2-model-detail-opacity, 1)
+      * (1 - (var(--stage2-collapse-progress, 0) * 0.72))
+    )
+  );
   pointer-events: none;
+}
+
+section.hero.stage2-scroll[data-stage2-phase="phase-1"] .stage2-model-shell::before {
+  background: rgba(255,255,255,0.94);
+  box-shadow: 0 0 0 1px rgba(39,39,42,0.12);
+}
+
+section.hero.stage2-scroll[data-stage2-phase="phase-1"] .stage2-model-header,
+section.hero.stage2-scroll[data-stage2-phase="phase-1"] .stage2-model-metrics {
+  opacity: 1;
 }
 
 .stage2-model-header,
@@ -5633,7 +5711,7 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   gap: 16px;
   max-height: max(0px, calc((1 - (var(--stage2-model-shrink-progress, 0) * 2.2)) * 68px));
   overflow: hidden;
-  opacity: max(0, calc((1 - (var(--stage2-model-shrink-progress, 0) * 2.6)) * (1 - (var(--stage2-placement-progress, 0) * 0.78))));
+  opacity: calc(var(--stage2-model-detail-opacity, 1) * max(0, calc((1 - (var(--stage2-model-shrink-progress, 0) * 2.6)) * (1 - (var(--stage2-placement-progress, 0) * 0.78)))));
 }
 
 .stage2-model-header strong {
@@ -5687,7 +5765,7 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   margin: 0;
   max-height: max(0px, calc((1 - (var(--stage2-model-shrink-progress, 0) * 2.2)) * 54px));
   overflow: hidden;
-  opacity: max(0, calc((1 - (var(--stage2-model-shrink-progress, 0) * 2.6)) * (1 - (var(--stage2-placement-progress, 0) * 0.86))));
+  opacity: calc(var(--stage2-model-detail-opacity, 1) * max(0, calc((1 - (var(--stage2-model-shrink-progress, 0) * 2.6)) * (1 - (var(--stage2-placement-progress, 0) * 0.86)))));
 }
 
 .stage2-model-metrics div {
@@ -5737,18 +5815,24 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
 }
 
 .stage2-model-layer.is-stage2-layer-in-flight {
-  grid-template-columns: 8px minmax(22px, 0.18fr) minmax(0, 1fr);
+  --stage2-layer-extract-progress: 0;
+  --stage2-layer-highlight-progress: 0;
+  grid-template-columns: 12px minmax(30px, 0.26fr) minmax(0, 1fr) minmax(38px, 0.36fr);
+  background:
+    linear-gradient(90deg, rgba(34,197,94,calc(var(--stage2-layer-highlight-progress, 0) * 0.18)), rgba(255,255,255,0) 32%),
+    color-mix(in srgb, var(--stage2-active-layer-color, var(--stage2-layer-node-color, #3b82f6)) calc(var(--stage2-layer-highlight-progress, 0) * 12%), #ffffff);
   opacity: 1;
   pointer-events: none;
   z-index: 10;
+  transform-origin: 0 0;
+  backface-visibility: hidden;
+  will-change: transform;
   box-shadow:
-    inset 0 0 0 1px rgba(59,130,246,0.34),
-    0 var(--stage2-flight-shadow-y, 24px) var(--stage2-flight-shadow-blur, 30px) var(--stage2-flight-shadow-spread, -5px) rgba(9,9,11,var(--stage2-flight-shadow-alpha, 0.24)),
-    0 calc(var(--stage2-flight-shadow-y, 24px) * 0.34) calc(var(--stage2-flight-shadow-blur, 30px) * 0.34) rgba(59,130,246,0.12);
+    inset 0 0 0 1px color-mix(in srgb, var(--stage2-active-layer-color, var(--stage2-layer-node-color, #3b82f6)) calc(var(--stage2-layer-highlight-progress, 0) * 44%), rgba(39,39,42,0.14)),
+    0 0 calc(var(--stage2-layer-highlight-progress, 0) * 18px) color-mix(in srgb, var(--stage2-active-layer-color, var(--stage2-layer-node-color, #3b82f6)) 28%, transparent);
   transition: none;
 }
 
-.stage2-model-layer.is-stage2-layer-in-flight .stage2-layer-param,
 .stage2-model-layer[data-stage2-assigned-node] .stage2-layer-param {
   display: none;
 }
@@ -5765,6 +5849,9 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   --stage2-layer-cut-energy: 0;
   --stage2-layer-cut-front: 0;
   --stage2-layer-cut-residue: 0;
+  --stage2-layer-cutter-opacity: 0;
+  --stage2-layer-cutter-left: 0;
+  --stage2-layer-cutter-right: 1;
   --stage2-layer-cut-shear: 0px;
   --stage2-layer-cut-skew: 0deg;
   appearance: none;
@@ -5791,7 +5878,7 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
     inset 0 0 0 calc(var(--stage2-layer-cut-energy, 0) * 0.7px) rgba(59,130,246,0.2),
     0 0 calc(var(--stage2-layer-cut-energy, 0) * 10px) rgba(59,130,246,0.1);
   cursor: default;
-  opacity: calc(1 - (var(--stage2-placement-progress, 0) * 0.46));
+  opacity: 1;
   transform:
     translateX(var(--stage2-layer-cut-shear, 0px))
     skewX(var(--stage2-layer-cut-skew, 0deg))
@@ -5824,18 +5911,22 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
 }
 
 .stage2-model-layer::after {
-  inset: 1px;
-  border-radius: inherit;
+  left: clamp(6px, 1.05vw, 10px);
+  right: clamp(6px, 1.05vw, 10px);
+  top: auto;
+  bottom: 0;
+  height: 3px;
+  border-radius: 999px;
   background:
-    linear-gradient(90deg, rgba(59,130,246,0.08), rgba(255,255,255,0) 12%),
-    linear-gradient(180deg, rgba(59,130,246,0.1), rgba(255,255,255,0) 18%, rgba(255,255,255,0) 82%, rgba(59,130,246,0.06));
+    linear-gradient(90deg, rgba(59,130,246,0), rgba(37,99,235,0.95) 16%, rgba(255,255,255,1) 48%, rgba(147,197,253,1) 55%, rgba(34,197,94,0.72) 68%, rgba(37,99,235,0.9) 86%, rgba(59,130,246,0));
   box-shadow:
-    inset 0 0 0 calc(var(--stage2-layer-cut-energy, 0) * 0.7px) rgba(59,130,246,0.18),
-    inset 0 1px 0 rgba(59,130,246,calc(var(--stage2-layer-cut-energy, 0) * 0.2)),
-    inset 0 -1px 0 rgba(34,197,94,calc(var(--stage2-layer-cut-residue, 0) * 0.08));
-  opacity: calc((var(--stage2-layer-cut-energy, 0) * 0.24) + (var(--stage2-layer-cut-residue, 0) * 0.06));
-  transform: none;
-  transform-origin: center;
+    0 0 0 1px rgba(37,99,235,0.34),
+    0 0 calc(12px + (var(--stage2-layer-cut-energy, 0) * 18px)) rgba(37,99,235,0.58),
+    0 0 calc(6px + (var(--stage2-layer-cut-energy, 0) * 22px)) rgba(34,197,94,0.24);
+  clip-path: inset(0 calc((1 - var(--stage2-layer-cutter-right, 1)) * 100%) 0 calc(var(--stage2-layer-cutter-left, 0) * 100%));
+  opacity: calc(var(--stage2-layer-cutter-opacity, 0) * (0.44 + (var(--stage2-layer-cut-energy, 0) * 0.56)));
+  transform: translateY(50%);
+  transform-origin: left center;
 }
 
 .stage2-layer-handle,
@@ -5865,6 +5956,7 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
 .stage2-model-layer:nth-child(10) { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
 
 .stage2-slice-cutter {
+  display: none;
   position: absolute;
   left: 10px;
   right: 10px;
@@ -5900,7 +5992,6 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   height: calc(16px + (var(--stage2-cutter-energy, 0) * 14px));
   background: linear-gradient(90deg, rgba(37,99,235,0), rgba(37,99,235,0.28) 36%, rgba(34,197,94,0.2) 55%, rgba(37,99,235,0));
   opacity: calc(0.58 + (var(--stage2-cutter-energy, 0) * 0.32));
-  filter: blur(6px);
   transform: translateY(-50%);
 }
 
@@ -5950,17 +6041,30 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
 }
 
 .stage2-model-layer[data-stage2-assigned-node].is-stage2-layer-in-flight {
-  background: color-mix(in srgb, var(--stage2-active-layer-color) 10%, #ffffff);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--stage2-active-layer-color) calc(var(--stage2-layer-highlight-progress, 0) * 18%), transparent), transparent 34%),
+    color-mix(in srgb, var(--stage2-active-layer-color) calc(var(--stage2-layer-highlight-progress, 0) * 10%), #ffffff);
   box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--stage2-active-layer-color) 34%, rgba(59,130,246,0.18)),
-    0 var(--stage2-flight-shadow-y, 24px) var(--stage2-flight-shadow-blur, 30px) var(--stage2-flight-shadow-spread, -5px) rgba(9,9,11,var(--stage2-flight-shadow-alpha, 0.24)),
-    0 calc(var(--stage2-flight-shadow-y, 24px) * 0.34) calc(var(--stage2-flight-shadow-blur, 30px) * 0.34) color-mix(in srgb, var(--stage2-active-layer-color) 16%, transparent);
-  opacity: calc(var(--stage2-node-content-opacity, 0) * var(--stage2-layer-placed-opacity, 1));
+    inset 0 0 0 1px color-mix(in srgb, var(--stage2-active-layer-color) calc(var(--stage2-layer-highlight-progress, 0) * 46%), rgba(39,39,42,0.14)),
+    0 0 calc(var(--stage2-layer-highlight-progress, 0) * 18px) color-mix(in srgb, var(--stage2-active-layer-color) 28%, transparent);
+  opacity: 1;
 }
 
 .stage2-model-layer[data-stage2-layer-state="source"] .stage2-layer-bars,
 .stage2-model-layer[data-stage2-layer-state="source"] .stage2-layer-param {
   opacity: calc(1 - (var(--stage2-layer-compact-progress, 0) * 0.78));
+}
+
+.stage2-model-layer.is-stage2-layer-in-flight .stage2-layer-bars {
+  opacity: calc((1 - (var(--stage2-layer-compact-progress, 0) * 0.78)) + (var(--stage2-layer-extract-progress, 0) * 0.18));
+  transform: scaleX(calc(1 - (var(--stage2-layer-extract-progress, 0) * 0.08)));
+  transform-origin: left center;
+}
+
+.stage2-model-layer.is-stage2-layer-in-flight .stage2-layer-param,
+.stage2-model-layer[data-stage2-assigned-node].is-stage2-layer-in-flight .stage2-layer-param {
+  display: block;
+  opacity: calc((1 - (var(--stage2-layer-compact-progress, 0) * 0.78)) * (1 - (var(--stage2-layer-extract-progress, 0) * 0.6)));
 }
 
 .stage2-layer-bars i:nth-child(2n) {
@@ -6155,6 +6259,63 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   opacity: var(--stage2-lock-node-progress, var(--stage2-lock-check-progress, 0));
 }
 
+.stage2-debug-toggle {
+  position: absolute;
+  right: clamp(16px, 3vw, 38px);
+  bottom: clamp(18px, 4.5vh, 42px);
+  z-index: 13;
+  display: none;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  padding: 5px 6px 5px 11px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 999px;
+  background: rgba(9,9,11,0.78);
+  color: #f4f4f5;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.24);
+  cursor: pointer;
+}
+
+.stage2-debug-toggle i {
+  position: relative;
+  display: block;
+  width: 30px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.18);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+}
+
+.stage2-debug-toggle i::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: inherit;
+  background: #f4f4f5;
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+
+.stage2-debug-toggle[aria-checked="true"] i {
+  background: rgba(59,130,246,0.72);
+}
+
+.stage2-debug-toggle[aria-checked="true"] i::after {
+  background: #ffffff;
+  transform: translateX(12px);
+}
+
+body.is-stage2-debug-view .stage2-debug-toggle {
+  display: inline-flex;
+}
+
 .stage2-scrubber {
   position: absolute;
   left: 50%;
@@ -6162,7 +6323,7 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   z-index: 12;
   width: min(336px, calc(100vw - 58px));
   min-height: 58px;
-  transform: translateX(-50%) translateY(var(--stage2-scrubber-y, 16px));
+  transform: translateX(-50%);
   display: grid;
   gap: 8px;
   align-items: center;
@@ -6173,7 +6334,8 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   color: #f4f4f5;
   box-shadow: 0 16px 32px rgba(0,0,0,0.22);
   cursor: grab;
-  opacity: calc(var(--stage2-scrubber-opacity, 0) * 0.92);
+  opacity: 0;
+  pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -6270,6 +6432,11 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   touch-action: none;
 }
 
+body.is-stage2-debug-scrubber-visible .stage2-scroll .stage2-scrubber {
+  opacity: 0.92;
+  pointer-events: auto;
+}
+
 .stage2-scrubber:hover {
   cursor: grab;
 }
@@ -6307,8 +6474,6 @@ section.hero.stage2-scroll {
   --stage2-p: 0;
   --stage2-pct: 0%;
   --stage2-scrubber-pct: 0%;
-  --stage2-scrubber-y: 16px;
-  --stage2-scrubber-opacity: 0;
   --stage2-scrubber-tick-step: 4px;
   --stage2-aperture-x: 50%;
   --stage2-aperture-y: 42%;
@@ -6344,6 +6509,7 @@ section.hero.stage2-scroll {
   --stage2-model-width: 8px;
   --stage2-model-height: 8px;
   --stage2-model-shrink-progress: 0;
+  --stage2-model-detail-opacity: 0;
   --stage2-server-return-progress: 0;
   --stage2-stack-extra-height: 0px;
   --stage2-model-y: 22px;
@@ -6370,19 +6536,26 @@ section.hero.stage2-scroll {
   --stage2-title-place-opacity: 0;
   --stage2-title-final-opacity: 0;
   --stage2-title-model-offset: 0px;
-  min-height: 4000svh;
+  --stage2-viewport-height: 100svh;
+  min-height: 1800svh;
   max-width: none;
   padding: 0;
   margin: 0;
   background: #09090b;
 }
 
+@supports (height: 100dvh) {
+  section.hero.stage2-scroll {
+    --stage2-viewport-height: 100dvh;
+  }
+}
+
 .hero-stage-sticky {
   position: sticky;
   top: var(--hero-sticky-top);
   z-index: 1;
-  height: calc(100svh - var(--hero-initial-chrome));
-  min-height: calc(100svh - var(--hero-initial-chrome));
+  height: calc(var(--stage2-viewport-height) - var(--hero-initial-chrome));
+  min-height: calc(var(--stage2-viewport-height) - var(--hero-initial-chrome));
   overflow: hidden;
   isolation: isolate;
 }
@@ -6447,11 +6620,24 @@ body.is-stage2-complete section.hero.stage2-scroll {
   background-image: none;
 }
 
+body.is-stage2-active:not(.is-stage2-complete) section.hero.stage2-scroll .hero-viz {
+  opacity: var(--stage2-hero-opacity, 1) !important;
+  mask-image: none !important;
+  -webkit-mask-image: none !important;
+  transition: none;
+  will-change: auto;
+}
+
+body.is-stage2-active:not(.is-stage2-complete) section.hero.stage2-scroll .hero-viz * {
+  filter: none !important;
+  mix-blend-mode: normal !important;
+}
+
 body.is-stage2-complete section.hero.stage2-scroll::after {
   position: fixed;
   top: -60px;
   bottom: auto;
-  height: calc(var(--stage2-grid-clip-bottom, 100svh) + 60px);
+  height: calc(var(--stage2-grid-clip-bottom, var(--stage2-viewport-height)) + 60px);
 }
 
 section.hero.stage2-scroll .hero-viz {
@@ -6491,8 +6677,9 @@ section.hero.stage2-scroll .hero-viz .mesh-node {
 .stage2-final-hook {
   position: absolute;
   inset: 0;
-  z-index: 3;
+  z-index: 8;
   width: 100%;
+  overflow: visible;
   opacity: var(--stage2-title-final-opacity, 0);
   pointer-events: none;
   transition: none;
@@ -6525,19 +6712,18 @@ section.hero.stage2-scroll .hero-viz .mesh-node {
   display: block;
   width: max-content;
   max-width: calc(100vw - 2rem);
+  overflow: visible;
   white-space: nowrap;
   transform:
     translate3d(-50%, calc((1 - var(--stage2-title-final-opacity, 0)) * var(--stage2-final-line-rise, 0.34em)), 0)
     scale(calc(0.965 + (var(--stage2-title-final-opacity, 0) * 0.035)));
-  filter:
-    blur(calc((1 - var(--stage2-title-final-opacity, 0)) * 5px))
-    saturate(calc(1 + (var(--stage2-title-final-opacity, 0) * 0.4)));
   transform-origin: 50% 58%;
-  will-change: transform, filter;
+  will-change: transform;
 }
 
 .stage2-final-hook .stage2-final-word {
   display: inline-block;
+  overflow: visible;
   transform-origin: 50% 62%;
   will-change: transform;
 }
@@ -6551,14 +6737,11 @@ section.hero.stage2-scroll .hero-viz .mesh-node {
   z-index: 0;
   margin-inline: 0.035em;
   color: #f8fbff;
-  filter:
-    brightness(calc(1 + (var(--stage2-final-word-core, 0) * 0.2)))
-    saturate(calc(1 + (var(--stage2-final-word-glow, 0) * 0.38)));
   text-shadow:
     0 0 2px rgba(255,255,255,0.84),
     0 0 calc(10px + (var(--stage2-final-word-glow, 0) * 16px)) rgba(125,211,252,calc(0.16 + (var(--stage2-final-word-glow, 0) * 0.36))),
     0 0 calc(30px + (var(--stage2-final-word-glow, 0) * 32px)) rgba(34,197,94,calc(0.08 + (var(--stage2-final-word-glow, 0) * 0.2)));
-  will-change: transform, filter, text-shadow;
+  will-change: transform, text-shadow;
 }
 
 .stage2-final-hook [data-stage2-final-keyword="bigger"]::before,
@@ -6570,25 +6753,24 @@ section.hero.stage2-scroll .hero-viz .mesh-node {
 }
 
 .stage2-final-hook [data-stage2-final-keyword="bigger"]::before {
-  inset: -0.24em -0.34em -0.2em;
+  inset: -0.3em -0.5em -0.25em;
   z-index: -1;
-  border-radius: 999px;
   background:
     radial-gradient(
       ellipse at var(--stage2-final-word-glow-x, 50%) 54%,
-      rgba(226,248,255,0.82) 0%,
-      rgba(125,211,252,0.46) 18%,
-      rgba(34,197,94,0.22) 42%,
-      transparent 72%
-    );
-  opacity: calc(var(--stage2-final-word-glow, 0) * 0.92);
-  filter: blur(calc(8px + (var(--stage2-final-word-glow, 0) * 12px)));
+      rgba(226,248,255,0.45) 0%,
+      rgba(125,211,252,0.16) 8%,
+      rgba(34,197,94,0.04) 16%,
+      transparent 28%
+  );
+  opacity: calc(var(--stage2-final-word-glow, 0) * 0.68);
+  filter: blur(5px);
   transform:
     translate3d(0, 0, 0)
-    scaleX(var(--stage2-final-word-glow-stretch, 1))
+    scaleX(calc(var(--stage2-final-word-glow-stretch, 1) * 1.08))
     scaleY(calc(0.72 + (var(--stage2-final-word-core, 0) * 0.22)));
   transform-origin: var(--stage2-final-word-glow-x, 50%) 55%;
-  will-change: opacity, filter, transform;
+  will-change: opacity, transform, filter;
 }
 
 .stage2-final-hook [data-stage2-final-keyword="bigger"]::after {
@@ -6606,9 +6788,8 @@ section.hero.stage2-scroll .hero-viz .mesh-node {
       rgba(255,255,255,0.88) 48%,
       rgba(125,211,252,0.24) 64%,
       transparent 100%
-    );
+  );
   opacity: calc(var(--stage2-final-word-core, 0) * 0.58);
-  filter: blur(5px);
   transform: translateX(-50%) skewX(-13deg);
   will-change: left, opacity;
 }
@@ -6691,36 +6872,62 @@ body.is-stage2-active section.hero.stage2-scroll::before {
   -webkit-clip-path: circle(var(--stage2-aperture-radius) at var(--stage2-aperture-x) calc(var(--stage2-aperture-y) + var(--hero-sticky-top)));
 }
 
+body.is-stage2-active section.hero.stage2-scroll.is-stage2-aperture-settled::before {
+  opacity: 1;
+  background: #fbfaf7;
+  clip-path: none;
+  -webkit-clip-path: none;
+}
+
 .stage2-aperture-portal {
   position: absolute;
-  left: var(--stage2-aperture-px);
-  top: var(--stage2-aperture-py);
+  left: 0;
+  top: 0;
   z-index: 4;
-  width: calc(var(--stage2-aperture-max-radius) * 2);
-  height: calc(var(--stage2-aperture-max-radius) * 2);
-  overflow: hidden;
-  border-radius: 50%;
+  width: 100vw;
+  height: calc(var(--stage2-viewport-height) - var(--hero-initial-chrome));
+  overflow: visible;
+  border-radius: 0;
   opacity: var(--stage2-light-opacity);
-  transform: translate(-50%, -50%) scale(var(--stage2-aperture-scale));
-  transform-origin: 50% 50%;
+  clip-path: circle(var(--stage2-aperture-radius) at var(--stage2-aperture-px) var(--stage2-aperture-py));
+  -webkit-clip-path: circle(var(--stage2-aperture-radius) at var(--stage2-aperture-px) var(--stage2-aperture-py));
   pointer-events: none;
   transition: none;
-  contain: layout paint style;
-  will-change: transform, opacity;
+  contain: paint;
+  will-change: clip-path, opacity;
+}
+
+.stage2-scroll.is-stage2-aperture-settled .stage2-aperture-portal {
+  left: 0;
+  top: 0;
+  width: 100vw;
+  height: calc(var(--stage2-viewport-height) - var(--hero-initial-chrome));
+  overflow: hidden;
+  border-radius: 0;
+  clip-path: none;
+  -webkit-clip-path: none;
 }
 
 .stage2-aperture-portal .stage2-workspace {
-  left: calc(var(--stage2-aperture-max-radius) - var(--stage2-aperture-px));
-  top: calc(var(--stage2-aperture-max-radius) - var(--stage2-aperture-py));
+  left: 0;
+  top: 0;
   right: auto;
   bottom: auto;
   width: 100vw;
-  height: calc(100svh - var(--hero-initial-chrome));
+  height: calc(var(--stage2-viewport-height) - var(--hero-initial-chrome));
   opacity: 1;
-  transform: scale(var(--stage2-aperture-inverse-scale));
-  transform-origin: var(--stage2-aperture-px) var(--stage2-aperture-py);
+  transform: none;
   transition: none;
-  will-change: transform;
+}
+
+.stage2-scroll.is-stage2-aperture-settled .stage2-aperture-portal .stage2-workspace {
+  left: 0;
+  top: 0;
+  right: auto;
+  bottom: auto;
+  width: 100vw;
+  height: calc(var(--stage2-viewport-height) - var(--hero-initial-chrome));
+  transform: none;
 }
 
 .stage2-aperture-ring {
@@ -6742,6 +6949,10 @@ body.is-stage2-active section.hero.stage2-scroll::before {
   will-change: transform, opacity;
 }
 
+.stage2-scroll.is-stage2-aperture-settled .stage2-aperture-ring {
+  opacity: 0;
+}
+
 body.is-stage2-active .stage2-aperture-ring {
   position: fixed;
   top: calc(var(--hero-sticky-top) + var(--stage2-aperture-y));
@@ -6749,18 +6960,17 @@ body.is-stage2-active .stage2-aperture-ring {
 
 .stage2-scroll .stage2-scrubber {
   position: absolute;
-  opacity: calc(var(--stage2-scrubber-opacity, 0) * 0.92);
   pointer-events: none;
   transition: none;
 }
 
-.stage2-scroll.is-stage2-scrubbable .stage2-scrubber {
+body.is-stage2-debug-scrubber-visible .stage2-scroll.is-stage2-scrubbable .stage2-scrubber {
   pointer-events: auto;
 }
 
 @media (max-width: 900px) {
   section.hero.stage2-scroll {
-    min-height: 3100svh;
+    min-height: 1500svh;
   }
 
   .stage2-model-header strong {
@@ -6774,7 +6984,7 @@ body.is-stage2-active .stage2-aperture-ring {
 
 @media (max-width: 640px) {
   section.hero.stage2-scroll {
-    min-height: 3200svh;
+    min-height: 1180svh;
   }
 
   .stage2-final-hook {
@@ -6918,7 +7128,7 @@ body.is-stage2-active .stage2-aperture-ring {
 
 @media (pointer: coarse) {
   section.hero.stage2-scroll {
-    min-height: 2200svh;
+    min-height: 1100svh;
   }
   @media (min-width: 641px) {
     section.hero.stage2-scroll .hero-viz svg {
@@ -6959,7 +7169,7 @@ body.is-stage2-active .stage2-aperture-ring {
   }
 
   .stage2-model-layer::after {
-    opacity: calc(var(--stage2-layer-cut-energy, 0) * 0.48);
+    opacity: calc(var(--stage2-layer-cutter-opacity, 0) * 0.56);
   }
 
   .stage2-slice-cutter {
@@ -6978,7 +7188,13 @@ body.is-stage2-active .stage2-aperture-ring {
 
 @media (pointer: coarse) and (max-width: 640px) {
   section.hero.stage2-scroll {
-    min-height: 1850svh;
+    min-height: 880svh;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 640px) and (max-height: 720px) {
+  section.hero.stage2-scroll {
+    min-height: 760svh;
   }
 }
 
@@ -7126,6 +7342,7 @@ body.is-stage2-active .stage2-aperture-ring {
   }
 
   .stage2-scroll .stage2-scrubber,
+  .stage2-debug-toggle,
   .stage2-aperture-ring {
     display: none;
   }
@@ -7168,6 +7385,9 @@ body.is-stage2-active .stage2-aperture-ring {
     --stage2-layer-cut-energy: 0;
     --stage2-layer-cut-front: 0;
     --stage2-layer-cut-residue: 0;
+    --stage2-layer-cutter-opacity: 0;
+    --stage2-layer-cutter-left: 0;
+    --stage2-layer-cutter-right: 1;
     --stage2-layer-cut-shear: 0px;
     --stage2-layer-cut-skew: 0deg;
   }

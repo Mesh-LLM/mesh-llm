@@ -127,6 +127,8 @@
   }
 
   function revealVisibleHiddenTitles() {
+    if (document.body.classList.contains('is-stage2-active')) return;
+
     titles.forEach(function (title) {
       if (title.classList.contains('is-title-revealed')) {
         cancelQueuedReveal(title);
