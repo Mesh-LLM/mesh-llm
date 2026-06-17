@@ -1,0 +1,170 @@
+From e58fbeb30279cbb8bd9e2069f765438368ac4f36 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Mon, 15 Jun 2026 15:09:14 +1000
+Subject: [PATCH 09/10] Drop quantized output cache after tensor writes
+
+---
+ src/llama-quant.cpp | 105 +++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 104 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+index 601f9dea2..46b174b35 100644
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -4,6 +4,7 @@
+ #include "llama-ext.h"
+ 
+ #include <algorithm>
++#include <cerrno>
+ #include <chrono>
+ #include <condition_variable>
+ #include <cmath>
+@@ -18,6 +19,11 @@
+ #include <unordered_map>
+ #include <utility>
+ 
++#if defined(__linux__)
++#include <fcntl.h>
++#include <unistd.h>
++#endif
++
+ #if defined(__APPLE__)
+ #include <mach/mach.h>
+ #include <sys/resource.h>
+@@ -105,6 +111,37 @@ static quantize_process_memory llama_quantize_process_memory_usage() {
+     return result;
+ }
+ 
++static void llama_quantize_drop_output_cache(const std::string & path, std::streamoff offset, size_t size) {
++#if defined(__linux__)
++    if (path.empty() || offset < 0 || size == 0) {
++        return;
++    }
++
++    const int fd = open(path.c_str(), O_RDWR | O_CLOEXEC);
++    if (fd < 0) {
++        LLAMA_LOG_WARN("%s: failed to open %s for output cache drop: %s\n", __func__, path.c_str(), std::strerror(errno));
++        return;
++    }
++
++    const off_t start = static_cast<off_t>(offset);
++    const off_t len = static_cast<off_t>(size);
++    if (fdatasync(fd) != 0) {
++        LLAMA_LOG_WARN("%s: fdatasync failed for %s: %s\n", __func__, path.c_str(), std::strerror(errno));
++    }
++
++    const int rc = posix_fadvise(fd, start, len, POSIX_FADV_DONTNEED);
++    if (rc != 0) {
++        LLAMA_LOG_WARN("%s: posix_fadvise DONTNEED failed for %s: %s\n", __func__, path.c_str(), std::strerror(rc));
++    }
++
++    close(fd);
++#else
++    (void) path;
++    (void) offset;
++    (void) size;
++#endif
++}
++
+ static int64_t llama_quantize_watchdog_interval_seconds() {
+     const char * env = std::getenv("LLAMA_QUANTIZE_WATCHDOG_SECONDS");
+     if (env == nullptr || env[0] == '\0') {
+@@ -1275,6 +1312,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+ 
+     int cur_split = -1;
+     std::ofstream fout;
++    std::string current_output_path;
+     auto close_ofstream = [&]() {
+         // Write metadata and close file handler
+         if (fout.is_open()) {
+@@ -1295,6 +1333,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+             fname = std::string(split_path.data());
+         }
+ 
++        current_output_path = fname;
+         fout = std::ofstream(fname, std::ios::binary);
+         fout.exceptions(std::ofstream::failbit); // fail fast on write errors
+         const size_t meta_size = gguf_get_meta_size(ctx_outs[cur_split].get());
+@@ -1627,6 +1666,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+             gguf_set_tensor_data(ctx_outs[cur_split].get(), metadata[i].name.c_str(), new_data);
+ 
+             // write tensor data + padding
++            const std::streamoff output_offset = fout.tellp();
++            const size_t output_padding = GGML_PAD(new_size, align) - new_size;
+             watchdog.update({
+                 tensor_name,
+                 tensor_shape,
+@@ -1648,7 +1689,69 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+                 false,
+             });
+             fout.write((const char *) new_data, new_size);
+-            zeros(fout, GGML_PAD(new_size, align) - new_size);
++            zeros(fout, output_padding);
++            watchdog.update({
++                tensor_name,
++                tensor_shape,
++                "flushing-output",
++                cur_type,
++                new_type,
++                tensor_index,
++                tensors.size(),
++                params->keep_split ? weight.idx : 0,
++                n_split,
++                tensor_size,
++                new_size,
++                -1,
++                -1,
++                -1,
++                -1,
++                -1,
++                quantize,
++                false,
++            });
++            fout.flush();
++            watchdog.update({
++                tensor_name,
++                tensor_shape,
++                "dropping-output-cache",
++                cur_type,
++                new_type,
++                tensor_index,
++                tensors.size(),
++                params->keep_split ? weight.idx : 0,
++                n_split,
++                tensor_size,
++                new_size,
++                -1,
++                -1,
++                -1,
++                -1,
++                -1,
++                quantize,
++                false,
++            });
++            llama_quantize_drop_output_cache(current_output_path, output_offset, new_size + output_padding);
++            watchdog.update({
++                tensor_name,
++                tensor_shape,
++                "unmapping-source",
++                cur_type,
++                new_type,
++                tensor_index,
++                tensors.size(),
++                params->keep_split ? weight.idx : 0,
++                n_split,
++                tensor_size,
++                new_size,
++                -1,
++                -1,
++                -1,
++                -1,
++                -1,
++                quantize,
++                false,
++            });
+             ml.unmap_data_for(tensor);
+             watchdog.update({
+                 tensor_name,
+-- 
+2.54.0 (Apple Git-156)
+

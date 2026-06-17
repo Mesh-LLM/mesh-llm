@@ -1,0 +1,527 @@
+From 5890fca0b695bf926fef701142ba2279ea03eef9 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Mon, 15 Jun 2026 14:34:03 +1000
+Subject: [PATCH 08/10] Add llama-quantize progress watchdog
+
+---
+ src/llama-quant.cpp | 414 ++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 404 insertions(+), 10 deletions(-)
+
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+index fd695b388..601f9dea2 100644
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -4,14 +4,24 @@
+ #include "llama-ext.h"
+ 
+ #include <algorithm>
++#include <chrono>
++#include <condition_variable>
+ #include <cmath>
++#include <cstdio>
+ #include <cstring>
+ #include <cinttypes>
++#include <cstdlib>
+ #include <fstream>
+ #include <mutex>
+ #include <regex>
+ #include <thread>
+ #include <unordered_map>
++#include <utility>
++
++#if defined(__APPLE__)
++#include <mach/mach.h>
++#include <sys/resource.h>
++#endif
+ 
+ // result of parsing --tensor-type option
+ // (changes to this struct must be reflected in tools/quantize/quantize.cpp)
+@@ -44,6 +54,206 @@ static void zeros(std::ofstream & file, size_t n) {
+     }
+ }
+ 
++struct quantize_process_memory {
++    int64_t rss_kib = -1;
++    int64_t hwm_kib = -1;
++};
++
++static int64_t llama_quantize_parse_kib_line(const std::string & line, const char * prefix) {
++    if (line.rfind(prefix, 0) != 0) {
++        return -1;
++    }
++
++    long long value = -1;
++    if (std::sscanf(line.c_str() + std::strlen(prefix), "%lld", &value) != 1) {
++        return -1;
++    }
++    return value;
++}
++
++static quantize_process_memory llama_quantize_process_memory_usage() {
++    quantize_process_memory result;
++
++#if defined(__linux__)
++    std::ifstream status("/proc/self/status");
++    std::string line;
++    while (std::getline(status, line)) {
++        const int64_t rss = llama_quantize_parse_kib_line(line, "VmRSS:");
++        if (rss >= 0) {
++            result.rss_kib = rss;
++            continue;
++        }
++
++        const int64_t hwm = llama_quantize_parse_kib_line(line, "VmHWM:");
++        if (hwm >= 0) {
++            result.hwm_kib = hwm;
++        }
++    }
++#elif defined(__APPLE__)
++    mach_task_basic_info info;
++    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
++    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t) &info, &count) == KERN_SUCCESS) {
++        result.rss_kib = (int64_t) info.resident_size / 1024;
++    }
++
++    struct rusage usage;
++    if (getrusage(RUSAGE_SELF, &usage) == 0) {
++        result.hwm_kib = (int64_t) usage.ru_maxrss / 1024;
++    }
++#endif
++
++    return result;
++}
++
++static int64_t llama_quantize_watchdog_interval_seconds() {
++    const char * env = std::getenv("LLAMA_QUANTIZE_WATCHDOG_SECONDS");
++    if (env == nullptr || env[0] == '\0') {
++        return 180;
++    }
++
++    char * end = nullptr;
++    const long long value = std::strtoll(env, &end, 10);
++    if (end == env) {
++        return 180;
++    }
++    return std::max<long long>(0, value);
++}
++
++struct quantize_watchdog_snapshot {
++    std::string tensor_name;
++    std::string tensor_shape;
++    std::string phase;
++    ggml_type   source_type = GGML_TYPE_COUNT;
++    ggml_type   target_type = GGML_TYPE_COUNT;
++    size_t      tensor_index = 0;
++    size_t      tensor_count = 0;
++    int         split_index = 0;
++    int         split_count = 1;
++    size_t      tensor_size = 0;
++    size_t      output_size = 0;
++    int64_t     expert_index = -1;
++    int64_t     expert_count = -1;
++    int64_t     first_row = -1;
++    int64_t     rows = -1;
++    int64_t     total_rows = -1;
++    bool        quantize = false;
++    bool        streaming = false;
++};
++
++class quantize_watchdog {
++public:
++    quantize_watchdog() : interval_seconds(llama_quantize_watchdog_interval_seconds()) {
++        if (interval_seconds <= 0) {
++            return;
++        }
++
++        started_at = std::chrono::steady_clock::now();
++        worker = std::thread([this]() { this->run(); });
++    }
++
++    ~quantize_watchdog() {
++        stop();
++    }
++
++    quantize_watchdog(const quantize_watchdog &) = delete;
++    quantize_watchdog & operator=(const quantize_watchdog &) = delete;
++
++    void update(quantize_watchdog_snapshot next) {
++        if (interval_seconds <= 0) {
++            return;
++        }
++
++        std::lock_guard<std::mutex> lock(mutex);
++        current = std::move(next);
++    }
++
++    void stop() {
++        if (interval_seconds <= 0) {
++            return;
++        }
++
++        {
++            std::lock_guard<std::mutex> lock(mutex);
++            stopping = true;
++        }
++        cv.notify_all();
++
++        if (worker.joinable()) {
++            worker.join();
++        }
++
++        interval_seconds = 0;
++    }
++
++private:
++    void run() {
++        std::unique_lock<std::mutex> lock(mutex);
++        while (!stopping) {
++            if (cv.wait_for(lock, std::chrono::seconds(interval_seconds), [this]() { return stopping; })) {
++                break;
++            }
++
++            const auto snapshot = current;
++            const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
++                std::chrono::steady_clock::now() - started_at);
++            lock.unlock();
++            log(snapshot, elapsed.count());
++            lock.lock();
++        }
++    }
++
++    static void log(const quantize_watchdog_snapshot & snapshot, int64_t elapsed_seconds) {
++        if (snapshot.tensor_name.empty()) {
++            return;
++        }
++
++        const quantize_process_memory mem = llama_quantize_process_memory_usage();
++        const double rss_mib = mem.rss_kib >= 0 ? mem.rss_kib / 1024.0 : -1.0;
++        const double hwm_mib = mem.hwm_kib >= 0 ? mem.hwm_kib / 1024.0 : -1.0;
++
++        LLAMA_LOG_INFO(
++            "\nllama_model_quantize_impl: watchdog elapsed=%" PRId64 "s phase=%s tensor=%zu/%zu split=%d/%d name=%s shape=[%s] type=%s->%s quantize=%s stream=%s tensor=%.2f MiB output=%.2f MiB rss=%.2f MiB hwm=%.2f MiB",
++            elapsed_seconds,
++            snapshot.phase.c_str(),
++            snapshot.tensor_index,
++            snapshot.tensor_count,
++            snapshot.split_index + 1,
++            snapshot.split_count,
++            snapshot.tensor_name.c_str(),
++            snapshot.tensor_shape.c_str(),
++            ggml_type_name(snapshot.source_type),
++            ggml_type_name(snapshot.target_type),
++            snapshot.quantize ? "yes" : "no",
++            snapshot.streaming ? "yes" : "no",
++            snapshot.tensor_size / 1024.0 / 1024.0,
++            snapshot.output_size / 1024.0 / 1024.0,
++            rss_mib,
++            hwm_mib);
++
++        if (snapshot.expert_index >= 0) {
++            LLAMA_LOG_INFO(
++                " expert=%" PRId64 "/%" PRId64 " rows=%" PRId64 "+%" PRId64 "/%" PRId64,
++                snapshot.expert_index + 1,
++                snapshot.expert_count,
++                snapshot.first_row,
++                snapshot.rows,
++                snapshot.total_rows);
++        }
++
++        LLAMA_LOG_INFO("\n");
++        std::fflush(stdout);
++        std::fflush(stderr);
++    }
++
++    std::mutex mutex;
++    std::condition_variable cv;
++    std::thread worker;
++    std::chrono::steady_clock::time_point started_at;
++    quantize_watchdog_snapshot current;
++    int64_t interval_seconds = 0;
++    bool stopping = false;
++};
++
+ static std::string remap_layer(const std::string & orig_name, const std::vector<int> & prune, std::map<int, std::string> & mapped, int & next_id) {
+     if (prune.empty()) {
+         return orig_name;
+@@ -1097,6 +1307,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+         new_ofstream(0);
+     }
+ 
++    quantize_watchdog watchdog;
++
+     //
+     // main loop: iterate over all weights
+     //
+@@ -1105,6 +1317,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+         const auto & weight = *tensors[i];
+         const auto & tm = metadata[i];
+         ggml_tensor * tensor = weight.tensor;
++        const size_t tensor_index = i + 1;
++        const std::string tensor_name = ggml_get_name(tensor);
++        const std::string tensor_shape = llama_format_tensor_shape(tensor);
++        const ggml_type cur_type = tensor->type;
++        const ggml_type new_type = tm.target_type;
+ 
+         if (!params->dry_run && (weight.idx != cur_split && params->keep_split)) {
+             close_ofstream();
+@@ -1112,6 +1329,28 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+         }
+ 
+         const size_t tensor_size = ggml_nbytes(tensor);
++        const bool quantize = cur_type != new_type;
++
++        watchdog.update({
++            tensor_name,
++            tensor_shape,
++            "loading",
++            cur_type,
++            new_type,
++            tensor_index,
++            tensors.size(),
++            params->keep_split ? weight.idx : 0,
++            n_split,
++            tensor_size,
++            0,
++            -1,
++            -1,
++            -1,
++            -1,
++            -1,
++            quantize,
++            false,
++        });
+ 
+         if (!params->dry_run) {
+             if (!ml.use_mmap) {
+@@ -1123,19 +1362,34 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+             ml.load_data_for(tensor);
+         }
+ 
++        ++idx;
++        watchdog.update({
++            tensor_name,
++            tensor_shape,
++            params->dry_run ? "dry-run" : "loaded",
++            cur_type,
++            new_type,
++            tensor_index,
++            tensors.size(),
++            params->keep_split ? weight.idx : 0,
++            n_split,
++            tensor_size,
++            0,
++            -1,
++            -1,
++            -1,
++            -1,
++            -1,
++            quantize,
++            false,
++        });
++
+         LLAMA_LOG_INFO("[%4d/%4d] %-36s - [%s], type = %6s, ",
+-               ++idx, ml.n_tensors,
+-               ggml_get_name(tensor),
+-               llama_format_tensor_shape(tensor).c_str(),
++               idx, ml.n_tensors,
++               tensor_name.c_str(),
++               tensor_shape.c_str(),
+                ggml_type_name(tensor->type));
+ 
+-        const ggml_type cur_type = tensor->type;
+-        const ggml_type new_type = tm.target_type;
+-
+-        // If we've decided to quantize to the same type the tensor is already
+-        // in then there's nothing to do.
+-        bool quantize = cur_type != new_type;
+-
+         void * new_data;
+         size_t new_size;
+ 
+@@ -1156,12 +1410,52 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+             }
+             total_size_org += tensor_size;
+             total_size_new += new_size;
++            watchdog.update({
++                tensor_name,
++                tensor_shape,
++                "done",
++                cur_type,
++                new_type,
++                tensor_index,
++                tensors.size(),
++                params->keep_split ? weight.idx : 0,
++                n_split,
++                tensor_size,
++                new_size,
++                -1,
++                -1,
++                -1,
++                -1,
++                -1,
++                quantize,
++                false,
++            });
+             continue;
+         } else {
+             // no --dry-run, perform quantization
+             if (!quantize) {
+                 new_data = tensor->data;
+                 new_size = tensor_size;
++                watchdog.update({
++                    tensor_name,
++                    tensor_shape,
++                    "copying",
++                    cur_type,
++                    new_type,
++                    tensor_index,
++                    tensors.size(),
++                    params->keep_split ? weight.idx : 0,
++                    n_split,
++                    tensor_size,
++                    new_size,
++                    -1,
++                    -1,
++                    -1,
++                    -1,
++                    -1,
++                    quantize,
++                    false,
++                });
+                 LLAMA_LOG_INFO("size = %8.3f MiB\n", tensor_size/1024.0/1024.0);
+             } else {
+                 const int64_t nelements = ggml_nelements(tensor);
+@@ -1232,6 +1526,26 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+                             const int64_t this_nrow = std::min(nrows - first_row, rows_per_stream_chunk);
+                             const int64_t start = i03 * nelements_matrix + first_row * n_per_row;
+                             const size_t chunk_nelements = this_nrow * n_per_row;
++                            watchdog.update({
++                                tensor_name,
++                                tensor_shape,
++                                "streaming",
++                                cur_type,
++                                new_type,
++                                tensor_index,
++                                tensors.size(),
++                                params->keep_split ? weight.idx : 0,
++                                n_split,
++                                tensor_size,
++                                new_size,
++                                i03,
++                                tensor->ne[2],
++                                first_row,
++                                this_nrow,
++                                nrows,
++                                quantize,
++                                true,
++                            });
+ 
+                             llama_tensor_dequantize_chunk_impl(tensor, f32_conv_buf, workers, start, chunk_nelements, nthread);
+ 
+@@ -1250,6 +1564,26 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+                     } else if (ggml_is_quantized(tensor->type) && !params->allow_requantize) {
+                         throw std::runtime_error(format("requantizing from type %s is disabled", ggml_type_name(tensor->type)));
+                     } else {
++                        watchdog.update({
++                            tensor_name,
++                            tensor_shape,
++                            "dequantizing",
++                            cur_type,
++                            new_type,
++                            tensor_index,
++                            tensors.size(),
++                            params->keep_split ? weight.idx : 0,
++                            n_split,
++                            tensor_size,
++                            new_size,
++                            -1,
++                            -1,
++                            -1,
++                            -1,
++                            -1,
++                            quantize,
++                            false,
++                        });
+                         llama_tensor_dequantize_impl(tensor, f32_conv_buf, workers, nelements, nthread);
+                         f32_data = (float *) f32_conv_buf.data();
+                     }
+@@ -1258,6 +1592,26 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+                         const float * f32_data_03 = f32_data + i03 * nelements_matrix;
+                         void * new_data_03 = (char *)new_data + row_size * i03 * nrows;
+                         const float * imatrix_03 = imatrix ? imatrix + i03 * n_per_row : nullptr;
++                        watchdog.update({
++                            tensor_name,
++                            tensor_shape,
++                            "quantizing",
++                            cur_type,
++                            new_type,
++                            tensor_index,
++                            tensors.size(),
++                            params->keep_split ? weight.idx : 0,
++                            n_split,
++                            tensor_size,
++                            new_size,
++                            i03,
++                            tensor->ne[2],
++                            0,
++                            nrows,
++                            nrows,
++                            quantize,
++                            false,
++                        });
+ 
+                         new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
+                     }
+@@ -1273,9 +1627,49 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+             gguf_set_tensor_data(ctx_outs[cur_split].get(), metadata[i].name.c_str(), new_data);
+ 
+             // write tensor data + padding
++            watchdog.update({
++                tensor_name,
++                tensor_shape,
++                "writing",
++                cur_type,
++                new_type,
++                tensor_index,
++                tensors.size(),
++                params->keep_split ? weight.idx : 0,
++                n_split,
++                tensor_size,
++                new_size,
++                -1,
++                -1,
++                -1,
++                -1,
++                -1,
++                quantize,
++                false,
++            });
+             fout.write((const char *) new_data, new_size);
+             zeros(fout, GGML_PAD(new_size, align) - new_size);
+             ml.unmap_data_for(tensor);
++            watchdog.update({
++                tensor_name,
++                tensor_shape,
++                "done",
++                cur_type,
++                new_type,
++                tensor_index,
++                tensors.size(),
++                params->keep_split ? weight.idx : 0,
++                n_split,
++                tensor_size,
++                new_size,
++                -1,
++                -1,
++                -1,
++                -1,
++                -1,
++                quantize,
++                false,
++            });
+         } // no --dry-run
+     } // main loop
+ 
+-- 
+2.54.0 (Apple Git-156)
+

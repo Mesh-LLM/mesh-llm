@@ -1,0 +1,162 @@
+From 21e71f17838dfd5d84f471d567e35994cff6c45a Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Mon, 15 Jun 2026 17:03:17 +1000
+Subject: [PATCH 10/10] Quantize split GGUF windows
+
+---
+ include/llama.h             |  2 ++
+ src/llama-quant.cpp         | 40 +++++++++++++++++++++++++++++++++----
+ tools/quantize/quantize.cpp | 18 ++++++++++++++++-
+ 3 files changed, 55 insertions(+), 5 deletions(-)
+
+diff --git a/include/llama.h b/include/llama.h
+index 27e480674..8f893592b 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -421,6 +421,8 @@ extern "C" {
+         const struct llama_model_kv_override * kv_overrides;        // pointer to kv overrides
+         const struct llama_model_tensor_override * tt_overrides;    // pointer to tensor overrides
+         const int32_t * prune_layers;                               // pointer to layer indices to prune
++        int32_t first_split;                                        // first 1-based split to quantize when keep_split is enabled, <= 0 means first
++        int32_t last_split;                                         // last 1-based split to quantize when keep_split is enabled, <= 0 means last
+     } llama_model_quantize_params;
+ 
+     typedef struct llama_logit_bias {
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+index 46b174b35..220b396a2 100644
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -1244,6 +1244,22 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+             n_split = std::max(uint16_t(it->idx + 1), n_split);
+         }
+     }
++
++    if (!params->keep_split && (params->first_split > 0 || params->last_split > 0)) {
++        throw std::runtime_error("--first-split and --last-split require --keep-split");
++    }
++
++    const uint16_t first_split = params->keep_split && params->first_split > 0 ? uint16_t(params->first_split - 1) : 0;
++    const uint16_t last_split  = params->keep_split && params->last_split  > 0 ? uint16_t(params->last_split  - 1) : uint16_t(n_split - 1);
++    if (first_split > last_split || last_split >= n_split) {
++        throw std::runtime_error(format("invalid split window: first=%d last=%d split_count=%d",
++                params->first_split, params->last_split, n_split));
++    }
++
++    auto split_in_window = [&](uint16_t split_idx) {
++        return !params->keep_split || (split_idx >= first_split && split_idx <= last_split);
++    };
++
+     std::vector<gguf_context_ptr> ctx_outs(n_split);
+     ctx_outs[0] = std::move(ctx_out);
+ 
+@@ -1259,6 +1275,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+         const struct ggml_tensor * tensor = it->tensor;
+ 
+         uint16_t i_split = params->keep_split ? it->idx : 0;
++        if (!split_in_window(i_split)) {
++            metadata[i].target_type = tensor->type;
++            continue;
++        }
++
+         if (!ctx_outs[i_split]) {
+             ctx_outs[i_split].reset(gguf_init_empty());
+         }
+@@ -1294,6 +1315,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+     // Set split info if needed
+     if (n_split > 1) {
+         for (size_t i = 0; i < ctx_outs.size(); ++i) {
++            if (!ctx_outs[i]) {
++                continue;
++            }
+             gguf_set_val_u16(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_NO).c_str(), i);
+             gguf_set_val_u16(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), n_split);
+             gguf_set_val_i32(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), (int32_t)tensors.size());
+@@ -1342,7 +1366,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+     };
+ 
+     // no output file for --dry-run
+-    if (!params->dry_run) {
++    if (!params->dry_run && !params->keep_split) {
+         new_ofstream(0);
+     }
+ 
+@@ -1356,14 +1380,20 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+         const auto & weight = *tensors[i];
+         const auto & tm = metadata[i];
+         ggml_tensor * tensor = weight.tensor;
++        if (!split_in_window(params->keep_split ? weight.idx : 0)) {
++            continue;
++        }
++
+         const size_t tensor_index = i + 1;
+         const std::string tensor_name = ggml_get_name(tensor);
+         const std::string tensor_shape = llama_format_tensor_shape(tensor);
+         const ggml_type cur_type = tensor->type;
+         const ggml_type new_type = tm.target_type;
+ 
+-        if (!params->dry_run && (weight.idx != cur_split && params->keep_split)) {
+-            close_ofstream();
++        if (!params->dry_run && params->keep_split && weight.idx != cur_split) {
++            if (cur_split >= 0) {
++                close_ofstream();
++            }
+             new_ofstream(weight.idx);
+         }
+ 
+@@ -1814,7 +1844,9 @@ llama_model_quantize_params llama_model_quantize_default_params() {
+         /*.imatrix                     =*/ nullptr,
+         /*.kv_overrides                =*/ nullptr,
+         /*.tensor_type                 =*/ nullptr,
+-        /*.prune_layers                =*/ nullptr
++        /*.prune_layers                =*/ nullptr,
++        /*.first_split                 =*/ 0,
++        /*.last_split                  =*/ 0,
+     };
+ 
+     return result;
+diff --git a/tools/quantize/quantize.cpp b/tools/quantize/quantize.cpp
+index 840eefc2f..b9ef9c0ca 100644
+--- a/tools/quantize/quantize.cpp
++++ b/tools/quantize/quantize.cpp
+@@ -121,7 +121,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
+ static void usage(const char * executable) {
+     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
+     printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file]\n");
+-    printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run]\n");
++    printf("       [--prune-layers] [--keep-split] [--first-split N] [--last-split N] [--override-kv] [--dry-run]\n");
+     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
+     printf("  --allow-requantize\n");
+     printf("                                      allow requantizing tensors that have already been quantized\n");
+@@ -155,6 +155,10 @@ static void usage(const char * executable) {
+     printf("                                      WARNING: this is an advanced option, use with care.\n");
+     printf("  --keep-split\n");
+     printf("                                      generate quantized model in the same shards as input\n");
++    printf("  --first-split N\n");
++    printf("                                      first 1-based split to quantize with --keep-split\n");
++    printf("  --last-split N\n");
++    printf("                                      last 1-based split to quantize with --keep-split\n");
+     printf("  --override-kv KEY=TYPE:VALUE\n");
+     printf("                                      override model metadata by key in the quantized model. may be specified multiple times.\n");
+     printf("                                      WARNING: this is an advanced option, use with care.\n");
+@@ -466,6 +470,18 @@ int llama_quantize(int argc, char ** argv) {
+             }
+         } else if (strcmp(argv[arg_idx], "--keep-split") == 0) {
+             params.keep_split = true;
++        } else if (strcmp(argv[arg_idx], "--first-split") == 0) {
++            if (arg_idx < argc-1) {
++                params.first_split = std::stoi(argv[++arg_idx]);
++            } else {
++                usage(argv[0]);
++            }
++        } else if (strcmp(argv[arg_idx], "--last-split") == 0) {
++            if (arg_idx < argc-1) {
++                params.last_split = std::stoi(argv[++arg_idx]);
++            } else {
++                usage(argv[0]);
++            }
+         } else {
+             usage(argv[0]);
+         }
+-- 
+2.54.0 (Apple Git-156)
+

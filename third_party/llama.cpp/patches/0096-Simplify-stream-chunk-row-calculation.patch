@@ -1,0 +1,25 @@
+From f482b044622aee4b1ef1fe7c1a09c60adaf3a6c2 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Mon, 15 Jun 2026 10:48:40 +1000
+Subject: [PATCH 07/10] Simplify stream chunk row calculation
+
+---
+ src/llama-quant.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+index 86089853a..fd695b388 100644
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -1222,7 +1222,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+                 new_size = 0;
+                 if (stream_source) {
+                     static const int64_t stream_chunk_size = 32 * 1024 * 1024;
+-                    const int64_t rows_per_stream_chunk = std::max<int64_t>(1, std::max(chunk_size, stream_chunk_size) / n_per_row);
++                    const int64_t rows_per_stream_chunk = std::max<int64_t>(1, stream_chunk_size / n_per_row);
+ 
+                     for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
+                         void * new_data_03 = (char *)new_data + row_size * i03 * nrows;
+-- 
+2.54.0 (Apple Git-156)
+
