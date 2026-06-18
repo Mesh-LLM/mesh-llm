@@ -1,7 +1,7 @@
-From 85cbb38f54f20bfa5e73b2b44ddc363b04c238d7 Mon Sep 17 00:00:00 2001
+From 0897c7c7c750940cdef44fbab005e4ac81de56ad Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 09:32:21 +1000
-Subject: [PATCH 52/82] Support Mamba runtime-slice execution
+Subject: [PATCH 052/108] Support Mamba runtime-slice execution
 
 ---
  src/models/mamba.cpp | 20 ++++++++++++++++----
@@ -9,7 +9,7 @@ Subject: [PATCH 52/82] Support Mamba runtime-slice execution
  2 files changed, 18 insertions(+), 4 deletions(-)
 
 diff --git a/src/models/mamba.cpp b/src/models/mamba.cpp
-index 0d94e9828..99e2c825e 100644
+index 0d94e982..99e2c825 100644
 --- a/src/models/mamba.cpp
 +++ b/src/models/mamba.cpp
 @@ -88,14 +88,19 @@ llama_model_mamba::graph::graph(const llama_model & model, const llm_graph_param
@@ -59,7 +59,7 @@ index 0d94e9828..99e2c825e 100644
      cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);
  
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index daa3b249a..e071f9c3c 100644
+index daa3b249..e071f9c3 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1473,6 +1473,8 @@ static enum skippy_status skippy_finish_model_open(
@@ -72,5 +72,5 @@ index daa3b249a..e071f9c3c 100644
              model->arch != LLM_ARCH_MPT &&
              model->arch != LLM_ARCH_OLMO2 &&
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

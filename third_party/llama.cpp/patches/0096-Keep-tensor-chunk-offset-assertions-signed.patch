@@ -1,14 +1,14 @@
-From 37d97e1156a0162d0164531fb2b5a6e312297114 Mon Sep 17 00:00:00 2001
+From e4fc0e726ef5d4ee7bf06b59f22345247c2201f3 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 15 Jun 2026 10:32:16 +1000
-Subject: [PATCH 06/10] Keep tensor chunk offset assertions signed
+Subject: [PATCH 096/108] Keep tensor chunk offset assertions signed
 
 ---
  src/llama-quant.cpp | 14 ++++++++------
  1 file changed, 8 insertions(+), 6 deletions(-)
 
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index cf1e5bce3..86089853a 100644
+index 154c435b..a26d9443 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -223,14 +223,16 @@ static void llama_tensor_dequantize_chunk_impl(
@@ -51,5 +51,5 @@ index cf1e5bce3..86089853a 100644
  
          auto compute = [qtype] (const uint8_t * inbuf, float * outbuf, int64_t nels) {
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

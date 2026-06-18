@@ -1,7 +1,7 @@
-From 07b1ff0732a61ffd76d6e274758cdfa5f88e83ee Mon Sep 17 00:00:00 2001
+From 3279d7bf45d0de9849f79ba070a777954b11d2b5 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 16:31:35 +1000
-Subject: [PATCH 68/82] Support DeepSeek OCR and Qwen3-VL-MoE runtime slices
+Subject: [PATCH 068/108] Support DeepSeek OCR and Qwen3-VL-MoE runtime slices
 
 ---
  src/models/qwen3vlmoe.cpp | 22 +++++++++++++++++-----
@@ -9,7 +9,7 @@ Subject: [PATCH 68/82] Support DeepSeek OCR and Qwen3-VL-MoE runtime slices
  2 files changed, 19 insertions(+), 5 deletions(-)
 
 diff --git a/src/models/qwen3vlmoe.cpp b/src/models/qwen3vlmoe.cpp
-index 7c41592f7..33c961a41 100644
+index 7c41592f..33c961a4 100644
 --- a/src/models/qwen3vlmoe.cpp
 +++ b/src/models/qwen3vlmoe.cpp
 @@ -73,7 +73,12 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_
@@ -71,7 +71,7 @@ index 7c41592f7..33c961a41 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index f49e0623e..0290f045b 100644
+index f49e0623..0290f045 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1638,6 +1638,7 @@ static enum skippy_status skippy_finish_model_open(
@@ -91,5 +91,5 @@ index f49e0623e..0290f045b 100644
              model->arch != LLM_ARCH_KIMI_LINEAR &&
              model->arch != LLM_ARCH_LFM2MOE &&
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

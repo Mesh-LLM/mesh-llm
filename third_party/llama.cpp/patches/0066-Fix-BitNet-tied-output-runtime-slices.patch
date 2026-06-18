@@ -1,14 +1,14 @@
-From 762a920403fdd0d35d0a32f2f26452a3183d16da Mon Sep 17 00:00:00 2001
+From 3fb11c1bc592f292ff6cb9fa33e849b472d5b373 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 06:54:19 +1000
-Subject: [PATCH 66/82] Fix BitNet tied output runtime slices
+Subject: [PATCH 066/108] Fix BitNet tied output runtime slices
 
 ---
  src/models/bitnet.cpp | 4 ++--
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/src/models/bitnet.cpp b/src/models/bitnet.cpp
-index e2e0f2074..20faa0697 100644
+index e2e0f207..20faa069 100644
 --- a/src/models/bitnet.cpp
 +++ b/src/models/bitnet.cpp
 @@ -16,6 +16,7 @@ void llama_model_bitnet::load_arch_tensors(llama_model_loader &) {
@@ -30,5 +30,5 @@ index e2e0f2074..20faa0697 100644
      cb(cur, "result_output", -1);
      res->t_logits = cur;
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

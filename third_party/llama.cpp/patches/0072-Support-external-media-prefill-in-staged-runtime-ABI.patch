@@ -1,7 +1,7 @@
-From 361212f8f45265982dc0bf236e638719627db892 Mon Sep 17 00:00:00 2001
+From ef4b643feda0a36638be8c7a0f6a5eb763066014 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 18:18:58 +1000
-Subject: [PATCH 72/82] Support external media prefill in staged runtime ABI
+Subject: [PATCH 072/108] Support external media prefill in staged runtime ABI
 
 ---
  include/skippy.h | 14 ++++++++++
@@ -9,7 +9,7 @@ Subject: [PATCH 72/82] Support external media prefill in staged runtime ABI
  2 files changed, 84 insertions(+), 3 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index c48bc2407..c588c8624 100644
+index c48bc240..c588c862 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -351,6 +351,20 @@ LLAMA_API enum skippy_status skippy_prefill_chunk_frame(
@@ -34,7 +34,7 @@ index c48bc2407..c588c8624 100644
          struct skippy_session * session,
          llama_token token_id,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index f0a154b4f..2a38c01b0 100644
+index f0a154b4..2a38c01b 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -2317,17 +2317,23 @@ enum skippy_status skippy_verify_tokens(
@@ -144,5 +144,5 @@ index f0a154b4f..2a38c01b0 100644
          struct skippy_session * session,
          llama_token token_id,
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

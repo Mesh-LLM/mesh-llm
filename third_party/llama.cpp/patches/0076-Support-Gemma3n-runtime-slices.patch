@@ -1,7 +1,7 @@
-From 82da00b8bab66f9b0e9c303611d184c93a7c094f Mon Sep 17 00:00:00 2001
+From 75bccd40abe00c877a9d410f5c312c8ecac2822b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 20:29:25 +1000
-Subject: [PATCH 76/82] Support Gemma3n runtime slices
+Subject: [PATCH 076/108] Support Gemma3n runtime slices
 
 ---
  include/skippy.h           |   3 +-
@@ -13,7 +13,7 @@ Subject: [PATCH 76/82] Support Gemma3n runtime slices
  6 files changed, 216 insertions(+), 15 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index eb6da73ef..f1ff7852b 100644
+index eb6da73e..f1ff7852 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -99,7 +99,8 @@ enum skippy_activation_layout {
@@ -27,7 +27,7 @@ index eb6da73ef..f1ff7852b 100644
  struct skippy_model;
  struct skippy_session;
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index ec748bcaf..5e8bf4835 100644
+index 57c02537..3f61635a 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -22,6 +22,7 @@
@@ -97,7 +97,7 @@ index ec748bcaf..5e8bf4835 100644
          const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
          for (size_t il = 0; il < embeddings_layer_inp.size(); ++il) {
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 3414f3477..57054cd68 100644
+index 2a7bd2be..63499675 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -47,6 +47,13 @@ struct skippy_activation_rwkv7_v_first {
@@ -164,7 +164,7 @@ index 3414f3477..57054cd68 100644
      std::vector<ggml_tensor *> t_layer_inp;
  
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 8bfc15b2a..1e7ec54cd 100644
+index 8bfc15b2..1e7ec54c 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -1185,6 +1185,13 @@ struct ggml_tensor * llama_model_loader::create_tensor(
@@ -191,7 +191,7 @@ index 8bfc15b2a..1e7ec54cd 100644
                      }
                      const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/models/gemma3n.cpp b/src/models/gemma3n.cpp
-index 83eb8250a..c1f6a3f61 100644
+index 83eb8250..c1f6a3f6 100644
 --- a/src/models/gemma3n.cpp
 +++ b/src/models/gemma3n.cpp
 @@ -98,11 +98,28 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
@@ -298,7 +298,7 @@ index 83eb8250a..c1f6a3f61 100644
          // Multimodal embedding path: use padding token (ID=0) embedding
          // TODO: verify if this is the correct behavior in transformers implementation
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 3f7571691..d61f922c9 100644
+index 3f757169..d61f922c 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -670,6 +670,34 @@ struct skippy_rwkv7_v_first_scope {
@@ -502,5 +502,5 @@ index 3f7571691..d61f922c9 100644
              model->arch != LLM_ARCH_GLM_DSA &&
              model->arch != LLM_ARCH_GLM4 &&
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

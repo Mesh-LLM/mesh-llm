@@ -1,7 +1,7 @@
-From dfcb1e6a28d849225b3875ec095856327b397adc Mon Sep 17 00:00:00 2001
+From 0c496e8ab0a6a62fa507041a21fd337775ff8c7e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 5 May 2026 19:20:00 +1000
-Subject: [PATCH 40/82] Add borrowed resident prefix session ABI
+Subject: [PATCH 040/108] Add borrowed resident prefix session ABI
 
 ---
  include/skippy.h |  10 ++++-
@@ -9,7 +9,7 @@ Subject: [PATCH 40/82] Add borrowed resident prefix session ABI
  2 files changed, 107 insertions(+), 6 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index b051b66c6..fe166e3d6 100644
+index b051b66c..fe166e3d 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -37,7 +37,7 @@ index b051b66c6..fe166e3d6 100644
          struct skippy_session * session);
  
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 30f538a7d..bea61d65c 100644
+index 30f538a7..bea61d65 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -45,6 +45,8 @@ struct skippy_session {
@@ -191,5 +191,5 @@ index 30f538a7d..bea61d65c 100644
          struct skippy_session * session,
          int32_t seq_id,
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

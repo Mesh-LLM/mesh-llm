@@ -1,7 +1,7 @@
-From bf86aed60149b250dbfe20d84d0a5d624a1d71d9 Mon Sep 17 00:00:00 2001
+From 4612e3307657e41e32165e0da517dabfcfca728e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 29 Apr 2026 11:45:50 +1000
-Subject: [PATCH 28/82] Load stage models from ordered GGUF parts
+Subject: [PATCH 028/108] Load stage models from ordered GGUF parts
 
 ---
  include/llama.h            |   7 ++
@@ -14,7 +14,7 @@ Subject: [PATCH 28/82] Load stage models from ordered GGUF parts
  7 files changed, 186 insertions(+), 50 deletions(-)
 
 diff --git a/include/llama.h b/include/llama.h
-index 27e480674..f9e4f4019 100644
+index 27e48067..f9e4f401 100644
 --- a/include/llama.h
 +++ b/include/llama.h
 @@ -502,6 +502,13 @@ extern "C" {
@@ -32,7 +32,7 @@ index 27e480674..f9e4f4019 100644
              const struct llama_model * model,
                          const char * path_model);
 diff --git a/include/skippy.h b/include/skippy.h
-index 69293d6d3..4dd985da2 100644
+index 69293d6d..4dd985da 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -67,7 +67,7 @@ index 69293d6d3..4dd985da2 100644
          struct skippy_model * model,
          struct skippy_error ** out_error);
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 622b228e6..16cc0b06e 100644
+index 622b228e..16cc0b06 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -525,6 +525,7 @@ llama_model_loader::llama_model_loader(
@@ -131,7 +131,7 @@ index 622b228e6..16cc0b06e 100644
              uint16_t idx = 0;
              const std::string kv_split_no = llm_kv(LLM_KV_SPLIT_NO);
 diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
-index 3fb84fdd2..d889c99d2 100644
+index 3fb84fdd..d889c99d 100644
 --- a/src/llama-model-loader.h
 +++ b/src/llama-model-loader.h
 @@ -136,6 +136,7 @@ struct llama_model_loader {
@@ -143,7 +143,7 @@ index 3fb84fdd2..d889c99d2 100644
          bool use_mmap,
          bool use_direct_io,
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index cf92ce4bb..d4e7738a9 100644
+index cf92ce4b..d4e7738a 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -879,7 +879,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
@@ -156,7 +156,7 @@ index cf92ce4bb..d4e7738a9 100644
  
      auto mparams = llama_model_default_params();
 diff --git a/src/llama.cpp b/src/llama.cpp
-index a67fa8039..e39854377 100644
+index 0de6048f..900a87f7 100644
 --- a/src/llama.cpp
 +++ b/src/llama.cpp
 @@ -277,9 +277,9 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
@@ -250,7 +250,7 @@ index a67fa8039..e39854377 100644
  }
 -
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 5abc8776d..ab5a147c0 100644
+index 5abc8776..ab5a147c 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1005,7 +1005,8 @@ uint64_t skippy_abi_features(void) {
@@ -416,5 +416,5 @@ index 5abc8776d..ab5a147c0 100644
          struct skippy_model * model,
          struct skippy_error ** out_error) {
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

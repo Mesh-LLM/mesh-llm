@@ -1,7 +1,7 @@
-From 08f5e8ebf4116f1fe150e9742039009ac5cc63da Mon Sep 17 00:00:00 2001
+From b0cd1ce8c33cd860e3c36d2a17c225049b87393e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 18:45:41 +1000
-Subject: [PATCH 75/82] Carry activation frame position sideband
+Subject: [PATCH 075/108] Carry activation frame position sideband
 
 ---
  include/skippy.h |  30 +++++++++++
@@ -9,7 +9,7 @@ Subject: [PATCH 75/82] Carry activation frame position sideband
  2 files changed, 145 insertions(+), 12 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index c588c8624..eb6da73ef 100644
+index c588c862..eb6da73e 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -365,6 +365,36 @@ LLAMA_API enum skippy_status skippy_prefill_chunk_frame_sampled(
@@ -50,7 +50,7 @@ index c588c8624..eb6da73ef 100644
          struct skippy_session * session,
          llama_token token_id,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index aa48c9a89..3f7571691 100644
+index aa48c9a8..3f757169 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1455,6 +1455,8 @@ static enum skippy_status skippy_decode_activation_frame(
@@ -253,5 +253,5 @@ index aa48c9a89..3f7571691 100644
          status = session->stage_model->config.include_output ?
                  skippy_verify_token_batch(session, token_ids, token_count, out_error) :
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

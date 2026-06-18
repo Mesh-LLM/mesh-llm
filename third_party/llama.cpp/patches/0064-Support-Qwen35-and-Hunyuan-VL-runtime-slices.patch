@@ -1,7 +1,7 @@
-From 14b0828d43bb690adae93ae70652536e5230db0e Mon Sep 17 00:00:00 2001
+From ef8362359012f9918b9d88c7c0cf0331ebde6d37 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 20:10:14 +1000
-Subject: [PATCH 64/82] Support Qwen35 and Hunyuan-VL runtime slices
+Subject: [PATCH 064/108] Support Qwen35 and Hunyuan-VL runtime slices
 
 ---
  src/models/qwen35.cpp | 29 ++++++++++++++++++++++++-----
@@ -9,7 +9,7 @@ Subject: [PATCH 64/82] Support Qwen35 and Hunyuan-VL runtime slices
  2 files changed, 26 insertions(+), 5 deletions(-)
 
 diff --git a/src/models/qwen35.cpp b/src/models/qwen35.cpp
-index 6783d98ec..0e5bbb16b 100644
+index 6783d98e..c6053638 100644
 --- a/src/models/qwen35.cpp
 +++ b/src/models/qwen35.cpp
 @@ -145,17 +145,29 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
@@ -70,7 +70,7 @@ index 6783d98ec..0e5bbb16b 100644
  
      cb(cur, "h_nextn", -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 755120fcb..03cce3cb1 100644
+index 755120fc..03cce3cb 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1590,6 +1590,7 @@ static enum skippy_status skippy_finish_model_open(
@@ -90,4 +90,5 @@ index 755120fcb..03cce3cb1 100644
              model->arch != LLM_ARCH_QWEN3MOE &&
              model->arch != LLM_ARCH_RWKV6 &&
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
+

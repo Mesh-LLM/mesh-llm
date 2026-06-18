@@ -1,14 +1,14 @@
-From 3ce3f68c946031dcbabacba30c4cf935c154bc42 Mon Sep 17 00:00:00 2001
+From 7d2489cfda99805200178ecb7aa39aee4c6bb1e7 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 15 Jun 2026 10:29:13 +1000
-Subject: [PATCH 05/10] Call tensor to_float directly
+Subject: [PATCH 095/108] Call tensor to_float directly
 
 ---
  src/llama-quant.cpp | 8 ++------
  1 file changed, 2 insertions(+), 6 deletions(-)
 
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 847292290..cf1e5bce3 100644
+index 8bfeaf03..154c435b 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -209,10 +209,6 @@ struct tensor_metadata {
@@ -41,5 +41,5 @@ index 847292290..cf1e5bce3 100644
          workers.emplace_back(compute, input_data + in_buff_offs, f32_output + out_buff_offs, thr_elems);
          in_buff_offs += thr_block_bytes;
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

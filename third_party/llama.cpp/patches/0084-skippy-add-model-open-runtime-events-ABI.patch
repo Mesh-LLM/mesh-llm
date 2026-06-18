@@ -1,16 +1,16 @@
-From b81d5c52a79ca5e80e39b0cefdfe5da87d4f9769 Mon Sep 17 00:00:00 2001
+From 61da4c5616fa413d7ea42487295260938211f975 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 12 Jun 2026 14:34:47 -0400
-Subject: [PATCH] skippy: add model-open runtime events ABI
+Subject: [PATCH 084/108] skippy: add model-open runtime events ABI
 
 ---
  include/skippy.h        |  15 ++
- include/skippy/common.h |  86 ++++++++-
+ include/skippy/common.h |  84 +++++++-
  src/skippy.cpp          | 414 +++++++++++++++++++++++++++++++++++++---
- 3 files changed, 488 insertions(+), 27 deletions(-)
+ 3 files changed, 487 insertions(+), 26 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 84173c028..075850e38 100644
+index 84173c02..075850e3 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -137,6 +137,13 @@ LLAMA_API enum skippy_status skippy_model_open(
@@ -43,7 +43,7 @@ index 84173c028..075850e38 100644
          struct skippy_model * model,
          struct skippy_error ** out_error);
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index a680d3421..74b82d57a 100644
+index a680d342..a6bd7fd9 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -55,12 +55,10 @@ index a680d3421..74b82d57a 100644
  
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
-@@ -52,7 +52,8 @@ enum skippy_feature {
-     SKIPPY_FEATURE_EXTERNAL_MEDIA_PREFILL = 1 << 20,
+@@ -53,6 +53,7 @@ enum skippy_feature {
      SKIPPY_FEATURE_CHAT_TEMPLATE_TOOLS    = 1 << 21,
      SKIPPY_FEATURE_CHAT_SAMPLING_GRAMMAR  = 1 << 22,
--    SKIPPY_FEATURE_BACKEND_DEVICES        = 1 << 23,
-+    SKIPPY_FEATURE_BACKEND_DEVICES        = 1 << 23,
+     SKIPPY_FEATURE_BACKEND_DEVICES        = 1 << 23,
 +    SKIPPY_FEATURE_RUNTIME_EVENTS         = 1 << 24,
  };
  
@@ -154,7 +152,7 @@ index a680d3421..74b82d57a 100644
      enum skippy_status status;
      const char * message;
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index f0f14820e..8c04b87da 100644
+index f0f14820..4dcd0d96 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -205,6 +205,237 @@ static uint64_t skippy_backend_device_caps_from_ggml(const ggml_backend_dev_caps
@@ -724,3 +722,4 @@ index f0f14820e..8c04b87da 100644
  enum skippy_status skippy_model_free(
 -- 
 2.50.1 (Apple Git-155)
+

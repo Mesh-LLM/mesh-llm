@@ -1,7 +1,7 @@
-From 1c0852d25759b12d2e507fbf1ef477b97592a257 Mon Sep 17 00:00:00 2001
+From 0bb0655ae4872a8b8b937e9d44fec7eddacc2535 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 8 May 2026 05:58:50 +1000
-Subject: [PATCH 77/82] Support Llama4 and Mistral4 runtime slices
+Subject: [PATCH 077/108] Support Llama4 and Mistral4 runtime slices
 
 ---
  src/llama-graph.cpp    | 50 ++++++++++++++++++++++++++++--------------
@@ -11,7 +11,7 @@ Subject: [PATCH 77/82] Support Llama4 and Mistral4 runtime slices
  4 files changed, 83 insertions(+), 21 deletions(-)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 5e8bf4835..50b9edd44 100644
+index 3f61635a..64d38fc4 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -674,19 +674,19 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
@@ -126,7 +126,7 @@ index 5e8bf4835..50b9edd44 100644
      res &= inp_rs->head == mctx->get_recr()->get_head();
      res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
 diff --git a/src/models/gemma3n.cpp b/src/models/gemma3n.cpp
-index c1f6a3f61..8e712f757 100644
+index c1f6a3f6..8e712f75 100644
 --- a/src/models/gemma3n.cpp
 +++ b/src/models/gemma3n.cpp
 @@ -112,6 +112,25 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
@@ -156,7 +156,7 @@ index c1f6a3f61..8e712f757 100644
          inpL = build_inp_embd(model.tok_embd);
  
 diff --git a/src/models/llama4.cpp b/src/models/llama4.cpp
-index 7194c72a5..1f3f1c358 100644
+index 7194c72a..1f3f1c35 100644
 --- a/src/models/llama4.cpp
 +++ b/src/models/llama4.cpp
 @@ -113,14 +113,30 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
@@ -228,7 +228,7 @@ index 7194c72a5..1f3f1c358 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index d61f922c9..27dc78b07 100644
+index d61f922c..27dc78b0 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1764,12 +1764,14 @@ static enum skippy_status skippy_finish_model_open(
@@ -247,5 +247,5 @@ index d61f922c9..27dc78b07 100644
              model->arch != LLM_ARCH_NEMOTRON &&
              model->arch != LLM_ARCH_OLMO2 &&
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

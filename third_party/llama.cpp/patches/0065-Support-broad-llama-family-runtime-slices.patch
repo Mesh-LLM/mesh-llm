@@ -1,7 +1,7 @@
-From f6f6b333d56d5948e61c8aa74e207ea37183008b Mon Sep 17 00:00:00 2001
+From df446f468ddf7c6e574ea8f613284cafccb3ce87 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 20:26:18 +1000
-Subject: [PATCH 65/82] Support broad llama family runtime slices
+Subject: [PATCH 065/108] Support broad llama family runtime slices
 
 ---
  src/models/afmoe.cpp        | 18 ++++++++++---
@@ -53,7 +53,7 @@ Subject: [PATCH 65/82] Support broad llama family runtime slices
  46 files changed, 732 insertions(+), 143 deletions(-)
 
 diff --git a/src/models/afmoe.cpp b/src/models/afmoe.cpp
-index 063b21425..b388e586a 100644
+index 063b2142..b388e586 100644
 --- a/src/models/afmoe.cpp
 +++ b/src/models/afmoe.cpp
 @@ -113,7 +113,12 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param
@@ -99,7 +99,7 @@ index 063b21425..b388e586a 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/apertus.cpp b/src/models/apertus.cpp
-index 6dfb8905f..88f6799e6 100644
+index 6dfb8905..88f6799e 100644
 --- a/src/models/apertus.cpp
 +++ b/src/models/apertus.cpp
 @@ -66,7 +66,12 @@ llama_model_apertus::graph::graph(const llama_model & model, const llm_graph_par
@@ -143,7 +143,7 @@ index 6dfb8905f..88f6799e6 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/arcee.cpp b/src/models/arcee.cpp
-index 9536e7c5d..7711f805e 100644
+index 9536e7c5..7711f805 100644
 --- a/src/models/arcee.cpp
 +++ b/src/models/arcee.cpp
 @@ -54,7 +54,12 @@ llama_model_arcee::graph::graph(const llama_model & model, const llm_graph_param
@@ -187,7 +187,7 @@ index 9536e7c5d..7711f805e 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/arctic.cpp b/src/models/arctic.cpp
-index 09ee0f752..a2b3e6cf8 100644
+index 09ee0f75..a2b3e6cf 100644
 --- a/src/models/arctic.cpp
 +++ b/src/models/arctic.cpp
 @@ -62,16 +62,21 @@ llama_model_arctic::graph::graph(const llama_model & model, const llm_graph_para
@@ -230,7 +230,7 @@ index 09ee0f752..a2b3e6cf8 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/bailingmoe.cpp b/src/models/bailingmoe.cpp
-index 7faf73c83..3fa8e41d0 100644
+index 7faf73c8..3fa8e41d 100644
 --- a/src/models/bailingmoe.cpp
 +++ b/src/models/bailingmoe.cpp
 @@ -63,16 +63,21 @@ llama_model_bailingmoe::graph::graph(const llama_model & model, const llm_graph_
@@ -273,7 +273,7 @@ index 7faf73c83..3fa8e41d0 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/bailingmoe2.cpp b/src/models/bailingmoe2.cpp
-index 5000e9c6d..2d95fc677 100644
+index 5000e9c6..2d95fc67 100644
 --- a/src/models/bailingmoe2.cpp
 +++ b/src/models/bailingmoe2.cpp
 @@ -99,16 +99,21 @@ llama_model_bailingmoe2::graph::graph(const llama_model & model, const llm_graph
@@ -325,7 +325,7 @@ index 5000e9c6d..2d95fc677 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/bitnet.cpp b/src/models/bitnet.cpp
-index c83302745..e2e0f2074 100644
+index c8330274..e2e0f207 100644
 --- a/src/models/bitnet.cpp
 +++ b/src/models/bitnet.cpp
 @@ -56,16 +56,21 @@ llama_model_bitnet::graph::graph(const llama_model & model, const llm_graph_para
@@ -368,7 +368,7 @@ index c83302745..e2e0f2074 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/chatglm.cpp b/src/models/chatglm.cpp
-index 7ae5b938f..ad6ea6e76 100644
+index 7ae5b938..ad6ea6e7 100644
 --- a/src/models/chatglm.cpp
 +++ b/src/models/chatglm.cpp
 @@ -63,16 +63,21 @@ llama_model_chatglm::graph::graph(const llama_model & model, const llm_graph_par
@@ -411,7 +411,7 @@ index 7ae5b938f..ad6ea6e76 100644
              model.output_norm,
              NULL,
 diff --git a/src/models/codeshell.cpp b/src/models/codeshell.cpp
-index de53bb981..bc7cc8865 100644
+index de53bb98..bc7cc886 100644
 --- a/src/models/codeshell.cpp
 +++ b/src/models/codeshell.cpp
 @@ -59,16 +59,21 @@ llama_model_codeshell::graph::graph(const llama_model & model, const llm_graph_p
@@ -454,7 +454,7 @@ index de53bb981..bc7cc8865 100644
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/models/dbrx.cpp b/src/models/dbrx.cpp
-index 4f5ac4d06..f2d5238f4 100644
+index 4f5ac4d0..f2d5238f 100644
 --- a/src/models/dbrx.cpp
 +++ b/src/models/dbrx.cpp
 @@ -53,16 +53,21 @@ llama_model_dbrx::graph::graph(const llama_model & model, const llm_graph_params
@@ -497,7 +497,7 @@ index 4f5ac4d06..f2d5238f4 100644
              model.output_norm, NULL,
              LLM_NORM, -1);
 diff --git a/src/models/deci.cpp b/src/models/deci.cpp
-index cdfcf29e0..d732efe45 100644
+index cdfcf29e..d732efe4 100644
 --- a/src/models/deci.cpp
 +++ b/src/models/deci.cpp
 @@ -86,7 +86,12 @@ llama_model_deci::graph::graph(const llama_model & model, const llm_graph_params
@@ -541,7 +541,7 @@ index cdfcf29e0..d732efe45 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/dots1.cpp b/src/models/dots1.cpp
-index 07d6ab1b7..ea7e03b0c 100644
+index 07d6ab1b..ea7e03b0 100644
 --- a/src/models/dots1.cpp
 +++ b/src/models/dots1.cpp
 @@ -81,16 +81,21 @@ llama_model_dots1::graph::graph(const llama_model & model, const llm_graph_param
@@ -584,7 +584,7 @@ index 07d6ab1b7..ea7e03b0c 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/dream.cpp b/src/models/dream.cpp
-index abe737c33..b8902bb7b 100644
+index abe737c3..b8902bb7 100644
 --- a/src/models/dream.cpp
 +++ b/src/models/dream.cpp
 @@ -60,16 +60,21 @@ llama_model_dream::graph::graph(const llama_model & model, const llm_graph_param
@@ -627,7 +627,7 @@ index abe737c33..b8902bb7b 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/ernie4-5-moe.cpp b/src/models/ernie4-5-moe.cpp
-index 8d9ff1386..66ec33e4c 100644
+index 8d9ff138..66ec33e4 100644
 --- a/src/models/ernie4-5-moe.cpp
 +++ b/src/models/ernie4-5-moe.cpp
 @@ -14,17 +14,22 @@ llama_model_ernie4_5_moe::graph::graph(const llama_model & model, const llm_grap
@@ -671,7 +671,7 @@ index 8d9ff1386..66ec33e4c 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/ernie4-5.cpp b/src/models/ernie4-5.cpp
-index 895cf690b..fff2c2476 100644
+index 895cf690..fff2c247 100644
 --- a/src/models/ernie4-5.cpp
 +++ b/src/models/ernie4-5.cpp
 @@ -83,16 +83,21 @@ llama_model_ernie4_5::graph::graph(const llama_model & model, const llm_graph_pa
@@ -714,7 +714,7 @@ index 895cf690b..fff2c2476 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/exaone-moe.cpp b/src/models/exaone-moe.cpp
-index 5aed93794..f5946ddfc 100644
+index 5aed9379..f5946ddf 100644
 --- a/src/models/exaone-moe.cpp
 +++ b/src/models/exaone-moe.cpp
 @@ -120,16 +120,21 @@ llama_model_exaone_moe::graph::graph(const llama_model & model, const llm_graph_
@@ -766,7 +766,7 @@ index 5aed93794..f5946ddfc 100644
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
  
 diff --git a/src/models/grok.cpp b/src/models/grok.cpp
-index 42f38af67..53f683914 100644
+index 42f38af6..53f68391 100644
 --- a/src/models/grok.cpp
 +++ b/src/models/grok.cpp
 @@ -92,16 +92,21 @@ llama_model_grok::graph::graph(const llama_model & model, const llm_graph_params
@@ -809,7 +809,7 @@ index 42f38af67..53f683914 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/grovemoe.cpp b/src/models/grovemoe.cpp
-index 643a448e5..12fce2051 100644
+index 643a448e..12fce205 100644
 --- a/src/models/grovemoe.cpp
 +++ b/src/models/grovemoe.cpp
 @@ -75,16 +75,21 @@ llama_model_grovemoe::graph::graph(const llama_model & model, const llm_graph_pa
@@ -852,7 +852,7 @@ index 643a448e5..12fce2051 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/jais.cpp b/src/models/jais.cpp
-index 415103ce2..1c77c02b1 100644
+index 415103ce..1c77c02b 100644
 --- a/src/models/jais.cpp
 +++ b/src/models/jais.cpp
 @@ -60,13 +60,18 @@ llama_model_jais::graph::graph(const llama_model & model, const llm_graph_params
@@ -892,7 +892,7 @@ index 415103ce2..1c77c02b1 100644
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/models/jais2.cpp b/src/models/jais2.cpp
-index 8610fcc9f..cd71d5dbc 100644
+index 8610fcc9..cd71d5db 100644
 --- a/src/models/jais2.cpp
 +++ b/src/models/jais2.cpp
 @@ -66,7 +66,12 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
@@ -936,7 +936,7 @@ index 8610fcc9f..cd71d5dbc 100644
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/models/kimi-linear.cpp b/src/models/kimi-linear.cpp
-index 367f6990d..2426dfa0f 100644
+index 367f6990..2426dfa0 100644
 --- a/src/models/kimi-linear.cpp
 +++ b/src/models/kimi-linear.cpp
 @@ -236,7 +236,12 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
@@ -986,7 +986,7 @@ index 367f6990d..2426dfa0f 100644
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
  
 diff --git a/src/models/llada-moe.cpp b/src/models/llada-moe.cpp
-index 2ae893864..6debd1303 100644
+index 2ae89386..6debd130 100644
 --- a/src/models/llada-moe.cpp
 +++ b/src/models/llada-moe.cpp
 @@ -60,16 +60,21 @@ llama_model_llada_moe::graph::graph(const llama_model & model, const llm_graph_p
@@ -1029,7 +1029,7 @@ index 2ae893864..6debd1303 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/llada.cpp b/src/models/llada.cpp
-index 87d4259f9..47e2f9dfc 100644
+index 87d4259f..47e2f9df 100644
 --- a/src/models/llada.cpp
 +++ b/src/models/llada.cpp
 @@ -78,7 +78,12 @@ llama_model_llada::graph::graph(const llama_model & model, const llm_graph_param
@@ -1073,7 +1073,7 @@ index 87d4259f9..47e2f9dfc 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/maincoder.cpp b/src/models/maincoder.cpp
-index ae56a26a1..631e4057f 100644
+index ae56a26a..631e4057 100644
 --- a/src/models/maincoder.cpp
 +++ b/src/models/maincoder.cpp
 @@ -53,16 +53,21 @@ llama_model_maincoder::graph::graph(const llama_model & model, const llm_graph_p
@@ -1116,7 +1116,7 @@ index ae56a26a1..631e4057f 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/mimo2.cpp b/src/models/mimo2.cpp
-index 889891605..04eaa2173 100644
+index 88989160..04eaa217 100644
 --- a/src/models/mimo2.cpp
 +++ b/src/models/mimo2.cpp
 @@ -82,15 +82,20 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
@@ -1169,7 +1169,7 @@ index 889891605..04eaa2173 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/minicpm3.cpp b/src/models/minicpm3.cpp
-index e011b1ff0..ec121e8b7 100644
+index e011b1ff..ec121e8b 100644
 --- a/src/models/minicpm3.cpp
 +++ b/src/models/minicpm3.cpp
 @@ -75,7 +75,12 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
@@ -1213,7 +1213,7 @@ index e011b1ff0..ec121e8b7 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/nemotron-h.cpp b/src/models/nemotron-h.cpp
-index a45626934..cdc09a506 100644
+index a4562693..cdc09a50 100644
 --- a/src/models/nemotron-h.cpp
 +++ b/src/models/nemotron-h.cpp
 @@ -129,14 +129,19 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
@@ -1254,7 +1254,7 @@ index a45626934..cdc09a506 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/nemotron.cpp b/src/models/nemotron.cpp
-index 6e2bd9a33..5b91df3d8 100644
+index 6e2bd9a3..5b91df3d 100644
 --- a/src/models/nemotron.cpp
 +++ b/src/models/nemotron.cpp
 @@ -56,16 +56,21 @@ llama_model_nemotron::graph::graph(const llama_model & model, const llm_graph_pa
@@ -1297,7 +1297,7 @@ index 6e2bd9a33..5b91df3d8 100644
              model.output_norm, model.output_norm_b,
              LLM_NORM, -1);
 diff --git a/src/models/openai-moe.cpp b/src/models/openai-moe.cpp
-index 6d74f9c7e..d860df794 100644
+index 6d74f9c7..d860df79 100644
 --- a/src/models/openai-moe.cpp
 +++ b/src/models/openai-moe.cpp
 @@ -65,16 +65,21 @@ llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_
@@ -1349,7 +1349,7 @@ index 6d74f9c7e..d860df794 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/openelm.cpp b/src/models/openelm.cpp
-index 13120bd32..33ca072f0 100644
+index 13120bd3..33ca072f 100644
 --- a/src/models/openelm.cpp
 +++ b/src/models/openelm.cpp
 @@ -54,16 +54,21 @@ llama_model_openelm::graph::graph(const llama_model & model, const llm_graph_par
@@ -1392,7 +1392,7 @@ index 13120bd32..33ca072f0 100644
      cur = build_norm(cur,
              model.output_norm, NULL,
 diff --git a/src/models/orion.cpp b/src/models/orion.cpp
-index 863a28222..99609dbe9 100644
+index 863a2822..99609dbe 100644
 --- a/src/models/orion.cpp
 +++ b/src/models/orion.cpp
 @@ -49,16 +49,21 @@ llama_model_orion::graph::graph(const llama_model & model, const llm_graph_param
@@ -1435,7 +1435,7 @@ index 863a28222..99609dbe9 100644
              model.output_norm, model.output_norm_b,
              LLM_NORM, -1);
 diff --git a/src/models/plamo.cpp b/src/models/plamo.cpp
-index 246144519..fbc65bfac 100644
+index 24614451..fbc65bfa 100644
 --- a/src/models/plamo.cpp
 +++ b/src/models/plamo.cpp
 @@ -45,16 +45,21 @@ llama_model_plamo::graph::graph(const llama_model & model, const llm_graph_param
@@ -1478,7 +1478,7 @@ index 246144519..fbc65bfac 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/plamo2.cpp b/src/models/plamo2.cpp
-index 0b81513c3..07d0bee7b 100644
+index 0b81513c..07d0bee7 100644
 --- a/src/models/plamo2.cpp
 +++ b/src/models/plamo2.cpp
 @@ -113,16 +113,21 @@ llama_model_plamo2::graph::graph(const llama_model & model, const llm_graph_para
@@ -1521,7 +1521,7 @@ index 0b81513c3..07d0bee7b 100644
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
      cb(cur, "result_norm", -1);
 diff --git a/src/models/plamo3.cpp b/src/models/plamo3.cpp
-index 16d0b1dce..1c9d04ad9 100644
+index 16d0b1dc..1c9d04ad 100644
 --- a/src/models/plamo3.cpp
 +++ b/src/models/plamo3.cpp
 @@ -74,7 +74,12 @@ llama_model_plamo3::graph<iswa>::graph(const llama_model & model, const llm_grap
@@ -1565,7 +1565,7 @@ index 16d0b1dce..1c9d04ad9 100644
      res->t_embd = cur;
  
 diff --git a/src/models/plm.cpp b/src/models/plm.cpp
-index 8ca325f5e..0dd5142fa 100644
+index 8ca325f5..0dd5142f 100644
 --- a/src/models/plm.cpp
 +++ b/src/models/plm.cpp
 @@ -57,16 +57,21 @@ llama_model_plm::graph::graph(const llama_model & model, const llm_graph_params
@@ -1608,7 +1608,7 @@ index 8ca325f5e..0dd5142fa 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/qwen.cpp b/src/models/qwen.cpp
-index 1f5dff384..becc84eee 100644
+index 1f5dff38..becc84ee 100644
 --- a/src/models/qwen.cpp
 +++ b/src/models/qwen.cpp
 @@ -48,16 +48,21 @@ llama_model_qwen::graph::graph(const llama_model & model, const llm_graph_params
@@ -1651,7 +1651,7 @@ index 1f5dff384..becc84eee 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/refact.cpp b/src/models/refact.cpp
-index a46c358fa..0226a7fdf 100644
+index a46c358f..0226a7fd 100644
 --- a/src/models/refact.cpp
 +++ b/src/models/refact.cpp
 @@ -84,13 +84,18 @@ llama_model_refact::graph::graph(const llama_model & model, const llm_graph_para
@@ -1691,7 +1691,7 @@ index a46c358fa..0226a7fdf 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/rnd1.cpp b/src/models/rnd1.cpp
-index fc276ce59..8d39e03bb 100644
+index fc276ce5..8d39e03b 100644
 --- a/src/models/rnd1.cpp
 +++ b/src/models/rnd1.cpp
 @@ -71,7 +71,12 @@ llama_model_rnd1::graph::graph(const llama_model & model, const llm_graph_params
@@ -1735,7 +1735,7 @@ index fc276ce59..8d39e03bb 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/rwkv6qwen2.cpp b/src/models/rwkv6qwen2.cpp
-index 6c7db5144..ba530ccfb 100644
+index 6c7db514..ba530ccf 100644
 --- a/src/models/rwkv6qwen2.cpp
 +++ b/src/models/rwkv6qwen2.cpp
 @@ -87,7 +87,12 @@ llama_model_rwkv6qwen2::graph::graph(const llama_model & model, const llm_graph_
@@ -1779,7 +1779,7 @@ index 6c7db5144..ba530ccfb 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/seed-oss.cpp b/src/models/seed-oss.cpp
-index 57de881a0..c49415551 100644
+index 57de881a..c4941555 100644
 --- a/src/models/seed-oss.cpp
 +++ b/src/models/seed-oss.cpp
 @@ -55,7 +55,12 @@ llama_model_seed_oss::graph::graph(const llama_model & model, const llm_graph_pa
@@ -1823,7 +1823,7 @@ index 57de881a0..c49415551 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/smallthinker.cpp b/src/models/smallthinker.cpp
-index a8e3d957f..6a7c16032 100644
+index a8e3d957..6a7c1603 100644
 --- a/src/models/smallthinker.cpp
 +++ b/src/models/smallthinker.cpp
 @@ -83,7 +83,12 @@ llama_model_smallthinker::graph<iswa>::graph(const llama_model & model, const ll
@@ -1867,7 +1867,7 @@ index a8e3d957f..6a7c16032 100644
      cb(cur, "result_norm", -1);
      res->t_embd = cur;
 diff --git a/src/models/smollm3.cpp b/src/models/smollm3.cpp
-index c67d967b2..9fa28f8fc 100644
+index c67d967b..9fa28f8f 100644
 --- a/src/models/smollm3.cpp
 +++ b/src/models/smollm3.cpp
 @@ -52,7 +52,12 @@ llama_model_smollm3::graph::graph(const llama_model & model, const llm_graph_par
@@ -1911,7 +1911,7 @@ index c67d967b2..9fa28f8fc 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/starcoder.cpp b/src/models/starcoder.cpp
-index f73a88fd4..ee80f5149 100644
+index f73a88fd..ee80f514 100644
 --- a/src/models/starcoder.cpp
 +++ b/src/models/starcoder.cpp
 @@ -65,7 +65,12 @@ llama_model_starcoder::graph::graph(const llama_model & model, const llm_graph_p
@@ -1955,7 +1955,7 @@ index f73a88fd4..ee80f5149 100644
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/models/step35.cpp b/src/models/step35.cpp
-index e2218c587..68116e02d 100644
+index e2218c58..68116e02 100644
 --- a/src/models/step35.cpp
 +++ b/src/models/step35.cpp
 @@ -197,13 +197,18 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
@@ -2004,7 +2004,7 @@ index e2218c587..68116e02d 100644
      res->t_h_nextn = cur;
  
 diff --git a/src/models/xverse.cpp b/src/models/xverse.cpp
-index 313500129..0aada2095 100644
+index 31350012..0aada209 100644
 --- a/src/models/xverse.cpp
 +++ b/src/models/xverse.cpp
 @@ -47,16 +47,21 @@ llama_model_xverse::graph::graph(const llama_model & model, const llm_graph_para
@@ -2047,7 +2047,7 @@ index 313500129..0aada2095 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 03cce3cb1..f49e0623e 100644
+index 03cce3cb..f49e0623 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1576,30 +1576,63 @@ static enum skippy_status skippy_finish_model_open(
@@ -2156,5 +2156,5 @@ index 03cce3cb1..f49e0623e 100644
              skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime-slice execution is not supported for this model architecture yet");
              return SKIPPY_STATUS_UNSUPPORTED;
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

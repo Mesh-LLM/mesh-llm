@@ -1,14 +1,14 @@
-From f1c58bae80d2032a58a0f47409813a28e7b7b3bd Mon Sep 17 00:00:00 2001
+From b2b99e7ff2fd5a966cfea2cfd3b71d1f98f459fd Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 17:40:58 +1000
-Subject: [PATCH 70/82] Skip recurrent layers in native KV page export
+Subject: [PATCH 070/108] Skip recurrent layers in native KV page export
 
 ---
  src/llama-kv-cache.cpp | 42 ++++++++++++++++++++++++++----------------
  1 file changed, 26 insertions(+), 16 deletions(-)
 
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 6fe172866..8a3fb5482 100644
+index 6fe17286..8a3fb548 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -1300,14 +1300,16 @@ bool llama_kv_cache::stage_export_kv_page(
@@ -103,5 +103,5 @@ index 6fe172866..8a3fb5482 100644
              for (uint32_t i = 0; i < n_tokens; ++i) {
                  ggml_backend_tensor_set(v, src, static_cast<size_t>(sinfo.idxs[0][i]) * desc.v_row_bytes, desc.v_row_bytes);
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

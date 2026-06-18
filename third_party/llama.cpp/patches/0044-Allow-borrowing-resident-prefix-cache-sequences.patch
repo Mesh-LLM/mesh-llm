@@ -1,14 +1,14 @@
-From 125d7089ec16d68e802267c15395b7b3c7f8fea9 Mon Sep 17 00:00:00 2001
+From 8e4e85c2ec3ef86d66ae2189b5dd7b50a11e29a8 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 5 May 2026 22:34:00 +1000
-Subject: [PATCH 44/82] Allow borrowing resident prefix cache sequences
+Subject: [PATCH 044/108] Allow borrowing resident prefix cache sequences
 
 ---
  src/skippy.cpp | 40 +++++++++++++++++++++++++++++++---------
  1 file changed, 31 insertions(+), 9 deletions(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 074797b22..5f4557b8d 100644
+index 074797b2..5f4557b8 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -2953,9 +2953,18 @@ enum skippy_status skippy_session_create_from_resident_prefix(
@@ -83,5 +83,5 @@ index 074797b22..5f4557b8d 100644
          session->token_history.assign(token_ids, token_ids + token_count);
      }
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

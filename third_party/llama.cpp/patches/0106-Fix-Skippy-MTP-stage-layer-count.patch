@@ -1,7 +1,7 @@
-From d207849787a221123cf1ad195e23f4cc5454e365 Mon Sep 17 00:00:00 2001
+From 9a6872289bd9d3f409c675e23d97506725b7925e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 09:05:21 +1000
-Subject: [PATCH] Fix Skippy MTP stage layer count
+Subject: [PATCH 106/108] Fix Skippy MTP stage layer count
 
 ---
  src/models/deepseek2.cpp |  4 +++-
@@ -24,7 +24,7 @@ index d0ddb3c5..180fb082 100644
      // {n_embd, n_tokens}
      inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index d49946cf..9f05153f 100644
+index 57592c7f..9d6c4fbd 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -181,6 +181,17 @@ static enum skippy_status skippy_success(skippy_error ** out_error) {
@@ -45,7 +45,7 @@ index d49946cf..9f05153f 100644
  static enum skippy_backend_device_type skippy_backend_device_type_from_ggml(
          enum ggml_backend_dev_type type) {
      switch (type) {
-@@ -2417,7 +2428,7 @@ static enum skippy_status skippy_finish_model_open(
+@@ -2392,7 +2403,7 @@ static enum skippy_status skippy_finish_model_open(
          struct skippy_model ** out_model,
          struct skippy_error ** out_error) {
      if (config != nullptr && config->filter_tensors_on_load) {
@@ -54,7 +54,7 @@ index d49946cf..9f05153f 100644
          if (model->arch != LLM_ARCH_LLAMA &&
              model->arch != LLM_ARCH_AFMOE &&
              model->arch != LLM_ARCH_APERTUS &&
-@@ -3976,7 +3987,7 @@ static enum skippy_status skippy_validate_state_range(
+@@ -3944,7 +3955,7 @@ static enum skippy_status skippy_validate_state_range(
      const skippy_runtime_config & config = session->stage_model->config;
      const int32_t expected_layer_start = config.filter_tensors_on_load ? config.layer_start : 0;
      const int32_t expected_layer_end = config.filter_tensors_on_load ?
@@ -64,5 +64,5 @@ index d49946cf..9f05153f 100644
          skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "state range must match the session layer range");
          return SKIPPY_STATUS_INVALID_ARGUMENT;
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

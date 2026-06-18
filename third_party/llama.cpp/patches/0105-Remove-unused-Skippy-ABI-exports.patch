@@ -1,7 +1,7 @@
-From 7a2e03abe085ebbd12d429d54e54c51dbb227b23 Mon Sep 17 00:00:00 2001
+From 68bb4eac40f2671d4800f48b469f1d8a9cc1efdc Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 07:39:07 +1000
-Subject: [PATCH 94/94] Remove unused Skippy ABI exports
+Subject: [PATCH 105/108] Remove unused Skippy ABI exports
 
 ---
  include/skippy.h        | 41 -----------------
@@ -10,10 +10,10 @@ Subject: [PATCH 94/94] Remove unused Skippy ABI exports
  3 files changed, 142 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 8360f40d..a74ad680 100644
+index 8d52c199..0e94e95b 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -193,9 +193,6 @@ LLAMA_API struct llama_context * skippy_session_llama_context(
+@@ -192,9 +192,6 @@ LLAMA_API struct llama_context * skippy_session_llama_context(
  LLAMA_API int32_t skippy_session_position(
          const struct skippy_session * session);
  
@@ -23,7 +23,7 @@ index 8360f40d..a74ad680 100644
  LLAMA_API int32_t skippy_session_batch_size(
          const struct skippy_session * session);
  
-@@ -254,17 +251,6 @@ LLAMA_API enum skippy_status skippy_prefill_chunk(
+@@ -253,17 +250,6 @@ LLAMA_API enum skippy_status skippy_prefill_chunk(
          size_t * out_output_activation_bytes,
          struct skippy_error ** out_error);
  
@@ -41,7 +41,7 @@ index 8360f40d..a74ad680 100644
  LLAMA_API enum skippy_status skippy_verify_tokens(
          struct skippy_session * session,
          const llama_token * token_ids,
-@@ -351,18 +337,6 @@ LLAMA_API enum skippy_status skippy_prefill_chunk_frame_sampled_with_positions(
+@@ -350,18 +336,6 @@ LLAMA_API enum skippy_status skippy_prefill_chunk_frame_sampled_with_positions(
          llama_token * out_predicted_token,
          struct skippy_error ** out_error);
  
@@ -60,7 +60,7 @@ index 8360f40d..a74ad680 100644
  LLAMA_API enum skippy_status skippy_decode_step_frame_sampled(
          struct skippy_session * session,
          llama_token token_id,
-@@ -405,21 +379,6 @@ LLAMA_API enum skippy_status skippy_decode_step_frame_batch_sampled(
+@@ -404,21 +378,6 @@ LLAMA_API enum skippy_status skippy_decode_step_frame_batch_sampled(
          size_t request_count,
          struct skippy_error ** out_error);
  
@@ -96,10 +96,10 @@ index cf97f7ab..cfb4a8fa 100644
  
  #ifdef __cplusplus
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index e4a854e2..01cfd3c9 100644
+index 57ae2aaa..57592c7f 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
-@@ -2308,21 +2308,6 @@ uint64_t skippy_abi_features(void) {
+@@ -2310,21 +2310,6 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_NATIVE_MTP_N1;
  }
  
@@ -121,7 +121,7 @@ index e4a854e2..01cfd3c9 100644
  void skippy_error_free(struct skippy_error * error) {
      if (error == nullptr) {
          return;
-@@ -2904,11 +2889,6 @@ int32_t skippy_session_position(
+@@ -2906,11 +2891,6 @@ int32_t skippy_session_position(
      return session != nullptr ? session->n_past : -1;
  }
  
@@ -133,7 +133,7 @@ index e4a854e2..01cfd3c9 100644
  int32_t skippy_session_batch_size(
          const struct skippy_session * session) {
      return session != nullptr && session->ctx != nullptr ? llama_n_batch(session->ctx) : 0;
-@@ -3208,29 +3188,6 @@ enum skippy_status skippy_prefill_chunk(
+@@ -3210,29 +3190,6 @@ enum skippy_status skippy_prefill_chunk(
      return skippy_decode_tokens(session, token_ids, token_count, false, out_error);
  }
  
@@ -163,7 +163,7 @@ index e4a854e2..01cfd3c9 100644
  enum skippy_status skippy_decode_step_sampled(
          struct skippy_session * session,
          llama_token token_id,
-@@ -3567,31 +3524,6 @@ enum skippy_status skippy_prefill_chunk_frame_sampled_with_positions(
+@@ -3569,31 +3526,6 @@ enum skippy_status skippy_prefill_chunk_frame_sampled_with_positions(
              out_error);
  }
  
@@ -195,7 +195,7 @@ index e4a854e2..01cfd3c9 100644
  enum skippy_status skippy_decode_step_frame_sampled(
          struct skippy_session * session,
          llama_token token_id,
-@@ -3859,37 +3791,6 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+@@ -3861,37 +3793,6 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
      return skippy_success(out_error);
  }
  
@@ -234,5 +234,5 @@ index e4a854e2..01cfd3c9 100644
          struct skippy_session * session,
          const llama_token * token_ids,
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

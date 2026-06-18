@@ -1,7 +1,7 @@
-From 21e71f17838dfd5d84f471d567e35994cff6c45a Mon Sep 17 00:00:00 2001
+From efc41c2a90a24ff13809d4e964fb21d0da7a148e Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 15 Jun 2026 17:03:17 +1000
-Subject: [PATCH 10/10] Quantize split GGUF windows
+Subject: [PATCH 100/108] Quantize split GGUF windows
 
 ---
  include/llama.h             |  2 ++
@@ -10,7 +10,7 @@ Subject: [PATCH 10/10] Quantize split GGUF windows
  3 files changed, 55 insertions(+), 5 deletions(-)
 
 diff --git a/include/llama.h b/include/llama.h
-index 27e480674..8f893592b 100644
+index f9e4f401..ec953044 100644
 --- a/include/llama.h
 +++ b/include/llama.h
 @@ -421,6 +421,8 @@ extern "C" {
@@ -23,7 +23,7 @@ index 27e480674..8f893592b 100644
  
      typedef struct llama_logit_bias {
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 46b174b35..220b396a2 100644
+index eaa1b052..3a8f47fb 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -1244,6 +1244,22 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
@@ -115,7 +115,7 @@ index 46b174b35..220b396a2 100644
  
      return result;
 diff --git a/tools/quantize/quantize.cpp b/tools/quantize/quantize.cpp
-index 840eefc2f..b9ef9c0ca 100644
+index 840eefc2..b9ef9c0c 100644
 --- a/tools/quantize/quantize.cpp
 +++ b/tools/quantize/quantize.cpp
 @@ -121,7 +121,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
@@ -158,5 +158,5 @@ index 840eefc2f..b9ef9c0ca 100644
              usage(argv[0]);
          }
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

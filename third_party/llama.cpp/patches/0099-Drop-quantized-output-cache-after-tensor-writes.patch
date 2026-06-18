@@ -1,14 +1,14 @@
-From e58fbeb30279cbb8bd9e2069f765438368ac4f36 Mon Sep 17 00:00:00 2001
+From a45fa1c11d14e408a39f0d833de19b6946688a90 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 15 Jun 2026 15:09:14 +1000
-Subject: [PATCH 09/10] Drop quantized output cache after tensor writes
+Subject: [PATCH 099/108] Drop quantized output cache after tensor writes
 
 ---
  src/llama-quant.cpp | 105 +++++++++++++++++++++++++++++++++++++++++++-
  1 file changed, 104 insertions(+), 1 deletion(-)
 
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 601f9dea2..46b174b35 100644
+index 54537d34..eaa1b052 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -4,6 +4,7 @@
@@ -166,5 +166,5 @@ index 601f9dea2..46b174b35 100644
              watchdog.update({
                  tensor_name,
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

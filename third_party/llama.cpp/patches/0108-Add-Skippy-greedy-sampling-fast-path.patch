@@ -1,17 +1,17 @@
-From 2d45dd40bbf9cd30c54182a548fafe1fb08d32e8 Mon Sep 17 00:00:00 2001
+From 2064e11e8d55fd63c7f94332b92f8a602b0922ce Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 21:29:11 +1000
-Subject: [PATCH] Add Skippy greedy sampling fast path
+Subject: [PATCH 108/108] Add Skippy greedy sampling fast path
 
 ---
  src/skippy.cpp | 36 ++++++++++++++++++++++++++++++++++++
  1 file changed, 36 insertions(+)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index b357620e..dce41495 100644
+index 04f01eac..8f7205d2 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
-@@ -1239,6 +1239,21 @@ static bool skippy_mtp_available(const skippy_session * session) {
+@@ -1255,6 +1255,21 @@ static bool skippy_mtp_available(const skippy_session * session) {
             session->stage_model->config.include_output;
  }
  
@@ -33,7 +33,7 @@ index b357620e..dce41495 100644
  static void skippy_mtp_clear_session_state(skippy_session * session) {
      if (session == nullptr) {
          return;
-@@ -1760,6 +1764,18 @@ static bool skippy_sampling_enabled(const skippy_sampling_config * sampling) {
+@@ -1664,6 +1679,18 @@ static bool skippy_sampling_enabled(const skippy_sampling_config * sampling) {
      return true;
  }
  
@@ -52,7 +52,7 @@ index b357620e..dce41495 100644
  static bool skippy_sampling_configs_equal(
          const skippy_sampling_config & lhs,
          const skippy_sampling_config & rhs) {
-@@ -2013,6 +2029,15 @@ static llama_token skippy_sample_token_ith(
+@@ -1917,6 +1944,15 @@ static llama_token skippy_sample_token_ith(
          skippy_session * session,
          const skippy_sampling_config * sampling,
          int32_t logits_index) {
@@ -69,4 +69,5 @@ index b357620e..dce41495 100644
          if (!session->chat_sampling_metadata.empty() ||
                  (skippy_sampling_enabled(sampling) &&
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
+

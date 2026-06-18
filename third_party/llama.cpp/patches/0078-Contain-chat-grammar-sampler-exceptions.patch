@@ -1,14 +1,14 @@
-From 9f97a0a7cc646fe31d14ff9891bce45144d78dfb Mon Sep 17 00:00:00 2001
+From d39bfbd46e9e71c06275a9bf89e97178d3c5605c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 9 May 2026 13:23:46 +1000
-Subject: [PATCH 78/82] Contain chat grammar sampler exceptions
+Subject: [PATCH 078/108] Contain chat grammar sampler exceptions
 
 ---
  src/skippy.cpp | 42 ++++++++++++++++++++++++++++++++++++++----
  1 file changed, 38 insertions(+), 4 deletions(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 27dc78b07..2aa45bb9f 100644
+index 27dc78b0..2aa45bb9 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -148,6 +148,20 @@ static void skippy_set_error(
@@ -82,5 +82,5 @@ index 27dc78b07..2aa45bb9f 100644
      llama_sampler_apply(session->sampling_chain, &cur);
      if (cur.selected < 0 || static_cast<size_t>(cur.selected) >= cur.size) {
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

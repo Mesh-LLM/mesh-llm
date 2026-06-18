@@ -1,14 +1,14 @@
-From 5916dc8a91bc3d60d6822866eee5ded34d95f858 Mon Sep 17 00:00:00 2001
+From 8fa0fa6943dbb0292064208ed116c8ed5ba3b490 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 15 Jun 2026 09:09:02 +1000
-Subject: [PATCH 01/10] Reduce llama-quantize BF16 memory residency
+Subject: [PATCH 091/108] Reduce llama-quantize BF16 memory residency
 
 ---
  src/llama-quant.cpp | 117 +++++++++++++++++++++++++++++---------------
  1 file changed, 78 insertions(+), 39 deletions(-)
 
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 912ef9ae7..d77866392 100644
+index 0fe62d6b..6ea48bbe 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -209,9 +209,9 @@ struct tensor_metadata {
@@ -197,5 +197,5 @@ index 912ef9ae7..d77866392 100644
                  LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
              }
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

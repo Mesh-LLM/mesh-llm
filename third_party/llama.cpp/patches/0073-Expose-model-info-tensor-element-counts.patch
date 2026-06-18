@@ -1,14 +1,14 @@
-From d1575afa061355926decfed4c446c80c14434a0c Mon Sep 17 00:00:00 2001
+From d4484b7c3e7fa764b33c1068e72d5ae50f716b04 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 18:20:30 +1000
-Subject: [PATCH 73/82] Expose model info tensor element counts
+Subject: [PATCH 073/108] Expose model info tensor element counts
 
 ---
  src/skippy.cpp | 14 +++++++++++++-
  1 file changed, 13 insertions(+), 1 deletion(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 2a38c01b0..7ae8b7eb9 100644
+index 2a38c01b..7ae8b7eb 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -83,6 +83,17 @@ struct skippy_tensor_meta {
@@ -40,5 +40,5 @@ index 2a38c01b0..7ae8b7eb9 100644
  }
  
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

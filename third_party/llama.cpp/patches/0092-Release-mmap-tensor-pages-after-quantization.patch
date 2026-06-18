@@ -1,7 +1,7 @@
-From 460c8000aeae571b256901a53c9b53ac6d473faf Mon Sep 17 00:00:00 2001
+From 9141fd1baf66e7417a5c767f57e1bee85b516d5a Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 15 Jun 2026 09:25:06 +1000
-Subject: [PATCH 02/10] Release mmap tensor pages after quantization
+Subject: [PATCH 092/108] Release mmap tensor pages after quantization
 
 ---
  src/llama-model-loader.cpp | 10 ++++++++++
@@ -10,10 +10,10 @@ Subject: [PATCH 02/10] Release mmap tensor pages after quantization
  3 files changed, 12 insertions(+)
 
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 0d1cf3cc3..feb9d31c8 100644
+index 1e7ec54c..77de9066 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1404,6 +1404,16 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
+@@ -1538,6 +1538,16 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
      }
  }
  
@@ -31,10 +31,10 @@ index 0d1cf3cc3..feb9d31c8 100644
          struct ggml_context * ctx,
          llama_buf_map & bufs,
 diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
-index c476026d3..39e20ff9a 100644
+index 6876262d..7fe0f3a1 100644
 --- a/src/llama-model-loader.h
 +++ b/src/llama-model-loader.h
-@@ -192,6 +192,7 @@ struct llama_model_loader {
+@@ -207,6 +207,7 @@ struct llama_model_loader {
  
      // for backwards compatibility, does not support ggml-backend
      void load_data_for(struct ggml_tensor * cur) const;
@@ -43,7 +43,7 @@ index c476026d3..39e20ff9a 100644
      // Returns false if cancelled by progress_callback
      bool load_all_data(
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index d77866392..3899ca896 100644
+index 6ea48bbe..90cb1c0a 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -1298,6 +1298,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
@@ -55,5 +55,5 @@ index d77866392..3899ca896 100644
      } // main loop
  
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

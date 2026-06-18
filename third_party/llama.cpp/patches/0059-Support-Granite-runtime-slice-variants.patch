@@ -1,7 +1,7 @@
-From 7fa9d422daffd8c0d49a1f83cbeac8e5cc310c9f Mon Sep 17 00:00:00 2001
+From d9ad75a7ecd7d39fbbd0fcc6a51fc6ac5d747c21 Mon Sep 17 00:00:00 2001
 From: mesh-llm <mesh-llm@example.com>
 Date: Wed, 6 May 2026 00:00:00 +1000
-Subject: [PATCH 59/82] Support Granite runtime-slice variants
+Subject: [PATCH 059/108] Support Granite runtime-slice variants
 
 ---
  src/models/granite-hybrid.cpp | 17 ++++++++++++++---
@@ -9,7 +9,7 @@ Subject: [PATCH 59/82] Support Granite runtime-slice variants
  2 files changed, 16 insertions(+), 3 deletions(-)
 
 diff --git a/src/models/granite-hybrid.cpp b/src/models/granite-hybrid.cpp
-index eb23095ae..e12b977c3 100644
+index eb23095a..e12b977c 100644
 --- a/src/models/granite-hybrid.cpp
 +++ b/src/models/granite-hybrid.cpp
 @@ -139,11 +139,16 @@ llama_model_granite_hybrid::graph::graph(const llama_model & model, const llm_gr
@@ -54,7 +54,7 @@ index eb23095ae..e12b977c3 100644
      cur = inpL;
  
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index ab7b5d0e1..eb41cb47f 100644
+index ab7b5d0e..eb41cb47 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1586,6 +1586,8 @@ static enum skippy_status skippy_finish_model_open(
@@ -67,5 +67,5 @@ index ab7b5d0e1..eb41cb47f 100644
              model->arch != LLM_ARCH_JAMBA &&
              model->arch != LLM_ARCH_LFM2 &&
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

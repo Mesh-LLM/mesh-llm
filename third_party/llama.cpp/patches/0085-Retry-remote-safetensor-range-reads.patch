@@ -1,7 +1,7 @@
-From e74383485f22d7458e6e97848269daa8a93d5274 Mon Sep 17 00:00:00 2001
+From 876f0fd51880fbee4a83ef191b5983e4f1f878b3 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Thu, 11 Jun 2026 09:20:58 +1000
-Subject: [PATCH 84/89] Retry remote safetensor range reads
+Subject: [PATCH 085/108] Retry remote safetensor range reads
 
 ---
  gguf-py/gguf/utility.py | 28 ++++++++++++++++++++++++----
@@ -55,5 +55,5 @@ index 154351d8..ec44e55f 100644
      @classmethod
      def check_file_exist(cls, url: str) -> bool:
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

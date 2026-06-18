@@ -1,14 +1,14 @@
-From 7927825c5fb5eb96563f2f9dfd0149ee7960422d Mon Sep 17 00:00:00 2001
+From d71210469ed8048fdc4ed4b8fbb3837ac3527f63 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 07:39:00 +1000
-Subject: [PATCH 93/94] Align Skippy sampling and detokenization parity
+Subject: [PATCH 104/108] Align Skippy sampling and detokenization parity
 
 ---
  src/skippy.cpp | 155 ++++++++++++++++++++++++++++++++++++++-----------
  1 file changed, 121 insertions(+), 34 deletions(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 04c0afb4..e4a854e2 100644
+index 6de92990..57ae2aaa 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -72,6 +72,8 @@ struct skippy_session {
@@ -20,7 +20,7 @@ index 04c0afb4..e4a854e2 100644
      std::string chat_sampling_metadata;
      uint64_t grammar_generated_start = 0;
      size_t sampling_accepted_token_count = 0;
-@@ -1474,6 +1476,7 @@ static llama_token skippy_greedy_sample_context(
+@@ -1488,6 +1490,7 @@ static llama_token skippy_greedy_sample_context(
      }
      const llama_vocab * vocab = llama_model_get_vocab(model);
      const int32_t n_vocab = llama_vocab_n_tokens(vocab);
@@ -28,7 +28,7 @@ index 04c0afb4..e4a854e2 100644
      const float * logits = llama_get_logits_ith(ctx, index);
      if (logits == nullptr) {
          return 0;
-@@ -1596,6 +1599,8 @@ static void skippy_clear_chat_sampling(skippy_session * session) {
+@@ -1610,6 +1613,8 @@ static void skippy_clear_chat_sampling(skippy_session * session) {
      llama_sampler_free(session->grammar_sampler);
      session->sampling_chain = nullptr;
      session->grammar_sampler = nullptr;
@@ -37,7 +37,7 @@ index 04c0afb4..e4a854e2 100644
      session->chat_sampling_metadata.clear();
      session->grammar_generated_start = 0;
      session->sampling_accepted_token_count = 0;
-@@ -1634,6 +1639,34 @@ static bool skippy_sampling_enabled(const skippy_sampling_config * sampling) {
+@@ -1648,6 +1653,34 @@ static bool skippy_sampling_enabled(const skippy_sampling_config * sampling) {
      return true;
  }
  
@@ -72,7 +72,7 @@ index 04c0afb4..e4a854e2 100644
  static llama_sampler * skippy_build_sampling_chain(
          skippy_session * session,
          const skippy_sampling_config * sampling) {
-@@ -1673,21 +1706,40 @@ static llama_sampler * skippy_build_sampling_chain(
+@@ -1687,21 +1720,40 @@ static llama_sampler * skippy_build_sampling_chain(
          llama_sampler_chain_add(sampler, llama_sampler_init_top_k(sampling->top_k));
      }
      if (sampling->top_p > 0.0f && sampling->top_p < 1.0f) {
@@ -123,7 +123,7 @@ index 04c0afb4..e4a854e2 100644
  }
  
  static bool skippy_init_chat_grammar_sampler(
-@@ -1800,6 +1852,7 @@ static void skippy_sync_chat_sampling_history(skippy_session * session) {
+@@ -1814,6 +1866,7 @@ static void skippy_sync_chat_sampling_history(skippy_session * session) {
  
  static llama_token skippy_chat_sample_token(skippy_session * session, int32_t logits_index) {
      skippy_sync_chat_sampling_history(session);
@@ -131,7 +131,7 @@ index 04c0afb4..e4a854e2 100644
  
      const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
      const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-@@ -1840,11 +1893,21 @@ static llama_token skippy_sample_token_ith(
+@@ -1854,11 +1907,21 @@ static llama_token skippy_sample_token_ith(
          const skippy_sampling_config * sampling,
          int32_t logits_index) {
      if (session != nullptr && session->sampling_chain != nullptr) {
@@ -154,7 +154,7 @@ index 04c0afb4..e4a854e2 100644
  
      llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
      llama_sampler * sampler = llama_sampler_chain_init(chain_params);
-@@ -1877,20 +1940,14 @@ static llama_token skippy_sample_token_ith(
+@@ -1891,20 +1954,14 @@ static llama_token skippy_sample_token_ith(
          llama_sampler_chain_add(sampler, llama_sampler_init_top_k(sampling->top_k));
      }
      if (sampling->top_p > 0.0f && sampling->top_p < 1.0f) {
@@ -180,7 +180,7 @@ index 04c0afb4..e4a854e2 100644
  
      for (const llama_token token : session->token_history) {
          llama_sampler_accept(sampler, token);
-@@ -2951,6 +3008,10 @@ enum skippy_status skippy_session_configure_chat_sampling(
+@@ -2953,6 +3010,10 @@ enum skippy_status skippy_session_configure_chat_sampling(
              return SKIPPY_STATUS_RUNTIME_ERROR;
          }
          session->chat_sampling_metadata = metadata_json;
@@ -191,7 +191,7 @@ index 04c0afb4..e4a854e2 100644
          session->grammar_generated_start = prompt_token_count;
          session->sampling_accepted_token_count = 0;
          if (!skippy_init_chat_grammar_sampler(session, metadata, out_error)) {
-@@ -4904,21 +4965,47 @@ enum skippy_status skippy_detokenize(
+@@ -4891,21 +4952,47 @@ enum skippy_status skippy_detokenize(
      }
  
      const llama_vocab * vocab = llama_model_get_vocab(model->model);
@@ -252,5 +252,5 @@ index 04c0afb4..e4a854e2 100644
  }
  
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

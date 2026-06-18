@@ -1,7 +1,7 @@
-From 443fde64580ce7773587466424daf20a7ff2b20f Mon Sep 17 00:00:00 2001
+From 43973496e1565f7a26816e4e8a653e8d01b3a792 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 09:27:42 +1000
-Subject: [PATCH 51/82] Support LFM2 runtime-slice execution
+Subject: [PATCH 051/108] Support LFM2 runtime-slice execution
 
 ---
  src/models/lfm2.cpp | 30 +++++++++++++++++++++++++-----
@@ -9,7 +9,7 @@ Subject: [PATCH 51/82] Support LFM2 runtime-slice execution
  2 files changed, 26 insertions(+), 5 deletions(-)
 
 diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
-index 97da8a6ab..8a0d75840 100644
+index 97da8a6a..9265223e 100644
 --- a/src/models/lfm2.cpp
 +++ b/src/models/lfm2.cpp
 @@ -217,7 +217,20 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
@@ -72,7 +72,7 @@ index 97da8a6ab..8a0d75840 100644
      cb(cur, "result_norm", -1);
      res->t_embd = cur;
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 5eadfbeec..daa3b249a 100644
+index 5eadfbee..daa3b249 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1472,6 +1472,7 @@ static enum skippy_status skippy_finish_model_open(
@@ -84,4 +84,5 @@ index 5eadfbeec..daa3b249a 100644
              model->arch != LLM_ARCH_MPT &&
              model->arch != LLM_ARCH_OLMO2 &&
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
+

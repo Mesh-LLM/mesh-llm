@@ -1,7 +1,7 @@
-From 3581accd09ae328190aaaadb70ebc0521c24c365 Mon Sep 17 00:00:00 2001
+From 2e8866003686f9e2ea22c36df9ce88a6be767a57 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 25 Apr 2026 10:28:54 +1000
-Subject: [PATCH 02/82] Implement skippy model info ABI
+Subject: [PATCH 002/108] Implement skippy model info ABI
 
 ---
  CMakeLists.txt     |   1 +
@@ -11,7 +11,7 @@ Subject: [PATCH 02/82] Implement skippy model info ABI
  create mode 100644 src/skippy.cpp
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 9e7b1253c..d1e6b4e6d 100644
+index 9e7b1253..d1e6b4e6 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -235,6 +235,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
@@ -23,7 +23,7 @@ index 9e7b1253c..d1e6b4e6d 100644
  
  set_target_properties(llama
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index d15ccfd99..2526f45cd 100644
+index d15ccfd9..2526f45c 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -35,6 +35,7 @@ add_library(llama
@@ -36,7 +36,7 @@ index d15ccfd99..2526f45cd 100644
              unicode.cpp
 diff --git a/src/skippy.cpp b/src/skippy.cpp
 new file mode 100644
-index 000000000..bd94fa37f
+index 00000000..bd94fa37
 --- /dev/null
 +++ b/src/skippy.cpp
 @@ -0,0 +1,219 @@
@@ -260,5 +260,5 @@ index 000000000..bd94fa37f
 +
 +}
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

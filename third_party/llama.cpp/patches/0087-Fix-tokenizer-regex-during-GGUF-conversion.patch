@@ -1,7 +1,7 @@
-From 5719e0c044ba8f5cfe617fbb17fb811127689e6f Mon Sep 17 00:00:00 2001
+From f9849ddba1940482a9ee17604a5716eb1174c99f Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Thu, 11 Jun 2026 11:34:36 +1000
-Subject: [PATCH 86/89] Fix tokenizer regex during GGUF conversion
+Subject: [PATCH 087/108] Fix tokenizer regex during GGUF conversion
 
 ---
  gguf-py/gguf/vocab.py | 22 +++++++++++++++++-----
@@ -41,5 +41,5 @@ index d93b94f2..52618906 100644
  
          # Initialize lists and dictionaries for added tokens
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

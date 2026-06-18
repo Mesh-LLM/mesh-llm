@@ -1,7 +1,7 @@
-From 535f950006aca0654b83594a505d45e68d5b47aa Mon Sep 17 00:00:00 2001
+From 10be5bdfa88465449a581ca7df3b0032ecb2e221 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 5 May 2026 07:11:33 +1000
-Subject: [PATCH 37/82] Apply chat grammar during stage sampling
+Subject: [PATCH 037/108] Apply chat grammar during stage sampling
 
 ---
  include/skippy.h |  10 +-
@@ -9,7 +9,7 @@ Subject: [PATCH 37/82] Apply chat grammar during stage sampling
  2 files changed, 280 insertions(+), 1 deletion(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 384c7e406..3ffdb879d 100644
+index 384c7e40..3ffdb879 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -44,7 +44,7 @@ index 384c7e406..3ffdb879d 100644
          struct skippy_session * session,
          struct skippy_error ** out_error);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index eec2c8b43..e4d08ee4c 100644
+index eec2c8b4..e4d08ee4 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -11,6 +11,7 @@
@@ -385,5 +385,5 @@ index eec2c8b43..e4d08ee4c 100644
      if (session->signal_history.size() > token_count) {
          session->signal_history.resize(static_cast<size_t>(token_count));
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

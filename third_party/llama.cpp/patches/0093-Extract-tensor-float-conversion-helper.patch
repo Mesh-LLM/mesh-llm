@@ -1,14 +1,14 @@
-From a391159ab6bef9eb0f14dbf027f9d761a18da445 Mon Sep 17 00:00:00 2001
+From b27b78067749c38ddf1b9d25a5e4cf924b0098c2 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 15 Jun 2026 10:21:56 +1000
-Subject: [PATCH 03/10] Extract tensor float conversion helper
+Subject: [PATCH 093/108] Extract tensor float conversion helper
 
 ---
  src/llama-quant.cpp | 32 +++++++++++++++-----------------
  1 file changed, 15 insertions(+), 17 deletions(-)
 
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 3899ca896..5b14869b6 100644
+index 90cb1c0a..c8277dd4 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -209,6 +209,18 @@ struct tensor_metadata {
@@ -65,5 +65,5 @@ index 3899ca896..5b14869b6 100644
          workers.emplace_back(compute, tensor->type, input_data + in_buff_offs, f32_output + out_buff_offs, thr_elems);
          in_buff_offs += thr_block_bytes;
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

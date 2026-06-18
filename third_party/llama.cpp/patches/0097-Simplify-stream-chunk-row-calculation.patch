@@ -1,14 +1,14 @@
-From f482b044622aee4b1ef1fe7c1a09c60adaf3a6c2 Mon Sep 17 00:00:00 2001
+From e3e216f0fbfd5b65d1d45a86b94281c5cd5bc741 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 15 Jun 2026 10:48:40 +1000
-Subject: [PATCH 07/10] Simplify stream chunk row calculation
+Subject: [PATCH 097/108] Simplify stream chunk row calculation
 
 ---
  src/llama-quant.cpp | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 86089853a..fd695b388 100644
+index a26d9443..2695c844 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -1222,7 +1222,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
@@ -21,5 +21,5 @@ index 86089853a..fd695b388 100644
                      for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
                          void * new_data_03 = (char *)new_data + row_size * i03 * nrows;
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

@@ -1,15 +1,15 @@
-From d1d28b4b904b0b870ac1160a0a59cae90b6529c8 Mon Sep 17 00:00:00 2001
+From e506504c390369492cfa3c2168b3b703309a5691 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 07:39:00 +1000
-Subject: [PATCH 92/94] Add Skippy batched MTP verification drafts
+Subject: [PATCH 103/108] Add Skippy batched MTP verification drafts
 
 ---
- include/skippy.h |  16 +++++++
- src/skippy.cpp   |  82 ++++++++++++++++++++++++++++++++---
- 2 files changed, 92 insertions(+), 6 deletions(-)
+ include/skippy.h | 16 ++++++++++
+ src/skippy.cpp   | 77 ++++++++++++++++++++++++++++++++++++++++++++----
+ 2 files changed, 87 insertions(+), 6 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index c4da8e28..8360f40d 100644
+index c4da8e28..8d52c199 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -419,6 +419,22 @@ LLAMA_API enum skippy_status skippy_verify_tokens_frame(
@@ -36,10 +36,10 @@ index c4da8e28..8360f40d 100644
          struct skippy_session * session,
          size_t token_count,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index f8c07856..8ecb890c 100644
+index f8c07856..6de92990 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
-@@ -1488,17 +1488,18 @@ static llama_token skippy_greedy_sample(skippy_session * session) {
+@@ -1513,17 +1513,18 @@ static llama_token skippy_greedy_sample(skippy_session * session) {
      return skippy_greedy_sample_ith(session, -1);
  }
  
@@ -63,7 +63,7 @@ index f8c07856..8ecb890c 100644
      if (logits == nullptr || n_vocab <= 0) {
          return false;
      }
-@@ -1555,6 +1556,20 @@ static bool skippy_compute_token_signal(
+@@ -1580,6 +1581,20 @@ static bool skippy_compute_token_signal(
      return true;
  }
  
@@ -84,7 +84,7 @@ index f8c07856..8ecb890c 100644
  static void skippy_record_signal(skippy_session * session, int32_t logits_index) {
      skippy_token_signal signal = {};
      if (skippy_compute_token_signal(session, logits_index, &signal)) {
-@@ -3771,6 +3787,38 @@ enum skippy_status skippy_verify_tokens_frame(
+@@ -3799,6 +3814,38 @@ enum skippy_status skippy_verify_tokens_frame(
          size_t output_token_capacity,
          size_t * out_token_count,
          struct skippy_error ** out_error) {
@@ -123,7 +123,7 @@ index f8c07856..8ecb890c 100644
      if (out_token_count != nullptr) {
          *out_token_count = 0;
      }
-@@ -3843,7 +3891,25 @@ enum skippy_status skippy_verify_tokens_frame(
+@@ -3871,7 +3918,25 @@ enum skippy_status skippy_verify_tokens_frame(
      if (session->stage_model->config.include_output) {
          const int32_t n_tokens = static_cast<int32_t>(token_count);
          for (int32_t i = 0; i < n_tokens; ++i) {
@@ -151,4 +151,5 @@ index f8c07856..8ecb890c 100644
      }
  
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
+

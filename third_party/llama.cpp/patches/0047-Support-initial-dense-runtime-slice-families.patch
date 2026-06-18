@@ -1,7 +1,7 @@
-From a5b6114607cbdf16f949b82900b8b2448e54d0a8 Mon Sep 17 00:00:00 2001
+From eb9aa08ff4d40e48a9e73cdbd9b7ee03725654f7 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 08:32:41 +1000
-Subject: [PATCH 47/82] Support initial dense runtime-slice families
+Subject: [PATCH 047/108] Support initial dense runtime-slice families
 
 ---
  src/models/baichuan.cpp | 20 ++++++++++++++++----
@@ -13,7 +13,7 @@ Subject: [PATCH 47/82] Support initial dense runtime-slice families
  6 files changed, 94 insertions(+), 26 deletions(-)
 
 diff --git a/src/models/baichuan.cpp b/src/models/baichuan.cpp
-index 585f36141..8e9dc3028 100644
+index 585f3614..8e9dc302 100644
 --- a/src/models/baichuan.cpp
 +++ b/src/models/baichuan.cpp
 @@ -52,16 +52,21 @@ llama_model_baichuan::graph::graph(const llama_model & model, const llm_graph_pa
@@ -65,7 +65,7 @@ index 585f36141..8e9dc3028 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/bloom.cpp b/src/models/bloom.cpp
-index 609d2ddf9..021ea67a6 100644
+index 609d2ddf..021ea67a 100644
 --- a/src/models/bloom.cpp
 +++ b/src/models/bloom.cpp
 @@ -70,19 +70,26 @@ llama_model_bloom::graph::graph(const llama_model & model, const llm_graph_param
@@ -127,7 +127,7 @@ index 609d2ddf9..021ea67a6 100644
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/models/gptneox.cpp b/src/models/gptneox.cpp
-index ed5e8c50d..d5e4a7205 100644
+index ed5e8c50..d5e4a720 100644
 --- a/src/models/gptneox.cpp
 +++ b/src/models/gptneox.cpp
 @@ -92,16 +92,21 @@ llama_model_gptneox::graph::graph(const llama_model & model, const llm_graph_par
@@ -179,7 +179,7 @@ index ed5e8c50d..d5e4a7205 100644
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/models/phi3.cpp b/src/models/phi3.cpp
-index 716ff814c..6d3026905 100644
+index 716ff814..6d302690 100644
 --- a/src/models/phi3.cpp
 +++ b/src/models/phi3.cpp
 @@ -73,7 +73,12 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
@@ -233,7 +233,7 @@ index 716ff814c..6d3026905 100644
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/models/stablelm.cpp b/src/models/stablelm.cpp
-index bf6087b87..767cb1dac 100644
+index bf6087b8..767cb1da 100644
 --- a/src/models/stablelm.cpp
 +++ b/src/models/stablelm.cpp
 @@ -56,16 +56,21 @@ llama_model_stablelm::graph::graph(const llama_model & model, const llm_graph_pa
@@ -285,7 +285,7 @@ index bf6087b87..767cb1dac 100644
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index f078f0b93..8aa27ecde 100644
+index f078f0b9..8aa27ecd 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1461,6 +1461,9 @@ static enum skippy_status skippy_finish_model_open(
@@ -310,5 +310,5 @@ index f078f0b93..8aa27ecde 100644
              skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime-slice execution is not supported for this model architecture yet");
              return SKIPPY_STATUS_UNSUPPORTED;
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

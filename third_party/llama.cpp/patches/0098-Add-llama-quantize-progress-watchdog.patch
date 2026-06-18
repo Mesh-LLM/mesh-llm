@@ -1,14 +1,14 @@
-From 5890fca0b695bf926fef701142ba2279ea03eef9 Mon Sep 17 00:00:00 2001
+From c879b79637c994306b1c55fe91ffc3cb1c09f838 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 15 Jun 2026 14:34:03 +1000
-Subject: [PATCH 08/10] Add llama-quantize progress watchdog
+Subject: [PATCH 098/108] Add llama-quantize progress watchdog
 
 ---
  src/llama-quant.cpp | 414 ++++++++++++++++++++++++++++++++++++++++++--
  1 file changed, 404 insertions(+), 10 deletions(-)
 
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index fd695b388..601f9dea2 100644
+index 2695c844..54537d34 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -4,14 +4,24 @@
@@ -523,5 +523,5 @@ index fd695b388..601f9dea2 100644
      } // main loop
  
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

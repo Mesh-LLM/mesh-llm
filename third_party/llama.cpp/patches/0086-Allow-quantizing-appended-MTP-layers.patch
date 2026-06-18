@@ -1,7 +1,7 @@
-From b1c6596c2f333447967f157260074d43948f2261 Mon Sep 17 00:00:00 2001
+From 730975eb06bd706416945aaeb1d8ea8e257f1206 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Thu, 11 Jun 2026 10:46:54 +1000
-Subject: [PATCH 85/89] Allow quantizing appended MTP layers
+Subject: [PATCH 086/108] Allow quantizing appended MTP layers
 
 ---
  src/llama-quant.cpp | 2 +-
@@ -21,5 +21,5 @@ index d4e7738a..0fe62d6b 100644
  
  //
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

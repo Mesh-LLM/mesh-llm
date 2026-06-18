@@ -1,21 +1,21 @@
-From 36483efd1c6398efa35d8625a6b340516c15d7be Mon Sep 17 00:00:00 2001
+From a6b91f629881cf946e5bcb42fd74ad53729a77aa Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 07:36:49 +1000
-Subject: [PATCH 89/94] Add GLM native MTP conversion and graph support
+Subject: [PATCH 090/108] Add GLM native MTP conversion and graph support
 
 ---
  conversion/glm.py                   |  11 ++
  convert_hf_to_gguf.py               |   6 +-
- gguf-py/gguf/gguf_writer.py         |  40 +++-
+ gguf-py/gguf/gguf_writer.py         |  44 ++++-
  gguf-py/gguf/tensor_mapping.py      |   1 +
  scripts/check-glm51-mtp-metadata.py | 110 +++++++++++
  src/llama-context.cpp               |  15 +-
  src/llama-model.cpp                 |   8 +
  src/models/deepseek2.cpp            | 284 +++++++++++++++++++++++++++-
  src/models/glm-dsa.cpp              |  12 +-
- src/models/models.h                 |   5 +
+ src/models/models.h                 |  10 +
  src/skippy.cpp                      |   3 +
- 11 files changed, 481 insertions(+), 14 deletions(-)
+ 11 files changed, 490 insertions(+), 14 deletions(-)
  create mode 100755 scripts/check-glm51-mtp-metadata.py
 
 diff --git a/conversion/glm.py b/conversion/glm.py
@@ -62,7 +62,7 @@ index 3b23d5eb..2678c01f 100755
      if args.outfile is not None:
          fname_out = args.outfile
 diff --git a/gguf-py/gguf/gguf_writer.py b/gguf-py/gguf/gguf_writer.py
-index f707f29d..52ee3d31 100644
+index f707f29d..bfb0a38d 100644
 --- a/gguf-py/gguf/gguf_writer.py
 +++ b/gguf-py/gguf/gguf_writer.py
 @@ -403,6 +403,16 @@ class GGUFWriter:
@@ -252,7 +252,7 @@ index 00000000..208b46b9
 +if __name__ == "__main__":
 +    raise SystemExit(main())
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 87f75b94..5cf50e6c 100644
+index a6e75ba9..d649ffa3 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -1972,9 +1972,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
@@ -280,10 +280,10 @@ index 87f75b94..5cf50e6c 100644
          }
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index a1dc66c6..869f80b6 100644
+index 3b7320ad..9d51c869 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -2147,6 +2147,14 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2153,6 +2153,14 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          }
                      }
  
@@ -673,10 +673,10 @@ index 11d91312..d7067347 100644
  }
 -
 diff --git a/src/models/models.h b/src/models/models.h
-index ee3aff07..75c0ffcf 100644
+index 2ac8415a..f1a84e15 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -1051,6 +1051,10 @@ struct llama_model_deepseek2 : public llama_model_base {
+@@ -1055,6 +1055,10 @@ struct llama_model_deepseek : public llama_model_base {
          graph(const llama_model & model, const llm_graph_params & params);
      };
  
@@ -687,7 +687,26 @@ index ee3aff07..75c0ffcf 100644
      std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
  };
  
-@@ -1085,6 +1089,7 @@ struct llama_model_glm_dsa : public llama_model_base {
+@@ -1068,6 +1072,10 @@ struct llama_model_deepseek2 : public llama_model_base {
+         graph(const llama_model & model, const llm_graph_params & params);
+     };
+ 
++    struct graph_mtp : public llm_graph_context {
++        graph_mtp(const llama_model & model, const llm_graph_params & params);
++    };
++
+     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+ };
+ 
+@@ -1091,6 +1099,7 @@ struct llama_model_deepseek2ocr : public llama_model_base {
+     void load_arch_tensors(llama_model_loader & ml) override;
+ 
+     using graph = llama_model_deepseek2::graph;
++    using graph_mtp = llama_model_deepseek2::graph_mtp;
+ 
+     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+ };
+@@ -1102,6 +1111,7 @@ struct llama_model_glm_dsa : public llama_model_base {
      void load_arch_tensors(llama_model_loader & ml) override;
  
      using graph = llama_model_deepseek2::graph;
@@ -710,4 +729,5 @@ index 4dcd0d96..20cff23f 100644
              filter.include_output = config->include_output;
              llama_model_loader_set_stage_filter(filter);
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
+

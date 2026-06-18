@@ -1,17 +1,17 @@
-From 29409539414f3400462fbc155128bd22f7eb9d2f Mon Sep 17 00:00:00 2001
+From d094e64f90d5754c807c1984c1f706accf741936 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Thu, 11 Jun 2026 08:26:33 +1000
-Subject: [PATCH 83/89] Allow DeepSeek2 NextN tensor mapping
+Subject: [PATCH 083/108] Allow DeepSeek2 NextN tensor mapping
 
 ---
  gguf-py/gguf/constants.py | 6 ++++++
  1 file changed, 6 insertions(+)
 
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index 4b6dfea6..48147001 100644
+index 463963f2..e0d7ad81 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -3031,6 +3031,12 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -3060,6 +3060,12 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.FFN_DOWN_SHEXP,
          MODEL_TENSOR.FFN_UP_SHEXP,
          MODEL_TENSOR.FFN_EXP_PROBS_B,
@@ -25,5 +25,5 @@ index 4b6dfea6..48147001 100644
      MODEL_ARCH.DEEPSEEK2OCR: [
          MODEL_TENSOR.TOKEN_EMBD,
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

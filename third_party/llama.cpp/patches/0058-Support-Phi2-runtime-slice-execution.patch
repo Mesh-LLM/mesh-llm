@@ -1,7 +1,7 @@
-From b2a46f424afa5dae1f225e7a659b150c23fcec67 Mon Sep 17 00:00:00 2001
+From cea5dde96a2079d780bf765216f69ff9ab153bd0 Mon Sep 17 00:00:00 2001
 From: mesh-llm <mesh-llm@example.com>
 Date: Wed, 6 May 2026 00:00:00 +1000
-Subject: [PATCH 58/82] Support Phi2 runtime-slice execution
+Subject: [PATCH 058/108] Support Phi2 runtime-slice execution
 
 ---
  src/llama-model-loader.cpp | 11 +++++++++++
@@ -12,7 +12,7 @@ Subject: [PATCH 58/82] Support Phi2 runtime-slice execution
  5 files changed, 32 insertions(+), 5 deletions(-)
 
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 16cc0b06e..38e0bc2ad 100644
+index 16cc0b06..38e0bc2a 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -18,6 +18,7 @@ static const size_t MiB = 1024*kiB;
@@ -61,7 +61,7 @@ index 16cc0b06e..38e0bc2ad 100644
          if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
              const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
-index d889c99d2..d85aa85d2 100644
+index d889c99d..d85aa85d 100644
 --- a/src/llama-model-loader.h
 +++ b/src/llama-model-loader.h
 @@ -30,6 +30,7 @@ struct llama_model_loader_stage_filter {
@@ -73,10 +73,10 @@ index d889c99d2..d85aa85d2 100644
  enum llama_fver {
      GGUF_FILE_VERSION_V1 = 1,
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 8eead6ded..a1dc66c6c 100644
+index 89413a1a..3b7320ad 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -2680,7 +2680,8 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
+@@ -2687,7 +2687,8 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
          int flags) {
      const int64_t n_embd_qkv = n_embd_q_ + n_embd_k_ + n_embd_v_;
      layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", bid), {n_embd_, n_embd_qkv}, TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);
@@ -87,7 +87,7 @@ index 8eead6ded..a1dc66c6c 100644
      } else {
          layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", bid), {n_embd_, n_embd_q_}, flags);
 diff --git a/src/models/phi2.cpp b/src/models/phi2.cpp
-index 81b1ad12c..f82e0c74a 100644
+index 81b1ad12..f82e0c74 100644
 --- a/src/models/phi2.cpp
 +++ b/src/models/phi2.cpp
 @@ -54,16 +54,21 @@ llama_model_phi2::graph::graph(const llama_model & model, const llm_graph_params
@@ -140,7 +140,7 @@ index 81b1ad12c..f82e0c74a 100644
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 4b6e06be5..ab7b5d0e1 100644
+index 4b6e06be..ab7b5d0e 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1615,6 +1615,7 @@ static enum skippy_status skippy_finish_model_open(
@@ -152,5 +152,5 @@ index 4b6e06be5..ab7b5d0e1 100644
              model->arch != LLM_ARCH_STARCODER2 &&
              model->arch != LLM_ARCH_STABLELM) {
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

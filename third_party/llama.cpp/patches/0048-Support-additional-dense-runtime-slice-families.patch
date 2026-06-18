@@ -1,7 +1,7 @@
-From d626cb6bdeca73bcd50416e10726a60887c4befe Mon Sep 17 00:00:00 2001
+From b370442a6c10086fcb941bcc49bf03875fb13599 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 08:38:54 +1000
-Subject: [PATCH 48/82] Support additional dense runtime-slice families
+Subject: [PATCH 048/108] Support additional dense runtime-slice families
 
 ---
  src/models/cohere2.cpp    | 20 ++++++++++++++++----
@@ -17,7 +17,7 @@ Subject: [PATCH 48/82] Support additional dense runtime-slice families
  10 files changed, 153 insertions(+), 36 deletions(-)
 
 diff --git a/src/models/cohere2.cpp b/src/models/cohere2.cpp
-index 61a5945a1..4ca90c985 100644
+index e2b36625..1223aae3 100644
 --- a/src/models/cohere2.cpp
 +++ b/src/models/cohere2.cpp
 @@ -59,16 +59,21 @@ llama_model_cohere2::graph::graph(const llama_model & model, const llm_graph_par
@@ -69,7 +69,7 @@ index 61a5945a1..4ca90c985 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/command-r.cpp b/src/models/command-r.cpp
-index 94a46188b..260012552 100644
+index 94a46188..26001255 100644
 --- a/src/models/command-r.cpp
 +++ b/src/models/command-r.cpp
 @@ -54,16 +54,21 @@ llama_model_command_r::graph::graph(const llama_model & model, const llm_graph_p
@@ -121,7 +121,7 @@ index 94a46188b..260012552 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/exaone.cpp b/src/models/exaone.cpp
-index 676fb37b5..22daba948 100644
+index 676fb37b..22daba94 100644
 --- a/src/models/exaone.cpp
 +++ b/src/models/exaone.cpp
 @@ -53,16 +53,21 @@ llama_model_exaone::graph::graph(const llama_model & model, const llm_graph_para
@@ -173,7 +173,7 @@ index 676fb37b5..22daba948 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/exaone4.cpp b/src/models/exaone4.cpp
-index 863268abc..306d73a95 100644
+index 863268ab..306d73a9 100644
 --- a/src/models/exaone4.cpp
 +++ b/src/models/exaone4.cpp
 @@ -94,7 +94,12 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
@@ -226,7 +226,7 @@ index 863268abc..306d73a95 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/falcon.cpp b/src/models/falcon.cpp
-index b2ad90b32..00f3bd4f9 100644
+index b2ad90b3..00f3bd4f 100644
 --- a/src/models/falcon.cpp
 +++ b/src/models/falcon.cpp
 @@ -56,16 +56,21 @@ llama_model_falcon::graph::graph(const llama_model & model, const llm_graph_para
@@ -278,7 +278,7 @@ index b2ad90b32..00f3bd4f9 100644
      cur = build_norm(cur,
              model.output_norm,
 diff --git a/src/models/granite.cpp b/src/models/granite.cpp
-index 4a75c5ff3..fb75406f4 100644
+index 4a75c5ff..fb75406f 100644
 --- a/src/models/granite.cpp
 +++ b/src/models/granite.cpp
 @@ -123,7 +123,12 @@ llama_model_granite::graph::graph(
@@ -331,7 +331,7 @@ index 4a75c5ff3..fb75406f4 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/internlm2.cpp b/src/models/internlm2.cpp
-index f6cfdfb94..c44bc35fa 100644
+index f6cfdfb9..c44bc35f 100644
 --- a/src/models/internlm2.cpp
 +++ b/src/models/internlm2.cpp
 @@ -47,16 +47,21 @@ llama_model_internlm2::graph::graph(const llama_model & model, const llm_graph_p
@@ -383,7 +383,7 @@ index f6cfdfb94..c44bc35fa 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/mistral3.cpp b/src/models/mistral3.cpp
-index 9a8e3f9a5..4203192b7 100644
+index 9a8e3f9a..4203192b 100644
 --- a/src/models/mistral3.cpp
 +++ b/src/models/mistral3.cpp
 @@ -99,7 +99,12 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
@@ -436,7 +436,7 @@ index 9a8e3f9a5..4203192b7 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/starcoder2.cpp b/src/models/starcoder2.cpp
-index b81b46937..af2bc1128 100644
+index b81b4693..af2bc112 100644
 --- a/src/models/starcoder2.cpp
 +++ b/src/models/starcoder2.cpp
 @@ -65,16 +65,21 @@ llama_model_starcoder2::graph::graph(const llama_model & model, const llm_graph_
@@ -488,7 +488,7 @@ index b81b46937..af2bc1128 100644
              model.output_norm, model.output_norm_b,
              LLM_NORM, -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 8aa27ecde..788ea9991 100644
+index 8aa27ecd..788ea999 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1463,7 +1463,15 @@ static enum skippy_status skippy_finish_model_open(
@@ -516,5 +516,5 @@ index 8aa27ecde..788ea9991 100644
              llama_model_free(model);
              skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime-slice execution is not supported for this model architecture yet");
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

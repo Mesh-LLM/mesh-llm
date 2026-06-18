@@ -1,7 +1,7 @@
-From 42b77c4151c67a77b855a110602ea9639d18b20c Mon Sep 17 00:00:00 2001
+From fee9d3bfdb4986189fa61d3aac6dd9d0dc93c103 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 4 May 2026 17:49:03 +1000
-Subject: [PATCH 34/82] Add shared execution lanes to skippy ABI
+Subject: [PATCH 034/108] Add shared execution lanes to skippy ABI
 
 ---
  include/skippy.h       |  92 +-------
@@ -11,7 +11,7 @@ Subject: [PATCH 34/82] Add shared execution lanes to skippy ABI
  4 files changed, 73 insertions(+), 897 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 1db835d5f..9e91519d1 100644
+index 1db835d5..9e91519d 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -161,7 +161,7 @@ index 1db835d5f..9e91519d1 100644
          struct skippy_model * model,
          const char * text,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 400a9d292..024bac7a5 100644
+index 400a9d29..024bac7a 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -1221,352 +1221,6 @@ ggml_type llama_kv_cache::type_v() const {
@@ -518,7 +518,7 @@ index 400a9d292..024bac7a5 100644
      uint32_t result = 0;
  
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 83cee5f9c..a3a1ec96c 100644
+index 83cee5f9..a3a1ec96 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -13,8 +13,6 @@ struct llama_cparams;
@@ -555,7 +555,7 @@ index 83cee5f9c..a3a1ec96c 100644
      // graph_build API
      //
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 08cfeb20b..152e2ffe5 100644
+index 08cfeb20..152e2ffe 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -29,13 +29,18 @@
@@ -1225,5 +1225,5 @@ index 08cfeb20b..152e2ffe5 100644
          struct skippy_model * model,
          const char * text,
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

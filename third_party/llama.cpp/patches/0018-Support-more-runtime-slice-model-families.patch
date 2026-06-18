@@ -1,7 +1,7 @@
-From c9314b2a0e18d76c980834a83c1a461cb6b08331 Mon Sep 17 00:00:00 2001
+From 20019ff6a96b2ceba3a07da4a907b829e0aba40c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 27 Apr 2026 16:07:00 +1000
-Subject: [PATCH 18/82] Support more runtime-slice model families
+Subject: [PATCH 018/108] Support more runtime-slice model families
 
 ---
  include/skippy.h           |  17 +++
@@ -25,7 +25,7 @@ Subject: [PATCH 18/82] Support more runtime-slice model families
  18 files changed, 560 insertions(+), 83 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 6dc5af7b1..23a46e0f2 100644
+index 6dc5af7b..23a46e0f 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -258,6 +258,23 @@ LLAMA_API enum skippy_status skippy_import_state(
@@ -53,7 +53,7 @@ index 6dc5af7b1..23a46e0f2 100644
          struct skippy_session * session,
          int32_t layer_start,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index f6042d81a..fee74df01 100644
+index 110f4f6a..126261f2 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -20,6 +20,7 @@
@@ -103,7 +103,7 @@ index f6042d81a..fee74df01 100644
      if (ubatch->pos && pos) {
          const int64_t n_tokens = ubatch->n_tokens;
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 84b7124a1..3454637a5 100644
+index e93cc31c..9c4a7849 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -36,9 +36,17 @@ struct skippy_graph_filter {
@@ -144,7 +144,7 @@ index 84b7124a1..3454637a5 100644
  public:
      llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index c1e512883..622b228e6 100644
+index c1e51288..622b228e 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -1121,6 +1121,13 @@ struct ggml_tensor * llama_model_loader::create_tensor(
@@ -162,10 +162,10 @@ index c1e512883..622b228e6 100644
                  if (t_meta) {
                      const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 7281ed79f..8eead6ded 100644
+index c5287553..89413a1a 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -1358,13 +1358,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1360,13 +1360,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
              }
  
              // MoE expert weight scales (per-expert, shape {n_expert})
@@ -183,7 +183,7 @@ index 7281ed79f..8eead6ded 100644
              }
  
 diff --git a/src/models/deepseek2.cpp b/src/models/deepseek2.cpp
-index a9e8bc514..233824916 100644
+index a9e8bc51..d1b261b4 100644
 --- a/src/models/deepseek2.cpp
 +++ b/src/models/deepseek2.cpp
 @@ -174,8 +174,14 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
@@ -238,7 +238,7 @@ index a9e8bc514..233824916 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/falcon-h1.cpp b/src/models/falcon-h1.cpp
-index d6ef2d519..1222a5d49 100644
+index d6ef2d51..1222a5d4 100644
 --- a/src/models/falcon-h1.cpp
 +++ b/src/models/falcon-h1.cpp
 @@ -116,7 +116,12 @@ llama_model_falcon_h1::graph::graph(const llama_model & model, const llm_graph_p
@@ -291,7 +291,7 @@ index d6ef2d519..1222a5d49 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/gemma.cpp b/src/models/gemma.cpp
-index 651cd7e64..d6d7cae7d 100644
+index 651cd7e6..d6d7cae7 100644
 --- a/src/models/gemma.cpp
 +++ b/src/models/gemma.cpp
 @@ -44,19 +44,26 @@ llama_model_gemma::graph::graph(const llama_model & model, const llm_graph_param
@@ -350,7 +350,7 @@ index 651cd7e64..d6d7cae7d 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/gemma2.cpp b/src/models/gemma2.cpp
-index 2fbfb15a9..7e1154a92 100644
+index 2fbfb15a..7e1154a9 100644
 --- a/src/models/gemma2.cpp
 +++ b/src/models/gemma2.cpp
 @@ -65,19 +65,26 @@ llama_model_gemma2::graph::graph(const llama_model & model, const llm_graph_para
@@ -409,7 +409,7 @@ index 2fbfb15a9..7e1154a92 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/gemma3.cpp b/src/models/gemma3.cpp
-index 690194529..de94cdb53 100644
+index 69019452..de94cdb5 100644
 --- a/src/models/gemma3.cpp
 +++ b/src/models/gemma3.cpp
 @@ -87,11 +87,18 @@ llama_model_gemma3::graph<iswa>::graph(const llama_model & model, const llm_grap
@@ -470,7 +470,7 @@ index 690194529..de94cdb53 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/gemma4.cpp b/src/models/gemma4.cpp
-index 6a96979ce..afac5ed5e 100644
+index 6a96979c..afac5ed5 100644
 --- a/src/models/gemma4.cpp
 +++ b/src/models/gemma4.cpp
 @@ -98,8 +98,9 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
@@ -594,7 +594,7 @@ index 6a96979ce..afac5ed5e 100644
          // Multimodal embedding path: use padding token (ID=0) embedding
          // TODO: verify if this is the correct behavior in transformers implementation
 diff --git a/src/models/glm4.cpp b/src/models/glm4.cpp
-index b4326c5f2..ed7c42f87 100644
+index b4326c5f..c4e951a1 100644
 --- a/src/models/glm4.cpp
 +++ b/src/models/glm4.cpp
 @@ -80,10 +80,18 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
@@ -661,7 +661,7 @@ index b4326c5f2..ed7c42f87 100644
      cb(cur, "result_norm", -1);
      res->t_embd = cur;
 diff --git a/src/models/minimax-m2.cpp b/src/models/minimax-m2.cpp
-index b25435e4d..522e6fceb 100644
+index b25435e4..522e6fce 100644
 --- a/src/models/minimax-m2.cpp
 +++ b/src/models/minimax-m2.cpp
 @@ -53,13 +53,18 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
@@ -710,7 +710,7 @@ index b25435e4d..522e6fceb 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/olmo.cpp b/src/models/olmo.cpp
-index 9f7a2ba60..162cb4bc9 100644
+index 9f7a2ba6..162cb4bc 100644
 --- a/src/models/olmo.cpp
 +++ b/src/models/olmo.cpp
 @@ -49,16 +49,21 @@ llama_model_olmo::graph::graph(const llama_model & model, const llm_graph_params
@@ -762,7 +762,7 @@ index 9f7a2ba60..162cb4bc9 100644
              NULL, NULL,
              LLM_NORM, -1);
 diff --git a/src/models/qwen2.cpp b/src/models/qwen2.cpp
-index e9c2ea80a..6362851e7 100644
+index e9c2ea80..6362851e 100644
 --- a/src/models/qwen2.cpp
 +++ b/src/models/qwen2.cpp
 @@ -59,16 +59,21 @@ llama_model_qwen2::graph::graph(const llama_model & model, const llm_graph_param
@@ -814,7 +814,7 @@ index e9c2ea80a..6362851e7 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/qwen3.cpp b/src/models/qwen3.cpp
-index f4b2a2aeb..9991ce56b 100644
+index f4b2a2ae..9991ce56 100644
 --- a/src/models/qwen3.cpp
 +++ b/src/models/qwen3.cpp
 @@ -59,16 +59,21 @@ llama_model_qwen3::graph::graph(const llama_model & model, const llm_graph_param
@@ -866,7 +866,7 @@ index f4b2a2aeb..9991ce56b 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/qwen3next.cpp b/src/models/qwen3next.cpp
-index 97200a440..885d3155f 100644
+index 97200a44..e68c24dd 100644
 --- a/src/models/qwen3next.cpp
 +++ b/src/models/qwen3next.cpp
 @@ -112,15 +112,27 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
@@ -925,7 +925,7 @@ index 97200a440..885d3155f 100644
      cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
  
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index f0b70b962..50e25c8f5 100644
+index f0b70b96..50e25c8f 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -500,6 +500,26 @@ struct skippy_graph_filter_scope {
@@ -1243,4 +1243,5 @@ index f0b70b962..50e25c8f5 100644
  
  static llama_kv_cache * skippy_get_kv_cache(
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
+

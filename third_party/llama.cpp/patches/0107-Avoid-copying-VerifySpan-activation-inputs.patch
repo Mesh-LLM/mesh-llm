@@ -1,17 +1,17 @@
-From bd53d862a053cceea05d8df0c196fae4bafc1f2c Mon Sep 17 00:00:00 2001
+From b0431293db143ef40314c237784c5c9bf426f135 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 20:21:16 +1000
-Subject: [PATCH] Avoid copying VerifySpan activation inputs
+Subject: [PATCH 107/108] Avoid copying VerifySpan activation inputs
 
 ---
  src/skippy.cpp | 35 +++++++++++++++++++++++++++++++----
  1 file changed, 31 insertions(+), 4 deletions(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 56bb1ba2..b357620e 100644
+index 9d6c4fbd..04f01eac 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
-@@ -2293,10 +2293,35 @@ static enum skippy_status skippy_verify_activation_frame(
+@@ -2263,10 +2263,35 @@ static enum skippy_status skippy_verify_activation_frame(
      const int32_t n_tokens = static_cast<int32_t>(token_count);
      const int32_t n_embd = llama_model_n_embd(session->stage_model->model);
      const int32_t n_altup = static_cast<int32_t>(session->stage_model->model->hparams.n_altup);
@@ -50,7 +50,7 @@ index 56bb1ba2..b357620e 100644
  
      for (int32_t i = 0; i < n_tokens; ++i) {
          batch.pos[i] = session->n_past + i;
-@@ -2309,7 +2334,9 @@ static enum skippy_status skippy_verify_activation_frame(
+@@ -2279,7 +2304,9 @@ static enum skippy_status skippy_verify_activation_frame(
      skippy_gemma3n_altup_scope gemma3n_altup_scope(input_desc, input_payload, n_embd, n_altup);
      const llama_pos token_start = session->n_past;
      enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
@@ -62,5 +62,5 @@ index 56bb1ba2..b357620e 100644
          status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, token_start, out_error);
      }
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

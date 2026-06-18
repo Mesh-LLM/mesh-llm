@@ -1,14 +1,14 @@
-From e0b78d67fa560e66ad16c6b3d75e73b80390f405 Mon Sep 17 00:00:00 2001
+From 27fd1f3aa1a724945148cf10657d5c9992320b27 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Thu, 11 Jun 2026 11:45:43 +1000
-Subject: [PATCH 88/89] Recognize fixed GLM tokenizer signature
+Subject: [PATCH 089/108] Recognize fixed GLM tokenizer signature
 
 ---
  conversion/base.py | 3 +++
  1 file changed, 3 insertions(+)
 
 diff --git a/conversion/base.py b/conversion/base.py
-index ffe59da9..6ece31fc 100644
+index e0a0c3b5..c211c4ad 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
 @@ -1424,6 +1424,9 @@ class TextModel(ModelBase):
@@ -22,5 +22,5 @@ index ffe59da9..6ece31fc 100644
              # ref: https://huggingface.co/sapienzanlp/Minerva-7B-base-v1.0
              res = "minerva-7b"
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

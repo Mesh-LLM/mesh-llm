@@ -1,14 +1,14 @@
-From 3e3387508bc10e9953e849b025122aee7d501ce5 Mon Sep 17 00:00:00 2001
+From 11da61cb14ed17bc37dc1433907552f137382eaf Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 15 Jun 2026 10:26:29 +1000
-Subject: [PATCH 04/10] Use type traits for tensor float conversion
+Subject: [PATCH 094/108] Use type traits for tensor float conversion
 
 ---
  src/llama-quant.cpp | 37 +++++++++----------------------------
  1 file changed, 9 insertions(+), 28 deletions(-)
 
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 5b14869b6..847292290 100644
+index c8277dd4..8bfeaf03 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -209,16 +209,8 @@ struct tensor_metadata {
@@ -80,5 +80,5 @@ index 5b14869b6..847292290 100644
          out_buff_offs += thr_elems;
      }
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

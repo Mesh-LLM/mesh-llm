@@ -1,7 +1,7 @@
-From 144d9a16600e69c85a59899a324dfb395cd3b183 Mon Sep 17 00:00:00 2001
+From 55a31f271bc2b2d1e236084c8e035869df92b5d6 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 17:34:50 +1000
-Subject: [PATCH 69/82] Avoid double-counting optional filtered tensors
+Subject: [PATCH 069/108] Avoid double-counting optional filtered tensors
 
 ---
  src/llama-model-loader.cpp | 30 ++++++++++++++++++++++++++----
@@ -9,7 +9,7 @@ Subject: [PATCH 69/82] Avoid double-counting optional filtered tensors
  2 files changed, 28 insertions(+), 4 deletions(-)
 
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 38e0bc2ad..8bfc15b2a 100644
+index 38e0bc2a..8bfc15b2 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -1132,6 +1132,19 @@ struct ggml_tensor * llama_model_loader::create_tensor(
@@ -62,7 +62,7 @@ index 38e0bc2ad..8bfc15b2a 100644
                      g_skippy_last_tensor_filtered = true;
                  } else {
 diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
-index d85aa85d2..6876262da 100644
+index d85aa85d..6876262d 100644
 --- a/src/llama-model-loader.h
 +++ b/src/llama-model-loader.h
 @@ -14,6 +14,7 @@
@@ -82,5 +82,5 @@ index d85aa85d2..6876262da 100644
  
      gguf_context_ptr metadata_ptr;
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

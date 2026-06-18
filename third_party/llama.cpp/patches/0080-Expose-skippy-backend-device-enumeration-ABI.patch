@@ -1,7 +1,7 @@
-From 21b677b397c22b5393503a97322e839953f1ef23 Mon Sep 17 00:00:00 2001
+From db8c90d5dd31a66404ef55081c67e7fc2aeae4c6 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 11 May 2026 05:38:23 +1000
-Subject: [PATCH 80/82] Expose skippy backend device enumeration ABI
+Subject: [PATCH 080/108] Expose skippy backend device enumeration ABI
 
 ---
  include/skippy.h         |  81 ++----------------------------
@@ -13,7 +13,7 @@ Subject: [PATCH 80/82] Expose skippy backend device enumeration ABI
  create mode 100644 include/skippy/devices.h
 
 diff --git a/include/skippy.h b/include/skippy.h
-index f1ff7852b..486e95dc7 100644
+index f1ff7852..486e95dc 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -1,76 +1,18 @@
@@ -136,7 +136,7 @@ index f1ff7852b..486e95dc7 100644
  #endif // SKIPPY_ABI_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 new file mode 100644
-index 000000000..afef27491
+index 00000000..afef2749
 --- /dev/null
 +++ b/include/skippy/common.h
 @@ -0,0 +1,92 @@
@@ -234,7 +234,7 @@ index 000000000..afef27491
 +#endif
 diff --git a/include/skippy/devices.h b/include/skippy/devices.h
 new file mode 100644
-index 000000000..382f1e699
+index 00000000..382f1e69
 --- /dev/null
 +++ b/include/skippy/devices.h
 @@ -0,0 +1,49 @@
@@ -288,7 +288,7 @@ index 000000000..382f1e699
 +
 +#endif
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 2aa45bb9f..35e426717 100644
+index 2aa45bb9..35e42671 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1,6 +1,8 @@
@@ -425,5 +425,5 @@ index 2aa45bb9f..35e426717 100644
          llama_model * model,
          const struct skippy_runtime_config * config,
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

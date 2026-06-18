@@ -1,7 +1,7 @@
-From 4679b5983cf0a31d12a20cfdd44f1bc459bd4b16 Mon Sep 17 00:00:00 2001
+From 4c737712f1fd95169983c24f5ac0c3700b9569fa Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 27 Apr 2026 20:52:31 +1000
-Subject: [PATCH 22/82] Add stage logit bias sampling ABI
+Subject: [PATCH 022/108] Add stage logit bias sampling ABI
 
 ---
  include/skippy.h |  8 +++++++-
@@ -9,7 +9,7 @@ Subject: [PATCH 22/82] Add stage logit bias sampling ABI
  2 files changed, 24 insertions(+), 4 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index c5c22b5d8..bf54c23ea 100644
+index c5c22b5d..bf54c23e 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -26,7 +26,9 @@ extern "C" {
@@ -42,7 +42,7 @@ index c5c22b5d8..bf54c23ea 100644
  
  struct skippy_kv_page_desc {
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index ce454d6c3..b7188fb4b 100644
+index ce454d6c..b7188fb4 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -786,7 +786,7 @@ static bool skippy_sampling_enabled(const skippy_sampling_config * sampling) {
@@ -87,5 +87,5 @@ index ce454d6c3..b7188fb4b 100644
      for (const llama_token token : session->token_history) {
          llama_sampler_accept(sampler, token);
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

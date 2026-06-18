@@ -1,14 +1,14 @@
-From 6f8f9772cb7402e758bd10474d124ecad504e963 Mon Sep 17 00:00:00 2001
+From 52acd04755b7dab2d904b3912ba6ba62b4e46671 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Thu, 11 Jun 2026 11:39:33 +1000
-Subject: [PATCH 87/89] Fix GLM tokenizer regex during conversion
+Subject: [PATCH 088/108] Fix GLM tokenizer regex during conversion
 
 ---
  conversion/base.py | 23 +++++++++++++++++------
  1 file changed, 17 insertions(+), 6 deletions(-)
 
 diff --git a/conversion/base.py b/conversion/base.py
-index 9d81c19b..ffe59da9 100644
+index c872bcbb..e0a0c3b5 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
 @@ -1129,6 +1129,20 @@ class TextModel(ModelBase):
@@ -42,7 +42,7 @@ index 9d81c19b..ffe59da9 100644
          vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
          assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
  
-@@ -2060,8 +2073,7 @@ class TextModel(ModelBase):
+@@ -2063,8 +2076,7 @@ class TextModel(ModelBase):
              self.gguf_writer.add_pooling_type(pooling_type)
  
      def _set_vocab_glmedge(self):
@@ -52,7 +52,7 @@ index 9d81c19b..ffe59da9 100644
          special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
          tokens, toktypes, tokpre = self.get_vocab_base()
          self.gguf_writer.add_tokenizer_model("gpt2")
-@@ -2075,8 +2087,7 @@ class TextModel(ModelBase):
+@@ -2078,8 +2090,7 @@ class TextModel(ModelBase):
          special_vocab.add_to_gguf(self.gguf_writer)
  
      def _set_vocab_glm(self):
@@ -63,5 +63,5 @@ index 9d81c19b..ffe59da9 100644
          tokens, toktypes, tokpre = self.get_vocab_base()
          self.gguf_writer.add_tokenizer_model("gpt2")
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

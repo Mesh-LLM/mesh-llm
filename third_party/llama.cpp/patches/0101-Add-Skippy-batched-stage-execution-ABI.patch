@@ -1,13 +1,13 @@
-From 304072b6240ebf11246255b2138c8d201e0014ee Mon Sep 17 00:00:00 2001
+From d2e848507b23deb086474d3714f5ec3a4bf05edb Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 07:36:49 +1000
-Subject: [PATCH 90/94] Add Skippy batched stage execution ABI
+Subject: [PATCH 101/108] Add Skippy batched stage execution ABI
 
 ---
  include/skippy.h        |  24 ++++
  include/skippy/common.h |   2 +-
- src/skippy.cpp          | 296 ++++++++++++++++++++++++++++++++++++----
- 3 files changed, 294 insertions(+), 28 deletions(-)
+ src/skippy.cpp          | 297 ++++++++++++++++++++++++++++++++++++----
+ 3 files changed, 295 insertions(+), 28 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
 index 075850e3..7cace0a4 100644
@@ -65,7 +65,7 @@ index a6bd7fd9..7009d98c 100644
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 20cff23f..4707be19 100644
+index 20cff23f..49db9189 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1335,23 +1335,6 @@ static enum skippy_status skippy_verify_token_batch(
@@ -437,4 +437,5 @@ index 20cff23f..4707be19 100644
          struct skippy_session * session,
          const llama_token * token_ids,
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
+

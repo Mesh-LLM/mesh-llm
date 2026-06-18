@@ -1,7 +1,7 @@
-From 595c9546682459de52dff39fa2c0fe74b71bde71 Mon Sep 17 00:00:00 2001
+From 3062bcd829d4799ba376df25df387d5220202d31 Mon Sep 17 00:00:00 2001
 From: mesh-llm <mesh-llm@example.com>
 Date: Wed, 6 May 2026 00:00:00 +1000
-Subject: [PATCH 60/82] Support Hunyuan-Dense runtime-slice execution
+Subject: [PATCH 060/108] Support Hunyuan-Dense runtime-slice execution
 
 ---
  src/models/hunyuan-vl.cpp | 20 ++++++++++++++++----
@@ -9,7 +9,7 @@ Subject: [PATCH 60/82] Support Hunyuan-Dense runtime-slice execution
  2 files changed, 17 insertions(+), 4 deletions(-)
 
 diff --git a/src/models/hunyuan-vl.cpp b/src/models/hunyuan-vl.cpp
-index da9bb74de..cbf767f7a 100644
+index da9bb74d..cbf767f7 100644
 --- a/src/models/hunyuan-vl.cpp
 +++ b/src/models/hunyuan-vl.cpp
 @@ -71,7 +71,12 @@ llama_model_hunyuan_vl::graph::graph(const llama_model & model, const llm_graph_
@@ -62,7 +62,7 @@ index da9bb74de..cbf767f7a 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index eb41cb47f..8a1583dff 100644
+index eb41cb47..8a1583df 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1588,6 +1588,7 @@ static enum skippy_status skippy_finish_model_open(
@@ -74,5 +74,5 @@ index eb41cb47f..8a1583dff 100644
              model->arch != LLM_ARCH_JAMBA &&
              model->arch != LLM_ARCH_LFM2 &&
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 

@@ -1,7 +1,7 @@
-From c60778b643313b7db3c6132ce8fe6910765c0ce4 Mon Sep 17 00:00:00 2001
+From 518c17c1980d8bb927c5bf850cd01bd99d251259 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 5 May 2026 22:20:00 +1000
-Subject: [PATCH 43/82] Default stage threads like llama-server
+Subject: [PATCH 043/108] Default stage threads like llama-server
 
 ---
  include/skippy.h |  4 +++-
@@ -9,7 +9,7 @@ Subject: [PATCH 43/82] Default stage threads like llama-server
  2 files changed, 45 insertions(+), 1 deletion(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index fe166e3d6..deb5151e0 100644
+index fe166e3d..deb5151e 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -31,7 +31,7 @@ index fe166e3d6..deb5151e0 100644
      int32_t cache_type_k;
      int32_t cache_type_v;
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 091b7cb21..074797b22 100644
+index 091b7cb2..074797b2 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -20,14 +20,23 @@
@@ -106,5 +106,5 @@ index 091b7cb21..074797b22 100644
      params.kv_unified = stage_model->lane_count > 1;
      params.type_k = config != nullptr && config->cache_type_k > 0 ? static_cast<ggml_type>(config->cache_type_k) : GGML_TYPE_F16;
 -- 
-2.54.0 (Apple Git-156)
+2.50.1 (Apple Git-155)
 
