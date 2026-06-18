@@ -12,10 +12,11 @@ use mesh_llm_host_runtime::command_support::models::skippy::{
 use mesh_llm_host_runtime::command_support::models::{
     ModelCleanupPlan, ModelCleanupResult, SearchArtifactFilter, SearchProgress, SearchSort,
     ShowVariantsProgress, delete, download_model_ref_with_progress_details,
-    find_remote_catalog_model_exact, installed_model_capabilities,
-    load_model_usage_record_for_path, model_usage_cache_dir, plan_model_cleanup, remote_catalog,
-    remote_catalog_model_ref, scan_installed_models, search_catalog_models, search_huggingface,
-    show_exact_model, show_model_variants_with_progress,
+    download_model_ref_with_progress_details_direct, find_remote_catalog_model_exact,
+    installed_model_capabilities, load_model_usage_record_for_path, model_usage_cache_dir,
+    plan_model_cleanup, remote_catalog, remote_catalog_model_ref, scan_installed_models,
+    search_catalog_models, search_huggingface, show_exact_model,
+    show_model_variants_with_progress,
 };
 use mesh_llm_tui::terminal_progress::{DeterminateProgressLine, clear_stderr_line, start_spinner};
 use serde_json::json;
@@ -386,19 +387,29 @@ pub async fn run_model_show(model_ref: &str, json_output: bool) -> Result<()> {
 pub async fn run_model_download(
     model_ref: &str,
     include_draft: bool,
+    direct: bool,
     json_output: bool,
 ) -> Result<()> {
     let formatter = models_formatter(json_output);
-    if let Some((package_ref, package_dir)) =
-        download_layer_package_for_model_ref(model_ref).await?
-    {
-        if include_draft && !json_output {
-            eprintln!("⚠ Draft download is not available for layer packages");
+    if !direct {
+        if let Some((package_ref, package_dir)) =
+            download_layer_package_for_model_ref(model_ref).await?
+        {
+            if !json_output {
+                eprintln!("ℹ Using repackaged model from catalog: {package_ref}");
+            }
+            if include_draft && !json_output {
+                eprintln!("⚠ Draft download is not available for layer packages");
+            }
+            return formatter.render_layer_package_download(model_ref, &package_ref, &package_dir);
         }
-        return formatter.render_layer_package_download(model_ref, &package_ref, &package_dir);
     }
 
-    let (path, details) = download_model_ref_with_progress_details(model_ref, !json_output).await?;
+    let (path, details) = if direct {
+        download_model_ref_with_progress_details_direct(model_ref, !json_output, true).await?
+    } else {
+        download_model_ref_with_progress_details(model_ref, !json_output).await?
+    };
     if !include_draft {
         return formatter.render_download(model_ref, &path, details.as_ref(), false, None);
     }
@@ -537,8 +548,13 @@ pub async fn dispatch_models_command(command: &ModelsCommand) -> Result<()> {
             json,
         } => run_model_search(query, *gguf, *mlx, *catalog, *limit, *sort, *json).await?,
         ModelsCommand::Show { model, json } => run_model_show(model, *json).await?,
-        ModelsCommand::Download { model, draft, json } => {
-            run_model_download(model, *draft, *json).await?
+        ModelsCommand::Download {
+            model,
+            draft,
+            direct,
+            json,
+        } => {
+            run_model_download(model, *draft, *direct, *json).await?
         }
         ModelsCommand::Updates {
             repo,

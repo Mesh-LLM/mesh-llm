@@ -39,6 +39,7 @@ pub mod models {
         DeleteResult, ModelCapabilities, ModelCleanupPlan, ModelCleanupResult, ModelDetails,
         ResolvedModel, SearchArtifactFilter, SearchHit, SearchProgress, SearchSort,
         ShowVariantsProgress, delete, download_model_ref_with_progress_details,
+        download_model_ref_with_progress_details_direct,
         execute_model_cleanup, find_model_path, find_remote_catalog_model_exact,
         huggingface_hub_cache_dir, huggingface_identity_for_path, installed_model_capabilities,
         installed_model_display_name, installed_model_huggingface_ref,

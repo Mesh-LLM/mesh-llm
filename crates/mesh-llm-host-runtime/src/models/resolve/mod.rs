@@ -139,6 +139,14 @@ pub async fn download_model_ref_with_progress_details(
     input: &str,
     progress: bool,
 ) -> Result<(PathBuf, Option<ModelDetails>)> {
+    download_model_ref_with_progress_details_direct(input, progress, false).await
+}
+
+pub async fn download_model_ref_with_progress_details_direct(
+    input: &str,
+    progress: bool,
+    direct: bool,
+) -> Result<(PathBuf, Option<ModelDetails>)> {
     let details = if progress {
         let mut spinner = start_spinner(&format!("Resolving {input}"));
         let details = show_exact_model(input).await.ok();
@@ -151,11 +159,20 @@ pub async fn download_model_ref_with_progress_details(
         .as_ref()
         .map(|detail| detail.download_url.as_str())
         .unwrap_or(input);
-    let path = download_exact_ref_with_progress(download_ref, progress).await?;
+    let path =
+        download_exact_ref_with_progress_direct(download_ref, progress, direct).await?;
     Ok((path, details))
 }
 
 pub async fn download_exact_ref_with_progress(input: &str, progress: bool) -> Result<PathBuf> {
+    download_exact_ref_with_progress_direct(input, progress, false).await
+}
+
+async fn download_exact_ref_with_progress_direct(
+    input: &str,
+    progress: bool,
+    direct: bool,
+) -> Result<PathBuf> {
     let input = canonicalize_model_ref_input(input).await?;
     match parse_exact_model_ref(&input)? {
         ExactModelRef::Catalog(model) => download_remote_catalog_model(&model, progress).await,
@@ -165,9 +182,20 @@ pub async fn download_exact_ref_with_progress(input: &str, progress: bool) -> Re
             file,
         } => {
             let file = resolve_huggingface_file(&repo, revision.as_deref(), &file).await?;
-            if let Some(model) =
-                matching_remote_catalog_primary_for_huggingface(&repo, revision.as_deref(), &file)
+            if !direct
+                && let Some(model) =
+                    matching_remote_catalog_primary_for_huggingface(
+                        &repo,
+                        revision.as_deref(),
+                        &file,
+                    )
             {
+                if progress {
+                    eprintln!(
+                        "ℹ Using repackaged model from catalog: {}",
+                        model.name
+                    );
+                }
                 return download_remote_catalog_model(&model, progress).await;
             }
             catalog::download_hf_repo_file_with_progress_label(

@@ -170,6 +170,9 @@ pub enum ModelsCommand {
         /// Also download the recommended draft model for speculative decoding.
         #[arg(long)]
         draft: bool,
+        /// Download the exact Hugging Face file directly, bypassing catalog layer-package resolution.
+        #[arg(long)]
+        direct: bool,
         /// Emit JSON output.
         #[arg(long)]
         json: bool,
