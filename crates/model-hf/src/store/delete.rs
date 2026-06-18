@@ -428,6 +428,24 @@ pub async fn delete_model_by_identifier_with_catalog(
         }
     }
 
+    // Clean up stale hf_hub cache symlinks that became broken when their blob
+    // targets were deleted (collect_delete_paths canonicalizes symlinks to
+    // blob paths, so the original symlinks in snapshots/<hash>/ are not
+    // cleaned up by the blob-deletion loop above). Without this cleanup the
+    // hf_hub cache still reports the revision as "ready" on re-download but
+    // the actual files are gone, causing a "No such file" error.
+    let hf_cache_root = huggingface_hub_cache_dir();
+    for path in &resolved_paths {
+        // symlink_metadata succeeds for real files AND broken symlinks;
+        // exists() returns false for broken symlinks. Combined they identify
+        // symlinks whose blob target no longer exists.
+        if std::fs::symlink_metadata(path).is_ok() && !path.exists() {
+            if std::fs::remove_file(path).is_ok() {
+                prune_empty_ancestors(path, &hf_cache_root);
+            }
+        }
+    }
+
     Ok(DeleteResult {
         deleted_paths,
         reclaimed_bytes,
