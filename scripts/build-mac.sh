@@ -46,6 +46,12 @@ stamp_build_version() {
         return 0
     fi
 
+    if [[ "$build_profile" == "release" ]]; then
+        export MESH_LLM_BUILD_VERSION="$release_version"
+        echo "Using release MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
+        return 0
+    fi
+
     if ! sha="$(git -C "$REPO_ROOT" rev-parse --short=6 HEAD 2>/dev/null)"; then
         echo "Warning: unable to derive build version; git SHA unavailable." >&2
         unset MESH_LLM_BUILD_VERSION || true

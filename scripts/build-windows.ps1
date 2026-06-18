@@ -218,6 +218,12 @@ function Set-BuildVersionStamp {
         return
     }
 
+    if ($buildProfile -eq "release") {
+        $env:MESH_LLM_BUILD_VERSION = $releaseVersion
+        Write-Host "Using release MESH_LLM_BUILD_VERSION: $($env:MESH_LLM_BUILD_VERSION)"
+        return
+    }
+
     $sha = $null
     try {
         $sha = (& git -C $repoRoot rev-parse --short=6 HEAD 2>$null).Trim()
