@@ -159,8 +159,7 @@ pub async fn download_model_ref_with_progress_details_direct(
         .as_ref()
         .map(|detail| detail.download_url.as_str())
         .unwrap_or(input);
-    let path =
-        download_exact_ref_with_progress_direct(download_ref, progress, direct).await?;
+    let path = download_exact_ref_with_progress_direct(download_ref, progress, direct).await?;
     Ok((path, details))
 }
 
@@ -183,18 +182,14 @@ async fn download_exact_ref_with_progress_direct(
         } => {
             let file = resolve_huggingface_file(&repo, revision.as_deref(), &file).await?;
             if !direct
-                && let Some(model) =
-                    matching_remote_catalog_primary_for_huggingface(
-                        &repo,
-                        revision.as_deref(),
-                        &file,
-                    )
+                && let Some(model) = matching_remote_catalog_primary_for_huggingface(
+                    &repo,
+                    revision.as_deref(),
+                    &file,
+                )
             {
                 if progress {
-                    eprintln!(
-                        "ℹ Using repackaged model from catalog: {}",
-                        model.name
-                    );
+                    eprintln!("ℹ Using repackaged model from catalog: {}", model.name);
                 }
                 return download_remote_catalog_model(&model, progress).await;
             }

@@ -36,12 +36,11 @@ pub use maintenance::{run_update, warn_about_updates_for_paths};
 pub(crate) use profile::{served_model_metadata_for_model, served_model_metadata_for_path};
 pub use resolve::{
     ModelDetails, ShowVariantsProgress, canonicalize_interest_model_ref,
-    download_model_ref_with_progress_details,
-    download_model_ref_with_progress_details_direct, find_loaded_remote_catalog_model_exact,
-    find_remote_catalog_model_exact, installed_model_capabilities, installed_model_display_name,
-    installed_model_huggingface_ref, remote_catalog_model_draft_ref, remote_catalog_model_ref,
-    resolve_model_spec, resolve_model_spec_with_progress, show_exact_model,
-    show_model_variants_with_progress,
+    download_model_ref_with_progress_details, download_model_ref_with_progress_details_direct,
+    find_loaded_remote_catalog_model_exact, find_remote_catalog_model_exact,
+    installed_model_capabilities, installed_model_display_name, installed_model_huggingface_ref,
+    remote_catalog_model_draft_ref, remote_catalog_model_ref, resolve_model_spec,
+    resolve_model_spec_with_progress, show_exact_model, show_model_variants_with_progress,
 };
 pub use search::{
     SearchArtifactFilter, SearchHit, SearchProgress, SearchSort, search_catalog_json_payload,
