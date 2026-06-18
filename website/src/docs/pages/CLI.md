@@ -175,6 +175,7 @@ mesh-llm models download mlx-community/SmolLM-135M-8bit
 Switches:
 
 - `--draft`: also download the recommended draft model (if available).
+- `--direct`: download the exact HuggingFace GGUF file directly, bypassing catalog layer-package resolution.
 - `--json`: machine-readable output.
 
 ### `models certify`
