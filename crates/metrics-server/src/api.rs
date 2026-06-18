@@ -35,6 +35,10 @@ pub(crate) async fn create_run(
     }))
 }
 
+pub(crate) async fn health() -> Json<Value> {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
 pub(crate) async fn run_status(
     State(state): State<AppState>,
     Path(run_id): Path<String>,

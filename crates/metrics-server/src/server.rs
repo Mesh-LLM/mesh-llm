@@ -17,8 +17,8 @@ use tokio::net::TcpListener;
 
 use crate::{
     api::{
-        artifacts, create_run, finalize_run, otlp_http_logs, otlp_http_metrics, otlp_http_traces,
-        report_json, run_status,
+        artifacts, create_run, finalize_run, health, otlp_http_logs, otlp_http_metrics,
+        otlp_http_traces, report_json, run_status,
     },
     cli::ServeArgs,
     otlp::OtlpIngest,
@@ -73,6 +73,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
 
 pub(crate) async fn serve_http(state: AppState, addr: SocketAddr) -> Result<()> {
     let app = Router::new()
+        .route("/health", get(health))
         .route("/v1/runs", post(create_run))
         .route("/v1/runs/{run_id}/status", get(run_status))
         .route("/v1/runs/{run_id}/finalize", post(finalize_run))
