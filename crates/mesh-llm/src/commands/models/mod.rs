@@ -390,18 +390,17 @@ pub async fn run_model_download(
     json_output: bool,
 ) -> Result<()> {
     let formatter = models_formatter(json_output);
-    if !direct {
-        if let Some((package_ref, package_dir)) =
+    if !direct
+        && let Some((package_ref, package_dir)) =
             download_layer_package_for_model_ref(model_ref).await?
-        {
-            if !json_output {
-                eprintln!("ℹ Using repackaged model from catalog: {package_ref}");
-            }
-            if include_draft && !json_output {
-                eprintln!("⚠ Draft download is not available for layer packages");
-            }
-            return formatter.render_layer_package_download(model_ref, &package_ref, &package_dir);
+    {
+        if !json_output {
+            eprintln!("ℹ Using repackaged model from catalog: {package_ref}");
         }
+        if include_draft && !json_output {
+            eprintln!("⚠ Draft download is not available for layer packages");
+        }
+        return formatter.render_layer_package_download(model_ref, &package_ref, &package_dir);
     }
 
     let (path, details) = if direct {
@@ -419,8 +418,12 @@ pub async fn run_model_download(
             let draft_ref = find_remote_catalog_model_exact(draft_name)
                 .map(|model| remote_catalog_model_ref(&model))
                 .unwrap_or_else(|| draft_name.to_string());
-            let (draft_path, _) =
-                download_model_ref_with_progress_details(&draft_ref, !json_output).await?;
+            let (draft_path, _) = if direct {
+                download_model_ref_with_progress_details_direct(&draft_ref, !json_output, true)
+                    .await?
+            } else {
+                download_model_ref_with_progress_details(&draft_ref, !json_output).await?
+            };
             draft_out = Some((draft_name.to_string(), draft_path));
         } else if !json_output {
             eprintln!(
