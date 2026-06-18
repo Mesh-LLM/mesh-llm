@@ -14,12 +14,12 @@ pub use mesh_llm_config::{
     ConfigDiagnosticSeverity, ConfigEditor, ConfigStore, FlashAttentionType, GpuAssignment,
     GpuConfig, HardwareConfig, IntegerOrString, LocalServingNodeConfig, MeshConfig,
     MeshRequirementsConfig, ModelConfigDefaults, ModelConfigEditor, ModelConfigEntry,
-    ModelDefaultsEditor, ModelFitConfig, ModelRuntimeKind, MultimodalConfig, OwnerControlConfig,
-    PluginConfigEditor, PluginConfigEntry, PluginStartupConfig, PrefixCacheConfig, ReasoningBudget,
-    ReasoningEnabled, RequestDefaultsConfig, ReservedObjectConfig, SkippyConfig, SpeculativeConfig,
-    StringOrStringList, TelemetryConfig, TelemetryMetricsConfig, TensorSplitConfig,
-    ThroughputConfig, config_path, config_to_toml, parse_config_toml as base_parse_config_toml,
-    validate_config_with_plugin_schemas,
+    ModelDefaultsEditor, ModelFitConfig, ModelRuntimeKind, MultimodalConfig, NativeRuntimeConfig,
+    OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PluginStartupConfig,
+    PrefixCacheConfig, ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig,
+    ReservedObjectConfig, SkippyConfig, SpeculativeConfig, StringOrStringList, TelemetryConfig,
+    TelemetryMetricsConfig, TensorSplitConfig, ThroughputConfig, config_path, config_to_toml,
+    parse_config_toml as base_parse_config_toml, validate_config_with_plugin_schemas,
 };
 use mesh_llm_plugin::MeshVisibility;
 use std::collections::BTreeMap;

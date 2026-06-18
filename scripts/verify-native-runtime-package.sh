@@ -136,7 +136,46 @@ if library_sha256:
             f"library_sha256 mismatch for {primary_library}: {actual} != {library_sha256}"
         )
 PY
+    verify_macos_runtime_paths "$artifact_dir" "$manifest"
     echo "verified native runtime artifact: $artifact_dir"
+}
+
+verify_macos_runtime_paths() {
+    local artifact_dir="$1"
+    local manifest="$2"
+    if ! find "$artifact_dir" -type f -name '*.dylib' -print -quit | grep -q .; then
+        return 0
+    fi
+    if ! command -v otool >/dev/null 2>&1; then
+        echo "otool is required to verify macOS native runtime dylibs" >&2
+        exit 1
+    fi
+    python3 - "$artifact_dir" "$manifest" <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+artifact_dir, manifest_path = sys.argv[1:3]
+with open(manifest_path, encoding="utf-8") as fh:
+    manifest = json.load(fh)
+
+libraries = manifest["runtime"]["libraries"]
+library_names = {os.path.basename(path) for path in libraries}
+for rel_path in libraries:
+    if not rel_path.endswith(".dylib"):
+        continue
+    path = os.path.join(artifact_dir, rel_path)
+    load_output = subprocess.check_output(["otool", "-L", path], text=True)
+    deps = [line.split()[0] for line in load_output.splitlines()[1:] if line.strip()]
+    for dep in deps:
+        if os.path.basename(dep) in library_names and dep.startswith("/"):
+            raise SystemExit(f"{rel_path} depends on absolute packaged dylib path: {dep}")
+
+    link_output = subprocess.check_output(["otool", "-l", path], text=True)
+    if "@loader_path" not in link_output:
+        raise SystemExit(f"{rel_path} is missing @loader_path LC_RPATH")
+PY
 }
 
 if [[ "$#" -lt 1 ]]; then

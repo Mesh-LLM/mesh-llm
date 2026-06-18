@@ -71,6 +71,8 @@ pub struct RuntimeConfig {
     pub reconcile_model_targets: bool,
     #[serde(default)]
     pub reconcile_model_target_demand_upgrades: bool,
+    #[serde(default)]
+    pub native_runtime: NativeRuntimeConfig,
     #[serde(default = "default_model_target_demand_upgrade_min_requests")]
     pub model_target_demand_upgrade_min_requests: u64,
     #[serde(default = "default_model_target_demand_upgrade_max_age_secs")]
@@ -82,12 +84,21 @@ impl Default for RuntimeConfig {
         Self {
             reconcile_model_targets: false,
             reconcile_model_target_demand_upgrades: false,
+            native_runtime: NativeRuntimeConfig::default(),
             model_target_demand_upgrade_min_requests:
                 DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MIN_REQUESTS,
             model_target_demand_upgrade_max_age_secs:
                 DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MAX_AGE_SECS,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct NativeRuntimeConfig {
+    #[serde(default)]
+    pub mesh_version: Option<String>,
+    #[serde(default)]
+    pub skippy_abi: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

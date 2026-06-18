@@ -141,6 +141,14 @@ fn build_built_in_config_schema() -> ConfigSchema {
             ConfigValueSchema::Boolean,
         ),
         runtime_setting(
+            "runtime.native_runtime.mesh_version",
+            ConfigValueSchema::String,
+        ),
+        runtime_setting(
+            "runtime.native_runtime.skippy_abi",
+            ConfigValueSchema::String,
+        ),
+        runtime_setting(
             "runtime.model_target_demand_upgrade_min_requests",
             ConfigValueSchema::Integer,
         ),

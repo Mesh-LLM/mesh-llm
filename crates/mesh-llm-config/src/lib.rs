@@ -99,6 +99,42 @@ connect_timeout_secs = 0
     }
 
     #[test]
+    fn native_runtime_override_requires_explicit_mesh_version_and_abi() {
+        let config = parse_config_toml(
+            r#"
+[runtime.native_runtime]
+mesh_version = "0.68.0"
+skippy_abi = "0.1.25"
+"#,
+        )
+        .expect("complete native runtime selector should parse");
+
+        assert_eq!(
+            config.runtime.native_runtime.mesh_version.as_deref(),
+            Some("0.68.0")
+        );
+        assert_eq!(
+            config.runtime.native_runtime.skippy_abi.as_deref(),
+            Some("0.1.25")
+        );
+
+        let err = parse_config_toml(
+            r#"
+[runtime.native_runtime]
+mesh_version = "0.68.0"
+"#,
+        )
+        .expect_err("partial native runtime selector should fail validation");
+
+        assert!(
+            err.to_string().contains(
+                "runtime.native_runtime override must set both mesh_version and skippy_abi"
+            ),
+            "unexpected validation error: {err}"
+        );
+    }
+
+    #[test]
     fn config_store_add_model_preserves_existing_fields() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("config.toml");
@@ -607,6 +643,7 @@ gpu_id = "pci:0000:65:00.0"
             ("OwnerControlConfig", 1),
             ("GpuConfig", 1),
             ("RuntimeConfig", 1),
+            ("NativeRuntimeConfig", 1),
             ("MeshRequirementsConfig", 1),
             ("ModelConfigEntry", 1),
             ("ModelFitConfig", 2),
@@ -628,6 +665,7 @@ gpu_id = "pci:0000:65:00.0"
             "MeshRequirementsConfig",
             "OwnerControlConfig",
             "RuntimeConfig",
+            "NativeRuntimeConfig",
             "TelemetryConfig",
             "TelemetryMetricsConfig",
             "ModelConfigDefaults",

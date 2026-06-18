@@ -6,7 +6,10 @@ use mesh_llm_cli::MeshGuardrailCliMode;
 use mesh_llm_cli::runtime::RuntimeCommand;
 use mesh_llm_host_runtime::command_support::plugin::{MeshConfig, load_config};
 
-pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -> Result<()> {
+pub(crate) async fn dispatch_runtime_command(
+    command: Option<&RuntimeCommand>,
+    config_path: Option<&Path>,
+) -> Result<()> {
     match command {
         Some(RuntimeCommand::List {
             available,
@@ -16,11 +19,18 @@ pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -
             cache_dir,
             json,
         }) => {
+            let selector = native_runtime_config_selector(config_path)?;
             mesh_llm_commands::runtime_native::run_native_runtime_list(
                 *available,
                 manifest.as_deref(),
                 bundle_dirs,
                 cache_dir.as_deref(),
+                selector
+                    .as_ref()
+                    .map(|selector| selector.mesh_version.as_str()),
+                selector
+                    .as_ref()
+                    .map(|selector| selector.skippy_abi.as_str()),
                 *json,
             )
             .await
@@ -32,11 +42,18 @@ pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -
             cache_dir,
             json,
         }) => {
+            let selector = native_runtime_config_selector(config_path)?;
             mesh_llm_commands::runtime_native::run_native_runtime_install(
                 runtime.as_deref(),
                 manifest.as_deref(),
                 bundle_dirs,
                 cache_dir.as_deref(),
+                selector
+                    .as_ref()
+                    .map(|selector| selector.mesh_version.as_str()),
+                selector
+                    .as_ref()
+                    .map(|selector| selector.skippy_abi.as_str()),
                 *json,
             )
             .await
@@ -89,6 +106,29 @@ pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -
         }
         None => run_status(3131).await,
     }
+}
+
+struct NativeRuntimeConfigSelector {
+    mesh_version: String,
+    skippy_abi: String,
+}
+
+fn native_runtime_config_selector(
+    config_path: Option<&Path>,
+) -> Result<Option<NativeRuntimeConfigSelector>> {
+    let config = load_config(config_path)?;
+    Ok(
+        match (
+            config.runtime.native_runtime.mesh_version,
+            config.runtime.native_runtime.skippy_abi,
+        ) {
+            (Some(mesh_version), Some(skippy_abi)) => Some(NativeRuntimeConfigSelector {
+                mesh_version,
+                skippy_abi,
+            }),
+            _ => None,
+        },
+    )
 }
 
 pub(crate) async fn run_set_mesh_guardrails(

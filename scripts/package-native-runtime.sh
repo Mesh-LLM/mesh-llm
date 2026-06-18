@@ -237,6 +237,42 @@ collect_runtime_libraries() {
         '
 }
 
+rewrite_macos_runtime_paths() {
+    case "$TARGET_TRIPLE" in
+        *apple-darwin) ;;
+        *) return 0 ;;
+    esac
+    if ! command -v install_name_tool >/dev/null 2>&1; then
+        echo "install_name_tool is required to package macOS native runtimes" >&2
+        exit 1
+    fi
+    if ! command -v otool >/dev/null 2>&1; then
+        echo "otool is required to package macOS native runtimes" >&2
+        exit 1
+    fi
+
+    local rel_path library name dep dep_name candidate candidate_name
+    for rel_path in "${library_paths[@]}"; do
+        library="$stage_dir/$rel_path"
+        name="$(basename "$library")"
+        install_name_tool -id "@rpath/$name" "$library" 2>/dev/null || true
+        install_name_tool -add_rpath "@loader_path" "$library" 2>/dev/null || true
+    done
+
+    for rel_path in "${library_paths[@]}"; do
+        library="$stage_dir/$rel_path"
+        while IFS= read -r dep; do
+            dep_name="$(basename "$dep")"
+            for candidate in "${library_paths[@]}"; do
+                candidate_name="$(basename "$candidate")"
+                if [[ "$dep_name" == "$candidate_name" && "$dep" != "@rpath/$candidate_name" ]]; then
+                    install_name_tool -change "$dep" "@rpath/$candidate_name" "$library"
+                fi
+            done
+        done < <(otool -L "$library" | awk 'NR > 1 { print $1 }')
+    done
+}
+
 if [[ -z "$TARGET_TRIPLE" ]]; then
     TARGET_TRIPLE="$(default_target_triple)"
 fi
@@ -291,6 +327,8 @@ for library in "${runtime_libraries[@]}"; do
     cp "$library" "$stage_dir/lib/$name"
     library_paths+=("lib/$name")
 done
+
+rewrite_macos_runtime_paths
 
 primary_library="lib/$primary_name"
 primary_sha="$(sha256_file "$stage_dir/$primary_library")"

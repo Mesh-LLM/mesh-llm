@@ -18,14 +18,21 @@ pub async fn run_native_runtime_list(
     manifest_path: Option<&Path>,
     bundle_dirs: &[PathBuf],
     cache_dir: Option<&Path>,
+    mesh_version: Option<&str>,
+    skippy_abi_version: Option<&str>,
     json_output: bool,
 ) -> Result<()> {
+    let mesh_version = mesh_version.unwrap_or(CURRENT_MESH_VERSION);
+    let skippy_abi_version = skippy_abi_version
+        .map(ToString::to_string)
+        .unwrap_or_else(mesh_llm_runtime_install::current_skippy_abi_version);
     let cache = native_runtime_cache(cache_dir)?;
     if available {
         if !json_output && manifest_path.is_none() && bundle_dirs.is_empty() {
             eprintln!("🔎 Loading native runtime release manifest");
         }
         let manifest = load_release_manifest(NativeRuntimeManifestOptions {
+            mesh_version: mesh_version.to_string(),
             manifest_path: manifest_path.map(Path::to_path_buf),
             bundle_dirs: bundle_dirs.to_vec(),
             ..Default::default()
@@ -33,14 +40,11 @@ pub async fn run_native_runtime_list(
         .await?;
         let profile = host_runtime_profile();
         let cache = native_runtime_cache(cache_dir)?;
-        let resolution = NativeRuntimeResolver::new(
-            CURRENT_MESH_VERSION,
-            profile.clone(),
-            manifest.clone(),
-            cache,
-        )
-        .resolve(&RuntimeSelection::Recommended)
-        .ok();
+        let resolution =
+            NativeRuntimeResolver::new(mesh_version, profile.clone(), manifest.clone(), cache)
+                .with_skippy_abi_version(skippy_abi_version)
+                .resolve(&RuntimeSelection::Recommended)
+                .ok();
         let rows = manifest
             .artifacts
             .iter()
@@ -87,6 +91,8 @@ pub async fn run_native_runtime_install(
     manifest_path: Option<&Path>,
     bundle_dirs: &[PathBuf],
     cache_dir: Option<&Path>,
+    mesh_version: Option<&str>,
+    skippy_abi_version: Option<&str>,
     json_output: bool,
 ) -> Result<()> {
     let selection = RuntimeSelection::parse(requested_runtime)?;
@@ -97,6 +103,10 @@ pub async fn run_native_runtime_install(
         eprintln!("🔎 Detecting host runtime profile");
     }
     let outcome = install_native_runtime(NativeRuntimeInstallOptions {
+        mesh_version: mesh_version.unwrap_or(CURRENT_MESH_VERSION).to_string(),
+        skippy_abi_version: skippy_abi_version
+            .map(ToString::to_string)
+            .unwrap_or_else(mesh_llm_runtime_install::current_skippy_abi_version),
         selection,
         manifest_path: manifest_path.map(Path::to_path_buf),
         bundle_dirs: bundle_dirs.to_vec(),

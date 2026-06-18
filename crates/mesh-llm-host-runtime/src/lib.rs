@@ -39,6 +39,7 @@ pub use mesh::requirements::{
 };
 
 use anyhow::Result;
+use std::path::Path;
 
 pub const BUILD_VERSION: &str = mesh_llm_build_info::BUILD_VERSION;
 pub const RELEASE_VERSION: &str = mesh_llm_build_info::RELEASE_VERSION;
@@ -58,7 +59,7 @@ pub async fn run_runtime(
     explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
 ) -> Result<()> {
-    initialize_host_runtime().await?;
+    initialize_host_runtime_with_config(options.config.as_deref()).await?;
     run_runtime_initialized(options, explicit_surface, legacy_warning).await
 }
 
@@ -71,13 +72,38 @@ pub async fn run_runtime_initialized(
 }
 
 pub async fn initialize_host_runtime() -> Result<()> {
+    initialize_host_runtime_with_config(None).await
+}
+
+pub async fn initialize_host_runtime_with_config(config_path: Option<&Path>) -> Result<()> {
     #[cfg(feature = "dynamic-native-runtime")]
-    if let Some(runtime) = system::native_runtime::try_load_installed_native_runtime().await? {
-        tracing::info!(
-            native_runtime_id = %runtime.native_runtime_id,
-            libraries = ?runtime.libraries,
-            "Loaded MeshLLM native runtime"
-        );
+    {
+        let config = plugin::load_config(config_path)?;
+        let startup_selection = match (
+            config.runtime.native_runtime.mesh_version,
+            config.runtime.native_runtime.skippy_abi,
+        ) {
+            (Some(mesh_version), Some(skippy_abi)) => {
+                system::native_runtime::NativeRuntimeStartupSelection::explicit(
+                    mesh_version,
+                    skippy_abi,
+                )
+            }
+            _ => system::native_runtime::NativeRuntimeStartupSelection::current(),
+        };
+        if let Some(runtime) =
+            system::native_runtime::try_load_installed_native_runtime(startup_selection).await?
+        {
+            tracing::info!(
+                native_runtime_id = %runtime.native_runtime_id,
+                libraries = ?runtime.libraries,
+                "Loaded MeshLLM native runtime"
+            );
+        }
+    }
+    #[cfg(not(feature = "dynamic-native-runtime"))]
+    {
+        let _ = config_path;
     }
     Ok(())
 }

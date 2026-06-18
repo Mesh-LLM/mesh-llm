@@ -82,6 +82,9 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
     if let Err(diagnostic) = validate_telemetry_config(&config.telemetry) {
         diagnostics.push(diagnostic);
     }
+    if let Err(diagnostic) = validate_runtime_config(&config.runtime) {
+        diagnostics.push(diagnostic);
+    }
     if let Err(diagnostic) = validate_plugin_entries(&config.plugins) {
         diagnostics.push(diagnostic);
     }
@@ -113,6 +116,30 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
     }
 
     diagnostics
+}
+
+fn validate_runtime_config(config: &RuntimeConfig) -> DiagnosticResult {
+    let mesh_version = config.native_runtime.mesh_version.as_deref();
+    let skippy_abi = config.native_runtime.skippy_abi.as_deref();
+    if mesh_version.is_some() != skippy_abi.is_some() {
+        return Err(validation_diagnostic(
+            "runtime.native_runtime",
+            "runtime.native_runtime override must set both mesh_version and skippy_abi",
+        ));
+    }
+    if matches!(mesh_version, Some(value) if value.trim().is_empty()) {
+        return Err(validation_diagnostic(
+            "runtime.native_runtime.mesh_version",
+            "runtime.native_runtime.mesh_version must not be empty",
+        ));
+    }
+    if matches!(skippy_abi, Some(value) if value.trim().is_empty()) {
+        return Err(validation_diagnostic(
+            "runtime.native_runtime.skippy_abi",
+            "runtime.native_runtime.skippy_abi must not be empty",
+        ));
+    }
+    Ok(())
 }
 
 pub fn validate_config_diagnostics_with_plugin_schemas<F>(

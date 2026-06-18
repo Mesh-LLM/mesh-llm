@@ -34,7 +34,7 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     if commands::dispatch(&cli).await? {
         return Ok(());
     }
-    mesh_llm_host_runtime::initialize_host_runtime().await?;
+    mesh_llm_host_runtime::initialize_host_runtime_with_config(cli.config.as_deref()).await?;
     mesh_llm_tui::output::OutputManager::init_global(
         cli.log_format,
         mesh_llm_host_runtime::console_session_mode_for_runtime_surface(explicit_surface),
