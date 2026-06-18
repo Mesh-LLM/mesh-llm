@@ -49,7 +49,7 @@ pub use runtime::{
 };
 
 pub async fn run() -> Result<()> {
-    initialize_host_runtime()?;
+    initialize_host_runtime().await?;
     runtime::run().await
 }
 
@@ -58,7 +58,7 @@ pub async fn run_runtime(
     explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
 ) -> Result<()> {
-    initialize_host_runtime()?;
+    initialize_host_runtime().await?;
     run_runtime_initialized(options, explicit_surface, legacy_warning).await
 }
 
@@ -70,9 +70,9 @@ pub async fn run_runtime_initialized(
     runtime::run_cli(options, explicit_surface, legacy_warning).await
 }
 
-pub fn initialize_host_runtime() -> Result<()> {
+pub async fn initialize_host_runtime() -> Result<()> {
     #[cfg(feature = "dynamic-native-runtime")]
-    if let Some(runtime) = system::native_runtime::try_load_installed_native_runtime()? {
+    if let Some(runtime) = system::native_runtime::try_load_installed_native_runtime().await? {
         tracing::info!(
             native_runtime_id = %runtime.native_runtime_id,
             libraries = ?runtime.libraries,

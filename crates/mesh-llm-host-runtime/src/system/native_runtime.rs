@@ -8,7 +8,7 @@ mod dynamic {
         HostRuntimeProfile, NativeRuntimeArtifact, NativeRuntimeCache, NativeRuntimeLoadPlan,
         NativeRuntimeReleaseManifest, RuntimeSelection, select_native_runtime,
     };
-    use std::path::PathBuf;
+    use std::{future::Future, path::PathBuf};
 
     #[derive(Clone, Debug)]
     pub(crate) struct LoadedNativeRuntime {
@@ -32,7 +32,7 @@ mod dynamic {
         pub(crate) source: NativeRuntimePlanSource,
     }
 
-    pub(crate) fn try_load_installed_native_runtime() -> Result<Option<LoadedNativeRuntime>> {
+    pub(crate) async fn try_load_installed_native_runtime() -> Result<Option<LoadedNativeRuntime>> {
         try_load_installed_native_runtime_with(
             skippy_runtime::native_runtime_loaded,
             default_native_runtime_cache,
@@ -44,14 +44,16 @@ mod dynamic {
                     .map_err(anyhow::Error::from)
             },
         )
+        .await
     }
 
-    fn try_load_installed_native_runtime_with<
+    async fn try_load_installed_native_runtime_with<
         NativeRuntimeLoadedFn,
         CacheFn,
         ProfileFn,
         InstallOptionsFn,
         InstallExecutorFn,
+        InstallFuture,
         LoadLibrariesFn,
     >(
         native_runtime_loaded: NativeRuntimeLoadedFn,
@@ -66,7 +68,8 @@ mod dynamic {
         CacheFn: Fn() -> Result<NativeRuntimeCache>,
         ProfileFn: Fn() -> HostRuntimeProfile,
         InstallOptionsFn: Fn() -> NativeRuntimeInstallOptions,
-        InstallExecutorFn: Fn(NativeRuntimeInstallOptions) -> Result<NativeRuntimeInstallOutcome>,
+        InstallExecutorFn: Fn(NativeRuntimeInstallOptions) -> InstallFuture,
+        InstallFuture: Future<Output = Result<NativeRuntimeInstallOutcome>>,
         LoadLibrariesFn: Fn(&[PathBuf]) -> Result<()>,
     {
         if native_runtime_loaded() {
@@ -77,7 +80,8 @@ mod dynamic {
             profile,
             install_options,
             install_executor,
-        )?
+        )
+        .await?
         else {
             return Ok(None);
         };
@@ -94,11 +98,12 @@ mod dynamic {
         }))
     }
 
-    fn resolve_startup_native_runtime_plan_with<
+    async fn resolve_startup_native_runtime_plan_with<
         CacheFn,
         ProfileFn,
         InstallOptionsFn,
         InstallExecutorFn,
+        InstallFuture,
     >(
         cache: CacheFn,
         profile: ProfileFn,
@@ -109,7 +114,8 @@ mod dynamic {
         CacheFn: Fn() -> Result<NativeRuntimeCache>,
         ProfileFn: Fn() -> HostRuntimeProfile,
         InstallOptionsFn: Fn() -> NativeRuntimeInstallOptions,
-        InstallExecutorFn: Fn(NativeRuntimeInstallOptions) -> Result<NativeRuntimeInstallOutcome>,
+        InstallExecutorFn: Fn(NativeRuntimeInstallOptions) -> InstallFuture,
+        InstallFuture: Future<Output = Result<NativeRuntimeInstallOutcome>>,
     {
         let cache = cache()?;
         let profile = profile();
@@ -134,7 +140,7 @@ mod dynamic {
             "No compatible installed MeshLLM native runtime found; attempting one-shot startup install"
         );
 
-        let install_result = install_executor(options.clone());
+        let install_result = install_executor(options.clone()).await;
         match install_result {
             Ok(outcome) => {
                 let load_plan = outcome.runtime.load_plan()?;
@@ -256,14 +262,10 @@ mod dynamic {
         }
     }
 
-    fn default_install_executor(
+    async fn default_install_executor(
         options: NativeRuntimeInstallOptions,
     ) -> Result<NativeRuntimeInstallOutcome> {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .context("build native runtime startup install executor")?
-            .block_on(crate::system::native_runtime_install::install_native_runtime(options))
+        crate::system::native_runtime_install::install_native_runtime(options).await
     }
 
     #[cfg(test)]
@@ -439,8 +441,8 @@ mod dynamic {
             assert!(plan.is_none());
         }
 
-        #[test]
-        fn cache_hit_skips_install_and_loads_cached_runtime_once() {
+        #[tokio::test]
+        async fn cache_hit_skips_install_and_loads_cached_runtime_once() {
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
             let runtime_id = "meshllm-native-runtime-test-cpu";
@@ -459,8 +461,11 @@ mod dynamic {
                 {
                     let install_calls = Arc::clone(&install_calls);
                     move |_| {
-                        *install_calls.lock().unwrap() += 1;
-                        anyhow::bail!("install should not run on cache hit")
+                        let install_calls = Arc::clone(&install_calls);
+                        async move {
+                            *install_calls.lock().unwrap() += 1;
+                            anyhow::bail!("install should not run on cache hit")
+                        }
                     }
                 },
                 {
@@ -471,6 +476,7 @@ mod dynamic {
                     }
                 },
             )
+            .await
             .unwrap()
             .expect("expected cached runtime to load");
 
@@ -483,8 +489,8 @@ mod dynamic {
             assert_eq!(load_calls.lock().unwrap().as_slice(), &[runtime.libraries]);
         }
 
-        #[test]
-        fn cache_miss_installs_once_and_loads_post_install_runtime() {
+        #[tokio::test]
+        async fn cache_miss_installs_once_and_loads_post_install_runtime() {
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
             let bundle_dir = temp.path().join("bundle");
@@ -505,18 +511,26 @@ mod dynamic {
                     let bundle_dir = bundle_dir.clone();
                     let cache = cache.clone();
                     move |mut options| {
-                        install_calls.lock().unwrap().push(options.clone());
-                        let source = options.bundle_dirs.pop().unwrap_or(bundle_dir.clone());
-                        let runtime = cache.install_from_dir(&source)?;
-                        Ok(NativeRuntimeInstallOutcome {
-                            status: crate::system::native_runtime_install::NativeRuntimeInstallStatus::Installed,
-                            runtime,
-                            resolution: mesh_llm_native_runtime::NativeRuntimeResolution {
-                                source: mesh_llm_native_runtime::NativeRuntimeSource::Bundle { path: source },
-                                selected: NativeRuntimeManifest::read_from_dir(&bundle_dir)?.runtime,
-                                evaluated: Vec::new(),
-                            },
-                        })
+                        let install_calls = Arc::clone(&install_calls);
+                        let bundle_dir = bundle_dir.clone();
+                        let cache = cache.clone();
+                        async move {
+                            install_calls.lock().unwrap().push(options.clone());
+                            let source = options.bundle_dirs.pop().unwrap_or(bundle_dir.clone());
+                            let runtime = cache.install_from_dir(&source)?;
+                            Ok(NativeRuntimeInstallOutcome {
+                                status: crate::system::native_runtime_install::NativeRuntimeInstallStatus::Installed,
+                                runtime,
+                                resolution: mesh_llm_native_runtime::NativeRuntimeResolution {
+                                    source: mesh_llm_native_runtime::NativeRuntimeSource::Bundle {
+                                        path: source,
+                                    },
+                                    selected: NativeRuntimeManifest::read_from_dir(&bundle_dir)?
+                                        .runtime,
+                                    evaluated: Vec::new(),
+                                },
+                            })
+                        }
                     }
                 },
                 {
@@ -527,6 +541,7 @@ mod dynamic {
                     }
                 },
             )
+            .await
             .unwrap()
             .expect("expected installed runtime to load");
 
@@ -546,8 +561,8 @@ mod dynamic {
             assert_eq!(load_calls.lock().unwrap().as_slice(), &[runtime.libraries]);
         }
 
-        #[test]
-        fn cache_miss_install_failure_returns_none_without_retry() {
+        #[tokio::test]
+        async fn cache_miss_install_failure_returns_none_without_retry() {
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
             let install_calls = Arc::new(Mutex::new(Vec::<NativeRuntimeInstallOptions>::new()));
@@ -561,10 +576,13 @@ mod dynamic {
                 {
                     let install_calls = Arc::clone(&install_calls);
                     move |options| {
-                        install_calls.lock().unwrap().push(options);
-                        anyhow::bail!(
-                            "no compatible native runtime found for Skippy ABI 0.1.25 on test/test"
-                        )
+                        let install_calls = Arc::clone(&install_calls);
+                        async move {
+                            install_calls.lock().unwrap().push(options);
+                            anyhow::bail!(
+                                "no compatible native runtime found for Skippy ABI 0.1.25 on test/test"
+                            )
+                        }
                     }
                 },
                 {
@@ -575,6 +593,7 @@ mod dynamic {
                     }
                 },
             )
+            .await
             .unwrap();
 
             assert!(runtime.is_none());

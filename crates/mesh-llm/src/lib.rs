@@ -31,10 +31,10 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     );
     let explicit_surface = normalized_args.explicit_surface.map(map_runtime_surface);
 
-    mesh_llm_host_runtime::initialize_host_runtime()?;
     if commands::dispatch(&cli).await? {
         return Ok(());
     }
+    mesh_llm_host_runtime::initialize_host_runtime().await?;
     mesh_llm_tui::output::OutputManager::init_global(
         cli.log_format,
         mesh_llm_host_runtime::console_session_mode_for_runtime_surface(explicit_surface),
