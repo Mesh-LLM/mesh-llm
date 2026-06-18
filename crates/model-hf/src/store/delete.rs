@@ -439,10 +439,11 @@ pub async fn delete_model_by_identifier_with_catalog(
         // symlink_metadata succeeds for real files AND broken symlinks;
         // exists() returns false for broken symlinks. Combined they identify
         // symlinks whose blob target no longer exists.
-        if std::fs::symlink_metadata(path).is_ok() && !path.exists() {
-            if std::fs::remove_file(path).is_ok() {
-                prune_empty_ancestors(path, &hf_cache_root);
-            }
+        if std::fs::symlink_metadata(path).is_ok()
+            && !path.exists()
+            && std::fs::remove_file(path).is_ok()
+        {
+            prune_empty_ancestors(path, &hf_cache_root);
         }
     }
 
