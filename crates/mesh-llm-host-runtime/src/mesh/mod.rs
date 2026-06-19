@@ -3640,7 +3640,7 @@ impl Node {
                 .store(true, std::sync::atomic::Ordering::Release);
             lifecycle.shutdown.notify_waiters();
             let _ = lifecycle.task.await;
-            drop(lifecycle.endpoint);
+            lifecycle.endpoint.close().await;
         }
     }
 

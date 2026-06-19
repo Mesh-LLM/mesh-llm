@@ -5,7 +5,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         mpsc as std_mpsc,
     },
-    thread,
+    thread::{self, JoinHandle},
     time::Instant,
 };
 
@@ -24,6 +24,7 @@ struct DecodeFrameBatcherShared {
     ready: Condvar,
     max_batch_size: usize,
     owner_count: AtomicUsize,
+    worker: Mutex<Option<JoinHandle<()>>>,
 }
 
 #[derive(Default)]
@@ -58,9 +59,13 @@ impl DecodeFrameBatcher {
             ready: Condvar::new(),
             max_batch_size: max_batch_size.max(1),
             owner_count: AtomicUsize::new(1),
+            worker: Mutex::new(None),
         });
         let worker = Arc::downgrade(&shared);
-        thread::spawn(move || DecodeFrameBatcherShared::run_worker(worker));
+        let worker = thread::spawn(move || DecodeFrameBatcherShared::run_worker(worker));
+        if let Ok(mut slot) = shared.worker.lock() {
+            *slot = Some(worker);
+        }
         Self { shared }
     }
 
@@ -103,6 +108,13 @@ impl Drop for DecodeFrameBatcher {
         if let Ok(mut state) = self.shared.state.lock() {
             state.stopping = true;
             self.shared.ready.notify_all();
+        }
+        let worker = match self.shared.worker.lock() {
+            Ok(mut worker) => worker.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(worker) = worker {
+            let _ = worker.join();
         }
     }
 }
