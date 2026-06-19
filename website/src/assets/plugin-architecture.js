@@ -242,6 +242,7 @@
         diagram.__pluginArchitectureObserver.disconnect();
         diagram.__pluginArchitectureObserver = null;
       }
+      diagram.classList.remove(MOTION_ACTIVE_CLASS);
     }, drawAt + DRAW_DURATION + 340);
 
     return timeline;

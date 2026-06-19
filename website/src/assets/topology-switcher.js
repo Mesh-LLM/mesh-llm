@@ -114,19 +114,26 @@
   }
 
   function bindMotionVisibility(root) {
-    if (reduceMotion.matches) {
-      root.classList.remove(MOTION_ACTIVE_CLASS);
-      return;
+    var isVisible = false;
+
+    function sync() {
+      if (reduceMotion.matches) {
+        root.classList.remove(MOTION_ACTIVE_CLASS);
+      } else {
+        root.classList.toggle(MOTION_ACTIVE_CLASS, isVisible);
+      }
     }
 
     if (!("IntersectionObserver" in window)) {
-      root.classList.add(MOTION_ACTIVE_CLASS);
+      isVisible = true;
+      sync();
       return;
     }
 
     var observer = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
-        root.classList.toggle(MOTION_ACTIVE_CLASS, entry.isIntersecting);
+        isVisible = entry.isIntersecting;
+        sync();
       });
     }, {
       rootMargin: "180px 0px",
@@ -136,9 +143,7 @@
     observer.observe(root);
 
     if (reduceMotion.addEventListener) {
-      reduceMotion.addEventListener("change", function (event) {
-        root.classList.toggle(MOTION_ACTIVE_CLASS, !event.matches);
-      });
+      reduceMotion.addEventListener("change", sync);
     }
   }
 

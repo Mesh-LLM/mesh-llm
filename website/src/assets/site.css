@@ -1180,7 +1180,7 @@ body:not(.docs-body)::after {
   z-index: 60;
   height: env(safe-area-inset-bottom);
   pointer-events: none;
-  background: #08090b;
+  background: var(--background);
 }
 .js body.home-intro {
   --page-atmosphere-opacity: 0;

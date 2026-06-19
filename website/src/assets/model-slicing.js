@@ -90,6 +90,7 @@
   var titleSnapRaf = null;
   var titleScrollProgress = 0;
   var titleFadeProgress = 0;
+  var currentStageProgress = 0;
   var heroVizStableRequested = false;
   var heroSvgMotionActive = null;
   var heroSvgMotionResumeTimer = null;
@@ -108,8 +109,8 @@
     raf: null,
   };
   var STAGE_INTRO_PROGRESS = 0.04;
-  // Leaves the final slice of the stage as a settled hold after the aperture closes.
-  var STAGE_ANIMATION_END_PROGRESS = 0.86;
+  // Leaves a short settled hold after the aperture closes without making the hero feel stuck.
+  var STAGE_ANIMATION_END_PROGRESS = 0.92;
   var APERTURE_OPEN_START = 0.190;
   var APERTURE_OPEN_END = 0.310;
   var APERTURE_CLOSE_START = 1.075;
@@ -442,6 +443,19 @@
     section.style.removeProperty(name);
   }
 
+  function setInlineStyle(element, property, value) {
+    var nextValue;
+
+    if (!element) return;
+
+    nextValue = value == null ? '' : String(value);
+    element.__stage2InlineStyleCache = element.__stage2InlineStyleCache || {};
+    if (element.__stage2InlineStyleCache[property] === nextValue) return;
+
+    element.__stage2InlineStyleCache[property] = nextValue;
+    element.style[property] = nextValue;
+  }
+
   function apertureVisualStep(deltaMs, durationMs) {
     if (durationMs <= 0) return 1;
     return 1 - Math.exp(-Math.max(0, deltaMs) / durationMs);
@@ -621,7 +635,7 @@
           var nextStageProgress;
 
           heroSvgMotionResumeTimer = null;
-          nextStageProgress = stageProgressFromScrollProgress(latestScrollProgress);
+          nextStageProgress = stageProgressFromScrollProgress(progressFromScroll());
           if (canRunHeroSvgMotion(nextStageProgress)) {
             setHeroSvgMotionActive(true, nextStageProgress);
           }
@@ -676,7 +690,7 @@
     if (!heroTitle) return;
     var y = Math.round(titleSnapY() * titleSnapState.progress);
     var shrink = lerp(1, 0.965, animeEase('outSine', easeOut)(titleFadeProgress));
-    heroTitle.style.transform = 'translateY(' + y + 'px) scale(' + Math.round(shrink * 10000) / 10000 + ')';
+    setInlineStyle(heroTitle, 'transform', 'translateY(' + y + 'px) scale(' + Math.round(shrink * 10000) / 10000 + ')');
     applyHeroVizTransform(currentMeshGeometryScale || 1, false);
   }
 
@@ -851,7 +865,7 @@
     titleFadeProgress = easeOut(titleOut);
     section.classList.toggle('is-stage2-title-cleared', titleFadeProgress > 0.985);
     syncTitleSnap(titleProgress);
-    heroTitle.style.opacity = String(Math.round((1 - titleFadeProgress) * 10000) / 10000);
+    setInlineStyle(heroTitle, 'opacity', String(Math.round((1 - titleFadeProgress) * 10000) / 10000));
     applyTitleSnapTransform();
   }
 
@@ -1714,17 +1728,17 @@
     section.classList.toggle('is-stage2-footer-cleared', footerOut > 0.985);
 
     if (nav) {
-      nav.style.opacity = String(1 - navHidden);
-      nav.style.transform = 'translateY(' + Math.round(-88 * navHidden) + 'px)';
-      nav.style.pointerEvents = navHidden > 0.92 ? 'none' : '';
+      setInlineStyle(nav, 'opacity', String(Math.round((1 - navHidden) * 10000) / 10000));
+      setInlineStyle(nav, 'transform', 'translateY(' + Math.round(-88 * navHidden) + 'px)');
+      setInlineStyle(nav, 'pointerEvents', navHidden > 0.92 ? 'none' : '');
     }
 
     syncTitleFromProgress(progress, stageProgress);
 
     if (heroFooter) {
-      heroFooter.style.opacity = String(1 - footerOut);
-      heroFooter.style.transform = 'translateY(' + Math.round(168 * easeOut(footerOut)) + 'px)';
-      heroFooter.style.pointerEvents = footerOut > 0.8 ? 'none' : '';
+      setInlineStyle(heroFooter, 'opacity', String(Math.round((1 - footerOut) * 10000) / 10000));
+      setInlineStyle(heroFooter, 'transform', 'translateY(' + Math.round(168 * easeOut(footerOut)) + 'px)');
+      setInlineStyle(heroFooter, 'pointerEvents', footerOut > 0.8 ? 'none' : '');
     }
   }
 
@@ -1780,9 +1794,8 @@
     modelDetailProgress = easeOut(ramp(stageProgress, MODEL_DETAIL_REVEAL_START, MODEL_DETAIL_REVEAL_END));
 
     setStage2TitleProgress(stageProgress);
-    setVar('--stage2-p', stageProgress);
-    setVar('--stage2-pct', Math.round((stageProgress / SCRUBBER_END) * 10000) / 100 + '%');
-    setVar('--stage2-scrubber-pct', Math.round(scrubberProgressFromProgress(stageProgress) * 10000) / 100 + '%');
+    currentStageProgress = stageProgress;
+    if (scrubberDebugVisible) setVar('--stage2-scrubber-pct', Math.round(scrubberProgressFromProgress(stageProgress) * 10000) / 100 + '%');
     setVar('--stage2-light-opacity', light);
     setVar('--stage2-workbench-opacity', workbench);
     setVar('--stage2-aperture-detail-fade', closeDetailFade);
@@ -1994,7 +2007,7 @@
     token = scrubScrollToken;
 
     from = window.scrollY;
-    fromStage = Number.parseFloat(section.style.getPropertyValue('--stage2-p')) || stageProgressFromScrollProgress(progressFromScroll());
+    fromStage = currentStageProgress || stageProgressFromScrollProgress(progressFromScroll());
     to = scrollTopForStageProgress(progress);
     distance = Math.abs(to - from);
     referenceDistance = options && options.referenceDistance ? Math.max(1, Math.abs(options.referenceDistance)) : 0;
@@ -2508,6 +2521,8 @@
       isScrubbing = false;
       scrubberPointerId = null;
       if (scrubber) scrubber.classList.remove('is-scrubbing');
+    } else {
+      setVar('--stage2-scrubber-pct', Math.round(scrubberProgressFromProgress(currentStageProgress) * 10000) / 100 + '%');
     }
     syncScrubberAccessibility();
   }
@@ -2815,7 +2830,7 @@
     if (raf) return;
     raf = window.requestAnimationFrame(function () {
       raf = null;
-      stageProgress = readSectionNumber('--stage2-p', stageProgressFromScrollProgress(latestScrollProgress));
+      stageProgress = currentStageProgress || stageProgressFromScrollProgress(latestScrollProgress);
       applyProgress(scrollProgressFromStageProgress(stageProgress));
     });
   }
@@ -3740,18 +3755,18 @@
       section.classList.add('is-stage2-reduced-summary');
       section.classList.remove('is-stage2-title-cleared', 'is-stage2-footer-cleared');
       if (nav) {
-        nav.style.opacity = '';
-        nav.style.transform = '';
-        nav.style.pointerEvents = '';
+        setInlineStyle(nav, 'opacity', '');
+        setInlineStyle(nav, 'transform', '');
+        setInlineStyle(nav, 'pointerEvents', '');
       }
       if (heroTitle) {
-        heroTitle.style.opacity = '';
-        heroTitle.style.transform = '';
+        setInlineStyle(heroTitle, 'opacity', '');
+        setInlineStyle(heroTitle, 'transform', '');
       }
       if (heroFooter) {
-        heroFooter.style.opacity = '';
-        heroFooter.style.transform = '';
-        heroFooter.style.pointerEvents = '';
+        setInlineStyle(heroFooter, 'opacity', '');
+        setInlineStyle(heroFooter, 'transform', '');
+        setInlineStyle(heroFooter, 'pointerEvents', '');
       }
       return;
     }
