@@ -140,12 +140,16 @@ fn build_built_in_config_schema() -> ConfigSchema {
             "runtime.reconcile_model_target_demand_upgrades",
             ConfigValueSchema::Boolean,
         ),
-        runtime_setting(
+        native_runtime_setting(
             "runtime.native_runtime.mesh_version",
             ConfigValueSchema::String,
         ),
-        runtime_setting(
+        native_runtime_setting(
             "runtime.native_runtime.skippy_abi",
+            ConfigValueSchema::String,
+        ),
+        native_runtime_setting(
+            "runtime.native_runtime.selection",
             ConfigValueSchema::String,
         ),
         runtime_setting(
@@ -896,6 +900,17 @@ fn runtime_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSetting
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];
     setting.apply_mode = ConfigApplyMode::DynamicValidationOnly;
+    setting
+}
+
+fn native_runtime_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];
+    setting.apply_mode = ConfigApplyMode::DynamicValidationOnly;
+    setting.restart_scope = ConfigRestartScope::ProcessRestart;
+    setting.description = Some(
+        "Native runtime selection is read before dynamic runtime libraries are loaded.".into(),
+    );
     setting
 }
 

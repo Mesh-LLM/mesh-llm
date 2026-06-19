@@ -127,18 +127,8 @@ impl NativeRuntimeResolver {
     }
 
     pub fn resolve(&self, selection: &RuntimeSelection) -> Result<NativeRuntimeResolution> {
-        let artifacts = self.candidate_artifacts()?;
-        let expected_abi = self
-            .skippy_abi
-            .as_deref()
-            .unwrap_or(self.release_manifest.skippy_abi.as_str());
-        let evaluated = evaluate_candidates(
-            &artifacts,
-            &self.profile,
-            &self.mesh_version,
-            expected_abi,
-            selection,
-        );
+        let evaluated = self.evaluate(selection)?;
+        let expected_abi = self.expected_skippy_abi();
         let Some(selected) = best_candidate(&evaluated) else {
             bail!(
                 "no compatible native runtime found for Skippy ABI {} on {}/{}",
@@ -152,6 +142,23 @@ impl NativeRuntimeResolver {
             selected: selected.artifact.clone(),
             evaluated,
         })
+    }
+
+    pub fn evaluate(&self, selection: &RuntimeSelection) -> Result<Vec<CandidateEvaluation>> {
+        let artifacts = self.candidate_artifacts()?;
+        Ok(evaluate_candidates(
+            &artifacts,
+            &self.profile,
+            &self.mesh_version,
+            Some(self.expected_skippy_abi()),
+            selection,
+        ))
+    }
+
+    fn expected_skippy_abi(&self) -> &str {
+        self.skippy_abi
+            .as_deref()
+            .unwrap_or(self.release_manifest.skippy_abi.as_str())
     }
 
     fn candidate_artifacts(&self) -> Result<Vec<NativeRuntimeArtifact>> {
@@ -195,7 +202,7 @@ impl NativeRuntimeResolver {
             let Ok(manifest) = crate::NativeRuntimeManifest::read_from_dir(dir) else {
                 continue;
             };
-            if manifest.runtime.id == artifact.id {
+            if artifact_identity_matches(&manifest.runtime, artifact) {
                 return Ok(NativeRuntimeSource::Bundle { path: dir.clone() });
             }
         }
@@ -212,7 +219,12 @@ fn parse_cuda_major(value: &str) -> Option<u32> {
 }
 
 fn artifact_key(artifact: &NativeRuntimeArtifact) -> String {
-    artifact.id.clone()
+    format!(
+        "{}\0{}\0{}",
+        artifact.id,
+        artifact.mesh_version.as_deref().unwrap_or_default(),
+        artifact.skippy_abi
+    )
 }
 
 pub fn select_native_runtime(
@@ -244,7 +256,24 @@ pub fn select_native_runtime_for_skippy_abi(
             artifact_with_manifest_mesh_version(artifact, release_manifest.mesh_version.as_str())
         })
         .collect::<Vec<_>>();
-    let evaluated = evaluate_candidates(&artifacts, profile, mesh_version, skippy_abi, selection);
+    let evaluated = evaluate_candidates(
+        &artifacts,
+        profile,
+        mesh_version,
+        Some(skippy_abi),
+        selection,
+    );
+    best_candidate(&evaluated).cloned()
+}
+
+pub fn select_native_runtime_from_artifacts(
+    artifacts: &[NativeRuntimeArtifact],
+    profile: &HostRuntimeProfile,
+    mesh_version: &str,
+    skippy_abi: Option<&str>,
+    selection: &RuntimeSelection,
+) -> Option<CandidateEvaluation> {
+    let evaluated = evaluate_candidates(artifacts, profile, mesh_version, skippy_abi, selection);
     best_candidate(&evaluated).cloned()
 }
 
@@ -252,7 +281,7 @@ fn evaluate_candidates(
     artifacts: &[NativeRuntimeArtifact],
     profile: &HostRuntimeProfile,
     mesh_version: &str,
-    skippy_abi: &str,
+    skippy_abi: Option<&str>,
     selection: &RuntimeSelection,
 ) -> Vec<CandidateEvaluation> {
     artifacts
@@ -276,7 +305,7 @@ fn evaluate_artifact(
     artifact: &NativeRuntimeArtifact,
     profile: &HostRuntimeProfile,
     mesh_version: &str,
-    skippy_abi: &str,
+    skippy_abi: Option<&str>,
     selection: &RuntimeSelection,
 ) -> CandidateEvaluation {
     let mut reasons = Vec::new();
@@ -290,7 +319,9 @@ fn evaluate_artifact(
             actual,
         });
     }
-    if artifact.skippy_abi != skippy_abi {
+    if let Some(skippy_abi) = skippy_abi
+        && artifact.skippy_abi != skippy_abi
+    {
         reasons.push(CandidateRejection::SkippyAbiMismatch {
             expected: skippy_abi.to_string(),
             actual: artifact.skippy_abi.clone(),
@@ -332,6 +363,15 @@ fn evaluate_artifact(
         rank: artifact.rank + artifact.backend.kind.default_rank(),
         rejection_reasons: reasons,
     }
+}
+
+fn artifact_identity_matches(
+    candidate: &NativeRuntimeArtifact,
+    selected: &NativeRuntimeArtifact,
+) -> bool {
+    candidate.id == selected.id
+        && candidate.mesh_version.as_deref() == selected.mesh_version.as_deref()
+        && candidate.skippy_abi == selected.skippy_abi
 }
 
 fn evaluate_backend_requirements(
@@ -663,5 +703,42 @@ mod tests {
             resolution.source,
             NativeRuntimeSource::Bundle { .. }
         ));
+    }
+
+    #[test]
+    fn stale_bundle_with_same_id_does_not_satisfy_selected_artifact() {
+        let bundle = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        let runtime_id = "meshllm-runtime-linux-x86_64-cpu";
+        let stale_bundle_artifact = NativeRuntimeArtifact {
+            mesh_version: Some("0.67.0".to_string()),
+            ..artifact(runtime_id, NativeRuntimeBackend::cpu())
+        };
+        NativeRuntimeManifest {
+            runtime: stale_bundle_artifact,
+        }
+        .write_to_dir(bundle.path())
+        .unwrap();
+
+        let resolution = NativeRuntimeResolver::new(
+            "0.68.0",
+            HostRuntimeProfile {
+                available_flavors: BTreeSet::from([NativeRuntimeBackendKind::Cpu]),
+                cuda: None,
+                ..profile()
+            },
+            NativeRuntimeReleaseManifest {
+                mesh_version: "0.68.0".to_string(),
+                skippy_abi: "0.1.25".to_string(),
+                artifacts: vec![artifact(runtime_id, NativeRuntimeBackend::cpu())],
+            },
+            NativeRuntimeCache::new(cache_root.path()),
+        )
+        .with_bundle_dirs(vec![bundle.path().to_path_buf()])
+        .with_skippy_abi_version("0.1.25")
+        .resolve(&RuntimeSelection::Recommended)
+        .unwrap();
+
+        assert!(matches!(resolution.source, NativeRuntimeSource::Missing));
     }
 }

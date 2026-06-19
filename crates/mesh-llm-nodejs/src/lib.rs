@@ -711,8 +711,7 @@ fn parse_native_runtime_install_options(
     Ok(mesh_llm_sdk::native_runtime::NativeRuntimeInstallOptions {
         mesh_version: optional_string(&value, "meshVersion")
             .unwrap_or_else(|| mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string()),
-        skippy_abi_version: optional_string(&value, "skippyAbiVersion")
-            .unwrap_or_else(mesh_llm_sdk::native_runtime::current_skippy_abi_version),
+        skippy_abi_version: optional_string(&value, "skippyAbiVersion"),
         selection: mesh_llm_sdk::native_runtime::RuntimeSelection::parse(
             optional_string(&value, "selection").as_deref(),
         )

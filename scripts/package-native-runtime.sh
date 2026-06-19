@@ -255,8 +255,13 @@ rewrite_macos_runtime_paths() {
     for rel_path in "${library_paths[@]}"; do
         library="$stage_dir/$rel_path"
         name="$(basename "$library")"
-        install_name_tool -id "@rpath/$name" "$library" 2>/dev/null || true
-        install_name_tool -add_rpath "@loader_path" "$library" 2>/dev/null || true
+        install_name_tool -id "@rpath/$name" "$library"
+        if ! otool -l "$library" | awk '
+            $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+            in_rpath && $1 == "path" { print $2; in_rpath = 0 }
+        ' | grep -qx '@loader_path'; then
+            install_name_tool -add_rpath "@loader_path" "$library"
+        fi
     done
 
     for rel_path in "${library_paths[@]}"; do

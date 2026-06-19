@@ -79,17 +79,19 @@ pub async fn initialize_host_runtime_with_config(config_path: Option<&Path>) -> 
     #[cfg(feature = "dynamic-native-runtime")]
     {
         let config = plugin::load_config(config_path)?;
-        let startup_selection = match (
-            config.runtime.native_runtime.mesh_version,
-            config.runtime.native_runtime.skippy_abi,
-        ) {
-            (Some(mesh_version), Some(skippy_abi)) => {
+        let native_runtime = config.runtime.native_runtime;
+        let startup_selection = match native_runtime.mesh_version {
+            Some(mesh_version) => {
+                let runtime_selection = mesh_llm_native_runtime::RuntimeSelection::parse(
+                    native_runtime.selection.as_deref(),
+                )?;
                 system::native_runtime::NativeRuntimeStartupSelection::explicit(
                     mesh_version,
-                    skippy_abi,
+                    native_runtime.skippy_abi,
+                    runtime_selection,
                 )
             }
-            _ => system::native_runtime::NativeRuntimeStartupSelection::current(),
+            None => system::native_runtime::NativeRuntimeStartupSelection::current(),
         };
         if let Some(runtime) =
             system::native_runtime::try_load_installed_native_runtime(startup_selection).await?

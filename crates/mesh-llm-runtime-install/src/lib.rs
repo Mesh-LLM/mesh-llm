@@ -53,7 +53,7 @@ pub struct NativeRuntimeManifestOptions {
 #[derive(Clone)]
 pub struct NativeRuntimeInstallOptions {
     pub mesh_version: String,
-    pub skippy_abi_version: String,
+    pub skippy_abi_version: Option<String>,
     pub selection: RuntimeSelection,
     pub manifest_path: Option<PathBuf>,
     pub manifest_url: Option<String>,
@@ -94,7 +94,7 @@ impl Default for NativeRuntimeInstallOptions {
     fn default() -> Self {
         Self {
             mesh_version: CURRENT_MESH_VERSION.to_string(),
-            skippy_abi_version: current_skippy_abi_version(),
+            skippy_abi_version: None,
             selection: RuntimeSelection::Recommended,
             manifest_path: None,
             manifest_url: None,
@@ -209,6 +209,10 @@ pub async fn install_native_runtime(
     if manifest.artifacts.is_empty() {
         bail!("no native runtime manifest entries found");
     }
+    let skippy_abi_version = options
+        .skippy_abi_version
+        .clone()
+        .unwrap_or_else(|| manifest.skippy_abi.clone());
     let cache = native_runtime_cache(options.cache_dir.as_deref())?;
     let resolution = NativeRuntimeResolver::new(
         &options.mesh_version,
@@ -216,7 +220,7 @@ pub async fn install_native_runtime(
         manifest,
         cache.clone(),
     )
-    .with_skippy_abi_version(options.skippy_abi_version.clone())
+    .with_skippy_abi_version(skippy_abi_version)
     .with_bundle_dirs(options.bundle_dirs.clone())
     .resolve(&options.selection)?;
     install_resolved_runtime(&cache, resolution, &options).await

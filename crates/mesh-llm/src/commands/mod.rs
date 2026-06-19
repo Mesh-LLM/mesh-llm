@@ -51,7 +51,9 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             dispatch_runtime_command(command.as_ref(), cli.config.as_deref()).await
         }
         Command::Config { command } => dispatch_config_command(cli, command),
-        Command::Doctor { command, json } => dispatch_doctor_command(command.as_ref(), *json).await,
+        Command::Doctor { command, json } => {
+            dispatch_doctor_command(command.as_ref(), cli.config.as_deref(), *json).await
+        }
         Command::Load { name, port } => run_load(name, *port).await,
         Command::Unload { name, port } => run_drop(name, *port).await,
         Command::Status { port } => run_status(*port).await,

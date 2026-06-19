@@ -99,6 +99,8 @@ pub struct NativeRuntimeConfig {
     pub mesh_version: Option<String>,
     #[serde(default)]
     pub skippy_abi: Option<String>,
+    #[serde(default)]
+    pub selection: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

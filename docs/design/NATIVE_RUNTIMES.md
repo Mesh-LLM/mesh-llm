@@ -326,6 +326,20 @@ installs the recommended compatible native runtime from the release manifest,
 an explicit manifest, or bundle directories. Explicit backend policy or runtime ID
 arguments are overrides for advanced users, CI, and prepared images.
 
+Advanced users can pin runtime resolution in `~/.mesh-llm/config.toml`:
+
+```toml
+[runtime.native_runtime]
+mesh_version = "0.68.0"
+selection = "exact:meshllm-native-runtime-linux-x86_64-cuda12"
+```
+
+`skippy_abi` may also be supplied for strict ABI selection; when omitted,
+install resolves the ABI from the selected release manifest. The configured
+`mesh_version` is honored by startup, `runtime install`, `runtime list
+--available`, `runtime prune`, and `mesh-llm doctor`, so autoupdate pruning does
+not remove a manually pinned runtime version.
+
 Selected-runtime diagnostics belong in `mesh-llm doctor`, not in a separate
 `mesh-llm runtime doctor` command. Doctor output should include the active
 MeshLLM version, selected native runtime ID, backend lane, runtime path,

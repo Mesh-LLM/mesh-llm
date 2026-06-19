@@ -6,7 +6,7 @@ mod dynamic {
     use anyhow::{Context, Result};
     use mesh_llm_native_runtime::{
         HostRuntimeProfile, NativeRuntimeArtifact, NativeRuntimeCache, NativeRuntimeLoadPlan,
-        NativeRuntimeReleaseManifest, RuntimeSelection, select_native_runtime_for_skippy_abi,
+        NativeRuntimeReleaseManifest, RuntimeSelection,
     };
     use std::{future::Future, path::PathBuf};
 
@@ -35,21 +35,30 @@ mod dynamic {
     #[derive(Clone, Debug, Eq, PartialEq)]
     pub(crate) struct NativeRuntimeStartupSelection {
         pub(crate) mesh_version: String,
-        pub(crate) skippy_abi: String,
+        pub(crate) skippy_abi: Option<String>,
+        pub(crate) runtime_selection: RuntimeSelection,
     }
 
     impl NativeRuntimeStartupSelection {
         pub(crate) fn current() -> Self {
             Self {
                 mesh_version: crate::RELEASE_VERSION.to_string(),
-                skippy_abi: crate::system::native_runtime_install::current_skippy_abi_version(),
+                skippy_abi: Some(
+                    crate::system::native_runtime_install::current_skippy_abi_version(),
+                ),
+                runtime_selection: RuntimeSelection::Recommended,
             }
         }
 
-        pub(crate) fn explicit(mesh_version: String, skippy_abi: String) -> Self {
+        pub(crate) fn explicit(
+            mesh_version: String,
+            skippy_abi: Option<String>,
+            runtime_selection: RuntimeSelection,
+        ) -> Self {
             Self {
                 mesh_version,
                 skippy_abi,
+                runtime_selection,
             }
         }
     }
@@ -152,8 +161,8 @@ mod dynamic {
             &profile,
             crate::BUILD_VERSION,
             &startup_selection.mesh_version,
-            &startup_selection.skippy_abi,
-            &RuntimeSelection::Recommended,
+            startup_selection.skippy_abi.as_deref(),
+            &startup_selection.runtime_selection,
         )? {
             return Ok(Some(plan));
         }
@@ -161,6 +170,7 @@ mod dynamic {
         let mut options = install_options();
         options.mesh_version = startup_selection.mesh_version.clone();
         options.skippy_abi_version = startup_selection.skippy_abi.clone();
+        options.selection = startup_selection.runtime_selection.clone();
         if options.cache_dir.is_none() {
             options.cache_dir = Some(cache.root().to_path_buf());
         }
@@ -202,7 +212,7 @@ mod dynamic {
         profile: &HostRuntimeProfile,
         build_version: &str,
         target_mesh_version: &str,
-        target_skippy_abi: &str,
+        target_skippy_abi: Option<&str>,
         selection: &RuntimeSelection,
     ) -> Result<Option<NativeRuntimeStartupLoadPlan>> {
         let installed = cache.installed()?;
@@ -213,17 +223,17 @@ mod dynamic {
             startup_native_runtime_cache_version(build_version, target_mesh_version);
         let manifest = NativeRuntimeReleaseManifest {
             mesh_version: initial_cache_version.to_string(),
-            skippy_abi: target_skippy_abi.to_string(),
+            skippy_abi: target_skippy_abi.unwrap_or_default().to_string(),
             artifacts: installed
                 .iter()
                 .map(|runtime| runtime.manifest.runtime.clone())
                 .collect(),
         };
-        let Some(candidate) = select_native_runtime_for_skippy_abi(
-            &manifest,
+        let Some(candidate) = mesh_llm_native_runtime::select_native_runtime_from_artifacts(
+            &manifest.artifacts,
             profile,
             initial_cache_version,
-            &manifest.skippy_abi,
+            target_skippy_abi,
             selection,
         ) else {
             return Ok(None);
@@ -290,6 +300,9 @@ mod dynamic {
     fn default_install_options() -> NativeRuntimeInstallOptions {
         NativeRuntimeInstallOptions {
             mesh_version: crate::RELEASE_VERSION.to_string(),
+            skippy_abi_version: Some(
+                crate::system::native_runtime_install::current_skippy_abi_version(),
+            ),
             selection: RuntimeSelection::Recommended,
             ..Default::default()
         }
@@ -314,13 +327,21 @@ mod dynamic {
         };
 
         fn write_runtime(dir: &Path, version: &str, id: &str) {
+            write_runtime_with_manifest_mesh_version(dir, Some(version), id);
+        }
+
+        fn write_runtime_without_mesh_version(dir: &Path, id: &str) {
+            write_runtime_with_manifest_mesh_version(dir, None, id);
+        }
+
+        fn write_runtime_with_manifest_mesh_version(dir: &Path, version: Option<&str>, id: &str) {
             let library_rel_path = test_library_rel_path();
             fs::create_dir_all(dir.join(library_rel_path.parent().unwrap())).unwrap();
             fs::write(dir.join(&library_rel_path), b"native runtime").unwrap();
             let manifest = NativeRuntimeManifest {
                 runtime: NativeRuntimeArtifact {
                     id: id.to_string(),
-                    mesh_version: Some(version.to_string()),
+                    mesh_version: version.map(ToString::to_string),
                     skippy_abi: "0.1.25".to_string(),
                     platform: NativeRuntimePlatform {
                         os: std::env::consts::OS.to_string(),
@@ -372,7 +393,7 @@ mod dynamic {
                 &HostRuntimeProfile::current_without_gpu_probe(),
                 sha_build_version,
                 release_version,
-                "0.1.25",
+                Some("0.1.25"),
                 &RuntimeSelection::Recommended,
             )
             .unwrap()
@@ -405,7 +426,7 @@ mod dynamic {
                 &HostRuntimeProfile::current_without_gpu_probe(),
                 "0.68.0+gAB131C.dirty",
                 artifact_mesh_version,
-                "0.1.25",
+                Some("0.1.25"),
                 &RuntimeSelection::Recommended,
             )
             .unwrap()
@@ -431,7 +452,29 @@ mod dynamic {
                 &HostRuntimeProfile::current_without_gpu_probe(),
                 "0.68.0+gAB131C.dirty",
                 release_version,
-                "0.1.25",
+                Some("0.1.25"),
+                &RuntimeSelection::Recommended,
+            )
+            .unwrap();
+
+            assert!(plan.is_none());
+        }
+
+        #[test]
+        fn startup_plan_rejects_installed_runtime_without_mesh_version() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            let runtime_dir = cache.runtime_dir("unknown", runtime_id);
+            write_runtime_without_mesh_version(&runtime_dir, runtime_id);
+
+            let plan = resolve_installed_native_runtime_plan(
+                &cache,
+                &HostRuntimeProfile::current_without_gpu_probe(),
+                "0.68.0+gAB131C.dirty",
+                release_version,
+                Some("0.1.25"),
                 &RuntimeSelection::Recommended,
             )
             .unwrap();
@@ -527,7 +570,8 @@ mod dynamic {
                 },
                 NativeRuntimeStartupSelection::explicit(
                     release_version.to_string(),
-                    "0.1.25".to_string(),
+                    Some("0.1.25".to_string()),
+                    RuntimeSelection::Recommended,
                 ),
                 {
                     let load_calls = Arc::clone(&load_calls);
@@ -594,7 +638,11 @@ mod dynamic {
                         }
                     }
                 },
-                NativeRuntimeStartupSelection::explicit("0.68.0".to_string(), "0.1.25".to_string()),
+                NativeRuntimeStartupSelection::explicit(
+                    "0.68.0".to_string(),
+                    Some("0.1.25".to_string()),
+                    RuntimeSelection::Recommended,
+                ),
                 {
                     let load_calls = Arc::clone(&load_calls);
                     move |libraries| {
@@ -610,6 +658,10 @@ mod dynamic {
             let recorded_options = install_calls.lock().unwrap();
             assert_eq!(recorded_options.len(), 1);
             assert_eq!(recorded_options[0].mesh_version, "0.68.0");
+            assert_eq!(
+                recorded_options[0].skippy_abi_version.as_deref(),
+                Some("0.1.25")
+            );
             assert_eq!(recorded_options[0].cache_dir.as_deref(), Some(cache.root()));
             assert_eq!(runtime.native_runtime_id, runtime_id);
             assert_eq!(
@@ -647,7 +699,11 @@ mod dynamic {
                         }
                     }
                 },
-                NativeRuntimeStartupSelection::explicit("0.68.0".to_string(), "0.1.25".to_string()),
+                NativeRuntimeStartupSelection::explicit(
+                    "0.68.0".to_string(),
+                    Some("0.1.25".to_string()),
+                    RuntimeSelection::Recommended,
+                ),
                 {
                     let load_calls = Arc::clone(&load_calls);
                     move |_| {
@@ -670,6 +726,6 @@ mod dynamic {
 pub(crate) use dynamic::*;
 
 #[cfg(not(feature = "dynamic-native-runtime"))]
-pub(crate) fn try_load_installed_native_runtime(_: bool) -> anyhow::Result<Option<()>> {
+pub(crate) fn try_load_installed_native_runtime() -> anyhow::Result<Option<()>> {
     Ok(None)
 }

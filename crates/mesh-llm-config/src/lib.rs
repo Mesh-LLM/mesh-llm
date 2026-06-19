@@ -99,15 +99,16 @@ connect_timeout_secs = 0
     }
 
     #[test]
-    fn native_runtime_override_requires_explicit_mesh_version_and_abi() {
+    fn native_runtime_override_accepts_mesh_version_with_optional_abi_and_selection() {
         let config = parse_config_toml(
             r#"
 [runtime.native_runtime]
 mesh_version = "0.68.0"
 skippy_abi = "0.1.25"
+selection = "exact:meshllm-native-runtime-linux-x86_64-cuda12"
 "#,
         )
-        .expect("complete native runtime selector should parse");
+        .expect("native runtime selector should parse");
 
         assert_eq!(
             config.runtime.native_runtime.mesh_version.as_deref(),
@@ -117,18 +118,30 @@ skippy_abi = "0.1.25"
             config.runtime.native_runtime.skippy_abi.as_deref(),
             Some("0.1.25")
         );
+        assert_eq!(
+            config.runtime.native_runtime.selection.as_deref(),
+            Some("exact:meshllm-native-runtime-linux-x86_64-cuda12")
+        );
+
+        parse_config_toml(
+            r#"
+[runtime.native_runtime]
+mesh_version = "0.68.0"
+"#,
+        )
+        .expect("mesh-version-only native runtime selector should parse");
 
         let err = parse_config_toml(
             r#"
 [runtime.native_runtime]
-mesh_version = "0.68.0"
+selection = "cuda12"
 "#,
         )
         .expect_err("partial native runtime selector should fail validation");
 
         assert!(
             err.to_string().contains(
-                "runtime.native_runtime override must set both mesh_version and skippy_abi"
+                "runtime.native_runtime override must set mesh_version when skippy_abi or selection is set"
             ),
             "unexpected validation error: {err}"
         );

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mesh_llm_cli::DoctorCommand;
+use mesh_llm_host_runtime::command_support::plugin::load_config;
 use mesh_llm_host_runtime::command_support::runtime_instances::{
     LocalInstanceSnapshot, runtime_root, scan_local_instances,
 };
@@ -38,6 +39,7 @@ const SKIPPY_DIAGNOSTIC_ENDPOINTS: &[(&str, &str, &str)] = &[
 
 pub(crate) async fn dispatch_doctor_command(
     command: Option<&DoctorCommand>,
+    config_path: Option<&Path>,
     json_output: bool,
 ) -> Result<()> {
     match command {
@@ -47,7 +49,16 @@ pub(crate) async fn dispatch_doctor_command(
             json,
             output_dir,
         }) => run_split_doctor(model_ref, *port, *json, output_dir.as_deref()).await,
-        None => mesh_llm_commands::runtime_native::run_native_runtime_doctor(json_output),
+        None => {
+            let config = load_config(config_path)?;
+            let native_runtime = config.runtime.native_runtime;
+            mesh_llm_commands::runtime_native::run_native_runtime_doctor(
+                native_runtime.mesh_version.as_deref(),
+                native_runtime.skippy_abi.as_deref(),
+                native_runtime.selection.as_deref(),
+                json_output,
+            )
+        }
     }
 }
 

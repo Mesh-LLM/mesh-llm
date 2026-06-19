@@ -143,7 +143,7 @@ PY
 verify_macos_runtime_paths() {
     local artifact_dir="$1"
     local manifest="$2"
-    if ! find "$artifact_dir" -type f -name '*.dylib' -print -quit | grep -q .; then
+    if ! find -L "$artifact_dir" -type f -name '*.dylib' -print -quit | grep -q .; then
         return 0
     fi
     if ! command -v otool >/dev/null 2>&1; then
@@ -173,7 +173,18 @@ for rel_path in libraries:
             raise SystemExit(f"{rel_path} depends on absolute packaged dylib path: {dep}")
 
     link_output = subprocess.check_output(["otool", "-l", path], text=True)
-    if "@loader_path" not in link_output:
+    has_loader_path_rpath = False
+    in_rpath = False
+    for line in link_output.splitlines():
+        fields = line.split()
+        if fields[:2] == ["cmd", "LC_RPATH"]:
+            in_rpath = True
+            continue
+        if in_rpath and fields[:1] == ["path"]:
+            if len(fields) > 1 and fields[1] == "@loader_path":
+                has_loader_path_rpath = True
+            in_rpath = False
+    if not has_loader_path_rpath:
         raise SystemExit(f"{rel_path} is missing @loader_path LC_RPATH")
 PY
 }
