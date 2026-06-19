@@ -1,17 +1,17 @@
+mod formatters;
+
 use anyhow::Result;
-use mesh_llm_native_runtime::{
-    HostRuntimeProfile, NativeRuntimePruneMode, NativeRuntimeResolver, RuntimeSelection,
-};
+use mesh_llm_native_runtime::{NativeRuntimePruneMode, NativeRuntimeResolver, RuntimeSelection};
 use mesh_llm_runtime_install::{
     CURRENT_MESH_VERSION, NativeRuntimeDownloadProgressCallback, NativeRuntimeInstallOptions,
-    NativeRuntimeInstallStatus, NativeRuntimeManifestOptions, host_runtime_profile,
-    install_native_runtime, load_release_manifest, native_runtime_cache,
+    NativeRuntimeManifestOptions, host_runtime_profile, install_native_runtime,
+    load_release_manifest, native_runtime_cache,
 };
-use serde::Serialize;
-use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use formatters::{AvailableRuntimeRow, NativeRuntimeDoctorReport, runtime_native_formatter};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeRuntimeConfigSelection<'a> {
@@ -37,6 +37,7 @@ pub async fn run_native_runtime_list(
     let mesh_version = configured.mesh_version_or_current();
     let selection = RuntimeSelection::parse(configured.selection)?;
     let cache = native_runtime_cache(cache_dir)?;
+    let formatter = runtime_native_formatter(json_output);
     if available {
         print_configured_selector(configured, json_output);
         if !json_output && manifest_path.is_none() && bundle_dirs.is_empty() {
@@ -66,34 +67,26 @@ pub async fn run_native_runtime_list(
                     .iter()
                     .find(|candidate| candidate.artifact.id == artifact.id);
                 let supported = evaluation.is_some_and(|candidate| candidate.compatible);
-                json!({
-                    "id": artifact.id,
-                    "mesh_version": artifact.mesh_version.as_deref(),
-                    "skippy_abi": artifact.skippy_abi,
-                    "backend": artifact.backend.kind.to_string(),
-                    "os": artifact.platform.os,
-                    "arch": artifact.platform.arch,
-                    "supported": supported,
-                    "rejection_reasons": evaluation.map(|candidate| &candidate.rejection_reasons),
-                    "url": artifact.url.as_deref(),
-                })
+                AvailableRuntimeRow {
+                    id: artifact.id.clone(),
+                    mesh_version: artifact.mesh_version.clone(),
+                    skippy_abi: artifact.skippy_abi.clone(),
+                    backend: artifact.backend.kind.to_string(),
+                    os: artifact.platform.os.clone(),
+                    arch: artifact.platform.arch.clone(),
+                    supported,
+                    rejection_reasons: evaluation
+                        .map(|candidate| candidate.rejection_reasons.clone())
+                        .unwrap_or_default(),
+                    url: artifact.url.clone(),
+                }
             })
             .collect::<Vec<_>>();
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&rows)?);
-        } else {
-            print_available_runtimes(&rows);
-        }
-        return Ok(());
+        return formatter.render_available(&rows);
     }
 
     let installed = cache.installed()?;
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&installed)?);
-    } else {
-        print_installed_runtimes(&installed, cache.root());
-    }
-    Ok(())
+    formatter.render_installed(&installed, cache.root())
 }
 
 pub async fn run_native_runtime_install(
@@ -122,7 +115,8 @@ pub async fn run_native_runtime_install(
         },
         json_output,
     );
-    let outcome = install_native_runtime(NativeRuntimeInstallOptions {
+    let formatter = runtime_native_formatter(json_output);
+    let outcome = match install_native_runtime(NativeRuntimeInstallOptions {
         mesh_version: configured.mesh_version_or_current().to_string(),
         skippy_abi_version: configured.skippy_abi_version.map(ToString::to_string),
         selection,
@@ -132,45 +126,15 @@ pub async fn run_native_runtime_install(
         progress: cli_download_progress(json_output),
         ..Default::default()
     })
-    .await?;
-    match outcome.status {
-        NativeRuntimeInstallStatus::AlreadyInstalled => {
-            if json_output {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "status": "already_installed",
-                        "runtime": outcome.runtime,
-                        "resolution": outcome.resolution,
-                    }))?
-                );
-            } else {
-                eprintln!(
-                    "✅ Native runtime already installed: {}",
-                    outcome.runtime.native_runtime_id
-                );
-                eprintln!("   path: {}", outcome.runtime.path.display());
-            }
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            formatter.render_install_error(&error)?;
+            return Err(error);
         }
-        NativeRuntimeInstallStatus::Installed => {
-            if json_output {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "status": "installed",
-                        "runtime": outcome.runtime,
-                        "resolution": outcome.resolution,
-                    }))?
-                );
-            } else {
-                eprintln!("✅ Installed {}", outcome.runtime.native_runtime_id);
-                eprintln!("   version: {}", outcome.runtime.mesh_version);
-                eprintln!("   flavor: {}", outcome.runtime.flavor);
-                eprintln!("   path: {}", outcome.runtime.path.display());
-            }
-        }
-    }
-    Ok(())
+    };
+    formatter.render_install(&outcome)
 }
 
 fn print_configured_selector(configured: NativeRuntimeConfigSelection<'_>, json_output: bool) {
@@ -298,21 +262,7 @@ pub fn run_native_runtime_remove(
     let version = mesh_version.unwrap_or(CURRENT_MESH_VERSION);
     let cache = native_runtime_cache(cache_dir)?;
     let removed = cache.remove(version, native_runtime_id)?;
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "mesh_version": version,
-                "native_runtime_id": native_runtime_id,
-                "removed": removed,
-            }))?
-        );
-    } else if removed {
-        eprintln!("✅ Removed native runtime {native_runtime_id} for MeshLLM {version}");
-    } else {
-        eprintln!("🔎 Native runtime {native_runtime_id} for MeshLLM {version} was not installed");
-    }
-    Ok(())
+    runtime_native_formatter(json_output).render_remove(native_runtime_id, version, removed)
 }
 
 pub fn run_native_runtime_prune(
@@ -329,20 +279,7 @@ pub fn run_native_runtime_prune(
     };
     let cache = native_runtime_cache(cache_dir)?;
     let plan = cache.prune(version, mode)?;
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&plan)?);
-    } else if plan.remove_dirs.is_empty() {
-        eprintln!("✅ Native runtime cache already pruned");
-    } else {
-        eprintln!(
-            "✅ Pruned {} native runtime cache version(s)",
-            plan.remove_dirs.len()
-        );
-        for dir in plan.remove_dirs {
-            eprintln!("   removed: {}", dir.display());
-        }
-    }
-    Ok(())
+    runtime_native_formatter(json_output).render_prune(&plan)
 }
 
 pub fn run_native_runtime_doctor(
@@ -392,130 +329,5 @@ pub fn run_native_runtime_doctor(
         selected_version_installed_count: selected_version_runtimes.len(),
     };
 
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        print_doctor_report(&report);
-    }
-    Ok(())
-}
-
-#[derive(Serialize)]
-struct NativeRuntimeDoctorReport {
-    running_mesh_version: String,
-    selected_mesh_version: String,
-    configured_skippy_abi: Option<String>,
-    configured_selection: Option<String>,
-    host: HostRuntimeProfile,
-    cache_path: PathBuf,
-    selected_runtime_id: Option<String>,
-    selected_runtime_flavor: Option<String>,
-    selected_runtime_path: Option<PathBuf>,
-    installed_count: usize,
-    selected_version_installed_count: usize,
-}
-
-fn print_available_runtimes(rows: &[serde_json::Value]) {
-    if rows.is_empty() {
-        println!("📦 No native runtime manifest entries found");
-        println!("   Pass --manifest or --bundle-dir to inspect available runtimes.");
-        return;
-    }
-    println!("📦 Available native runtimes");
-    for row in rows {
-        let status = if row["supported"].as_bool().unwrap_or(false) {
-            "compatible"
-        } else {
-            "not compatible"
-        };
-        println!(
-            "  - {} {} ({}, {}/{})",
-            row["id"].as_str().unwrap_or("unknown"),
-            status,
-            row["backend"].as_str().unwrap_or("unknown"),
-            row["os"].as_str().unwrap_or("unknown"),
-            row["arch"].as_str().unwrap_or("unknown")
-        );
-        if let Some(reasons) = row["rejection_reasons"].as_array()
-            && !reasons.is_empty()
-        {
-            for reason in reasons {
-                println!("    reason: {}", compact_json(reason));
-            }
-        }
-    }
-}
-
-fn compact_json(value: &serde_json::Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
-}
-
-fn print_installed_runtimes(
-    installed: &[mesh_llm_native_runtime::InstalledNativeRuntime],
-    cache_root: &Path,
-) {
-    if installed.is_empty() {
-        println!("📦 No native runtimes installed");
-        println!("   cache: {}", cache_root.display());
-        return;
-    }
-    println!("📦 Installed native runtimes");
-    println!("   cache: {}", cache_root.display());
-    for runtime in installed {
-        println!(
-            "  - {} {} ({})",
-            runtime.native_runtime_id, runtime.mesh_version, runtime.flavor
-        );
-        println!("    path: {}", runtime.path.display());
-    }
-}
-
-fn print_doctor_report(report: &NativeRuntimeDoctorReport) {
-    println!("🩺 MeshLLM doctor");
-    println!();
-    println!("Native runtime:");
-    println!("  running MeshLLM version: {}", report.running_mesh_version);
-    println!(
-        "  selected runtime version: {}",
-        report.selected_mesh_version
-    );
-    if report.selected_mesh_version != report.running_mesh_version {
-        println!("  status: native runtime version is pinned by config");
-    }
-    if let Some(skippy_abi) = &report.configured_skippy_abi {
-        println!("  configured Skippy ABI: {skippy_abi}");
-    }
-    if let Some(selection) = &report.configured_selection {
-        println!("  configured selection: {selection}");
-    }
-    println!("  cache: {}", report.cache_path.display());
-    println!("  host: {}/{}", report.host.os, report.host.arch);
-    let flavors = report
-        .host
-        .available_flavors
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    println!("  detected flavors: {flavors}");
-    match &report.selected_runtime_id {
-        Some(id) => {
-            println!("  selected: {id}");
-            if let Some(flavor) = &report.selected_runtime_flavor {
-                println!("  flavor: {flavor}");
-            }
-            if let Some(path) = &report.selected_runtime_path {
-                println!("  path: {}", path.display());
-            }
-        }
-        None => {
-            println!("  selected: none");
-            println!("  status: no native runtime installed for selected MeshLLM version");
-        }
-    }
-    println!("  installed: {}", report.installed_count);
-    println!(
-        "  installed for selected version: {}",
-        report.selected_version_installed_count
-    );
+    runtime_native_formatter(json_output).render_doctor(&report)
 }
