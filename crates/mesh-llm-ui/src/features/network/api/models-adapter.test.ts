@@ -20,13 +20,34 @@ describe('adaptModelsToSummary', () => {
       expect.objectContaining({
         name: 'Hermes-2-Pro-Mistral-7B-Q4_K_M',
         status: 'warm',
-        size: '4.4B',
+        size: '4.4 GB',
         context: 'Unknown',
         ctxMaxK: undefined,
         moe: false,
         vision: false
       })
     ])
+  })
+
+  it('rounds overprecise model sizes for display', () => {
+    const models: MeshModelRaw[] = [
+      {
+        name: 'Qwen3.5-4B-UD-Q4_K_XL',
+        status: 'warm',
+        size_gb: 2.912109728,
+        node_count: 1,
+        quantization: 'Q4_K_XL',
+        moe: false,
+        vision: false
+      }
+    ]
+
+    expect(adaptModelsToSummary(models)[0]).toEqual(
+      expect.objectContaining({
+        size: '2.9 GB',
+        sizeGB: 2.912109728
+      })
+    )
   })
 
   it('prefers nested capabilities when available', () => {

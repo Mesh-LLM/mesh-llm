@@ -1,4 +1,5 @@
 import type { DragEvent } from 'react'
+import { formatModelSizeGB } from '@/lib/format-model-size'
 import { findModelFitContainerIdx, modelFamilyColorKey } from '@/features/configuration/lib/config-math'
 import type { ConfigAssign, ConfigModel, ConfigNode } from '@/features/app-tabs/types'
 
@@ -45,10 +46,11 @@ export function ModelCatalogRow({
 }: ModelCatalogRowProps) {
   const fits = findModelFitContainerIdx(model, node, assigns, 4096, models) !== null
   const verdict = fits ? 'Fits' : 'No fit'
+  const sizeLabel = formatModelSizeGB(model.sizeGB)
   return (
     <button
       draggable
-      aria-label={`${model.name}, ${model.sizeGB} GB, ${model.ctxMaxK}k context, ${verdict}`}
+      aria-label={`${model.name}, ${sizeLabel}, ${model.ctxMaxK}k context, ${verdict}`}
       onDragEnd={onDragEnd}
       onDragStart={(event) => {
         event.dataTransfer.setData('text/model', model.id)
@@ -64,7 +66,7 @@ export function ModelCatalogRow({
       <div>
         <div className="font-medium">{model.name}</div>
         <div className="font-mono text-[length:var(--density-type-annotation)] text-muted-foreground">
-          {model.family} · {model.quant} · {model.sizeGB} GB · {model.ctxMaxK}k ctx
+          {model.family} · {model.quant} · {sizeLabel} · {model.ctxMaxK}k ctx
         </div>
       </div>
       <span className={fits ? 'text-good' : 'text-bad'}>{verdict}</span>

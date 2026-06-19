@@ -5,6 +5,7 @@ import { AccentIconFrame } from '@/components/ui/AccentIconFrame'
 import { FilterPopover } from '@/components/ui/FilterPopover'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import { cn } from '@/lib/cn'
+import { formatModelSizeGB } from '@/lib/format-model-size'
 import { modelStatusBadge } from '@/features/drawers/lib/model-status'
 import { modelFamilyColorKey } from '@/features/configuration/lib/config-math'
 import type { ModelFamilyColorKey, ModelSummary } from '@/features/app-tabs/types'
@@ -70,7 +71,7 @@ function ModelRow({
   active: boolean
   onSelect?: (model: ModelSummary) => void
 }) {
-  const sizeLabel = model.sizeGB === undefined ? model.size : `${model.sizeGB} GB`
+  const sizeLabel = model.sizeGB === undefined ? model.size : formatModelSizeGB(model.sizeGB)
   const contextLabel = model.ctxMaxK === undefined ? model.context : `${model.ctxMaxK}k ctx`
   const architectureLabel = model.moe ? 'MoE' : 'Dense'
   const provider = getModelProvider(model)

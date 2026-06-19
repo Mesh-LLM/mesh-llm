@@ -1,14 +1,6 @@
 import type { MeshModelRaw } from '@/lib/api/types'
+import { formatModelSizeGB } from '@/lib/format-model-size'
 import type { ModelSummary } from '@/features/app-tabs/types'
-
-function formatSize(sizeGB: number | undefined): string {
-  if (sizeGB == null) return 'Unknown'
-
-  if (sizeGB >= 1) {
-    return `${sizeGB.toFixed(1)}B`
-  }
-  return `${(sizeGB * 1000).toFixed(0)}M`
-}
 
 function formatContext(contextLength: number | undefined): string {
   if (contextLength == null) return 'Unknown'
@@ -26,7 +18,7 @@ export function adaptModelsToSummary(models: MeshModelRaw[]): ModelSummary[] {
   return models.map((model) => ({
     name: model.name,
     family: model.family ?? model.name.split('/')[0] ?? 'unknown',
-    size: formatSize(model.size_gb),
+    size: formatModelSizeGB(model.size_gb),
     context: formatContext(model.context_length),
     status: mapModelStatus(model.status),
     tags: model.tags ?? [],

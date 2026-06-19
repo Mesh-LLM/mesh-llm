@@ -9,6 +9,7 @@ import { KV } from '@/features/drawers/components/KV'
 import { SectionHead } from '@/features/drawers/components/SectionHead'
 import { LatencySource } from '@/lib/api/types'
 import { formatPeerLatencySummary } from '@/lib/format-latency'
+import { formatModelSizeGB } from '@/lib/format-model-size'
 import type { ConfigModel, ModelSummary, Peer } from '@/features/app-tabs/types'
 
 type DrawerModel = ConfigModel | ModelSummary
@@ -29,7 +30,7 @@ function modelQuant(model: ModelSummary) {
 }
 
 function modelSummarySize(model: ModelSummary) {
-  return model.sizeGB === undefined ? model.size : `${model.sizeGB} GB`
+  return model.size
 }
 
 function modelSummaryContext(model: ModelSummary) {
@@ -89,10 +90,10 @@ function ModelDrawerContent({
               {model.paramsB}B
             </KV>
             <KV icon={drawerIcon(HardDrive)} label="Size">
-              {model.sizeGB} GB
+              {formatModelSizeGB(model.sizeGB)}
             </KV>
             <KV icon={drawerIcon(HardDrive)} label="Disk">
-              {model.diskGB} GB
+              {formatModelSizeGB(model.diskGB)}
             </KV>
             <KV icon={drawerIcon(Cpu)} label="Context">
               {model.ctxMaxK}k

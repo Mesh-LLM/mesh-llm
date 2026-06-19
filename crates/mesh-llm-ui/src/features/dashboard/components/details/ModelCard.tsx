@@ -1,6 +1,7 @@
 import { Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
 
+import { formatModelSizeGB } from '@/lib/format-model-size'
 import { StatusPill } from '@/features/dashboard/components/details/StatusPill'
 
 export type ModelStatus = 'warm' | 'cold' | 'loading' | string
@@ -79,7 +80,7 @@ export function ModelCard({
               👁
             </span>
           )}
-          {sizeGb.toFixed(1)} GB
+          {formatModelSizeGB(sizeGb)}
         </span>
       </div>
     </button>

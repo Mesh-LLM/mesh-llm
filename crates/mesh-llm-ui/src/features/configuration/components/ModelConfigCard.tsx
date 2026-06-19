@@ -1,6 +1,7 @@
 import { animate, createScope } from 'animejs'
 import { Trash2 } from 'lucide-react'
 import { useLayoutEffect, useRef } from 'react'
+import { formatModelSizeGB } from '@/lib/format-model-size'
 import { CtxSlider } from '@/features/configuration/components/CtxSlider'
 import { CTX_MAX, CTX_MIN, fmtCtx, snapCtx } from '@/features/configuration/components/ctx-slider-utils'
 import { DetailPill } from '@/features/configuration/components/DetailPill'
@@ -93,7 +94,7 @@ export function ModelConfigCard({
       : `ERROR: context allocation needs ${formatShortfallGB(ctxShortfallGB)} more KV cache.`
   const details = [
     ['Ctx len', fmtCtx(modelCtxMax)],
-    ['Weights', formatGBLabel(model.sizeGB)],
+    ['Weights', formatModelSizeGB(model.sizeGB)],
     ['KV cache', formatGBLabel(displayKV)],
     ['Total', formatGBLabel(total)],
     ['Embed', formatOptional(model.embed)],
