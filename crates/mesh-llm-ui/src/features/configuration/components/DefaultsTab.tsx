@@ -1,18 +1,16 @@
-import { useEffect, useMemo, useState, type PointerEvent, type ReactNode } from 'react'
-import * as RadioGroup from '@radix-ui/react-radio-group'
-import { NativeSelect } from '@/components/ui/NativeSelect'
-import { SegmentedControl, type SegmentedControlOption } from '@/components/ui/SegmentedControl'
-import { Slider } from '@/components/ui/Slider'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   BrainCircuit,
   Cog,
   Cpu,
   Filter,
+  Gauge,
   Image,
   MemoryStick,
   Network,
   RotateCcw,
   Server,
+  ShieldCheck,
   type LucideIcon
 } from 'lucide-react'
 import { configurationNavigationIconClassName } from '@/features/configuration/components/configuration-navigation-class-names'
@@ -23,18 +21,25 @@ import {
   SettingsSection,
   SettingsSummaryBanner
 } from '@/features/configuration/components/settings/SettingsScaffold'
-import { RestartBadge } from '@/features/configuration/components/settings/RestartBadge'
+import { ConfigurationDefaultsControl } from '@/features/configuration/components/settings/ConfigurationDefaultsControl'
+import { SettingInfoTrigger } from '@/features/configuration/components/settings/DisabledControlFrame'
+import { RestartRequiredIndicator } from '@/features/configuration/components/settings/RestartRequiredIndicator'
+import { validateConfigurationSettingValue } from '@/features/configuration/components/settings/schema-field-validation'
+import { configurationControlDetailBuckets } from '@/features/configuration/components/settings/ConfigurationDefaultsControl'
 import { useDefaultsSettingsState } from '@/features/configuration/hooks/useDefaultsSettingsState'
 import {
+  evaluateSettingControlState,
   getSettingBaselineValue,
-  getSettingDependencyStatus,
-  getSettingValue,
-  isSettingDisabled
+  getSettingValue
 } from '@/features/configuration/lib/settings-utils'
+import {
+  defaultSettingTomlPlacement,
+  defaultSettingTomlScalar,
+  shouldOmitSettingFromGeneratedToml
+} from '@/features/configuration/lib/build-toml'
 import type {
   ConfigurationDefaultsCategory,
   ConfigurationDefaultsCategoryId,
-  ConfigurationDefaultsControl,
   ConfigurationDefaultsHarnessData,
   ConfigurationDefaultsSetting,
   ConfigurationDefaultsValues,
@@ -43,7 +48,12 @@ import type {
 import { env } from '@/lib/env'
 import { cn } from '@/lib/cn'
 
-const categoryIcons: Record<ConfigurationDefaultsCategoryId, LucideIcon> = {
+const categoryIcons: Partial<Record<ConfigurationDefaultsCategoryId, LucideIcon>> = {
+  meshllm: Cpu,
+  telemetry: Gauge,
+  'runtime-policy': Cog,
+  network: Network,
+  attestation: ShieldCheck,
   runtime: Cpu,
   memory: MemoryStick,
   'speculative-decoding': BrainCircuit,
@@ -55,6 +65,11 @@ const categoryIcons: Record<ConfigurationDefaultsCategoryId, LucideIcon> = {
 }
 
 const defaultsCategoryOrder: readonly ConfigurationDefaultsCategoryId[] = [
+  'meshllm',
+  'telemetry',
+  'runtime-policy',
+  'network',
+  'attestation',
   'runtime',
   'memory',
   'speculative-decoding',
@@ -65,36 +80,14 @@ const defaultsCategoryOrder: readonly ConfigurationDefaultsCategoryId[] = [
   'advanced-server'
 ]
 
-const legacyCategoryTomlSections: Partial<Record<ConfigurationDefaultsCategoryId, string>> = {
-  advanced: 'defaults.runtime',
-  'speculative-decoding': 'defaults.speculative'
-}
-
-const slotOptions = Array.from({ length: 16 }, (_, index) => index + 1)
-
-const llamaFlavorColors: Record<string, string> = {
-  cpu: 'var(--color-accent)',
-  cuda: '#76b900',
-  metal: '#8b5cf6',
-  rocm: '#ed1c24',
-  vulkan: '#ac162c'
-}
-
-function LlamaFlavorOption({ option, selected }: { option: SegmentedControlOption; selected: boolean }) {
-  return (
-    <>
-      <span
-        aria-hidden="true"
-        className={cn('size-1.5 rounded-full', selected ? 'opacity-100' : 'opacity-65')}
-        data-model-runtime={option.value}
-        style={{ backgroundColor: llamaFlavorColors[option.value] ?? 'var(--color-accent)' }}
-      />
-      {option.label}
-    </>
-  )
-}
-
 const defaultsSectionOrder: readonly ConfigurationTomlSectionId[] = [
+  'gpu',
+  'telemetry',
+  'telemetry.metrics',
+  'runtime',
+  'owner_control',
+  'mesh_requirements',
+  'defaults',
   'defaults.model_fit',
   'defaults.hardware',
   'defaults.throughput',
@@ -113,23 +106,13 @@ type DefaultsTabProps = {
   onResetAll?: () => void
   configFilePath?: string
   readOnlyNotice?: ReactNode
-}
-
-function tomlValue(value: string) {
-  return /^-?\d+(\.\d+)?$/.test(value) ? value : JSON.stringify(value)
-}
-
-function isBooleanToggleChoice(setting: ConfigurationDefaultsSetting) {
-  return (
-    setting.control.kind === 'choice' &&
-    setting.control.presentation === 'toggle' &&
-    setting.control.options.length === 2 &&
-    setting.control.options.every((option) => option.value === 'on' || option.value === 'off')
-  )
-}
-
-function toggleTomlValue(value: string) {
-  return value === 'on' ? 'true' : 'false'
+  previewTitle?: string
+  previewTip?: ReactNode
+  screenLabel?: string
+  summaryDescription?: ReactNode
+  summaryStatus?: string
+  summaryTitle?: string
+  summaryTitleId?: string
 }
 
 type DefaultsPreviewLine =
@@ -137,75 +120,11 @@ type DefaultsPreviewLine =
   | { kind: 'section'; id: string; value: string }
   | { kind: 'pair'; id: string; keyName: string; value: string }
 
-function formatRangeValue(setting: ConfigurationDefaultsSetting, value: string) {
-  if (setting.id === 'gpu-layers' && value === '-1') return 'auto/all'
-  if (setting.id === 'memory-margin') return Number(value).toFixed(1)
-  if (setting.id === 'temperature' || setting.id === 'top-p' || setting.id === 'repeat-penalty')
-    return Number(value).toFixed(2)
-  return value
-}
-
-function rangeUnit(setting: ConfigurationDefaultsSetting, value: string) {
-  if (setting.id === 'gpu-layers' && value === '-1') return undefined
-  if (setting.id === 'parallel-slots') return `slot${value === '1' ? '' : 's'}`
-  if (setting.id === 'memory-margin') return 'GB'
-  if (setting.id === 'temperature' || setting.id === 'top-p' || setting.id === 'repeat-penalty') return undefined
-  if (setting.control.kind === 'range') return setting.control.unit
-  return undefined
-}
-
-function formatMetricValue(control: ConfigurationDefaultsControl) {
-  if (control.kind === 'metric' && control.unit) return `${control.value} ${control.unit}`
-  if (control.kind === 'metric') return control.value
-  return ''
-}
-
-function choiceItemClassName(setting: ConfigurationDefaultsSetting) {
-  return cn(
-    'min-w-[64px] capitalize',
-    setting.control.kind === 'choice' && setting.control.presentation === 'toggle' && 'min-w-[38px]',
-    setting.id === 'flash-attention' && 'min-w-[38px]',
-    setting.id === 'kv-cache' && 'min-w-[58px]',
-    setting.id === 'speculation-mode' && 'min-w-[72px]',
-    setting.id === 'draft-selection-policy' && 'min-w-[86px]',
-    setting.id === 'incompatible-pairing-behavior' && 'min-w-[104px]',
-    setting.id === 'reasoning-format' && 'min-w-[118px]',
-    setting.id === 'llamacpp-flavor' &&
-      'min-w-[52px] gap-1.5 font-mono normal-case max-[420px]:min-w-[72px] max-[420px]:flex-1'
-  )
-}
-
-function choiceControlClassName(setting: ConfigurationDefaultsSetting) {
-  return cn(
-    setting.id === 'llamacpp-flavor' &&
-      'max-[420px]:flex max-[420px]:h-auto max-[420px]:max-w-full max-[420px]:flex-wrap max-[420px]:gap-1 max-[420px]:rounded-[var(--radius)] max-[420px]:p-1'
-  )
-}
-
-function tomlPreviewValue(setting: ConfigurationDefaultsSetting, value: string) {
-  if (isBooleanToggleChoice(setting)) return toggleTomlValue(value)
-  if (setting.control.kind === 'text') return JSON.stringify(value)
-  if (setting.id === 'memory-margin') return Number(value).toFixed(1)
-  if (setting.id === 'temperature' || setting.id === 'top-p' || setting.id === 'repeat-penalty')
-    return Number(value).toFixed(2)
-  return tomlValue(value)
-}
-
-function categoryOrderIndex(categoryId: ConfigurationDefaultsCategoryId) {
+function categoryOrderIndex(category: ConfigurationDefaultsCategory) {
+  if (category.order !== undefined) return category.order
+  const categoryId = category.id
   const index = defaultsCategoryOrder.indexOf(categoryId)
   return index === -1 ? defaultsCategoryOrder.length : index
-}
-
-function defaultsTomlSectionPath(
-  setting: ConfigurationDefaultsSetting,
-  categoryById: ReadonlyMap<ConfigurationDefaultsCategoryId, ConfigurationDefaultsCategory>
-) {
-  return (
-    setting.tomlSection ??
-    categoryById.get(setting.categoryId)?.tomlSection ??
-    legacyCategoryTomlSections[setting.categoryId] ??
-    null
-  )
 }
 
 function buildDefaultsPreviewLines(
@@ -218,19 +137,20 @@ function buildDefaultsPreviewLines(
   const categoryById = new Map(data.categories.map((category) => [category.id, category] as const))
 
   for (const setting of settings) {
-    if (isSettingDisabled(setting, data.settings, values)) continue
+    if (shouldOmitSettingFromGeneratedToml(setting, data.settings, values)) continue
 
     const value = getSettingValue(setting, values)
     if (value === getSettingBaselineValue(setting)) continue
     if (setting.control.kind === 'text' && value.trim().length === 0) continue
 
+    const placement = defaultSettingTomlPlacement(setting, categoryById)
     const line: DefaultsPreviewLine = {
       kind: 'pair',
       id: setting.id,
-      keyName: setting.tomlKey ?? (setting.control.kind === 'metric' ? setting.id : setting.control.name),
-      value: tomlPreviewValue(setting, value)
+      keyName: placement.key,
+      value: defaultSettingTomlScalar(setting, value)
     }
-    const sectionPath = defaultsTomlSectionPath(setting, categoryById)
+    const sectionPath = placement.sectionPath
     if (!sectionPath) {
       mainLines.push(line)
       continue
@@ -277,6 +197,35 @@ function settingDescription(setting: ConfigurationDefaultsSetting) {
   return setting.description
 }
 
+function settingLabelAccessory(
+  setting: ConfigurationDefaultsSetting,
+  restartRequired: boolean,
+  visibleDetails: readonly string[],
+  disabledDetails: readonly string[]
+) {
+  if (!restartRequired && visibleDetails.length === 0 && disabledDetails.length === 0) return undefined
+
+  return (
+    <div className="flex items-center gap-1.5">
+      {restartRequired ? <RestartRequiredIndicator /> : null}
+      {visibleDetails.length > 0 ? (
+        <SettingInfoTrigger
+          details={visibleDetails}
+          detailsId={`${setting.id}-schema-details`}
+          label={`Setting information: ${setting.label}`}
+        />
+      ) : null}
+      {disabledDetails.length > 0 ? (
+        <SettingInfoTrigger
+          details={disabledDetails}
+          detailsId={`${setting.id}-schema-details-disabled`}
+          label={`Why unavailable: ${setting.label}`}
+        />
+      ) : null}
+    </div>
+  )
+}
+
 function readShowAdvancedSettings() {
   if (typeof window === 'undefined') return false
 
@@ -299,243 +248,15 @@ function writeShowAdvancedSettings(showAdvanced: boolean) {
 }
 
 function sectionSubtitle(category: ConfigurationDefaultsCategory) {
+  if (category.id === 'meshllm') return 'Local process settings'
+  if (category.id === 'telemetry') return 'Opt-in metrics export and queue settings'
+  if (category.id === 'runtime-policy') return 'Runtime reconciliation behavior'
+  if (category.id === 'network') return 'Owner-control listener settings'
+  if (category.id === 'attestation') return 'Certified-build admission requirements'
   if (category.id === 'memory') return 'VRAM accounting and KV cache policy'
   if (category.id === 'speculative-decoding') return 'Speculative draft policy defaults'
   if (category.id === 'request-defaults') return 'Request-time sampling and reasoning defaults'
   return category.help
-}
-
-function RangeControl({
-  disabled = false,
-  setting,
-  value,
-  onChange
-}: {
-  disabled?: boolean
-  setting: ConfigurationDefaultsSetting
-  value: string
-  onChange: (value: string) => void
-}) {
-  if (setting.control.kind !== 'range') return null
-
-  return (
-    <Slider
-      ariaLabel={setting.label}
-      disabled={disabled}
-      max={setting.control.max}
-      min={setting.control.min}
-      name={setting.control.name}
-      onValueChange={onChange}
-      step={setting.control.step}
-      formatValue={(nextValue) => formatRangeValue(setting, nextValue)}
-      unit={rangeUnit(setting, value)}
-      value={value}
-      valueLabelAlign="right"
-      valueLabelPlacement="bottom"
-    />
-  )
-}
-
-function TextControl({
-  disabled = false,
-  setting,
-  value,
-  onChange
-}: {
-  disabled?: boolean
-  setting: ConfigurationDefaultsSetting
-  value: string
-  onChange: (value: string) => void
-}) {
-  if (setting.control.kind !== 'text') return null
-
-  return (
-    <input
-      aria-label={setting.label}
-      className={cn(
-        'ui-control h-[32px] w-full min-w-[220px] rounded-[var(--radius)] border bg-surface px-2.5 font-mono text-[length:var(--density-type-control)] text-foreground outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent',
-        disabled && 'cursor-not-allowed opacity-60'
-      )}
-      disabled={disabled}
-      name={setting.control.name}
-      onChange={(event) => onChange(event.currentTarget.value)}
-      placeholder={setting.control.placeholder}
-      value={value}
-    />
-  )
-}
-
-function SlotCountControl({
-  setting,
-  value,
-  onChange
-}: {
-  setting: ConfigurationDefaultsSetting
-  value: string
-  onChange: (value: string) => void
-}) {
-  if (setting.control.kind !== 'range') return null
-
-  const control = setting.control
-  const selectedSlots = Math.max(control.min, Math.min(control.max, Number(value)))
-  const estimatedGb = (selectedSlots * 0.3).toFixed(1)
-  const selectSlotFromPointer = (event: PointerEvent<HTMLDivElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect()
-    if (bounds.width <= 0) return
-
-    const clampedX = Math.max(0, Math.min(bounds.width, event.clientX - bounds.left))
-    const slotCount = Math.max(control.min, Math.min(control.max, Math.ceil((clampedX / bounds.width) * control.max)))
-
-    onChange(String(slotCount))
-  }
-
-  return (
-    <RadioGroup.Root
-      aria-label={setting.label}
-      className="min-w-0 max-w-full rounded-[6px] border border-border-soft bg-panel-strong px-2.5 py-2 text-[length:var(--density-type-caption)] text-fg-dim"
-      name={control.name}
-      onValueChange={onChange}
-      value={String(selectedSlots)}
-    >
-      <div className="mb-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="text-fg-faint">est. KV @ 16K ctx</span>
-        <span className="font-mono text-fg-dim">
-          {estimatedGb} GB · {selectedSlots} × 0.30 GB
-        </span>
-      </div>
-      <div
-        className="grid w-full min-w-0 touch-none select-none grid-cols-[repeat(16,minmax(0,1fr))] gap-px"
-        data-testid="defaults-slot-meter"
-        onPointerDown={(event) => {
-          event.preventDefault()
-          if (event.currentTarget.setPointerCapture) event.currentTarget.setPointerCapture(event.pointerId)
-          selectSlotFromPointer(event)
-        }}
-        onPointerMove={(event) => {
-          if (
-            event.currentTarget.hasPointerCapture &&
-            !event.currentTarget.hasPointerCapture(event.pointerId) &&
-            event.buttons !== 1
-          )
-            return
-          selectSlotFromPointer(event)
-        }}
-        onPointerUp={(event) => {
-          if (event.currentTarget.hasPointerCapture?.(event.pointerId))
-            event.currentTarget.releasePointerCapture(event.pointerId)
-        }}
-      >
-        {slotOptions.map((slotCount) => (
-          <RadioGroup.Item
-            aria-label={`${slotCount} slot${slotCount === 1 ? '' : 's'}`}
-            className="group flex w-full min-w-0 cursor-pointer appearance-none items-center rounded-[2px] border-0 bg-transparent py-1 outline-none transition-[opacity] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
-            key={slotCount}
-            value={String(slotCount)}
-          >
-            <span
-              className={cn(
-                'h-1.5 w-full rounded-[1px] transition-colors',
-                slotCount <= selectedSlots ? 'bg-accent opacity-100' : 'bg-border-soft opacity-50'
-              )}
-              data-slot-empty={slotCount > selectedSlots ? 'true' : undefined}
-            />
-          </RadioGroup.Item>
-        ))}
-      </div>
-    </RadioGroup.Root>
-  )
-}
-
-function KvPolicyMatrix({ policy }: { policy: string }) {
-  const rows = [
-    { label: '<5GB', detail: 'K F16 · V F16', active: policy === 'auto' || policy === 'quality' },
-    { label: '5–50GB', detail: 'K q8_0 · V q4_0', active: policy === 'auto' || policy === 'balanced' },
-    { label: '≥50GB', detail: 'K q4_0 · V q4_0', active: policy === 'auto' || policy === 'saver' }
-  ]
-
-  return (
-    <fieldset
-      className="mt-2 grid max-w-[420px] grid-cols-3 gap-1.5 font-mono text-[length:var(--density-type-annotation)]"
-      aria-label="KV cache memory tiers"
-    >
-      {rows.map((row) => (
-        <span
-          className={cn(
-            'rounded-[5px] border px-2 py-1.5 text-fg-faint transition-[background-color,border-color,opacity]',
-            row.active
-              ? 'border-[color:color-mix(in_oklab,var(--color-accent)_35%,var(--color-border))] bg-[color:color-mix(in_oklab,var(--color-accent)_6%,var(--color-panel-strong))] opacity-100'
-              : 'border-border-soft bg-panel-strong opacity-50'
-          )}
-          data-kv-tier-active={row.active ? 'true' : 'false'}
-          key={row.label}
-        >
-          <span className="block text-[9.5px] uppercase tracking-[0.05em]">{row.label}</span>
-          <span className="mt-0.5 block text-fg-dim">{row.detail}</span>
-        </span>
-      ))}
-    </fieldset>
-  )
-}
-
-function SettingControl({
-  disabled = false,
-  setting,
-  value,
-  onChange
-}: {
-  disabled?: boolean
-  setting: ConfigurationDefaultsSetting
-  value: string
-  onChange: (value: string) => void
-}) {
-  return (
-    <div
-      aria-disabled={disabled ? 'true' : undefined}
-      className={cn('min-w-0', setting.id === 'kv-cache' && 'flex flex-col items-stretch md:items-end')}
-      data-setting-control-disabled={disabled ? 'true' : undefined}
-    >
-      {setting.control.kind === 'choice' && setting.control.presentation === 'select' ? (
-        <NativeSelect
-          ariaLabel={setting.label}
-          disabled={disabled}
-          name={setting.control.name}
-          onValueChange={onChange}
-          options={setting.control.options}
-          value={value}
-        />
-      ) : null}
-      {setting.control.kind === 'choice' && setting.control.presentation !== 'select' ? (
-        <SegmentedControl
-          ariaLabel={setting.label}
-          className={choiceControlClassName(setting)}
-          disabled={disabled}
-          itemClassName={choiceItemClassName(setting)}
-          name={setting.control.name}
-          onValueChange={onChange}
-          options={setting.control.options}
-          renderOption={
-            setting.id === 'llamacpp-flavor'
-              ? (option, selected) => <LlamaFlavorOption option={option} selected={selected} />
-              : undefined
-          }
-          value={value}
-          variant="pill"
-        />
-      ) : null}
-      {setting.id === 'parallel-slots' ? (
-        <SlotCountControl setting={setting} value={value} onChange={onChange} />
-      ) : (
-        <RangeControl disabled={disabled} setting={setting} value={value} onChange={onChange} />
-      )}
-      <TextControl disabled={disabled} setting={setting} value={value} onChange={onChange} />
-      {setting.control.kind === 'metric' ? (
-        <span className="rounded-[var(--radius)] border border-border-soft bg-surface px-2.5 py-1.5 font-mono text-[length:var(--density-type-control)] text-fg-dim">
-          {formatMetricValue(setting.control)}
-        </span>
-      ) : null}
-      {setting.id === 'kv-cache' ? <KvPolicyMatrix policy={value} /> : null}
-    </div>
-  )
 }
 
 function DefaultsSection({
@@ -551,7 +272,7 @@ function DefaultsSection({
   values: ConfigurationDefaultsValues
   onSettingValueChange: (settingId: string, value: string) => void
 }) {
-  const Icon = categoryIcons[category.id]
+  const Icon = categoryIcons[category.id] ?? Cog
 
   return (
     <SettingsSection
@@ -562,20 +283,48 @@ function DefaultsSection({
     >
       {settings.map((setting, settingIndex) => {
         const value = getSettingValue(setting, values)
-        const disabledInfo = getSettingDependencyStatus(setting, allSettings, values)
+        const evaluatedAvailability = evaluateSettingControlState(setting, allSettings, values)
+        const disabled = !evaluatedAvailability.enabled
+        const disabledReason = evaluatedAvailability.reason
+        const dirty = value !== setting.control.value
+        const availability = {
+          disabled,
+          note: evaluatedAvailability.note,
+          reason: evaluatedAvailability.reason,
+          source: evaluatedAvailability.source,
+          writePolicy: evaluatedAvailability.write_policy
+        }
+        const details = configurationControlDetailBuckets(setting, value, availability)
+        const validation = disabled ? { valid: true } : validateConfigurationSettingValue(setting, value)
+        const descriptionId = `${setting.id}-description`
+        const validationId = `${setting.id}-validation`
+        const ariaDescribedBy = validation.message ? `${descriptionId} ${validationId}` : descriptionId
 
         return (
           <SettingsRow
             className={cn(settingIndex === 0 && 'border-t-0')}
-            disabled={disabledInfo.disabled}
-            disabledReason={disabledInfo.reason}
+            disabled={disabled}
+            disabledReason={disabledReason}
+            dirty={dirty}
+            errorMessage={validation.message}
+            errorMessageId={validationId}
+            hintId={descriptionId}
             key={setting.id}
             label={setting.label}
-            labelAccessory={setting.mutability === 'restart-required' ? <RestartBadge /> : undefined}
+            labelAccessory={settingLabelAccessory(
+              setting,
+              setting.mutability === 'restart-required',
+              details.visibleDetails,
+              details.disabledDetails
+            )}
             hint={settingDescription(setting)}
+            showDisabledReason={false}
           >
-            <SettingControl
-              disabled={disabledInfo.disabled}
+            <ConfigurationDefaultsControl
+              ariaDescribedBy={ariaDescribedBy}
+              availability={availability}
+              disabled={disabled}
+              invalid={!validation.valid}
               setting={setting}
               value={value}
               onChange={(nextValue) => onSettingValueChange(setting.id, nextValue)}
@@ -593,7 +342,14 @@ export function DefaultsTab({
   onSettingValueChange,
   onResetAll,
   configFilePath,
-  readOnlyNotice
+  readOnlyNotice,
+  previewTitle = '[defaults]',
+  previewTip,
+  screenLabel = 'Configuration · defaults',
+  summaryDescription,
+  summaryStatus,
+  summaryTitle = 'Inherited defaults',
+  summaryTitleId = 'defaults-summary-heading'
 }: DefaultsTabProps) {
   const { activeCategoryId, setActiveCategoryId } = useDefaultsSettingsState(data)
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(() => readShowAdvancedSettings())
@@ -630,15 +386,16 @@ export function DefaultsTab({
         .filter((category) => category.count > 0)
         .sort(
           (left, right) =>
-            categoryOrderIndex(left.id) - categoryOrderIndex(right.id) || left.originalIndex - right.originalIndex
+            categoryOrderIndex(left) - categoryOrderIndex(right) || left.originalIndex - right.originalIndex
         )
         .map((category) => {
           const Icon = categoryIcons[category.id]
+          const CategoryIcon = Icon ?? Cog
           const { originalIndex: _originalIndex, ...resolvedCategory } = category
 
           return {
             ...resolvedCategory,
-            icon: <Icon aria-hidden="true" className={configurationNavigationIconClassName} strokeWidth={1.7} />
+            icon: <CategoryIcon aria-hidden="true" className={configurationNavigationIconClassName} strokeWidth={1.7} />
           }
         }),
     [data.categories, settingsByCategory]
@@ -659,12 +416,9 @@ export function DefaultsTab({
   }
 
   return (
-    <section
-      aria-labelledby="defaults-summary-heading"
-      className="space-y-[14px]"
-      data-screen-label="Configuration · defaults"
-    >
+    <section aria-labelledby={summaryTitleId} className="space-y-[14px]" data-screen-label={screenLabel}>
       <SettingsSummaryBanner
+        titleId={summaryTitleId}
         action={
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -692,22 +446,24 @@ export function DefaultsTab({
           </div>
         }
         description={
-          <>
-            These values flow into every{' '}
-            <span className="rounded border border-border-soft bg-surface px-1 font-mono text-foreground">
-              [defaults.*]
-            </span>{' '}
-            section, and every{' '}
-            <span className="rounded border border-border-soft bg-surface px-1 font-mono text-foreground">
-              [[models]]
-            </span>{' '}
-            entry can override them with matching nested model sections. Per-placement overrides surface as{' '}
-            <span className="rounded border border-border-soft bg-surface px-1 font-mono text-accent">OVERRIDE</span>{' '}
-            badges in Model Deployment.
-          </>
+          summaryDescription ?? (
+            <>
+              These values flow into every{' '}
+              <span className="rounded border border-border-soft bg-surface px-1 font-mono text-foreground">
+                [defaults.*]
+              </span>{' '}
+              section, and every{' '}
+              <span className="rounded border border-border-soft bg-surface px-1 font-mono text-foreground">
+                [[models]]
+              </span>{' '}
+              entry can override them with matching nested model sections. Per-placement overrides surface as{' '}
+              <span className="rounded border border-border-soft bg-surface px-1 font-mono text-accent">OVERRIDE</span>{' '}
+              badges in Model Deployment.
+            </>
+          )
         }
-        status={changedCount === 0 ? 'all upstream' : `${changedCount} modified`}
-        title="Inherited defaults"
+        status={summaryStatus ?? (changedCount === 0 ? 'all upstream' : `${changedCount} modified`)}
+        title={summaryTitle}
       />
 
       {readOnlyNotice}
@@ -718,10 +474,10 @@ export function DefaultsTab({
           categories={categories}
           footer={
             <span className="inline-flex flex-col gap-1 whitespace-nowrap leading-none">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
-                Configuration Path
+              <span className="type-label text-fg-faint">Configuration Path</span>
+              <span className="font-mono text-[length:var(--density-type-caption-lg)] text-fg-dim">
+                {configFilePath ?? '~/.mesh-llm/config.toml'}
               </span>
-              <span className="font-mono text-fg-dim">{configFilePath ?? '~/.mesh-llm/config.toml'}</span>
             </span>
           }
           onSelect={selectCategory}
@@ -742,13 +498,15 @@ export function DefaultsTab({
 
         <div className="hidden min-w-0 xl:block">
           <SettingsPreviewRail
-            title="[defaults]"
+            title={previewTitle}
             code={renderDefaultsPreview(previewLines)}
             tip={
-              <>
-                Adjust placements in <span className="text-foreground">Model Deployment</span> to override these for a
-                single model.
-              </>
+              previewTip ?? (
+                <>
+                  Adjust placements in <span className="text-foreground">Model Deployment</span> to override these for a
+                  single model.
+                </>
+              )
             }
           />
         </div>

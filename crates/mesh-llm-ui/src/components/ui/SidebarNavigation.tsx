@@ -57,9 +57,7 @@ export function SidebarNavigation<TId extends string = string>({
 
   return (
     <aside className={cn('min-w-0', className)}>
-      {eyebrow ? (
-        <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-fg-faint">{eyebrow}</p>
-      ) : null}
+      {eyebrow ? <p className="px-2 pb-1.5 type-label text-fg-faint">{eyebrow}</p> : null}
       <nav aria-label={ariaLabel} className={cn('space-y-0.5', navClassName)}>
         {navigationSections.map((section, sectionIndex) => (
           <div key={section.id}>
@@ -126,13 +124,11 @@ export function SidebarNavigation<TId extends string = string>({
                             {item.label}
                           </span>
                           {item.summary ? (
-                            <span className="mt-1 block line-clamp-2 text-[length:var(--density-type-caption)] leading-snug text-fg-faint">
-                              {item.summary}
-                            </span>
+                            <span className="mt-1 block line-clamp-2 type-caption text-fg-dim">{item.summary}</span>
                           ) : null}
                         </span>
                         {item.count !== undefined ? (
-                          <span className="shrink-0 font-mono text-[length:var(--density-type-annotation)] text-fg-faint">
+                          <span className="shrink-0 font-mono text-[length:var(--density-type-caption-lg)] text-fg-dim">
                             {item.count}
                           </span>
                         ) : null}
@@ -151,9 +147,7 @@ export function SidebarNavigation<TId extends string = string>({
         ))}
       </nav>
       {footer ? (
-        <div className="mt-3 border-t border-border-soft px-2 pb-1 pt-3 text-[length:var(--density-type-caption)] leading-relaxed text-fg-faint">
-          {footer}
-        </div>
+        <div className="mt-3 border-t border-border-soft px-2 pb-1 pt-3 type-caption text-fg-dim">{footer}</div>
       ) : null}
     </aside>
   )

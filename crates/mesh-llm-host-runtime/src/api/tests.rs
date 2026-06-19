@@ -24,6 +24,12 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
 mod apply_config_diagnostics;
+mod apply_config_validation_authority;
+mod runtime_config;
+mod runtime_config_validation_authority;
+mod runtime_control_state;
+mod runtime_control_state_builder;
+mod runtime_control_state_options;
 
 fn qwen_coder_remote_catalog_entry() -> crate::models::remote_catalog::CatalogEntry {
     use crate::models::remote_catalog::{

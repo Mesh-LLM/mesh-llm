@@ -6,7 +6,7 @@ parallel = 2
 
 [owner_control]
 bind = "127.0.0.1:7447"
-advertise_addr = "203.0.113.10:18443"
+advertise_addr = "203.0.113.10:7447"
 
 [defaults.model_fit]
 ctx_size = 8192

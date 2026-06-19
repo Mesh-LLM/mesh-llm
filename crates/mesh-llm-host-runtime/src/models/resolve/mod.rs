@@ -267,6 +267,12 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
         );
     }
 
+    let installed_path = find_model_path(&raw);
+    if installed_path.exists() {
+        record_resolved_model_usage(&installed_path, Some(raw.as_ref()));
+        return Ok(installed_path);
+    }
+
     let (path, _) = download_model_ref_with_progress_details(&raw, progress)
         .await
         .with_context(|| format!("Resolve model spec {raw}"))?;

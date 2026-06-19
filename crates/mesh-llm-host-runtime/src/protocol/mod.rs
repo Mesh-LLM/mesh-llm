@@ -740,7 +740,7 @@ pub(crate) mod tests {
         NodeConfigSnapshot {
             version: 1,
             gpu: Some(NodeGpuConfig {
-                assignment: crate::proto::node::GpuAssignment::Auto as i32,
+                assignment: crate::proto::node::GpuAssignment::Pinned as i32,
             }),
             models: vec![NodeModelEntry {
                 model: "Qwen3-8B".to_string(),
@@ -1784,7 +1784,7 @@ alias = "model-alias"
 
     fn assert_mesh_config_from_proto(config: &crate::plugin::MeshConfig) {
         assert_eq!(config.version, Some(1));
-        assert_eq!(config.gpu.assignment, crate::plugin::GpuAssignment::Auto);
+        assert_eq!(config.gpu.assignment, crate::plugin::GpuAssignment::Pinned);
         assert_eq!(config.models.len(), 1);
         assert_eq!(config.models[0].model, "Qwen3-8B");
         assert_eq!(config.models[0].mmproj.as_deref(), Some("mmproj-cut"));
@@ -1801,7 +1801,7 @@ alias = "model-alias"
         assert_eq!(roundtripped.version, snapshot.version);
         assert_eq!(
             roundtripped.gpu.as_ref().map(|g| g.assignment),
-            Some(crate::proto::node::GpuAssignment::Auto as i32)
+            Some(crate::proto::node::GpuAssignment::Pinned as i32)
         );
         assert_eq!(roundtripped.models.len(), snapshot.models.len());
         assert_eq!(roundtripped.models[0].model, snapshot.models[0].model);
@@ -2018,7 +2018,7 @@ alias = "model-alias"
         let config = crate::plugin::MeshConfig {
             version: Some(1),
             gpu: GpuConfig {
-                assignment: GpuAssignment::Auto,
+                assignment: GpuAssignment::Pinned,
                 parallel: None,
             },
             mesh_requirements: Default::default(),

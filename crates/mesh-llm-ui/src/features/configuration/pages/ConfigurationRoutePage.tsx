@@ -9,6 +9,8 @@ import { useBooleanFeatureFlag } from '@/lib/feature-flags'
 
 function configurationTabFromParams(params: object) {
   if (!('configurationTab' in params) || typeof params.configurationTab !== 'string') return undefined
+  if (params.configurationTab === 'defaults') return 'general'
+  if (params.configurationTab === 'integrations') return 'plugins'
   return params.configurationTab
 }
 
@@ -43,12 +45,12 @@ export function ConfigurationRoutePage() {
   if (
     activeTab === undefined ||
     !isConfigurationTabId(activeTab, {
-      integrationsEnabled,
+      pluginsEnabled: integrationsEnabled,
       signingAttestationEnabled,
       wakePolicyEnabled: wakePolicyConfigurationEnabled
     })
   ) {
-    return <Navigate replace to="/configuration/$configurationTab" params={{ configurationTab: 'defaults' }} />
+    return <Navigate replace to="/configuration/$configurationTab" params={{ configurationTab: 'general' }} />
   }
 
   return <ConfigurationPageContent activeTab={activeTab} onTabChange={navigateToTab} />

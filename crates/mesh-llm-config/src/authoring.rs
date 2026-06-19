@@ -1,9 +1,12 @@
 use crate::{
-    ConfigAliasMode, ConfigApplyMode, ConfigConstraint, ConfigControlSurface, ConfigPath,
-    ConfigPathAlias, ConfigRestartScope, ConfigSchema, ConfigSettingOwner, ConfigSettingSchema,
-    ConfigSupportState, ConfigValueSchema, ConfigVisibility, GpuAssignment, HardwareConfig,
-    MeshConfig, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, MultimodalConfig,
-    PluginConfigEntry, RequestDefaultsConfig, ThroughputConfig,
+    ConfigAliasMode, ConfigApplyMode, ConfigConditionalDisable, ConfigConflictRule,
+    ConfigConstraint, ConfigControlAvailability, ConfigControlAvailabilitySource,
+    ConfigControlBehavior, ConfigControlCondition, ConfigControlSurface, ConfigDisabledWritePolicy,
+    ConfigNumericControl, ConfigOptionsSource, ConfigPath, ConfigPathAlias,
+    ConfigPresentationMetadata, ConfigRestartScope, ConfigSchema, ConfigSettingOwner,
+    ConfigSettingSchema, ConfigSupportState, ConfigTextFormat, ConfigValueSchema, ConfigVisibility,
+    GpuAssignment, HardwareConfig, MeshConfig, ModelConfigDefaults, ModelConfigEntry,
+    ModelFitConfig, MultimodalConfig, PluginConfigEntry, RequestDefaultsConfig, ThroughputConfig,
 };
 use anyhow::{Result, bail};
 use mesh_llm_types::runtime::ModelRuntimeKind;
@@ -70,6 +73,8 @@ impl ConfigSettingSchemaBuilder {
                 visibility: ConfigVisibility::User,
                 constraints: Vec::new(),
                 description: None,
+                presentation: None,
+                control_behavior: None,
             },
         }
     }
@@ -109,6 +114,167 @@ impl ConfigSettingSchemaBuilder {
         self
     }
 
+    pub fn presentation(&mut self, presentation: ConfigPresentationMetadata) -> &mut Self {
+        self.setting.presentation = Some(presentation);
+        self
+    }
+
+    pub fn control_behavior(&mut self, control_behavior: ConfigControlBehavior) -> &mut Self {
+        self.setting.control_behavior = Some(control_behavior);
+        self
+    }
+
+    pub fn control_numeric(&mut self, numeric: ConfigNumericControl) -> &mut Self {
+        self.control_behavior_mut().numeric = Some(numeric);
+        self
+    }
+
+    pub fn control_numeric_min(&mut self, min: f64) -> &mut Self {
+        self.control_numeric_mut().min = Some(min);
+        self
+    }
+
+    pub fn control_numeric_max(&mut self, max: f64) -> &mut Self {
+        self.control_numeric_mut().max = Some(max);
+        self
+    }
+
+    pub fn control_numeric_step(&mut self, step: f64) -> &mut Self {
+        self.control_numeric_mut().step = Some(step);
+        self
+    }
+
+    pub fn control_numeric_soft_min(&mut self, soft_min: f64) -> &mut Self {
+        self.control_numeric_mut().soft_min = Some(soft_min);
+        self
+    }
+
+    pub fn control_numeric_soft_max(&mut self, soft_max: f64) -> &mut Self {
+        self.control_numeric_mut().soft_max = Some(soft_max);
+        self
+    }
+
+    pub fn control_numeric_unit(&mut self, unit: impl Into<String>) -> &mut Self {
+        self.control_numeric_mut().unit = Some(unit.into());
+        self
+    }
+
+    pub fn control_text_format(&mut self, text_format: ConfigTextFormat) -> &mut Self {
+        self.control_behavior_mut().text_format = Some(text_format);
+        self
+    }
+
+    pub fn control_options_source(&mut self, options_source: ConfigOptionsSource) -> &mut Self {
+        self.control_behavior_mut().options_source = Some(options_source);
+        self
+    }
+
+    pub fn control_options_static(&mut self) -> &mut Self {
+        self.control_options_source(ConfigOptionsSource::Static)
+    }
+
+    pub fn control_options_runtime_gpus(&mut self) -> &mut Self {
+        self.control_options_source(ConfigOptionsSource::RuntimeGpus)
+    }
+
+    pub fn control_availability(&mut self, availability: ConfigControlAvailability) -> &mut Self {
+        self.control_behavior_mut().availability = Some(availability);
+        self
+    }
+
+    pub fn control_availability_enabled(&mut self, enabled: bool) -> &mut Self {
+        self.control_availability_mut().enabled = enabled;
+        self
+    }
+
+    pub fn control_availability_source(
+        &mut self,
+        source: ConfigControlAvailabilitySource,
+    ) -> &mut Self {
+        self.control_availability_mut().source = source;
+        self
+    }
+
+    pub fn control_availability_reason(&mut self, reason: impl Into<String>) -> &mut Self {
+        self.control_availability_mut().reason = Some(reason.into());
+        self
+    }
+
+    pub fn control_availability_note(&mut self, note: impl Into<String>) -> &mut Self {
+        self.control_availability_mut().note = Some(note.into());
+        self
+    }
+
+    pub fn control_enable_when(&mut self, condition: ConfigControlCondition) -> &mut Self {
+        self.control_behavior_mut().enable_when.push(condition);
+        self
+    }
+
+    pub fn control_disable_when(&mut self, disable: ConfigConditionalDisable) -> &mut Self {
+        self.control_behavior_mut().disable_when.push(disable);
+        self
+    }
+
+    pub fn control_conflict(&mut self, conflict: ConfigConflictRule) -> &mut Self {
+        self.control_behavior_mut().conflicts.push(conflict);
+        self
+    }
+
+    pub fn control_write_policy(&mut self, policy: ConfigDisabledWritePolicy) -> &mut Self {
+        self.control_behavior_mut().write_policy = Some(policy);
+        self
+    }
+
+    pub fn presentation_label(&mut self, label: impl Into<String>) -> &mut Self {
+        self.presentation_mut().label = Some(label.into());
+        self
+    }
+
+    pub fn presentation_help(&mut self, help: impl Into<String>) -> &mut Self {
+        self.presentation_mut().help = Some(help.into());
+        self
+    }
+
+    pub fn presentation_category(
+        &mut self,
+        id: impl Into<String>,
+        label: impl Into<String>,
+        summary: impl Into<String>,
+        order: u32,
+    ) -> &mut Self {
+        let presentation = self.presentation_mut();
+        presentation.category_id = Some(id.into());
+        presentation.category_label = Some(label.into());
+        presentation.category_summary = Some(summary.into());
+        presentation.category_order = Some(order);
+        self
+    }
+
+    pub fn presentation_order(&mut self, order: u32) -> &mut Self {
+        self.presentation_mut().setting_order = Some(order);
+        self
+    }
+
+    pub fn presentation_unit(&mut self, unit: impl Into<String>) -> &mut Self {
+        self.presentation_mut().unit = Some(unit.into());
+        self
+    }
+
+    pub fn presentation_placeholder(&mut self, placeholder: impl Into<String>) -> &mut Self {
+        self.presentation_mut().placeholder = Some(placeholder.into());
+        self
+    }
+
+    pub fn presentation_control_hint(&mut self, control_hint: impl Into<String>) -> &mut Self {
+        self.presentation_mut().control_hint = Some(control_hint.into());
+        self
+    }
+
+    pub fn presentation_renderer_id(&mut self, renderer_id: impl Into<String>) -> &mut Self {
+        self.presentation_mut().renderer_id = Some(renderer_id.into());
+        self
+    }
+
     pub fn alias(&mut self, alias: ConfigPathAlias) -> &mut Self {
         self.setting.alias_policy.mode = ConfigAliasMode::CanonicalWithLegacyAliases;
         self.setting.alias_policy.aliases.push(alias);
@@ -122,6 +288,35 @@ impl ConfigSettingSchemaBuilder {
 
     pub fn build(self) -> ConfigSettingSchema {
         self.setting
+    }
+
+    fn presentation_mut(&mut self) -> &mut ConfigPresentationMetadata {
+        self.setting
+            .presentation
+            .get_or_insert_with(ConfigPresentationMetadata::default)
+    }
+
+    fn control_behavior_mut(&mut self) -> &mut ConfigControlBehavior {
+        self.setting
+            .control_behavior
+            .get_or_insert_with(ConfigControlBehavior::default)
+    }
+
+    fn control_numeric_mut(&mut self) -> &mut ConfigNumericControl {
+        self.control_behavior_mut()
+            .numeric
+            .get_or_insert_with(ConfigNumericControl::default)
+    }
+
+    fn control_availability_mut(&mut self) -> &mut ConfigControlAvailability {
+        self.control_behavior_mut()
+            .availability
+            .get_or_insert(ConfigControlAvailability {
+                enabled: true,
+                reason: None,
+                note: None,
+                source: ConfigControlAvailabilitySource::Static,
+            })
     }
 }
 
@@ -523,7 +718,11 @@ fn normalize_non_empty(value: &str, label: &str) -> Result<String> {
 #[cfg(test)]
 mod schema_tests {
     use super::*;
-    use crate::{ConfigPathAliasKind, ConfigVisibility};
+    use crate::{
+        ConfigAliasPolicy, ConfigConditionOperator, ConfigConditionValue, ConfigPathAliasKind,
+        ConfigVisibility,
+    };
+    use toml::Value;
 
     #[test]
     fn schema_setting_builder_populates_control_surface_metadata() {
@@ -577,5 +776,230 @@ mod schema_tests {
 
         assert_eq!(built.settings.len(), 1);
         assert_eq!(built.settings[0].path.render(), "telemetry.endpoint");
+    }
+
+    #[test]
+    fn schema_setting_builder_control_behavior_matches_hand_constructed_json() {
+        let enable_condition = ConfigControlCondition {
+            path: ConfigPath::from_fields(["gpu", "assignment"]),
+            operator: ConfigConditionOperator::Equals,
+            values: vec![ConfigConditionValue::String("pinned".to_string())],
+        };
+        let disable_condition = ConfigConditionalDisable {
+            condition: ConfigControlCondition {
+                path: ConfigPath::from_fields(["owner_control", "bind"]),
+                operator: ConfigConditionOperator::Absent,
+                values: Vec::new(),
+            },
+            reason: "Owner control bind is required".to_string(),
+            note: Some("Preserve the existing value until bind is configured".to_string()),
+            write_policy: ConfigDisabledWritePolicy::OmitWhenDisabled,
+        };
+        let conflict = ConfigConflictRule {
+            group: "gpu-selection".to_string(),
+            condition: ConfigControlCondition {
+                path: ConfigPath::from_fields(["defaults", "hardware", "gpu_id"]),
+                operator: ConfigConditionOperator::Present,
+                values: Vec::new(),
+            },
+            reason: "Choose either a runtime GPU selector or a pinned GPU id".to_string(),
+            preferred_path: Some(ConfigPath::from_fields(["gpu", "assignment"])),
+        };
+        let expected_behavior = ConfigControlBehavior {
+            numeric: Some(ConfigNumericControl {
+                min: Some(1.0),
+                max: Some(8.0),
+                step: Some(1.0),
+                soft_min: Some(1.0),
+                soft_max: Some(4.0),
+                unit: Some("gpus".to_string()),
+            }),
+            text_format: Some(ConfigTextFormat::Path),
+            options_source: Some(ConfigOptionsSource::RuntimeGpus),
+            availability: Some(ConfigControlAvailability {
+                enabled: false,
+                reason: Some("GPU inventory is unavailable".to_string()),
+                note: Some(
+                    "The current value is preserved until runtime inventory returns".to_string(),
+                ),
+                source: ConfigControlAvailabilitySource::Runtime,
+            }),
+            enable_when: vec![enable_condition.clone()],
+            disable_when: vec![disable_condition.clone()],
+            conflicts: vec![conflict.clone()],
+            write_policy: Some(ConfigDisabledWritePolicy::RejectWhenDisabled),
+        };
+        let hand_constructed = ConfigSettingSchema {
+            path: ConfigPath::from_fields(["gpu", "parallel"]),
+            alias_policy: ConfigAliasPolicy::default(),
+            owner: ConfigSettingOwner::BuiltIn,
+            value_schema: ConfigValueSchema::Integer,
+            support: ConfigSupportState::Supported,
+            control_surfaces: Vec::new(),
+            apply_mode: ConfigApplyMode::StaticOnLoad,
+            restart_scope: ConfigRestartScope::None,
+            visibility: ConfigVisibility::User,
+            constraints: Vec::new(),
+            description: None,
+            presentation: None,
+            control_behavior: Some(expected_behavior.clone()),
+        };
+        let mut builder = ConfigSettingSchemaBuilder::new(
+            ConfigPath::from_fields(["gpu", "parallel"]),
+            ConfigValueSchema::Integer,
+        );
+        builder
+            .control_numeric_min(1.0)
+            .control_numeric_max(8.0)
+            .control_numeric_step(1.0)
+            .control_numeric_soft_min(1.0)
+            .control_numeric_soft_max(4.0)
+            .control_numeric_unit("gpus")
+            .control_text_format(ConfigTextFormat::Path)
+            .control_options_runtime_gpus()
+            .control_availability_enabled(false)
+            .control_availability_source(ConfigControlAvailabilitySource::Runtime)
+            .control_availability_reason("GPU inventory is unavailable")
+            .control_availability_note(
+                "The current value is preserved until runtime inventory returns",
+            )
+            .control_enable_when(enable_condition)
+            .control_disable_when(disable_condition)
+            .control_conflict(conflict)
+            .control_write_policy(ConfigDisabledWritePolicy::RejectWhenDisabled);
+
+        let built = builder.build();
+
+        assert_eq!(built.control_behavior, Some(expected_behavior));
+        assert_eq!(
+            Value::try_from(built).expect("built setting should serialize"),
+            Value::try_from(hand_constructed).expect("hand-constructed setting should serialize")
+        );
+    }
+
+    #[test]
+    fn schema_setting_builder_runtime_gpu_option_helper_sets_runtime_source() {
+        let mut setting = ConfigSettingSchemaBuilder::new(
+            ConfigPath::from_fields(["defaults", "hardware", "device"]),
+            ConfigValueSchema::String,
+        );
+        setting.control_options_runtime_gpus();
+
+        let built = setting.build();
+
+        assert_eq!(
+            built
+                .control_behavior
+                .and_then(|behavior| behavior.options_source),
+            Some(ConfigOptionsSource::RuntimeGpus)
+        );
+    }
+
+    #[test]
+    fn schema_setting_builder_no_helper_serialization_omits_control_behavior() {
+        let setting = ConfigSettingSchemaBuilder::new(
+            ConfigPath::from_fields(["telemetry", "endpoint"]),
+            ConfigValueSchema::String,
+        )
+        .build();
+
+        let serialized = Value::try_from(setting).expect("setting should serialize");
+        let table = serialized
+            .as_table()
+            .expect("setting should serialize to a table");
+
+        assert!(!table.contains_key("control_behavior"));
+    }
+
+    #[test]
+    fn schema_setting_builder_direct_control_behavior_can_be_extended_deterministically() {
+        let mut setting = ConfigSettingSchemaBuilder::new(
+            ConfigPath::from_fields(["defaults", "request_defaults", "temperature"]),
+            ConfigValueSchema::Float,
+        );
+        setting
+            .control_behavior(ConfigControlBehavior {
+                numeric: None,
+                text_format: Some(ConfigTextFormat::Plain),
+                options_source: None,
+                availability: None,
+                enable_when: Vec::new(),
+                disable_when: Vec::new(),
+                conflicts: Vec::new(),
+                write_policy: None,
+            })
+            .control_numeric(ConfigNumericControl {
+                min: Some(0.0),
+                max: Some(2.0),
+                step: Some(0.1),
+                soft_min: None,
+                soft_max: None,
+                unit: None,
+            })
+            .control_options_static();
+
+        let built = setting.build();
+        let behavior = built
+            .control_behavior
+            .expect("control behavior should be present");
+
+        assert_eq!(behavior.text_format, Some(ConfigTextFormat::Plain));
+        assert_eq!(
+            behavior.numeric,
+            Some(ConfigNumericControl {
+                min: Some(0.0),
+                max: Some(2.0),
+                step: Some(0.1),
+                soft_min: None,
+                soft_max: None,
+                unit: None,
+            })
+        );
+        assert_eq!(behavior.options_source, Some(ConfigOptionsSource::Static));
+    }
+
+    #[test]
+    fn schema_setting_builder_static_availability_and_dependency_disable_are_deterministic() {
+        let dependency_disable = ConfigConditionalDisable {
+            condition: ConfigControlCondition {
+                path: ConfigPath::from_fields(["owner_control", "bind"]),
+                operator: ConfigConditionOperator::Absent,
+                values: Vec::new(),
+            },
+            reason: "Owner control bind is required".to_string(),
+            note: None,
+            write_policy: ConfigDisabledWritePolicy::OmitWhenDisabled,
+        };
+        let mut setting = ConfigSettingSchemaBuilder::new(
+            ConfigPath::from_fields(["owner_control", "advertise_addr"]),
+            ConfigValueSchema::SocketAddr,
+        );
+        setting
+            .control_availability_enabled(false)
+            .control_availability_source(ConfigControlAvailabilitySource::Static)
+            .control_availability_reason("Owner control is disabled for this build")
+            .control_disable_when(dependency_disable.clone());
+
+        let built = setting.build();
+        let behavior = built
+            .control_behavior
+            .as_ref()
+            .expect("control behavior should be present");
+        let availability = behavior
+            .availability
+            .as_ref()
+            .expect("availability metadata should be present");
+
+        assert!(!availability.enabled);
+        assert_eq!(availability.source, ConfigControlAvailabilitySource::Static);
+        assert_eq!(
+            built.default_disabled_write_policy(Some(availability.source)),
+            Some(ConfigDisabledWritePolicy::PreserveExisting)
+        );
+        assert_eq!(behavior.disable_when, vec![dependency_disable]);
+        assert_eq!(
+            behavior.disable_when[0].write_policy,
+            ConfigDisabledWritePolicy::OmitWhenDisabled
+        );
     }
 }

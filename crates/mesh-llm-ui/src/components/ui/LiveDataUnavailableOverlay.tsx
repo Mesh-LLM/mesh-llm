@@ -7,6 +7,7 @@ type LiveDataUnavailableOverlayProps = {
   productionDescription: string
   title: string
   debugTitle?: string
+  statusLabel?: string
   onRetry: () => void
   onSwitchToTestData?: () => void
 }
@@ -18,6 +19,7 @@ export function LiveDataUnavailableOverlay({
   onRetry,
   onSwitchToTestData,
   productionDescription,
+  statusLabel = 'Live API unavailable',
   title
 }: LiveDataUnavailableOverlayProps) {
   const isDebug = env.isDevelopment
@@ -37,7 +39,7 @@ export function LiveDataUnavailableOverlay({
               aria-hidden="true"
               className="size-1.5 rounded-full bg-bad shadow-[0_0_10px_color-mix(in_oklab,var(--color-bad)_42%,transparent)]"
             />
-            Live API unavailable
+            {statusLabel}
           </div>
           <h2 className="mt-3 type-panel-title text-foreground">{isDebug && debugTitle ? debugTitle : title}</h2>
           <p className="mt-2 text-[length:var(--density-type-caption-lg)] leading-relaxed text-fg-dim">

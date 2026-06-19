@@ -21,6 +21,8 @@ type CtxSliderProps = {
   controlTabIndex?: number
 }
 
+const THUMB_SIZE_PX = 13
+
 export function CtxSlider({ value, onChange, maxCtx, invalid = false, controlTabIndex }: CtxSliderProps) {
   const trackAlertRef = useRef<HTMLSpanElement>(null)
   const fillAlertRef = useRef<HTMLSpanElement>(null)
@@ -113,6 +115,9 @@ export function CtxSlider({ value, onChange, maxCtx, invalid = false, controlTab
   const displayCtx = dragging ? draftCtx : value
 
   const valuePct = ctxToPct(displayCtx)
+  // Radix nudges thumbs inward near the bounds; offset the visual knob back onto the log-scale value.
+  const thumbInBoundsOffsetPx = (THUMB_SIZE_PX / 2) * (1 - valuePct / 50)
+  const thumbTransform = `translateX(${-thumbInBoundsOffsetPx}px)${dragging ? ' scale(1.1)' : ''}`
   const dangerStartPct = ctxToPct(maxCtx)
   const showDanger = maxCtx < CTX_MAX
   const overAllocated = invalid || displayCtx > maxCtx
@@ -154,7 +159,7 @@ export function CtxSlider({ value, onChange, maxCtx, invalid = false, controlTab
       </div>
       <SliderPrimitive.Root
         aria-invalid={overAllocated}
-        className="relative flex h-6 cursor-pointer touch-none select-none items-center rounded-[var(--radius)] outline-none transition-[box-shadow] duration-150 focus-visible:shadow-[var(--shadow-focus-accent)] focus-visible:[&_[data-ctx-slider-track]]:border-accent"
+        className="relative flex h-6 cursor-pointer touch-none select-none items-center rounded-[var(--radius)] outline-none transition-[box-shadow] duration-150 focus-visible:shadow-[inset_0_0_0_2px_var(--color-accent)] focus-visible:[&_[data-ctx-slider-track]]:border-accent"
         max={100}
         min={0}
         onPointerDown={() => {
@@ -208,7 +213,9 @@ export function CtxSlider({ value, onChange, maxCtx, invalid = false, controlTab
           aria-valuemin={CTX_MIN}
           aria-valuenow={normalizeCtx(displayCtx)}
           aria-valuetext={valueText}
-          className={`block size-[13px] overflow-hidden rounded-full border border-panel bg-accent shadow-[var(--shadow-slider-thumb)] outline-none transition-transform duration-150 ${dragging ? 'scale-110' : ''}`}
+          className="relative z-10 block size-[13px] overflow-hidden rounded-full border border-panel bg-accent shadow-[var(--shadow-slider-thumb)] outline-none transition-transform duration-150"
+          data-ctx-slider-thumb
+          style={{ transform: thumbTransform }}
           tabIndex={controlTabIndex}
         >
           <span ref={knobAlertRef} aria-hidden="true" className="absolute inset-0 rounded-full bg-bad opacity-0" />

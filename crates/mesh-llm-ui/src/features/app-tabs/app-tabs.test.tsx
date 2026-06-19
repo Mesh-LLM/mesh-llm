@@ -1857,7 +1857,7 @@ describe('app surfaces', () => {
     expect(initialToml).toContain('model = "GLM-4.7-Flash-Q4_K_M"')
     expect(initialToml).not.toContain('perseus.local')
     expect(initialToml).not.toContain('triton.lab')
-    expect(initialToml).toContain('device = "cuda:0"')
+    expect(initialToml).toContain('gpu_id = "cuda:0"')
     expect(initialToml).not.toContain('gpu_index =')
     expect(initialToml).not.toContain('[node]')
 

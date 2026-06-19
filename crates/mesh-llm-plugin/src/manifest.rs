@@ -3,6 +3,15 @@ use anyhow::{Context, Result, anyhow};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+mod control_behavior;
+
+use self::control_behavior::PackagedPluginControlBehavior;
+
+#[cfg(test)]
+use self::control_behavior::{
+    PackagedPluginDisabledWritePolicy, PackagedPluginOptionsSource, PackagedPluginTextFormat,
+};
+
 #[derive(Clone, Debug)]
 pub enum ManifestEntry {
     Capability(String),
@@ -98,6 +107,8 @@ pub fn config_setting(
             restart_scope: proto::PluginConfigRestartScope::None as i32,
             visibility: proto::PluginConfigVisibility::User as i32,
             description: None,
+            presentation: None,
+            control_behavior: None,
         },
     }
 }
@@ -240,7 +251,7 @@ fn value_schema(kind: proto::PluginConfigValueKind) -> proto::PluginConfigValueS
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 struct PackagedPluginManifest {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     config_schema: Option<PackagedPluginConfigSchema>,
@@ -260,7 +271,7 @@ impl TryFrom<&proto::PluginManifest> for PackagedPluginManifest {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 struct PackagedPluginConfigSchema {
     plugin_name: String,
     schema_version: u32,
@@ -289,7 +300,7 @@ impl TryFrom<&proto::PluginConfigSchemaManifest> for PackagedPluginConfigSchema 
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 struct PackagedPluginSetting {
     key: String,
     value_schema: PackagedPluginValueSchema,
@@ -304,6 +315,10 @@ struct PackagedPluginSetting {
     visibility: PackagedPluginVisibility,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    presentation: Option<PackagedPluginPresentation>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    control_behavior: Option<PackagedPluginControlBehavior>,
 }
 
 impl TryFrom<&proto::PluginConfigSettingManifest> for PackagedPluginSetting {
@@ -366,7 +381,66 @@ impl TryFrom<&proto::PluginConfigSettingManifest> for PackagedPluginSetting {
                 },
             )?,
             description: value.description.clone(),
+            presentation: value
+                .presentation
+                .as_ref()
+                .map(PackagedPluginPresentation::from),
+            control_behavior: value
+                .control_behavior
+                .as_ref()
+                .map(PackagedPluginControlBehavior::try_from)
+                .transpose()
+                .with_context(|| {
+                    format!(
+                        "plugin config setting `{}` has invalid control_behavior",
+                        value.key
+                    )
+                })?,
         })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+struct PackagedPluginPresentation {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    help: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    category_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    category_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    category_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    category_order: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    setting_order: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    placeholder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    control_hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    renderer_id: Option<String>,
+}
+
+impl From<&proto::PluginConfigPresentationManifest> for PackagedPluginPresentation {
+    fn from(value: &proto::PluginConfigPresentationManifest) -> Self {
+        Self {
+            label: value.label.clone(),
+            help: value.help.clone(),
+            category_id: value.category_id.clone(),
+            category_label: value.category_label.clone(),
+            category_summary: value.category_summary.clone(),
+            category_order: value.category_order,
+            setting_order: value.setting_order,
+            unit: value.unit.clone(),
+            placeholder: value.placeholder.clone(),
+            control_hint: value.control_hint.clone(),
+            renderer_id: value.renderer_id.clone(),
+        }
     }
 }
 
@@ -715,6 +789,62 @@ impl PluginConfigSettingBuilder {
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.inner.description = Some(description.into());
         self
+    }
+
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.presentation_mut().label = Some(label.into());
+        self
+    }
+
+    pub fn help(mut self, help: impl Into<String>) -> Self {
+        self.presentation_mut().help = Some(help.into());
+        self
+    }
+
+    pub fn category(
+        mut self,
+        id: impl Into<String>,
+        label: impl Into<String>,
+        summary: impl Into<String>,
+        order: u32,
+    ) -> Self {
+        let presentation = self.presentation_mut();
+        presentation.category_id = Some(id.into());
+        presentation.category_label = Some(label.into());
+        presentation.category_summary = Some(summary.into());
+        presentation.category_order = Some(order);
+        self
+    }
+
+    pub fn order(mut self, order: u32) -> Self {
+        self.presentation_mut().setting_order = Some(order);
+        self
+    }
+
+    pub fn unit(mut self, unit: impl Into<String>) -> Self {
+        self.presentation_mut().unit = Some(unit.into());
+        self
+    }
+
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.presentation_mut().placeholder = Some(placeholder.into());
+        self
+    }
+
+    pub fn control_hint(mut self, control_hint: impl Into<String>) -> Self {
+        self.presentation_mut().control_hint = Some(control_hint.into());
+        self
+    }
+
+    pub fn renderer_id(mut self, renderer_id: impl Into<String>) -> Self {
+        self.presentation_mut().renderer_id = Some(renderer_id.into());
+        self
+    }
+
+    fn presentation_mut(&mut self) -> &mut proto::PluginConfigPresentationManifest {
+        self.inner
+            .presentation
+            .get_or_insert_with(proto::PluginConfigPresentationManifest::default)
     }
 }
 
@@ -1392,7 +1522,15 @@ mod tests {
         let manifest = crate::plugin_manifest![
             config_schema("demo")
                 .allow_unvalidated_config(true)
-                .setting(config_setting("legacy", config_boolean()).default_value(&true))
+                .setting(
+                    config_setting("legacy", config_boolean())
+                        .default_value(&true)
+                        .label("Legacy mode")
+                        .help("Enable the legacy compatibility path.")
+                        .category("compat", "Compatibility", "Compatibility settings", 20)
+                        .order(10)
+                        .control_hint("toggle"),
+                )
         ];
 
         let encoded = package_manifest_json(&manifest).expect("manifest json");
@@ -1402,6 +1540,120 @@ mod tests {
         let schema = decoded.config_schema.expect("config schema");
         assert!(schema.allow_unvalidated_config);
         assert_eq!(schema.settings[0].key, "legacy");
+        assert_eq!(
+            schema.settings[0]
+                .presentation
+                .as_ref()
+                .and_then(|presentation| presentation.label.as_deref()),
+            Some("Legacy mode")
+        );
+        assert!(schema.settings[0].control_behavior.is_none());
+    }
+
+    #[test]
+    fn packaged_manifest_json_omits_control_behavior_for_old_manifests() {
+        let manifest = crate::plugin_manifest![config_schema("demo").setting(
+            config_setting("legacy", config_string()).description("Legacy free-form setting."),
+        )];
+
+        let encoded = package_manifest_json(&manifest).expect("manifest json");
+        let decoded: serde_json::Value =
+            serde_json::from_str(&encoded).expect("manifest should deserialize");
+
+        assert!(
+            !decoded["config_schema"]["settings"][0]
+                .as_object()
+                .expect("setting object")
+                .contains_key("control_behavior")
+        );
+    }
+
+    #[test]
+    fn packaged_manifest_json_roundtrips_control_behavior_metadata() {
+        let manifest = crate::plugin_manifest![
+            config_schema("demo").setting(
+                config_setting("service_url", config_url())
+                    .control_text_format(proto::PluginConfigTextFormat::Url)
+                    .control_options_runtime_local_models()
+                    .control_availability(
+                        false,
+                        proto::PluginConfigControlAvailabilitySource::Runtime
+                    )
+                    .control_availability_reason("Waiting for runtime discovery")
+                    .control_availability_note("The current value will be preserved.")
+                    .control_enable_when(proto::PluginConfigControlCondition {
+                        key: "mode".into(),
+                        operator: proto::PluginConfigConditionOperator::Equals as i32,
+                        values: vec![proto::PluginConfigConditionValue {
+                            value: Some(proto::plugin_config_condition_value::Value::StringValue(
+                                "remote".into(),
+                            ),),
+                        }],
+                    })
+                    .control_disable_when(proto::PluginConfigConditionalDisable {
+                        condition: Some(proto::PluginConfigControlCondition {
+                            key: "mode".into(),
+                            operator: proto::PluginConfigConditionOperator::NotEquals as i32,
+                            values: vec![proto::PluginConfigConditionValue {
+                                value: Some(
+                                    proto::plugin_config_condition_value::Value::StringValue(
+                                        "remote".into(),
+                                    ),
+                                ),
+                            }],
+                        }),
+                        reason: "Remote mode is required".into(),
+                        note: Some("Switch mode back to remote to edit this setting.".into()),
+                        write_policy: proto::PluginConfigDisabledWritePolicy::PreserveExisting
+                            as i32,
+                    })
+                    .control_conflict(proto::PluginConfigConflictRule {
+                        group: "transport".into(),
+                        condition: Some(proto::PluginConfigControlCondition {
+                            key: "socket_path".into(),
+                            operator: proto::PluginConfigConditionOperator::Present as i32,
+                            values: Vec::new(),
+                        }),
+                        reason: "Use either a URL or a socket path.".into(),
+                        preferred_key: Some("service_url".into()),
+                    })
+                    .control_write_policy(proto::PluginConfigDisabledWritePolicy::PreserveExisting),
+            )
+        ];
+
+        let encoded = package_manifest_json(&manifest).expect("manifest json");
+        let decoded: PackagedPluginManifest =
+            serde_json::from_str(&encoded).expect("manifest should deserialize");
+        let schema = decoded.config_schema.expect("config schema");
+        let setting = &schema.settings[0];
+        let control_behavior = setting
+            .control_behavior
+            .as_ref()
+            .expect("control behavior should be present");
+
+        assert_eq!(setting.value_schema.kind, PackagedPluginValueKind::Url);
+        assert_eq!(
+            control_behavior.text_format,
+            Some(PackagedPluginTextFormat::Url)
+        );
+        assert_eq!(
+            control_behavior.options_source,
+            Some(PackagedPluginOptionsSource::RuntimeLocalModels)
+        );
+        assert_eq!(
+            control_behavior
+                .availability
+                .as_ref()
+                .map(|availability| availability.enabled),
+            Some(false)
+        );
+        assert_eq!(
+            control_behavior.write_policy,
+            Some(PackagedPluginDisabledWritePolicy::PreserveExisting)
+        );
+        assert_eq!(control_behavior.enable_when.len(), 1);
+        assert_eq!(control_behavior.disable_when.len(), 1);
+        assert_eq!(control_behavior.conflicts.len(), 1);
     }
 
     #[test]

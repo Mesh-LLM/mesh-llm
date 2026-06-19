@@ -40,16 +40,19 @@ export interface ModelCapabilities {
 
 export interface MeshModelRaw {
   name: string
+  display_name?: string
   status: 'warm' | 'cold'
   size_gb?: number
   node_count: number
   capabilities?: ModelCapabilities
-  quantization: string
+  quantization?: string
   context_length?: number
   family?: string
   tags?: string[]
   params_b?: number
   disk_gb?: number
+  source_file?: string
+  source_ref?: string
   moe?: boolean
   vision?: boolean
   license?: string
@@ -135,12 +138,12 @@ export interface StatusPayload {
   peers: PeerInfo[]
   models: MeshModelRaw[]
   my_vram_gb: number
+  my_is_soc?: boolean
   api_port?: number
   gpus: GpuInfo[]
   serving_models: ServingModelEntry[]
   hostname?: string
   my_hostname?: string
-  my_is_soc?: boolean
   region?: string
   version?: string
   token?: string

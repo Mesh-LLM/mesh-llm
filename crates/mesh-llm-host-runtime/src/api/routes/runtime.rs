@@ -7,6 +7,8 @@ use super::control_apply_diagnostics::{
     LocalControlApplyDiagnosticPayload, local_control_apply_diagnostic_payload,
     local_control_apply_diagnostic_payload_from_local,
 };
+use super::runtime_control_state::collect_runtime_config_control_state_payload;
+use crate::config_schema::{EngineConfigSchemaDescriptor, export_runtime_config_schema_reference};
 use crate::crypto::{
     OwnerKeychainLoadError, keystore_metadata, load_keystore, load_owner_keypair_from_keychain,
 };
@@ -15,10 +17,15 @@ use mesh_client::{
     ClientBuilder, ControlPlaneBootstrapOptions, ControlPlaneClientError, ControlPlaneConnection,
     InviteToken, OwnerControlRemoteError,
 };
+use mesh_llm_config::{
+    ConfigConditionValue, ConfigControlAvailabilitySource, ConfigDisabledWritePolicy,
+    ConfigOptionsSource,
+};
 use mesh_llm_config::{ConfigDiagnosticSeverity, legacy_validation_error_text};
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
 use openai_frontend::GuardrailMode;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use tokio::io::AsyncWriteExt;
@@ -54,6 +61,10 @@ async fn handle_get(
         "/api/runtime/endpoints" => handle_runtime_endpoints(stream, state).await,
         "/api/runtime/processes" => handle_runtime_processes(stream, state).await,
         "/api/runtime/stages" => handle_runtime_stages(stream, state).await,
+        "/api/runtime/config-schema" => handle_runtime_config_schema(stream).await,
+        "/api/runtime/config-control-state" => {
+            handle_runtime_config_control_state(stream, state).await
+        }
         "/api/runtime/control-bootstrap" => handle_control_bootstrap(stream, state).await,
         "/api/events" => handle_events(stream, state).await,
         _ => Ok(()),
@@ -74,6 +85,7 @@ async fn handle_post(
         "/api/runtime/control/apply-config" => {
             handle_control_apply_config(stream, state, body).await
         }
+        "/api/runtime/config/validate" => handle_runtime_config_validate(stream, body).await,
         "/api/runtime/mesh-guardrails" => handle_set_mesh_guardrails(stream, state, body).await,
         "/api/runtime/models" => handle_load_model(stream, state, body).await,
         _ => Ok(()),
@@ -101,6 +113,34 @@ async fn handle_control_bootstrap(stream: &mut TcpStream, state: &MeshApi) -> an
     respond_json(stream, 200, &state.control_bootstrap().await).await
 }
 
+async fn handle_runtime_config_schema(stream: &mut TcpStream) -> anyhow::Result<()> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+
+    match export_runtime_config_schema_reference(std::iter::empty::<EngineConfigSchemaDescriptor>())
+    {
+        Ok(schema) => respond_json(stream, 200, &schema).await,
+        Err(error) => respond_error(stream, 500, &error.to_string()).await,
+    }
+}
+
+async fn handle_runtime_config_control_state(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+) -> anyhow::Result<()> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+
+    respond_json(
+        stream,
+        200,
+        &collect_runtime_config_control_state_payload(state).await,
+    )
+    .await
+}
+
 #[derive(Debug, Deserialize)]
 struct ControlEndpointRequest {
     endpoint: Option<String>,
@@ -118,6 +158,12 @@ struct RawApplyConfigRequest {
     endpoint: Option<String>,
     expected_revision: u64,
     config: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct ValidateConfigRequest {
+    toml: String,
+    path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,12 +194,54 @@ struct LocalControlApplyPayload {
 }
 
 #[derive(Debug, Serialize)]
+struct LocalConfigValidatePayload {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    diagnostics: Vec<LocalControlApplyDiagnosticPayload>,
+}
+
+#[derive(Debug, Serialize)]
 struct LocalControlErrorPayload {
     code: String,
     message: String,
     legacy_retry_allowed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     current_revision: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub(crate) struct ConfigControlStatePayload {
+    #[serde(default)]
+    pub(crate) settings: BTreeMap<String, ConfigControlStateEntry>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ConfigControlStateEntry {
+    pub(crate) enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
+    pub(crate) source: ConfigControlAvailabilitySource,
+    pub(crate) write_policy: ConfigDisabledWritePolicy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) options: Option<Vec<ConfigControlOption>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ConfigControlOption {
+    pub(crate) value: ConfigConditionValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
+    pub(crate) disabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+    pub(crate) source: ConfigOptionsSource,
 }
 
 async fn handle_control_get_config(
@@ -310,6 +398,54 @@ async fn handle_control_apply_config(
         }
         Err(error) => respond_control_error(stream, error).await,
     }
+}
+
+async fn handle_runtime_config_validate(stream: &mut TcpStream, body: &str) -> anyhow::Result<()> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+
+    let request: ValidateConfigRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
+    };
+
+    let config: crate::plugin::MeshConfig = match toml::from_str(&request.toml) {
+        Ok(config) => config,
+        Err(error) => {
+            return respond_json(
+                stream,
+                200,
+                &LocalConfigValidatePayload {
+                    ok: false,
+                    path: request.path,
+                    error: Some(format!("Invalid config TOML: {error}")),
+                    diagnostics: Vec::new(),
+                },
+            )
+            .await;
+        }
+    };
+
+    let diagnostics =
+        validate_config_diagnostics_with_installed_plugin_schemas(&config, Some(&request.toml));
+    let ok = diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.severity != ConfigDiagnosticSeverity::Error);
+    respond_json(
+        stream,
+        200,
+        &LocalConfigValidatePayload {
+            ok,
+            path: request.path,
+            error: None,
+            diagnostics: diagnostics
+                .iter()
+                .map(local_control_apply_diagnostic_payload_from_local)
+                .collect(),
+        },
+    )
+    .await
 }
 
 async fn connect_owner_control_client(

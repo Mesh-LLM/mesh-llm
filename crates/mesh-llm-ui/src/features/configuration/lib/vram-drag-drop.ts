@@ -6,6 +6,10 @@ export const SOURCE_CONTAINER_MIME_PREFIX = 'application/x-mesh-source-container
 export const MODEL_MIME_PREFIX = 'application/x-mesh-model-'
 export const ASSIGN_MIME_PREFIX = 'application/x-mesh-assign-'
 
+const DRAG_ID_CHUNK_LENGTH = 4
+const ENCODED_DRAG_ID = /^(?:[0-9a-f]{4})+$/u
+const ENCODED_DRAG_ID_PREFIX = 'hex-'
+
 type VramDropIntent = {
   supported: boolean
   fits: boolean
@@ -37,8 +41,30 @@ export function isReservedLaneEvent(event: DragEvent<HTMLElement>) {
   return target instanceof Element && Boolean(target.closest('[data-vram-reserved-lane="true"]'))
 }
 
+function encodeDragDataId(value: string): string {
+  return Array.from(value)
+    .map((character) => character.charCodeAt(0).toString(16).padStart(DRAG_ID_CHUNK_LENGTH, '0'))
+    .join('')
+}
+
+function decodeDragDataId(value: string): string {
+  if (!value.startsWith(ENCODED_DRAG_ID_PREFIX)) return value
+
+  const encoded = value.slice(ENCODED_DRAG_ID_PREFIX.length)
+  if (!ENCODED_DRAG_ID.test(encoded)) return value
+
+  const chunks = encoded.match(new RegExp(`.{${DRAG_ID_CHUNK_LENGTH}}`, 'gu'))
+  if (!chunks) return value
+  return chunks.map((chunk) => String.fromCharCode(Number.parseInt(chunk, 16))).join('')
+}
+
+export function modelDragMimeType(modelId: string): string {
+  return `${MODEL_MIME_PREFIX}${ENCODED_DRAG_ID_PREFIX}${encodeDragDataId(modelId)}`
+}
+
 export function getTypedDataId(types: string[], prefix: string) {
-  return types.find((type) => type.startsWith(prefix))?.slice(prefix.length) ?? ''
+  const rawId = types.find((type) => type.startsWith(prefix))?.slice(prefix.length) ?? ''
+  return rawId ? decodeDragDataId(rawId) : ''
 }
 
 export function getVramDropIntent({

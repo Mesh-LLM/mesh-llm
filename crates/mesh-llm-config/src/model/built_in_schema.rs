@@ -1,4 +1,8 @@
 use super::*;
+mod control_behavior;
+mod presentation;
+use self::control_behavior::apply_built_in_control_behavior;
+use self::presentation::apply_built_in_presentation_metadata;
 use std::sync::OnceLock;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,11 +95,11 @@ fn build_built_in_config_schema() -> ConfigSchema {
         top_level_setting("gpu.parallel", ConfigValueSchema::Integer),
         top_level_setting(
             "mesh_requirements.min_node_version",
-            ConfigValueSchema::String,
+            string_enum_from_slice(known_mesh_llm_versions()),
         ),
         top_level_setting(
             "mesh_requirements.max_node_version",
-            ConfigValueSchema::String,
+            string_enum_from_slice(known_mesh_llm_versions()),
         ),
         top_level_setting(
             "mesh_requirements.min_protocol_version",
@@ -122,7 +126,7 @@ fn build_built_in_config_schema() -> ConfigSchema {
         ),
         telemetry_setting("telemetry.enabled", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.service_name", ConfigValueSchema::String),
-        telemetry_setting("telemetry.endpoint", ConfigValueSchema::String),
+        telemetry_setting("telemetry.endpoint", ConfigValueSchema::Url),
         telemetry_setting("telemetry.headers", ConfigValueSchema::Object),
         telemetry_setting("telemetry.export_interval_secs", ConfigValueSchema::Integer),
         telemetry_setting("telemetry.queue_size", ConfigValueSchema::Integer),
@@ -131,7 +135,9 @@ fn build_built_in_config_schema() -> ConfigSchema {
             ConfigValueSchema::Boolean,
             "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed.",
         ),
-        telemetry_setting("telemetry.metrics.endpoint", ConfigValueSchema::String),
+        telemetry_setting("telemetry.metrics.endpoint", ConfigValueSchema::Url),
+        startup_runtime_setting("runtime.debug", ConfigValueSchema::Boolean),
+        startup_runtime_setting("runtime.listen_all", ConfigValueSchema::Boolean),
         runtime_setting(
             "runtime.reconcile_model_targets",
             ConfigValueSchema::Boolean,
@@ -165,6 +171,12 @@ fn build_built_in_config_schema() -> ConfigSchema {
     settings.extend(model_defaults_settings());
     settings.extend(model_entry_settings());
     settings.extend(plugin_entry_settings());
+    settings
+        .iter_mut()
+        .for_each(apply_built_in_control_behavior);
+    settings
+        .iter_mut()
+        .for_each(apply_built_in_presentation_metadata);
 
     ConfigSchema { settings }
 }
@@ -257,7 +269,7 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
                 items: Box::new(ConfigValueSchema::String),
             },
         ),
-        plugin_setting(&format!("{plugin_prefix}.url"), ConfigValueSchema::String),
+        plugin_setting(&format!("{plugin_prefix}.url"), ConfigValueSchema::Url),
         plugin_setting(
             &format!("{plugin_prefix}.startup.connect_timeout_secs"),
             ConfigValueSchema::Integer,
@@ -285,11 +297,11 @@ fn model_fit_settings(
         basic_setting(&format!("{prefix}.ctx_size"), ConfigValueSchema::Integer),
         basic_setting(&format!("{prefix}.batch"), ConfigValueSchema::Integer),
         basic_setting(&format!("{prefix}.ubatch"), ConfigValueSchema::Integer),
-        basic_setting(&format!("{prefix}.cache_type_k"), ConfigValueSchema::String),
-        basic_setting(&format!("{prefix}.cache_type_v"), ConfigValueSchema::String),
+        basic_setting(&format!("{prefix}.cache_type_k"), kv_cache_type_schema()),
+        basic_setting(&format!("{prefix}.cache_type_v"), kv_cache_type_schema()),
         basic_setting(
             &format!("{prefix}.kv_cache_policy"),
-            ConfigValueSchema::String,
+            string_enum(["auto", "quality", "balanced", "saver"]),
         ),
         basic_setting(&format!("{prefix}.kv_offload"), bool_or_auto_schema()),
         basic_setting(&format!("{prefix}.kv_unified"), bool_or_auto_schema()),
@@ -328,7 +340,7 @@ fn model_fit_settings(
         ),
         basic_setting(
             &format!("{prefix}.prefix_cache.payload_mode"),
-            ConfigValueSchema::String,
+            string_enum(["resident-kv", "kv-recurrent", "full-state", "auto"]),
         ),
         basic_setting(&format!("{prefix}.keep_tokens"), ConfigValueSchema::Integer),
         basic_setting(&format!("{prefix}.context_shift"), bool_or_auto_schema()),
@@ -351,7 +363,7 @@ fn model_fit_settings(
         ),
         basic_setting(
             &format!("{prefix}.flash_attention"),
-            ConfigValueSchema::String,
+            string_enum(["auto", "disabled", "enabled"]),
         ),
     ];
 
@@ -396,9 +408,10 @@ fn hardware_settings(
     legacy_device_aliases: &[ConfigPathAlias],
 ) -> Vec<ConfigSettingSchema> {
     let mut settings = vec![
-        basic_setting(
+        hidden_setting(
             &format!("{prefix}.model_runtime"),
-            ConfigValueSchema::String,
+            string_enum(["auto", "cpu", "cuda", "rocm", "metal", "vulkan"]),
+            "Model runtime is selected by the installed native runtime and hardware resolver, not by the web configuration UI.",
         ),
         basic_setting(&format!("{prefix}.device"), ConfigValueSchema::String),
         basic_setting(&format!("{prefix}.gpu_layers"), integer_or_auto_schema()),
@@ -410,9 +423,15 @@ fn hardware_settings(
             &format!("{prefix}.stage_layer_end"),
             ConfigValueSchema::Integer,
         ),
-        basic_setting(&format!("{prefix}.placement"), ConfigValueSchema::String),
+        basic_setting(
+            &format!("{prefix}.placement"),
+            string_enum(["auto", "pooled", "separated"]),
+        ),
         basic_setting(&format!("{prefix}.tensor_split"), tensor_split_schema()),
-        basic_setting(&format!("{prefix}.split_mode"), ConfigValueSchema::String),
+        basic_setting(
+            &format!("{prefix}.split_mode"),
+            string_enum(["auto", "none", "layer", "row"]),
+        ),
         basic_setting(&format!("{prefix}.main_gpu"), ConfigValueSchema::Integer),
         basic_setting(&format!("{prefix}.cpu_moe"), bool_or_auto_schema()),
         basic_setting(&format!("{prefix}.n_cpu_moe"), ConfigValueSchema::Integer),
@@ -430,10 +449,10 @@ fn hardware_settings(
             ConfigValueSchema::Float,
         ),
         basic_setting(&format!("{prefix}.fit_context"), bool_or_auto_schema()),
-        basic_setting(&format!("{prefix}.model_path"), ConfigValueSchema::String),
+        basic_setting(&format!("{prefix}.model_path"), ConfigValueSchema::Path),
         basic_setting(&format!("{prefix}.hf_repo"), ConfigValueSchema::String),
         basic_setting(&format!("{prefix}.hf_file"), ConfigValueSchema::String),
-        basic_setting(&format!("{prefix}.mmproj"), ConfigValueSchema::String),
+        basic_setting(&format!("{prefix}.mmproj"), ConfigValueSchema::Path),
         basic_setting(&format!("{prefix}.mmproj_offload"), bool_or_auto_schema()),
         basic_setting(
             &format!("{prefix}.lora_adapters"),
@@ -512,7 +531,7 @@ fn throughput_settings(
         ),
         basic_setting(
             &format!("{prefix}.tuning_profile"),
-            ConfigValueSchema::String,
+            string_enum(["throughput", "balanced", "saver"]),
         ),
     ];
 
@@ -531,7 +550,7 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
     vec![
         basic_setting(
             &format!("{prefix}.stage_model_path"),
-            ConfigValueSchema::String,
+            ConfigValueSchema::Path,
         ),
         basic_setting(&format!("{prefix}.stage_role"), ConfigValueSchema::String),
         basic_setting(
@@ -540,7 +559,7 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.activation_wire_dtype"),
-            ConfigValueSchema::String,
+            string_enum(["auto", "f16", "f32", "q8"]),
         ),
         basic_setting(
             &format!("{prefix}.binary_stage_transport"),
@@ -565,7 +584,7 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.prefill_chunking"),
-            ConfigValueSchema::String,
+            string_enum(["auto", "fixed", "schedule", "adaptive-ramp"]),
         ),
         basic_setting(
             &format!("{prefix}.prefill_chunk_size"),
@@ -580,11 +599,13 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
 
 fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
     vec![
-        basic_setting(&format!("{prefix}.strategy"), ConfigValueSchema::String),
-        basic_setting(&format!("{prefix}.mode"), ConfigValueSchema::String),
+        basic_setting(
+            &format!("{prefix}.mode"),
+            string_enum(["auto", "disabled", "draft", "ngram"]),
+        ),
         basic_setting(
             &format!("{prefix}.draft_model_path"),
-            ConfigValueSchema::String,
+            ConfigValueSchema::Path,
         ),
         basic_setting(
             &format!("{prefix}.draft_hf_repo"),
@@ -596,11 +617,17 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.draft_selection_policy"),
-            ConfigValueSchema::String,
+            string_enum(["manual", "auto"]),
         ),
         basic_setting(
             &format!("{prefix}.pairing_fault"),
-            ConfigValueSchema::String,
+            string_enum([
+                "warn_disable",
+                "fail-open",
+                "fail-closed",
+                "fail_open",
+                "fail_closed",
+            ]),
         ),
         basic_setting(
             &format!("{prefix}.draft_max_tokens"),
@@ -629,11 +656,11 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.draft_cache_type_k"),
-            ConfigValueSchema::String,
+            kv_cache_type_schema(),
         ),
         basic_setting(
             &format!("{prefix}.draft_cache_type_v"),
-            ConfigValueSchema::String,
+            kv_cache_type_schema(),
         ),
         basic_setting(&format!("{prefix}.ngram_min"), ConfigValueSchema::Integer),
         basic_setting(&format!("{prefix}.ngram_max"), ConfigValueSchema::Integer),
@@ -722,7 +749,7 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.reasoning_format"),
-            ConfigValueSchema::String,
+            string_enum(["auto", "none", "deepseek", "deepseek-legacy", "hidden"]),
         ),
         basic_setting(
             &format!("{prefix}.reasoning_enabled"),
@@ -738,7 +765,7 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.chat_template_file"),
-            ConfigValueSchema::String,
+            ConfigValueSchema::Path,
         ),
         basic_setting(&format!("{prefix}.jinja"), ConfigValueSchema::Boolean),
         basic_setting(
@@ -780,8 +807,8 @@ fn multimodal_settings(
     legacy_mmproj_aliases: &[ConfigPathAlias],
 ) -> Vec<ConfigSettingSchema> {
     let mut settings = vec![
-        basic_setting(&format!("{prefix}.mmproj"), ConfigValueSchema::String),
-        basic_setting(&format!("{prefix}.mmproj_url"), ConfigValueSchema::String),
+        basic_setting(&format!("{prefix}.mmproj"), ConfigValueSchema::Path),
+        basic_setting(&format!("{prefix}.mmproj_url"), ConfigValueSchema::Url),
         basic_setting(&format!("{prefix}.mmproj_offload"), bool_or_auto_schema()),
         basic_setting(
             &format!("{prefix}.image_min_tokens"),
@@ -915,6 +942,13 @@ fn native_runtime_setting(path: &str, value_schema: ConfigValueSchema) -> Config
     setting
 }
 
+fn startup_runtime_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];
+    setting.restart_scope = ConfigRestartScope::ProcessRestart;
+    setting
+}
+
 fn plugin_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![
@@ -938,6 +972,8 @@ fn basic_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSc
         visibility: ConfigVisibility::Advanced,
         constraints: Vec::new(),
         description: Some(path.to_string()),
+        presentation: None,
+        control_behavior: None,
     }
 }
 
@@ -976,6 +1012,17 @@ fn unwired_setting(
     setting
 }
 
+fn hidden_setting(
+    path: &str,
+    value_schema: ConfigValueSchema,
+    description: &str,
+) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.visibility = ConfigVisibility::Hidden;
+    setting.description = Some(description.to_string());
+    setting
+}
+
 fn schema_path(path: &str) -> ConfigPath {
     ConfigPath::parse_rendered(path).expect("static schema path should parse")
 }
@@ -992,6 +1039,18 @@ fn string_enum<const N: usize>(values: [&str; N]) -> ConfigValueSchema {
     ConfigValueSchema::Enum {
         values: values.into_iter().map(str::to_string).collect(),
     }
+}
+
+fn string_enum_from_slice(values: &[&str]) -> ConfigValueSchema {
+    ConfigValueSchema::Enum {
+        values: values.iter().map(|s| (*s).to_string()).collect(),
+    }
+}
+
+fn kv_cache_type_schema() -> ConfigValueSchema {
+    string_enum([
+        "auto", "f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1",
+    ])
 }
 
 fn one_of<const N: usize>(variants: [ConfigValueSchema; N]) -> ConfigValueSchema {
@@ -1036,6 +1095,14 @@ fn tensor_split_schema() -> ConfigValueSchema {
         },
         ConfigValueSchema::String,
     ])
+}
+
+/// Returns the list of known mesh-llm versions from GitHub releases.
+/// This list should be updated during the release process.
+fn known_mesh_llm_versions() -> &'static [&'static str] {
+    &[
+        "0.68.0", "0.67.0", "0.66.0", "0.65.0", "0.64.0", "0.63.0", "0.62.0", "0.61.0", "0.60.0",
+    ]
 }
 
 fn apply_aliases(
@@ -1113,9 +1180,545 @@ mod tests {
         );
     }
 
+    #[test]
+    fn built_in_schema_marks_curated_defaults_user_visible() {
+        for path in [
+            "defaults.throughput.threads",
+            "defaults.throughput.parallel",
+            "defaults.model_fit.kv_cache_policy",
+            "defaults.request_defaults.temperature",
+            "defaults.skippy.binary_stage_transport",
+            "defaults.multimodal.mmproj_offload",
+        ] {
+            assert_eq!(
+                schema_setting(path).visibility,
+                ConfigVisibility::User,
+                "{path}"
+            );
+        }
+
+        assert_eq!(
+            schema_setting("defaults.model_fit.prompt_cache").visibility,
+            ConfigVisibility::Advanced
+        );
+        assert_eq!(
+            schema_setting("defaults.hardware.model_runtime").visibility,
+            ConfigVisibility::Hidden
+        );
+        assert_eq!(
+            schema_setting("defaults.advanced.server.alias").visibility,
+            ConfigVisibility::Advanced
+        );
+    }
+
+    #[test]
+    fn built_in_schema_uses_explicit_path_and_url_value_kinds() {
+        assert_eq!(schema_value("telemetry.endpoint"), ConfigValueSchema::Url);
+        assert_eq!(
+            schema_value("telemetry.metrics.endpoint"),
+            ConfigValueSchema::Url
+        );
+        assert_eq!(
+            schema_value("plugin.<plugin-name>.url"),
+            ConfigValueSchema::Url
+        );
+        assert_eq!(
+            schema_value("defaults.hardware.model_path"),
+            ConfigValueSchema::Path
+        );
+        assert_eq!(
+            schema_value("defaults.hardware.mmproj"),
+            ConfigValueSchema::Path
+        );
+        assert_eq!(
+            schema_value("defaults.multimodal.mmproj"),
+            ConfigValueSchema::Path
+        );
+        assert_eq!(
+            schema_value("defaults.multimodal.mmproj_url"),
+            ConfigValueSchema::Url
+        );
+        assert_eq!(
+            schema_value("defaults.speculative.draft_model_path"),
+            ConfigValueSchema::Path
+        );
+    }
+
+    #[test]
+    fn startup_runtime_settings_require_process_restart() {
+        for path in ["runtime.debug", "runtime.listen_all"] {
+            let setting = schema_setting(path);
+
+            assert_eq!(
+                setting.control_surfaces,
+                vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api],
+                "{path}"
+            );
+            assert_eq!(setting.apply_mode, ConfigApplyMode::StaticOnLoad, "{path}");
+            assert_eq!(
+                setting.restart_scope,
+                ConfigRestartScope::ProcessRestart,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn built_in_schema_exports_model_fit_numeric_controls_and_relative_bounds() {
+        let defaults_batch = schema_setting("defaults.model_fit.batch");
+        let defaults_ubatch = schema_setting("defaults.model_fit.ubatch");
+        let model_ubatch = schema_setting("models.<model-ref>.model_fit.ubatch");
+
+        assert_eq!(numeric_control(&defaults_batch).min, Some(1.0));
+        assert_eq!(numeric_control(&defaults_batch).step, Some(1.0));
+        assert_eq!(
+            numeric_control(&defaults_batch).unit.as_deref(),
+            Some("tokens")
+        );
+
+        assert_eq!(
+            numeric_control(&defaults_ubatch),
+            numeric_control(&model_ubatch)
+        );
+        assert_has_range_constraint(&defaults_ubatch, None, Some("defaults.model_fit.batch"));
+        assert_has_range_constraint(
+            &model_ubatch,
+            None,
+            Some("models.<model-ref>.model_fit.batch"),
+        );
+    }
+
+    #[test]
+    fn built_in_schema_keeps_defaults_and_model_hardware_device_semantics_in_sync() {
+        let defaults_device = schema_setting("defaults.hardware.device");
+        let model_device = schema_setting("models.<model-ref>.hardware.device");
+
+        assert_eq!(
+            control_behavior(&defaults_device).options_source,
+            Some(ConfigOptionsSource::RuntimeGpus)
+        );
+        assert_eq!(
+            defaults_device.control_behavior,
+            model_device.control_behavior
+        );
+        assert_eq!(
+            control_behavior(&defaults_device).enable_when,
+            vec![equals_condition("gpu.assignment", "pinned")]
+        );
+        assert_eq!(
+            control_behavior(&defaults_device).disable_when,
+            vec![dependency_disable(
+                equals_condition("gpu.assignment", "auto"),
+                "Set gpu.assignment = \"pinned\" to edit a concrete GPU device.",
+            )]
+        );
+    }
+
+    #[test]
+    fn built_in_schema_marks_rejected_hardware_escape_hatches_non_editable() {
+        let setting = schema_setting("models.<model-ref>.hardware.rpc_backend");
+        let behavior = control_behavior(&setting);
+
+        assert_eq!(setting.support, ConfigSupportState::Rejected);
+        assert_eq!(
+            behavior.availability.as_ref().map(|value| value.enabled),
+            Some(false)
+        );
+        assert_eq!(
+            behavior.availability.as_ref().map(|value| value.source),
+            Some(ConfigControlAvailabilitySource::Static)
+        );
+        assert_eq!(
+            setting.default_disabled_write_policy(None),
+            Some(ConfigDisabledWritePolicy::RejectWhenDisabled)
+        );
+    }
+
+    #[test]
+    fn built_in_schema_exports_throughput_and_skippy_t5_controls() {
+        let threads = schema_setting("defaults.throughput.threads");
+        let prefill_chunk_size = schema_setting("defaults.skippy.prefill_chunk_size");
+        let prefill_chunk_schedule = schema_setting("defaults.skippy.prefill_chunk_schedule");
+
+        assert_static_choices(
+            "defaults.throughput.tuning_profile",
+            &["throughput", "balanced", "saver"],
+        );
+        assert_eq!(numeric_control(&threads).min, Some(0.0));
+        assert_eq!(numeric_control(&threads).step, Some(1.0));
+
+        assert_static_choices(
+            "defaults.skippy.activation_wire_dtype",
+            &["auto", "f16", "f32", "q8"],
+        );
+        assert_static_choices(
+            "defaults.skippy.prefill_chunking",
+            &["auto", "fixed", "schedule", "adaptive-ramp"],
+        );
+        assert_eq!(numeric_control(&prefill_chunk_size).min, Some(1.0));
+        assert_eq!(
+            control_behavior(&prefill_chunk_size).enable_when,
+            vec![equals_condition(
+                "defaults.skippy.prefill_chunking",
+                "fixed"
+            )]
+        );
+        assert_eq!(
+            control_behavior(&prefill_chunk_schedule).text_format,
+            Some(ConfigTextFormat::CsvPositiveInts)
+        );
+        assert_eq!(
+            control_behavior(&prefill_chunk_schedule).enable_when,
+            vec![equals_condition(
+                "defaults.skippy.prefill_chunking",
+                "schedule"
+            )]
+        );
+    }
+
+    #[test]
+    fn built_in_schema_exports_speculative_and_request_default_t5_controls() {
+        let draft_min = schema_setting("defaults.speculative.draft_min_tokens");
+        let ngram_max = schema_setting("defaults.speculative.ngram_max");
+        let mirostat_entropy = schema_setting("defaults.request_defaults.mirostat_entropy");
+
+        assert_static_choices(
+            "defaults.speculative.mode",
+            &["auto", "disabled", "draft", "ngram"],
+        );
+        assert_static_choices(
+            "defaults.speculative.draft_selection_policy",
+            &["manual", "auto"],
+        );
+        assert_static_choices(
+            "defaults.speculative.pairing_fault",
+            &[
+                "warn_disable",
+                "fail-open",
+                "fail-closed",
+                "fail_open",
+                "fail_closed",
+            ],
+        );
+        assert_has_range_constraint(
+            &draft_min,
+            None,
+            Some("defaults.speculative.draft_max_tokens"),
+        );
+        assert_has_range_constraint(&ngram_max, Some("defaults.speculative.ngram_min"), None);
+
+        assert_static_choices(
+            "defaults.request_defaults.reasoning_format",
+            &["auto", "none", "deepseek", "deepseek-legacy", "hidden"],
+        );
+        assert_eq!(
+            control_behavior(&mirostat_entropy).enable_when,
+            vec![in_condition(
+                "defaults.request_defaults.mirostat_mode",
+                &[
+                    ConfigConditionValue::Integer(1),
+                    ConfigConditionValue::Integer(2),
+                    ConfigConditionValue::String("1".to_string()),
+                    ConfigConditionValue::String("2".to_string()),
+                ],
+            )]
+        );
+        assert_eq!(
+            control_behavior(&mirostat_entropy).disable_when,
+            vec![dependency_disable(
+                not_in_condition(
+                    "defaults.request_defaults.mirostat_mode",
+                    &[
+                        ConfigConditionValue::Integer(1),
+                        ConfigConditionValue::Integer(2),
+                        ConfigConditionValue::String("1".to_string()),
+                        ConfigConditionValue::String("2".to_string()),
+                    ],
+                ),
+                "defaults.request_defaults.mirostat_entropy requires defaults.request_defaults.mirostat_mode = 1 or 2",
+            )]
+        );
+    }
+
+    #[test]
+    fn built_in_schema_disables_duplicate_multimodal_projector_controls_with_preserve_policy() {
+        let mmproj = schema_setting("defaults.hardware.mmproj");
+        let offload = schema_setting("defaults.hardware.mmproj_offload");
+
+        assert_eq!(
+            control_behavior(&mmproj).availability,
+            Some(ConfigControlAvailability {
+                enabled: false,
+                reason: Some(
+                    "Edit defaults.multimodal.mmproj instead of the legacy hardware duplicate."
+                        .to_string(),
+                ),
+                note: Some(
+                    "Existing values are preserved on save unless you change defaults.multimodal.mmproj."
+                        .to_string(),
+                ),
+                source: ConfigControlAvailabilitySource::Static,
+            })
+        );
+        assert_eq!(
+            control_behavior(&mmproj).write_policy,
+            Some(ConfigDisabledWritePolicy::PreserveExisting)
+        );
+        assert_eq!(
+            control_behavior(&offload)
+                .availability
+                .as_ref()
+                .map(|value| value.enabled),
+            Some(false)
+        );
+        assert_eq!(
+            control_behavior(&offload).write_policy,
+            Some(ConfigDisabledWritePolicy::PreserveExisting)
+        );
+    }
+
+    #[test]
+    fn built_in_schema_exports_telemetry_owner_control_attestation_and_plugin_timeout_controls() {
+        let telemetry_interval = schema_setting("telemetry.export_interval_secs");
+        let advertise_addr = schema_setting("owner_control.advertise_addr");
+        let signer_keys = schema_setting("mesh_requirements.release_signer_keys");
+        let plugin_timeout = schema_setting("plugin.<plugin-name>.startup.connect_timeout_secs");
+
+        assert_eq!(numeric_control(&telemetry_interval).min, Some(1.0));
+        assert_eq!(
+            numeric_control(&telemetry_interval).unit.as_deref(),
+            Some("sec")
+        );
+
+        assert_eq!(
+            control_behavior(&advertise_addr).enable_when,
+            vec![present_condition("owner_control.bind")]
+        );
+        assert_eq!(
+            control_behavior(&advertise_addr).disable_when,
+            vec![dependency_disable(
+                absent_condition("owner_control.bind"),
+                "owner_control.advertise_addr requires owner_control.bind so the advertised port is actually listening",
+            )]
+        );
+
+        assert_eq!(
+            control_behavior(&schema_setting("mesh_requirements.min_node_version")).text_format,
+            Some(ConfigTextFormat::Semver)
+        );
+        assert_eq!(
+            control_behavior(&signer_keys).text_format,
+            Some(ConfigTextFormat::Ed25519Key)
+        );
+        assert_eq!(
+            control_behavior(&signer_keys).enable_when,
+            vec![equals_bool_condition(
+                "mesh_requirements.require_release_attestation",
+                true,
+            )]
+        );
+
+        assert_eq!(numeric_control(&plugin_timeout).min, Some(1.0));
+        assert_eq!(
+            numeric_control(&plugin_timeout).unit.as_deref(),
+            Some("sec")
+        );
+    }
+
+    #[test]
+    fn built_in_schema_covers_t5_fallback_choices_or_keeps_open_text_intentional() {
+        for (path, expected) in [
+            (
+                "defaults.throughput.tuning_profile",
+                vec!["throughput", "balanced", "saver"],
+            ),
+            (
+                "defaults.speculative.mode",
+                vec!["auto", "disabled", "draft", "ngram"],
+            ),
+            (
+                "defaults.speculative.draft_selection_policy",
+                vec!["manual", "auto"],
+            ),
+            (
+                "defaults.speculative.pairing_fault",
+                vec![
+                    "warn_disable",
+                    "fail-open",
+                    "fail-closed",
+                    "fail_open",
+                    "fail_closed",
+                ],
+            ),
+            (
+                "defaults.request_defaults.reasoning_format",
+                vec!["auto", "none", "deepseek", "deepseek-legacy", "hidden"],
+            ),
+            (
+                "defaults.speculative.draft_cache_type_k",
+                vec![
+                    "auto", "f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1",
+                ],
+            ),
+            (
+                "defaults.speculative.draft_cache_type_v",
+                vec![
+                    "auto", "f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1",
+                ],
+            ),
+        ] {
+            assert_eq!(
+                schema_enum_values(path),
+                expected.into_iter().map(str::to_string).collect::<Vec<_>>(),
+                "{path}"
+            );
+        }
+
+        for path in [
+            "defaults.throughput.numa",
+            "defaults.skippy.binary_stage_transport",
+        ] {
+            assert!(schema_enum_values(path).is_empty(), "{path}");
+            assert_ne!(
+                schema_setting(path)
+                    .control_behavior
+                    .as_ref()
+                    .and_then(|behavior| behavior.options_source),
+                Some(ConfigOptionsSource::Static),
+                "{path}"
+            );
+        }
+    }
+
     fn schema_value(path: &str) -> ConfigValueSchema {
-        built_in_config_schema_descriptor(&schema_path(path))
-            .expect("schema setting should exist")
-            .value_schema
+        schema_setting(path).value_schema
+    }
+
+    fn schema_setting(path: &str) -> ConfigSettingSchema {
+        built_in_config_schema_descriptor(&schema_path(path)).expect("schema setting should exist")
+    }
+
+    fn control_behavior(setting: &ConfigSettingSchema) -> &ConfigControlBehavior {
+        setting
+            .control_behavior
+            .as_ref()
+            .expect("control behavior should be present")
+    }
+
+    fn numeric_control(setting: &ConfigSettingSchema) -> ConfigNumericControl {
+        control_behavior(setting)
+            .numeric
+            .clone()
+            .expect("numeric control should be present")
+    }
+
+    fn assert_has_range_constraint(
+        setting: &ConfigSettingSchema,
+        expected_min: Option<&str>,
+        expected_max: Option<&str>,
+    ) {
+        assert!(
+            setting.constraints.iter().any(|constraint| {
+                matches!(
+                    constraint,
+                    ConfigConstraint::Range { min, max }
+                        if min.as_deref() == expected_min && max.as_deref() == expected_max
+                )
+            }),
+            "expected range constraint min={expected_min:?} max={expected_max:?} on {}",
+            setting.path.render()
+        );
+    }
+
+    fn equals_condition(path: &str, expected: &str) -> ConfigControlCondition {
+        ConfigControlCondition {
+            path: schema_path(path),
+            operator: ConfigConditionOperator::Equals,
+            values: vec![ConfigConditionValue::String(expected.to_string())],
+        }
+    }
+
+    fn equals_bool_condition(path: &str, expected: bool) -> ConfigControlCondition {
+        ConfigControlCondition {
+            path: schema_path(path),
+            operator: ConfigConditionOperator::Equals,
+            values: vec![ConfigConditionValue::Bool(expected)],
+        }
+    }
+
+    fn in_condition(path: &str, values: &[ConfigConditionValue]) -> ConfigControlCondition {
+        ConfigControlCondition {
+            path: schema_path(path),
+            operator: ConfigConditionOperator::In,
+            values: values.to_vec(),
+        }
+    }
+
+    fn not_in_condition(path: &str, values: &[ConfigConditionValue]) -> ConfigControlCondition {
+        ConfigControlCondition {
+            path: schema_path(path),
+            operator: ConfigConditionOperator::NotIn,
+            values: values.to_vec(),
+        }
+    }
+
+    fn present_condition(path: &str) -> ConfigControlCondition {
+        ConfigControlCondition {
+            path: schema_path(path),
+            operator: ConfigConditionOperator::Present,
+            values: Vec::new(),
+        }
+    }
+
+    fn absent_condition(path: &str) -> ConfigControlCondition {
+        ConfigControlCondition {
+            path: schema_path(path),
+            operator: ConfigConditionOperator::Absent,
+            values: Vec::new(),
+        }
+    }
+
+    fn dependency_disable(
+        condition: ConfigControlCondition,
+        reason: &str,
+    ) -> ConfigConditionalDisable {
+        ConfigConditionalDisable {
+            condition,
+            reason: reason.to_string(),
+            note: None,
+            write_policy: ConfigDisabledWritePolicy::OmitWhenDisabled,
+        }
+    }
+
+    fn assert_static_choices(path: &str, expected: &[&str]) {
+        let setting = schema_setting(path);
+
+        assert_eq!(
+            control_behavior(&setting).options_source,
+            Some(ConfigOptionsSource::Static),
+            "{path}"
+        );
+        assert_eq!(
+            schema_enum_values(path),
+            expected
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>(),
+            "{path}"
+        );
+    }
+
+    fn schema_enum_values(path: &str) -> Vec<String> {
+        enum_values(&schema_value(path))
+    }
+
+    fn enum_values(schema: &ConfigValueSchema) -> Vec<String> {
+        match schema {
+            ConfigValueSchema::Enum { values } => values.clone(),
+            ConfigValueSchema::OneOf { variants } => {
+                variants.iter().flat_map(enum_values).collect()
+            }
+            _ => Vec::new(),
+        }
     }
 }

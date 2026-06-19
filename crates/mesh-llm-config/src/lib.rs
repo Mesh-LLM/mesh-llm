@@ -5,11 +5,20 @@ mod plugin_validation;
 mod store;
 mod validate;
 
+#[cfg(test)]
+mod validate_schema_contract;
+
 pub use authoring::{
     ConfigEditor, ConfigSchemaBuilder, ConfigSettingSchemaBuilder, LocalServingNodeConfig,
     ModelConfigEditor, ModelDefaultsEditor, PluginConfigEditor, built_in_config_schema,
 };
 pub use model::*;
+pub use plugin_validation::control_behavior::{
+    PluginConditionOperator, PluginConditionValue, PluginConditionalDisable, PluginConflictRule,
+    PluginControlAvailability, PluginControlAvailabilitySource, PluginControlBehavior,
+    PluginControlCondition, PluginDisabledWritePolicy, PluginNumericControl, PluginOptionsSource,
+    PluginTextFormat,
+};
 pub use plugin_validation::{
     PluginConfigSchema, PluginObjectPropertySchema, PluginSchemaAvailability,
     PluginSettingConstraint, PluginSettingSchema, PluginValueKind, PluginValueSchema,
@@ -213,7 +222,7 @@ ctx_size = 4096
                     context_size: Some(8192),
                     parallel: Some(2),
                     owner_control_bind: Some("127.0.0.1:0".parse().unwrap()),
-                    gpu_assignment: Some(GpuAssignment::Auto),
+                    gpu_assignment: Some(GpuAssignment::Pinned),
                     ..LocalServingNodeConfig::default()
                 })?;
                 config
@@ -317,6 +326,8 @@ model_runtime = "Metal"
 version = 1
 
 [runtime]
+debug = true
+listen_all = true
 reconcile_model_targets = true
 reconcile_model_target_demand_upgrades = true
 model_target_demand_upgrade_min_requests = 4
@@ -325,6 +336,8 @@ model_target_demand_upgrade_max_age_secs = 900
         )
         .unwrap();
 
+        assert!(config.runtime.debug);
+        assert!(config.runtime.listen_all);
         assert!(config.runtime.reconcile_model_targets);
         assert!(config.runtime.reconcile_model_target_demand_upgrades);
         assert_eq!(config.runtime.model_target_demand_upgrade_min_requests, 4);
@@ -338,7 +351,7 @@ model_target_demand_upgrade_max_age_secs = 900
 version = 1
 
 [gpu]
-assignment = "auto"
+assignment = "pinned"
 
 [[models]]
 model = "Qwen3-8B-Q4_K_M"
@@ -402,6 +415,8 @@ gpu_id = "pci:0000:65:00.0"
             "version",
             "gpu.assignment",
             "owner_control.bind",
+            "runtime.debug",
+            "runtime.listen_all",
             "telemetry.prompt_shape_metrics",
             "defaults.model_fit.ctx_size",
             "defaults.hardware.rpc_backend",
@@ -702,6 +717,7 @@ gpu_id = "pci:0000:65:00.0"
             "models",
             "plugins",
             "settings",
+            "strategy",
         ];
 
         occurrences

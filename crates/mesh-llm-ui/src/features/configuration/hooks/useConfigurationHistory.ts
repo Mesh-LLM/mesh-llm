@@ -1,5 +1,11 @@
 import { useCallback, useMemo, useState, type SetStateAction } from 'react'
-import { containerUsedGB, contextGB, findModel, nodeTotalGB } from '@/features/configuration/lib/config-math'
+import {
+  containerUsedGB,
+  contextGB,
+  findModel,
+  modelWeightsGB,
+  nodeTotalGB
+} from '@/features/configuration/lib/config-math'
 import { CFG_NODES, INITIAL_ASSIGNS } from '@/features/app-tabs/data'
 import type { ConfigAssign, ConfigModel, ConfigNode, ConfigurationDefaultsValues } from '@/features/app-tabs/types'
 
@@ -79,7 +85,7 @@ export function hasInvalidAllocation(nodes: ConfigNode[], assigns: ConfigAssign[
       containerIdx,
       models
     )
-    const freeForContextGB = totalGB - reservedGB - usedByOtherAssignmentsGB - model.sizeGB
+    const freeForContextGB = totalGB - reservedGB - usedByOtherAssignmentsGB - modelWeightsGB(model)
 
     return freeForContextGB < 0 || contextGB(model, assign.ctx) > Math.max(0, freeForContextGB)
   })

@@ -1,3 +1,7 @@
+pub mod control_behavior;
+
+use self::control_behavior::PluginControlBehavior;
+
 use crate::PluginConfigEntry;
 use crate::model::ConfigPath;
 use crate::validate::{
@@ -9,7 +13,7 @@ use toml::Value;
 
 pub const SUPPORTED_PLUGIN_CONFIG_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PluginSchemaAvailability {
     Available(PluginConfigSchema),
     NotInstalled,
@@ -17,7 +21,7 @@ pub enum PluginSchemaAvailability {
     UnsupportedVersion { version: u32 },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PluginConfigSchema {
     pub plugin_name: String,
     pub schema_version: u32,
@@ -25,7 +29,7 @@ pub struct PluginConfigSchema {
     pub settings: Vec<PluginSettingSchema>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PluginSettingSchema {
     pub key: String,
     pub value_schema: PluginValueSchema,
@@ -33,6 +37,7 @@ pub struct PluginSettingSchema {
     pub default_json: Option<String>,
     pub constraints: Vec<PluginSettingConstraint>,
     pub description: Option<String>,
+    pub control_behavior: Option<PluginControlBehavior>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,14 +127,19 @@ where
                             ConfigDiagnosticSeverity::Warning,
                             settings_path,
                             format!(
-                                "plugin '{}' allows legacy unvalidated config; custom settings are accepted without schema checks",
+                                "plugin '{}' allows legacy unvalidated config; unknown custom settings are accepted, but declared settings are still schema-validated",
                                 entry.name
                             ),
                         ));
                     }
+                    diagnostics.extend(validate_plugin_settings_against_schema(
+                        entry, &schema, true,
+                    ));
                     continue;
                 }
-                diagnostics.extend(validate_plugin_settings_against_schema(entry, &schema));
+                diagnostics.extend(validate_plugin_settings_against_schema(
+                    entry, &schema, false,
+                ));
             }
             PluginSchemaAvailability::NotInstalled => {
                 if has_custom_settings {
@@ -193,6 +203,7 @@ fn validate_plugin_startup(entry: &PluginConfigEntry, index: usize) -> Diagnosti
 fn validate_plugin_settings_against_schema(
     entry: &PluginConfigEntry,
     schema: &PluginConfigSchema,
+    allow_unknown_settings: bool,
 ) -> Vec<ConfigDiagnostic> {
     let mut diagnostics = Vec::new();
     let schema_by_key = schema
@@ -202,7 +213,7 @@ fn validate_plugin_settings_against_schema(
         .collect::<BTreeMap<_, _>>();
 
     for key in entry.settings.keys() {
-        if !schema_by_key.contains_key(key.as_str()) {
+        if !allow_unknown_settings && !schema_by_key.contains_key(key.as_str()) {
             diagnostics.push(plugin_diagnostic(
                 ConfigDiagnosticCode::UnknownField,
                 ConfigDiagnosticSeverity::Error,
@@ -615,6 +626,7 @@ mod tests {
                         max: Some("365".into()),
                     }],
                     description: None,
+                    control_behavior: None,
                 },
                 PluginSettingSchema {
                     key: "mode".into(),
@@ -629,6 +641,7 @@ mod tests {
                     default_json: Some("\"strict\"".into()),
                     constraints: Vec::new(),
                     description: None,
+                    control_behavior: None,
                 },
             ],
         }
@@ -817,6 +830,58 @@ unknown = true
                 .message
                 .contains("allows legacy unvalidated config")
         );
+    }
+
+    #[test]
+    fn strict_plugin_validation_legacy_escape_hatch_still_validates_known_settings() {
+        let raw = r#"
+[[plugin]]
+name = "blackboard"
+
+[plugin.settings]
+retention_days = 0
+mode = "mystery"
+unknown = true
+"#;
+        let config: crate::MeshConfig = toml::from_str(raw).unwrap();
+        let mut legacy_schema = schema();
+        legacy_schema.allow_unvalidated_config = true;
+
+        let diagnostics = validate_plugin_entries_strict(&config.plugins, Some(raw), |_| {
+            PluginSchemaAvailability::Available(legacy_schema.clone())
+        });
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == ConfigDiagnosticCode::LegacyUnvalidatedConfig
+                && diagnostic.severity == ConfigDiagnosticSeverity::Warning
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == ConfigDiagnosticCode::InvalidValue
+                && diagnostic
+                    .canonical_path
+                    .as_ref()
+                    .map(ConfigPath::render)
+                    .as_deref()
+                    == Some("plugin.blackboard.settings.retention_days")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == ConfigDiagnosticCode::InvalidValue
+                && diagnostic
+                    .canonical_path
+                    .as_ref()
+                    .map(ConfigPath::render)
+                    .as_deref()
+                    == Some("plugin.blackboard.settings.mode")
+        }));
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == ConfigDiagnosticCode::UnknownField
+                && diagnostic
+                    .canonical_path
+                    .as_ref()
+                    .map(ConfigPath::render)
+                    .as_deref()
+                    == Some("plugin.blackboard.settings.unknown")
+        }));
     }
 
     #[test]

@@ -855,13 +855,6 @@
       }
     },
     {
-      "canonical_path": "defaults.speculative.strategy",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.throughput.continuous_batching",
       "support": "supported",
       "source": {

@@ -16,16 +16,13 @@ export const MODEL_FAMILY_COLOR_KEYS: readonly ModelFamilyColorKey[] = [
 export function findModel(modelId: string, models: ConfigModel[] = CFG_CATALOG): ConfigModel | undefined {
   return models.find((model) => model.id === modelId)
 }
-
 function finiteNumber(value: number | undefined, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
-
 export function modelWeightsGB(model: ConfigModel): number {
   const explicitSizeGB = finiteNumber(model.sizeGB)
   return explicitSizeGB > 0 ? explicitSizeGB : finiteNumber(model.diskGB)
 }
-
 function gpuSystemTotalGB(gpu: ConfigNode['gpus'][number]): number {
   const systemTotal = finiteNumber(gpu.systemTotalGB)
   return systemTotal > 0 ? systemTotal : finiteNumber(gpu.totalGB)
@@ -37,27 +34,31 @@ function gpuAllocatableGB(gpu: ConfigNode['gpus'][number]): number {
   }
   return Math.max(0, gpuSystemTotalGB(gpu) - finiteNumber(gpu.reservedGB))
 }
-
 export function nodeTotalGB(node: ConfigNode): number {
-  return node.gpus.reduce((total, gpu) => total + gpu.totalGB, 0)
+  return node.gpus.reduce((total, gpu) => total + finiteNumber(gpu.totalGB), 0)
 }
 export function nodeSystemTotalGB(node: ConfigNode): number {
   return node.gpus.reduce((total, gpu) => total + gpuSystemTotalGB(gpu), 0)
 }
 export function nodeReservedGB(node: ConfigNode): number {
-  return node.gpus.reduce((total, gpu) => total + (gpu.reservedGB ?? 0), 0)
+  return node.gpus.reduce((total, gpu) => total + finiteNumber(gpu.reservedGB), 0)
 }
 export function nodeUsableGB(node: ConfigNode): number {
   return node.gpus.reduce((total, gpu) => total + gpuAllocatableGB(gpu), 0)
 }
 export function contextGBPerK(model: ConfigModel): number {
-  return model.ctxPerGB ?? model.paramsB / 120
+  const explicit = finiteNumber(model.ctxPerGB)
+  if (explicit > 0) return explicit
+  const paramsB = finiteNumber(model.paramsB)
+  if (paramsB > 0) return paramsB / 120
+  const sizeGB = modelWeightsGB(model)
+  return sizeGB > 0 ? sizeGB / 240 : 0
 }
 export function contextGB(model: ConfigModel, ctx: number): number {
-  return contextGBPerK(model) * (ctx / 1024)
+  return contextGBPerK(model) * (finiteNumber(ctx, 4096) / 1024)
 }
 export function kvGB(model: ConfigModel, ctx: number): number {
-  return Number(contextGB(model, ctx).toFixed(1))
+  return Number(finiteNumber(contextGB(model, ctx)).toFixed(1))
 }
 export function containerAssigns(assigns: ConfigAssign[], nodeId: string, containerIdx: number): ConfigAssign[] {
   return assigns.filter((assign) => assign.nodeId === nodeId && assign.containerIdx === containerIdx)
@@ -70,7 +71,7 @@ export function containerUsedGB(
 ): number {
   return containerAssigns(assigns, nodeId, containerIdx).reduce((total, assign) => {
     const model = findModel(assign.modelId, models)
-    return model ? total + model.sizeGB + contextGB(model, assign.ctx) : total
+    return model ? total + modelWeightsGB(model) + contextGB(model, assign.ctx) : total
   }, 0)
 }
 export function containerTotalGB(node: ConfigNode, containerIdx: number): number {
@@ -79,8 +80,8 @@ export function containerTotalGB(node: ConfigNode, containerIdx: number): number
   return gpu ? gpuSystemTotalGB(gpu) : 0
 }
 export function containerReservedGB(node: ConfigNode, containerIdx: number): number {
-  if (node.placement === 'pooled') return node.gpus.reduce((sum, gpu) => sum + (gpu.reservedGB ?? 0), 0)
-  return node.gpus.find((gpu) => gpu.idx === containerIdx)?.reservedGB ?? 0
+  if (node.placement === 'pooled') return node.gpus.reduce((sum, gpu) => sum + finiteNumber(gpu.reservedGB), 0)
+  return finiteNumber(node.gpus.find((gpu) => gpu.idx === containerIdx)?.reservedGB)
 }
 export function containerAllocatableGB(node: ConfigNode, containerIdx: number): number {
   if (node.placement === 'pooled') return nodeUsableGB(node)
@@ -88,7 +89,7 @@ export function containerAllocatableGB(node: ConfigNode, containerIdx: number): 
   return gpu ? gpuAllocatableGB(gpu) : 0
 }
 export function modelNeedGB(model: ConfigModel, ctx = 4096): number {
-  return model.sizeGB + contextGB(model, ctx)
+  return modelWeightsGB(model) + contextGB(model, ctx)
 }
 export function containerAvailableGB(
   assigns: ConfigAssign[],

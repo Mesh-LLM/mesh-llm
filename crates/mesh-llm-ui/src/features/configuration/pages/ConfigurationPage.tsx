@@ -1,21 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import {
-  AlertTriangle,
-  Binary,
-  Blocks,
-  BookOpen,
-  Brackets,
-  Computer,
-  Copy,
-  LockKeyhole,
-  ShieldCheck,
-  SlidersHorizontal
-} from 'lucide-react'
+import { AlertTriangle, Blocks, Brackets, Computer, Cpu, Network, ShieldCheck, SlidersHorizontal } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { LiveDataUnavailableOverlay } from '@/components/ui/LiveDataUnavailableOverlay'
 import { CatalogPopover } from '@/features/configuration/components/CatalogPopover'
 import { ConfigurationHeader } from '@/features/configuration/components/ConfigurationHeader'
-import { ConfigurationLiveLoadingGhost } from '@/features/configuration/components/ConfigurationLiveLoadingGhost'
+import { ConfigurationLiveDataBoundary } from '@/features/configuration/components/ConfigurationLiveDataBoundary'
+import { ConfigurationReadOnlyNodesDivider } from '@/features/configuration/components/ConfigurationReadOnlyNodesDivider'
+import { ConfigurationRuntimeControlBanner } from '@/features/configuration/components/ConfigurationRuntimeControlBanner'
+import {
+  formatRuntimeControlDisabledReason,
+  formatRuntimeControlDisabledSaveError
+} from '@/features/configuration/components/runtime-control-copy'
 import { ConfigurationTabs, type ConfigurationTabItem } from '@/features/configuration/components/ConfigurationTabs'
 import { ConfigurationWakePolicyTab } from '@/features/configuration/components/ConfigurationWakePolicyTab'
 import type { ConfigurationTabId } from '@/features/configuration/components/configuration-tab-ids'
@@ -49,46 +43,39 @@ import { UnsavedConfigurationNavigationBlocker } from '@/features/configuration/
 import { useConfigurationPageSelection } from '@/features/configuration/pages/useConfigurationPageSelection'
 import { useConfigurationPageKeyboardShortcuts } from '@/features/configuration/pages/useConfigurationPageKeyboardShortcuts'
 import { CONFIGURATION_HARNESS } from '@/features/app-tabs/data'
-import type { ConfigurationHarnessData, Placement } from '@/features/app-tabs/types'
+import type { ConfigurationDefaultsHarnessData, ConfigurationHarnessData, Placement } from '@/features/app-tabs/types'
 import { useConfigQuery } from '@/features/configuration/api/use-config-query'
 import {
   runtimeControlApplyErrorMessage,
+  type RuntimeControlApplyInput,
+  type RuntimeControlApplyResponse,
   type RuntimeControlBootstrapPayload
 } from '@/features/configuration/api/config-adapter'
-import { useDataMode } from '@/lib/data-mode'
 import { useBooleanFeatureFlag } from '@/lib/feature-flags'
-import { copyStateLabel } from '@/lib/copyStateLabel'
-import { useClipboardCopy } from '@/lib/useClipboardCopy'
 
 type ConfigurationPageProps = {
   activeTab?: ConfigurationTabId
-  data?: ConfigurationHarnessData
   enableNavigationBlocker?: boolean
   initialTab?: ConfigurationTabId
   onTabChange?: (tab: ConfigurationTabId) => void
 }
 
-const OWNER_CONTROL_READ_ONLY_MESSAGE = 'No owner-control identity on this node, run both commands to unlock saving.'
-const OWNER_CONTROL_SAVE_ERROR = 'Config was not saved. Runtime control is disabled: missing owner identity.'
+type ConfigurationFixturePageProps = ConfigurationPageProps & {
+  data?: ConfigurationHarnessData
+}
+
+type ConfigurationEditorPageProps = ConfigurationPageProps & {
+  data: ConfigurationHarnessData
+  liveMode: boolean
+  runtimeControlBootstrap?: RuntimeControlBootstrapPayload
+  runtimeControlConfigUnavailableReason?: string
+  applyDefaults: (input: RuntimeControlApplyInput) => Promise<RuntimeControlApplyResponse | null>
+}
+
 const RUNTIME_CONTROL_SAVE_UNAVAILABLE_ERROR = 'Config was not saved. Runtime control config is unavailable.'
-const OWNER_CONTROL_DOCS_URL = 'https://meshllm.cloud/'
 
-function formatRuntimeControlDisabledReason(bootstrap: RuntimeControlBootstrapPayload | undefined) {
-  if (bootstrap?.disabled_reason === 'missing_owner_identity') return 'missing owner identity'
-  return bootstrap?.disabled_reason?.replace(/_/g, ' ') ?? 'unavailable'
-}
-
-function formatRuntimeControlDisabledMessage(bootstrap: RuntimeControlBootstrapPayload) {
-  if (bootstrap.disabled_reason === 'missing_owner_identity') return OWNER_CONTROL_READ_ONLY_MESSAGE
-  return (
-    bootstrap.message ??
-    `Configuration saving is unavailable because runtime control is disabled: ${formatRuntimeControlDisabledReason(bootstrap)}.`
-  )
-}
-
-function formatRuntimeControlDisabledSaveError(bootstrap: RuntimeControlBootstrapPayload | undefined) {
-  if (bootstrap?.disabled_reason === 'missing_owner_identity') return OWNER_CONTROL_SAVE_ERROR
-  return `Config was not saved. Runtime control is disabled: ${formatRuntimeControlDisabledReason(bootstrap)}.`
+function valuesSnapshot(values: Record<string, string>, settingIds: readonly string[]) {
+  return JSON.stringify(Object.fromEntries(settingIds.map((settingId) => [settingId, values[settingId] ?? null])))
 }
 
 function formatRuntimeControlFailure(error: unknown) {
@@ -97,168 +84,137 @@ function formatRuntimeControlFailure(error: unknown) {
   return 'Config was not saved. Runtime control failed.'
 }
 
-function RuntimeCommandRow({ command, hint, index }: { command: string; hint: string; index: number }) {
-  const { copyState, copyText } = useClipboardCopy()
-  const [binary, action, ...args] = command.split(' ')
+function combineSettingsData(
+  ...groups: readonly (ConfigurationDefaultsHarnessData | undefined)[]
+): ConfigurationDefaultsHarnessData {
+  const categoryById = new Map<string, ConfigurationDefaultsHarnessData['categories'][number]>()
+  const settingById = new Map<string, ConfigurationDefaultsHarnessData['settings'][number]>()
+  const preview = groups.flatMap((group) => group?.preview ?? [])
 
-  return (
-    <div className="grid grid-cols-[1.5rem_minmax(0,1fr)_4.5rem] items-start gap-2 px-5 py-2.5 sm:grid-cols-[1.75rem_minmax(0,1fr)_4.5rem]">
-      <div className="pt-1.5 text-right font-mono text-[length:var(--density-type-annotation)] font-medium leading-none text-fg-faint">
-        {index}
-      </div>
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto whitespace-nowrap font-mono text-[length:var(--density-type-caption-lg)] font-semibold leading-6">
-          <span className="text-accent">$</span>
-          <span className="text-accent">{binary}</span>
-          <span className="text-warn">{action}</span>
-          {args.map((arg) => (
-            <span key={arg} className="text-accent-contrast">
-              {arg}
-            </span>
-          ))}
-        </div>
-        <div className="mt-1 flex items-center gap-2 text-[length:var(--density-type-caption)] leading-5 text-fg-faint">
-          <span aria-hidden="true" className="font-mono text-warn">
-            →
-          </span>
-          <span>{hint}</span>
-        </div>
-      </div>
-      <button
-        aria-label={`Copy ${command}`}
-        className="ui-control inline-flex h-[30px] items-center justify-center gap-1.5 rounded-[var(--radius)] border px-2.5 text-[length:var(--density-type-control)] font-medium leading-none"
-        onClick={() => void copyText(command)}
-        type="button"
-      >
-        <Copy aria-hidden="true" className="size-3.5 shrink-0" />
-        {copyStateLabel(copyState)}
-      </button>
-    </div>
-  )
-}
+  for (const group of groups) {
+    for (const category of group?.categories ?? []) categoryById.set(String(category.id), category)
+    for (const setting of group?.settings ?? []) settingById.set(setting.id, setting)
+  }
 
-function ConfigurationRuntimeControlBanner({ bootstrap }: { bootstrap: RuntimeControlBootstrapPayload }) {
-  const suggestedCommands = bootstrap.suggested_commands?.length
-    ? bootstrap.suggested_commands
-    : ['mesh-llm auth init --no-passphrase', 'mesh-llm serve --owner-required']
-  const authInitCommand = suggestedCommands.includes('mesh-llm auth init --no-passphrase')
-    ? 'mesh-llm auth init --no-passphrase'
-    : suggestedCommands[0]
-  const restartCommand = suggestedCommands.includes('mesh-llm serve --owner-required')
-    ? 'mesh-llm serve --owner-required'
-    : (suggestedCommands[1] ?? 'mesh-llm serve --owner-required')
-  const commandPairs = [
-    {
-      command: authInitCommand,
-      hint: 'Initialize owner identity (creates a local keypair)'
-    },
-    {
-      command: restartCommand,
-      hint: 'Restart the daemon so the new identity takes effect'
-    }
-  ]
-
-  return (
-    <section
-      aria-labelledby="configuration-runtime-control-read-only"
-      className="panel-shell overflow-hidden rounded-[var(--radius-lg)] border border-border bg-panel text-foreground"
-    >
-      <div className="panel-divider flex flex-col gap-3 border-b border-border-soft px-[14px] py-[10px] sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-[color:color-mix(in_oklab,var(--color-warn)_42%,var(--color-border))] bg-[color:color-mix(in_oklab,var(--color-warn)_10%,var(--color-panel))] text-warn shadow-surface-inset">
-            <LockKeyhole aria-hidden="true" className="size-4" strokeWidth={1.8} />
-          </div>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2
-                id="configuration-runtime-control-read-only"
-                className="text-[length:var(--density-type-control-lg)] font-semibold leading-tight text-foreground"
-              >
-                Configuration UI is read-only
-              </h2>
-              <span className="inline-flex items-center gap-1.5 rounded-[var(--radius)] border border-[color:color-mix(in_oklab,var(--color-warn)_48%,var(--color-border))] bg-[color:color-mix(in_oklab,var(--color-warn)_8%,var(--color-panel))] px-2 py-0.5 font-mono text-[length:var(--density-type-annotation)] font-semibold uppercase leading-none tracking-[0.14em] text-warn">
-                <AlertTriangle aria-hidden="true" className="size-3" strokeWidth={1.9} />
-                {formatRuntimeControlDisabledReason(bootstrap)}
-              </span>
-            </div>
-            <p className="mt-1 max-w-[72ch] text-[length:var(--density-type-caption)] leading-snug text-fg-faint">
-              {formatRuntimeControlDisabledMessage(bootstrap)}
-            </p>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2 sm:self-start">
-          <a
-            className="ui-control inline-flex h-[30px] items-center justify-center gap-1.5 rounded-[var(--radius)] border px-3 text-[length:var(--density-type-control)] font-medium leading-none"
-            href={OWNER_CONTROL_DOCS_URL}
-            rel="noreferrer"
-            target="_blank"
-          >
-            <BookOpen aria-hidden="true" className="size-3.5" strokeWidth={1.8} />
-            Docs
-          </a>
-        </div>
-      </div>
-      <div className="bg-background py-3">
-        {commandPairs.map((commandPair, index) => (
-          <RuntimeCommandRow key={commandPair.command} index={index + 1} {...commandPair} />
-        ))}
-      </div>
-    </section>
-  )
-}
-
-function ReadOnlyNodesDivider() {
-  return (
-    <div className="mt-4 mb-2 flex items-center gap-2.5">
-      <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-fg-faint">Peers</span>
-      <span aria-hidden="true" className="h-px flex-1 bg-border-soft" />
-      <span className="inline-flex shrink-0 items-center gap-1.5 font-mono text-[11px] font-medium uppercase leading-none tracking-[0.14em] text-fg-faint">
-        read-only
-        <LockKeyhole aria-hidden="true" className="size-3.5" strokeWidth={1.7} />
-      </span>
-    </div>
-  )
+  return {
+    categories: Array.from(categoryById.values()),
+    settings: Array.from(settingById.values()),
+    preview
+  }
 }
 
 export function ConfigurationPageContent({
   activeTab: controlledActiveTab,
-  data = CONFIGURATION_HARNESS,
   enableNavigationBlocker = true,
-  initialTab = 'defaults',
+  initialTab = 'general',
   onTabChange
 }: ConfigurationPageProps = {}) {
-  const { mode, setMode } = useDataMode()
-  const liveMode = mode === 'live'
-  const signingAttestationEnabled = useBooleanFeatureFlag('configuration/signingAttestation')
-  const integrationsEnabled = useBooleanFeatureFlag('configuration/integrations')
-  const wakePolicyConfigurationEnabled = useBooleanFeatureFlag('configuration/wakePolicyConfiguration')
   const {
     data: liveData,
     isFetching,
     isError,
+    isPending,
     modelsQuery,
     statusQuery,
     controlConfigQuery,
     applyDefaults
-  } = useConfigQuery({
-    enabled: liveMode
-  })
+  } = useConfigQuery({ enabled: true })
   const runtimeControlBootstrap = controlConfigQuery.data?.bootstrap
+  const runtimeControlDisabled = Boolean(runtimeControlBootstrap && !runtimeControlBootstrap.enabled)
+  const runtimeControlConfigUnavailableReason =
+    !runtimeControlDisabled && !controlConfigQuery.isFetching && !controlConfigQuery.data?.snapshot
+      ? 'Runtime control config is unavailable'
+      : undefined
+  const livePluginSettingsData = liveData?.plugins ?? liveData?.integrations
+  const retryLiveData = useCallback(() => {
+    void Promise.all([statusQuery.refetch(), modelsQuery.refetch(), controlConfigQuery.refetch()])
+  }, [controlConfigQuery, modelsQuery, statusQuery])
+  const boundaryState = isError || (!isFetching && !isPending) ? 'error' : 'loading'
+
+  if (!liveData) return <ConfigurationLiveDataBoundary state={boundaryState} onRetry={retryLiveData} />
+  if (
+    liveData.defaults.settings.length === 0 &&
+    (liveData.meshllm?.settings.length ?? 0) === 0 &&
+    (liveData.runtimeSettings?.settings.length ?? 0) === 0 &&
+    (liveData.network?.settings.length ?? 0) === 0 &&
+    (livePluginSettingsData?.settings.length ?? 0) === 0
+  ) {
+    return <ConfigurationLiveDataBoundary state="empty-schema" onRetry={retryLiveData} />
+  }
+
+  return (
+    <ConfigurationEditorPage
+      activeTab={controlledActiveTab}
+      applyDefaults={applyDefaults}
+      data={liveData}
+      enableNavigationBlocker={enableNavigationBlocker}
+      initialTab={initialTab}
+      liveMode
+      runtimeControlBootstrap={runtimeControlBootstrap}
+      runtimeControlConfigUnavailableReason={runtimeControlConfigUnavailableReason}
+      onTabChange={onTabChange}
+    />
+  )
+}
+
+export function ConfigurationFixturePage({
+  data = CONFIGURATION_HARNESS,
+  initialTab = 'models',
+  ...props
+}: ConfigurationFixturePageProps = {}) {
+  return (
+    <ConfigurationEditorPage
+      {...props}
+      applyDefaults={async () => null}
+      data={data}
+      initialTab={initialTab}
+      liveMode={false}
+    />
+  )
+}
+
+function ConfigurationEditorPage({
+  activeTab: controlledActiveTab,
+  applyDefaults,
+  data: displayData,
+  enableNavigationBlocker = true,
+  initialTab = 'general',
+  liveMode,
+  runtimeControlBootstrap,
+  runtimeControlConfigUnavailableReason,
+  onTabChange
+}: ConfigurationEditorPageProps) {
+  const signingAttestationEnabled = useBooleanFeatureFlag('configuration/signingAttestation')
+  const pluginsEnabled = useBooleanFeatureFlag('configuration/integrations')
+  const wakePolicyConfigurationEnabled = useBooleanFeatureFlag('configuration/wakePolicyConfiguration')
+  const pluginsSettingsData = displayData.plugins ?? displayData.integrations
   const runtimeControlDisabled = liveMode && Boolean(runtimeControlBootstrap && !runtimeControlBootstrap.enabled)
   const runtimeControlDisabledReason = runtimeControlDisabled
     ? `Runtime control is disabled: ${formatRuntimeControlDisabledReason(runtimeControlBootstrap)}`
     : undefined
-  const runtimeControlConfigUnavailableReason =
-    liveMode && !runtimeControlDisabled && !controlConfigQuery.isFetching && !controlConfigQuery.data?.snapshot
-      ? 'Runtime control config is unavailable'
-      : undefined
   const runtimeControlSaveDisabledReason = runtimeControlDisabledReason ?? runtimeControlConfigUnavailableReason
-  const resolvedData = liveMode ? liveData : data
-  const displayData = resolvedData ?? data
-  const showLiveError = liveMode && !liveData && !isFetching && isError
-  const showLiveLoading = liveMode && !liveData && !showLiveError
 
-  const initialDefaultsValues = useMemo(() => createDefaultsValues(displayData.defaults), [displayData.defaults])
+  const initialDefaultsValues = useMemo(
+    () =>
+      createDefaultsValues(
+        displayData.defaults,
+        displayData.meshllm,
+        displayData.runtimeSettings,
+        displayData.modelSettings,
+        displayData.network,
+        displayData.attestation,
+        pluginsSettingsData
+      ),
+    [
+      displayData.attestation,
+      displayData.defaults,
+      displayData.meshllm,
+      displayData.modelSettings,
+      displayData.network,
+      displayData.runtimeSettings,
+      pluginsSettingsData
+    ]
+  )
   const initialConfiguration = useMemo(
     () => createInitialConfigurationState(displayData.nodes, displayData.assigns, initialDefaultsValues),
     [displayData.assigns, displayData.nodes, initialDefaultsValues]
@@ -416,10 +372,23 @@ export function ConfigurationPageContent({
     }
     return saveError
   }, [hasUnsavedChanges, runtimeControlConfigUnavailableReason, runtimeControlDisabledReason, saveError])
-  const defaultsDirty = useMemo(
-    () => JSON.stringify(defaultsValues) !== JSON.stringify(savedConfiguration.defaultsValues),
+  const settingsDirty = useCallback(
+    (settingsData: { settings: readonly { id: string }[] } | undefined) => {
+      const settingIds = settingsData?.settings.map((setting) => setting.id) ?? []
+      return (
+        settingIds.length > 0 &&
+        valuesSnapshot(defaultsValues, settingIds) !== valuesSnapshot(savedConfiguration.defaultsValues, settingIds)
+      )
+    },
     [defaultsValues, savedConfiguration.defaultsValues]
   )
+  const modelSettingsData = displayData.modelSettings ?? displayData.defaults
+  const meshllmDirty = settingsDirty(displayData.meshllm)
+  const runtimeDirty = settingsDirty(displayData.runtimeSettings)
+  const modelSettingsDirty = settingsDirty(modelSettingsData)
+  const networkDirty = settingsDirty(displayData.network)
+  const attestationDirty = settingsDirty(displayData.attestation)
+  const pluginsDirty = settingsDirty(pluginsSettingsData)
   const localDeploymentDirty = useMemo(
     () =>
       createConfigurationSnapshot(nodes, assigns, savedConfiguration.defaultsValues) !==
@@ -441,9 +410,21 @@ export function ConfigurationPageContent({
     [updateConfiguration]
   )
 
-  const resetDefaultSettings = useCallback(() => {
-    updateConfiguration((current) => ({ ...current, defaultsValues: initialDefaultsValues }))
-  }, [initialDefaultsValues, updateConfiguration])
+  const resetSettings = useCallback(
+    (settingsData: { settings: readonly { id: string }[] } | undefined) => {
+      const settingIds = new Set(settingsData?.settings.map((setting) => setting.id) ?? [])
+      updateConfiguration((current) => ({
+        ...current,
+        defaultsValues: {
+          ...current.defaultsValues,
+          ...Object.fromEntries(
+            Array.from(settingIds).map((settingId) => [settingId, initialDefaultsValues[settingId] ?? ''])
+          )
+        }
+      }))
+    },
+    [initialDefaultsValues, updateConfiguration]
+  )
 
   const stepSelectedContext = useCallback(
     (direction: -1 | 1, jumpToPower = false) => {
@@ -482,9 +463,15 @@ export function ConfigurationPageContent({
       return
     }
 
-    if (liveMode && defaultsDirty) {
+    if (liveMode) {
       setIsSavingConfiguration(true)
-      void applyDefaults(configuration.defaultsValues)
+      void applyDefaults({
+        values: configuration.defaultsValues,
+        nodes: localNodes.length > 0 ? localNodes : nodes,
+        assigns: localAssigns,
+        catalog: displayData.catalog,
+        modelPlacementPaths: displayData.modelPlacementPaths
+      })
         .then((response) => {
           if (!response?.success) {
             const message = runtimeControlApplyErrorMessage(response)
@@ -506,19 +493,19 @@ export function ConfigurationPageContent({
   }, [
     applyDefaults,
     configuration,
-    defaultsDirty,
+    displayData.catalog,
+    displayData.modelPlacementPaths,
     hasInvalidNode,
     hasUnsavedChanges,
     isSavingConfiguration,
     liveMode,
+    localAssigns,
+    localNodes,
+    nodes,
     runtimeControlBootstrap,
     runtimeControlConfigUnavailableReason,
     runtimeControlDisabled
   ])
-  const retryLiveData = useCallback(() => {
-    void Promise.all([statusQuery.refetch(), modelsQuery.refetch()])
-  }, [modelsQuery, statusQuery])
-  const switchToTestData = useCallback(() => setMode('harness'), [setMode])
 
   const currentKeyboardNode = useMemo(
     () => localNodes.find((item) => item.id === (selectedNodeId ?? selectedAssign?.nodeId)) ?? null,
@@ -593,6 +580,7 @@ export function ConfigurationPageContent({
             node={node}
             assigns={assigns}
             models={displayData.catalog}
+            modelPlacementOptions={displayData.modelPlacementOptions}
             setAssigns={setAssigns}
             selectedId={selectedId}
             selectedContainerIdx={
@@ -611,13 +599,14 @@ export function ConfigurationPageContent({
           />
         </div>
       ))}
-      {remoteNodes.length > 0 ? <ReadOnlyNodesDivider /> : null}
+      {remoteNodes.length > 0 ? <ConfigurationReadOnlyNodesDivider /> : null}
       {remoteNodes.map((node) => (
         <NodeSection
           key={node.id}
           node={node}
           assigns={assigns}
           models={displayData.catalog}
+          modelPlacementOptions={displayData.modelPlacementOptions}
           setAssigns={setAssigns}
           selectedId={null}
           selectedContainerIdx={null}
@@ -634,26 +623,155 @@ export function ConfigurationPageContent({
       ))}
     </ConfigurationDeploymentLayout>
   )
+  const runtimeControlNotice =
+    runtimeControlDisabled && runtimeControlBootstrap ? (
+      <ConfigurationRuntimeControlBanner bootstrap={runtimeControlBootstrap} />
+    ) : undefined
+  const tomlSettings = useMemo(
+    () =>
+      combineSettingsData(
+        displayData.meshllm,
+        displayData.runtimeSettings,
+        modelSettingsData,
+        displayData.network,
+        displayData.attestation,
+        pluginsSettingsData
+      ),
+    [
+      displayData.attestation,
+      displayData.meshllm,
+      displayData.network,
+      displayData.runtimeSettings,
+      modelSettingsData,
+      pluginsSettingsData
+    ]
+  )
 
   const tabs: ConfigurationTabItem[] = [
     {
-      id: 'defaults',
-      label: 'Defaults',
-      icon: Binary,
-      dirty: defaultsDirty,
-      content: (
+      id: 'general',
+      label: 'General',
+      icon: Cpu,
+      dirty: meshllmDirty,
+      content: displayData.meshllm?.settings.length ? (
         <DefaultsTab
-          data={displayData.defaults}
+          data={displayData.meshllm}
           values={defaultsValues}
-          onResetAll={resetDefaultSettings}
+          onResetAll={() => resetSettings(displayData.meshllm)}
           onSettingValueChange={updateDefaultSetting}
           configFilePath={displayData.configFilePath}
-          readOnlyNotice={
-            runtimeControlDisabled && runtimeControlBootstrap ? (
-              <ConfigurationRuntimeControlBanner bootstrap={runtimeControlBootstrap} />
-            ) : undefined
+          readOnlyNotice={runtimeControlNotice}
+          previewTitle="[runtime] / [telemetry]"
+          screenLabel="Configuration · meshllm"
+          summaryDescription={
+            <>
+              Local process settings written directly to{' '}
+              <span className="rounded border border-border-soft bg-surface px-1 font-mono text-foreground">
+                config.toml
+              </span>
+              . These are process-owned settings, not per-model placement defaults.
+            </>
           }
+          summaryTitle="General settings"
+          summaryTitleId="meshllm-summary-heading"
         />
+      ) : (
+        <ConfigurationPlaceholderPanel title="General settings" icon={Cpu}>
+          No writable general process settings are exposed by the current runtime schema.
+        </ConfigurationPlaceholderPanel>
+      )
+    },
+    {
+      id: 'runtime',
+      label: 'Runtime',
+      icon: SlidersHorizontal,
+      dirty: runtimeDirty,
+      content: displayData.runtimeSettings?.settings.length ? (
+        <DefaultsTab
+          data={displayData.runtimeSettings}
+          values={defaultsValues}
+          onResetAll={() => resetSettings(displayData.runtimeSettings)}
+          onSettingValueChange={updateDefaultSetting}
+          configFilePath={displayData.configFilePath}
+          readOnlyNotice={runtimeControlNotice}
+          previewTitle="[runtime] / [defaults.*]"
+          screenLabel="Configuration · runtime"
+          summaryDescription={
+            <>
+              Startup and reconciliation settings that the local process reads from the config file. Native runtime
+              installation and hardware selection are intentionally not presented as switchable UI controls here.
+            </>
+          }
+          summaryTitle="Runtime settings"
+          summaryTitleId="runtime-summary-heading"
+        />
+      ) : (
+        <ConfigurationPlaceholderPanel title="Runtime settings" icon={SlidersHorizontal}>
+          No writable runtime settings are exposed by the current runtime schema.
+        </ConfigurationPlaceholderPanel>
+      )
+    },
+    {
+      id: 'models',
+      label: 'Models',
+      icon: Computer,
+      dirty: modelSettingsDirty,
+      content: modelSettingsData.settings.length ? (
+        <DefaultsTab
+          data={modelSettingsData}
+          values={defaultsValues}
+          onResetAll={() => resetSettings(modelSettingsData)}
+          onSettingValueChange={updateDefaultSetting}
+          configFilePath={displayData.configFilePath}
+          readOnlyNotice={runtimeControlNotice}
+          previewTitle="[gpu] / [defaults.*]"
+          screenLabel="Configuration · models"
+          summaryDescription={
+            <>
+              GPU placement policy and model defaults are inherited by new{' '}
+              <span className="rounded border border-border-soft bg-surface px-1 font-mono text-foreground">
+                [[models]]
+              </span>{' '}
+              entries and can be overridden by individual deployments.
+            </>
+          }
+          summaryTitle="Model settings"
+          summaryTitleId="models-summary-heading"
+        />
+      ) : (
+        <ConfigurationPlaceholderPanel title="Model settings" icon={Computer}>
+          No writable model defaults are exposed by the current runtime schema.
+        </ConfigurationPlaceholderPanel>
+      )
+    },
+    {
+      id: 'network',
+      label: 'Network',
+      icon: Network,
+      dirty: networkDirty,
+      content: displayData.network?.settings.length ? (
+        <DefaultsTab
+          data={displayData.network}
+          values={defaultsValues}
+          onResetAll={() => resetSettings(displayData.network)}
+          onSettingValueChange={updateDefaultSetting}
+          configFilePath={displayData.configFilePath}
+          readOnlyNotice={runtimeControlNotice}
+          previewTitle="[owner_control]"
+          screenLabel="Configuration · network"
+          summaryDescription={
+            <>
+              Network settings cover owner-control binding and advertised control endpoints that are applied when the
+              local process starts.
+            </>
+          }
+          summaryTitle="Network settings"
+          summaryTitleId="network-summary-heading"
+        />
+      ) : (
+        <ConfigurationPlaceholderPanel title="Network settings" icon={Network}>
+          No writable network settings are exposed by the current runtime schema.
+        </ConfigurationPlaceholderPanel>
       )
     },
     {
@@ -679,25 +797,88 @@ export function ConfigurationPageContent({
             id: 'signing',
             label: 'Signing / Attestation',
             icon: ShieldCheck,
-            dirty: hasUnsavedChanges,
-            content: (
+            dirty: attestationDirty,
+            content: displayData.attestation?.settings.length ? (
+              <DefaultsTab
+                data={displayData.attestation}
+                values={defaultsValues}
+                onResetAll={() => resetSettings(displayData.attestation)}
+                onSettingValueChange={updateDefaultSetting}
+                configFilePath={displayData.configFilePath}
+                readOnlyNotice={runtimeControlNotice}
+                previewTitle="[mesh_requirements]"
+                screenLabel="Configuration · signing"
+                summaryDescription={
+                  <>
+                    Attestation settings define certified-build admission requirements for meshes. They are written to{' '}
+                    <span className="rounded border border-border-soft bg-surface px-1 font-mono text-foreground">
+                      [mesh_requirements]
+                    </span>{' '}
+                    and enforced from the loaded config.
+                  </>
+                }
+                summaryStatus={attestationDirty ? 'modified' : 'ready'}
+                summaryTitle="Signing / Attestation"
+                summaryTitleId="attestation-summary-heading"
+                previewTip={
+                  <>
+                    These controls describe required build provenance. They do not claim remote hardware or native
+                    runtime integrity beyond the attestation data the node can verify.
+                  </>
+                }
+              />
+            ) : (
               <ConfigurationPlaceholderPanel title="Signing / Attestation" icon={ShieldCheck}>
-                Unsigned local configuration. This pass reserves the review surface for key binding, attestation
-                receipts, and dirty-state signing checks.
+                No writable attestation settings are exposed by the current runtime schema.
               </ConfigurationPlaceholderPanel>
             )
           } satisfies ConfigurationTabItem
         ]
       : []),
-    ...(integrationsEnabled
+    ...(pluginsEnabled
       ? [
           {
-            id: 'integrations',
-            label: 'Integrations',
+            id: 'plugins',
+            label: 'Plugins',
             icon: Blocks,
-            content: (
-              <ConfigurationPlaceholderPanel title="Integrations" icon={Blocks}>
-                Plugin and external endpoint defaults will live here once the underlying TOML fields are available.
+            dirty: pluginsDirty,
+            content: pluginsSettingsData?.settings.length ? (
+              <DefaultsTab
+                data={pluginsSettingsData}
+                values={defaultsValues}
+                onResetAll={() => resetSettings(pluginsSettingsData)}
+                onSettingValueChange={updateDefaultSetting}
+                configFilePath={displayData.configFilePath}
+                readOnlyNotice={runtimeControlNotice}
+                previewTitle="[[plugin]]"
+                screenLabel="Configuration · plugins"
+                summaryDescription={
+                  <>
+                    Plugin settings are generated from installed plugin schemas and written under each matching{' '}
+                    <span className="rounded border border-border-soft bg-surface px-1 font-mono text-foreground">
+                      [[plugin]]
+                    </span>{' '}
+                    entry. Host-owned fields such as command and startup policy stay separate from plugin-owned custom
+                    settings.
+                  </>
+                }
+                summaryStatus={
+                  pluginsDirty
+                    ? `${pluginsSettingsData.settings.length} settings · modified`
+                    : `${pluginsSettingsData.settings.length} settings`
+                }
+                summaryTitle="Plugin settings"
+                summaryTitleId="plugins-summary-heading"
+                previewTip={
+                  <>
+                    Plugin manifests own these fields; update or reinstall the plugin when a setting is missing from
+                    this list.
+                  </>
+                }
+              />
+            ) : (
+              <ConfigurationPlaceholderPanel title="Plugins" icon={Blocks}>
+                Plugin settings will appear here when an installed plugin publishes config schema metadata.
               </ConfigurationPlaceholderPanel>
             )
           } satisfies ConfigurationTabItem
@@ -713,9 +894,12 @@ export function ConfigurationPageContent({
           nodes={localNodes}
           assigns={localAssigns}
           models={displayData.catalog}
-          defaults={displayData.defaults}
+          defaults={tomlSettings}
           defaultsValues={defaultsValues}
+          modelPlacementPaths={displayData.modelPlacementPaths}
+          modelConfigEntries={displayData.modelConfigEntries}
           reviewMode
+          validationEnabled={liveMode && activeTab === 'toml-review'}
           configPath={displayData.configFilePath}
           validationWarnings={displayData.validationWarnings}
           launchSummaryConfig={displayData.launchSummaryConfig}
@@ -723,7 +907,7 @@ export function ConfigurationPageContent({
       )
     }
   ]
-  const renderedActiveTab = tabs.some((tab) => tab.id === activeTab) ? activeTab : 'defaults'
+  const renderedActiveTab = tabs.some((tab) => tab.id === activeTab) ? activeTab : 'general'
 
   const setActiveTab = useCallback(
     (tab: ConfigurationTabId) => {
@@ -732,25 +916,6 @@ export function ConfigurationPageContent({
     },
     [controlledActiveTab, onTabChange]
   )
-
-  if (showLiveError) {
-    return (
-      <LiveDataUnavailableOverlay
-        debugTitle="Could not reach live configuration sources"
-        title="Live configuration is unavailable"
-        debugDescription="Configuration could not fetch the initial status and model catalog from the configured API target. Start the backend, verify the endpoint, or switch Data source back to Harness in Tweaks while debugging."
-        productionDescription="Configuration is waiting for live node and model data before rendering editable controls. Keep the page open while the service recovers, or switch Data source back to Harness in Tweaks to inspect sample configuration."
-        onRetry={retryLiveData}
-        onSwitchToTestData={switchToTestData}
-      >
-        <ConfigurationLiveLoadingGhost />
-      </LiveDataUnavailableOverlay>
-    )
-  }
-
-  if (showLiveLoading) {
-    return <ConfigurationLiveLoadingGhost />
-  }
 
   return (
     <>

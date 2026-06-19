@@ -8,11 +8,11 @@ describe('configuration-tab-ids', () => {
   it('omits gated configuration tabs when their flags are disabled', () => {
     expect(
       getEnabledConfigurationTabIds({
-        integrationsEnabled: false,
+        pluginsEnabled: false,
         signingAttestationEnabled: false,
         wakePolicyEnabled: false
       })
-    ).toEqual(['defaults', 'local-deployment', 'toml-review'])
+    ).toEqual(['general', 'runtime', 'models', 'network', 'local-deployment', 'toml-review'])
   })
 
   it('treats the Reserves tab as invalid when its feature flag is disabled', () => {

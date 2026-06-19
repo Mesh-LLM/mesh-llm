@@ -469,6 +469,8 @@ mod tests {
                     restart_scope: InstalledPluginRestartScope::PluginProcess,
                     visibility: InstalledPluginVisibility::User,
                     description: Some("Retention window".to_string()),
+                    presentation: None,
+                    control_behavior: None,
                 },
                 InstalledPluginSettingSchema {
                     key: "mode".to_string(),
@@ -486,6 +488,8 @@ mod tests {
                     restart_scope: InstalledPluginRestartScope::PluginProcess,
                     visibility: InstalledPluginVisibility::User,
                     description: Some("Conflict mode".to_string()),
+                    presentation: None,
+                    control_behavior: None,
                 },
             ],
         }
@@ -536,7 +540,7 @@ version = 1
 
 [owner_control]
 bind = "127.0.0.1:7447"
-advertise_addr = "203.0.113.10:18443"
+advertise_addr = "203.0.113.10:7447"
 
 [gpu]
 assignment = "auto"
@@ -563,7 +567,7 @@ command = "/tmp/demo"
         );
         assert_eq!(
             config.owner_control.advertise_addr,
-            Some("203.0.113.10:18443".parse().unwrap())
+            Some("203.0.113.10:7447".parse().unwrap())
         );
         assert_eq!(config.gpu.assignment, GpuAssignment::Auto);
         assert_eq!(config.models.len(), 2);
@@ -1285,7 +1289,7 @@ flash_attention = "enabled"
         let err = validate_config(&config).unwrap_err();
         assert!(
             err.to_string()
-                .contains("models[0].model_fit.batch must be at least 1 when set")
+                .contains("models[0].model_fit.batch must be between 1 and 10000000, got 0")
         );
     }
 
@@ -1302,7 +1306,7 @@ flash_attention = "enabled"
         let err = validate_config(&config).unwrap_err();
         assert!(
             err.to_string()
-                .contains("models[0].model_fit.ubatch must be at least 1 when set")
+                .contains("models[0].model_fit.ubatch must be between 1 and 10000000, got 0")
         );
     }
 
@@ -1402,7 +1406,7 @@ model = "Qwen3-8B-Q4_K_M"
 version = 1
 
 [gpu]
-assignment = "auto"
+assignment = "pinned"
 
 [defaults.model_fit]
 ctx_size = 8192
@@ -1420,7 +1424,6 @@ context_shift = "auto"
 
 [defaults.hardware]
 model_runtime = "auto"
-device = "auto"
 gpu_layers = "auto"
 tensor_split = []
 split_mode = "auto"
@@ -1452,7 +1455,7 @@ mode = "auto"
 draft_selection_policy = "auto"
 pairing_fault = "warn_disable"
 draft_max_tokens = 16
-draft_min_tokens = 0
+draft_min_tokens = 1
 draft_acceptance_threshold = 0.0
 
 [defaults.request_defaults]
@@ -1606,7 +1609,7 @@ batch = 0
         let err = validate_config(&config).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "models[0].model_fit.batch must be at least 1 when set"
+            "models[0].model_fit.batch must be between 1 and 10000000, got 0"
         );
     }
 
@@ -1721,7 +1724,7 @@ mmproj = "multimodal.gguf"
         );
         assert_eq!(
             config.owner_control.advertise_addr,
-            Some("203.0.113.10:18443".parse().unwrap())
+            Some("203.0.113.10:7447".parse().unwrap())
         );
 
         let defaults = config.defaults.as_ref().expect("defaults should parse");
@@ -1809,7 +1812,7 @@ mmproj = "multimodal.gguf"
         let batch_error = validate_config(&invalid).unwrap_err().to_string();
         assert_eq!(
             batch_error,
-            "models[0].model_fit.batch must be at least 1 when set"
+            "models[0].model_fit.batch must be between 1 and 10000000, got 0"
         );
 
         let repaired_batch = FULL_SURFACE_INVALID_FIXTURE.replace("batch = 0", "batch = 64");

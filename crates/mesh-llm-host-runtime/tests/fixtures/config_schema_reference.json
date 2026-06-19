@@ -7,6 +7,9 @@
         "kind": "engine",
         "engine_id": "vllm"
       },
+      "value_schema": {
+        "kind": "float"
+      },
       "support": "supported",
       "control_surfaces": [
         "api",
@@ -15,13 +18,365 @@
       "apply_mode": "dynamic_apply",
       "restart_scope": "none",
       "visibility": "advanced",
-      "description": "Engine temperature override."
+      "description": "Engine temperature override.",
+      "control_behavior": {
+        "numeric": {
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.1
+        }
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.device",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "string"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "model_reload",
+      "visibility": "user",
+      "constraints": [
+        {
+          "kind": "non_empty"
+        }
+      ],
+      "alias_policy": {
+        "mode": "canonical_with_legacy_aliases",
+        "aliases": [
+          {
+            "path": {
+              "segments": [
+                {
+                  "kind": "field",
+                  "name": "defaults"
+                },
+                {
+                  "kind": "field",
+                  "name": "gpu_id"
+                }
+              ]
+            },
+            "kind": "legacy_layout",
+            "note": "legacy flattened TOML field"
+          }
+        ]
+      },
+      "description": "Optional fallback device for pinned GPU assignment when a model does not set its own device.",
+      "presentation": {
+        "label": "Default GPU device",
+        "help": "Optional fallback device for pinned GPU assignment when a model does not set its own device.",
+        "category_id": "runtime",
+        "category_label": "Runtime",
+        "category_summary": "Load-time runtime behavior and concurrency defaults",
+        "category_order": 10,
+        "setting_order": 90,
+        "placeholder": "cuda:0 or CUDA0",
+        "control_hint": "text"
+      },
+      "control_behavior": {
+        "options_source": "runtime_gpus",
+        "enable_when": [
+          {
+            "path": {
+              "segments": [
+                {
+                  "kind": "field",
+                  "name": "gpu"
+                },
+                {
+                  "kind": "field",
+                  "name": "assignment"
+                }
+              ]
+            },
+            "operator": "equals",
+            "values": [
+              {
+                "kind": "string",
+                "value": "pinned"
+              }
+            ]
+          }
+        ],
+        "disable_when": [
+          {
+            "condition": {
+              "path": {
+                "segments": [
+                  {
+                    "kind": "field",
+                    "name": "gpu"
+                  },
+                  {
+                    "kind": "field",
+                    "name": "assignment"
+                  }
+                ]
+              },
+              "operator": "equals",
+              "values": [
+                {
+                  "kind": "string",
+                  "value": "auto"
+                }
+              ]
+            },
+            "reason": "Set gpu.assignment = \"pinned\" to edit a concrete GPU device.",
+            "write_policy": "omit_when_disabled"
+          }
+        ]
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.mmproj",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "path"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "model_reload",
+      "visibility": "advanced",
+      "description": "defaults.hardware.mmproj",
+      "presentation": {
+        "label": "Mmproj",
+        "help": "defaults.hardware.mmproj",
+        "category_id": "runtime",
+        "category_label": "Runtime",
+        "category_summary": "Load-time runtime behavior and concurrency defaults",
+        "category_order": 10,
+        "setting_order": 3839006759,
+        "placeholder": "/path/to/mmproj.gguf"
+      },
+      "control_behavior": {
+        "text_format": "path",
+        "availability": {
+          "enabled": false,
+          "reason": "Edit defaults.multimodal.mmproj instead of the legacy hardware duplicate.",
+          "note": "Existing values are preserved on save unless you change defaults.multimodal.mmproj.",
+          "source": "static"
+        },
+        "write_policy": "preserve_existing"
+      }
+    },
+    {
+      "canonical_path": "defaults.model_fit.batch",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "integer"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "model_reload",
+      "visibility": "user",
+      "alias_policy": {
+        "mode": "canonical_with_legacy_aliases",
+        "aliases": [
+          {
+            "path": {
+              "segments": [
+                {
+                  "kind": "field",
+                  "name": "defaults"
+                },
+                {
+                  "kind": "field",
+                  "name": "batch"
+                }
+              ]
+            },
+            "kind": "legacy_layout",
+            "note": "legacy flattened TOML field"
+          }
+        ]
+      },
+      "description": "Set the default prefill batch size.",
+      "presentation": {
+        "label": "Batch size",
+        "help": "Set the default prefill batch size.",
+        "category_id": "memory",
+        "category_label": "Memory",
+        "category_summary": "VRAM accounting and KV cache policy",
+        "category_order": 20,
+        "setting_order": 40,
+        "unit": "tokens",
+        "control_hint": "range"
+      },
+      "control_behavior": {
+        "numeric": {
+          "min": 1.0,
+          "step": 1.0,
+          "unit": "tokens"
+        }
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.mmproj",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "path"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "model_reload",
+      "visibility": "user",
+      "constraints": [
+        {
+          "kind": "non_empty"
+        }
+      ],
+      "alias_policy": {
+        "mode": "canonical_with_legacy_aliases",
+        "aliases": [
+          {
+            "path": {
+              "segments": [
+                {
+                  "kind": "field",
+                  "name": "defaults"
+                },
+                {
+                  "kind": "field",
+                  "name": "mmproj"
+                }
+              ]
+            },
+            "kind": "legacy_layout",
+            "note": "legacy flattened TOML field"
+          }
+        ]
+      },
+      "description": "Set an explicit local path to the multimodal projector file.",
+      "presentation": {
+        "label": "MMProj path",
+        "help": "Set an explicit local path to the multimodal projector file.",
+        "category_id": "multimodal",
+        "category_label": "Multimodal",
+        "category_summary": "Vision projector and image token defaults",
+        "category_order": 60,
+        "setting_order": 40,
+        "placeholder": "e.g. /path/to/mmproj.gguf",
+        "control_hint": "text"
+      },
+      "control_behavior": {
+        "text_format": "path"
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.mmproj_offload",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "one_of",
+        "variants": [
+          {
+            "kind": "boolean"
+          },
+          {
+            "kind": "enum",
+            "values": [
+              "auto",
+              "true",
+              "false"
+            ]
+          }
+        ]
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "model_reload",
+      "visibility": "user",
+      "description": "Choose whether the multimodal projector stays auto-managed or explicitly on or off.",
+      "presentation": {
+        "label": "MMProj offload",
+        "help": "Choose whether the multimodal projector stays auto-managed or explicitly on or off.",
+        "category_id": "multimodal",
+        "category_label": "Multimodal",
+        "category_summary": "Vision projector and image token defaults",
+        "category_order": 60,
+        "setting_order": 10,
+        "control_hint": "segmented"
+      },
+      "control_behavior": {
+        "options_source": "static"
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.mmproj_url",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "url"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "model_reload",
+      "visibility": "user",
+      "constraints": [
+        {
+          "kind": "non_empty"
+        }
+      ],
+      "description": "Set a URL used to download or reference the multimodal projector file.",
+      "presentation": {
+        "label": "MMProj URL",
+        "help": "Set a URL used to download or reference the multimodal projector file.",
+        "category_id": "multimodal",
+        "category_label": "Multimodal",
+        "category_summary": "Vision projector and image token defaults",
+        "category_order": 60,
+        "setting_order": 50,
+        "placeholder": "e.g. https://example.com/mmproj.gguf",
+        "control_hint": "text"
+      },
+      "control_behavior": {
+        "text_format": "url"
+      }
     },
     {
       "canonical_path": "defaults.request_defaults.dry",
       "owner": "built_in",
       "source": {
         "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "object"
       },
       "support": "unwired",
       "control_surfaces": [
@@ -30,15 +385,371 @@
       "apply_mode": "static_on_load",
       "restart_scope": "model_reload",
       "visibility": "advanced",
-      "description": "Reserved sampler object accepted for compatibility but not wired into the current runtime."
+      "description": "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
+      "presentation": {
+        "label": "Dry",
+        "help": "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
+        "category_id": "request-defaults",
+        "category_label": "Request Defaults",
+        "category_summary": "Request-time sampling and reasoning defaults",
+        "category_order": 40,
+        "setting_order": 3084612059,
+        "control_hint": "textarea"
+      },
+      "control_behavior": {
+        "availability": {
+          "enabled": false,
+          "reason": "Reserved sampler object is accepted for compatibility but not wired into the current runtime.",
+          "source": "static"
+        }
+      }
     },
     {
-      "canonical_path": "plugin.blackboard.settings.retention_days",
+      "canonical_path": "gpu.assignment",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "enum",
+        "values": [
+          "auto",
+          "pinned"
+        ]
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "model_reload",
+      "visibility": "user",
+      "description": "Choose automatic GPU placement, or require configured model entries to name a concrete GPU device.",
+      "presentation": {
+        "label": "GPU assignment",
+        "help": "Choose automatic GPU placement, or require configured model entries to name a concrete GPU device.",
+        "category_id": "runtime",
+        "category_label": "Runtime",
+        "category_summary": "Load-time runtime behavior and concurrency defaults",
+        "category_order": 10,
+        "setting_order": 10,
+        "control_hint": "segmented"
+      },
+      "control_behavior": {
+        "options_source": "static"
+      }
+    },
+    {
+      "canonical_path": "models.<model-ref>.hardware.device",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "string"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "model_reload",
+      "visibility": "user",
+      "constraints": [
+        {
+          "kind": "non_empty"
+        }
+      ],
+      "alias_policy": {
+        "mode": "canonical_with_legacy_aliases",
+        "aliases": [
+          {
+            "path": {
+              "segments": [
+                {
+                  "kind": "field",
+                  "name": "models"
+                },
+                {
+                  "kind": "field",
+                  "name": "<model-ref>"
+                },
+                {
+                  "kind": "field",
+                  "name": "gpu_id"
+                }
+              ]
+            },
+            "kind": "legacy_layout",
+            "note": "legacy flattened TOML field"
+          }
+        ]
+      },
+      "description": "Device assignment for this local placement.",
+      "presentation": {
+        "label": "GPU device",
+        "help": "Device assignment for this local placement.",
+        "category_id": "runtime",
+        "category_label": "Runtime",
+        "category_summary": "Load-time runtime behavior and concurrency defaults",
+        "category_order": 10,
+        "setting_order": 30,
+        "placeholder": "cuda:0",
+        "renderer_id": "model-placement-device"
+      },
+      "control_behavior": {
+        "options_source": "runtime_gpus",
+        "enable_when": [
+          {
+            "path": {
+              "segments": [
+                {
+                  "kind": "field",
+                  "name": "gpu"
+                },
+                {
+                  "kind": "field",
+                  "name": "assignment"
+                }
+              ]
+            },
+            "operator": "equals",
+            "values": [
+              {
+                "kind": "string",
+                "value": "pinned"
+              }
+            ]
+          }
+        ],
+        "disable_when": [
+          {
+            "condition": {
+              "path": {
+                "segments": [
+                  {
+                    "kind": "field",
+                    "name": "gpu"
+                  },
+                  {
+                    "kind": "field",
+                    "name": "assignment"
+                  }
+                ]
+              },
+              "operator": "equals",
+              "values": [
+                {
+                  "kind": "string",
+                  "value": "auto"
+                }
+              ]
+            },
+            "reason": "Set gpu.assignment = \"pinned\" to edit a concrete GPU device.",
+            "write_policy": "omit_when_disabled"
+          }
+        ]
+      }
+    },
+    {
+      "canonical_path": "models.<model-ref>.hardware.rpc_backend",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "object"
+      },
+      "support": "rejected",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "none",
+      "visibility": "advanced",
+      "description": "The legacy rpc_backend escape hatch is explicitly unsupported by the embedded runtime.",
+      "presentation": {
+        "label": "Rpc Backend",
+        "help": "The legacy rpc_backend escape hatch is explicitly unsupported by the embedded runtime.",
+        "category_id": "runtime",
+        "category_label": "Runtime",
+        "category_summary": "Load-time runtime behavior and concurrency defaults",
+        "category_order": 10,
+        "setting_order": 1150618843,
+        "control_hint": "textarea"
+      },
+      "control_behavior": {
+        "availability": {
+          "enabled": false,
+          "reason": "The legacy rpc_backend escape hatch is explicitly unsupported by the embedded runtime.",
+          "source": "static"
+        }
+      }
+    },
+    {
+      "canonical_path": "owner_control.advertise_addr",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "socket_addr"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file",
+        "owner_control"
+      ],
+      "apply_mode": "dynamic_apply",
+      "restart_scope": "process_restart",
+      "visibility": "user",
+      "constraints": [
+        {
+          "kind": "requires",
+          "path": {
+            "segments": [
+              {
+                "kind": "field",
+                "name": "owner_control"
+              },
+              {
+                "kind": "field",
+                "name": "bind"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "Concrete address encoded into local owner-control bootstrap payloads. Requires owner-control bind to listen on the same port.",
+      "presentation": {
+        "label": "Advertised control address",
+        "help": "Concrete address encoded into local owner-control bootstrap payloads. Requires owner-control bind to listen on the same port.",
+        "category_id": "network",
+        "category_label": "Network",
+        "category_summary": "Owner-control listener and advertised control endpoint settings",
+        "category_order": 20,
+        "setting_order": 20,
+        "placeholder": "127.0.0.1:7447",
+        "control_hint": "text"
+      },
+      "control_behavior": {
+        "enable_when": [
+          {
+            "path": {
+              "segments": [
+                {
+                  "kind": "field",
+                  "name": "owner_control"
+                },
+                {
+                  "kind": "field",
+                  "name": "bind"
+                }
+              ]
+            },
+            "operator": "present"
+          }
+        ],
+        "disable_when": [
+          {
+            "condition": {
+              "path": {
+                "segments": [
+                  {
+                    "kind": "field",
+                    "name": "owner_control"
+                  },
+                  {
+                    "kind": "field",
+                    "name": "bind"
+                  }
+                ]
+              },
+              "operator": "absent"
+            },
+            "reason": "owner_control.advertise_addr requires owner_control.bind so the advertised port is actually listening",
+            "write_policy": "omit_when_disabled"
+          }
+        ]
+      }
+    },
+    {
+      "canonical_path": "plugin.<plugin-name>.startup.connect_timeout_secs",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "integer"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file",
+        "plugin_manifest"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "process_restart",
+      "visibility": "user",
+      "description": "Seconds to wait for the plugin transport connection.",
+      "presentation": {
+        "label": "Connect timeout",
+        "help": "Seconds to wait for the plugin transport connection.",
+        "category_id": "plugin-host",
+        "category_label": "Plugin Host",
+        "category_summary": "Host-owned plugin process and startup settings",
+        "category_order": 10,
+        "setting_order": 50,
+        "unit": "sec",
+        "control_hint": "number"
+      },
+      "control_behavior": {
+        "numeric": {
+          "min": 1.0,
+          "step": 1.0,
+          "unit": "sec"
+        }
+      }
+    },
+    {
+      "canonical_path": "plugin.<plugin-name>.url",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "url"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file",
+        "plugin_manifest"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "process_restart",
+      "visibility": "user",
+      "description": "URL used by endpoint-style plugins.",
+      "presentation": {
+        "label": "Base URL",
+        "help": "URL used by endpoint-style plugins.",
+        "category_id": "plugin-host",
+        "category_label": "Plugin Host",
+        "category_summary": "Host-owned plugin process and startup settings",
+        "category_order": 10,
+        "setting_order": 20,
+        "placeholder": "http://localhost:8000/v1",
+        "control_hint": "text"
+      }
+    },
+    {
+      "canonical_path": "plugin.blackboard.settings.projector_path",
       "owner": "plugin",
       "source": {
         "kind": "plugin",
         "plugin_name": "blackboard",
         "allow_unvalidated_config": false
+      },
+      "value_schema": {
+        "kind": "path"
       },
       "support": "supported",
       "control_surfaces": [
@@ -49,13 +760,142 @@
       "apply_mode": "dynamic_apply",
       "restart_scope": "process_restart",
       "visibility": "advanced",
-      "description": "Retention period in days"
+      "description": "Projector path",
+      "control_behavior": {
+        "text_format": "path"
+      }
+    },
+    {
+      "canonical_path": "plugin.blackboard.settings.projector_url",
+      "owner": "plugin",
+      "source": {
+        "kind": "plugin",
+        "plugin_name": "blackboard",
+        "allow_unvalidated_config": false
+      },
+      "value_schema": {
+        "kind": "url"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file",
+        "owner_control",
+        "plugin_manifest"
+      ],
+      "apply_mode": "dynamic_apply",
+      "restart_scope": "process_restart",
+      "visibility": "advanced",
+      "description": "Projector URL",
+      "control_behavior": {
+        "text_format": "url"
+      }
+    },
+    {
+      "canonical_path": "plugin.blackboard.settings.retention_days",
+      "owner": "plugin",
+      "source": {
+        "kind": "plugin",
+        "plugin_name": "blackboard",
+        "allow_unvalidated_config": false
+      },
+      "value_schema": {
+        "kind": "integer"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file",
+        "owner_control",
+        "plugin_manifest"
+      ],
+      "apply_mode": "dynamic_apply",
+      "restart_scope": "process_restart",
+      "visibility": "advanced",
+      "constraints": [
+        {
+          "kind": "range",
+          "min": "1",
+          "max": "365"
+        }
+      ],
+      "description": "Retention period in days",
+      "presentation": {
+        "label": "Retention days",
+        "help": "How long entries stay available.",
+        "category_id": "blackboard-retention",
+        "category_label": "Retention",
+        "category_summary": "Retention policy",
+        "category_order": 10,
+        "setting_order": 20,
+        "unit": "days",
+        "control_hint": "number"
+      }
+    },
+    {
+      "canonical_path": "runtime.debug",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "boolean"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file",
+        "api"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "process_restart",
+      "visibility": "user",
+      "description": "Enable mesh runtime debug output on startup. Set MESH_LLM_DEBUG_NATIVE_VERBOSE=1 separately for verbose llama.cpp native logs.",
+      "presentation": {
+        "label": "Debug output",
+        "help": "Enable mesh runtime debug output on startup. Set MESH_LLM_DEBUG_NATIVE_VERBOSE=1 separately for verbose llama.cpp native logs.",
+        "category_id": "meshllm",
+        "category_label": "General",
+        "category_summary": "Local node startup and observability settings",
+        "category_order": 10,
+        "setting_order": 30,
+        "control_hint": "toggle"
+      }
+    },
+    {
+      "canonical_path": "runtime.listen_all",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "boolean"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file",
+        "api"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "process_restart",
+      "visibility": "user",
+      "description": "Bind the OpenAI-compatible API and web console listeners to 0.0.0.0 instead of 127.0.0.1. This matches --listen-all and is useful for containers or exposed LAN hosts.",
+      "presentation": {
+        "label": "Listen on all interfaces",
+        "help": "Bind the OpenAI-compatible API and web console listeners to 0.0.0.0 instead of 127.0.0.1. This matches --listen-all and is useful for containers or exposed LAN hosts.",
+        "category_id": "network",
+        "category_label": "Network",
+        "category_summary": "Owner-control listener and advertised control endpoint settings",
+        "category_order": 20,
+        "setting_order": 30,
+        "control_hint": "toggle"
+      }
     },
     {
       "canonical_path": "telemetry.prompt_shape_metrics",
       "owner": "built_in",
       "source": {
         "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "boolean"
       },
       "support": "unsupported",
       "control_surfaces": [
@@ -64,13 +904,33 @@
       "apply_mode": "static_on_load",
       "restart_scope": "none",
       "visibility": "advanced",
-      "description": "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed."
+      "description": "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed.",
+      "presentation": {
+        "label": "Prompt Shape Metrics",
+        "help": "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed.",
+        "category_id": "telemetry",
+        "category_label": "Telemetry",
+        "category_summary": "Opt-in metrics export and local telemetry queue settings",
+        "category_order": 40,
+        "setting_order": 1629890975,
+        "control_hint": "toggle"
+      },
+      "control_behavior": {
+        "availability": {
+          "enabled": false,
+          "reason": "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed.",
+          "source": "static"
+        }
+      }
     },
     {
       "canonical_path": "version",
       "owner": "built_in",
       "source": {
         "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "integer"
       },
       "support": "supported",
       "control_surfaces": [
@@ -80,6 +940,25 @@
       "restart_scope": "model_reload",
       "visibility": "internal",
       "description": "version"
+    }
+  ],
+  "plugin_instances": [
+    {
+      "name": "blobstore",
+      "enabled": true,
+      "source_repository": "built-in",
+      "installed_version": "0.68.0",
+      "last_status": "built-in",
+      "has_config_schema": false,
+      "allow_unvalidated_config": false
+    },
+    {
+      "name": "blackboard",
+      "enabled": true,
+      "source_repository": "mesh-llm/blackboard",
+      "installed_version": "0.1.0",
+      "has_config_schema": true,
+      "allow_unvalidated_config": false
     }
   ]
 }

@@ -1,0 +1,93 @@
+version = 1
+
+[gpu]
+assignment = "pinned"
+
+[owner_control]
+advertise_addr = "127.0.0.1:17001"
+
+[mesh_requirements]
+require_release_attestation = true
+
+[defaults.model_fit]
+batch = 32
+ubatch = 64
+
+[[models]]
+model = "gpu-assignment-conflict"
+
+[models.hardware]
+device = "auto"
+
+[[models]]
+model = "hf-pair-conflict"
+
+[models.hardware]
+hf_repo = "meshllm/example-gguf"
+
+[[models]]
+model = "stage-layer-conflict"
+
+[models.hardware]
+stage_layer_end = 12
+
+[[models]]
+model = "keep-tokens-conflict"
+
+[models.model_fit]
+ctx_size = 256
+keep_tokens = 512
+
+[[models]]
+model = "cache-idle-conflict"
+
+[models.model_fit]
+prompt_cache = false
+cache_idle_slots = 4
+
+[[models]]
+model = "skippy-schedule-conflict"
+
+[models.skippy]
+prefill_chunk_schedule = "128,0"
+
+[[models]]
+model = "speculative-hf-pair-conflict"
+
+[models.speculative]
+draft_hf_repo = "meshllm/draft"
+
+[[models]]
+model = "speculative-draft-range-conflict"
+
+[models.speculative]
+draft_max_tokens = 4
+draft_min_tokens = 8
+
+[[models]]
+model = "speculative-ngram-range-conflict"
+
+[models.speculative]
+ngram_min = 5
+ngram_max = 3
+
+[[models]]
+model = "mirostat-mode-conflict"
+
+[models.request_defaults]
+mirostat_mode = 0
+
+[[models]]
+model = "multimodal-projector-conflict"
+
+[models.hardware]
+mmproj = "hardware-projector.gguf"
+
+[models.multimodal]
+mmproj = "multimodal-projector.gguf"
+
+[[models]]
+model = "rejected-rpc-backend"
+
+[models.hardware]
+rpc_backend = "rpc"

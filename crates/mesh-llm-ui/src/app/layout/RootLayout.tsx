@@ -79,7 +79,7 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
   const enabledConfigurationTabs = useMemo(
     () =>
       getEnabledConfigurationTabIds({
-        integrationsEnabled,
+        pluginsEnabled: integrationsEnabled,
         signingAttestationEnabled,
         wakePolicyEnabled: wakePolicyConfigurationEnabled
       }),
@@ -91,7 +91,7 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
       reserves: hrefWithBasePath('/reserves'),
       chat: hrefWithBasePath('/chat'),
       configuration: hrefWithBasePath(
-        `/configuration/${pathToConfigurationTab(pathname, enabledConfigurationTabs) ?? 'defaults'}`
+        `/configuration/${pathToConfigurationTab(pathname, enabledConfigurationTabs) ?? 'general'}`
       )
     }),
     [enabledConfigurationTabs, pathname]
@@ -111,7 +111,7 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
       if (tab === 'configuration') {
         void router.navigate({
           to: '/configuration/$configurationTab',
-          params: { configurationTab: pathToConfigurationTab(pathname, enabledConfigurationTabs) ?? 'defaults' }
+          params: { configurationTab: pathToConfigurationTab(pathname, enabledConfigurationTabs) ?? 'general' }
         })
         return
       }

@@ -1,14 +1,43 @@
 import type { ReactNode } from 'react'
 
+const TOML_KEY_PATTERN = String.raw`(?:"(?:\\.|[^"\\])*"|[A-Za-z0-9_.-]+)`
+const tomlSectionClassName =
+  'font-semibold text-[color:color-mix(in_oklab,var(--color-accent)_35%,var(--color-foreground))]'
+const tomlStringClassName = 'text-[color:color-mix(in_oklab,var(--color-accent)_35%,var(--color-foreground))]'
+const tomlBooleanClassName = 'text-[color:color-mix(in_oklab,var(--color-good)_35%,var(--color-foreground))]'
+const tomlNumberClassName = 'text-[color:color-mix(in_oklab,var(--color-warn)_35%,var(--color-foreground))]'
+
+function valueClassName(value: string): string {
+  const trimmed = value.trim()
+  if (/^".*"$/.test(trimmed) || /^'.*'$/.test(trimmed)) return tomlStringClassName
+  if (/^(true|false)$/i.test(trimmed)) return tomlBooleanClassName
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) return tomlNumberClassName
+  return 'text-foreground'
+}
+
 function highlightTomlLine(line: string): ReactNode {
-  if (/^\[\[.+\]\]$/.test(line.trim())) return <span className="text-accent">{line}</span>
-  const keyValue = line.match(/^(\w+)\s*=\s*(.+)$/)
+  if (/^\s*#/.test(line)) return <span className="text-fg-dim">{line}</span>
+  if (/^\s*\[\[?.+\]?\]\s*$/.test(line)) {
+    return (
+      <span className={tomlSectionClassName} data-toml-token="section">
+        {line}
+      </span>
+    )
+  }
+
+  const keyValue = line.match(new RegExp(`^(\\s*)(${TOML_KEY_PATTERN})(\\s*=\\s*)(.*)$`))
   if (keyValue) {
+    const [, indent, key, operator, value] = keyValue
     return (
       <>
-        <span className="text-foreground">{keyValue[1]}</span>
-        <span className="text-fg-dim">{' = '}</span>
-        <span className="text-warn">{keyValue[2]}</span>
+        {indent}
+        <span className="text-foreground" data-toml-token="key">
+          {key}
+        </span>
+        <span className="text-fg-dim">{operator}</span>
+        <span className={valueClassName(value)} data-toml-token="value">
+          {value}
+        </span>
       </>
     )
   }

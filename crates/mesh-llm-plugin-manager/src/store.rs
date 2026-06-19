@@ -8,16 +8,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::source_ref::is_valid_name;
 
+mod control_behavior;
+
+pub use control_behavior::{
+    InstalledPluginConditionOperator, InstalledPluginConditionValue,
+    InstalledPluginConditionalDisable, InstalledPluginConflictRule,
+    InstalledPluginControlAvailability, InstalledPluginControlAvailabilitySource,
+    InstalledPluginControlBehavior, InstalledPluginControlCondition,
+    InstalledPluginDisabledWritePolicy, InstalledPluginNumericControl,
+    InstalledPluginOptionsSource, InstalledPluginTextFormat,
+};
+
 const METADATA_FILE: &str = "plugin-install.json";
 pub const SUPPORTED_PLUGIN_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstalledPluginManifestMetadata {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub config_schema: Option<InstalledPluginConfigSchema>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstalledPluginConfigSchema {
     pub plugin_name: String,
     pub schema_version: u32,
@@ -27,7 +38,7 @@ pub struct InstalledPluginConfigSchema {
     pub settings: Vec<InstalledPluginSettingSchema>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstalledPluginSettingSchema {
     pub key: String,
     pub value_schema: InstalledPluginValueSchema,
@@ -42,6 +53,36 @@ pub struct InstalledPluginSettingSchema {
     pub visibility: InstalledPluginVisibility,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub presentation: Option<InstalledPluginPresentationMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub control_behavior: Option<InstalledPluginControlBehavior>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginPresentationMetadata {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub help: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub category_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub category_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub category_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub category_order: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub setting_order: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub placeholder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub control_hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub renderer_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,7 +168,7 @@ pub enum InstalledPluginConstraint {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstalledPluginMetadata {
     pub name: String,
     pub source_repository: String,
@@ -328,6 +369,20 @@ mod tests {
                         restart_scope: InstalledPluginRestartScope::PluginProcess,
                         visibility: InstalledPluginVisibility::User,
                         description: Some("How long to retain entries.".to_string()),
+                        presentation: Some(InstalledPluginPresentationMetadata {
+                            label: Some("Retention days".to_string()),
+                            help: Some("How long to retain entries.".to_string()),
+                            category_id: Some("retention".to_string()),
+                            category_label: Some("Retention".to_string()),
+                            category_summary: Some("Retention settings".to_string()),
+                            category_order: Some(10),
+                            setting_order: Some(20),
+                            unit: Some("days".to_string()),
+                            placeholder: None,
+                            control_hint: Some("number".to_string()),
+                            renderer_id: None,
+                        }),
+                        control_behavior: None,
                     }],
                 }),
             }),
@@ -355,6 +410,16 @@ mod tests {
                 .and_then(|manifest| manifest.config_schema.as_ref())
                 .map(|schema| schema.schema_version),
             Some(SUPPORTED_PLUGIN_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            loaded
+                .manifest
+                .as_ref()
+                .and_then(|manifest| manifest.config_schema.as_ref())
+                .and_then(|schema| schema.settings.first())
+                .and_then(|setting| setting.presentation.as_ref())
+                .and_then(|presentation| presentation.unit.as_deref()),
+            Some("days")
         );
         assert_eq!(loaded.last_protocol_version, Some(2));
 
@@ -419,5 +484,53 @@ mod tests {
         let listed = store.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "blackboard");
+    }
+
+    #[test]
+    fn load_legacy_metadata_without_control_behavior() {
+        let temp = TempDir::new().unwrap();
+        let store = PluginStore::new(temp.path());
+        let plugin_dir = temp.path().join("blackboard");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join(METADATA_FILE),
+            r#"{
+  "name": "blackboard",
+  "source_repository": "https://github.com/mesh-llm/blackboard",
+  "installed_version": "v1.0.0",
+  "target_triple": "aarch64-apple-darwin",
+  "downloaded_asset_name": "blackboard-v1.0.0-aarch64-apple-darwin.tar.gz",
+  "install_path": "/tmp/plugins/blackboard",
+  "enabled": true,
+  "manifest": {
+    "config_schema": {
+      "plugin_name": "blackboard",
+      "schema_version": 1,
+      "allow_unvalidated_config": false,
+      "settings": [
+        {
+          "key": "retention_days",
+          "value_schema": { "kind": "integer" },
+          "required": true,
+          "apply_mode": "dynamic_validation_only",
+          "restart_scope": "plugin_process",
+          "visibility": "user"
+        }
+      ]
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let loaded = store.load("blackboard").unwrap();
+        let setting = loaded
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.config_schema.as_ref())
+            .and_then(|schema| schema.settings.first())
+            .expect("legacy setting should load");
+
+        assert!(setting.control_behavior.is_none());
     }
 }

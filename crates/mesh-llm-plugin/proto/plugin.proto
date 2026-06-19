@@ -205,6 +205,127 @@ message PluginConfigSettingManifest {
   PluginConfigRestartScope restart_scope = 7;
   PluginConfigVisibility visibility = 8;
   optional string description = 9;
+  optional PluginConfigPresentationManifest presentation = 10;
+  optional PluginConfigControlBehavior control_behavior = 11;
+}
+
+message PluginConfigControlBehavior {
+  optional PluginConfigNumericControl numeric = 1;
+  optional PluginConfigTextFormat text_format = 2;
+  optional PluginConfigOptionsSource options_source = 3;
+  optional PluginConfigControlAvailability availability = 4;
+  repeated PluginConfigControlCondition enable_when = 5;
+  repeated PluginConfigConditionalDisable disable_when = 6;
+  repeated PluginConfigConflictRule conflicts = 7;
+  optional PluginConfigDisabledWritePolicy write_policy = 8;
+}
+
+message PluginConfigNumericControl {
+  optional double min = 1;
+  optional double max = 2;
+  optional double step = 3;
+  optional double soft_min = 4;
+  optional double soft_max = 5;
+  optional string unit = 6;
+}
+
+enum PluginConfigTextFormat {
+  PLUGIN_CONFIG_TEXT_FORMAT_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_TEXT_FORMAT_PLAIN = 1;
+  PLUGIN_CONFIG_TEXT_FORMAT_PATH = 2;
+  PLUGIN_CONFIG_TEXT_FORMAT_URL = 3;
+  PLUGIN_CONFIG_TEXT_FORMAT_SOCKET_ADDR = 4;
+  PLUGIN_CONFIG_TEXT_FORMAT_SEMVER = 5;
+  PLUGIN_CONFIG_TEXT_FORMAT_ED25519_KEY = 6;
+  PLUGIN_CONFIG_TEXT_FORMAT_CSV_POSITIVE_INTS = 7;
+}
+
+enum PluginConfigOptionsSource {
+  PLUGIN_CONFIG_OPTIONS_SOURCE_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_STATIC = 1;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_RUNTIME_GPUS = 2;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_RUNTIME_NATIVE_BACKENDS = 3;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_RUNTIME_LOCAL_MODELS = 4;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_RUNTIME_INSTALLED_PLUGINS = 5;
+  PLUGIN_CONFIG_OPTIONS_SOURCE_RUNTIME_MESH_PEERS = 6;
+}
+
+message PluginConfigControlAvailability {
+  bool enabled = 1;
+  optional string reason = 2;
+  optional string note = 3;
+  PluginConfigControlAvailabilitySource source = 4;
+}
+
+enum PluginConfigControlAvailabilitySource {
+  PLUGIN_CONFIG_CONTROL_AVAILABILITY_SOURCE_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_CONTROL_AVAILABILITY_SOURCE_STATIC = 1;
+  PLUGIN_CONFIG_CONTROL_AVAILABILITY_SOURCE_RUNTIME = 2;
+  PLUGIN_CONFIG_CONTROL_AVAILABILITY_SOURCE_DEPENDENCY = 3;
+  PLUGIN_CONFIG_CONTROL_AVAILABILITY_SOURCE_CONFLICT = 4;
+}
+
+message PluginConfigControlCondition {
+  string key = 1;
+  PluginConfigConditionOperator operator = 2;
+  repeated PluginConfigConditionValue values = 3;
+}
+
+enum PluginConfigConditionOperator {
+  PLUGIN_CONFIG_CONDITION_OPERATOR_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_EQUALS = 1;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_NOT_EQUALS = 2;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_IN = 3;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_NOT_IN = 4;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_PRESENT = 5;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_ABSENT = 6;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_TRUTHY = 7;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_FALSY = 8;
+  PLUGIN_CONFIG_CONDITION_OPERATOR_RANGE = 9;
+}
+
+message PluginConfigConditionValue {
+  oneof value {
+    bool bool_value = 1;
+    int64 integer_value = 2;
+    double float_value = 3;
+    string string_value = 4;
+  }
+}
+
+message PluginConfigConditionalDisable {
+  optional PluginConfigControlCondition condition = 1;
+  string reason = 2;
+  optional string note = 3;
+  PluginConfigDisabledWritePolicy write_policy = 4;
+}
+
+message PluginConfigConflictRule {
+  string group = 1;
+  optional PluginConfigControlCondition condition = 2;
+  string reason = 3;
+  optional string preferred_key = 4;
+}
+
+enum PluginConfigDisabledWritePolicy {
+  PLUGIN_CONFIG_DISABLED_WRITE_POLICY_UNSPECIFIED = 0;
+  PLUGIN_CONFIG_DISABLED_WRITE_POLICY_PRESERVE_EXISTING = 1;
+  PLUGIN_CONFIG_DISABLED_WRITE_POLICY_OMIT_WHEN_DISABLED = 2;
+  PLUGIN_CONFIG_DISABLED_WRITE_POLICY_REJECT_WHEN_DISABLED = 3;
+}
+
+message PluginConfigPresentationManifest {
+  optional string label = 1;
+  optional string help = 2;
+  optional string category_id = 3;
+  optional string category_label = 4;
+  optional string category_summary = 5;
+  optional uint32 category_order = 6;
+  optional uint32 setting_order = 7;
+  optional string unit = 8;
+  optional string placeholder = 9;
+  optional string control_hint = 10;
+  optional string renderer_id = 11;
 }
 
 message PluginConfigValueSchema {
