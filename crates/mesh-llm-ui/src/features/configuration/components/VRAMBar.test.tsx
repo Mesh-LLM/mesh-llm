@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { VRAMBar } from '@/features/configuration/components/VRAMBar'
-import { contextGB, findModel } from '@/features/configuration/lib/config-math'
+import { contextGB, findModel, modelWeightsGB } from '@/features/configuration/lib/config-math'
 import { reservedVramSelectionId } from '@/features/configuration/lib/selection'
 import type { ConfigAssign, ConfigNode } from '@/features/app-tabs/types'
 
@@ -64,8 +64,9 @@ describe('VRAMBar', () => {
     expect(bar.firstElementChild).toBe(reservedLane)
     const modelSegment = within(bar).getByRole('button', { name: /qwen3-4b-q4_k_m/i })
     const widthPercent = Number.parseFloat(modelSegment.style.width)
-    const expectedUsableWidth = ((model.sizeGB + contextGB(model, assigns[0].ctx)) / 3) * 100
-    const rawTotalWidth = ((model.sizeGB + contextGB(model, assigns[0].ctx)) / 4) * 100
+    const modelUsageGB = modelWeightsGB(model) + contextGB(model, assigns[0].ctx)
+    const expectedUsableWidth = (modelUsageGB / 3) * 100
+    const rawTotalWidth = (modelUsageGB / 4) * 100
 
     expect(widthPercent).toBeCloseTo(expectedUsableWidth, 3)
     expect(widthPercent).toBeGreaterThan(rawTotalWidth)

@@ -1,50 +1,95 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { ModelConfigCard } from '@/features/configuration/components/ModelConfigCard'
 import { ReservedConfigCard } from '@/features/configuration/components/ReservedConfigCard'
+import {
+  containerAssigns,
+  containerReservedGB,
+  containerTotalGB,
+  containerUsedGB,
+  findModel,
+  modelWeightsGB
+} from '@/features/configuration/lib/config-math'
 import { reservedVramSelectionId } from '@/features/configuration/lib/selection'
-import type { ConfigAssign, ConfigModel, ConfigNode } from '@/features/app-tabs/types'
+import type {
+  ConfigAssign,
+  ConfigModel,
+  ConfigNode,
+  ConfigurationModelPlacementOptions
+} from '@/features/app-tabs/types'
 
-type SelectedModelConfigProps = {
+type AssignedModelConfigsProps = {
   containerIdx: number
   readOnly: boolean
-  selectedAssign: ConfigAssign | undefined
-  selectedAssignContainerIdx: number
+  selectedId?: string | null
   node: ConfigNode
+  assigns: ConfigAssign[]
   models?: ConfigModel[]
-  containerFreeGB: number
+  modelPlacementOptions?: ConfigurationModelPlacementOptions
   setAssigns: Dispatch<SetStateAction<ConfigAssign[]>>
   onPick: (id: string | null) => void
 }
 
-export function SelectedModelConfig({
+export function AssignedModelConfigs({
   containerIdx,
   readOnly,
-  selectedAssign,
-  selectedAssignContainerIdx,
+  selectedId,
   node,
+  assigns,
   models,
-  containerFreeGB,
+  modelPlacementOptions,
   setAssigns,
   onPick
-}: SelectedModelConfigProps) {
-  if (readOnly || !selectedAssign || selectedAssignContainerIdx !== containerIdx) return null
+}: AssignedModelConfigsProps) {
+  if (readOnly) return null
+
+  const scopedAssigns = containerAssigns(assigns, node.id, containerIdx)
+  if (scopedAssigns.length === 0) return null
+
+  const selectedAssign = scopedAssigns.find((assign) => assign.id === selectedId)
+  if (!selectedAssign) return null
+
+  const totalGB = containerTotalGB(node, containerIdx)
+  const reservedGB = containerReservedGB(node, containerIdx)
+
+  const containerFreeGBForAssign = (assign: ConfigAssign) => {
+    const model = findModel(assign.modelId, models)
+    return (
+      totalGB -
+      reservedGB -
+      containerUsedGB(
+        assigns.filter((item) => item.id !== assign.id),
+        node.id,
+        containerIdx,
+        models
+      ) -
+      (model ? modelWeightsGB(model) : 0)
+    )
+  }
 
   return (
-    <ModelConfigCard
-      key={selectedAssign.id}
-      assign={selectedAssign}
-      node={node}
-      models={models}
-      containerFreeGB={containerFreeGB}
-      controlTabIndex={-1}
-      onCtxChange={(ctx) =>
-        setAssigns((items) => items.map((assign) => (assign.id === selectedAssign.id ? { ...assign, ctx } : assign)))
-      }
-      onRemove={() => {
-        setAssigns((items) => items.filter((assign) => assign.id !== selectedAssign.id))
-        onPick(null)
-      }}
-    />
+    <div className="space-y-2">
+      <ModelConfigCard
+        key={selectedAssign.id}
+        assign={selectedAssign}
+        node={node}
+        models={models}
+        modelPlacementOptions={modelPlacementOptions}
+        selected
+        containerFreeGB={containerFreeGBForAssign(selectedAssign)}
+        controlTabIndex={-1}
+        onPick={() => onPick(selectedAssign.id)}
+        onCtxChange={(ctx) =>
+          setAssigns((items) => items.map((item) => (item.id === selectedAssign.id ? { ...item, ctx } : item)))
+        }
+        onConfigChange={(config) =>
+          setAssigns((items) => items.map((item) => (item.id === selectedAssign.id ? { ...item, config } : item)))
+        }
+        onRemove={() => {
+          setAssigns((items) => items.filter((item) => item.id !== selectedAssign.id))
+          onPick(null)
+        }}
+      />
+    </div>
   )
 }
 

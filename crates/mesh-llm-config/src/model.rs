@@ -68,6 +68,10 @@ fn default_model_target_demand_upgrade_max_age_secs() -> u64 {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RuntimeConfig {
     #[serde(default)]
+    pub debug: bool,
+    #[serde(default)]
+    pub listen_all: bool,
+    #[serde(default)]
     pub reconcile_model_targets: bool,
     #[serde(default)]
     pub reconcile_model_target_demand_upgrades: bool,
@@ -82,6 +86,8 @@ pub struct RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
+            debug: false,
+            listen_all: false,
             reconcile_model_targets: false,
             reconcile_model_target_demand_upgrades: false,
             native_runtime: NativeRuntimeConfig::default(),

@@ -128,6 +128,9 @@ importers:
       tw-animate-css:
         specifier: 1.4.0
         version: 1.4.0
+      valibot:
+        specifier: ^1.4.1
+        version: 1.4.1(typescript@6.0.3)
     devDependencies:
       '@axe-core/playwright':
         specifier: ^4.11.3
@@ -3430,6 +3433,14 @@ packages:
   uuid@11.1.1:
     resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
     hasBin: true
+
+  valibot@1.4.1:
+    resolution: {integrity: sha512-klCmFTz2jeDluy9RwX+F884TCiogtdBJ/YaxSx1EOBYXa3NXNWj8kR1jjN8rzluwojJVWWaHJ4r1U5LfICnM3g==}
+    peerDependencies:
+      typescript: '>=5'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
 
   vfile-message@4.0.3:
     resolution: {integrity: sha512-QTHzsGd1EhbZs4AsQ20JX1rC3cOlt/IWJruk893DfLRr57lcnOeMaWG4K0JrRta4mIJZKth2Au3mM3u03/JWKw==}
@@ -7089,6 +7100,10 @@ snapshots:
       react: 19.2.5
 
   uuid@11.1.1: {}
+
+  valibot@1.4.1(typescript@6.0.3):
+    optionalDependencies:
+      typescript: 6.0.3
 
   vfile-message@4.0.3:
     dependencies:

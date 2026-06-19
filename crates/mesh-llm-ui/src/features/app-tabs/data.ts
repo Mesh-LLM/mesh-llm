@@ -959,28 +959,6 @@ export const CONFIGURATION_DEFAULTS = {
       }
     },
     {
-      id: 'llamacpp-flavor',
-      categoryId: 'runtime',
-      tomlSection: 'defaults.hardware',
-      tomlKey: 'model_runtime',
-      icon: 'binary',
-      label: 'Model Runtime',
-      description: 'Select the default runtime target for new placements.',
-      inheritedLabel: 'Override when a model needs a specialized runner',
-      control: {
-        kind: 'choice',
-        name: 'model_runtime',
-        value: 'cuda',
-        options: [
-          { value: 'cuda', label: 'cuda' },
-          { value: 'rocm', label: 'rocm' },
-          { value: 'metal', label: 'metal' },
-          { value: 'vulkan', label: 'vulkan' },
-          { value: 'cpu', label: 'cpu' }
-        ]
-      }
-    },
-    {
       id: 'hardware-device',
       categoryId: 'runtime',
       tomlSection: 'defaults.hardware',

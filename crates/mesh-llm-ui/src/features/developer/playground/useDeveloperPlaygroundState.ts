@@ -114,6 +114,10 @@ export function useDeveloperPlaygroundState() {
   const [prompt, setPrompt] = useState('')
   const [selectedChatModel, setSelectedChatModel] = useState(CHAT_HARNESS.models[0]?.name ?? '')
   const [shellSelectedModel, setShellSelectedModel] = useState(CHAT_HARNESS.models[0]?.name ?? '')
+  const [stepperValue1, setStepperValue1] = useState(0)
+  const [stepperValue2, setStepperValue2] = useState(0)
+  const [stepperValue3, setStepperValue3] = useState(0)
+  const [stepperValue4, setStepperValue4] = useState(0)
   const [chatHeaderTitle, setChatHeaderTitle] = useState(CHAT_HARNESS.title)
   const [chatPreviewDrafts, setChatPreviewDrafts] = useState<Record<string, ChatPreviewDraft>>(() =>
     buildChatPreviewDrafts()
@@ -531,6 +535,14 @@ export function useDeveloperPlaygroundState() {
     setSidebarTab,
     shellSelectedModel,
     sidebarTab,
+    stepperValue1,
+    setStepperValue1,
+    stepperValue2,
+    setStepperValue2,
+    stepperValue3,
+    setStepperValue3,
+    stepperValue4,
+    setStepperValue4,
     toggleSelectedModelTag,
     updateActiveChatDraft,
     updateAssignCtx,

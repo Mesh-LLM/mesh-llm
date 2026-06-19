@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import type { ModelsResponse, StatusPayload } from '@/lib/api/types'
-import type { ConfigurationDefaultsValues, ConfigurationHarnessData } from '@/features/app-tabs/types'
+import type { ConfigurationHarnessData } from '@/features/app-tabs/types'
 import { useStatusQuery } from '@/features/network/api/use-status-query'
 import { useModelsQuery } from '@/features/network/api/use-models-query'
 import {
@@ -9,6 +9,7 @@ import {
   applyRuntimeControlConfig,
   createConfigurationDefaultsValuesFromMeshConfig,
   fetchRuntimeControlConfig,
+  type RuntimeControlApplyInput,
   type RuntimeControlApplyResponse,
   type RuntimeControlConfigResult
 } from '@/features/configuration/api/config-adapter'
@@ -23,7 +24,7 @@ type ConfigQueryResult = {
   statusQuery: UseQueryResult<StatusPayload, Error>
   modelsQuery: UseQueryResult<ModelsResponse, Error>
   controlConfigQuery: UseQueryResult<RuntimeControlConfigResult, Error>
-  applyDefaults: (defaultsValues: ConfigurationDefaultsValues) => Promise<RuntimeControlApplyResponse | null>
+  applyDefaults: (input: RuntimeControlApplyInput) => Promise<RuntimeControlApplyResponse | null>
 }
 
 export function useConfigQuery(options?: { enabled?: boolean }): ConfigQueryResult {
@@ -41,27 +42,42 @@ export function useConfigQuery(options?: { enabled?: boolean }): ConfigQueryResu
   const defaultsValues = useMemo(
     () =>
       controlConfigQuery.data?.snapshot
-        ? createConfigurationDefaultsValuesFromMeshConfig(controlConfigQuery.data.snapshot.config)
+        ? createConfigurationDefaultsValuesFromMeshConfig(
+            controlConfigQuery.data.snapshot.config,
+            controlConfigQuery.data.schema
+          )
         : undefined,
     [controlConfigQuery.data]
   )
 
-  const data = useMemo(
-    () =>
-      statusQuery.data && modelsQuery.data
-        ? adaptStatusToConfiguration(statusQuery.data, modelsQuery.data.mesh_models ?? [], defaultsValues)
-        : undefined,
-    [defaultsValues, modelsQuery.data, statusQuery.data]
-  )
+  const data = useMemo(() => {
+    if (!statusQuery.data || !modelsQuery.data) return undefined
+    if ((options?.enabled ?? true) && !controlConfigQuery.data?.schema) return undefined
+
+    return adaptStatusToConfiguration(
+      statusQuery.data,
+      modelsQuery.data.mesh_models ?? [],
+      defaultsValues,
+      controlConfigQuery.data?.schema,
+      controlConfigQuery.data?.snapshot?.config,
+      controlConfigQuery.data?.controlState
+    )
+  }, [controlConfigQuery.data, defaultsValues, modelsQuery.data, options?.enabled, statusQuery.data])
 
   const applyDefaults = useCallback(
-    async (nextDefaultsValues: ConfigurationDefaultsValues) => {
+    async (input: RuntimeControlApplyInput) => {
       const endpoint = controlConfigQuery.data?.bootstrap.endpoint?.trim()
       const snapshot = controlConfigQuery.data?.snapshot
 
       if (!endpoint || !snapshot) return null
 
-      const applied = await applyRuntimeControlConfig(endpoint, snapshot, nextDefaultsValues)
+      const applied = await applyRuntimeControlConfig(
+        endpoint,
+        snapshot,
+        input,
+        controlConfigQuery.data?.schema,
+        controlConfigQuery.data?.controlState
+      )
       if (applied.response.success) {
         queryClient.setQueryData<RuntimeControlConfigResult>(CONFIG_CONTROL_QUERY_KEY, (current) => {
           if (!current) return current
@@ -70,6 +86,7 @@ export function useConfigQuery(options?: { enabled?: boolean }): ConfigQueryResu
             snapshot: applied.snapshot
           }
         })
+        void queryClient.invalidateQueries({ queryKey: CONFIG_CONTROL_QUERY_KEY })
       }
       return applied.response
     },
@@ -78,7 +95,7 @@ export function useConfigQuery(options?: { enabled?: boolean }): ConfigQueryResu
 
   return {
     data,
-    isPending: statusQuery.isPending || modelsQuery.isPending,
+    isPending: statusQuery.isPending || modelsQuery.isPending || controlConfigQuery.isPending,
     isFetching: statusQuery.isFetching || modelsQuery.isFetching || controlConfigQuery.isFetching,
     isError: statusQuery.isError || modelsQuery.isError || controlConfigQuery.isError,
     statusQuery,

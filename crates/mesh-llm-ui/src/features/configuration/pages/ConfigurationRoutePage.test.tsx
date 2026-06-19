@@ -89,7 +89,7 @@ describe('ConfigurationRoutePage', () => {
 
     expect(screen.getByTestId('redirect')).toHaveAttribute('data-to', '/configuration/$configurationTab')
     expect(screen.getByTestId('redirect')).toHaveAttribute('data-replace', 'true')
-    expect(screen.getByTestId('redirect')).toHaveTextContent('defaults')
+    expect(screen.getByTestId('redirect')).toHaveTextContent('general')
   })
 
   it('restores a valid tab from the path segment', () => {
@@ -106,7 +106,7 @@ describe('ConfigurationRoutePage', () => {
 
     render(<ConfigurationRoutePage />)
 
-    await user.click(screen.getByRole('button', { name: 'Active tab: defaults' }))
+    await user.click(screen.getByRole('button', { name: 'Active tab: general' }))
 
     expect(routerMocks.navigate).toHaveBeenCalledWith({
       params: { configurationTab: 'toml-review' },
@@ -115,22 +115,22 @@ describe('ConfigurationRoutePage', () => {
     })
   })
 
-  it('redirects gated temporary section paths back to defaults', () => {
+  it('redirects gated temporary section paths back to general', () => {
     routerMocks.useParams.mockReturnValue({ configurationTab: 'wake-policy' })
 
     const { rerender } = render(<ConfigurationRoutePage />)
 
-    expect(screen.getByTestId('redirect')).toHaveTextContent('defaults')
+    expect(screen.getByTestId('redirect')).toHaveTextContent('general')
 
     routerMocks.useParams.mockReturnValue({ configurationTab: 'signing' })
     rerender(<ConfigurationRoutePage />)
 
-    expect(screen.getByTestId('redirect')).toHaveTextContent('defaults')
+    expect(screen.getByTestId('redirect')).toHaveTextContent('general')
 
     routerMocks.useParams.mockReturnValue({ configurationTab: 'integrations' })
     rerender(<ConfigurationRoutePage />)
 
-    expect(screen.getByTestId('redirect')).toHaveTextContent('defaults')
+    expect(screen.getByTestId('redirect')).toHaveTextContent('general')
   })
 
   it('restores gated temporary section paths when their flags are enabled', () => {
@@ -151,7 +151,7 @@ describe('ConfigurationRoutePage', () => {
     routerMocks.useParams.mockReturnValue({ configurationTab: 'integrations' })
     rerender(<ConfigurationRoutePage />)
 
-    expect(screen.getByRole('button', { name: 'Active tab: integrations' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Active tab: plugins' })).toBeInTheDocument()
   })
 
   it('redirects unknown tab paths back to the default tab path', () => {
@@ -159,6 +159,6 @@ describe('ConfigurationRoutePage', () => {
 
     render(<ConfigurationRoutePage />)
 
-    expect(screen.getByTestId('redirect')).toHaveTextContent('defaults')
+    expect(screen.getByTestId('redirect')).toHaveTextContent('general')
   })
 })

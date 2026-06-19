@@ -64,8 +64,27 @@ describe('Slider', () => {
     expect(screen.getByText('0.70')).toHaveClass('font-mono')
     expect(screen.getByText('ratio')).not.toHaveClass('font-mono')
     expect(screen.getByText('0.70').parentElement).toHaveClass('justify-self-center')
-    expect(screen.getByText('0.00')).toBeInTheDocument()
-    expect(screen.getByText('1.00')).toBeInTheDocument()
+    expect(screen.getByText('0.00').parentElement).toHaveTextContent('(0.00')
+    expect(screen.getByText('1.00').parentElement).toHaveTextContent('1.00]')
     expect(screen.getByRole('slider', { name: 'Acceptance threshold' })).toHaveAttribute('aria-valuetext', '0.70 ratio')
+  })
+
+  it('renders lower and upper schema guidance labels with inclusive boundary markers', () => {
+    render(
+      <Slider
+        ariaLabel="Safety margin"
+        lowerBound={{ inclusive: true, value: 'Min 0.0 GB' }}
+        max={8}
+        min={0}
+        name="safety-margin"
+        onValueChange={vi.fn()}
+        upperBound={{ inclusive: true, value: 'Max 8.0 GB' }}
+        unit="GB"
+        value="2"
+      />
+    )
+
+    expect(screen.getByText('Min 0.0 GB').parentElement).toHaveTextContent('[Min 0.0 GB')
+    expect(screen.getByText('Max 8.0 GB').parentElement).toHaveTextContent('Max 8.0 GB]')
   })
 })

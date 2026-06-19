@@ -3650,6 +3650,7 @@ async fn run_runtime_cli(
     }
 
     let config = plugin::load_config(options.config.as_deref())?;
+    apply_runtime_config_options(&mut options, &config);
     let startup_mesh_creation_state = resolve_startup_mesh_creation_state(&options, &config)?;
     let cli_has_explicit_models = cli_has_explicit_models(&options);
     let has_config_models = !config.models.is_empty();
@@ -3702,6 +3703,11 @@ async fn run_runtime_cli(
         embedded_control_rx,
     })
     .await
+}
+
+fn apply_runtime_config_options(options: &mut RuntimeOptions, config: &plugin::MeshConfig) {
+    options.debug |= config.runtime.debug;
+    options.listen_all |= config.runtime.listen_all;
 }
 
 #[cfg(test)]
@@ -9272,6 +9278,34 @@ mod tests {
             mesh::RelayPolicy::ExplicitlyDisabled
         );
         assert!(!relay_policy_for_runtime_options(&options).uses_relay());
+    }
+
+    #[test]
+    fn runtime_config_enables_debug_and_listen_all_options() {
+        let mut options = RuntimeOptions::default();
+        let mut config = plugin::MeshConfig::default();
+        config.runtime.debug = true;
+        config.runtime.listen_all = true;
+
+        apply_runtime_config_options(&mut options, &config);
+
+        assert!(options.debug);
+        assert!(options.listen_all);
+    }
+
+    #[test]
+    fn explicit_debug_and_listen_all_options_survive_false_config_defaults() {
+        let mut options = RuntimeOptions {
+            debug: true,
+            listen_all: true,
+            ..RuntimeOptions::default()
+        };
+        let config = plugin::MeshConfig::default();
+
+        apply_runtime_config_options(&mut options, &config);
+
+        assert!(options.debug);
+        assert!(options.listen_all);
     }
 
     #[test]

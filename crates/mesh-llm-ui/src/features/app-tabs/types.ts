@@ -257,8 +257,32 @@ export type ConfigModel = {
   vision: boolean
   tags: string[]
 }
-export type ConfigAssign = { id: string; modelId: string; nodeId: string; containerIdx: number; ctx: number }
+export type ConfigAssignModelConfig = {
+  slots?: number
+  batchProfile?: 'auto' | 'balanced' | 'throughput' | 'saver'
+  splitMode?: 'auto' | 'layer' | 'row'
+  tensorSplit?: string
+  mmproj?: string
+  draftModelPath?: string
+  flashAttention?: 'auto' | 'enabled' | 'disabled'
+  cacheTypeK?: string
+  cacheTypeV?: string
+  kvCachePolicy?: 'auto' | 'quality' | 'balanced' | 'saver'
+}
+export type ConfigAssign = {
+  id: string
+  modelId: string
+  nodeId: string
+  containerIdx: number
+  ctx: number
+  config?: ConfigAssignModelConfig
+}
 export type ConfigurationDefaultsCategoryId =
+  | 'meshllm'
+  | 'network'
+  | 'attestation'
+  | 'telemetry'
+  | 'runtime-policy'
   | 'runtime'
   | 'memory'
   | 'speculative-decoding'
@@ -267,7 +291,15 @@ export type ConfigurationDefaultsCategoryId =
   | 'skippy-transport'
   | 'multimodal'
   | 'advanced-server'
+  | (string & {})
 export type ConfigurationTomlSectionId =
+  | 'gpu'
+  | 'runtime'
+  | 'owner_control'
+  | 'mesh_requirements'
+  | 'telemetry'
+  | 'telemetry.metrics'
+  | 'defaults'
   | 'defaults.model_fit'
   | 'defaults.hardware'
   | 'defaults.throughput'
@@ -281,9 +313,120 @@ export type ConfigurationDefaultsCategory = {
   label: string
   summary: string
   help: string
-  tomlSection?: ConfigurationTomlSectionId
+  tomlSection?: string
+  order?: number
 }
 export type ConfigurationDefaultsChoice = { value: string; label: string; description?: string }
+export type ConfigurationControlTextFormat =
+  | 'plain'
+  | 'path'
+  | 'url'
+  | 'socket_addr'
+  | 'semver'
+  | 'ed25519_key'
+  | 'csv_positive_ints'
+export type ConfigurationControlOptionsSource =
+  | 'static'
+  | 'runtime_gpus'
+  | 'runtime_native_backends'
+  | 'runtime_local_models'
+  | 'runtime_installed_plugins'
+  | 'runtime_mesh_peers'
+export type ConfigurationControlAvailabilitySource = 'static' | 'runtime' | 'dependency' | 'conflict'
+export type ConfigurationDisabledWritePolicy = 'preserve_existing' | 'omit_when_disabled' | 'reject_when_disabled'
+export type ConfigurationControlConditionOperator =
+  | 'equals'
+  | 'not_equals'
+  | 'in'
+  | 'not_in'
+  | 'present'
+  | 'absent'
+  | 'truthy'
+  | 'falsy'
+  | 'range'
+export type ConfigurationControlConditionValue =
+  | { kind: 'bool'; value: boolean }
+  | { kind: 'integer'; value: number }
+  | { kind: 'float'; value: number }
+  | { kind: 'string'; value: string }
+export type ConfigurationControlPath = {
+  segments: readonly unknown[]
+}
+export type ConfigurationNumericControl = {
+  min?: number
+  max?: number
+  step?: number
+  soft_min?: number
+  soft_max?: number
+  unit?: string
+}
+export type ConfigurationControlAvailability = {
+  enabled: boolean
+  reason?: string
+  note?: string
+  source: ConfigurationControlAvailabilitySource
+}
+export type ConfigurationControlCondition = {
+  path: ConfigurationControlPath
+  operator: ConfigurationControlConditionOperator
+  values?: readonly ConfigurationControlConditionValue[]
+}
+export type ConfigurationConditionalDisable = {
+  condition: ConfigurationControlCondition
+  reason: string
+  note?: string
+  write_policy: ConfigurationDisabledWritePolicy
+}
+export type ConfigurationConflictRule = {
+  group: string
+  condition: ConfigurationControlCondition
+  reason: string
+  preferred_path?: ConfigurationControlPath
+}
+export type ConfigurationSettingControlBehavior = {
+  numeric?: ConfigurationNumericControl
+  text_format?: ConfigurationControlTextFormat
+  options_source?: ConfigurationControlOptionsSource
+  availability?: ConfigurationControlAvailability
+  enable_when?: readonly ConfigurationControlCondition[]
+  disable_when?: readonly ConfigurationConditionalDisable[]
+  conflicts?: readonly ConfigurationConflictRule[]
+  write_policy?: ConfigurationDisabledWritePolicy
+}
+export type ConfigurationSettingValidationConstraint =
+  | { readonly kind: 'non_empty' }
+  | { readonly kind: 'positive' }
+  | { readonly kind: 'range'; readonly min?: string; readonly max?: string }
+  | { readonly kind: 'requires'; readonly path: unknown }
+  | { readonly kind: 'allowed_values'; readonly values: readonly string[] }
+export type ConfigurationRuntimeControlOption = {
+  value: ConfigurationControlConditionValue
+  label?: string
+  note?: string
+  disabled: boolean
+  reason?: string
+  source: ConfigurationControlOptionsSource
+}
+export type ConfigurationRuntimeControlStateEntry = {
+  enabled: boolean
+  reason?: string
+  note?: string
+  source: ConfigurationControlAvailabilitySource
+  write_policy: ConfigurationDisabledWritePolicy
+  options?: readonly ConfigurationRuntimeControlOption[]
+}
+export type ConfigurationSettingValueSchema =
+  | { kind: 'boolean' }
+  | { kind: 'integer' }
+  | { kind: 'float' }
+  | { kind: 'string' }
+  | { kind: 'path' }
+  | { kind: 'url' }
+  | { kind: 'socket_addr' }
+  | { kind: 'enum'; values: string[] }
+  | { kind: 'one_of'; variants: ConfigurationSettingValueSchema[] }
+  | { kind: 'array'; items: ConfigurationSettingValueSchema }
+  | { kind: 'object' }
 export type ConfigurationDefaultsControl =
   | {
       kind: 'choice'
@@ -312,15 +455,25 @@ export type ConfigurationDefaultsSettingIcon =
 export type ConfigurationDefaultsSetting = {
   id: string
   categoryId: ConfigurationDefaultsCategoryId
-  tomlSection?: ConfigurationTomlSectionId
+  canonicalPath?: string
+  tomlSection?: string
   tomlKey?: string
+  rendererId?: string
+  controlHint?: string
+  categoryOrder?: number
+  settingOrder?: number
   icon: ConfigurationDefaultsSettingIcon
   label: string
   description: string
   inheritedLabel: string
+  valueSchema?: ConfigurationSettingValueSchema
   control: ConfigurationDefaultsControl
+  baselineValue?: string
   visibility?: 'standard' | 'advanced'
   mutability?: 'runtime' | 'restart-required'
+  controlBehavior?: ConfigurationSettingControlBehavior
+  validationConstraints?: readonly ConfigurationSettingValidationConstraint[]
+  controlState?: ConfigurationRuntimeControlStateEntry
   dependsOn?: { settingId: string; condition: (value: string) => boolean }
 }
 export type ConfigurationDefaultsPreviewItem = { label: string; value: string; meta?: string }
@@ -329,6 +482,23 @@ export type ConfigurationDefaultsHarnessData = {
   categories: readonly ConfigurationDefaultsCategory[]
   settings: readonly ConfigurationDefaultsSetting[]
   preview: readonly ConfigurationDefaultsPreviewItem[]
+}
+export type ConfigurationIntegrationsHarnessData = ConfigurationDefaultsHarnessData
+export type ConfigurationSettingsHarnessData = ConfigurationDefaultsHarnessData
+export type ConfigurationModelPlacementPaths = {
+  model: string
+  ctxSize: string
+  device: string
+  gpuLayers: string
+  cacheTypeK?: string
+  cacheTypeV?: string
+  kvCachePolicy?: string
+  flashAttention?: string
+  mmproj?: string
+}
+export type ConfigurationModelPlacementOptions = {
+  cacheTypeK?: string[]
+  cacheTypeV?: string[]
 }
 export type ConfigurationHarnessData = {
   title: string
@@ -341,4 +511,18 @@ export type ConfigurationHarnessData = {
   configFilePath?: string
   validationWarnings?: TomlValidationWarning[]
   launchSummaryConfig?: { httpBind?: string; mmap?: string }
+  meshllm?: ConfigurationSettingsHarnessData
+  runtimeSettings?: ConfigurationSettingsHarnessData
+  modelSettings?: ConfigurationSettingsHarnessData
+  network?: ConfigurationSettingsHarnessData
+  attestation?: ConfigurationSettingsHarnessData
+  plugins?: ConfigurationIntegrationsHarnessData
+  integrations?: ConfigurationIntegrationsHarnessData
+  modelConfigEntries?: readonly Record<string, unknown>[]
+  modelPlacementPaths?: ConfigurationModelPlacementPaths
+  modelPlacementOptions?: ConfigurationModelPlacementOptions
+  attestationStatus?: {
+    owner?: string | { status?: string; verified?: boolean; name?: string; display_name?: string }
+    release_attestation?: import('@/lib/api/types').ReleaseAttestationSummary
+  }
 }

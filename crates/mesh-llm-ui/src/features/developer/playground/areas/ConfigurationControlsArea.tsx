@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Binary, Blocks, Brackets, Computer, ShieldCheck } from 'lucide-react'
+import { Blocks, Brackets, Computer, Cpu, Network, ShieldCheck, SlidersHorizontal } from 'lucide-react'
 import { LiveDataUnavailableOverlay } from '@/components/ui/LiveDataUnavailableOverlay'
 import { ModelSelect } from '@/features/chat/components/ModelSelect'
 import { CatalogPopover } from '@/features/configuration/components/CatalogPopover'
@@ -28,20 +28,51 @@ import { OptionGroup, PlaygroundPanel, SidebarTabs } from '@/features/developer/
 import type { DeveloperPlaygroundState } from '@/features/developer/playground/useDeveloperPlaygroundState'
 
 export function ConfigurationControlsArea({ state }: { state: DeveloperPlaygroundState }) {
-  const [activeConfigTab, setActiveConfigTab] = useState<ConfigurationTabId>('defaults')
+  const [activeConfigTab, setActiveConfigTab] = useState<ConfigurationTabId>('general')
   const [collapsedMap, setCollapsedMap] = useState<Record<string, boolean>>({})
   const [catalogNode, setCatalogNode] = useState<ConfigNode | null>(null)
   const [defaultsValues, setDefaultsValues] = useState(() => createDefaultsValues(CONFIGURATION_HARNESS.defaults))
 
   const sectionTabs: ConfigurationTabItem[] = [
     {
-      id: 'defaults',
-      label: 'Defaults',
-      icon: Binary,
+      id: 'general',
+      label: 'General',
+      icon: Cpu,
       dirty: true,
       content: (
         <div className="rounded-[var(--radius)] border border-border bg-background p-3 text-[length:var(--density-type-caption-lg)] text-fg-dim">
-          Defaults tab trigger with dirty accessory.
+          General tab trigger with dirty accessory.
+        </div>
+      )
+    },
+    {
+      id: 'runtime',
+      label: 'Runtime',
+      icon: SlidersHorizontal,
+      dirty: true,
+      content: (
+        <div className="rounded-[var(--radius)] border border-border bg-background p-3 text-[length:var(--density-type-caption-lg)] text-fg-dim">
+          Runtime tab trigger and navigation density.
+        </div>
+      )
+    },
+    {
+      id: 'models',
+      label: 'Models',
+      icon: Computer,
+      content: (
+        <div className="rounded-[var(--radius)] border border-border bg-background p-3 text-[length:var(--density-type-caption-lg)] text-fg-dim">
+          Model settings trigger.
+        </div>
+      )
+    },
+    {
+      id: 'network',
+      label: 'Network',
+      icon: Network,
+      content: (
+        <div className="rounded-[var(--radius)] border border-border bg-background p-3 text-[length:var(--density-type-caption-lg)] text-fg-dim">
+          Network settings trigger.
         </div>
       )
     },
@@ -49,10 +80,9 @@ export function ConfigurationControlsArea({ state }: { state: DeveloperPlaygroun
       id: 'local-deployment',
       label: 'Model Deployment',
       icon: Computer,
-      dirty: true,
       content: (
         <div className="rounded-[var(--radius)] border border-border bg-background p-3 text-[length:var(--density-type-caption-lg)] text-fg-dim">
-          Deployment tab trigger and navigation density.
+          Deployment tab trigger.
         </div>
       )
     },
@@ -67,12 +97,12 @@ export function ConfigurationControlsArea({ state }: { state: DeveloperPlaygroun
       )
     },
     {
-      id: 'integrations',
-      label: 'Integrations',
+      id: 'plugins',
+      label: 'Plugins',
       icon: Blocks,
       content: (
         <div className="rounded-[var(--radius)] border border-border bg-background p-3 text-[length:var(--density-type-caption-lg)] text-fg-dim">
-          Reserved integration surface.
+          Plugin settings surface.
         </div>
       )
     },
@@ -321,6 +351,7 @@ export function ConfigurationControlsArea({ state }: { state: DeveloperPlaygroun
                           models={CONFIGURATION_HARNESS.catalog}
                           node={state.primaryNode}
                           onCtxChange={(ctx) => state.updateAssignCtx(assign.id, ctx)}
+                          onPick={() => state.selectFocusedAssign(assign.id)}
                           onRemove={() => state.removeConfigCard(assign.id)}
                         />
                       </div>

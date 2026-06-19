@@ -2,15 +2,22 @@ use anyhow::{Context, Result, bail};
 use mesh_llm_cli::Cli;
 use mesh_llm_config::{
     ConfigDiagnostic, ConfigDiagnosticCode, ConfigDiagnosticSchemaSource, ConfigDiagnosticSeverity,
-    ConfigDiagnosticSource, ConfigPath, MeshConfig, PluginConfigSchema, PluginObjectPropertySchema,
-    PluginSchemaAvailability, PluginSettingConstraint, PluginSettingSchema, PluginValueKind,
-    PluginValueSchema, SUPPORTED_PLUGIN_CONFIG_SCHEMA_VERSION, config_path,
-    validate_config_diagnostics_with_plugin_schemas,
+    ConfigDiagnosticSource, ConfigPath, MeshConfig, PluginConditionOperator, PluginConditionValue,
+    PluginConditionalDisable, PluginConfigSchema, PluginConflictRule, PluginControlAvailability,
+    PluginControlAvailabilitySource, PluginControlBehavior, PluginControlCondition,
+    PluginDisabledWritePolicy, PluginNumericControl, PluginObjectPropertySchema,
+    PluginOptionsSource, PluginSchemaAvailability, PluginSettingConstraint, PluginSettingSchema,
+    PluginTextFormat, PluginValueKind, PluginValueSchema, SUPPORTED_PLUGIN_CONFIG_SCHEMA_VERSION,
+    config_path, validate_config_diagnostics_with_plugin_schemas,
 };
 use mesh_llm_plugin_manager::{
-    InstalledPluginConfigSchema, InstalledPluginConstraint, InstalledPluginMetadata,
-    InstalledPluginObjectProperty, InstalledPluginValueKind, InstalledPluginValueSchema,
-    PluginStore, default_store_root,
+    InstalledPluginConditionOperator, InstalledPluginConditionValue,
+    InstalledPluginConditionalDisable, InstalledPluginConfigSchema, InstalledPluginConflictRule,
+    InstalledPluginConstraint, InstalledPluginControlAvailability,
+    InstalledPluginControlAvailabilitySource, InstalledPluginControlBehavior,
+    InstalledPluginControlCondition, InstalledPluginDisabledWritePolicy, InstalledPluginMetadata,
+    InstalledPluginObjectProperty, InstalledPluginOptionsSource, InstalledPluginTextFormat,
+    InstalledPluginValueKind, InstalledPluginValueSchema, PluginStore, default_store_root,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -106,8 +113,178 @@ fn plugin_schema_from_installed(schema: &InstalledPluginConfigSchema) -> PluginC
                     .map(plugin_constraint_from_installed)
                     .collect(),
                 description: setting.description.clone(),
+                control_behavior: setting
+                    .control_behavior
+                    .as_ref()
+                    .map(plugin_control_behavior_from_installed),
             })
             .collect(),
+    }
+}
+
+fn plugin_control_behavior_from_installed(
+    behavior: &InstalledPluginControlBehavior,
+) -> PluginControlBehavior {
+    PluginControlBehavior {
+        numeric: behavior
+            .numeric
+            .as_ref()
+            .map(|numeric| PluginNumericControl {
+                min: numeric.min,
+                max: numeric.max,
+                step: numeric.step,
+                soft_min: numeric.soft_min,
+                soft_max: numeric.soft_max,
+                unit: numeric.unit.clone(),
+            }),
+        text_format: behavior.text_format.map(plugin_text_format_from_installed),
+        options_source: behavior
+            .options_source
+            .map(plugin_options_source_from_installed),
+        availability: behavior
+            .availability
+            .as_ref()
+            .map(plugin_availability_from_installed),
+        enable_when: behavior
+            .enable_when
+            .iter()
+            .map(plugin_condition_from_installed)
+            .collect(),
+        disable_when: behavior
+            .disable_when
+            .iter()
+            .map(plugin_disable_from_installed)
+            .collect(),
+        conflicts: behavior
+            .conflicts
+            .iter()
+            .map(plugin_conflict_from_installed)
+            .collect(),
+        write_policy: behavior
+            .write_policy
+            .map(plugin_write_policy_from_installed),
+    }
+}
+
+fn plugin_text_format_from_installed(format: InstalledPluginTextFormat) -> PluginTextFormat {
+    match format {
+        InstalledPluginTextFormat::Plain => PluginTextFormat::Plain,
+        InstalledPluginTextFormat::Path => PluginTextFormat::Path,
+        InstalledPluginTextFormat::Url => PluginTextFormat::Url,
+        InstalledPluginTextFormat::SocketAddr => PluginTextFormat::SocketAddr,
+        InstalledPluginTextFormat::Semver => PluginTextFormat::Semver,
+        InstalledPluginTextFormat::Ed25519Key => PluginTextFormat::Ed25519Key,
+        InstalledPluginTextFormat::CsvPositiveInts => PluginTextFormat::CsvPositiveInts,
+    }
+}
+
+fn plugin_options_source_from_installed(
+    source: InstalledPluginOptionsSource,
+) -> PluginOptionsSource {
+    match source {
+        InstalledPluginOptionsSource::Static => PluginOptionsSource::Static,
+        InstalledPluginOptionsSource::RuntimeGpus => PluginOptionsSource::RuntimeGpus,
+        InstalledPluginOptionsSource::RuntimeNativeBackends => {
+            PluginOptionsSource::RuntimeNativeBackends
+        }
+        InstalledPluginOptionsSource::RuntimeLocalModels => PluginOptionsSource::RuntimeLocalModels,
+        InstalledPluginOptionsSource::RuntimeInstalledPlugins => {
+            PluginOptionsSource::RuntimeInstalledPlugins
+        }
+        InstalledPluginOptionsSource::RuntimeMeshPeers => PluginOptionsSource::RuntimeMeshPeers,
+    }
+}
+
+fn plugin_availability_from_installed(
+    availability: &InstalledPluginControlAvailability,
+) -> PluginControlAvailability {
+    PluginControlAvailability {
+        enabled: availability.enabled,
+        reason: availability.reason.clone(),
+        note: availability.note.clone(),
+        source: match availability.source {
+            InstalledPluginControlAvailabilitySource::Static => {
+                PluginControlAvailabilitySource::Static
+            }
+            InstalledPluginControlAvailabilitySource::Runtime => {
+                PluginControlAvailabilitySource::Runtime
+            }
+            InstalledPluginControlAvailabilitySource::Dependency => {
+                PluginControlAvailabilitySource::Dependency
+            }
+            InstalledPluginControlAvailabilitySource::Conflict => {
+                PluginControlAvailabilitySource::Conflict
+            }
+        },
+    }
+}
+
+fn plugin_condition_from_installed(
+    condition: &InstalledPluginControlCondition,
+) -> PluginControlCondition {
+    PluginControlCondition {
+        key: condition.key.clone(),
+        operator: match condition.operator {
+            InstalledPluginConditionOperator::Equals => PluginConditionOperator::Equals,
+            InstalledPluginConditionOperator::NotEquals => PluginConditionOperator::NotEquals,
+            InstalledPluginConditionOperator::In => PluginConditionOperator::In,
+            InstalledPluginConditionOperator::NotIn => PluginConditionOperator::NotIn,
+            InstalledPluginConditionOperator::Present => PluginConditionOperator::Present,
+            InstalledPluginConditionOperator::Absent => PluginConditionOperator::Absent,
+            InstalledPluginConditionOperator::Truthy => PluginConditionOperator::Truthy,
+            InstalledPluginConditionOperator::Falsy => PluginConditionOperator::Falsy,
+            InstalledPluginConditionOperator::Range => PluginConditionOperator::Range,
+        },
+        values: condition
+            .values
+            .iter()
+            .map(|value| match value {
+                InstalledPluginConditionValue::Bool(value) => PluginConditionValue::Bool(*value),
+                InstalledPluginConditionValue::Integer(value) => {
+                    PluginConditionValue::Integer(*value)
+                }
+                InstalledPluginConditionValue::Float(value) => PluginConditionValue::Float(*value),
+                InstalledPluginConditionValue::String(value) => {
+                    PluginConditionValue::String(value.clone())
+                }
+            })
+            .collect(),
+    }
+}
+
+fn plugin_disable_from_installed(
+    disable: &InstalledPluginConditionalDisable,
+) -> PluginConditionalDisable {
+    PluginConditionalDisable {
+        condition: plugin_condition_from_installed(&disable.condition),
+        reason: disable.reason.clone(),
+        note: disable.note.clone(),
+        write_policy: plugin_write_policy_from_installed(disable.write_policy),
+    }
+}
+
+fn plugin_conflict_from_installed(conflict: &InstalledPluginConflictRule) -> PluginConflictRule {
+    PluginConflictRule {
+        group: conflict.group.clone(),
+        condition: plugin_condition_from_installed(&conflict.condition),
+        reason: conflict.reason.clone(),
+        preferred_key: conflict.preferred_key.clone(),
+    }
+}
+
+fn plugin_write_policy_from_installed(
+    policy: InstalledPluginDisabledWritePolicy,
+) -> PluginDisabledWritePolicy {
+    match policy {
+        InstalledPluginDisabledWritePolicy::PreserveExisting => {
+            PluginDisabledWritePolicy::PreserveExisting
+        }
+        InstalledPluginDisabledWritePolicy::OmitWhenDisabled => {
+            PluginDisabledWritePolicy::OmitWhenDisabled
+        }
+        InstalledPluginDisabledWritePolicy::RejectWhenDisabled => {
+            PluginDisabledWritePolicy::RejectWhenDisabled
+        }
     }
 }
 
@@ -312,6 +489,113 @@ impl From<&ConfigDiagnostic> for ConfigDiagnosticPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mesh_llm_config::{ConfigDiagnosticSeverity, validate_config_diagnostics};
+    use std::collections::BTreeSet;
+    use tempfile::TempDir;
+
+    const VALID_FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../mesh-llm-host-runtime/tests/fixtures/schema_driven_controls_valid.toml"
+    ));
+    const INVALID_FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../mesh-llm-host-runtime/tests/fixtures/schema_driven_controls_invalid.toml"
+    ));
+
+    #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    struct DiagnosticSignature {
+        path: String,
+        canonical_path: String,
+        severity: &'static str,
+        code: &'static str,
+    }
+
+    impl DiagnosticSignature {
+        fn new(
+            path: String,
+            canonical_path: String,
+            severity: &'static str,
+            code: &'static str,
+        ) -> Self {
+            Self {
+                path,
+                canonical_path,
+                severity,
+                code,
+            }
+        }
+    }
+
+    fn severity_label(severity: ConfigDiagnosticSeverity) -> &'static str {
+        match severity {
+            ConfigDiagnosticSeverity::Error => "error",
+            ConfigDiagnosticSeverity::Warning => "warning",
+            ConfigDiagnosticSeverity::Info => "info",
+        }
+    }
+
+    fn code_label(code: ConfigDiagnosticCode) -> &'static str {
+        match code {
+            ConfigDiagnosticCode::InvalidValue => "invalid_value",
+            ConfigDiagnosticCode::MissingRequiredValue => "missing_required_value",
+            ConfigDiagnosticCode::UnknownField => "unknown_field",
+            ConfigDiagnosticCode::UnsupportedField => "unsupported_field",
+            ConfigDiagnosticCode::RejectedField => "rejected_field",
+            ConfigDiagnosticCode::MisplacedField => "misplaced_field",
+            ConfigDiagnosticCode::SchemaUnavailable => "schema_unavailable",
+            ConfigDiagnosticCode::LegacyUnvalidatedConfig => "legacy_unvalidated_config",
+            ConfigDiagnosticCode::AliasApplied => "alias_applied",
+            ConfigDiagnosticCode::UnsupportedSchemaVersion => "unsupported_schema_version",
+        }
+    }
+
+    fn write_fixture_file(raw: &str) -> (TempDir, PathBuf) {
+        let dir = TempDir::new().expect("fixture tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, raw).expect("write fixture config");
+        (dir, path)
+    }
+
+    fn signatures_from_report(report: &ConfigValidateReport) -> BTreeSet<DiagnosticSignature> {
+        report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                DiagnosticSignature::new(
+                    diagnostic.path.clone().expect("report should include path"),
+                    diagnostic
+                        .canonical_path
+                        .clone()
+                        .expect("report should include canonical path"),
+                    severity_label(diagnostic.severity),
+                    code_label(diagnostic.code),
+                )
+            })
+            .collect()
+    }
+
+    fn expected_signatures(raw: &str) -> BTreeSet<DiagnosticSignature> {
+        let config: MeshConfig = toml::from_str(raw).expect("fixture should deserialize");
+        validate_config_diagnostics(&config)
+            .into_iter()
+            .map(|diagnostic| {
+                DiagnosticSignature::new(
+                    diagnostic
+                        .path
+                        .as_ref()
+                        .map(ConfigPath::render)
+                        .expect("validator diagnostics should include path"),
+                    diagnostic
+                        .canonical_path
+                        .as_ref()
+                        .map(ConfigPath::render)
+                        .expect("validator diagnostics should include canonical path"),
+                    severity_label(diagnostic.severity),
+                    code_label(diagnostic.code),
+                )
+            })
+            .collect()
+    }
 
     #[test]
     fn config_validate_report_keeps_warning_only_diagnostics_successful() {
@@ -359,6 +643,33 @@ mod tests {
         assert_eq!(json["path"], "/tmp/config.toml");
         assert_eq!(json["error"], "failed to parse config TOML");
         assert_eq!(json["diagnostics"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn config_validate_file_accepts_schema_driven_valid_fixture() {
+        let (_dir, path) = write_fixture_file(VALID_FIXTURE);
+
+        let validation =
+            validate_config_file(Some(path.as_path())).expect("valid fixture should validate");
+
+        assert!(validation.diagnostics.is_empty());
+        assert_eq!(validation.path, path);
+    }
+
+    #[test]
+    fn config_validate_file_matches_validator_signatures_for_schema_driven_invalid_fixture() {
+        let (_dir, path) = write_fixture_file(INVALID_FIXTURE);
+
+        let validation = validate_config_file(Some(path.as_path()))
+            .expect("invalid fixture should deserialize and report diagnostics");
+        let report =
+            ConfigValidateReport::from_diagnostics(validation.path, validation.diagnostics);
+
+        assert!(!report.ok);
+        assert_eq!(
+            signatures_from_report(&report),
+            expected_signatures(INVALID_FIXTURE)
+        );
     }
 
     fn plugin_settings_path(plugin_name: &str) -> ConfigPath {

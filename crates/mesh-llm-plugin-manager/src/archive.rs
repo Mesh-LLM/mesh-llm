@@ -13,7 +13,7 @@ use crate::{
 
 const PACKAGED_MANIFEST_FILE: &str = "plugin-manifest.json";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExtractedPluginArchive {
     pub install_path: PathBuf,
     pub manifest: Option<InstalledPluginManifestMetadata>,
@@ -303,6 +303,8 @@ mod tests {
                     restart_scope: InstalledPluginRestartScope::PluginProcess,
                     visibility: InstalledPluginVisibility::User,
                     description: None,
+                    presentation: None,
+                    control_behavior: None,
                 }],
             }),
         })

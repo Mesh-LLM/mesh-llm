@@ -278,8 +278,9 @@ fn inventory_scan_entries() -> Vec<InventoryScanEntry> {
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        let model_key = split_gguf_base_name(stem).unwrap_or(stem).to_string();
-        let quantization_type = derive_quantization_type(&model_key);
+        let model_key = super::local::model_ref_for_path(&path);
+        let quantization_type =
+            derive_quantization_type(split_gguf_base_name(stem).unwrap_or(stem));
         let scans_metadata = metadata_seen.insert(model_key.clone());
         let missing_cache_file = scans_metadata && metadata_cache_missing_for_path(&path);
         entries.push(InventoryScanEntry {
@@ -345,6 +346,55 @@ where
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            let previous = std::env::var_os(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.previous {
+                // TODO: Audit that the environment access only happens in single-threaded code.
+                unsafe { std::env::set_var(self.key, value) };
+            } else {
+                // TODO: Audit that the environment access only happens in single-threaded code.
+                unsafe { std::env::remove_var(self.key) };
+            }
+        }
+    }
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(path: PathBuf) -> Self {
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 
     fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
         if let Some(value) = value {
@@ -430,5 +480,36 @@ mod tests {
         restore_env("HF_HOME", prev_hf_home);
         restore_env("XDG_CACHE_HOME", prev_xdg);
         restore_env("MESH_LLM_ALLOW_FULL_HF_CACHE_SCAN", prev_full_scan);
+    }
+
+    #[test]
+    #[serial]
+    fn local_inventory_keys_sizes_and_metadata_by_canonical_model_ref() {
+        let temp = std::env::temp_dir().join(format!(
+            "mesh-llm-inventory-canonical-ref-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _temp_guard = TempDirGuard::new(temp.clone());
+        let snapshot_dir = temp
+            .join("models--bartowski--Llama-3.2-1B-Instruct-GGUF")
+            .join("snapshots")
+            .join("abcdef1234567890");
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        let model = snapshot_dir.join("Llama-3.2-1B-Instruct-Q4_K_M.gguf");
+        let file = std::fs::File::create(&model).unwrap();
+        file.set_len(600_000_000).unwrap();
+
+        let _hub_cache_guard = EnvGuard::set_path("HF_HUB_CACHE", &temp);
+        let _hf_home_guard = EnvGuard::remove("HF_HOME");
+        let _xdg_cache_guard = EnvGuard::remove("XDG_CACHE_HOME");
+
+        let snapshot = scan_local_inventory_snapshot_with_progress(|_| {});
+        let model_ref = "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M";
+        assert!(snapshot.model_names.contains(model_ref));
+        assert_eq!(snapshot.size_by_name.get(model_ref), Some(&600_000_000));
+        assert!(snapshot.metadata_by_name.contains_key(model_ref));
     }
 }

@@ -210,13 +210,13 @@ fn resolve_cache_type_k(
     resolve_field_string(
         context
             .model_fit
-            .and_then(|fit| fit.cache_type_k.as_deref()),
+            .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref())),
         kv.model_macro
             .as_ref()
             .and_then(|defaults| defaults.cache_type_k.as_deref()),
         context
             .global_model_fit
-            .and_then(|fit| fit.cache_type_k.as_deref()),
+            .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref())),
         kv.global_macro
             .as_ref()
             .and_then(|defaults| defaults.cache_type_k.as_deref()),
@@ -232,18 +232,22 @@ fn resolve_cache_type_v(
     resolve_field_string(
         context
             .model_fit
-            .and_then(|fit| fit.cache_type_v.as_deref()),
+            .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref())),
         kv.model_macro
             .as_ref()
             .and_then(|defaults| defaults.cache_type_v.as_deref()),
         context
             .global_model_fit
-            .and_then(|fit| fit.cache_type_v.as_deref()),
+            .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref())),
         kv.global_macro
             .as_ref()
             .and_then(|defaults| defaults.cache_type_v.as_deref()),
         kv_policy.cache_type_v(),
     )
+}
+
+fn non_auto_string(value: Option<&str>) -> Option<&str> {
+    value.filter(|item| !item.eq_ignore_ascii_case("auto"))
 }
 
 fn resolve_kv_offload(context: &ResolverContext<'_>, kv: &KvDefaults) -> String {

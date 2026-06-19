@@ -1,14 +1,16 @@
-import { useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { cn } from '@/lib/cn'
 import { Copy } from 'lucide-react'
 import { buildTOML } from '@/features/configuration/lib/build-toml'
 import { HighlightedTomlLines } from '@/features/configuration/components/toml-highlight'
+import { validateRuntimeConfigToml, type RuntimeControlDiagnostic } from '@/features/configuration/api/config-adapter'
 import type {
   ConfigAssign,
   ConfigModel,
   ConfigNode,
   ConfigurationDefaultsHarnessData,
   ConfigurationDefaultsValues,
+  ConfigurationModelPlacementPaths,
   TomlValidationWarning
 } from '@/features/app-tabs/types'
 import { copyStateLabel } from '@/lib/copyStateLabel'
@@ -20,7 +22,10 @@ type TomlViewProps = {
   models?: ConfigModel[]
   defaults?: ConfigurationDefaultsHarnessData
   defaultsValues?: ConfigurationDefaultsValues
+  modelPlacementPaths?: ConfigurationModelPlacementPaths
+  modelConfigEntries?: readonly Record<string, unknown>[]
   reviewMode?: boolean
+  validationEnabled?: boolean
   configPath?: string
   validationWarnings?: TomlValidationWarning[]
   launchSummaryConfig?: { httpBind?: string; mmap?: string }
@@ -142,7 +147,7 @@ function WarningItem({ kind, text }: TomlValidationWarning) {
 }
 
 const DEFAULT_VALIDATION_WARNINGS: TomlValidationWarning[] = [
-  { kind: 'ok', text: 'All local model entries use canonical nested model_fit and hardware sections.' },
+  { kind: 'ok', text: 'Local model entries use compact model aliases accepted by mesh-llm config.' },
   {
     kind: 'warn',
     text: 'carrack · GPU 0 · GLM-4.7-Flash will exceed 80% VRAM at 16K context. Consider 8K or moving to GPU 1.'
@@ -150,6 +155,46 @@ const DEFAULT_VALIDATION_WARNINGS: TomlValidationWarning[] = [
   { kind: 'ok', text: 'Remote nodes remain read-only context and are excluded from the saved TOML preview.' },
   { kind: 'info', text: 'Request defaults merge at request time, explicit request payload fields still win.' }
 ]
+
+const VALIDATING_WARNING: TomlValidationWarning = {
+  kind: 'info',
+  text: 'Validating generated TOML against mesh-llm config rules.'
+}
+
+const VALIDATING_WARNINGS: TomlValidationWarning[] = [VALIDATING_WARNING]
+
+type LiveValidationResult = {
+  readonly key: string
+  readonly warnings: TomlValidationWarning[]
+}
+
+function diagnosticWarningKind(diagnostic: RuntimeControlDiagnostic): TomlValidationWarning['kind'] {
+  return diagnostic.severity === 'error' || diagnostic.severity === 'warning' || diagnostic.severity === 'warn'
+    ? 'warn'
+    : 'info'
+}
+
+function diagnosticWarningText(diagnostic: RuntimeControlDiagnostic): string {
+  const location = diagnostic.canonical_path ?? diagnostic.path
+  return location ? `${location}: ${diagnostic.message}` : diagnostic.message
+}
+
+function validationWarningsFromResponse(response: Awaited<ReturnType<typeof validateRuntimeConfigToml>>) {
+  const warnings = response.diagnostics.map((diagnostic) => ({
+    kind: diagnosticWarningKind(diagnostic),
+    text: diagnosticWarningText(diagnostic)
+  }))
+  if (response.error) warnings.unshift({ kind: 'warn', text: response.error })
+  if (warnings.length > 0) return warnings
+  return [
+    {
+      kind: response.ok ? 'ok' : 'warn',
+      text: response.ok
+        ? 'Generated TOML validates against mesh-llm config rules.'
+        : 'Generated TOML did not pass mesh-llm config validation.'
+    }
+  ] satisfies TomlValidationWarning[]
+}
 
 function ValidationPanel({ warnings, className }: { warnings?: TomlValidationWarning[]; className?: string }) {
   const resolvedWarnings = warnings ?? DEFAULT_VALIDATION_WARNINGS
@@ -180,8 +225,8 @@ function LaunchSummaryPanel({
 }) {
   const localNode = nodes[0]
   const gpuCount = localNode?.gpus.length ?? 0
-  const flashAttention = defaultsValues?.['flash-attention'] ?? 'on'
-  const kvCache = defaultsValues?.['kv-cache'] ?? 'auto'
+  const flashAttention = defaultsValues?.['defaults.model_fit.flash_attention'] ?? 'auto'
+  const kvCache = defaultsValues?.['defaults.model_fit.kv_cache_policy'] ?? 'auto'
   const httpBind = launchSummaryConfig?.httpBind ?? '0.0.0.0:9337'
   const mmap = launchSummaryConfig?.mmap ?? 'off'
   const rows = [
@@ -215,19 +260,51 @@ export function TomlView({
   models,
   defaults,
   defaultsValues,
+  modelPlacementPaths,
+  modelConfigEntries,
   reviewMode = false,
+  validationEnabled = false,
   configPath,
   validationWarnings,
   launchSummaryConfig
 }: TomlViewProps) {
-  const toml = buildTOML(nodes, assigns, models, { defaults, defaultsValues })
+  const toml = buildTOML(nodes, assigns, models, { defaults, defaultsValues, modelPlacementPaths, modelConfigEntries })
   const { copyState, copyText } = useClipboardCopy()
   const [scrollOffset, setScrollOffset] = useState({ left: 0, top: 0 })
+  const [liveValidationResult, setLiveValidationResult] = useState<LiveValidationResult | undefined>()
   const copyLabel = copyStateLabel(copyState, 'TOML')
   const lines = toml.split('\n')
   const lineCount = lines.length
   const sourceStyle: TomlSourceStyle | undefined = reviewMode ? undefined : { '--toml-line-count': lineCount }
   const highlighted = <HighlightedTomlLines toml={toml} />
+  const validationRequestKey = reviewMode && validationEnabled ? `${configPath ?? ''}\n${toml}` : undefined
+  const resolvedValidationWarnings =
+    validationRequestKey === undefined
+      ? validationWarnings
+      : liveValidationResult?.key === validationRequestKey
+        ? liveValidationResult.warnings
+        : VALIDATING_WARNINGS
+
+  useEffect(() => {
+    if (validationRequestKey === undefined) return
+
+    let cancelled = false
+    void validateRuntimeConfigToml(toml, configPath)
+      .then((response) => {
+        if (!cancelled) {
+          setLiveValidationResult({ key: validationRequestKey, warnings: validationWarningsFromResponse(response) })
+        }
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        const message = error instanceof Error && error.message.trim() ? error.message : 'Runtime validation failed.'
+        setLiveValidationResult({ key: validationRequestKey, warnings: [{ kind: 'warn', text: message }] })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [configPath, toml, validationRequestKey])
 
   const editor = (
     <TomlEditorPanel
@@ -252,7 +329,7 @@ export function TomlView({
     <div className="toml-review-layout grid xl:items-stretch">
       {editor}
       <aside className="toml-review-aside flex flex-col" aria-label="TOML review actions">
-        <ValidationPanel warnings={validationWarnings} className="flex-1 min-h-0" />
+        <ValidationPanel warnings={resolvedValidationWarnings} className="flex-1 min-h-0" />
         <LaunchSummaryPanel
           nodes={nodes}
           assigns={assigns}

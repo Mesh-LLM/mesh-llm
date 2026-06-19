@@ -9,6 +9,8 @@ mod model_targets;
 mod objects;
 mod plugins;
 pub(crate) mod runtime;
+pub(crate) mod runtime_control_state;
+mod runtime_control_state_sources;
 mod search;
 
 use super::MeshApi;
@@ -56,10 +58,13 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("GET", "/api/runtime/endpoints")
                 | ("GET", "/api/runtime/processes")
                 | ("GET", "/api/runtime/stages")
+                | ("GET", "/api/runtime/config-schema")
+                | ("GET", "/api/runtime/config-control-state")
                 | ("GET", "/api/runtime/control-bootstrap")
                 | ("POST", "/api/runtime/control/get-config")
                 | ("POST", "/api/runtime/control/refresh-inventory")
                 | ("POST", "/api/runtime/control/apply-config")
+                | ("POST", "/api/runtime/config/validate")
                 | ("POST", "/api/runtime/mesh-guardrails")
                 | ("POST", "/api/runtime/models")
                 | ("GET", "/api/events") => {

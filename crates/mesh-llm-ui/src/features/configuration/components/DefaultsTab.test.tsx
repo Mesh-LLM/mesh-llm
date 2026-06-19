@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CONFIGURATION_DEFAULTS } from '@/features/app-tabs/data'
@@ -9,7 +9,7 @@ import type {
   ConfigurationDefaultsValues
 } from '@/features/app-tabs/types'
 import { env } from '@/lib/env'
-import { RESTART_REQUIRED_TOOLTIP } from '@/features/configuration/components/settings/RestartBadge'
+import { RESTART_REQUIRED_TOOLTIP } from '@/features/configuration/components/settings/RestartRequiredIndicator'
 
 const SHOW_ADVANCED_STORAGE_KEY = `${env.storageNamespace}:configuration-defaults:show-advanced:v1`
 
@@ -177,6 +177,300 @@ const dependencyData = {
   preview: []
 } satisfies ConfigurationDefaultsHarnessData
 
+const schemaDrivenControlSettings = [
+  {
+    id: 'schema-number',
+    categoryId: 'runtime',
+    icon: 'gauge',
+    label: 'Context window',
+    description: 'Schema numeric control.',
+    inheritedLabel: 'Inherited by runtime defaults',
+    valueSchema: { kind: 'integer' },
+    controlBehavior: {
+      numeric: { min: 1, max: 8, step: 1, unit: 'slots' }
+    },
+    control: {
+      kind: 'range',
+      name: 'context_window',
+      value: '4',
+      min: 1,
+      max: 8,
+      step: 1,
+      unit: 'slots'
+    }
+  },
+  {
+    id: 'schema-path',
+    categoryId: 'multimodal',
+    icon: 'folder',
+    label: 'Projector path',
+    description: 'Schema path control.',
+    inheritedLabel: 'Inherited by multimodal defaults',
+    valueSchema: { kind: 'path' },
+    control: {
+      kind: 'text',
+      name: 'projector_path',
+      value: '',
+      placeholder: './models/projector.gguf'
+    }
+  },
+  {
+    id: 'schema-url',
+    categoryId: 'multimodal',
+    icon: 'server',
+    label: 'Projector URL',
+    description: 'Schema URL control.',
+    inheritedLabel: 'Inherited by multimodal defaults',
+    valueSchema: { kind: 'url' },
+    control: {
+      kind: 'text',
+      name: 'projector_url',
+      value: '',
+      placeholder: 'https://example.com/projector.gguf'
+    }
+  },
+  {
+    id: 'schema-runtime-choice',
+    categoryId: 'runtime',
+    icon: 'cpu',
+    label: 'GPU device',
+    description: 'Runtime choice control.',
+    inheritedLabel: 'Inherited by runtime defaults',
+    valueSchema: { kind: 'string' },
+    controlBehavior: {
+      options_source: 'runtime_gpus',
+      write_policy: 'preserve_existing'
+    },
+    controlState: {
+      enabled: true,
+      source: 'runtime',
+      write_policy: 'preserve_existing',
+      options: [
+        {
+          value: { kind: 'string', value: 'cuda:0' },
+          label: 'CUDA 0',
+          note: '31.8 GiB VRAM',
+          disabled: false,
+          source: 'runtime_gpus'
+        },
+        {
+          value: { kind: 'string', value: 'cuda:1' },
+          label: 'CUDA 1',
+          reason: 'Reserved by another runtime',
+          disabled: true,
+          source: 'runtime_gpus'
+        }
+      ]
+    },
+    control: {
+      kind: 'choice',
+      name: 'gpu_device',
+      value: 'cuda:0',
+      presentation: 'segmented',
+      options: [{ value: 'cuda:0', label: 'CUDA 0' }]
+    }
+  },
+  {
+    id: 'schema-disabled',
+    categoryId: 'runtime',
+    icon: 'cpu',
+    label: 'Unavailable backend',
+    description: 'Disabled runtime control.',
+    inheritedLabel: 'Inherited by runtime defaults',
+    valueSchema: { kind: 'string' },
+    controlBehavior: {
+      options_source: 'runtime_native_backends',
+      write_policy: 'omit_when_disabled'
+    },
+    controlState: {
+      enabled: false,
+      reason: 'No native backend was detected.',
+      note: 'The current value is kept in config but cannot be edited here.',
+      source: 'runtime',
+      write_policy: 'omit_when_disabled'
+    },
+    control: {
+      kind: 'text',
+      name: 'native_backend',
+      value: 'metal'
+    }
+  },
+  {
+    id: 'schema-pinned-assignment',
+    categoryId: 'runtime',
+    canonicalPath: 'gpu.assignment',
+    icon: 'cpu',
+    label: 'GPU assignment',
+    description: 'Controls whether device selection is automatic or pinned.',
+    inheritedLabel: 'Inherited by runtime defaults',
+    valueSchema: { kind: 'enum', values: ['auto', 'pinned'] },
+    control: {
+      kind: 'choice',
+      name: 'gpu_assignment',
+      value: 'auto',
+      presentation: 'segmented',
+      options: [
+        { value: 'auto', label: 'auto' },
+        { value: 'pinned', label: 'pinned' }
+      ]
+    }
+  },
+  {
+    id: 'schema-preserved-device',
+    categoryId: 'runtime',
+    canonicalPath: 'defaults.hardware.device',
+    icon: 'cpu',
+    label: 'Pinned GPU device',
+    description: 'Only editable when GPU assignment is pinned.',
+    inheritedLabel: 'Inherited by runtime defaults',
+    mutability: 'restart-required',
+    valueSchema: { kind: 'string' },
+    controlBehavior: {
+      enable_when: [
+        {
+          path: { segments: ['gpu', 'assignment'] },
+          operator: 'equals',
+          values: [{ kind: 'string', value: 'pinned' }]
+        }
+      ],
+      write_policy: 'preserve_existing'
+    },
+    control: {
+      kind: 'text',
+      name: 'device',
+      value: 'cuda:0'
+    },
+    baselineValue: ''
+  },
+  {
+    id: 'schema-array',
+    categoryId: 'network',
+    icon: 'server',
+    label: 'Allowed peers',
+    description: 'Schema array control.',
+    inheritedLabel: 'Inherited by network defaults',
+    valueSchema: { kind: 'array', items: { kind: 'string' } },
+    control: {
+      kind: 'text',
+      name: 'allowed_peers',
+      value: 'peer-a, peer-b'
+    }
+  },
+  {
+    id: 'schema-object',
+    categoryId: 'telemetry',
+    icon: 'filter',
+    label: 'Telemetry headers',
+    description: 'Schema object control.',
+    inheritedLabel: 'Inherited by telemetry defaults',
+    valueSchema: { kind: 'object' },
+    control: {
+      kind: 'text',
+      name: 'telemetry_headers',
+      value: '{"x-trace": "abc"}'
+    }
+  },
+  {
+    id: 'schema-conflict',
+    categoryId: 'advanced',
+    icon: 'filter',
+    label: 'Draft pairing mode',
+    description: 'Conflict metadata control.',
+    inheritedLabel: 'Inherited by advanced defaults',
+    valueSchema: { kind: 'enum', values: ['warn_disable', 'fail_launch'] },
+    controlBehavior: {
+      conflicts: [
+        {
+          group: 'speculative-pairing',
+          reason: 'Conflicts with draft_min_tokens values above the configured maximum.',
+          condition: {
+            path: { segments: ['defaults', 'speculative', 'draft_min_tokens'] },
+            operator: 'present'
+          }
+        }
+      ]
+    },
+    control: {
+      kind: 'choice',
+      name: 'draft_pairing_mode',
+      value: 'warn_disable',
+      presentation: 'segmented',
+      options: [
+        { value: 'warn_disable', label: 'warn_disable' },
+        { value: 'fail_launch', label: 'fail_launch' }
+      ]
+    }
+  }
+] satisfies readonly ConfigurationDefaultsSetting[]
+
+const schemaDrivenControlData = {
+  categories: [
+    { id: 'runtime', label: 'Runtime', summary: 'Runtime defaults.', help: 'Runtime defaults' },
+    { id: 'multimodal', label: 'Multimodal', summary: 'Multimodal defaults.', help: 'Multimodal defaults' },
+    { id: 'network', label: 'Network', summary: 'Network defaults.', help: 'Network defaults' },
+    { id: 'telemetry', label: 'Telemetry', summary: 'Telemetry defaults.', help: 'Telemetry defaults' },
+    { id: 'advanced', label: 'Advanced', summary: 'Advanced defaults.', help: 'Advanced defaults' }
+  ],
+  settings: schemaDrivenControlSettings,
+  preview: []
+} satisfies ConfigurationDefaultsHarnessData
+
+const slotDependencySettings = [
+  {
+    id: 'speculation-mode',
+    categoryId: 'speculative-decoding',
+    icon: 'brain',
+    label: 'Speculation mode',
+    description: 'Controls whether draft-model speculation is active.',
+    inheritedLabel: 'Inherited by speculative decoding defaults',
+    control: {
+      kind: 'choice',
+      name: 'speculation_mode',
+      value: 'off',
+      presentation: 'segmented',
+      options: [
+        { value: 'off', label: 'off' },
+        { value: 'draft_model', label: 'draft model' }
+      ]
+    }
+  },
+  {
+    id: 'parallel-slots',
+    categoryId: 'speculative-decoding',
+    icon: 'gauge',
+    label: 'Default slots / parallel requests',
+    description: 'Parallel slot count.',
+    inheritedLabel: 'Only available when draft-model speculation is enabled',
+    rendererId: 'slot-meter',
+    dependsOn: {
+      settingId: 'speculation-mode',
+      condition: (value: string) => value === 'draft_model'
+    },
+    control: {
+      kind: 'range',
+      name: 'parallel',
+      value: '4',
+      min: 1,
+      max: 16,
+      step: 1,
+      unit: 'slots'
+    }
+  }
+] satisfies readonly ConfigurationDefaultsSetting[]
+
+const slotDependencyData = {
+  categories: [
+    {
+      id: 'speculative-decoding',
+      label: 'Speculative Decoding',
+      summary: 'Speculative defaults.',
+      help: 'Speculative defaults'
+    }
+  ],
+  settings: slotDependencySettings,
+  preview: []
+} satisfies ConfigurationDefaultsHarnessData
+
 const defaultValues: ConfigurationDefaultsValues = {}
 
 function renderDefaultsTab(overrides: Partial<Parameters<typeof DefaultsTab>[0]> = {}) {
@@ -211,9 +505,57 @@ function settingsRow(label: string) {
   return row
 }
 
+function disabledInfoTrigger(row: HTMLElement) {
+  const trigger = within(row).getByRole('button', { name: /why unavailable/i })
+
+  if (!(trigger instanceof HTMLButtonElement)) throw new Error('Expected disabled info trigger button')
+
+  return trigger
+}
+
+function settingInfoTrigger(row: HTMLElement) {
+  const trigger = within(row).getByRole('button', { name: /setting information/i })
+
+  if (!(trigger instanceof HTMLButtonElement)) throw new Error('Expected setting info trigger button')
+
+  return trigger
+}
+
 describe('DefaultsTab', () => {
   beforeEach(() => {
     window.localStorage.clear()
+  })
+
+  it('marks modified setting rows with the same warning tone used by dirty tabs', () => {
+    renderDefaultsTab({
+      values: {
+        'runtime-mode': 'manual'
+      }
+    })
+
+    const row = settingsRow('Runtime mode')
+    expect(row).toHaveAttribute('data-settings-row-dirty', 'true')
+    expect(within(row).getByText('Runtime mode')).toHaveClass('text-warn')
+  })
+
+  it('uses network-panel typography tokens for configuration helper text', () => {
+    renderDefaultsTab({ configFilePath: '/Users/test/.mesh-llm/config.toml' })
+
+    const runtimeSection = screen.getByRole('heading', { name: 'Runtime' }).closest('section')
+    if (!(runtimeSection instanceof HTMLElement)) throw new Error('Expected runtime settings section')
+
+    expect(screen.getByRole('heading', { name: 'Runtime' })).toHaveClass('type-panel-title', 'text-foreground')
+    expect(within(runtimeSection).getByText('Runtime defaults')).toHaveClass('type-caption', 'text-fg-dim')
+
+    const row = settingsRow('Runtime mode')
+    expect(within(row).getByText('Controls the standard runtime selection.')).toHaveClass('type-caption', 'text-fg-dim')
+    expect(screen.getByText('TIP')).toHaveClass('type-label')
+    expect(screen.getByText('Configuration Path')).toHaveClass('type-label', 'text-fg-faint')
+    expect(screen.getByText('/Users/test/.mesh-llm/config.toml')).toHaveClass(
+      'font-mono',
+      'text-[length:var(--density-type-caption-lg)]',
+      'text-fg-dim'
+    )
   })
 
   it('hides advanced settings by default and persists the toggle', async () => {
@@ -375,6 +717,7 @@ describe('DefaultsTab', () => {
         if (setting.id === 'activation-wire-dtype') {
           return {
             ...setting,
+            baselineValue: setting.control.value,
             control: {
               ...setting.control,
               value: 'q8'
@@ -385,6 +728,7 @@ describe('DefaultsTab', () => {
         if (setting.id === 'image-min-tokens') {
           return {
             ...setting,
+            baselineValue: setting.control.value,
             control: {
               ...setting.control,
               value: '64'
@@ -395,6 +739,7 @@ describe('DefaultsTab', () => {
         if (setting.id === 'server-alias') {
           return {
             ...setting,
+            baselineValue: setting.control.value,
             control: {
               ...setting.control,
               value: 'carrack-mesh'
@@ -421,25 +766,27 @@ describe('DefaultsTab', () => {
     expect(previewSource().value).not.toContain('[defaults.request_defaults]')
   })
 
-  it('shows restart badges only for restart-required settings and exposes the exact tooltip copy on hover and focus', async () => {
+  it('shows restart indicators only for restart-required settings and exposes the exact tooltip copy on hover and focus', async () => {
     const user = userEvent.setup()
 
     const { unmount } = renderDefaultsTab({ data: CONFIGURATION_DEFAULTS })
 
     const cpuThreadsRow = within(settingsRow('CPU threads'))
     const topKRow = within(settingsRow('Top-k'))
-    const restartBadge = cpuThreadsRow.getByRole('button', { name: 'Restart required' })
+    const restartIndicator = cpuThreadsRow.getByRole('button', { name: 'Restart required' })
 
-    expect(restartBadge).toBeInTheDocument()
+    expect(restartIndicator).toBeInTheDocument()
     expect(topKRow.queryByRole('button', { name: 'Restart required' })).not.toBeInTheDocument()
 
-    await user.hover(restartBadge)
+    await user.hover(restartIndicator)
     expect(await screen.findByText(RESTART_REQUIRED_TOOLTIP, { selector: 'div' })).toBeInTheDocument()
 
     unmount()
     renderDefaultsTab({ data: CONFIGURATION_DEFAULTS })
 
-    within(settingsRow('CPU threads')).getByRole('button', { name: 'Restart required' }).focus()
+    await act(async () => {
+      within(settingsRow('CPU threads')).getByRole('button', { name: 'Restart required' }).focus()
+    })
     expect(await screen.findByText(RESTART_REQUIRED_TOOLTIP, { selector: 'div' })).toBeInTheDocument()
   })
 
@@ -476,7 +823,9 @@ describe('DefaultsTab', () => {
     })
   })
 
-  it('keeps integrated dependency disable states and explanations working across real dependency pairs', () => {
+  it('keeps integrated dependency disable states and explanations working across real dependency pairs', async () => {
+    const user = userEvent.setup()
+
     window.localStorage.setItem(SHOW_ADVANCED_STORAGE_KEY, 'true')
 
     const { rerender } = renderDefaultsTab({
@@ -486,21 +835,26 @@ describe('DefaultsTab', () => {
       }
     })
 
-    expect(
-      screen.getByText('Default draft selection policy').closest('[data-settings-row-disabled="true"]')
-    ).not.toBeNull()
-    expect(screen.getAllByText('Requires speculation-mode = draft')).toHaveLength(5)
+    const draftSelectionPolicyRow = settingsRow('Default draft selection policy')
+    expect(draftSelectionPolicyRow).toHaveAttribute('data-settings-row-disabled', 'true')
+    expect(screen.queryAllByText('Requires speculation-mode = draft')).toHaveLength(0)
     expect(screen.getByText('Prefill chunk size').closest('[data-settings-row-disabled="true"]')).not.toBeNull()
-    expect(screen.getByText('Requires prefill-chunking = fixed')).toBeInTheDocument()
+    expect(screen.queryByText('Requires prefill-chunking = fixed')).not.toBeInTheDocument()
     expect(screen.getByText('Prefill chunk schedule').closest('[data-settings-row-disabled="true"]')).not.toBeNull()
-    expect(screen.getByText('Requires prefill-chunking = schedule')).toBeInTheDocument()
+    expect(screen.queryByText('Requires prefill-chunking = schedule')).not.toBeInTheDocument()
     expect(screen.getByText('Mirostat entropy').closest('[data-settings-row-disabled="true"]')).not.toBeNull()
     expect(screen.getByText('Mirostat learning rate').closest('[data-settings-row-disabled="true"]')).not.toBeNull()
-    expect(screen.getAllByText('Requires mirostat-mode = 1 or 2')).toHaveLength(2)
+    expect(screen.queryAllByText('Requires mirostat-mode = 1 or 2')).toHaveLength(0)
     expect(previewSource().value).not.toContain('draft_selection_policy')
     expect(previewSource().value).not.toContain('prefill_chunk_size')
     expect(previewSource().value).not.toContain('prefill_chunk_schedule')
     expect(previewSource().value).not.toContain('mirostat_entropy')
+
+    const draftSelectionPolicyTrigger = disabledInfoTrigger(draftSelectionPolicyRow)
+
+    await user.hover(draftSelectionPolicyTrigger)
+    expect(await screen.findByText('Requires speculation-mode = draft', { selector: 'div' })).toBeInTheDocument()
+    await user.unhover(draftSelectionPolicyTrigger)
 
     rerender(
       <DefaultsTab
@@ -520,10 +874,10 @@ describe('DefaultsTab', () => {
     expect(screen.getByText('Prefill chunk size').closest('[data-settings-row-disabled="true"]')).toBeNull()
     expect(screen.queryByText('Requires prefill-chunking = fixed')).not.toBeInTheDocument()
     expect(screen.getByText('Prefill chunk schedule').closest('[data-settings-row-disabled="true"]')).not.toBeNull()
-    expect(screen.getByText('Requires prefill-chunking = schedule')).toBeInTheDocument()
+    expect(screen.queryByText('Requires prefill-chunking = schedule')).not.toBeInTheDocument()
     expect(screen.getByText('Mirostat entropy').closest('[data-settings-row-disabled="true"]')).toBeNull()
     expect(screen.getByText('Mirostat learning rate').closest('[data-settings-row-disabled="true"]')).toBeNull()
-    expect(screen.queryByText('Requires mirostat-mode = 1 or 2')).not.toBeInTheDocument()
+    expect(screen.queryAllByText('Requires mirostat-mode = 1 or 2')).toHaveLength(0)
     expect(previewSource().value).toContain('mirostat_mode = 2')
     expect(previewSource().value).toContain('prefill_chunking = "fixed"')
     expect(previewSource().value).not.toContain('draft_selection_policy')
@@ -545,7 +899,7 @@ describe('DefaultsTab', () => {
     )
 
     expect(screen.getByText('Prefill chunk size').closest('[data-settings-row-disabled="true"]')).not.toBeNull()
-    expect(screen.getByText('Requires prefill-chunking = fixed')).toBeInTheDocument()
+    expect(screen.queryByText('Requires prefill-chunking = fixed')).not.toBeInTheDocument()
     expect(screen.getByText('Prefill chunk schedule').closest('[data-settings-row-disabled="true"]')).toBeNull()
     expect(screen.queryByText('Requires prefill-chunking = schedule')).not.toBeInTheDocument()
     expect(previewSource().value).toContain('prefill_chunk_schedule = "128,256"')
@@ -554,15 +908,31 @@ describe('DefaultsTab', () => {
     expect(previewSource().value).not.toContain('mirostat_entropy')
   })
 
-  it('disables dependent settings until their dependency is satisfied', () => {
+  it('disables dependent settings until their dependency is satisfied behind inline info triggers', async () => {
+    const user = userEvent.setup()
+
     const { rerender } = renderDefaultsTab({ data: dependencyData })
 
-    expect(screen.getByText('Draft selection policy').closest('[data-settings-row-disabled="true"]')).not.toBeNull()
-    expect(screen.getByText('Requires speculation-mode = draft_model')).toBeInTheDocument()
-    expect(screen.getByText('Mirostat entropy').closest('[data-settings-row-disabled="true"]')).not.toBeNull()
-    expect(screen.getByText('Requires mirostat-mode = 1 or 2')).toBeInTheDocument()
+    const draftSelectionPolicyRow = settingsRow('Draft selection policy')
+    const mirostatEntropyRow = settingsRow('Mirostat entropy')
+
+    expect(draftSelectionPolicyRow).toHaveAttribute('data-settings-row-disabled', 'true')
+    expect(mirostatEntropyRow).toHaveAttribute('data-settings-row-disabled', 'true')
+    expect(screen.queryByText('Requires speculation-mode = draft_model')).not.toBeInTheDocument()
+    expect(screen.queryByText('Requires mirostat-mode = 1 or 2')).not.toBeInTheDocument()
     expect(previewSource().value).not.toContain('draft_selection_policy')
     expect(previewSource().value).not.toContain('mirostat_entropy')
+
+    const draftSelectionPolicyTrigger = disabledInfoTrigger(draftSelectionPolicyRow)
+
+    await user.hover(draftSelectionPolicyTrigger)
+    expect(await screen.findByText('Requires speculation-mode = draft_model', { selector: 'div' })).toBeInTheDocument()
+    await user.unhover(draftSelectionPolicyTrigger)
+
+    await act(async () => {
+      disabledInfoTrigger(mirostatEntropyRow).focus()
+    })
+    expect(await screen.findByText('Requires mirostat-mode = 1 or 2', { selector: 'div' })).toBeInTheDocument()
 
     rerender(
       <DefaultsTab
@@ -579,5 +949,180 @@ describe('DefaultsTab', () => {
     expect(screen.queryByText('Requires mirostat-mode = 1 or 2')).not.toBeInTheDocument()
     expect(previewSource().value).not.toContain('draft_selection_policy')
     expect(previewSource().value).not.toContain('mirostat_entropy')
+  })
+
+  it('keeps disabled slot-meter controls inert', () => {
+    const onSettingValueChange = vi.fn()
+
+    renderDefaultsTab({ data: slotDependencyData, onSettingValueChange })
+
+    const slotRow = settingsRow('Default slots / parallel requests')
+    expect(slotRow).toHaveAttribute('data-settings-row-disabled', 'true')
+    expect(screen.getByRole('radio', { name: '4 slots' })).toBeChecked()
+    expect(within(slotRow).queryByRole('spinbutton')).not.toBeInTheDocument()
+    expect(within(slotRow).queryByRole('slider')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('radio', { name: '12 slots' }))
+    fireEvent.pointerDown(screen.getByTestId('defaults-slot-meter'), {
+      buttons: 1,
+      clientX: 200,
+      pointerId: 1
+    })
+
+    expect(onSettingValueChange).not.toHaveBeenCalled()
+    expect(screen.getByRole('radio', { name: '4 slots' })).toBeChecked()
+  })
+
+  it('sizes slot-meter options and pointer selection from schema bounds', () => {
+    const onSettingValueChange = vi.fn()
+    const boundedSlotData = {
+      ...slotDependencyData,
+      settings: slotDependencySettings.map((setting) =>
+        setting.id === 'parallel-slots'
+          ? {
+              ...setting,
+              control: {
+                ...setting.control,
+                value: '3',
+                min: 3,
+                max: 6
+              }
+            }
+          : setting
+      )
+    } satisfies ConfigurationDefaultsHarnessData
+
+    renderDefaultsTab({
+      data: boundedSlotData,
+      values: { 'speculation-mode': 'draft_model' },
+      onSettingValueChange
+    })
+
+    expect(screen.getByRole('radio', { name: '3 slots' })).toBeChecked()
+    expect(screen.getByRole('radio', { name: '6 slots' })).toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: '2 slots' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: '7 slots' })).not.toBeInTheDocument()
+
+    const slotMeter = screen.getByTestId('defaults-slot-meter')
+    vi.spyOn(slotMeter, 'getBoundingClientRect').mockReturnValue({
+      bottom: 10,
+      height: 10,
+      left: 0,
+      right: 400,
+      top: 0,
+      width: 400,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    })
+
+    fireEvent.pointerDown(slotMeter, {
+      buttons: 1,
+      clientX: 100,
+      pointerId: 1
+    })
+
+    expect(onSettingValueChange).toHaveBeenCalledWith('parallel-slots', '4')
+  })
+
+  it('renders schema-driven controls with bounds, hints, runtime notes, disabled framing, arrays, objects, and conflicts', async () => {
+    const user = userEvent.setup()
+
+    renderDefaultsTab({ data: schemaDrivenControlData })
+
+    expect(screen.getByRole('slider', { name: 'Context window' })).toHaveValue('4')
+    expect(screen.queryByRole('spinbutton', { name: 'Context window' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Min 1 · Max 8 · Step 1 · Unit slots')).not.toBeInTheDocument()
+    expect(screen.queryByText('Accepted: auto, pinned')).not.toBeInTheDocument()
+
+    expect(screen.getByRole('textbox', { name: 'Projector path' })).toBeInTheDocument()
+    expect(
+      screen.queryByText('Path hint: enter a local filesystem path. No file picker is available here.')
+    ).not.toBeInTheDocument()
+
+    expect(screen.getByRole('textbox', { name: 'Projector URL' })).toBeInTheDocument()
+    expect(screen.queryByText('URL hint: enter a full URL including protocol.')).not.toBeInTheDocument()
+
+    expect(screen.getByRole('radio', { name: 'CUDA 0' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'CUDA 1' })).toBeDisabled()
+    expect(screen.queryByText('Unavailable: CUDA 1 — Reserved by another runtime')).not.toBeInTheDocument()
+
+    const unavailableBackendRow = settingsRow('Unavailable backend')
+    expect(unavailableBackendRow).toHaveAttribute('data-settings-row-disabled', 'true')
+    expect(screen.queryByText('No native backend was detected.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Omit when disabled')).not.toBeInTheDocument()
+    expect(screen.queryByText('The current value is kept in config but cannot be edited here.')).not.toBeInTheDocument()
+
+    const unavailableBackendTrigger = disabledInfoTrigger(unavailableBackendRow)
+
+    await user.hover(unavailableBackendTrigger)
+    expect(await screen.findByText('No native backend was detected.', { selector: 'div' })).toBeInTheDocument()
+    expect(
+      await screen.findByText('The current value is kept in config but cannot be edited here.', {
+        selector: 'div'
+      })
+    ).toBeInTheDocument()
+    await user.unhover(unavailableBackendTrigger)
+
+    const preservedDeviceRow = settingsRow('Pinned GPU device')
+    expect(preservedDeviceRow).toHaveAttribute('data-settings-row-disabled', 'true')
+    expect(within(preservedDeviceRow).getByRole('button', { name: 'Restart required' })).toBeInTheDocument()
+    expect(screen.queryByText('Requires gpu.assignment = pinned')).not.toBeInTheDocument()
+    expect(within(preservedDeviceRow).queryByText('Preserve value on save')).not.toBeInTheDocument()
+
+    await act(async () => {
+      disabledInfoTrigger(preservedDeviceRow).focus()
+    })
+    expect(await screen.findByText('Requires gpu.assignment = pinned', { selector: 'div' })).toBeInTheDocument()
+
+    const arrayControl = screen.getByRole('textbox', { name: 'Allowed peers' })
+    expect(arrayControl).toBeInTheDocument()
+    expect(
+      screen.queryByText('List input: enter one item per line. Saved as a TOML string array.')
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('peer-a')).toBeInTheDocument()
+    expect(screen.getByText('peer-b')).toBeInTheDocument()
+
+    expect(screen.getByRole('textbox', { name: 'Telemetry headers' })).toBeInTheDocument()
+    expect(screen.queryByText('Object input: enter a JSON object.')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Conflict: Conflicts with draft_min_tokens values above the configured maximum.')
+    ).not.toBeInTheDocument()
+
+    const projectorPathRow = settingsRow('Projector path')
+    await user.hover(settingInfoTrigger(projectorPathRow))
+    expect(
+      await screen.findByText('Path hint: enter a local filesystem path. No file picker is available here.', {
+        selector: 'div'
+      })
+    ).toBeInTheDocument()
+    await user.unhover(settingInfoTrigger(projectorPathRow))
+
+    await act(async () => {
+      settingInfoTrigger(settingsRow('Projector URL')).focus()
+    })
+    expect(
+      await screen.findByText('URL hint: enter a full URL including protocol.', { selector: 'div' })
+    ).toBeInTheDocument()
+
+    await user.hover(settingInfoTrigger(settingsRow('Allowed peers')))
+    expect(
+      await screen.findByText('List input: enter one item per line. Saved as a TOML string array.', {
+        selector: 'div'
+      })
+    ).toBeInTheDocument()
+    await user.unhover(settingInfoTrigger(settingsRow('Allowed peers')))
+
+    await act(async () => {
+      settingInfoTrigger(settingsRow('Telemetry headers')).focus()
+    })
+    expect(await screen.findByText('Object input: enter a JSON object.', { selector: 'div' })).toBeInTheDocument()
+
+    await user.hover(settingInfoTrigger(settingsRow('Draft pairing mode')))
+    expect(
+      await screen.findByText('Conflict: Conflicts with draft_min_tokens values above the configured maximum.', {
+        selector: 'div'
+      })
+    ).toBeInTheDocument()
   })
 })

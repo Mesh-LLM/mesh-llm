@@ -92,7 +92,7 @@ impl PluginInstallOptions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InstallOutcome {
     pub metadata: InstalledPluginMetadata,
     pub changed: bool,
@@ -318,10 +318,15 @@ mod tests {
     use super::*;
     use crate::ArchiveExt;
     use crate::store::{
-        InstalledPluginApplyMode, InstalledPluginConfigSchema, InstalledPluginConstraint,
-        InstalledPluginManifestMetadata, InstalledPluginRestartScope, InstalledPluginSettingSchema,
-        InstalledPluginValueKind, InstalledPluginValueSchema, InstalledPluginVisibility,
-        SUPPORTED_PLUGIN_SCHEMA_VERSION,
+        InstalledPluginApplyMode, InstalledPluginConditionOperator, InstalledPluginConditionValue,
+        InstalledPluginConditionalDisable, InstalledPluginConfigSchema,
+        InstalledPluginConflictRule, InstalledPluginConstraint, InstalledPluginControlAvailability,
+        InstalledPluginControlAvailabilitySource, InstalledPluginControlBehavior,
+        InstalledPluginControlCondition, InstalledPluginDisabledWritePolicy,
+        InstalledPluginManifestMetadata, InstalledPluginNumericControl,
+        InstalledPluginOptionsSource, InstalledPluginRestartScope, InstalledPluginSettingSchema,
+        InstalledPluginTextFormat, InstalledPluginValueKind, InstalledPluginValueSchema,
+        InstalledPluginVisibility, SUPPORTED_PLUGIN_SCHEMA_VERSION,
     };
 
     fn write_tar_gz(archive_path: &Path, plugin_name: &str, files: &[(&str, &[u8])]) -> Result<()> {
@@ -353,26 +358,113 @@ mod tests {
                 plugin_name: "demo".to_string(),
                 schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,
                 allow_unvalidated_config: false,
-                settings: vec![InstalledPluginSettingSchema {
-                    key: "retention_days".to_string(),
-                    value_schema: InstalledPluginValueSchema {
-                        kind: InstalledPluginValueKind::Integer,
-                        enum_values: Vec::new(),
-                        items: None,
-                        object_properties: Vec::new(),
-                        allow_additional_properties: false,
+                settings: vec![
+                    InstalledPluginSettingSchema {
+                        key: "retention_days".to_string(),
+                        value_schema: InstalledPluginValueSchema {
+                            kind: InstalledPluginValueKind::Integer,
+                            enum_values: Vec::new(),
+                            items: None,
+                            object_properties: Vec::new(),
+                            allow_additional_properties: false,
+                        },
+                        required: true,
+                        default_json: Some("14".to_string()),
+                        constraints: vec![InstalledPluginConstraint::Range {
+                            min: Some("1".to_string()),
+                            max: Some("365".to_string()),
+                        }],
+                        apply_mode: InstalledPluginApplyMode::DynamicValidationOnly,
+                        restart_scope: InstalledPluginRestartScope::PluginProcess,
+                        visibility: InstalledPluginVisibility::User,
+                        description: Some("How long to retain entries.".to_string()),
+                        presentation: Some(crate::store::InstalledPluginPresentationMetadata {
+                            label: Some("Retention days".to_string()),
+                            help: Some("How long to retain entries.".to_string()),
+                            category_id: Some("retention".to_string()),
+                            category_label: Some("Retention".to_string()),
+                            category_summary: Some("Retention settings".to_string()),
+                            category_order: Some(10),
+                            setting_order: Some(20),
+                            unit: Some("days".to_string()),
+                            placeholder: None,
+                            control_hint: Some("number".to_string()),
+                            renderer_id: None,
+                        }),
+                        control_behavior: Some(InstalledPluginControlBehavior {
+                            numeric: Some(InstalledPluginNumericControl {
+                                min: Some(1.0),
+                                max: Some(365.0),
+                                step: Some(1.0),
+                                soft_min: None,
+                                soft_max: None,
+                                unit: Some("days".to_string()),
+                            }),
+                            text_format: Some(InstalledPluginTextFormat::Path),
+                            options_source: Some(
+                                InstalledPluginOptionsSource::RuntimeInstalledPlugins,
+                            ),
+                            availability: Some(InstalledPluginControlAvailability {
+                                enabled: false,
+                                reason: Some("Waiting for runtime discovery".to_string()),
+                                note: Some("The current value will be preserved.".to_string()),
+                                source: InstalledPluginControlAvailabilitySource::Runtime,
+                            }),
+                            enable_when: vec![InstalledPluginControlCondition {
+                                key: "peer_name".to_string(),
+                                operator: InstalledPluginConditionOperator::Present,
+                                values: Vec::new(),
+                            }],
+                            disable_when: vec![InstalledPluginConditionalDisable {
+                                condition: InstalledPluginControlCondition {
+                                    key: "mode".to_string(),
+                                    operator: InstalledPluginConditionOperator::Equals,
+                                    values: vec![InstalledPluginConditionValue::String(
+                                        "strict".to_string(),
+                                    )],
+                                },
+                                reason: "Strict mode disables retention edits".to_string(),
+                                note: None,
+                                write_policy: InstalledPluginDisabledWritePolicy::PreserveExisting,
+                            }],
+                            conflicts: vec![InstalledPluginConflictRule {
+                                group: "retention-policy".to_string(),
+                                condition: InstalledPluginControlCondition {
+                                    key: "legacy_mode".to_string(),
+                                    operator: InstalledPluginConditionOperator::Truthy,
+                                    values: Vec::new(),
+                                },
+                                reason: "Legacy mode conflicts with retention controls".to_string(),
+                                preferred_key: Some("retention_days".to_string()),
+                            }],
+                            write_policy: Some(
+                                InstalledPluginDisabledWritePolicy::PreserveExisting,
+                            ),
+                        }),
                     },
-                    required: true,
-                    default_json: Some("14".to_string()),
-                    constraints: vec![InstalledPluginConstraint::Range {
-                        min: Some("1".to_string()),
-                        max: Some("365".to_string()),
-                    }],
-                    apply_mode: InstalledPluginApplyMode::DynamicValidationOnly,
-                    restart_scope: InstalledPluginRestartScope::PluginProcess,
-                    visibility: InstalledPluginVisibility::User,
-                    description: Some("How long to retain entries.".to_string()),
-                }],
+                    InstalledPluginSettingSchema {
+                        key: "endpoint_url".to_string(),
+                        value_schema: InstalledPluginValueSchema {
+                            kind: InstalledPluginValueKind::Url,
+                            enum_values: Vec::new(),
+                            items: None,
+                            object_properties: Vec::new(),
+                            allow_additional_properties: false,
+                        },
+                        required: false,
+                        default_json: Some("\"https://example.invalid\"".to_string()),
+                        constraints: vec![InstalledPluginConstraint::NonEmpty],
+                        apply_mode: InstalledPluginApplyMode::DynamicValidationOnly,
+                        restart_scope: InstalledPluginRestartScope::PluginProcess,
+                        visibility: InstalledPluginVisibility::User,
+                        description: Some("Plugin endpoint URL.".to_string()),
+                        presentation: None,
+                        control_behavior: Some(InstalledPluginControlBehavior {
+                            text_format: Some(InstalledPluginTextFormat::Url),
+                            ..InstalledPluginControlBehavior::default()
+                        }),
+                    },
+                ],
             }),
         })
         .unwrap();
@@ -420,5 +512,42 @@ mod tests {
         assert_eq!(schema.schema_version, SUPPORTED_PLUGIN_SCHEMA_VERSION);
         assert_eq!(schema.settings[0].key, "retention_days");
         assert_eq!(schema.settings[0].default_json.as_deref(), Some("14"));
+        assert_eq!(
+            schema.settings[0].value_schema.kind,
+            InstalledPluginValueKind::Integer
+        );
+        assert_eq!(
+            schema.settings[1].value_schema.kind,
+            InstalledPluginValueKind::Url
+        );
+        assert_eq!(
+            schema.settings[0]
+                .presentation
+                .as_ref()
+                .and_then(|presentation| presentation.label.as_deref()),
+            Some("Retention days")
+        );
+        let control_behavior = schema.settings[0]
+            .control_behavior
+            .as_ref()
+            .expect("control behavior should survive install/load");
+        assert_eq!(
+            control_behavior.text_format,
+            Some(InstalledPluginTextFormat::Path)
+        );
+        assert_eq!(
+            control_behavior.options_source,
+            Some(InstalledPluginOptionsSource::RuntimeInstalledPlugins)
+        );
+        assert_eq!(control_behavior.enable_when.len(), 1);
+        assert_eq!(control_behavior.disable_when.len(), 1);
+        assert_eq!(control_behavior.conflicts.len(), 1);
+        assert_eq!(
+            schema.settings[1]
+                .control_behavior
+                .as_ref()
+                .and_then(|behavior| behavior.text_format),
+            Some(InstalledPluginTextFormat::Url)
+        );
     }
 }

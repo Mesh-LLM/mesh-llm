@@ -355,6 +355,111 @@ tuning_profile = "throughput"
 }
 
 #[test]
+fn resolver_treats_auto_cache_type_as_policy_selected_cache_type() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.model_fit]
+kv_cache_policy = "saver"
+cache_type_k = "auto"
+cache_type_v = "auto"
+"#,
+    );
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: Path::new("/models/qwen.gguf"),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .unwrap();
+
+    assert_eq!(resolved.model_fit.kv_cache_policy, "saver");
+    assert_eq!(resolved.model_fit.cache_type_k, "q8_0");
+    assert_eq!(resolved.model_fit.cache_type_v, "q8_0");
+}
+
+#[test]
+fn resolver_treats_auto_cache_type_case_insensitively() {
+    // Test uppercase "AUTO"
+    let mesh_config_upper = parse_config(
+        r#"
+[defaults.model_fit]
+kv_cache_policy = "saver"
+cache_type_k = "AUTO"
+cache_type_v = "AUTO"
+"#,
+    );
+
+    let resolved_upper = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config_upper,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: Path::new("/models/qwen.gguf"),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .unwrap();
+
+    assert_eq!(resolved_upper.model_fit.kv_cache_policy, "saver");
+    assert_eq!(resolved_upper.model_fit.cache_type_k, "q8_0");
+    assert_eq!(resolved_upper.model_fit.cache_type_v, "q8_0");
+
+    // Test mixed-case "Auto"
+    let mesh_config_mixed = parse_config(
+        r#"
+[defaults.model_fit]
+kv_cache_policy = "saver"
+cache_type_k = "Auto"
+cache_type_v = "Auto"
+"#,
+    );
+
+    let resolved_mixed = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config_mixed,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: Path::new("/models/qwen.gguf"),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .unwrap();
+
+    assert_eq!(resolved_mixed.model_fit.kv_cache_policy, "saver");
+    assert_eq!(resolved_mixed.model_fit.cache_type_k, "q8_0");
+    assert_eq!(resolved_mixed.model_fit.cache_type_v, "q8_0");
+
+    // Test mixed-case "AuTo"
+    let mesh_config_mixed2 = parse_config(
+        r#"
+[defaults.model_fit]
+kv_cache_policy = "saver"
+cache_type_k = "AuTo"
+cache_type_v = "AuTo"
+"#,
+    );
+
+    let resolved_mixed2 = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config_mixed2,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: Path::new("/models/qwen.gguf"),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .unwrap();
+
+    assert_eq!(resolved_mixed2.model_fit.kv_cache_policy, "saver");
+    assert_eq!(resolved_mixed2.model_fit.cache_type_k, "q8_0");
+    assert_eq!(resolved_mixed2.model_fit.cache_type_v, "q8_0");
+}
+
+#[test]
 fn per_model_kv_macro_beats_global_explicit_cache_fields_unless_model_explicit_exists() {
     let mesh_config = parse_config(
         r#"

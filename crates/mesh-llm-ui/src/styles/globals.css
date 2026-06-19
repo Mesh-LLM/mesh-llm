@@ -153,8 +153,7 @@
     0 0 0 4px color-mix(in oklch, var(--color-bad), transparent 88%);
   --shadow-config-reserved-selected:
     inset 0 0 0 1.5px var(--color-background), 0 0 0 1px color-mix(in oklch, var(--color-accent), transparent 38%);
-  --shadow-config-chip-selected:
-    inset 0 0 0 1.5px var(--color-background), 0 0 0 1px color-mix(in oklch, var(--color-accent), transparent 40%);
+  --shadow-config-chip-selected: inset 0 0 0 1.5px color-mix(in oklch, var(--color-accent), transparent 34%);
   --shadow-config-chip-resting: inset 0 0 0 1px color-mix(in oklch, var(--color-background), transparent 65%);
   --shadow-slider-thumb: 0 4px 12px color-mix(in oklch, var(--color-accent) 42%, transparent);
   --shadow-slider-alert: 0 0 0 3px color-mix(in oklch, var(--color-bad) 18%, transparent);
@@ -735,7 +734,7 @@ textarea:focus-visible,
 .ui-control[data-active='true'] {
   border-color: color-mix(in oklab, var(--color-accent) 70%, var(--color-border));
   background: color-mix(in oklab, var(--color-accent) 12%, var(--color-panel));
-  color: var(--color-accent);
+  color: var(--color-foreground);
 }
 .ui-control:disabled {
   opacity: 0.45;

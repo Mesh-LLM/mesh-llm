@@ -247,14 +247,92 @@ impl ConfigState {
 mod tests {
     use super::*;
     use crate::plugin::{GpuAssignment, GpuConfig, MeshConfig};
-    use mesh_llm_config::ConfigDiagnosticCode;
+    use mesh_llm_config::{
+        ConfigDiagnosticCode, ConfigDiagnosticSeverity, validate_config_diagnostics,
+    };
     use mesh_llm_plugin_manager::{
         InstalledPluginConfigSchema, InstalledPluginManifestMetadata, InstalledPluginMetadata,
         PluginStore, SUPPORTED_PLUGIN_SCHEMA_VERSION,
     };
+    use std::collections::BTreeSet;
 
     const FULL_SURFACE_VALID_FIXTURE: &str =
         include_str!("../../tests/fixtures/skippy_full_surface_valid.toml");
+    const CONTROL_FIXTURE_VALID: &str =
+        include_str!("../../tests/fixtures/schema_driven_controls_valid.toml");
+    const CONTROL_FIXTURE_INVALID: &str =
+        include_str!("../../tests/fixtures/schema_driven_controls_invalid.toml");
+
+    #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    struct DiagnosticSignature {
+        path: String,
+        canonical_path: String,
+        severity: &'static str,
+        code: &'static str,
+    }
+
+    impl DiagnosticSignature {
+        fn new(
+            path: String,
+            canonical_path: String,
+            severity: &'static str,
+            code: &'static str,
+        ) -> Self {
+            Self {
+                path,
+                canonical_path,
+                severity,
+                code,
+            }
+        }
+    }
+
+    fn severity_label(severity: ConfigDiagnosticSeverity) -> &'static str {
+        match severity {
+            ConfigDiagnosticSeverity::Error => "error",
+            ConfigDiagnosticSeverity::Warning => "warning",
+            ConfigDiagnosticSeverity::Info => "info",
+        }
+    }
+
+    fn code_label(code: ConfigDiagnosticCode) -> &'static str {
+        match code {
+            ConfigDiagnosticCode::InvalidValue => "invalid_value",
+            ConfigDiagnosticCode::MissingRequiredValue => "missing_required_value",
+            ConfigDiagnosticCode::UnknownField => "unknown_field",
+            ConfigDiagnosticCode::UnsupportedField => "unsupported_field",
+            ConfigDiagnosticCode::RejectedField => "rejected_field",
+            ConfigDiagnosticCode::AliasApplied => "alias_applied",
+            ConfigDiagnosticCode::MisplacedField => "misplaced_field",
+            ConfigDiagnosticCode::SchemaUnavailable => "schema_unavailable",
+            ConfigDiagnosticCode::LegacyUnvalidatedConfig => "legacy_unvalidated_config",
+            ConfigDiagnosticCode::UnsupportedSchemaVersion => "unsupported_schema_version",
+        }
+    }
+
+    fn diagnostic_signatures(
+        diagnostics: &[mesh_llm_config::ConfigDiagnostic],
+    ) -> BTreeSet<DiagnosticSignature> {
+        diagnostics
+            .iter()
+            .map(|diagnostic| {
+                DiagnosticSignature::new(
+                    diagnostic
+                        .path
+                        .as_ref()
+                        .map(|path| path.render())
+                        .expect("diagnostic should include path"),
+                    diagnostic
+                        .canonical_path
+                        .as_ref()
+                        .map(|path| path.render())
+                        .expect("diagnostic should include canonical path"),
+                    severity_label(diagnostic.severity),
+                    code_label(diagnostic.code),
+                )
+            })
+            .collect()
+    }
 
     fn test_dir() -> PathBuf {
         let dir =
@@ -311,6 +389,64 @@ mod tests {
         }
     }
 
+    fn strict_blackboard_schema(
+        plugin_name: &str,
+        allow_unvalidated_config: bool,
+    ) -> InstalledPluginConfigSchema {
+        InstalledPluginConfigSchema {
+            plugin_name: plugin_name.to_string(),
+            schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,
+            allow_unvalidated_config,
+            settings: vec![
+                mesh_llm_plugin_manager::InstalledPluginSettingSchema {
+                    key: "retention_days".to_string(),
+                    value_schema: mesh_llm_plugin_manager::InstalledPluginValueSchema {
+                        kind: mesh_llm_plugin_manager::InstalledPluginValueKind::Integer,
+                        enum_values: Vec::new(),
+                        items: None,
+                        object_properties: Vec::new(),
+                        allow_additional_properties: false,
+                    },
+                    required: true,
+                    default_json: Some("14".to_string()),
+                    constraints: vec![mesh_llm_plugin_manager::InstalledPluginConstraint::Range {
+                        min: Some("1".to_string()),
+                        max: Some("365".to_string()),
+                    }],
+                    apply_mode:
+                        mesh_llm_plugin_manager::InstalledPluginApplyMode::DynamicValidationOnly,
+                    restart_scope:
+                        mesh_llm_plugin_manager::InstalledPluginRestartScope::PluginProcess,
+                    visibility: mesh_llm_plugin_manager::InstalledPluginVisibility::User,
+                    description: Some("Retention window".to_string()),
+                    presentation: None,
+                    control_behavior: None,
+                },
+                mesh_llm_plugin_manager::InstalledPluginSettingSchema {
+                    key: "mode".to_string(),
+                    value_schema: mesh_llm_plugin_manager::InstalledPluginValueSchema {
+                        kind: mesh_llm_plugin_manager::InstalledPluginValueKind::Enum,
+                        enum_values: vec!["strict".to_string(), "relaxed".to_string()],
+                        items: None,
+                        object_properties: Vec::new(),
+                        allow_additional_properties: false,
+                    },
+                    required: false,
+                    default_json: Some("\"strict\"".to_string()),
+                    constraints: Vec::new(),
+                    apply_mode:
+                        mesh_llm_plugin_manager::InstalledPluginApplyMode::DynamicValidationOnly,
+                    restart_scope:
+                        mesh_llm_plugin_manager::InstalledPluginRestartScope::PluginProcess,
+                    visibility: mesh_llm_plugin_manager::InstalledPluginVisibility::User,
+                    description: Some("Conflict mode".to_string()),
+                    presentation: None,
+                    control_behavior: None,
+                },
+            ],
+        }
+    }
+
     fn with_plugin_store(metadata: &[InstalledPluginMetadata], test: impl FnOnce()) {
         struct PluginDirRestoreGuard {
             previous: Option<std::ffi::OsString>,
@@ -319,8 +455,12 @@ mod tests {
         impl Drop for PluginDirRestoreGuard {
             fn drop(&mut self) {
                 if let Some(previous) = self.previous.take() {
+                    // SAFETY: `with_plugin_store` is only called from `#[serial_test::serial]`
+                    // tests in this module, so restoring the process env here cannot race with
+                    // other tests that read or write `MESH_LLM_PLUGIN_DIR`.
                     unsafe { std::env::set_var("MESH_LLM_PLUGIN_DIR", previous) };
                 } else {
+                    // SAFETY: This is the paired env cleanup for the same serialized test scope.
                     unsafe { std::env::remove_var("MESH_LLM_PLUGIN_DIR") };
                 }
             }
@@ -334,7 +474,8 @@ mod tests {
 
         let previous = std::env::var_os("MESH_LLM_PLUGIN_DIR");
         let _restore_plugin_dir = PluginDirRestoreGuard { previous };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: `with_plugin_store` is only used by `#[serial_test::serial]` tests in this
+        // module, so this temporary process-wide override cannot race with concurrent tests.
         unsafe { std::env::set_var("MESH_LLM_PLUGIN_DIR", temp.path()) };
         test();
     }
@@ -913,6 +1054,121 @@ arbitrary = "kept"
                 std::fs::remove_dir_all(&dir).ok();
             },
         );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn runtime_config_apply_legacy_plugin_schema_keeps_unknown_settings_but_rejects_bad_known_values()
+     {
+        with_plugin_store(
+            &[installed_plugin_metadata(
+                "blackboard",
+                Some(strict_blackboard_schema("blackboard", true)),
+            )],
+            || {
+                let dir = test_dir();
+                let config_path = dir.join("config.toml");
+                let mut state = ConfigState::load(&config_path).expect("load");
+                let config: MeshConfig = toml::from_str(
+                    r#"
+version = 1
+
+[[plugin]]
+name = "blackboard"
+
+[plugin.settings]
+retention_days = 0
+mode = "mystery"
+unknown = true
+"#,
+                )
+                .expect("legacy plugin config should deserialize");
+
+                match state.apply(config, 0) {
+                    ApplyResult::ValidationError { error, diagnostics } => {
+                        assert!(
+                            !error.is_empty(),
+                            "legacy error summary should not be empty"
+                        );
+                        assert!(diagnostics.iter().any(|diagnostic| {
+                            diagnostic.code == ConfigDiagnosticCode::LegacyUnvalidatedConfig
+                                && diagnostic.severity == ConfigDiagnosticSeverity::Warning
+                                && diagnostic
+                                    .canonical_path
+                                    .as_ref()
+                                    .map(|path| path.render())
+                                    .as_deref()
+                                    == Some("plugin.blackboard.settings")
+                        }));
+                        assert!(diagnostics.iter().any(|diagnostic| {
+                            diagnostic.code == ConfigDiagnosticCode::InvalidValue
+                                && diagnostic
+                                    .canonical_path
+                                    .as_ref()
+                                    .map(|path| path.render())
+                                    .as_deref()
+                                    == Some("plugin.blackboard.settings.retention_days")
+                        }));
+                        assert!(diagnostics.iter().any(|diagnostic| {
+                            diagnostic.code == ConfigDiagnosticCode::InvalidValue
+                                && diagnostic
+                                    .canonical_path
+                                    .as_ref()
+                                    .map(|path| path.render())
+                                    .as_deref()
+                                    == Some("plugin.blackboard.settings.mode")
+                        }));
+                        assert!(!diagnostics.iter().any(|diagnostic| {
+                            diagnostic.code == ConfigDiagnosticCode::UnknownField
+                                && diagnostic
+                                    .canonical_path
+                                    .as_ref()
+                                    .map(|path| path.render())
+                                    .as_deref()
+                                    == Some("plugin.blackboard.settings.unknown")
+                        }));
+                    }
+                    other => panic!("expected ValidationError, got {other:?}"),
+                }
+
+                std::fs::remove_dir_all(&dir).ok();
+            },
+        );
+    }
+
+    #[test]
+    fn runtime_config_apply_accepts_schema_driven_valid_fixture() {
+        let dir = test_dir();
+        let config_path = dir.join("config.toml");
+        let mut state = ConfigState::load(&config_path).expect("load");
+        let valid: MeshConfig =
+            toml::from_str(CONTROL_FIXTURE_VALID).expect("valid fixture should deserialize");
+
+        match state.apply(valid, 0) {
+            ApplyResult::Applied { diagnostics, .. } => assert!(diagnostics.is_empty()),
+            other => panic!("expected Applied, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn runtime_config_apply_matches_validator_signatures_for_schema_driven_invalid_fixture() {
+        let dir = test_dir();
+        let config_path = dir.join("config.toml");
+        let mut state = ConfigState::load(&config_path).expect("load");
+        let invalid: MeshConfig =
+            toml::from_str(CONTROL_FIXTURE_INVALID).expect("invalid fixture should deserialize");
+        let expected = diagnostic_signatures(&validate_config_diagnostics(&invalid));
+
+        match state.apply(invalid, 0) {
+            ApplyResult::ValidationError { diagnostics, .. } => {
+                assert_eq!(diagnostic_signatures(&diagnostics), expected);
+            }
+            other => panic!("expected ValidationError, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -2230,11 +2230,6 @@ async fn control_plane_refresh_inventory() -> Result<()> {
     let (server, _secret_key, _config_path) =
         start_owner_control_test_server(&owner_keypair, &tmp).await?;
     let expected_model_ref = crate::models::model_ref_for_path(&gguf_path);
-    let expected_inventory_name = gguf_path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .expect("gguf test file should have a valid stem")
-        .to_string();
     assert!(server.available_models().await.is_empty());
 
     let (_refresh_endpoint, mut refresh_send, mut refresh_recv, requester_id) =
@@ -2273,11 +2268,7 @@ async fn control_plane_refresh_inventory() -> Result<()> {
             .contains(&expected_model_ref)
     );
     let inventory_snapshot = server.runtime_data_collector().local_inventory_snapshot();
-    assert!(
-        inventory_snapshot
-            .model_names
-            .contains(&expected_inventory_name)
-    );
+    assert!(inventory_snapshot.model_names.contains(&expected_model_ref));
 
     write_len_prefixed(&mut refresh_send, &refresh_request(31).encode_to_vec()).await?;
     let second = read_owner_control_envelope(&mut refresh_recv).await?;

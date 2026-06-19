@@ -160,7 +160,7 @@ describe('app router routes', () => {
     ['/', 'MeshLLM - Dashboard', 'Dashboard route'],
     ['/reserves', 'MeshLLM - Reserves', 'Reserves route'],
     ['/chat', 'MeshLLM - Chat', 'Chat route cache: missing'],
-    ['/configuration/defaults', 'MeshLLM - Configuration', 'Active route tab: defaults'],
+    ['/configuration/defaults', 'MeshLLM - Configuration', 'Active route tab: general'],
     ['/__playground?tab=shell-controls', 'MeshLLM - Developer Playground', 'Active developer route tab: shell-controls']
   ])('sets the document title for %s', async (pathname, title, routeText) => {
     renderRouterAt(pathname)
@@ -172,8 +172,8 @@ describe('app router routes', () => {
   it('canonicalizes the bare configuration route to the default tab path', async () => {
     const testRouter = renderRouterAt('/configuration')
 
-    await screen.findByText('Active route tab: defaults')
-    await waitFor(() => expect(testRouter.state.location.pathname).toBe('/configuration/defaults'))
+    await screen.findByText('Active route tab: general')
+    await waitFor(() => expect(testRouter.state.location.pathname).toBe('/configuration/general'))
   })
 
   it('restores a configuration tab from the path segment on initial load', async () => {
@@ -205,7 +205,7 @@ describe('app router routes', () => {
     })
     const testRouter = renderRouterWithHistory(history)
 
-    await screen.findByText('Active route tab: defaults')
+    await screen.findByText('Active route tab: general')
 
     await act(async () => {
       history.back()
