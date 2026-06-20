@@ -56,7 +56,7 @@ Bring over these skippy crates:
 | `skippy-server` | Stage transport and OpenAI driver code to refactor into embeddable APIs |
 | `skippy-topology` | Layer topology planning and family/split policy |
 | `skippy-metrics` | Runtime telemetry helpers |
-| `metrics-server` | Benchmark/debug OTLP ingest, run lifecycle, DuckDB storage, and report export |
+| `metrics-server` | Benchmark/debug OTLP ingest, run lifecycle, SQLite storage, and report export |
 | `openai-frontend` | Shared OpenAI-compatible request/response, streaming, responses API compatibility, structured-output, tool-call, logprob, and backend contract |
 | `skippy-model-package` | Later package tooling for producing layer packages |
 
@@ -153,7 +153,7 @@ Current branch status:
   behind the backend selector. The next replacement step is multi-peer stage
   topology planning and activation transport, after which the legacy
   `llama-server`/`rpc-server` startup path can be retired.
-- `metrics-server` is in the workspace with OTLP ingest, DuckDB-backed run
+- `metrics-server` is in the workspace with OTLP ingest, SQLite-backed run
   lifecycle/report export, `just metrics-server` recipes, and agent workflow
   documentation.
 
@@ -575,13 +575,13 @@ work can keep the same measure/debug loop:
 mesh/skippy stage runtime
     -. best-effort OTLP summaries .->
 metrics-server
-    -> metrics.duckdb
+    -> metrics.sqlite
     -> report.json
 ```
 
 `metrics-server` is not on the request path. Mesh and skippy stages must keep
 running if telemetry export is unavailable, slow, or drops events. The server
-owns benchmark/debug ingest, run lifecycle, DuckDB storage, and report export;
+owns benchmark/debug ingest, run lifecycle, SQLite storage, and report export;
 stage runtime code owns only best-effort emission and stable `skippy-metrics`
 names.
 
