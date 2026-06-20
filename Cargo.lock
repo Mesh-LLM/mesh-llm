@@ -7476,6 +7476,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "skippy-quantize"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "libc",
+ "serde",
+ "serde_json",
+ "skippy-ffi",
+]
+
+[[package]]
 name = "skippy-runtime"
 version = "0.68.0"
 dependencies = [

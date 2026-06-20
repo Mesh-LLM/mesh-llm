@@ -56,6 +56,7 @@ WORKSPACE_MEMBERS=(
   "skippy-server"
   "metrics-server"
   "skippy-model-package"
+  "skippy-quantize"
   "model-package"
   "skippy-correctness"
   "llama-spec-bench"

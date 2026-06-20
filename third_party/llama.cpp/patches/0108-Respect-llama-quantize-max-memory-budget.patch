@@ -1,0 +1,50 @@
+From 3b29f2f7a0bb41c1c05af0b42b3f9d8d3c89d99e Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sat, 20 Jun 2026 18:00:00 +1000
+Subject: [PATCH] Respect llama-quantize max memory budget
+
+src/llama-quant.cpp | 24 ++++++++++++++++++++++--
+1 file changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+index 000000000..000000000 100644
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -142,5 +142,25 @@ static int64_t llama_quantize_watchdog_interval_seconds() {
+     return std::max<long long>(0, value);
+ }
++
++static int64_t llama_quantize_stream_chunk_size() {
++    static constexpr int64_t default_stream_chunk_size = 32 * 1024 * 1024;
++    const char * env = std::getenv("LLAMA_QUANTIZE_MAX_MEMORY_BYTES");
++    if (env == nullptr || env[0] == '\0') {
++        return default_stream_chunk_size;
++    }
++
++    char * end = nullptr;
++    const long long budget = std::strtoll(env, &end, 10);
++    if (end == env || budget <= 0) {
++        return default_stream_chunk_size;
++    }
++
++    // Keep the streamed F32 conversion chunk to a conservative fraction of the
++    // requested process budget. Other quantization buffers still contribute to
++    // RSS, so the Rust wrapper remains responsible for hard enforcement.
++    return std::max<int64_t>(32 * 512, std::min<int64_t>(default_stream_chunk_size, budget / 4));
++}
++
+ struct quantize_watchdog_snapshot {
+     std::string tensor_name;
+     std::string tensor_shape;
+@@ -1589,8 +1609,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+                 // quantize each expert separately since they have different importance matrices
+                 new_size = 0;
+                 if (stream_source) {
+-                    static const int64_t stream_chunk_size = 32 * 1024 * 1024;
+-                    const int64_t rows_per_stream_chunk = std::max<int64_t>(1, stream_chunk_size / n_per_row);
+-
++                    const int64_t stream_chunk_size = llama_quantize_stream_chunk_size();
++                    const int64_t rows_per_stream_chunk = std::max<int64_t>(1, stream_chunk_size / n_per_row);
++
+                     for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
+                         void * new_data_03 = (char *)new_data + row_size * i03 * nrows;

@@ -47,6 +47,7 @@ members = [
     "crates/skippy-server",
     "crates/metrics-server",
     "crates/skippy-model-package",
+    "crates/skippy-quantize",
     "crates/model-package",
     "crates/skippy-correctness",
     "crates/llama-spec-bench",
