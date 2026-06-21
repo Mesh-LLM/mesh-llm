@@ -171,9 +171,12 @@ pub async fn resolve(
         .target
         .unwrap_or_else(|| format!("{}/{}-layers", permissions.namespace, dist_id));
 
-    let model_id = params.model_id.unwrap_or_else(|| {
-        model_ref::format_gguf_selection_ref(&params.source_repo, &source_file, &matched.name)
-    });
+    let model_id = resolve_model_id(
+        params.model_id,
+        &params.source_repo,
+        &source_file,
+        &matched.name,
+    )?;
 
     let job_plan = crate::jobs::plan_cpu_job(
         &crate::jobs::hf_endpoint(),
@@ -276,6 +279,25 @@ fn parse_repo(repo: &str) -> Result<(String, String)> {
     Ok((parts[0].to_string(), parts[1].to_string()))
 }
 
+fn resolve_model_id(
+    explicit_model_id: Option<String>,
+    source_repo: &str,
+    source_file: &str,
+    quant_name: &str,
+) -> Result<String> {
+    if let Some(model_id) = explicit_model_id {
+        model_ref::ModelRef::parse(&model_id)
+            .with_context(|| format!("invalid --model-id {model_id:?}"))?;
+        return Ok(model_id);
+    }
+
+    Ok(model_ref::format_gguf_selection_ref(
+        source_repo,
+        source_file,
+        quant_name,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +334,47 @@ mod tests {
             .map(|quant| quant.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["Q4_K_M", "Q8_0"]);
+    }
+
+    #[test]
+    fn accepts_explicit_model_id_coordinate() {
+        let model_id = resolve_model_id(
+            Some("unsloth/gemma-4-E4B-it-GGUF:Q4_K_M".to_string()),
+            "unsloth/gemma-4-E4B-it-GGUF",
+            "gemma-4-E4B-it-Q4_K_M.gguf",
+            "Q4_K_M",
+        )
+        .expect("valid model id");
+
+        assert_eq!(model_id, "unsloth/gemma-4-E4B-it-GGUF:Q4_K_M");
+    }
+
+    #[test]
+    fn rejects_explicit_model_id_without_repo_coordinate() {
+        let error = resolve_model_id(
+            Some("gemma-4-E4B-it-Q4_K_M".to_string()),
+            "unsloth/gemma-4-E4B-it-GGUF",
+            "gemma-4-E4B-it-Q4_K_M.gguf",
+            "Q4_K_M",
+        )
+        .expect_err("invalid model id should fail");
+
+        assert!(
+            error.to_string().contains("invalid --model-id"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn derives_model_id_from_selected_quant() {
+        let model_id = resolve_model_id(
+            None,
+            "unsloth/gemma-4-E4B-it-GGUF",
+            "gemma-4-E4B-it-Q4_K_M.gguf",
+            "Q4_K_M",
+        )
+        .expect("derived model id");
+
+        assert_eq!(model_id, "unsloth/gemma-4-E4B-it-GGUF:Q4_K_M");
     }
 }
