@@ -106,6 +106,7 @@ pub(crate) fn run_direct_convert(args: DirectConvertArgs) -> Result<()> {
             window: RunConvertWindowArgs {
                 manifest: manifest_path.clone(),
                 runner,
+                json: args.json,
             },
             max_windows: args.max_windows,
         })?;

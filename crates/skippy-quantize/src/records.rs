@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::backend::BackendRunStatus;
+use crate::output::print_path_event;
 use crate::splits::SplitWindow;
 use crate::types::JobKind;
 
@@ -62,7 +63,7 @@ pub fn write_window_record(
     let path = record_dir.join(name);
     fs::write(&path, serde_json::to_vec_pretty(&record)?)
         .with_context(|| format!("write {}", path.display()))?;
-    println!("window_record path={}", path.display());
+    print_path_event("🧾", "Wrote window record", &path);
     Ok(())
 }
 

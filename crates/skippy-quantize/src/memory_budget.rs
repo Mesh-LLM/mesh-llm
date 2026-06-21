@@ -4,6 +4,7 @@ use anyhow::{Context, Result, ensure};
 use clap::ValueEnum;
 use serde::Serialize;
 
+use crate::output::{format_bytes, print_info, print_json_pretty, print_warn};
 use crate::splits::SplitWindow;
 use crate::types::ConvertOutputType;
 
@@ -100,6 +101,7 @@ pub(crate) struct MemoryBudgetPlanInput<'a> {
     pub(crate) stream_buffer_bytes: Option<usize>,
     pub(crate) estimated_stream_working_set_bytes: Option<u64>,
     pub(crate) llama_quantize_env_bytes: Option<u64>,
+    pub(crate) json: bool,
 }
 
 pub(crate) fn print_memory_budget_plan(input: MemoryBudgetPlanInput<'_>) -> Result<()> {
@@ -124,11 +126,20 @@ pub(crate) fn print_memory_budget_plan(input: MemoryBudgetPlanInput<'_>) -> Resu
         estimated_stream_working_set_bytes: input.estimated_stream_working_set_bytes,
         llama_quantize_env_bytes: input.llama_quantize_env_bytes,
     };
-    println!(
-        "{}_memory_budget={}",
-        input.kind,
-        serde_json::to_string(&plan)?
-    );
+    if input.json {
+        print_json_pretty(&serde_json::json!({
+            "event": format!("{}_memory_budget", input.kind),
+            "plan": plan,
+        }))?;
+    } else if plan.hard_limit {
+        print_warn(format!(
+            "{} memory budget: hard cap {}",
+            input.kind,
+            format_bytes(input.max_memory.map(MemorySize::bytes).unwrap_or_default())
+        ));
+    } else {
+        print_info(format!("{} memory budget configured", input.kind));
+    }
     Ok(())
 }
 
@@ -175,12 +186,11 @@ pub(crate) fn enforce_memory_budget(
     if estimated_bytes <= max_memory.bytes() {
         return Ok(());
     }
-    println!(
-        "memory_budget_exceeded label={label} estimated_bytes={} max_memory_bytes={} policy={:?}",
-        estimated_bytes,
-        max_memory.bytes(),
-        policy
-    );
+    print_warn(format!(
+        "{label} estimated working set {} exceeds budget {} ({policy:?})",
+        format_bytes(estimated_bytes),
+        format_bytes(max_memory.bytes())
+    ));
     ensure!(
         !policy.is_hard(),
         "{label} estimated working set {} bytes exceeds --max-memory {} bytes",

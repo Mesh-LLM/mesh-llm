@@ -5,6 +5,10 @@ use anyhow::{Context, Result, ensure};
 
 use crate::command_reports::{SplitValidation, TensorTypeValidation};
 use crate::manifest::{manifest_progress, read_manifest};
+use crate::output::{
+    format_shard_ranges, format_window, print_info, print_json_pretty, print_progress_line,
+    print_success, print_warn,
+};
 use crate::quantize::ensure_tensor_type_entry;
 use crate::splits::{Progress, split_status, split_status_for_basename};
 
@@ -12,7 +16,7 @@ pub(crate) fn run_status(manifest_path: &Path, json: bool) -> Result<()> {
     let manifest = read_manifest(manifest_path)?;
     let progress = manifest_progress(&manifest)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&progress)?);
+        print_json_pretty(&progress)?;
     } else {
         print_progress(&progress);
     }
@@ -23,11 +27,11 @@ pub(crate) fn run_next_window(manifest_path: &Path, json: bool) -> Result<()> {
     let manifest = read_manifest(manifest_path)?;
     let progress = manifest_progress(&manifest)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&progress.next_window)?);
+        print_json_pretty(&progress.next_window)?;
     } else if let Some(window) = progress.next_window {
-        println!("{}..{}", window.first_split, window.last_split);
+        print_info(format!("Next window: {}", format_window(window)));
     } else {
-        println!("complete");
+        print_success("No next window; job is complete");
     }
     Ok(())
 }
@@ -35,9 +39,12 @@ pub(crate) fn run_next_window(manifest_path: &Path, json: bool) -> Result<()> {
 pub(crate) fn validate_tensor_types_command(path: &Path, json: bool) -> Result<()> {
     let validation = validate_tensor_types(path)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&validation)?);
+        print_json_pretty(&validation)?;
     } else {
-        println!("valid tensor type file: {} entries", validation.entry_count);
+        print_success(format!(
+            "Valid tensor type file: {} entries",
+            validation.entry_count
+        ));
     }
     Ok(())
 }
@@ -69,17 +76,24 @@ pub(crate) fn validate_splits_command(
         complete: progress.complete,
     };
     if json {
-        println!("{}", serde_json::to_string_pretty(&validation)?);
+        print_json_pretty(&validation)?;
     } else if validation.complete {
-        println!(
-            "complete split artifact: {}/{} shards",
-            validation.completed_count, validation.expected_splits
+        print_progress_line(
+            "split artifact",
+            validation.completed_count,
+            validation.expected_splits,
         );
+        print_success("Split artifact is complete");
     } else {
-        println!(
-            "incomplete split artifact: {}/{} shards first_missing={:?}",
-            validation.completed_count, validation.expected_splits, validation.first_missing
+        print_progress_line(
+            "split artifact",
+            validation.completed_count,
+            validation.expected_splits,
         );
+        print_warn(format!(
+            "Split artifact is incomplete; first missing shard: {:?}",
+            validation.first_missing
+        ));
     }
     ensure!(validation.complete, "split artifact is incomplete");
     Ok(())
@@ -99,28 +113,24 @@ pub(crate) fn validate_tensor_types(path: &Path) -> Result<TensorTypeValidation>
 }
 
 fn print_progress(progress: &Progress) {
-    println!(
-        "{}/{} shards complete ({:.2}%)",
-        progress.completed_count, progress.expected_splits, progress.completed_percent
+    print_progress_line(
+        "job status",
+        progress.completed_count,
+        progress.expected_splits,
     );
-    println!("missing shards: {}", progress.missing_count);
+    if progress.complete {
+        print_success("All shards complete");
+    } else {
+        print_warn(format!("Missing shards: {}", progress.missing_count));
+    }
     if !progress.missing_ranges.is_empty() {
-        let ranges = progress
-            .missing_ranges
-            .iter()
-            .map(|range| {
-                if range.first_split == range.last_split {
-                    range.first_split.to_string()
-                } else {
-                    format!("{}..{}", range.first_split, range.last_split)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("missing ranges: {ranges}");
+        print_info(format!(
+            "Missing ranges: {}",
+            format_shard_ranges(&progress.missing_ranges)
+        ));
     }
     match progress.next_window {
-        Some(window) => println!("next window: {}..{}", window.first_split, window.last_split),
-        None => println!("next window: complete"),
+        Some(window) => print_info(format!("Next window: {}", format_window(window))),
+        None => print_success("Next window: complete"),
     }
 }

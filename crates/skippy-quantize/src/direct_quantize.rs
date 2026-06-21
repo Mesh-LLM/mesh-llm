@@ -105,6 +105,7 @@ pub(crate) fn run_direct_quantize(args: DirectQuantizeArgs) -> Result<()> {
             window: RunQuantWindowArgs {
                 manifest: manifest_path.clone(),
                 runner,
+                json: args.json,
             },
             window_override,
             max_windows: args.max_windows,

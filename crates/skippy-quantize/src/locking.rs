@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::output::print_path_event;
+
 pub fn with_manifest_lock<T>(
     manifest_path: &Path,
     action: impl FnOnce() -> Result<T>,
@@ -31,7 +33,7 @@ impl ManifestLock {
             .open(&path)
             .with_context(|| format!("open manifest lock {}", path.display()))?;
         lock_file(&file).with_context(|| format!("lock manifest {}", manifest_path.display()))?;
-        println!("manifest_lock_acquired path={}", path.display());
+        print_path_event("🔒", "Manifest lock acquired", &path);
         Ok(Self { path, file })
     }
 }
@@ -39,7 +41,7 @@ impl ManifestLock {
 impl Drop for ManifestLock {
     fn drop(&mut self) {
         unlock_file(&self.file);
-        println!("manifest_lock_released path={}", self.path.display());
+        print_path_event("🔓", "Manifest lock released", &self.path);
     }
 }
 

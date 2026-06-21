@@ -25,6 +25,14 @@ just skippy-quantize-release-build
 just skippy-quantize-standalone-release-build
 ```
 
+## Output
+
+Human-readable output is the default. It uses compact emoji-labelled status
+lines and progress bars for shard progress. Commands that expose `--json`
+emit structured JSON instead, including `status`, `next-window`, validation,
+preflight, and the resumable `run-convert[-window]` / `run-quant[-window]`
+commands.
+
 ## Backends
 
 Inspect backend capabilities:

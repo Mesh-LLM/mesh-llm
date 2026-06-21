@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::llama_load::{LlamaLoadOptions, validate_llama_load};
 use crate::manifest::{Manifest, manifest_progress, read_manifest};
+use crate::output::{print_info, print_success};
 use crate::splits::{Progress, split_status_for_basename};
 
 #[derive(Debug, Serialize)]
@@ -67,10 +68,10 @@ pub fn print_verify_on_complete(
     let Some(report) = verify_manifest_path_if_complete(manifest_path)? else {
         return Ok(());
     };
-    println!(
-        "verify_on_complete: {}/{} shards prefix={} basename={}",
+    print_success(format!(
+        "Verified complete artifact: {}/{} shards prefix={} basename={}",
         report.completed_count, report.expected_splits, report.prefix, report.basename
-    );
+    ));
     if options.llama_load || options.llama_cli.is_some() {
         let llama_load = validate_llama_load(
             &first_artifact_path(&manifest),
@@ -79,11 +80,11 @@ pub fn print_verify_on_complete(
                 check_tensors: options.check_tensors,
             },
         )?;
-        println!(
-            "verify_on_complete_llama_load_valid=true model={} llama_cli={}",
+        print_info(format!(
+            "llama load validation passed: model={} llama_cli={}",
             llama_load.model.display(),
             llama_load.llama_cli.display()
-        );
+        ));
     }
     Ok(())
 }

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 
+use crate::output::{print_copy, print_info};
 use crate::residency::{copy_file_bounded_with_label, remove_dir_if_exists, symlink_file};
 
 #[derive(Debug, Serialize)]
@@ -230,10 +231,10 @@ pub fn stage_source_window(
         );
         let staged_shard = stage_root.join(name);
         if window.first_split <= index && index <= window.last_split {
-            println!(
-                "stage_source_copy index={index} source={} target={}",
-                source_shard.display(),
-                staged_shard.display()
+            print_copy(
+                &source_shard,
+                &staged_shard,
+                source_shard.metadata().ok().map(|m| m.len()),
             );
             copy_file_bounded_with_label("stage_source_copy", &source_shard, &staged_shard)?;
         } else {
@@ -242,15 +243,12 @@ pub fn stage_source_window(
     }
 
     let staged_first = stage_root.join(shard_name_for(first_source_shard, 1, total)?);
-    println!(
-        "stage_source_window={}",
-        serde_json::json!({
-            "first_split": window.first_split,
-            "last_split": window.last_split,
-            "stage_path": stage_path,
-            "staged_first_shard": staged_first,
-        })
-    );
+    print_info(format!(
+        "Staged source window {}..{} at {}",
+        window.first_split,
+        window.last_split,
+        stage_path.display()
+    ));
     Ok(staged_first)
 }
 

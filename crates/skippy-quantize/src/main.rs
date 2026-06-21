@@ -21,6 +21,7 @@ mod manifest;
 mod memory_budget;
 mod native_convert;
 mod native_quantize;
+mod output;
 mod plan_convert;
 mod preflight;
 mod quantize;
@@ -56,6 +57,7 @@ use memory_budget::{
 };
 use native_convert::{build_native_convert_command, run_native_convert};
 use native_quantize::{build_native_quantize_command, run_native_quantize};
+use output::{print_info, print_json_pretty, print_path_event, print_success, print_window};
 use plan_convert::{PlanConvertArgs, run_plan_convert};
 use preflight::run_job_preflight;
 use records::{WindowRunRecordInput, unix_timestamp_ms, write_window_record};
@@ -309,6 +311,8 @@ struct RunConvertWindowArgs {
     manifest: PathBuf,
     #[command(flatten)]
     runner: ConvertRunnerArgs,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -325,6 +329,8 @@ struct RunQuantWindowArgs {
     manifest: PathBuf,
     #[command(flatten)]
     runner: QuantRunnerArgs,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -603,6 +609,7 @@ fn quant_job(args: QuantJobArgs) -> Result<()> {
             window: RunQuantWindowArgs {
                 manifest: manifest_path.clone(),
                 runner,
+                json: args.run.json,
             },
             window_override: None,
             max_windows: args.run.max_windows,
@@ -682,6 +689,7 @@ fn convert_job(args: ConvertJobArgs) -> Result<()> {
             window: RunConvertWindowArgs {
                 manifest: manifest_path.clone(),
                 runner,
+                json: args.run.json,
             },
             max_windows: args.run.max_windows,
         })?;
@@ -750,7 +758,14 @@ fn run_convert_window_once(args: &RunConvertWindowArgs) -> Result<bool> {
 
     let progress = manifest_progress(&manifest)?;
     let Some(window) = progress.next_window else {
-        println!("convert_windows_complete=true");
+        if args.json {
+            print_json_pretty(&serde_json::json!({
+                "event": "convert_windows_complete",
+                "completed": true,
+            }))?;
+        } else {
+            print_success("convert windows complete");
+        }
         return Ok(false);
     };
 
@@ -776,7 +791,16 @@ fn run_convert_window_once(args: &RunConvertWindowArgs) -> Result<bool> {
         output_prefix,
         command,
     };
-    println!("convert_window={}", serde_json::to_string(&plan)?);
+    if args.json {
+        print_json_pretty(&serde_json::json!({
+            "event": "convert_window",
+            "plan": plan,
+        }))?;
+    } else {
+        print_window("convert window", window);
+        print_info(format!("Output prefix: {}", plan.output_prefix.display()));
+        print_info(format!("Command: {}", plan.command.join(" ")));
+    }
     let stream_buffer_bytes = (runner.backend == BackendKind::NativeRust)
         .then(|| effective_stream_buffer_bytes(runner.stream_buffer_bytes, runner.max_memory))
         .transpose()?;
@@ -801,6 +825,7 @@ fn run_convert_window_once(args: &RunConvertWindowArgs) -> Result<bool> {
         stream_buffer_bytes,
         estimated_stream_working_set_bytes,
         llama_quantize_env_bytes: None,
+        json: args.json,
     })?;
     if runner.print_only {
         return Ok(true);
@@ -887,17 +912,31 @@ fn run_quant_window_once(
     let window = if let Some(requested) = window_override {
         validate_split_window(requested, manifest.expected_splits)?;
         let Some(window) = next_missing_window_in_range(&progress.missing_ranges, requested) else {
-            println!(
-                "quant_requested_window_complete={}",
-                serde_json::to_string(&requested)?
-            );
+            if args.json {
+                print_json_pretty(&serde_json::json!({
+                    "event": "quant_requested_window_complete",
+                    "window": requested,
+                }))?;
+            } else {
+                print_success(format!(
+                    "requested quant window {} is already complete",
+                    output::format_window(requested)
+                ));
+            }
             return Ok(false);
         };
         window
     } else if let Some(window) = progress.next_window {
         window
     } else {
-        println!("quant_windows_complete=true");
+        if args.json {
+            print_json_pretty(&serde_json::json!({
+                "event": "quant_windows_complete",
+                "completed": true,
+            }))?;
+        } else {
+            print_success("quant windows complete");
+        }
         return Ok(false);
     };
 
@@ -947,7 +986,20 @@ fn run_quant_window_once(
         output_prefix,
         command,
     };
-    println!("quant_window={}", serde_json::to_string(&plan)?);
+    if args.json {
+        print_json_pretty(&serde_json::json!({
+            "event": "quant_window",
+            "plan": plan,
+        }))?;
+    } else {
+        print_window("quant window", window);
+        print_info(format!(
+            "Staged first shard: {}",
+            plan.staged_first_shard.display()
+        ));
+        print_info(format!("Output prefix: {}", plan.output_prefix.display()));
+        print_info(format!("Command: {}", plan.command.join(" ")));
+    }
     print_memory_budget_plan(MemoryBudgetPlanInput {
         kind: "quant",
         backend: runner.backend.as_str(),
@@ -958,6 +1010,7 @@ fn run_quant_window_once(
         stream_buffer_bytes: None,
         estimated_stream_working_set_bytes: None,
         llama_quantize_env_bytes: runner.max_memory.map(MemorySize::bytes),
+        json: args.json,
     })?;
 
     if runner.print_only {
@@ -1012,7 +1065,7 @@ fn run_quant_window_once(
     }
     if !runner.no_stage_source && !runner.keep_staged_source {
         remove_dir_if_exists(&stage_path)?;
-        println!("stage_source_cleanup path={}", stage_path.display());
+        print_path_event("🧹", "Cleaned staged source", &stage_path);
     }
     Ok(true)
 }

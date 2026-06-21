@@ -4,6 +4,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::output::{format_bytes, print_success};
+
 const COPY_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn remove_dir_if_exists(path: &Path) -> Result<()> {
@@ -38,11 +40,12 @@ pub fn copy_file_bounded_with_label(label: &str, source: &Path, target: &Path) -
         .sync_all()
         .with_context(|| format!("sync {}", target.display()))?;
     let target_dropped = drop_file_cache_range(&output, 0, copied);
-    println!(
-        "{label}_done source={} target={} size_bytes={copied} target_cache_dropped={target_dropped}",
+    print_success(format!(
+        "{label} copied {} -> {} ({}, cache_dropped={target_dropped})",
         source.display(),
-        target.display()
-    );
+        target.display(),
+        format_bytes(copied)
+    ));
     Ok(())
 }
 

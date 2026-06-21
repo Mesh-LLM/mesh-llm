@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
+use crate::output::{format_bytes, print_copy, print_info, print_path_event, print_success};
 use crate::residency::copy_file_bounded_with_label;
 use crate::splits::SplitWindow;
 
@@ -56,7 +57,7 @@ pub fn clean_spooled_window(
         for path in stale_spool_candidates(&source_root, output_basename, index, expected_splits) {
             if path.exists() {
                 fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
-                println!("spool_stale_cleanup path={}", path.display());
+                print_path_event("🧹", "Removed stale spool shard", &path);
             }
         }
     }
@@ -85,7 +86,7 @@ fn publish_one_shard(
     publish_file(&source, &target)?;
     if !keep_spool {
         fs::remove_file(&source).with_context(|| format!("remove {}", source.display()))?;
-        println!("spool_cleanup path={}", source.display());
+        print_path_event("🧹", "Removed spooled shard", &source);
     }
     Ok(())
 }
@@ -107,11 +108,11 @@ fn publish_file(source: &Path, target: &Path) -> Result<()> {
             source_len,
             target_len
         );
-        println!(
-            "publish_skip_existing source={} target={} size_bytes={source_len}",
-            source.display(),
-            target.display()
-        );
+        print_info(format!(
+            "Publish target already exists: {} ({})",
+            target.display(),
+            format_bytes(source_len)
+        ));
         return Ok(());
     }
 
@@ -126,19 +127,15 @@ fn publish_file(source: &Path, target: &Path) -> Result<()> {
     if temp.exists() {
         fs::remove_file(&temp).with_context(|| format!("remove {}", temp.display()))?;
     }
-    println!(
-        "publish_copy source={} target={} size_bytes={source_len}",
-        source.display(),
-        target.display()
-    );
+    print_copy(source, target, Some(source_len));
     copy_file_bounded_with_label("publish_copy", source, &temp)?;
     fs::rename(&temp, target)
         .with_context(|| format!("rename {} -> {}", temp.display(), target.display()))?;
-    println!(
-        "publish_done source={} target={} size_bytes={source_len}",
-        source.display(),
-        target.display()
-    );
+    print_success(format!(
+        "Published {} ({})",
+        target.display(),
+        format_bytes(source_len)
+    ));
     Ok(())
 }
 

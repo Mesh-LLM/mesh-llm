@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+use crate::output::print_path_event;
 use crate::splits::{Progress, next_missing_window, split_status_for_basename};
 use crate::types::{ConvertOutputType, JobKind};
 
@@ -33,11 +34,11 @@ pub fn ensure_manifest(path: &Path, manifest: &Manifest) -> Result<()> {
             "existing manifest does not match requested job: {}",
             path.display()
         );
-        println!("manifest_resume path={}", path.display());
+        print_path_event("📄", "Resuming manifest", path);
         return Ok(());
     }
     write_manifest(path, manifest)?;
-    println!("manifest_created path={}", path.display());
+    print_path_event("📄", "Created manifest", path);
     Ok(())
 }
 

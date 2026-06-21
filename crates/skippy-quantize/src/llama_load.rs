@@ -5,6 +5,7 @@ use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use serde::Serialize;
 
+use crate::output::{print_json_pretty, print_success};
 use crate::tool_paths::resolve_llama_cli;
 
 #[derive(Debug, Parser)]
@@ -38,17 +39,16 @@ pub(crate) fn run_validate_llama_load(args: ValidateLlamaLoadArgs) -> Result<()>
         },
     )?;
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        print_json_pretty(&report)?;
     } else {
-        println!(
-            "llama_load_valid={} model={} llama_cli={} status={}",
-            report.success,
+        print_success(format!(
+            "llama load valid: model={} llama_cli={} status={}",
             report.model.display(),
             report.llama_cli.display(),
             report
                 .status_code
                 .map_or_else(|| "signal".to_string(), |code| code.to_string())
-        );
+        ));
     }
     Ok(())
 }

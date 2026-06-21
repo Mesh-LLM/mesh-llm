@@ -12,6 +12,7 @@ use crate::hf_checkpoint::{
     HfCheckpointPlan, inspect_hf_checkpoint, verify_hf_checkpoint_tensor_streams,
 };
 use crate::memory_budget::MemorySize;
+use crate::output::{format_bytes, print_info, print_json_pretty, print_success};
 use crate::tensor_map::TensorNameMap;
 use crate::tokenizer_metadata::ensure_native_tokenizer_metadata_supported;
 use crate::types::ConvertOutputType;
@@ -89,15 +90,12 @@ pub(crate) fn run_plan_convert(args: PlanConvertArgs) -> Result<()> {
     }
     if args.json {
         if let Some(native_validation) = native_validation {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "plan": plan,
-                    "native_validation": native_validation,
-                }))?
-            );
+            print_json_pretty(&serde_json::json!({
+                "plan": plan,
+                "native_validation": native_validation,
+            }))?;
         } else {
-            println!("{}", serde_json::to_string_pretty(&plan)?);
+            print_json_pretty(&plan)?;
         }
     } else {
         print_plan(&plan);
@@ -109,40 +107,45 @@ pub(crate) fn run_plan_convert(args: PlanConvertArgs) -> Result<()> {
 }
 
 fn print_plan(plan: &HfCheckpointPlan) {
-    println!("checkpoint={}", plan.source.display());
-    println!("safetensors={}", plan.safetensor_count);
-    println!("tensors={}", plan.tensor_count);
-    println!("total_tensor_bytes={}", plan.total_tensor_bytes);
-    println!("largest_tensor_bytes={}", plan.largest_tensor_bytes);
-    println!("source_windows={}", plan.source_windows.len());
+    print_success(format!("Checkpoint: {}", plan.source.display()));
+    print_info(format!("SafeTensors files: {}", plan.safetensor_count));
+    print_info(format!("Tensors: {}", plan.tensor_count));
+    print_info(format!(
+        "Total tensor bytes: {}",
+        format_bytes(plan.total_tensor_bytes)
+    ));
+    print_info(format!(
+        "Largest tensor: {}",
+        format_bytes(plan.largest_tensor_bytes)
+    ));
+    print_info(format!("Source windows: {}", plan.source_windows.len()));
     for window in &plan.source_windows {
-        println!(
-            "window={} files={} bytes={}",
+        print_info(format!(
+            "Window {}: {} file(s), {}",
             window.index,
             window.files.len(),
-            window.total_tensor_bytes
-        );
+            format_bytes(window.total_tensor_bytes)
+        ));
     }
     if let Some(verification) = &plan.stream_verification {
-        println!(
-            "stream_verified=true tensors={} bytes={} buffer_size={}",
-            verification.tensor_count, verification.streamed_bytes, verification.buffer_size
-        );
+        print_success(format!(
+            "Stream verified: {} tensors, {}, buffer {}",
+            verification.tensor_count,
+            format_bytes(verification.streamed_bytes),
+            format_bytes(verification.buffer_size as u64)
+        ));
     }
 }
 
 fn print_native_validation(validation: &RawGgufValidation) {
-    println!("native_valid=true");
-    println!(
-        "native_selected_tensors={}",
-        validation.selected_tensor_count
-    );
-    println!(
-        "native_selected_tensor_bytes={}",
-        validation.selected_tensor_bytes
-    );
-    println!("native_metadata_entries={}", validation.metadata_count);
+    print_success("Native writer validation passed");
+    print_info(format!(
+        "Selected tensors: {} ({})",
+        validation.selected_tensor_count,
+        format_bytes(validation.selected_tensor_bytes)
+    ));
+    print_info(format!("Metadata entries: {}", validation.metadata_count));
     if let Some(output_type) = validation.output_type.as_deref() {
-        println!("native_output_type={output_type}");
+        print_info(format!("Output type: {output_type}"));
     }
 }

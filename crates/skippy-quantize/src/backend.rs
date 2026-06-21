@@ -4,6 +4,8 @@ use anyhow::{Result, ensure};
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 
+use crate::output::{print_info, print_json_pretty, print_success, print_warn};
+
 const SKIPPY_FEATURE_MODEL_INTROSPECTION: u64 = 1 << 3;
 const SKIPPY_FEATURE_GGUF_SLICE_WRITE: u64 = 1 << 4;
 
@@ -79,41 +81,48 @@ pub fn capabilities(skippy_runtime_libraries: &[PathBuf]) -> BackendCapabilities
 pub fn run_backends(args: BackendArgs) -> Result<()> {
     let capabilities = capabilities(&args.skippy_runtime_libraries);
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&capabilities)?);
+        print_json_pretty(&capabilities)?;
     } else {
-        println!(
-            "native-rust: convert_hf_to_gguf={} llama_quantize={} resumable_windows={} low_residency_streaming={} reason={}",
-            capabilities.native_rust.convert_hf_to_gguf,
-            capabilities.native_rust.llama_quantize,
+        print_success(format!(
+            "native-rust conversion: {}",
+            bool_word(capabilities.native_rust.convert_hf_to_gguf)
+        ));
+        print_info(format!(
+            "native-rust: resumable_windows={} low_residency_streaming={}",
             capabilities.native_rust.resumable_windows,
-            capabilities.native_rust.low_residency_streaming,
-            capabilities.native_rust.reason
-        );
-        println!(
-            "llama-api: convert_hf_to_gguf={} llama_quantize={} runtime_loaded={} reason={}",
-            capabilities.llama_api.convert_hf_to_gguf,
-            capabilities.llama_api.llama_quantize,
-            capabilities.llama_api.runtime_loaded,
-            capabilities.llama_api.reason
-        );
-        println!(
-            "skippy-abi: convert_hf_to_gguf={} llama_quantize={} runtime_loaded={} feature_mask={} model_introspection={} gguf_slice_write={} reason={}",
-            capabilities.skippy_abi.convert_hf_to_gguf,
-            capabilities.skippy_abi.llama_quantize,
-            capabilities.skippy_abi.runtime_loaded,
+            capabilities.native_rust.low_residency_streaming
+        ));
+        print_success(format!(
+            "llama-api quantization: {}",
+            bool_word(capabilities.llama_api.llama_quantize)
+        ));
+        print_info(format!(
+            "llama-api runtime: {}",
+            bool_word(capabilities.llama_api.runtime_loaded)
+        ));
+        if capabilities.skippy_abi.runtime_loaded {
+            print_success("skippy-abi runtime loaded");
+        } else {
+            print_warn("skippy-abi runtime not loaded");
+        }
+        print_info(format!(
+            "skippy-abi: model_introspection={} gguf_slice_write={} feature_mask={}",
+            capabilities.skippy_abi.model_introspection,
+            capabilities.skippy_abi.gguf_slice_write,
             capabilities
                 .skippy_abi
                 .feature_mask
-                .map_or_else(|| "unknown".to_string(), |value| format!("{value:#x}")),
-            capabilities.skippy_abi.model_introspection,
-            capabilities.skippy_abi.gguf_slice_write,
-            capabilities.skippy_abi.reason
-        );
+                .map_or_else(|| "unknown".to_string(), |value| format!("{value:#x}"))
+        ));
         if let Some(load_error) = capabilities.skippy_abi.load_error.as_deref() {
-            println!("skippy-abi-load-error: {load_error}");
+            print_warn(format!("skippy-abi load error: {load_error}"));
         }
     }
     Ok(())
+}
+
+fn bool_word(value: bool) -> &'static str {
+    if value { "available" } else { "unavailable" }
 }
 
 fn skippy_abi_capabilities(skippy_runtime_libraries: &[PathBuf]) -> SkippyAbiCapabilities {

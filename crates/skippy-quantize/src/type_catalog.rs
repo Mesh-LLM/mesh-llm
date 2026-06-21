@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use serde::Serialize;
 
+use crate::output::{print_info, print_json_pretty, print_success};
 use crate::types::{QuantType, TensorType};
 
 #[derive(Debug, Parser)]
@@ -33,17 +34,23 @@ pub(crate) fn list_quants(args: TypeCatalogArgs) -> Result<()> {
         .iter()
         .map(|quant| quant.as_llama_name())
         .collect::<Vec<_>>();
+    let labels = known_recipe_labels();
     if args.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&QuantCatalog {
-                whole_model_quant_modes: names,
-                known_recipe_labels: known_recipe_labels(),
-            })?
-        );
+        print_json_pretty(&QuantCatalog {
+            whole_model_quant_modes: names,
+            known_recipe_labels: labels,
+        })?;
     } else {
+        print_success("Whole-model quant modes");
         for name in names {
-            println!("{name}");
+            println!("   • {name}");
+        }
+        print_info("Known recipe labels");
+        for label in labels {
+            println!(
+                "   • {} -> {} ({})",
+                label.label, label.base_quant, label.note
+            );
         }
     }
     Ok(())
@@ -70,15 +77,13 @@ pub(crate) fn list_tensor_types(args: TypeCatalogArgs) -> Result<()> {
         .map(|tensor_type| tensor_type.as_ggml_name())
         .collect::<Vec<_>>();
     if args.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&TensorTypeCatalog {
-                raw_tensor_types: names
-            })?
-        );
+        print_json_pretty(&TensorTypeCatalog {
+            raw_tensor_types: names,
+        })?;
     } else {
+        print_success("Raw tensor override types");
         for name in names {
-            println!("{name}");
+            println!("   • {name}");
         }
     }
     Ok(())

@@ -4,6 +4,7 @@ use anyhow::Result;
 
 use crate::llama_load::{LlamaLoadOptions, validate_llama_load};
 use crate::manifest::read_manifest;
+use crate::output::{print_info, print_json_pretty, print_success};
 use crate::verify::{first_artifact_path, verify_manifest};
 
 pub(crate) fn verify_job(
@@ -26,27 +27,24 @@ pub(crate) fn verify_job(
     };
     if json {
         if let Some(llama_load) = llama_load {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "artifact": report,
-                    "llama_load": llama_load,
-                }))?
-            );
+            print_json_pretty(&serde_json::json!({
+                "artifact": report,
+                "llama_load": llama_load,
+            }))?;
         } else {
-            println!("{}", serde_json::to_string_pretty(&report)?);
+            print_json_pretty(&report)?;
         }
     } else {
-        println!(
-            "verified artifact: {}/{} shards prefix={} basename={}",
+        print_success(format!(
+            "Verified artifact: {}/{} shards prefix={} basename={}",
             report.completed_count, report.expected_splits, report.prefix, report.basename
-        );
+        ));
         if let Some(llama_load) = llama_load {
-            println!(
-                "llama_load_valid=true model={} llama_cli={}",
+            print_info(format!(
+                "llama load valid: model={} llama_cli={}",
                 llama_load.model.display(),
                 llama_load.llama_cli.display()
-            );
+            ));
         }
     }
     Ok(())

@@ -5,6 +5,9 @@ use serde::Serialize;
 
 use crate::backend::{BackendKind, ensure_convert_backend, ensure_quant_backend};
 use crate::manifest::{Manifest, manifest_progress, read_manifest};
+use crate::output::{
+    print_info, print_json_pretty, print_progress_line, print_success, print_warn,
+};
 use crate::splits::{Progress, SplitWindow, next_missing_window_in_range, split_status};
 use crate::types::JobKind;
 
@@ -211,50 +214,63 @@ fn progress_windows(ranges: &[crate::splits::ShardRange]) -> Vec<ProgressWindow>
 
 fn print_preflight(report: &JobPreflight, json: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(report)?);
+        print_json_pretty(report)?;
     } else {
-        println!(
-            "preflight kind={:?} backend={} manifest_exists={} manifest_matches={} backend_ready={} target={}/{} first_missing={:?}",
-            report.kind,
-            report.backend_kind,
-            report.manifest_exists,
-            report.manifest_matches,
-            report.backend_ready,
+        print_info(format!(
+            "Preflight {:?} with backend {}",
+            report.kind, report.backend_kind
+        ));
+        print_progress_line(
+            "target",
             report.target_shards,
             report.expected_target_shards,
-            report.first_missing_target
         );
+        if report.manifest_matches {
+            print_success("Manifest is compatible");
+        } else {
+            print_warn("Existing manifest does not match requested job");
+        }
+        if report.backend_ready {
+            print_success("Backend is ready");
+        } else {
+            print_warn("Backend is not ready");
+        }
         if let Some(error) = report.backend_error.as_deref() {
-            println!("backend_error={error}");
+            print_warn(format!("Backend error: {error}"));
         }
         if let (Some(source_shards), Some(expected), Some(complete)) = (
             report.source_shards,
             report.expected_source_shards,
             report.source_complete,
         ) {
-            println!("source={source_shards}/{expected} complete={complete}");
+            print_progress_line("source", source_shards, expected);
+            if complete {
+                print_success("Source artifact is complete");
+            } else {
+                print_warn("Source artifact is incomplete");
+            }
             if let Some(ranges) = report.source_missing_ranges.as_deref()
                 && !ranges.is_empty()
             {
-                println!("source_missing_ranges={}", format_ranges(ranges));
+                print_info(format!("Source missing ranges: {}", format_ranges(ranges)));
             }
         }
         if !report.target_missing_ranges.is_empty() {
-            println!(
-                "target_missing_ranges={}",
+            print_info(format!(
+                "Target missing ranges: {}",
                 format_ranges(&report.target_missing_ranges)
-            );
+            ));
         }
         if let Some(requested) = report.requested_window.as_ref() {
-            println!(
-                "requested_window={} next_requested_window={}",
+            print_info(format!(
+                "Requested window: {}; next requested window: {}",
                 format_ranges(std::slice::from_ref(requested)),
                 report
                     .next_requested_window
                     .as_ref()
                     .map(|window| format_ranges(std::slice::from_ref(window)))
                     .unwrap_or_else(|| "complete".to_string())
-            );
+            ));
         }
     }
     Ok(())

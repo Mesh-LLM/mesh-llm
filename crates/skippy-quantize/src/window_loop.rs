@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+use crate::output::{print_info, print_success};
+
 pub(crate) fn run_window_loop<F>(
     label: &str,
     max_windows: Option<u32>,
@@ -11,11 +13,15 @@ where
     let mut completed = 0_u32;
     loop {
         if max_windows.is_some_and(|max| completed >= max) {
-            println!("{label}_loop_stop=max_windows completed_windows={completed}");
+            print_info(format!(
+                "{label} loop stopped after {completed} completed window(s)"
+            ));
             return Ok(());
         }
         if !run_once()? {
-            println!("{label}_loop_complete completed_windows={completed}");
+            print_success(format!(
+                "{label} loop complete after {completed} completed window(s)"
+            ));
             return Ok(());
         }
         completed += 1;

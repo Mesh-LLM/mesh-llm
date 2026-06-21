@@ -15,6 +15,7 @@ use crate::manifest::Manifest;
 use crate::memory_budget::{
     effective_stream_buffer_bytes, enforce_memory_budget, native_convert_stream_working_set_bytes,
 };
+use crate::output::{format_bytes, print_info};
 use crate::splits::SplitWindow;
 use crate::tensor_map::TensorNameMap;
 use crate::tokenizer_metadata::ensure_native_tokenizer_metadata_supported;
@@ -89,14 +90,14 @@ pub(crate) fn run_native_convert(
     let tensor_name_map = native_tensor_name_map(mtp_layer_start);
     for split_index in window.first_split..=window.last_split {
         let output = output_shard_path(output_prefix, split_index, manifest.expected_splits)?;
-        println!(
-            "native_convert_write split={} total={} output={} buffer_size={} estimated_stream_working_set_bytes={}",
+        print_info(format!(
+            "Writing native convert shard {}/{} -> {} (buffer {}, estimated working set {})",
             split_index,
             manifest.expected_splits,
             output.display(),
-            buffer_size,
-            estimated_stream_working_set_bytes
-        );
+            format_bytes(buffer_size as u64),
+            format_bytes(estimated_stream_working_set_bytes)
+        ));
         let metadata = metadata_from_hf_config_with_options(
             &manifest.source,
             plan.tensor_count,
