@@ -33,6 +33,158 @@ emit structured JSON instead, including `status`, `next-window`, validation,
 preflight, and the resumable `run-convert[-window]` / `run-quant[-window]`
 commands.
 
+### CLI output examples
+
+Backend inspection defaults to human-readable capability summaries:
+
+```bash
+skippy-quantize backends
+```
+
+```text
+✅ native-rust conversion: available
+ℹ️  native-rust: resumable_windows=true low_residency_streaming=true
+✅ llama-api quantization: available
+ℹ️  llama-api runtime: available
+⚠️  skippy-abi runtime not loaded
+ℹ️  skippy-abi: model_introspection=false gguf_slice_write=false feature_mask=unknown
+```
+
+Preflight shows the job shape, backend readiness, and source/target shard
+progress:
+
+```bash
+skippy-quantize quantize \
+  --preflight-only \
+  --backend llama-api \
+  --tensor-type-file /mnt/recipe/glm-5.2-ud-q3-k-s.txt \
+  /mnt/bf16/BF16/GLM-5.2-BF16-00001-of-00306.gguf \
+  /mnt/quant/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S.gguf \
+  UD-Q3_K_S
+```
+
+```text
+ℹ️  Preflight QuantizeGguf with backend llama-api
+📊 target: [██░░░░░░░░░░░░░░░░░░░░░░] 28/306 shards (9.15%)
+✅ Manifest is compatible
+✅ Backend is ready
+📊 source: [████████████████████████] 306/306 shards (100.00%)
+✅ Source artifact is complete
+ℹ️  Target missing ranges: 29..306
+```
+
+`status` and `next-window` are concise for operators:
+
+```bash
+skippy-quantize status --manifest /tmp/skippy-quantize.json
+skippy-quantize next-window --manifest /tmp/skippy-quantize.json
+```
+
+```text
+📊 job status: [██████░░░░░░░░░░░░░░░░░░] 77/306 shards (25.16%)
+⚠️  Missing shards: 229
+ℹ️  Missing ranges: 78..306
+ℹ️  Next window: 78
+
+ℹ️  Next window: 78
+```
+
+Conversion and quantization window runners print the selected window and the
+effective command in human mode:
+
+```bash
+skippy-quantize run-convert-window \
+  --manifest /tmp/skippy-convert.json \
+  --max-memory 32G \
+  --spool-dir /tmp/skippy-convert-output
+```
+
+```text
+🔒 Manifest lock acquired: /tmp/skippy-convert.json.lock
+🪟 convert window: 42
+ℹ️  Output prefix: /tmp/skippy-convert-output/BF16/GLM-5.2-BF16.gguf
+ℹ️  Command: skippy-quantize run-convert-window --backend native-rust --source /mnt/checkpoint --outfile /tmp/skippy-convert-output/BF16/GLM-5.2-BF16.gguf --first-split 42 --last-split 42 --expected-splits 306
+⚠️  convert memory budget: hard cap 32.00 GiB
+ℹ️  Writing native convert shard 42/306 -> /tmp/skippy-convert-output/BF16/GLM-5.2-BF16-00042-of-00306.gguf (buffer 8.00 MiB, estimated working set 16.00 MiB)
+✅ Published /mnt/target/BF16/GLM-5.2-BF16-00042-of-00306.gguf (49.87 GiB)
+🔓 Manifest lock released: /tmp/skippy-convert.json.lock
+```
+
+```bash
+skippy-quantize run-quant-window \
+  --manifest /tmp/skippy-quantize.json \
+  --backend llama-api \
+  --max-memory 32G \
+  --work-dir /tmp/skippy-quantize-work \
+  --spool-dir /tmp/skippy-quantize-output
+```
+
+```text
+🔒 Manifest lock acquired: /tmp/skippy-quantize.json.lock
+📤 Copying /mnt/bf16/BF16/GLM-5.2-BF16-00078-of-00306.gguf -> /tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00078-of-00306.gguf (49.87 GiB)
+ℹ️  Staged source window 78..78 at /tmp/skippy-quantize-work/source-window
+🪟 quant window: 78
+ℹ️  Staged first shard: /tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00001-of-00306.gguf
+ℹ️  Output prefix: /tmp/skippy-quantize-output/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S.gguf
+ℹ️  Command: llama-api-quantize --max-memory 34359738368 --memory-policy hard --tensor-type-file /mnt/recipe/glm-5.2-ud-q3-k-s.txt --keep-split --first-split 78 --last-split 78 /tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00001-of-00306.gguf /tmp/skippy-quantize-output/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S Q3_K_S
+⚠️  quant memory budget: hard cap 32.00 GiB
+✅ Published /mnt/quant/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S-00078-of-00306.gguf (13.42 GiB)
+🧹 Cleaned staged source: /tmp/skippy-quantize-work/source-window
+🔓 Manifest lock released: /tmp/skippy-quantize.json.lock
+```
+
+Validation commands also use the same progress-bar formatter:
+
+```bash
+skippy-quantize validate-splits \
+  --root /mnt/quant \
+  --prefix UD-Q3_K_S \
+  --basename GLM-5.2-UD-Q3_K_S \
+  --expected-splits 306
+```
+
+```text
+📊 split artifact: [████████████████████████] 306/306 shards (100.00%)
+✅ Split artifact is complete
+```
+
+Every workflow above can emit JSON for job automation:
+
+```bash
+skippy-quantize run-quant-window \
+  --manifest /tmp/skippy-quantize.json \
+  --backend llama-api \
+  --max-memory 32G \
+  --json
+```
+
+```json
+{
+  "event": "quant_window",
+  "plan": {
+    "first_split": 78,
+    "last_split": 78,
+    "staged_first_shard": "/tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00001-of-00306.gguf",
+    "output_prefix": "/mnt/quant/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S.gguf",
+    "command": [
+      "llama-api-quantize",
+      "--max-memory",
+      "34359738368",
+      "--memory-policy",
+      "hard",
+      "--keep-split",
+      "--first-split",
+      "78",
+      "--last-split",
+      "78",
+      "/tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00001-of-00306.gguf",
+      "/mnt/quant/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S",
+      "Q3_K_S"
+    ]
+  }
+}
+```
+
 ## Backends
 
 Inspect backend capabilities:
