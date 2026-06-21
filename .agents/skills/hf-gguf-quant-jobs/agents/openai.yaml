@@ -1,4 +1,4 @@
 interface:
   display_name: "HF GGUF Quant Jobs"
-  short_description: "Run low-memory GGUF quantization jobs on Hugging Face."
-  default_prompt: "Create or monitor a low-memory Hugging Face GGUF quantization job."
+  short_description: "Run low-memory GGUF quantization jobs with skippy-quantize."
+  default_prompt: "Create or monitor a low-memory skippy-quantize GGUF quantization job."

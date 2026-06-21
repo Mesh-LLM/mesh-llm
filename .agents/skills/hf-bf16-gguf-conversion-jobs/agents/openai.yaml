@@ -1,0 +1,4 @@
+interface:
+  display_name: "HF BF16 GGUF Conversion Jobs"
+  short_description: "Convert HF checkpoints to BF16 GGUF repos with skippy-quantize."
+  default_prompt: "Create or monitor a skippy-quantize BF16 GGUF conversion job."

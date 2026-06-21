@@ -1,18 +1,20 @@
 ---
 name: hf-gguf-quant-jobs
-description: Use when creating, monitoring, validating, or documenting low-memory Hugging Face Jobs that quantize split BF16/FP16 GGUF model repos into quantized GGUF repos, especially Skippy/layer-aware quants that use mounted model repos, tensor-type files, resumable shard windows, incremental Hub uploads, or patched llama.cpp quantization branches.
+description: Use when creating, monitoring, validating, or documenting low-memory Hugging Face Jobs or local runs that quantize split BF16/FP16 GGUF model repos into custom quant GGUF repos with skippy-quantize.
 ---
 
 # HF GGUF Quant Jobs
 
 Use this skill to turn an existing split BF16/FP16 GGUF model repo into a
-quantized GGUF model repo on Hugging Face Jobs without requiring the job host to
-hold the full model in memory or on local disk at once.
+quantized GGUF model repo without requiring the host to hold the full model in
+memory or on local disk at once. The operational tool is `skippy-quantize`; do
+not use `llama-quantize`, `llama-quantise`, or wrapper scripts that shell out to
+those binaries.
 
-The proven Jianyang pattern is: mount the source GGUF repo, quantize split
-windows with `llama-quantize --keep-split`, upload completed output shards to a
-target model repo, delete local staged files immediately, and resume from the
-already uploaded target shards after cancellation or failure.
+The supported pattern is: mount or point at the source BF16/FP16 GGUF repo,
+quantize resumable split windows with `skippy-quantize`, publish completed
+output shards to the target model repo, delete staged files immediately, and
+resume from the first missing target shard after cancellation or failure.
 
 ## Preconditions
 
@@ -27,25 +29,28 @@ already uploaded target shards after cancellation or failure.
   printed environment variable.
 - Prefer mounted Hub repos over full `hf download` when the job only needs to
   stream or stage one shard/window at a time.
+- Build the standalone binary with `just skippy-quantize-standalone-release-build`
+  for local runs or in the job image/script for HF Jobs.
 
 ## Workflow
 
 1. Identify the source BF16/FP16 GGUF repo, target quant repo, output prefix,
-   output basename, source prefix, quant type, llama.cpp branch, and
-   tensor-type file.
-2. Preflight both Hub and mounted source paths. Log `gguf_count`,
-   `expected_total`, `missing_count`, and `first_missing`; stop if incomplete.
+   output basename, source prefix, quant type, tensor-type file, memory budget,
+   and split window size.
+2. Preflight both Hub and mounted source paths with `skippy-quantize status`,
+   `next-window`, `validate-splits`, or a `quantize --preflight-only` run. Stop
+   if the source artifact is incomplete.
 3. Write or upload a `quant-plan.json` with source repo/revision, target repo,
-   branch, quant type, shard count, output prefix, tensor policy, and resume
+   quant type, shard count, output prefix, tensor policy, and resume
    settings.
-4. Launch the job with `QUANT_WINDOW_SIZE=1` for the first full model run unless
-   a smaller fixture proves a larger window is safe on the chosen hardware.
+4. Launch the job with `--window-size 1` for the first full model run unless a
+   smaller fixture proves a larger window is safe on the chosen hardware.
 5. For each split window, stage only the required input shard, run
-   `llama-quantize --keep-split`, upload finished shards, then delete local
-   staged input and output files.
-6. Monitor for progress markers. A healthy job should repeatedly emit staged
-   source drops, `llama-quantize` tensor progress, upload completion, and local
-   output cache drops.
+   `skippy-quantize run-quant-window` or `run-quant`, publish finished shards,
+   then delete local staged input and output files.
+6. Monitor for progress markers. A healthy job repeatedly emits staged source
+   copies, `quant_window`, publish completion, cleanup, and increasing split
+   progress.
 7. Validate the target repo after completion by counting GGUF shards, checking
    the first and last shard names, and confirming `quant-plan.json` plus the
    tensor-type file are present.
@@ -55,7 +60,35 @@ already uploaded target shards after cancellation or failure.
 
 ## Launch Template
 
-Adapt this shape rather than rebuilding the job from scratch:
+Create a quantization manifest:
+
+```bash
+target/release/skippy-quantize init-quant \
+  --source /mnt/source-gguf \
+  --source-prefix <source-prefix> \
+  --target /mnt/target-quant \
+  --target-prefix <target-prefix> \
+  --output-basename <output-basename> \
+  --quant <quant> \
+  --tensor-type-file /mnt/recipe/tensor-types.txt \
+  --window-size 1 \
+  --manifest /tmp/skippy-quantize.json
+```
+
+Run until complete:
+
+```bash
+target/release/skippy-quantize run-quant \
+  --manifest /tmp/skippy-quantize.json \
+  --backend llama-api \
+  --max-memory 32G \
+  --work-dir /tmp/skippy-quantize-work \
+  --spool-dir /tmp/skippy-quantize-output \
+  --record-dir /tmp/skippy-quantize-records
+```
+
+For HF Jobs, mount the BF16/FP16 source repo and target quant repo, then run the
+same manifest and `run-quant` commands inside the job:
 
 ```bash
 hf jobs uv run \
@@ -65,37 +98,23 @@ hf jobs uv run \
   --secrets HF_TOKEN \
   --volume hf://models/<source-repo>:/mnt/source-gguf \
   --volume hf://models/<target-repo>:/mnt/target-quant \
-  --env WORK_DIR=/tmp/<job-name>-work \
-  --env OUTPUT_DIR=/tmp/<job-name>-output \
-  --env PRIVATE=1 \
-  --env RESUME_EXISTING=1 \
-  --env QUANT_WINDOW_SIZE=1 \
-  --env STAGE_COPY_CHUNK_BYTES=16777216 \
-  --env LLAMA_QUANTIZE_WATCHDOG_SECONDS=120 \
+  --env SKIPPY_QUANTIZE_OUTPUT=json \
   --env PYTHONUNBUFFERED=1 \
   --detach \
-  /path/to/quant_wrapper.py \
+  /path/to/skippy_quant_job.py \
   -- \
-  --source-repo <source-repo> \
-  --source-path /mnt/source-gguf \
+  --source /mnt/source-gguf \
   --source-prefix <source-prefix> \
-  --target-repo <target-repo> \
+  --target /mnt/target-quant \
   --target-prefix <target-prefix> \
-  --tensor-type-file /mnt/target-quant/<tensor-type-file> \
-  --llama-branch <llama-branch> \
   --output-basename <output-basename> \
-  --execute
+  --quant <quant> \
+  --tensor-type-file /mnt/recipe/tensor-types.txt \
+  --max-memory 32G
 ```
 
-Current Jianyang reference wrapper:
-
-```text
-<lab-experiments>/jianyang/hf-jobs/glm51_quant_gguf.py
-```
-
-Use it as the behavior reference for other models, but parameterize model names,
-prefixes, recipes, and branch names. Do not bake GLM-specific assumptions into a
-new reusable wrapper unless the model architecture truly requires them.
+The job script should only build or install `skippy-quantize`, prepare the
+manifest if missing, run `run-quant`, verify the job, and upload sidecars.
 
 ## Monitoring
 
@@ -108,14 +127,12 @@ hf jobs logs <job-id> --namespace meshllm --tail 120
 
 Useful healthy markers:
 
-- `source_repo_preflight ... complete=true`
-- `mounted_source_preflight ... complete=true`
-- `first_missing=[]`
-- `quant_window ... --first-split N --last-split N`
-- `quant_upload_done path=...`
-- `quant_output_cache_drop ... dropped=true`
-- `quant_windows_complete=true`
-- `quant_manifest_upload_done repo=...`
+- `Preflight QuantizeGguf with backend llama-api`
+- `Source artifact is complete`
+- `quant_window`
+- `Published /mnt/target-quant/...`
+- `Cleaned staged source`
+- `split artifact ... 100.00%`
 
 Concerning markers:
 
@@ -124,9 +141,8 @@ Concerning markers:
 - the same split window restarting repeatedly without new uploaded target files;
 - fallback quant warnings for tensors that the recipe expected to preserve.
 
-If a job stalls, cancel it before changing code or hardware. With
-`RESUME_EXISTING=1`, the next run should skip already uploaded shards and resume
-at the first missing output shard.
+If a job stalls, cancel it before changing code or hardware. The next run should
+skip already published shards and resume at the first missing output shard.
 
 ## Validation
 
@@ -143,11 +159,10 @@ check. Record at least:
 
 For local smoke tests, use a small split GGUF source first and verify:
 
-- `llama-quantize --dry-run --keep-split` can read the output;
-- `llama-gguf-split --merge --dry-run` can see the split set;
+- `skippy-quantize verify-job --manifest <manifest> --llama-load` succeeds;
+- `skippy-quantize validate-splits --root <target> --prefix <prefix>` succeeds;
 - max RSS stays bounded compared with full-model size;
-- output is byte-identical when comparing a streaming/chunked path to the
-  upstream equivalent on the same fixture.
+- `skippy-quantize status --manifest <manifest> --json` reports completion.
 
 ## Documentation Contract
 
