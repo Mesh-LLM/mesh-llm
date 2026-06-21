@@ -73,7 +73,6 @@ pub enum QuantType {
     TQ1_0,
     TQ2_0,
     Mxfp4Moe,
-    Nvfp4,
     F16,
     Bf16,
     F32,
@@ -187,7 +186,6 @@ impl FromStr for QuantType {
             "TQ10" => Self::TQ1_0,
             "TQ20" => Self::TQ2_0,
             "MXFP4MOE" => Self::Mxfp4Moe,
-            "NVFP4" => Self::Nvfp4,
             "F16" => Self::F16,
             "BF16" => Self::Bf16,
             "F32" => Self::F32,
@@ -234,7 +232,6 @@ impl QuantType {
         Self::TQ1_0,
         Self::TQ2_0,
         Self::Mxfp4Moe,
-        Self::Nvfp4,
         Self::F16,
         Self::Bf16,
         Self::F32,
@@ -277,7 +274,6 @@ impl QuantType {
             Self::TQ1_0 => "TQ1_0",
             Self::TQ2_0 => "TQ2_0",
             Self::Mxfp4Moe => "MXFP4_MOE",
-            Self::Nvfp4 => "NVFP4",
             Self::F16 => "F16",
             Self::Bf16 => "BF16",
             Self::F32 => "F32",
@@ -320,7 +316,6 @@ impl QuantType {
             36 => Some(Self::TQ1_0),
             37 => Some(Self::TQ2_0),
             38 => Some(Self::Mxfp4Moe),
-            39 => Some(Self::Nvfp4),
             40 => Some(Self::Q1_0),
             _ => None,
         }
@@ -359,7 +354,6 @@ impl QuantType {
             Self::TQ1_0 => skippy_ffi::LlamaFileType::MostlyTQ1_0,
             Self::TQ2_0 => skippy_ffi::LlamaFileType::MostlyTQ2_0,
             Self::Mxfp4Moe => skippy_ffi::LlamaFileType::MostlyMxfp4Moe,
-            Self::Nvfp4 => skippy_ffi::LlamaFileType::MostlyNvfp4,
             Self::F16 => skippy_ffi::LlamaFileType::MostlyF16,
             Self::Bf16 => skippy_ffi::LlamaFileType::MostlyBf16,
             Self::F32 | Self::Copy => skippy_ffi::LlamaFileType::AllF32,
@@ -642,7 +636,6 @@ mod tests {
         assert_eq!(QuantType::Q2K.as_llama_name(), "Q2_K");
         assert_eq!(QuantType::Q3KS.as_llama_name(), "Q3_K_S");
         assert_eq!(QuantType::Mxfp4Moe.as_llama_name(), "MXFP4_MOE");
-        assert_eq!(QuantType::Nvfp4.as_llama_name(), "NVFP4");
     }
 
     #[test]
@@ -654,7 +647,7 @@ mod tests {
             "MXFP4_MOE".parse::<QuantType>().unwrap(),
             QuantType::Mxfp4Moe
         );
-        assert_eq!("NVFP4".parse::<QuantType>().unwrap(), QuantType::Nvfp4);
+        assert!("NVFP4".parse::<QuantType>().is_err());
     }
 
     #[test]
@@ -708,7 +701,7 @@ mod tests {
 
     #[test]
     fn parses_current_llama_ftype_names() {
-        let names = ["MXFP4_MOE", "NVFP4", "Q1_0"];
+        let names = ["MXFP4_MOE", "Q1_0"];
         for name in names {
             assert!(
                 name.parse::<QuantType>().is_ok(),
@@ -721,7 +714,6 @@ mod tests {
     fn public_quant_catalog_is_parseable() {
         assert!(QuantType::ALL.contains(&QuantType::Copy));
         assert!(QuantType::ALL.contains(&QuantType::Mxfp4Moe));
-        assert!(QuantType::ALL.contains(&QuantType::Nvfp4));
         for quant in QuantType::ALL {
             assert_eq!(quant.as_llama_name().parse::<QuantType>().unwrap(), *quant);
         }
@@ -743,8 +735,11 @@ mod tests {
             "local quant catalog is missing pinned llama-quantize modes: {missing:?}"
         );
 
-        let extra = local.difference(&pinned).cloned().collect::<BTreeSet<_>>();
-        assert_eq!(extra, BTreeSet::from(["NVFP4".to_string()]));
+        let extra = local.difference(&pinned).collect::<Vec<_>>();
+        assert!(
+            extra.is_empty(),
+            "local quant catalog has modes missing from pinned llama-quantize: {extra:?}"
+        );
     }
 
     #[test]
