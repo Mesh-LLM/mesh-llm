@@ -43,6 +43,22 @@ target/release/skippy-quantize init-convert \
   --manifest /tmp/skippy-convert.json
 ```
 
+Dry-run the next conversion window before spending I/O:
+
+```bash
+target/release/skippy-quantize convert-job \
+  --source /path/to/checkpoint \
+  --target /path/to/output-repo \
+  --target-prefix BF16 \
+  --output-basename <model>-BF16 \
+  --output-type bf16 \
+  --expected-splits <N> \
+  --window-size 1 \
+  --manifest /tmp/skippy-convert.json \
+  --max-memory 32G \
+  --dry-run
+```
+
 Run until complete:
 
 ```bash

@@ -75,6 +75,24 @@ target/release/skippy-quantize init-quant \
   --manifest /tmp/skippy-quantize.json
 ```
 
+Dry-run the next quantization window before spending I/O:
+
+```bash
+target/release/skippy-quantize quant-job \
+  --source /mnt/source-gguf \
+  --source-prefix <source-prefix> \
+  --target /mnt/target-quant \
+  --target-prefix <target-prefix> \
+  --output-basename <output-basename> \
+  --quant <quant> \
+  --tensor-type-file /mnt/recipe/tensor-types.txt \
+  --window-size 1 \
+  --manifest /tmp/skippy-quantize.json \
+  --backend llama-api \
+  --max-memory 32G \
+  --dry-run
+```
+
 Run until complete:
 
 ```bash

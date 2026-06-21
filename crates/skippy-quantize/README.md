@@ -90,7 +90,10 @@ skippy-quantize next-window --manifest /tmp/skippy-quantize.json
 ```
 
 Conversion and quantization window runners print the selected window and the
-effective command in human mode:
+effective command in human mode. Add `--dry-run` to direct, job, `run-*`, or
+`run-*-window` commands to plan the next missing window without writing output
+artifacts, creating spool/output directories, staging source shards, recording
+window records, publishing shards, or running completion verification.
 
 ```bash
 skippy-quantize run-convert-window \
@@ -108,6 +111,24 @@ skippy-quantize run-convert-window \
 ℹ️  Writing native convert shard 42/306 -> /tmp/skippy-convert-output/BF16/GLM-5.2-BF16-00042-of-00306.gguf (buffer 8.00 MiB, estimated working set 16.00 MiB)
 ✅ Published /mnt/target/BF16/GLM-5.2-BF16-00042-of-00306.gguf (49.87 GiB)
 🔓 Manifest lock released: /tmp/skippy-convert.json.lock
+```
+
+Dry-run mode stops after the same plan and memory-budget output:
+
+```bash
+skippy-quantize run-convert-window \
+  --manifest /tmp/skippy-convert.json \
+  --max-memory 32G \
+  --spool-dir /tmp/skippy-convert-output \
+  --dry-run
+```
+
+```text
+🪟 convert window: 42
+ℹ️  Output prefix: /tmp/skippy-convert-output/BF16/GLM-5.2-BF16.gguf
+ℹ️  Command: skippy-quantize run-convert-window --backend native-rust --source /mnt/checkpoint --outfile /tmp/skippy-convert-output/BF16/GLM-5.2-BF16.gguf --first-split 42 --last-split 42 --expected-splits 306
+⚠️  convert memory budget: hard cap 32.00 GiB
+⚠️  convert dry run: no files were written, cleaned, recorded, or published
 ```
 
 ```bash
@@ -285,7 +306,11 @@ Important conversion flags:
 - `--spool-dir DIR` writes window outputs to a local spool before publishing.
 - `--keep-spool` keeps the spooled window after publishing.
 - `--record-dir DIR` writes per-window run records.
-- `--print-only` prints the planned command/report without executing.
+- `--print-only` prints the planned command/report for one window without
+  executing.
+- `--dry-run` plans the next window without creating manifests, output/spool
+  directories, records, or artifacts. Loop commands plan only the next missing
+  window because no shard is written to advance progress.
 
 ## Quantize
 
@@ -343,8 +368,12 @@ Important quantization flags:
 - `--prune-layers SPEC` forwards layer-pruning metadata to the native quant
   API.
 - `--override-kv KEY=TYPE:VALUE` adds GGUF metadata overrides.
-- `--allow-requantize`, `--pure`, `--dry-run`, and `--leave-output-tensor`
-  mirror the native llama quantization parameters.
+- `--allow-requantize`, `--pure`, and `--leave-output-tensor` mirror native
+  quantization parameters.
+- `--dry-run` plans the next quant window without creating manifests, output or
+  spool directories, staging source shards, records, or artifacts. Loop commands
+  plan only the next missing window because no shard is written to advance
+  progress.
 - `--keep-split`, `--first-split`, and `--last-split` can request a manual
   split window for direct `quantize`.
 - `--no-stage-source` skips local source-window staging.

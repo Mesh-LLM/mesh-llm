@@ -13,6 +13,7 @@ use crate::verify::print_verify_on_complete;
 use crate::{
     ConvertRunnerArgs, InitConvertArgs, RunConvertArgs, RunConvertWindowArgs, VerifyLoadArgs,
     convert_manifest_from_args, prepare_convert_runner, run_convert_unlocked,
+    run_convert_window_once_with_manifest,
 };
 
 #[derive(Debug, Parser)]
@@ -99,6 +100,17 @@ pub(crate) fn run_direct_convert(args: DirectConvertArgs) -> Result<()> {
             None,
             args.json,
         );
+    }
+    if runner.dry_run {
+        return run_convert_window_once_with_manifest(
+            &RunConvertWindowArgs {
+                manifest: manifest_path,
+                runner,
+                json: args.json,
+            },
+            &manifest,
+        )
+        .map(|_| ());
     }
     with_manifest_lock(&manifest_path, || {
         ensure_manifest(&manifest_path, &manifest)?;
@@ -257,6 +269,8 @@ fn default_manifest_path(target: &OutputLocation, output_type: ConvertOutputType
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -410,5 +424,40 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn direct_convert_dry_run_does_not_write_manifest_or_output() {
+        let root = unique_temp_dir("direct-convert-dry-run");
+        let source = root.join("checkpoint");
+        let output = root.join("BF16").join("model-bf16.gguf");
+        let manifest = root.join("manifest.json");
+        let args = DirectConvertArgs::try_parse_from([
+            "skippy-quantize convert",
+            "--dry-run",
+            "--output-type",
+            "bf16",
+            "--manifest",
+            manifest.to_str().unwrap(),
+            source.to_str().unwrap(),
+            output.to_str().unwrap(),
+        ])
+        .unwrap();
+
+        run_direct_convert(args).unwrap();
+
+        assert!(!manifest.exists());
+        assert!(!root.join("BF16").exists());
+        fs::remove_dir_all(root).ok();
+    }
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("skippy-quantize-{name}-{nanos}-{id}"))
     }
 }

@@ -57,7 +57,9 @@ use memory_budget::{
 };
 use native_convert::{build_native_convert_command, run_native_convert};
 use native_quantize::{build_native_quantize_command, run_native_quantize};
-use output::{print_info, print_json_pretty, print_path_event, print_success, print_window};
+use output::{
+    print_info, print_json_pretty, print_path_event, print_success, print_warn, print_window,
+};
 use plan_convert::{PlanConvertArgs, run_plan_convert};
 use preflight::run_job_preflight;
 use records::{WindowRunRecordInput, unix_timestamp_ms, write_window_record};
@@ -602,6 +604,18 @@ fn quant_job(args: QuantJobArgs) -> Result<()> {
             args.run.json,
         );
     }
+    if runner.dry_run {
+        return run_quant_window_once_with_manifest(
+            &RunQuantWindowArgs {
+                manifest: manifest_path,
+                runner,
+                json: args.run.json,
+            },
+            &manifest,
+            None,
+        )
+        .map(|_| ());
+    }
     let verify_options = args.run.verify_load.options(args.run.verify_on_complete);
     with_manifest_lock(&manifest_path, || {
         ensure_manifest(&manifest_path, &manifest)?;
@@ -682,6 +696,17 @@ fn convert_job(args: ConvertJobArgs) -> Result<()> {
             args.run.json,
         );
     }
+    if runner.dry_run {
+        return run_convert_window_once_with_manifest(
+            &RunConvertWindowArgs {
+                manifest: manifest_path,
+                runner,
+                json: args.run.json,
+            },
+            &manifest,
+        )
+        .map(|_| ());
+    }
     let verify_options = args.run.verify_load.options(args.run.verify_on_complete);
     with_manifest_lock(&manifest_path, || {
         ensure_manifest(&manifest_path, &manifest)?;
@@ -733,6 +758,9 @@ pub(crate) fn run_convert_unlocked(args: RunConvertArgs) -> Result<()> {
         !args.window.runner.print_only,
         "run-convert does not support --print-only; use run-convert-window"
     );
+    if args.window.runner.dry_run {
+        return run_convert_window_once(&args.window).map(|_| ());
+    }
     run_window_loop("convert", args.max_windows, || {
         run_convert_window_once(&args.window)
     })
@@ -746,6 +774,13 @@ fn run_convert_window(args: RunConvertWindowArgs) -> Result<()> {
 
 fn run_convert_window_once(args: &RunConvertWindowArgs) -> Result<bool> {
     let manifest = read_manifest(&args.manifest)?;
+    run_convert_window_once_with_manifest(args, &manifest)
+}
+
+pub(crate) fn run_convert_window_once_with_manifest(
+    args: &RunConvertWindowArgs,
+    manifest: &Manifest,
+) -> Result<bool> {
     ensure!(
         manifest.kind == JobKind::ConvertHf,
         "run-convert-window requires a convert manifest"
@@ -756,7 +791,7 @@ fn run_convert_window_once(args: &RunConvertWindowArgs) -> Result<bool> {
         "run-convert-window owns shard selection; use direct convert passthrough for --skip-output-shards-before/--stop-output-shards-after"
     );
 
-    let progress = manifest_progress(&manifest)?;
+    let progress = manifest_progress(manifest)?;
     let Some(window) = progress.next_window else {
         if args.json {
             print_json_pretty(&serde_json::json!({
@@ -774,12 +809,10 @@ fn run_convert_window_once(args: &RunConvertWindowArgs) -> Result<bool> {
         &manifest.target_prefix,
         runner.spool_dir.as_deref(),
     );
-    fs::create_dir_all(&output_root)
-        .with_context(|| format!("create {}", output_root.display()))?;
     let output_prefix = output_root.join(format!("{}.gguf", manifest.output_basename));
     let command = match runner.backend {
         BackendKind::NativeRust => {
-            build_native_convert_command(&runner, &manifest, &output_prefix, window)
+            build_native_convert_command(&runner, manifest, &output_prefix, window)
         }
         BackendKind::LlamaApi | BackendKind::SkippyAbi => {
             unreachable!("unsupported convert backend checked earlier")
@@ -827,9 +860,15 @@ fn run_convert_window_once(args: &RunConvertWindowArgs) -> Result<bool> {
         llama_quantize_env_bytes: None,
         json: args.json,
     })?;
+    if runner.dry_run {
+        print_dry_run_complete(args.json, "convert")?;
+        return Ok(true);
+    }
     if runner.print_only {
         return Ok(true);
     }
+    fs::create_dir_all(&output_root)
+        .with_context(|| format!("create {}", output_root.display()))?;
     clean_spooled_window(
         runner.spool_dir.as_deref(),
         &manifest.target_prefix,
@@ -841,7 +880,7 @@ fn run_convert_window_once(args: &RunConvertWindowArgs) -> Result<bool> {
     let started = Instant::now();
     let status = match runner.backend {
         BackendKind::NativeRust => {
-            run_native_convert(&runner, &manifest, window, &plan.output_prefix)?
+            run_native_convert(&runner, manifest, window, &plan.output_prefix)?
         }
         BackendKind::LlamaApi | BackendKind::SkippyAbi => {
             unreachable!("unsupported convert backend checked earlier")
@@ -886,6 +925,9 @@ pub(crate) fn run_quant_unlocked(args: RunQuantArgs) -> Result<()> {
         !args.window.runner.print_only,
         "run-quant does not support --print-only; use run-quant-window"
     );
+    if args.window.runner.dry_run {
+        return run_quant_window_once(&args.window, args.window_override).map(|_| ());
+    }
     run_window_loop("quant", args.max_windows, || {
         run_quant_window_once(&args.window, args.window_override)
     })
@@ -902,13 +944,21 @@ fn run_quant_window_once(
     window_override: Option<SplitWindow>,
 ) -> Result<bool> {
     let manifest = read_manifest(&args.manifest)?;
+    run_quant_window_once_with_manifest(args, &manifest, window_override)
+}
+
+pub(crate) fn run_quant_window_once_with_manifest(
+    args: &RunQuantWindowArgs,
+    manifest: &Manifest,
+    window_override: Option<SplitWindow>,
+) -> Result<bool> {
     ensure!(
         manifest.kind == JobKind::QuantizeGguf,
         "run-quant-window requires a quantize manifest"
     );
     let runner = prepare_quant_runner(args.runner.clone())?;
 
-    let progress = manifest_progress(&manifest)?;
+    let progress = manifest_progress(manifest)?;
     let window = if let Some(requested) = window_override {
         validate_split_window(requested, manifest.expected_splits)?;
         let Some(window) = next_missing_window_in_range(&progress.missing_ranges, requested) else {
@@ -948,6 +998,13 @@ fn run_quant_window_once(
     let stage_path = runner.work_dir.join("source-window");
     let staged_first_shard = if runner.no_stage_source {
         first_source_shard
+    } else if runner.dry_run || runner.print_only {
+        planned_staged_first_shard(
+            &stage_path,
+            source_prefix,
+            &first_source_shard,
+            manifest.expected_splits,
+        )?
     } else {
         stage_source_window(
             &manifest.source,
@@ -964,13 +1021,11 @@ fn run_quant_window_once(
         &manifest.target_prefix,
         runner.spool_dir.as_deref(),
     );
-    fs::create_dir_all(&output_root)
-        .with_context(|| format!("create {}", output_root.display()))?;
     let output_prefix = output_root.join(format!("{}.gguf", manifest.output_basename));
     let command = match runner.backend {
         BackendKind::LlamaApi | BackendKind::SkippyAbi => build_native_quantize_command(
             &runner,
-            &manifest,
+            manifest,
             &staged_first_shard,
             &output_prefix,
             window,
@@ -1013,9 +1068,15 @@ fn run_quant_window_once(
         json: args.json,
     })?;
 
+    if runner.dry_run {
+        print_dry_run_complete(args.json, "quant")?;
+        return Ok(true);
+    }
     if runner.print_only {
         return Ok(true);
     }
+    fs::create_dir_all(&output_root)
+        .with_context(|| format!("create {}", output_root.display()))?;
     clean_spooled_window(
         runner.spool_dir.as_deref(),
         &manifest.target_prefix,
@@ -1028,7 +1089,7 @@ fn run_quant_window_once(
     let status = match runner.backend {
         BackendKind::LlamaApi | BackendKind::SkippyAbi => run_native_quantize(
             &runner,
-            &manifest,
+            manifest,
             &plan.staged_first_shard,
             &plan.output_prefix,
             window,
@@ -1068,4 +1129,30 @@ fn run_quant_window_once(
         print_path_event("🧹", "Cleaned staged source", &stage_path);
     }
     Ok(true)
+}
+
+fn planned_staged_first_shard(
+    stage_path: &Path,
+    source_prefix: &str,
+    first_source_shard: &Path,
+    total: u32,
+) -> Result<PathBuf> {
+    Ok(stage_path
+        .join(source_prefix)
+        .join(splits::shard_name_for(first_source_shard, 1, total)?))
+}
+
+fn print_dry_run_complete(json: bool, kind: &str) -> Result<()> {
+    if json {
+        print_json_pretty(&serde_json::json!({
+            "event": "dry_run",
+            "kind": kind,
+            "executed": false,
+        }))?;
+    } else {
+        print_warn(format!(
+            "{kind} dry run: no files were written, cleaned, recorded, or published"
+        ));
+    }
+    Ok(())
 }

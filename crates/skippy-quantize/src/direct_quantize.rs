@@ -12,6 +12,7 @@ use crate::verify::print_verify_on_complete;
 use crate::{
     InitQuantArgs, QuantRunnerArgs, RunQuantArgs, RunQuantWindowArgs, VerifyLoadArgs,
     prepare_quant_runner, quant_backend_path, quant_manifest_from_args, run_quant_unlocked,
+    run_quant_window_once_with_manifest,
 };
 
 #[derive(Debug, Parser)]
@@ -98,6 +99,18 @@ pub(crate) fn run_direct_quantize(args: DirectQuantizeArgs) -> Result<()> {
             quant_backend_path(&runner),
             args.json,
         );
+    }
+    if runner.dry_run {
+        return run_quant_window_once_with_manifest(
+            &RunQuantWindowArgs {
+                manifest: manifest_path,
+                runner,
+                json: args.json,
+            },
+            &manifest,
+            window_override,
+        )
+        .map(|_| ());
     }
     with_manifest_lock(&manifest_path, || {
         ensure_manifest(&manifest_path, &manifest)?;
@@ -338,6 +351,8 @@ fn apply_positional_nthreads(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use crate::types::QuantType;
 
     use super::*;
@@ -502,6 +517,52 @@ mod tests {
                 nthreads: Some(8),
             }
         );
+    }
+
+    #[test]
+    fn direct_quantize_dry_run_does_not_write_manifest_stage_or_output() {
+        let root = unique_temp_dir("direct-quant-dry-run");
+        let source_dir = root.join("source").join("BF16");
+        fs::create_dir_all(&source_dir).unwrap();
+        let first = source_dir.join("model-bf16-00001-of-00002.gguf");
+        fs::write(&first, b"not-a-real-gguf").unwrap();
+        fs::write(source_dir.join("model-bf16-00002-of-00002.gguf"), b"").unwrap();
+        let output = root.join("target").join("Q4_K").join("model-q4.gguf");
+        let manifest = root.join("manifest.json");
+        let work_dir = root.join("work");
+        let spool_dir = root.join("spool");
+        let args = DirectQuantizeArgs::try_parse_from([
+            "skippy-quantize quantize",
+            "--dry-run",
+            "--manifest",
+            manifest.to_str().unwrap(),
+            "--work-dir",
+            work_dir.to_str().unwrap(),
+            "--spool-dir",
+            spool_dir.to_str().unwrap(),
+            first.to_str().unwrap(),
+            output.to_str().unwrap(),
+            "Q4_K",
+        ])
+        .unwrap();
+
+        run_direct_quantize(args).unwrap();
+
+        assert!(!manifest.exists());
+        assert!(!work_dir.exists());
+        assert!(!spool_dir.exists());
+        assert!(!root.join("target").exists());
+        fs::remove_dir_all(root).ok();
+    }
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("skippy-quantize-{name}-{nanos}-{id}"))
     }
 
     #[test]

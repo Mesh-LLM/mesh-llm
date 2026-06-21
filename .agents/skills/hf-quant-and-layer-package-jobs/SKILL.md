@@ -52,6 +52,25 @@ target/release/skippy-quantize verify-job \
   --llama-load
 ```
 
+Before the real run, dry-run the same quant job and confirm it reports the
+expected source, target, tensor recipe, backend, memory budget, and next window:
+
+```bash
+target/release/skippy-quantize quant-job \
+  --source /mnt/bf16 \
+  --source-prefix BF16 \
+  --target /mnt/quant \
+  --target-prefix <quant-selector> \
+  --output-basename <model>-<quant-selector> \
+  --quant <quant-selector> \
+  --tensor-type-file /mnt/recipe/tensor-types.txt \
+  --window-size 1 \
+  --manifest /tmp/skippy-quantize.json \
+  --backend llama-api \
+  --max-memory 32G \
+  --dry-run
+```
+
 Publish the quant repo if the target is not already a mounted Hub repo:
 
 ```bash
