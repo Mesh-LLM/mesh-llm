@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use skippy_protocol::{FlashAttentionType, StageKvCacheMode, StageKvCachePayload};
+use skippy_runtime::package::PackageGenerationInfo;
 use skippy_server::EmbeddedOpenAiRequestDefaults;
 
 use super::super::StageWireDType;
@@ -24,6 +25,7 @@ pub(crate) struct SkippyConfigResolveRequest<'a> {
     pub(crate) model_bytes: u64,
     pub(crate) allocatable_memory_bytes: Option<u64>,
     pub(crate) request_defaults: Option<&'a RequestDefaultsConfig>,
+    pub(crate) package_generation: Option<&'a PackageGenerationInfo>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

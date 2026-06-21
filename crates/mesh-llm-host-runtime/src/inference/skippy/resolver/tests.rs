@@ -3,8 +3,13 @@ use crate::inference::skippy::{SkippyPackageIdentity, SkippyTelemetryOptions, St
 use crate::plugin::{MeshConfig, ReasoningBudget, RequestDefaultsConfig};
 use serde_json::Value;
 use skippy_protocol::{LoadMode, StageKvCacheMode, StageKvCachePayload};
+use skippy_runtime::package::{
+    PackageGenerationInfo, PackageSpeculativeDecodingInfo, PackageSpeculativeStrategyInfo,
+    PackageWindowPolicyInfo,
+};
 use skippy_server::{EmbeddedReasoningEnabled, EmbeddedReasoningFormat};
 use std::{
+    collections::BTreeMap,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -28,6 +33,7 @@ fn fake_package_identity(layer_count: u32) -> SkippyPackageIdentity {
         layer_count,
         activation_width: 4096,
         tensor_count: 100,
+        generation: None,
     }
 }
 
@@ -90,8 +96,34 @@ fn resolve_qwen_config_with_request_defaults(
         model_bytes: 10 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults,
+        package_generation: None,
     })
     .expect("qwen config should resolve")
+}
+
+fn native_mtp_generation() -> PackageGenerationInfo {
+    let mut strategies = BTreeMap::new();
+    strategies.insert(
+        "native-mtp-n1".to_string(),
+        PackageSpeculativeStrategyInfo {
+            strategy_type: "native-mtp".to_string(),
+            prediction_depth: Some(1),
+            layer_indices: vec![46],
+            window_policy: Some(PackageWindowPolicyInfo {
+                default: "fixed".to_string(),
+                initial_window: 1,
+                min_window: 1,
+                max_window: 1,
+            }),
+        },
+    );
+
+    PackageGenerationInfo {
+        speculative_decoding: Some(PackageSpeculativeDecodingInfo {
+            default: "native-mtp-n1".to_string(),
+            strategies,
+        }),
+    }
 }
 
 fn assert_request_override_keeps_load_time_config(
@@ -202,6 +234,7 @@ fn resolve_explicit_full_surface_config(
         model_bytes: 4 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: Some(12 * 1024 * 1024 * 1024),
         request_defaults: Some(request_defaults),
+        package_generation: None,
     })
     .expect("explicit model should resolve")
 }
@@ -214,6 +247,7 @@ fn resolve_defaults_full_surface_config(fixture: &FullSurfaceFixture) -> Resolve
         model_bytes: 2 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: Some(12 * 1024 * 1024 * 1024),
         request_defaults: None,
+        package_generation: None,
     })
     .expect("defaults-only model should resolve")
 }
@@ -351,6 +385,7 @@ temperature = 0.4
         model_bytes: 8 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: Some(16 * 1024 * 1024 * 1024),
         request_defaults: Some(&request_defaults),
+        package_generation: None,
     })
     .unwrap();
 
@@ -399,6 +434,7 @@ tuning_profile = "throughput"
         model_bytes: 10 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: Some(12 * 1024 * 1024 * 1024),
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap();
 
@@ -439,6 +475,7 @@ cache_type_v = "q4_0"
         model_bytes: 10 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap();
 
@@ -479,6 +516,7 @@ parallel = 11
         model_bytes: 10 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap();
 
@@ -547,6 +585,7 @@ reasoning_enabled = "on"
         model_bytes: 10 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap();
 
@@ -602,6 +641,7 @@ chat_template = "unsafe-template"
         model_bytes: 10 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap_err()
     .to_string();
@@ -618,6 +658,7 @@ fn family_policy_beats_builtin_wire_dtype_when_config_is_unset() {
         model_bytes: 2 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap();
 
@@ -634,6 +675,7 @@ fn family_policy_wires_prefix_cache_by_default_for_supported_models() {
         model_bytes: 4 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .expect("config should resolve");
 
@@ -688,6 +730,7 @@ draft_max_tokens = 8
         model_bytes: 4 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .expect("config should resolve");
 
@@ -734,6 +777,7 @@ fn layer_package_translation_does_not_treat_hf_ref_as_direct_gguf() {
         model_bytes: 5 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap();
 
@@ -767,6 +811,7 @@ draft_selection_policy = "auto"
         model_bytes: 4 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .expect("auto draft selection policy should not force draft resolution");
 
@@ -776,7 +821,7 @@ draft_selection_policy = "auto"
 }
 
 #[test]
-fn speculative_strategy_defaults_to_native_mtp_enabled() {
+fn speculative_strategy_auto_without_package_generation_disables_native_mtp() {
     let mesh_config = parse_config("");
     let model_file = temp_model_file();
 
@@ -787,8 +832,42 @@ fn speculative_strategy_defaults_to_native_mtp_enabled() {
         model_bytes: 4 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .expect("default speculative strategy should resolve");
+
+    assert_eq!(resolved.speculative.strategy, "auto");
+    assert!(!resolved.speculative.native_mtp_enabled);
+    let load_options = resolved
+        .to_model_load_options(SkippyTelemetryOptions::off())
+        .expect("model load options should build");
+    assert!(!load_options.native_mtp_enabled);
+    let stage = resolved
+        .to_stage_config(Some(fake_package_identity(24)), LoadMode::LayerPackage)
+        .expect("stage config should build");
+    assert!(!stage.native_mtp_enabled);
+    let openai = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("openai args should build");
+    assert!(!openai.native_mtp_enabled);
+}
+
+#[test]
+fn speculative_strategy_auto_uses_package_native_mtp_default() {
+    let mesh_config = parse_config("");
+    let model_file = temp_model_file();
+    let generation = native_mtp_generation();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "meshllm/GLM-4.7-Flash-MTP-GGUF",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: Some(&generation),
+    })
+    .expect("package native MTP default should resolve");
 
     assert_eq!(resolved.speculative.strategy, "auto");
     assert!(resolved.speculative.native_mtp_enabled);
@@ -804,6 +883,34 @@ fn speculative_strategy_defaults_to_native_mtp_enabled() {
         .to_embedded_openai_args(4096, true)
         .expect("openai args should build");
     assert!(openai.native_mtp_enabled);
+}
+
+#[test]
+fn speculative_strategy_native_mtp_rejects_package_without_native_mtp_metadata() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+strategy = "native-mtp-n1"
+"#,
+    );
+    let model_file = temp_model_file();
+    let generation = PackageGenerationInfo {
+        speculative_decoding: None,
+    };
+
+    let error = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "meshllm/package-without-mtp",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: Some(&generation),
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("requires package generation metadata advertising native-mtp-n1"));
 }
 
 #[test]
@@ -823,6 +930,7 @@ strategy = "disabled"
         model_bytes: 4 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .expect("disabled speculative strategy should resolve");
 
@@ -859,6 +967,7 @@ prefill_chunk_size = 128
         model_bytes: 4 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .expect("config should resolve");
 
@@ -890,6 +999,7 @@ draft_max_tokens = 8
         model_bytes: 4 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .expect("warn_disable should resolve");
 
@@ -918,6 +1028,7 @@ draft_max_tokens = 8
         model_bytes: 4 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap_err()
     .to_string();
@@ -943,6 +1054,7 @@ stage_layer_end = 24
         model_bytes: 4 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .expect("config should resolve");
 
@@ -975,6 +1087,7 @@ draft_acceptance_threshold = 0.5
         model_bytes: 4 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap_err()
     .to_string();
@@ -1021,6 +1134,7 @@ model = "Qwen/Qwen3-0.6B:Q4_K_M"
         model_bytes: 2 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap_err()
     .to_string();
@@ -1045,6 +1159,7 @@ placement = "auto"
         model_bytes: 2 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap_err()
     .to_string();
@@ -1069,6 +1184,7 @@ fn integrated_invalid_fixture_fails_closed_for_request_defaults_and_single_stage
         model_bytes: 2 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .unwrap_err()
     .to_string();
@@ -1085,6 +1201,7 @@ fn integrated_invalid_fixture_fails_closed_for_request_defaults_and_single_stage
         model_bytes: 2 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
+        package_generation: None,
     })
     .expect("staged-only config should resolve before translation gating");
     let staged_only_error = resolved

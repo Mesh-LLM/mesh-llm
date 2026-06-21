@@ -336,6 +336,7 @@ fn resolve_runtime_skippy_config(
         model_bytes,
         allocatable_memory_bytes,
         request_defaults: None,
+        package_generation: None,
     })?;
     resolved.model_id = model_name.to_string();
     apply_runtime_skippy_launch_overrides(
@@ -1540,6 +1541,7 @@ fn split_generation_load_settings<'a>(
         model_bytes: spec.package.source_model_bytes,
         allocatable_memory_bytes: spec.pinned_gpu.map(|gpu| gpu.vram_bytes),
         request_defaults: None,
+        package_generation: spec.package.generation.as_ref(),
     })?;
     resolved.model_fit.ctx_size = spec.ctx_size;
     resolved.throughput.parallel = spec.slots;
@@ -3823,6 +3825,7 @@ mod tests {
             layer_count,
             activation_width: 2048,
             tensor_count: 100,
+            generation: None,
         }
     }
 

@@ -11,6 +11,7 @@ use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use skippy_protocol::{LoadMode, StageConfig};
+use skippy_runtime::package::PackageGenerationInfo;
 use skippy_runtime::package::{
     self, LayerPackageInfo, PackageIntegrityOptions, PackageStageRequest,
 };
@@ -92,6 +93,7 @@ pub struct StagePackageInfo {
     pub source_model_bytes: Option<u64>,
     pub layer_count: u32,
     pub activation_width: u32,
+    pub generation: Option<PackageGenerationInfo>,
     pub projector_path: Option<String>,
     pub layers: Vec<StagePackageLayerInfo>,
 }
@@ -1337,6 +1339,7 @@ fn stage_package_info(package_ref: &str, info: LayerPackageInfo) -> Result<Stage
         source_model_bytes: info.source_model_bytes,
         layer_count: info.layer_count,
         activation_width,
+        generation: info.generation,
         projector_path: info
             .projectors
             .first()

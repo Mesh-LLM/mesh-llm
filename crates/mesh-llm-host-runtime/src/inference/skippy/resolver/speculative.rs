@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
+use skippy_runtime::package::{PackageGenerationInfo, PackageSpeculativeDecodingInfo};
 use skippy_topology::infer_family_capability;
 
 use super::support::{pick_owned, pick_string, pick_string_owned};
@@ -12,6 +13,7 @@ pub(super) fn resolve_speculative_config(
     global_config: Option<&SpeculativeConfig>,
     model_id: &str,
     model_path: &Path,
+    package_generation: Option<&PackageGenerationInfo>,
 ) -> Result<ResolvedSpeculativeConfig> {
     let strategy = pick_string_owned(
         model_config.and_then(|config| config.strategy.as_deref()),
@@ -19,7 +21,20 @@ pub(super) fn resolve_speculative_config(
         Some("auto"),
     );
     let native_mtp_enabled = match strategy.as_str() {
-        "auto" | "native-mtp-n1" => true,
+        "auto" => package_generation_supports_default_native_mtp(package_generation),
+        "native-mtp-n1" => {
+            if package_generation.is_some_and(|generation| {
+                !generation
+                    .speculative_decoding
+                    .as_ref()
+                    .is_some_and(speculative_supports_native_mtp_n1)
+            }) {
+                bail!(
+                    "skippy speculative.strategy = \"native-mtp-n1\" requires package generation metadata advertising native-mtp-n1"
+                );
+            }
+            true
+        }
         "disabled" => false,
         _ => bail!("skippy speculative.strategy must be auto, disabled, or native-mtp-n1"),
     };
@@ -165,6 +180,34 @@ pub(super) fn resolve_speculative_config(
         explicit,
         draft_n_gpu_layers,
     })
+}
+
+fn package_generation_supports_default_native_mtp(
+    generation: Option<&PackageGenerationInfo>,
+) -> bool {
+    generation
+        .and_then(|generation| generation.speculative_decoding.as_ref())
+        .is_some_and(|speculative| {
+            speculative
+                .strategies
+                .get(&speculative.default)
+                .is_some_and(|strategy| {
+                    strategy.strategy_type == "native-mtp"
+                        && strategy.prediction_depth == Some(1)
+                        && !strategy.layer_indices.is_empty()
+                })
+        })
+}
+
+fn speculative_supports_native_mtp_n1(speculative: &PackageSpeculativeDecodingInfo) -> bool {
+    speculative
+        .strategies
+        .get("native-mtp-n1")
+        .is_some_and(|strategy| {
+            strategy.strategy_type == "native-mtp"
+                && strategy.prediction_depth == Some(1)
+                && !strategy.layer_indices.is_empty()
+        })
 }
 
 fn normalize_pairing_fault(value: &str) -> String {

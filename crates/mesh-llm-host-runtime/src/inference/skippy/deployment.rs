@@ -203,6 +203,7 @@ mod tests {
             source_model_bytes: Some(100),
             layer_count: 4,
             activation_width: 1024,
+            generation: None,
             projector_path: Some("/tmp/package/projectors/mmproj.gguf".to_string()),
             layers: vec![StagePackageLayerInfo {
                 layer_index: 0,

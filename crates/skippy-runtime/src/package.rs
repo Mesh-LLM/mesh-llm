@@ -58,18 +58,18 @@ pub struct LayerPackageInfo {
     pub layers: Vec<LayerPackageLayerInfo>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PackageGenerationInfo {
     pub speculative_decoding: Option<PackageSpeculativeDecodingInfo>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PackageSpeculativeDecodingInfo {
     pub default: String,
     pub strategies: BTreeMap<String, PackageSpeculativeStrategyInfo>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PackageSpeculativeStrategyInfo {
     pub strategy_type: String,
     pub prediction_depth: Option<u32>,
@@ -77,7 +77,7 @@ pub struct PackageSpeculativeStrategyInfo {
     pub window_policy: Option<PackageWindowPolicyInfo>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PackageWindowPolicyInfo {
     pub default: String,
     pub initial_window: u32,

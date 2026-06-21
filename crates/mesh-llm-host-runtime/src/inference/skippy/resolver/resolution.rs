@@ -44,6 +44,7 @@ pub(crate) fn resolve_skippy_config(
             .and_then(|value| value.speculative.as_ref()),
         context.request.model_id,
         context.request.model_path,
+        context.request.package_generation,
     )?;
     let resolved_request = resolve_request_defaults(
         context.defaults,

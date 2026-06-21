@@ -1243,6 +1243,7 @@ mod tests {
             layer_count,
             activation_width: 4096,
             tensor_count: 100,
+            generation: None,
         }
     }
 

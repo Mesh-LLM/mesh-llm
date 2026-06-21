@@ -624,6 +624,7 @@ mod tests {
             source_model_bytes: Some(42),
             layer_count: 2,
             activation_width: 4096,
+            generation: None,
             projector_path: None,
             layers: vec![StagePackageLayerInfo {
                 layer_index: 0,
