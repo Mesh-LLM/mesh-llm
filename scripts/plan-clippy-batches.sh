@@ -61,6 +61,7 @@ WORKSPACE_MEMBERS=(
   "skippy-quantize"
   "model-package"
   "skippy-correctness"
+  "llama-quant-ffi"
   "llama-spec-bench"
   "skippy-bench"
   "skippy-prompt"
