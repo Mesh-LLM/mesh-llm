@@ -64,7 +64,7 @@ struct BpeVocabMetadata {
     added_tokens: BTreeMap<String, u32>,
 }
 
-fn read_byte_level_bpe(tokenizer: &Value, config: &Value) -> Result<BpeVocabMetadata> {
+fn read_byte_level_bpe(tokenizer: &Value, _config: &Value) -> Result<BpeVocabMetadata> {
     let model = tokenizer
         .get("model")
         .and_then(Value::as_object)
@@ -85,7 +85,8 @@ fn read_byte_level_bpe(tokenizer: &Value, config: &Value) -> Result<BpeVocabMeta
         .get("vocab")
         .and_then(Value::as_object)
         .context("tokenizer.json model missing object field vocab")?;
-    let vocab_size = config_vocab_size(config).unwrap_or(raw_vocab.len());
+    let added_tokens = collect_added_tokens(tokenizer);
+    let vocab_size = tokenizer_vocab_size(raw_vocab, &added_tokens)?;
     let mut tokens = vec![String::new(); vocab_size];
     let mut token_types = vec![TOKEN_TYPE_NORMAL; vocab_size];
     let mut scores = vec![0.0_f32; vocab_size];
@@ -99,7 +100,6 @@ fn read_byte_level_bpe(tokenizer: &Value, config: &Value) -> Result<BpeVocabMeta
         tokens[index] = token.clone();
     }
 
-    let added_tokens = collect_added_tokens(tokenizer);
     for added in &added_tokens {
         let index = usize::try_from(added.id).context("added token id does not fit usize")?;
         ensure!(
@@ -164,6 +164,25 @@ fn collect_added_tokens(tokenizer: &Value) -> Vec<AddedToken> {
         .collect::<Vec<_>>();
     tokens.sort_by_key(|token| token.id);
     tokens
+}
+
+fn tokenizer_vocab_size(
+    raw_vocab: &serde_json::Map<String, Value>,
+    added_tokens: &[AddedToken],
+) -> Result<usize> {
+    let mut max_id = raw_vocab
+        .values()
+        .map(u32_value)
+        .chain(added_tokens.iter().map(|token| Some(token.id)))
+        .collect::<Option<Vec<_>>>()
+        .context("tokenizer vocab contains a non-u32 id")?
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+    max_id = max_id
+        .checked_add(1)
+        .context("tokenizer vocab size overflow")?;
+    usize::try_from(max_id).context("tokenizer vocab size does not fit usize")
 }
 
 fn normalize_merges(model: &serde_json::Map<String, Value>) -> Result<Vec<String>> {
@@ -332,13 +351,6 @@ fn read_optional_json(path: &Path) -> Result<Value> {
         .with_context(|| format!("parse {}", path.display()))
 }
 
-fn config_vocab_size(config: &Value) -> Option<usize> {
-    config
-        .get("vocab_size")
-        .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-}
-
 fn u32_value(value: &Value) -> Option<u32> {
     value.as_u64().and_then(|value| u32::try_from(value).ok())
 }
@@ -431,6 +443,31 @@ mod tests {
         assert!(text.contains("tokenizer.ggml.padding_token_id"));
         assert!(text.contains("tokenizer.ggml.add_bos_token"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ignores_trailing_embedding_vocab_padding() {
+        let tokenizer: Value = serde_json::from_str(
+            r#"{
+              "model": {
+                "type": "BPE",
+                "vocab": {"a": 0, "b": 1},
+                "merges": ["a b"]
+              },
+              "decoder": {"type": "ByteLevel"},
+              "added_tokens": [
+                {"id": 2, "content": "<|endoftext|>", "special": true}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let config: Value =
+            serde_json::from_str(r#"{"model_type":"qwen2","vocab_size":8}"#).unwrap();
+
+        let metadata = read_byte_level_bpe(&tokenizer, &config).unwrap();
+
+        assert_eq!(metadata.tokens.len(), 3);
+        assert_eq!(metadata.tokens[2], "<|endoftext|>");
     }
 
     #[test]

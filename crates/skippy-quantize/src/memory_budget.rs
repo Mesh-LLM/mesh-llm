@@ -1,5 +1,4 @@
 use std::str::FromStr;
-use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use clap::ValueEnum;
@@ -191,16 +190,6 @@ pub(crate) fn enforce_memory_budget(
     Ok(())
 }
 
-pub(crate) fn monitor_interval(
-    watchdog_seconds: Option<u64>,
-    max_memory_bytes: Option<u64>,
-) -> Option<Duration> {
-    if let Some(seconds) = watchdog_seconds.filter(|value| *value > 0) {
-        return Some(Duration::from_secs(seconds));
-    }
-    max_memory_bytes.map(|_| Duration::from_secs(1))
-}
-
 fn bytes_to_usize(value: MemorySize) -> Result<usize> {
     usize::try_from(value.bytes()).context("--max-memory does not fit usize on this platform")
 }
@@ -227,19 +216,6 @@ mod tests {
     fn formats_memory_policy_cli_args() {
         assert_eq!(MemoryPolicy::Hard.as_arg(), "hard");
         assert_eq!(MemoryPolicy::Advisory.as_arg(), "advisory");
-    }
-
-    #[test]
-    fn chooses_monitor_interval_when_budget_exists() {
-        assert_eq!(monitor_interval(None, None), None);
-        assert_eq!(
-            monitor_interval(None, Some(1)),
-            Some(Duration::from_secs(1))
-        );
-        assert_eq!(
-            monitor_interval(Some(5), Some(1)),
-            Some(Duration::from_secs(5))
-        );
     }
 
     #[test]

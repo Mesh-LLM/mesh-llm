@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 
-use crate::float_convert::{FloatDType, convert_float_chunk, target_dtype_for};
+use crate::float_convert::{FloatDType, convert_float_chunk, target_dtype_for_tensor};
 use crate::hf_checkpoint::{SafetensorFile, SafetensorTensorInfo, open_safetensor_files};
 use crate::tensor_map::{
     TensorNameMap, hf_layer_id, is_mtp_source_tensor, is_shared_mtp_context_tensor,
@@ -316,7 +316,7 @@ impl TensorSource {
         let source_dtype = FloatDType::from_safetensor(tensor.dtype()).with_context(|| {
             format!("unsupported dtype {} for {}", tensor.dtype(), tensor.name())
         })?;
-        let target_dtype = target_dtype_for(source_dtype, output_type)?;
+        let target_dtype = target_dtype_for_tensor(source_dtype, output_type, tensor.shape())?;
         let name = tensor_name_map.map_tensor_name(tensor.name())?;
         let element_count = tensor_element_count(tensor)?;
         Ok(Self {
@@ -438,7 +438,7 @@ impl ExpertGroup {
         let source_dtype = FloatDType::from_safetensor(tensor.dtype()).with_context(|| {
             format!("unsupported dtype {} for {}", tensor.dtype(), tensor.name())
         })?;
-        let target_dtype = target_dtype_for(source_dtype, output_type)?;
+        let target_dtype = target_dtype_for_tensor(source_dtype, output_type, tensor.shape())?;
         let element_count = tensor_element_count(tensor)?;
         Ok(Self {
             key,

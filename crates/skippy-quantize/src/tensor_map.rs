@@ -170,6 +170,9 @@ impl<'a> HfLayerTensor<'a> {
             "self_attn.q_proj.weight" => Ok(format!("blk.{bid}.attn_q.weight")),
             "self_attn.k_proj.weight" => Ok(format!("blk.{bid}.attn_k.weight")),
             "self_attn.v_proj.weight" => Ok(format!("blk.{bid}.attn_v.weight")),
+            "self_attn.q_proj.bias" => Ok(format!("blk.{bid}.attn_q.bias")),
+            "self_attn.k_proj.bias" => Ok(format!("blk.{bid}.attn_k.bias")),
+            "self_attn.v_proj.bias" => Ok(format!("blk.{bid}.attn_v.bias")),
             "self_attn.o_proj.weight" => Ok(format!("blk.{bid}.attn_output.weight")),
             "self_attn.q_norm.weight" => Ok(format!("blk.{bid}.attn_q_norm.weight")),
             "self_attn.k_norm.weight" => Ok(format!("blk.{bid}.attn_k_norm.weight")),
@@ -250,6 +253,12 @@ mod tests {
                 .map_tensor_name("model.layers.3.self_attn.k_norm.weight")
                 .unwrap(),
             "blk.3.attn_k_norm.weight"
+        );
+        assert_eq!(
+            TensorNameMap::HfToGguf
+                .map_tensor_name("model.layers.3.self_attn.v_proj.bias")
+                .unwrap(),
+            "blk.3.attn_v.bias"
         );
         assert_eq!(
             TensorNameMap::HfToGguf

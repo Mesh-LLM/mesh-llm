@@ -1,19 +1,20 @@
-From 3b29f2f7a0bb41c1c05af0b42b3f9d8d3c89d99e Mon Sep 17 00:00:00 2001
-From: James Dumay <jameswdumay@gmail.com>
-Date: Sat, 20 Jun 2026 18:00:00 +1000
+From 36e64c0497da57df6974586f4c7ac246cd189d6d Mon Sep 17 00:00:00 2001
+From: Mesh LLM <meshllm@example.com>
+Date: Sun, 21 Jun 2026 10:24:17 +1000
 Subject: [PATCH] Respect llama-quantize max memory budget
 
-src/llama-quant.cpp | 24 ++++++++++++++++++++++--
-1 file changed, 22 insertions(+), 2 deletions(-)
+---
+ src/llama-quant.cpp | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
 
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 000000000..000000000 100644
+index 3a8f47fb..de3574c2 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
-@@ -142,5 +142,25 @@ static int64_t llama_quantize_watchdog_interval_seconds() {
+@@ -156,6 +156,25 @@ static int64_t llama_quantize_watchdog_interval_seconds() {
      return std::max<long long>(0, value);
  }
-+
+ 
 +static int64_t llama_quantize_stream_chunk_size() {
 +    static constexpr int64_t default_stream_chunk_size = 32 * 1024 * 1024;
 +    const char * env = std::getenv("LLAMA_QUANTIZE_MAX_MEMORY_BYTES");
@@ -36,15 +37,15 @@ index 000000000..000000000 100644
  struct quantize_watchdog_snapshot {
      std::string tensor_name;
      std::string tensor_shape;
-@@ -1589,8 +1609,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+@@ -1584,7 +1603,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                  // quantize each expert separately since they have different importance matrices
                  new_size = 0;
                  if (stream_source) {
 -                    static const int64_t stream_chunk_size = 32 * 1024 * 1024;
--                    const int64_t rows_per_stream_chunk = std::max<int64_t>(1, stream_chunk_size / n_per_row);
--
 +                    const int64_t stream_chunk_size = llama_quantize_stream_chunk_size();
-+                    const int64_t rows_per_stream_chunk = std::max<int64_t>(1, stream_chunk_size / n_per_row);
-+
+                     const int64_t rows_per_stream_chunk = std::max<int64_t>(1, stream_chunk_size / n_per_row);
+ 
                      for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
-                         void * new_data_03 = (char *)new_data + row_size * i03 * nrows;
+-- 
+2.54.0 (Apple Git-156)
+

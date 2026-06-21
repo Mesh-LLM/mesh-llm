@@ -5,11 +5,9 @@ use std::time::Instant;
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 
-mod argv_alias;
 mod artifacts;
 mod backend;
 mod command_reports;
-mod convert;
 mod direct_convert;
 mod direct_quantize;
 mod float_convert;
@@ -28,7 +26,6 @@ mod preflight;
 mod quantize;
 mod records;
 mod residency;
-mod shims;
 mod splits;
 mod tensor_map;
 mod tokenizer_metadata;
@@ -40,14 +37,11 @@ mod verify;
 mod verify_command;
 mod window_loop;
 
-use argv_alias::dispatch_argv0_alias;
 use artifacts::{clean_spooled_window, execution_root, publish_spooled_window};
 use backend::{
-    BackendArgs, BackendKind, ExternalProcessOptions, ensure_convert_backend, ensure_external_tool,
-    ensure_quant_backend, ensure_success, run_backend_command,
+    BackendArgs, BackendKind, ensure_convert_backend, ensure_quant_backend, ensure_success,
 };
 use command_reports::{ConvertWindowPlan, QuantWindowPlan};
-use convert::build_convert_command;
 use direct_convert::{DirectConvertArgs, run_direct_convert};
 use direct_quantize::{DirectQuantizeArgs, run_direct_quantize};
 use hf_checkpoint::resolve_auto_output_type;
@@ -64,15 +58,12 @@ use native_convert::{build_native_convert_command, run_native_convert};
 use native_quantize::{build_native_quantize_command, run_native_quantize};
 use plan_convert::{PlanConvertArgs, run_plan_convert};
 use preflight::run_job_preflight;
-use quantize::build_quantize_command;
 use records::{WindowRunRecordInput, unix_timestamp_ms, write_window_record};
 use residency::remove_dir_if_exists;
-use shims::{InstallShimsArgs, install_shims};
 use splits::{
     SplitWindow, find_first_shard, next_missing_window_in_range, split_status, stage_source_window,
     validate_split_window,
 };
-use tool_paths::{resolve_converter, resolve_llama_quantize};
 use type_catalog::{TypeCatalogArgs, list_quants, list_tensor_types};
 use types::{ConvertOutputType, JobKind, QuantSpec};
 use validation_commands::{
@@ -96,16 +87,11 @@ enum Command {
     Backends(BackendArgs),
     ListQuants(TypeCatalogArgs),
     ListTensorTypes(TypeCatalogArgs),
-    InstallShims(InstallShimsArgs),
     InitQuant(InitQuantArgs),
     InitConvert(InitConvertArgs),
     Convert(DirectConvertArgs),
-    #[command(name = "convert-hf-to-gguf")]
-    ConvertHfToGguf(DirectConvertArgs),
     PlanConvert(PlanConvertArgs),
     Quantize(DirectQuantizeArgs),
-    #[command(name = "llama-quantize")]
-    LlamaQuantize(DirectQuantizeArgs),
     ConvertJob(ConvertJobArgs),
     QuantJob(QuantJobArgs),
     Status(StatusArgs),
@@ -233,12 +219,8 @@ impl VerifyLoadArgs {
 
 #[derive(Debug, Parser, Clone)]
 struct ConvertRunnerArgs {
-    #[arg(long, value_enum, default_value_t = BackendKind::ExternalProcess)]
+    #[arg(long, value_enum, default_value_t = BackendKind::NativeRust)]
     backend: BackendKind,
-    #[arg(long)]
-    converter: Option<PathBuf>,
-    #[arg(long, default_value = "python3")]
-    python: String,
     #[arg(long, default_value = "0")]
     split_max_size: String,
     #[arg(long)]
@@ -347,10 +329,8 @@ struct RunQuantWindowArgs {
 
 #[derive(Debug, Parser, Clone)]
 struct QuantRunnerArgs {
-    #[arg(long, value_enum, default_value_t = BackendKind::ExternalProcess)]
+    #[arg(long, value_enum, default_value_t = BackendKind::LlamaApi)]
     backend: BackendKind,
-    #[arg(long)]
-    llama_quantize: Option<PathBuf>,
     #[arg(long = "native-runtime-library", value_name = "PATH")]
     native_runtime_libraries: Vec<PathBuf>,
     #[arg(long, default_value = "/tmp/skippy-quantize-work")]
@@ -447,21 +427,15 @@ struct ValidateSplitsArgs {
 }
 
 fn main() -> Result<()> {
-    if let Some(result) = dispatch_argv0_alias() {
-        return result;
-    }
     match Args::parse().command {
         Command::Backends(args) => backend::run_backends(args),
         Command::ListQuants(args) => list_quants(args),
         Command::ListTensorTypes(args) => list_tensor_types(args),
-        Command::InstallShims(args) => install_shims(args),
         Command::InitQuant(args) => init_quant(args),
         Command::InitConvert(args) => init_convert(args),
         Command::Convert(args) => run_direct_convert(args),
-        Command::ConvertHfToGguf(args) => run_direct_convert(args),
         Command::PlanConvert(args) => run_plan_convert(args),
         Command::Quantize(args) => run_direct_quantize(args),
-        Command::LlamaQuantize(args) => run_direct_quantize(args),
         Command::ConvertJob(args) => convert_job(args),
         Command::QuantJob(args) => quant_job(args),
         Command::Status(args) => run_status_command(&args.manifest, args.json),
@@ -489,7 +463,7 @@ fn main() -> Result<()> {
     }
 }
 
-pub(crate) fn prepare_convert_runner(mut runner: ConvertRunnerArgs) -> Result<ConvertRunnerArgs> {
+pub(crate) fn prepare_convert_runner(runner: ConvertRunnerArgs) -> Result<ConvertRunnerArgs> {
     ensure_convert_backend(runner.backend)?;
     ensure!(
         !(runner.mtp && runner.no_mtp),
@@ -499,15 +473,7 @@ pub(crate) fn prepare_convert_runner(mut runner: ConvertRunnerArgs) -> Result<Co
         runner.stream_buffer_bytes > 0,
         "--stream-buffer-bytes must be greater than zero"
     );
-    if runner.backend == BackendKind::ExternalProcess {
-        runner.converter = resolve_converter(runner.converter.as_deref());
-        ensure_external_tool(
-            runner.backend,
-            runner.converter.as_deref(),
-            "--converter",
-            "convert_hf_to_gguf.py",
-        )?;
-    } else if runner.backend == BackendKind::NativeRust {
+    if runner.backend == BackendKind::NativeRust {
         ensure_native_convert_runner_supported(&runner)?;
     }
     Ok(runner)
@@ -516,67 +482,67 @@ pub(crate) fn prepare_convert_runner(mut runner: ConvertRunnerArgs) -> Result<Co
 fn ensure_native_convert_runner_supported(runner: &ConvertRunnerArgs) -> Result<()> {
     ensure!(
         !runner.remote,
-        "--remote requires --backend external-process"
+        "--remote is not supported by the native converter"
     );
     ensure!(
         !runner.vocab_only,
-        "--vocab-only requires --backend external-process"
+        "--vocab-only is not supported by the native converter"
     );
     ensure!(
         !runner.bigendian,
-        "--bigendian requires --backend external-process"
+        "--bigendian is not supported by the native converter"
     );
     ensure!(
         !runner.use_temp_file,
-        "--use-temp-file requires --backend external-process"
+        "--use-temp-file is not supported by the native converter"
     );
     ensure!(
         !runner.no_lazy,
-        "--no-lazy requires --backend external-process"
+        "--no-lazy is not supported by the native converter"
     );
     ensure!(
         runner.model_name.is_none(),
-        "--model-name requires --backend external-process"
+        "--model-name is not supported by the native converter"
     );
     ensure!(
         !runner.no_tensor_first_split,
-        "--no-tensor-first-split requires --backend external-process"
+        "--no-tensor-first-split is not supported by the native converter"
     );
     ensure!(
         runner.metadata.is_none(),
-        "--metadata requires --backend external-process"
+        "--metadata is not supported by the native converter"
     );
     ensure!(
         !runner.print_supported_models,
-        "--print-supported-models requires --backend external-process"
+        "--print-supported-models is not supported by the native converter"
     );
     ensure!(
         !runner.mmproj,
-        "--mmproj requires --backend external-process"
+        "--mmproj is not supported by the native converter"
     );
     ensure!(
         !runner.mistral_format,
-        "--mistral-format requires --backend external-process"
+        "--mistral-format is not supported by the native converter"
     );
     ensure!(
         !runner.disable_mistral_community_chat_template,
-        "--disable-mistral-community-chat-template requires --backend external-process"
+        "--disable-mistral-community-chat-template is not supported by the native converter"
     );
     ensure!(
         !runner.sentence_transformers_dense_modules,
-        "--sentence-transformers-dense-modules requires --backend external-process"
+        "--sentence-transformers-dense-modules is not supported by the native converter"
     );
     ensure!(
         !runner.fuse_gate_up_exps,
-        "--fuse-gate-up-exps requires --backend external-process"
+        "--fuse-gate-up-exps is not supported by the native converter"
     );
     ensure!(
         !runner.fp8_as_q8,
-        "--fp8-as-q8 requires --backend external-process"
+        "--fp8-as-q8 is not supported by the native converter"
     );
     ensure!(
         runner.target_model_dir.is_none(),
-        "--target-model-dir requires --backend external-process"
+        "--target-model-dir is not supported by the native converter"
     );
     Ok(())
 }
@@ -587,23 +553,13 @@ impl ConvertRunnerArgs {
     }
 }
 
-pub(crate) fn prepare_quant_runner(mut runner: QuantRunnerArgs) -> Result<QuantRunnerArgs> {
+pub(crate) fn prepare_quant_runner(runner: QuantRunnerArgs) -> Result<QuantRunnerArgs> {
     ensure_quant_backend(runner.backend)?;
-    if runner.backend == BackendKind::ExternalProcess {
-        runner.llama_quantize = resolve_llama_quantize(runner.llama_quantize.as_deref());
-        ensure_external_tool(
-            runner.backend,
-            runner.llama_quantize.as_deref(),
-            "--llama-quantize",
-            "llama-quantize binary",
-        )?;
-    }
     Ok(runner)
 }
 
 pub(crate) fn quant_backend_path(runner: &QuantRunnerArgs) -> Option<&Path> {
     match runner.backend {
-        BackendKind::ExternalProcess => runner.llama_quantize.as_deref(),
         BackendKind::LlamaApi => runner
             .native_runtime_libraries
             .first()
@@ -711,7 +667,7 @@ fn convert_job(args: ConvertJobArgs) -> Result<()> {
             None,
             None,
             runner.backend,
-            runner.converter.as_deref(),
+            None,
             args.run.json,
         );
     }
@@ -803,9 +759,6 @@ fn run_convert_window_once(args: &RunConvertWindowArgs) -> Result<bool> {
         .with_context(|| format!("create {}", output_root.display()))?;
     let output_prefix = output_root.join(format!("{}.gguf", manifest.output_basename));
     let command = match runner.backend {
-        BackendKind::ExternalProcess => {
-            build_convert_command(&runner, &manifest, &output_prefix, window)?
-        }
         BackendKind::NativeRust => {
             build_native_convert_command(&runner, &manifest, &output_prefix, window)
         }
@@ -858,15 +811,6 @@ fn run_convert_window_once(args: &RunConvertWindowArgs) -> Result<bool> {
     let started_unix_ms = unix_timestamp_ms();
     let started = Instant::now();
     let status = match runner.backend {
-        BackendKind::ExternalProcess => run_backend_command(
-            runner.backend,
-            &plan.command,
-            &ExternalProcessOptions {
-                watchdog_seconds: runner.watchdog_seconds,
-                max_memory_bytes: runner.max_memory.map(MemorySize::bytes),
-                memory_policy: runner.memory_policy,
-            },
-        )?,
         BackendKind::NativeRust => {
             run_native_convert(&runner, &manifest, window, &plan.output_prefix)?
         }
@@ -981,13 +925,6 @@ fn run_quant_window_once(
         .with_context(|| format!("create {}", output_root.display()))?;
     let output_prefix = output_root.join(format!("{}.gguf", manifest.output_basename));
     let command = match runner.backend {
-        BackendKind::ExternalProcess => build_quantize_command(
-            &runner,
-            &manifest,
-            &staged_first_shard,
-            &output_prefix,
-            window,
-        )?,
         BackendKind::LlamaApi | BackendKind::SkippyAbi => build_native_quantize_command(
             &runner,
             &manifest,
@@ -1032,15 +969,6 @@ fn run_quant_window_once(
     let started_unix_ms = unix_timestamp_ms();
     let started = Instant::now();
     let status = match runner.backend {
-        BackendKind::ExternalProcess => run_backend_command(
-            runner.backend,
-            &plan.command,
-            &ExternalProcessOptions {
-                watchdog_seconds: runner.watchdog_seconds,
-                max_memory_bytes: runner.max_memory.map(MemorySize::bytes),
-                memory_policy: runner.memory_policy,
-            },
-        )?,
         BackendKind::LlamaApi | BackendKind::SkippyAbi => run_native_quantize(
             &runner,
             &manifest,

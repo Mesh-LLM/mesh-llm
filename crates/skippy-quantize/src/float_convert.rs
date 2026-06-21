@@ -47,6 +47,22 @@ pub(crate) fn target_dtype_for(
     }
 }
 
+pub(crate) fn target_dtype_for_tensor(
+    source_dtype: FloatDType,
+    output_type: Option<ConvertOutputType>,
+    shape: &[u64],
+) -> Result<FloatDType> {
+    if shape.len() <= 1
+        && matches!(
+            output_type,
+            Some(ConvertOutputType::F16 | ConvertOutputType::Bf16)
+        )
+    {
+        return Ok(FloatDType::F32);
+    }
+    target_dtype_for(source_dtype, output_type)
+}
+
 pub(crate) fn convert_float_chunk<W: Write>(
     input: &[u8],
     source_dtype: FloatDType,
@@ -180,5 +196,22 @@ mod tests {
             FloatDType::Bf16
         );
         assert!(target_dtype_for(FloatDType::F32, Some(ConvertOutputType::Auto)).is_err());
+    }
+
+    #[test]
+    fn target_dtype_keeps_rank_one_tensors_f32_for_float16_outputs() {
+        assert_eq!(
+            target_dtype_for_tensor(FloatDType::Bf16, Some(ConvertOutputType::Bf16), &[8]).unwrap(),
+            FloatDType::F32
+        );
+        assert_eq!(
+            target_dtype_for_tensor(FloatDType::Bf16, Some(ConvertOutputType::F16), &[8]).unwrap(),
+            FloatDType::F32
+        );
+        assert_eq!(
+            target_dtype_for_tensor(FloatDType::Bf16, Some(ConvertOutputType::Bf16), &[8, 8])
+                .unwrap(),
+            FloatDType::Bf16
+        );
     }
 }

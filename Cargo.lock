@@ -7482,6 +7482,7 @@ dependencies = [
  "anyhow",
  "clap",
  "libc",
+ "libloading",
  "serde",
  "serde_json",
  "skippy-ffi",

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, ensure};
+use libloading::Library;
 
 use crate::QuantRunnerArgs;
 use crate::backend::BackendRunStatus;
@@ -100,7 +101,9 @@ pub(crate) fn build_native_quantize_command(
         "--last-split".to_string(),
         window.last_split.to_string(),
         staged_first_shard.display().to_string(),
-        output_prefix.display().to_string(),
+        llama_split_output_prefix(output_prefix)
+            .display()
+            .to_string(),
         quant.to_string(),
     ]);
     if let Some(nthreads) = args.nthreads {
@@ -117,9 +120,9 @@ pub(crate) fn run_native_quantize(
     window: SplitWindow,
 ) -> Result<BackendRunStatus> {
     ensure_native_quantize_supported(args)?;
-    load_native_runtime(&args.native_runtime_libraries)?;
+    let quantize_api = LlamaQuantizeApi::load(&args.native_runtime_libraries)?;
     let native_inputs = NativeQuantizeInputs::build(args, manifest)?;
-    let mut params = unsafe { skippy_ffi::llama_model_quantize_default_params() };
+    let mut params = unsafe { (quantize_api.default_params)() };
     let quant = manifest
         .quant
         .as_deref()
@@ -150,9 +153,10 @@ pub(crate) fn run_native_quantize(
     params.imatrix = native_inputs.imatrix_ptr();
 
     let input = path_to_cstring(staged_first_shard)?;
-    let output = path_to_cstring(output_prefix)?;
+    let native_output_prefix = llama_split_output_prefix(output_prefix);
+    let output = path_to_cstring(&native_output_prefix)?;
     let code = with_llama_quantize_memory_budget(args.max_memory, || unsafe {
-        skippy_ffi::llama_model_quantize(input.as_ptr(), output.as_ptr(), &params)
+        (quantize_api.quantize)(input.as_ptr(), output.as_ptr(), &params)
     });
     Ok(BackendRunStatus::from_code(code as i32))
 }
@@ -199,7 +203,7 @@ impl Drop for EnvRestoreGuard {
 
 fn ensure_native_quantize_supported(args: &QuantRunnerArgs) -> Result<()> {
     ensure!(
-        !args.native_runtime_libraries.is_empty() || skippy_ffi::native_runtime_loaded(),
+        !args.native_runtime_libraries.is_empty(),
         "--native-runtime-library is required for --backend {}",
         args.backend.as_str()
     );
@@ -208,6 +212,58 @@ fn ensure_native_quantize_supported(args: &QuantRunnerArgs) -> Result<()> {
         "--include-weights and --exclude-weights cannot be used together"
     );
     Ok(())
+}
+
+type LlamaModelQuantizeDefaultParamsFn =
+    unsafe extern "C" fn() -> skippy_ffi::LlamaModelQuantizeParams;
+type LlamaModelQuantizeFn = unsafe extern "C" fn(
+    fname_inp: *const c_char,
+    fname_out: *const c_char,
+    params: *const skippy_ffi::LlamaModelQuantizeParams,
+) -> u32;
+
+struct LlamaQuantizeApi {
+    _libraries: Vec<Library>,
+    default_params: LlamaModelQuantizeDefaultParamsFn,
+    quantize: LlamaModelQuantizeFn,
+}
+
+impl LlamaQuantizeApi {
+    fn load(paths: &[PathBuf]) -> Result<Self> {
+        let mut libraries = Vec::with_capacity(paths.len());
+        for path in paths {
+            let library = unsafe { Library::new(path) }
+                .with_context(|| format!("load native runtime library {}", path.display()))?;
+            libraries.push(library);
+        }
+        let default_params = lookup_symbol(
+            &libraries,
+            b"llama_model_quantize_default_params\0",
+            "llama_model_quantize_default_params",
+        )?;
+        let quantize = lookup_symbol(
+            &libraries,
+            b"llama_model_quantize\0",
+            "llama_model_quantize",
+        )?;
+        Ok(Self {
+            _libraries: libraries,
+            default_params,
+            quantize,
+        })
+    }
+}
+
+fn lookup_symbol<Sym>(libraries: &[Library], name: &[u8], label: &str) -> Result<Sym>
+where
+    Sym: Copy + 'static,
+{
+    for library in libraries.iter().rev() {
+        if let Ok(symbol) = unsafe { library.get::<Sym>(name) } {
+            return Ok(*symbol);
+        }
+    }
+    Err(anyhow!("native runtime symbol not found: {label}"))
 }
 
 struct NativeQuantizeInputs {
@@ -444,14 +500,6 @@ fn fixed_c_char_array(raw: &str, label: &str) -> Result<[c_char; 128]> {
     Ok(out)
 }
 
-fn load_native_runtime(libraries: &[PathBuf]) -> Result<()> {
-    if skippy_ffi::native_runtime_loaded() {
-        return Ok(());
-    }
-    let result = unsafe { skippy_ffi::load_native_runtime_libraries(libraries) };
-    result.context("load native runtime libraries for llama-api quantization")
-}
-
 fn optional_ggml_type(raw: Option<&str>, flag: &str) -> Result<Option<skippy_ffi::GgmlType>> {
     raw.map(|value| {
         let tensor_type = TensorType::parse(value)
@@ -468,6 +516,16 @@ fn path_to_cstring(path: &Path) -> Result<CString> {
         .to_str()
         .with_context(|| format!("path is not valid UTF-8: {}", path.display()))?;
     CString::new(text).with_context(|| format!("path contains NUL byte: {}", path.display()))
+}
+
+fn llama_split_output_prefix(path: &Path) -> PathBuf {
+    if path.extension().and_then(|value| value.to_str()) != Some("gguf") {
+        return path.to_path_buf();
+    }
+    let Some(stem) = path.file_stem() else {
+        return path.to_path_buf();
+    };
+    path.with_file_name(stem)
 }
 
 fn push_optional(command: &mut Vec<String>, flag: &str, value: &Option<String>) {
@@ -542,6 +600,31 @@ mod tests {
     }
 
     #[test]
+    fn strips_gguf_extension_from_llama_split_output_prefix() {
+        let args = native_args();
+        let manifest = manifest(None);
+
+        let command = build_native_quantize_command(
+            &args,
+            &manifest,
+            Path::new("/tmp/in/model.gguf"),
+            Path::new("/tmp/out/model-q4.gguf"),
+            SplitWindow {
+                first_split: 1,
+                last_split: 1,
+            },
+        )
+        .unwrap();
+
+        assert!(command.contains(&"/tmp/out/model-q4".to_string()));
+        assert!(!command.contains(&"/tmp/out/model-q4.gguf".to_string()));
+        assert_eq!(
+            llama_split_output_prefix(Path::new("/tmp/out/model-q4.gguf")),
+            PathBuf::from("/tmp/out/model-q4")
+        );
+    }
+
+    #[test]
     fn builds_native_inputs_for_tensor_prune_and_kv_overrides() {
         let root = unique_temp_dir();
         fs::create_dir_all(&root).unwrap();
@@ -613,7 +696,6 @@ mod tests {
     fn native_args() -> QuantRunnerArgs {
         QuantRunnerArgs {
             backend: BackendKind::LlamaApi,
-            llama_quantize: None,
             native_runtime_libraries: vec![PathBuf::from("/tmp/libllama.dylib")],
             work_dir: PathBuf::from("/tmp/work"),
             print_only: false,

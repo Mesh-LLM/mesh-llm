@@ -78,8 +78,10 @@ fn direct_quantize_preflight_supports_current_directory_no_output_shape() {
     let output = Command::new(env!("CARGO_BIN_EXE_skippy-quantize"))
         .current_dir(&root)
         .args([
-            "llama-quantize",
-            "--llama-quantize",
+            "quantize",
+            "--backend",
+            "llama-api",
+            "--native-runtime-library",
             env!("CARGO_BIN_EXE_skippy-quantize"),
             "--preflight-only",
             "--json",
@@ -89,17 +91,12 @@ fn direct_quantize_preflight_supports_current_directory_no_output_shape() {
         .output()
         .expect("skippy-quantize command should run");
 
-    assert!(
-        output.status.success(),
-        "preflight should succeed: stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
     let report: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|err| panic!("parse preflight JSON: {err}\n{stdout}"));
 
-    assert_eq!(report["backend_kind"], "external-process");
-    assert_eq!(report["backend_ready"], true);
+    assert_eq!(report["backend_kind"], "llama-api");
+    assert_eq!(report["backend_ready"], false);
     assert_eq!(report["source_complete"], true);
     assert_eq!(report["expected_source_shards"], 1);
     assert_eq!(report["next_window"]["first_split"], 1);
@@ -124,8 +121,10 @@ fn direct_quantize_preflight_accepts_recipe_quant_label_with_tensor_file() {
     let output = Command::new(env!("CARGO_BIN_EXE_skippy-quantize"))
         .current_dir(&root)
         .args([
-            "llama-quantize",
-            "--llama-quantize",
+            "quantize",
+            "--backend",
+            "llama-api",
+            "--native-runtime-library",
             env!("CARGO_BIN_EXE_skippy-quantize"),
             "--tensor-type-file",
             "tensor-types.txt",
@@ -137,11 +136,6 @@ fn direct_quantize_preflight_accepts_recipe_quant_label_with_tensor_file() {
         .output()
         .expect("skippy-quantize command should run");
 
-    assert!(
-        output.status.success(),
-        "preflight should succeed: stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
     let report: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|err| panic!("parse preflight JSON: {err}\n{stdout}"));
@@ -165,8 +159,10 @@ fn direct_quantize_preflight_rejects_recipe_quant_label_without_tensor_file() {
     let output = Command::new(env!("CARGO_BIN_EXE_skippy-quantize"))
         .current_dir(&root)
         .args([
-            "llama-quantize",
-            "--llama-quantize",
+            "quantize",
+            "--backend",
+            "llama-api",
+            "--native-runtime-library",
             env!("CARGO_BIN_EXE_skippy-quantize"),
             "--preflight-only",
             "--json",

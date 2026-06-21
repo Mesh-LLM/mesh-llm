@@ -121,14 +121,6 @@ struct BackendReady {
 
 fn check_backend_ready(backend_kind: BackendKind, backend_path: Option<&Path>) -> BackendReady {
     match backend_kind {
-        BackendKind::ExternalProcess => {
-            let ready = backend_path.is_some_and(Path::is_file);
-            BackendReady {
-                ready,
-                error: (!ready)
-                    .then(|| "backend executable path is missing or not a file".to_string()),
-            }
-        }
         BackendKind::LlamaApi | BackendKind::SkippyAbi => check_native_runtime_ready(backend_path),
         BackendKind::NativeRust => BackendReady {
             ready: true,
@@ -277,17 +269,6 @@ mod tests {
 
         assert!(ready.ready);
         assert!(ready.error.is_none());
-    }
-
-    #[test]
-    fn external_backend_requires_file_path() {
-        let missing = check_backend_ready(BackendKind::ExternalProcess, None);
-        let executable = std::env::current_exe().unwrap();
-        let present = check_backend_ready(BackendKind::ExternalProcess, Some(&executable));
-
-        assert!(!missing.ready);
-        assert!(missing.error.unwrap().contains("missing"));
-        assert!(present.ready);
     }
 
     #[test]

@@ -3,17 +3,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
 
-use crate::backend::{ExternalProcessOptions, run_backend_command};
 use crate::locking::with_manifest_lock;
 use crate::manifest::ensure_manifest;
-use crate::memory_budget::MemorySize;
 use crate::preflight::run_job_preflight;
-use crate::quantize::normalize_tensor_type_entry;
 use crate::splits::{SplitWindow, parse_split_file_name, validate_split_window};
-use crate::types::{QuantSpec, TensorType};
+use crate::types::QuantSpec;
 use crate::verify::print_verify_on_complete;
 use crate::{
-    BackendKind, InitQuantArgs, QuantRunnerArgs, RunQuantArgs, RunQuantWindowArgs, VerifyLoadArgs,
+    InitQuantArgs, QuantRunnerArgs, RunQuantArgs, RunQuantWindowArgs, VerifyLoadArgs,
     prepare_quant_runner, quant_backend_path, quant_manifest_from_args, run_quant_unlocked,
 };
 
@@ -62,9 +59,6 @@ pub(crate) fn run_direct_quantize(args: DirectQuantizeArgs) -> Result<()> {
         .validate_recipe_requirements(args.tensor_type_file.is_some())
         .map_err(anyhow::Error::msg)?;
     apply_positional_nthreads(&mut runner, positional.nthreads)?;
-    if args.has_upstream_split_controls() && runner.backend == BackendKind::ExternalProcess {
-        return run_passthrough(&runner, &args, &positional);
-    }
     let source = derive_input(&args.input, args.source_prefix.as_deref())?;
     let window_override = args.manual_split_window(source.expected_splits)?;
     let output = if let Some(output) = positional.output.as_deref() {
@@ -191,154 +185,6 @@ fn parse_quant_type(raw: &str) -> Result<QuantSpec> {
 fn parse_nthreads(raw: &str) -> Result<u32> {
     raw.parse::<u32>()
         .with_context(|| format!("invalid nthreads {raw:?}"))
-}
-
-fn run_passthrough(
-    runner: &QuantRunnerArgs,
-    args: &DirectQuantizeArgs,
-    positional: &DirectQuantizePositionals,
-) -> Result<()> {
-    ensure!(
-        runner.backend == crate::BackendKind::ExternalProcess,
-        "direct quantize passthrough currently requires --backend external-process"
-    );
-    ensure!(
-        !args.preflight_only,
-        "--preflight-only requires the resumable quantize manifest path"
-    );
-    ensure!(
-        !args.verify_load.llama_load && !args.verify_load.check_tensors,
-        "load verification requires the resumable quantize manifest path"
-    );
-    let llama_quantize = runner
-        .llama_quantize
-        .as_deref()
-        .context("--llama-quantize is required for external quantization backend")?;
-    let command = build_passthrough_command(runner, args, llama_quantize, positional)?;
-    println!(
-        "quantize_passthrough={}",
-        serde_json::to_string(&serde_json::json!({ "command": command }))?
-    );
-    if runner.print_only {
-        return Ok(());
-    }
-    let status = run_backend_command(
-        runner.backend,
-        &command,
-        &ExternalProcessOptions {
-            watchdog_seconds: runner.watchdog_seconds,
-            max_memory_bytes: runner.max_memory.map(MemorySize::bytes),
-            memory_policy: runner.memory_policy,
-        },
-    )?;
-    ensure!(
-        status.success,
-        "llama-quantize passthrough exited unsuccessfully"
-    );
-    Ok(())
-}
-
-fn build_passthrough_command(
-    runner: &QuantRunnerArgs,
-    args: &DirectQuantizeArgs,
-    llama_quantize: &Path,
-    positional: &DirectQuantizePositionals,
-) -> Result<Vec<String>> {
-    let mut command = vec![llama_quantize.display().to_string()];
-    push_quantize_flags(&mut command, runner, args)?;
-    command.push(args.input.display().to_string());
-    if let Some(output) = positional.output.as_deref() {
-        command.push(output.display().to_string());
-    }
-    command.push(positional.quant.base_quant().as_llama_name().to_string());
-    if let Some(nthreads) = runner.nthreads {
-        command.push(nthreads.to_string());
-    }
-    Ok(command)
-}
-
-fn push_quantize_flags(
-    command: &mut Vec<String>,
-    runner: &QuantRunnerArgs,
-    args: &DirectQuantizeArgs,
-) -> Result<()> {
-    if runner.allow_requantize {
-        command.push("--allow-requantize".to_string());
-    }
-    if runner.pure {
-        command.push("--pure".to_string());
-    }
-    if let Some(imatrix) = runner.imatrix.as_deref() {
-        command.push("--imatrix".to_string());
-        command.push(imatrix.display().to_string());
-    }
-    ensure!(
-        runner.include_weights.is_empty() || runner.exclude_weights.is_empty(),
-        "--include-weights and --exclude-weights cannot be used together"
-    );
-    push_repeated_option(command, "--include-weights", &runner.include_weights);
-    push_repeated_option(command, "--exclude-weights", &runner.exclude_weights);
-    push_optional_tensor_type(command, "--output-tensor-type", &runner.output_tensor_type)?;
-    push_optional_tensor_type(
-        command,
-        "--token-embedding-type",
-        &runner.token_embedding_type,
-    )?;
-    for entry in &runner.tensor_type {
-        let normalized_entry = normalize_tensor_type_entry(entry)?;
-        command.push("--tensor-type".to_string());
-        command.push(normalized_entry);
-    }
-    if runner.dry_run {
-        command.push("--dry-run".to_string());
-    }
-    if runner.leave_output_tensor {
-        command.push("--leave-output-tensor".to_string());
-    }
-    if let Some(tensor_type_file) = args.tensor_type_file.as_deref() {
-        command.push("--tensor-type-file".to_string());
-        command.push(tensor_type_file.display().to_string());
-    }
-    if let Some(prune_layers) = runner.prune_layers.as_deref() {
-        command.push("--prune-layers".to_string());
-        command.push(prune_layers.to_string());
-    }
-    if args.keep_split {
-        command.push("--keep-split".to_string());
-    }
-    if let Some(first_split) = args.first_split {
-        command.push("--first-split".to_string());
-        command.push(first_split.to_string());
-    }
-    if let Some(last_split) = args.last_split {
-        command.push("--last-split".to_string());
-        command.push(last_split.to_string());
-    }
-    push_repeated_option(command, "--override-kv", &runner.override_kv);
-    Ok(())
-}
-
-fn push_repeated_option(command: &mut Vec<String>, option: &str, values: &[String]) {
-    for value in values {
-        command.push(option.to_string());
-        command.push(value.clone());
-    }
-}
-
-fn push_optional_tensor_type(
-    command: &mut Vec<String>,
-    option: &str,
-    raw_type: &Option<String>,
-) -> Result<()> {
-    if let Some(raw_type) = raw_type.as_deref() {
-        ensure!(
-            TensorType::parse(raw_type).is_some(),
-            "unsupported raw ggml tensor type {raw_type:?}"
-        );
-        command.push(option.to_string());
-        command.push(raw_type.to_string());
-    }
-    Ok(())
 }
 
 #[derive(Debug)]
@@ -491,8 +337,6 @@ fn apply_positional_nthreads(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use crate::types::QuantType;
 
     use super::*;
@@ -513,9 +357,12 @@ mod tests {
 
     #[test]
     fn parses_quant_without_output_for_upstream_default_output_shape() {
-        let args =
-            DirectQuantizeArgs::try_parse_from(["llama-quantize", "/repo/model.gguf", "Q4_K"])
-                .unwrap();
+        let args = DirectQuantizeArgs::try_parse_from([
+            "skippy-quantize quantize",
+            "/repo/model.gguf",
+            "Q4_K",
+        ])
+        .unwrap();
 
         assert_eq!(args.input, PathBuf::from("/repo/model.gguf"));
         assert_eq!(
@@ -532,8 +379,12 @@ mod tests {
 
     #[test]
     fn parses_numeric_ftype_like_upstream_llama_quantize() {
-        let args = DirectQuantizeArgs::try_parse_from(["llama-quantize", "/repo/model.gguf", "15"])
-            .unwrap();
+        let args = DirectQuantizeArgs::try_parse_from([
+            "skippy-quantize quantize",
+            "/repo/model.gguf",
+            "15",
+        ])
+        .unwrap();
 
         assert_eq!(
             parse_direct_quantize_positionals(&args.positional).unwrap(),
@@ -555,169 +406,9 @@ mod tests {
     }
 
     #[test]
-    fn builds_no_output_passthrough_command_without_leave_output_by_default() {
-        let args = DirectQuantizeArgs::try_parse_from([
-            "llama-quantize",
-            "--llama-quantize",
-            "/bin/llama-quantize",
-            "--print-only",
-            "/repo/model.gguf",
-            "Q4_K",
-            "8",
-        ])
-        .unwrap();
-        let mut runner = args.runner.clone();
-        apply_positional_nthreads(
-            &mut runner,
-            parse_direct_quantize_positionals(&args.positional)
-                .unwrap()
-                .nthreads,
-        )
-        .unwrap();
-        let positional = DirectQuantizePositionals {
-            output: None,
-            quant: QuantType::Q4K.into(),
-            nthreads: Some(8),
-        };
-        let command = build_passthrough_command(
-            &runner,
-            &args,
-            Path::new("/bin/llama-quantize"),
-            &positional,
-        )
-        .unwrap();
-
-        assert_eq!(
-            command,
-            vec!["/bin/llama-quantize", "/repo/model.gguf", "Q4_K", "8"]
-        );
-    }
-
-    #[test]
-    fn passthrough_recipe_quant_label_uses_base_llama_quant() {
-        let args = DirectQuantizeArgs::try_parse_from([
-            "llama-quantize",
-            "--llama-quantize",
-            "/bin/llama-quantize",
-            "--print-only",
-            "--tensor-type-file",
-            "/recipe/tensors.txt",
-            "/repo/model.gguf",
-            "UD-Q3_K_S",
-        ])
-        .unwrap();
-        let positional = parse_direct_quantize_positionals(&args.positional).unwrap();
-        let command = build_passthrough_command(
-            &args.runner,
-            &args,
-            Path::new("/bin/llama-quantize"),
-            &positional,
-        )
-        .unwrap();
-
-        assert!(command.contains(&"--tensor-type-file".to_string()));
-        assert!(command.contains(&"/recipe/tensors.txt".to_string()));
-        assert_eq!(command.last().unwrap(), "Q3_K_S");
-    }
-
-    #[test]
-    fn passthrough_recipe_quant_label_requires_tensor_file() {
-        let llama_quantize = std::env::current_exe().unwrap();
-        let args = DirectQuantizeArgs::try_parse_from([
-            "llama-quantize",
-            "--llama-quantize",
-            llama_quantize.to_str().unwrap(),
-            "--print-only",
-            "--keep-split",
-            "/repo/model-00001-of-00002.gguf",
-            "UD-Q3_K_S",
-        ])
-        .unwrap();
-        let error = run_direct_quantize(args).unwrap_err().to_string();
-
-        assert!(error.contains("pass --tensor-type-file"));
-    }
-
-    #[test]
-    fn passthrough_command_lowercases_tensor_type_pattern() {
-        let args = DirectQuantizeArgs::try_parse_from([
-            "llama-quantize",
-            "--llama-quantize",
-            "/bin/llama-quantize",
-            "--tensor-type",
-            "MTP_Head.Weight=NVFP4",
-            "/repo/model.gguf",
-            "Q4_K",
-        ])
-        .unwrap();
-        let positional = parse_direct_quantize_positionals(&args.positional).unwrap();
-        let command = build_passthrough_command(
-            &args.runner,
-            &args,
-            Path::new("/bin/llama-quantize"),
-            &positional,
-        )
-        .unwrap();
-
-        assert_eq!(
-            command,
-            vec![
-                "/bin/llama-quantize",
-                "--tensor-type",
-                "mtp_head.weight=NVFP4",
-                "/repo/model.gguf",
-                "Q4_K"
-            ]
-        );
-    }
-
-    #[test]
-    fn builds_passthrough_command_with_upstream_split_controls() {
-        let args = DirectQuantizeArgs::try_parse_from([
-            "llama-quantize",
-            "--llama-quantize",
-            "/bin/llama-quantize",
-            "--keep-split",
-            "--first-split",
-            "2",
-            "--last-split",
-            "3",
-            "/repo/model-00001-of-00004.gguf",
-            "/repo/q4/model-q4.gguf",
-            "Q4_K",
-        ])
-        .unwrap();
-        let runner = args.runner.clone();
-        let positional = parse_direct_quantize_positionals(&args.positional).unwrap();
-        let command = build_passthrough_command(
-            &runner,
-            &args,
-            Path::new("/bin/llama-quantize"),
-            &positional,
-        )
-        .unwrap();
-
-        assert!(args.has_upstream_split_controls());
-        assert_eq!(
-            command,
-            vec![
-                "/bin/llama-quantize",
-                "--keep-split",
-                "--first-split",
-                "2",
-                "--last-split",
-                "3",
-                "/repo/model-00001-of-00004.gguf",
-                "/repo/q4/model-q4.gguf",
-                "Q4_K"
-            ]
-        );
-    }
-
-    #[test]
     fn manual_split_window_matches_upstream_keep_split_defaults() {
         let args = DirectQuantizeArgs::try_parse_from([
-            "llama-quantize",
+            "skippy-quantize quantize",
             "--backend",
             "llama-api",
             "--keep-split",
@@ -738,7 +429,7 @@ mod tests {
     #[test]
     fn manual_split_window_rejects_first_or_last_without_keep_split() {
         let args = DirectQuantizeArgs::try_parse_from([
-            "llama-quantize",
+            "skippy-quantize quantize",
             "--backend",
             "llama-api",
             "--last-split",
@@ -761,7 +452,7 @@ mod tests {
     #[test]
     fn manual_split_window_rejects_out_of_range_bounds() {
         let args = DirectQuantizeArgs::try_parse_from([
-            "llama-quantize",
+            "skippy-quantize quantize",
             "--backend",
             "llama-api",
             "--keep-split",
@@ -776,20 +467,6 @@ mod tests {
         .unwrap();
 
         assert!(args.manual_split_window(5).is_err());
-    }
-
-    #[test]
-    fn direct_quantize_covers_pinned_llama_quantize_options() {
-        let pinned = pinned_llama_quantize_options()
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let local = local_quantize_options();
-        let missing = pinned.difference(&local).collect::<Vec<_>>();
-
-        assert!(
-            missing.is_empty(),
-            "direct quantize is missing pinned llama-quantize options: {missing:?}"
-        );
     }
 
     #[test]
@@ -902,52 +579,5 @@ mod tests {
     fn rejects_non_first_input_shard() {
         let input = Path::new("/repo/BF16/model-00002-of-00003.gguf");
         assert!(derive_input(input, None).is_err());
-    }
-
-    fn local_quantize_options() -> BTreeSet<String> {
-        [
-            "--allow-requantize",
-            "--dry-run",
-            "--exclude-weights",
-            "--first-split",
-            "--imatrix",
-            "--include-weights",
-            "--keep-split",
-            "--last-split",
-            "--leave-output-tensor",
-            "--output-tensor-type",
-            "--override-kv",
-            "--prune-layers",
-            "--pure",
-            "--tensor-type",
-            "--tensor-type-file",
-            "--token-embedding-type",
-        ]
-        .into_iter()
-        .map(ToString::to_string)
-        .collect()
-    }
-
-    fn pinned_llama_quantize_options() -> Vec<String> {
-        let quantize_cpp = repo_root().join(".deps/llama.cpp/tools/quantize/quantize.cpp");
-        let source = std::fs::read_to_string(&quantize_cpp)
-            .unwrap_or_else(|err| panic!("read {}: {err}", quantize_cpp.display()));
-        source
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                line.strip_prefix("} else if (strcmp(argv[arg_idx], \"")
-                    .or_else(|| line.strip_prefix("if (strcmp(argv[arg_idx], \""))
-                    .and_then(|rest| rest.split_once('"').map(|(flag, _)| flag.to_string()))
-            })
-            .collect()
-    }
-
-    fn repo_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|path| path.parent())
-            .expect("crate lives under crates/skippy-quantize")
-            .to_path_buf()
     }
 }

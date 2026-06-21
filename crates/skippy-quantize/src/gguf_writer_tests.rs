@@ -371,7 +371,7 @@ fn validates_qwen_dense_native_conversion_fixture() {
     let parsed = parse_test_gguf(&bytes);
     assert!(parsed.metadata_count > 10);
     let attn_k = parsed.tensor("blk.0.attn_k.weight");
-    assert_eq!(attn_k.ggml_type, GGML_TYPE_BF16);
+    assert_eq!(attn_k.ggml_type, GGML_TYPE_F32);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -592,7 +592,7 @@ fn validates_llama_dense_native_conversion_fixture() {
     assert!(parsed.metadata_count > 10);
     assert_eq!(
         parsed.tensor("blk.0.attn_q.weight").ggml_type,
-        GGML_TYPE_BF16
+        GGML_TYPE_F32
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -691,7 +691,7 @@ fn writes_only_selected_split_with_split_metadata() {
 }
 
 #[test]
-fn converts_f32_tensor_to_bf16_in_streaming_chunks() {
+fn keeps_rank_one_f32_tensor_as_f32_for_bf16_output() {
     let root = unique_temp_dir();
     fs::create_dir_all(&root).unwrap();
     write_safetensor(
@@ -716,10 +716,10 @@ fn converts_f32_tensor_to_bf16_in_streaming_chunks() {
 
     let bytes = fs::read(&output).unwrap();
     let parsed = parse_test_gguf(&bytes);
-    assert_eq!(parsed.tensors[0].ggml_type, GGML_TYPE_BF16);
+    assert_eq!(parsed.tensors[0].ggml_type, GGML_TYPE_F32);
     assert_eq!(
-        &bytes[parsed.tensors[0].absolute_offset..parsed.tensors[0].absolute_offset + 4],
-        &[0x80, 0x3f, 0x00, 0x40]
+        &bytes[parsed.tensors[0].absolute_offset..parsed.tensors[0].absolute_offset + 8],
+        &[0, 0, 0x80, 0x3f, 0, 0, 0, 0x40]
     );
     fs::remove_dir_all(root).unwrap();
 }
