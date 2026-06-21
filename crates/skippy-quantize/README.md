@@ -95,6 +95,23 @@ effective command in human mode. Add `--dry-run` to direct, job, `run-*`, or
 artifacts, creating spool/output directories, staging source shards, recording
 window records, publishing shards, or running completion verification.
 
+For long jobs, add `--json-event-file PATH` to write a compact periodic JSON
+snapshot for agents to poll. The file is overwritten in place and keeps only a
+bounded recent-event window, so agents do not need to ingest every log line:
+
+```bash
+skippy-quantize run-quant \
+  --manifest /tmp/skippy-quantize.json \
+  --backend llama-api \
+  --max-memory 32G \
+  --json-event-file /tmp/skippy-quantize-status.json \
+  --json-event-interval-seconds 120 \
+  --json-event-window 8
+```
+
+The snapshot has event type `skippy_quantize_periodic_status`, current phase,
+current split window, timestamps, and the last N high-level events.
+
 ```bash
 skippy-quantize run-convert-window \
   --manifest /tmp/skippy-convert.json \
@@ -311,6 +328,11 @@ Important conversion flags:
 - `--dry-run` plans the next window without creating manifests, output/spool
   directories, records, or artifacts. Loop commands plan only the next missing
   window because no shard is written to advance progress.
+- `--json-event-file PATH` writes a compact periodically refreshed status
+  snapshot for agent polling.
+- `--json-event-interval-seconds N` controls the refresh period, default `120`.
+- `--json-event-window N` controls how many recent high-level events are kept,
+  default `8`.
 
 ## Quantize
 
@@ -374,6 +396,11 @@ Important quantization flags:
   spool directories, staging source shards, records, or artifacts. Loop commands
   plan only the next missing window because no shard is written to advance
   progress.
+- `--json-event-file PATH` writes a compact periodically refreshed status
+  snapshot for agent polling.
+- `--json-event-interval-seconds N` controls the refresh period, default `120`.
+- `--json-event-window N` controls how many recent high-level events are kept,
+  default `8`.
 - `--keep-split`, `--first-split`, and `--last-split` can request a manual
   split window for direct `quantize`.
 - `--no-stage-source` skips local source-window staging.

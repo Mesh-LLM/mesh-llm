@@ -58,7 +58,8 @@ use memory_budget::{
 use native_convert::{build_native_convert_command, run_native_convert};
 use native_quantize::{build_native_quantize_command, run_native_quantize};
 use output::{
-    print_info, print_json_pretty, print_path_event, print_success, print_warn, print_window,
+    JsonEventConfig, JsonEventReporter, print_info, print_json_pretty, print_path_event,
+    print_success, print_warn, print_window,
 };
 use plan_convert::{PlanConvertArgs, run_plan_convert};
 use preflight::run_job_preflight;
@@ -289,6 +290,12 @@ struct ConvertRunnerArgs {
     print_only: bool,
     #[arg(long)]
     record_dir: Option<PathBuf>,
+    #[arg(long)]
+    json_event_file: Option<PathBuf>,
+    #[arg(long, default_value_t = 120)]
+    json_event_interval_seconds: u64,
+    #[arg(long, default_value_t = 8)]
+    json_event_window: usize,
 }
 
 #[derive(Debug, Parser)]
@@ -391,6 +398,12 @@ struct QuantRunnerArgs {
     memory_policy: MemoryPolicy,
     #[arg(long)]
     record_dir: Option<PathBuf>,
+    #[arg(long)]
+    json_event_file: Option<PathBuf>,
+    #[arg(long, default_value_t = 120)]
+    json_event_interval_seconds: u64,
+    #[arg(long, default_value_t = 8)]
+    json_event_window: usize,
 }
 
 #[derive(Debug, Parser)]
@@ -803,6 +816,9 @@ pub(crate) fn run_convert_window_once_with_manifest(
         }
         return Ok(false);
     };
+    let event_reporter =
+        JsonEventReporter::start(convert_json_event_config(&runner), "convert", Some(window))?;
+    event_reporter.record("selected conversion window")?;
 
     let output_root = execution_root(
         &manifest.target,
@@ -834,6 +850,7 @@ pub(crate) fn run_convert_window_once_with_manifest(
         print_info(format!("Output prefix: {}", plan.output_prefix.display()));
         print_info(format!("Command: {}", plan.command.join(" ")));
     }
+    event_reporter.record("conversion plan ready")?;
     let stream_buffer_bytes = (runner.backend == BackendKind::NativeRust)
         .then(|| effective_stream_buffer_bytes(runner.stream_buffer_bytes, runner.max_memory))
         .transpose()?;
@@ -862,11 +879,16 @@ pub(crate) fn run_convert_window_once_with_manifest(
     })?;
     if runner.dry_run {
         print_dry_run_complete(args.json, "convert")?;
+        event_reporter.record("dry run complete")?;
+        event_reporter.finish("dry_run")?;
         return Ok(true);
     }
     if runner.print_only {
+        event_reporter.record("print only complete")?;
+        event_reporter.finish("planned")?;
         return Ok(true);
     }
+    event_reporter.set_phase("preparing")?;
     fs::create_dir_all(&output_root)
         .with_context(|| format!("create {}", output_root.display()))?;
     clean_spooled_window(
@@ -878,6 +900,9 @@ pub(crate) fn run_convert_window_once_with_manifest(
     )?;
     let started_unix_ms = unix_timestamp_ms();
     let started = Instant::now();
+    event_reporter.set_phase("running")?;
+    event_reporter.record("native conversion started")?;
+    event_reporter.write_now()?;
     let status = match runner.backend {
         BackendKind::NativeRust => {
             run_native_convert(&runner, manifest, window, &plan.output_prefix)?
@@ -901,7 +926,9 @@ pub(crate) fn run_convert_window_once_with_manifest(
         },
     )?;
     ensure_success(status, &plan.command)?;
+    event_reporter.record("native conversion finished")?;
     if !runner.dry_run {
+        event_reporter.set_phase("publishing")?;
         publish_spooled_window(
             runner.spool_dir.as_deref(),
             &manifest.target,
@@ -911,7 +938,9 @@ pub(crate) fn run_convert_window_once_with_manifest(
             window,
             args.runner.keep_spool,
         )?;
+        event_reporter.record("conversion window published")?;
     }
+    event_reporter.finish("complete")?;
     Ok(true)
 }
 
@@ -996,9 +1025,14 @@ pub(crate) fn run_quant_window_once_with_manifest(
         .context("quantize manifest is missing source_prefix")?;
     let first_source_shard = find_first_shard(&manifest.source, source_prefix)?;
     let stage_path = runner.work_dir.join("source-window");
+    let event_reporter =
+        JsonEventReporter::start(quant_json_event_config(&runner), "quant", Some(window))?;
+    event_reporter.record("selected quantization window")?;
     let staged_first_shard = if runner.no_stage_source {
+        event_reporter.record("source staging skipped")?;
         first_source_shard
     } else if runner.dry_run || runner.print_only {
+        event_reporter.record("source staging planned")?;
         planned_staged_first_shard(
             &stage_path,
             source_prefix,
@@ -1006,6 +1040,9 @@ pub(crate) fn run_quant_window_once_with_manifest(
             manifest.expected_splits,
         )?
     } else {
+        event_reporter.set_phase("staging")?;
+        event_reporter.record("source staging started")?;
+        event_reporter.write_now()?;
         stage_source_window(
             &manifest.source,
             source_prefix,
@@ -1013,7 +1050,10 @@ pub(crate) fn run_quant_window_once_with_manifest(
             &stage_path,
             window,
             manifest.expected_splits,
-        )?
+        )
+        .inspect(|_| {
+            let _ = event_reporter.record("source staging finished");
+        })?
     };
 
     let output_root = execution_root(
@@ -1055,6 +1095,7 @@ pub(crate) fn run_quant_window_once_with_manifest(
         print_info(format!("Output prefix: {}", plan.output_prefix.display()));
         print_info(format!("Command: {}", plan.command.join(" ")));
     }
+    event_reporter.record("quantization plan ready")?;
     print_memory_budget_plan(MemoryBudgetPlanInput {
         kind: "quant",
         backend: runner.backend.as_str(),
@@ -1070,11 +1111,16 @@ pub(crate) fn run_quant_window_once_with_manifest(
 
     if runner.dry_run {
         print_dry_run_complete(args.json, "quant")?;
+        event_reporter.record("dry run complete")?;
+        event_reporter.finish("dry_run")?;
         return Ok(true);
     }
     if runner.print_only {
+        event_reporter.record("print only complete")?;
+        event_reporter.finish("planned")?;
         return Ok(true);
     }
+    event_reporter.set_phase("preparing")?;
     fs::create_dir_all(&output_root)
         .with_context(|| format!("create {}", output_root.display()))?;
     clean_spooled_window(
@@ -1086,6 +1132,9 @@ pub(crate) fn run_quant_window_once_with_manifest(
     )?;
     let started_unix_ms = unix_timestamp_ms();
     let started = Instant::now();
+    event_reporter.set_phase("running")?;
+    event_reporter.record("native quantization started")?;
+    event_reporter.write_now()?;
     let status = match runner.backend {
         BackendKind::LlamaApi | BackendKind::SkippyAbi => run_native_quantize(
             &runner,
@@ -1113,7 +1162,9 @@ pub(crate) fn run_quant_window_once_with_manifest(
         },
     )?;
     ensure_success(status, &plan.command)?;
+    event_reporter.record("native quantization finished")?;
     if !runner.dry_run {
+        event_reporter.set_phase("publishing")?;
         publish_spooled_window(
             runner.spool_dir.as_deref(),
             &manifest.target,
@@ -1123,12 +1174,32 @@ pub(crate) fn run_quant_window_once_with_manifest(
             window,
             args.runner.keep_spool,
         )?;
+        event_reporter.record("quantization window published")?;
     }
     if !runner.no_stage_source && !runner.keep_staged_source {
+        event_reporter.set_phase("cleanup")?;
         remove_dir_if_exists(&stage_path)?;
         print_path_event("🧹", "Cleaned staged source", &stage_path);
+        event_reporter.record("staged source cleaned")?;
     }
+    event_reporter.finish("complete")?;
     Ok(true)
+}
+
+fn convert_json_event_config(runner: &ConvertRunnerArgs) -> JsonEventConfig {
+    JsonEventConfig {
+        file: runner.json_event_file.clone(),
+        interval_seconds: runner.json_event_interval_seconds,
+        window_size: runner.json_event_window,
+    }
+}
+
+fn quant_json_event_config(runner: &QuantRunnerArgs) -> JsonEventConfig {
+    JsonEventConfig {
+        file: runner.json_event_file.clone(),
+        interval_seconds: runner.json_event_interval_seconds,
+        window_size: runner.json_event_window,
+    }
 }
 
 fn planned_staged_first_shard(

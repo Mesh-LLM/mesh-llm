@@ -45,7 +45,10 @@ target/release/skippy-quantize run-quant \
   --max-memory 32G \
   --work-dir /tmp/skippy-quantize-work \
   --spool-dir /tmp/skippy-quantize-output \
-  --record-dir /tmp/skippy-quantize-records
+  --record-dir /tmp/skippy-quantize-records \
+  --json-event-file /tmp/skippy-quantize-status.json \
+  --json-event-interval-seconds 120 \
+  --json-event-window 8
 
 target/release/skippy-quantize verify-job \
   --manifest /tmp/skippy-quantize.json \

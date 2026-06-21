@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::output::{print_copy, print_info};
 use crate::residency::{copy_file_bounded_with_label, remove_dir_if_exists, symlink_file};
@@ -21,7 +21,7 @@ pub struct Progress {
     pub next_window: Option<SplitWindow>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct SplitWindow {
     pub first_split: u32,
     pub last_split: u32,

@@ -68,7 +68,10 @@ target/release/skippy-quantize run-convert \
   --split-max-size 50G \
   --stream-buffer-bytes 8388608 \
   --spool-dir /tmp/skippy-convert-output \
-  --record-dir /tmp/skippy-convert-records
+  --record-dir /tmp/skippy-convert-records \
+  --json-event-file /tmp/skippy-convert-status.json \
+  --json-event-interval-seconds 120 \
+  --json-event-window 8
 ```
 
 Validate and publish:
@@ -123,10 +126,11 @@ hf jobs logs <job-id> --namespace meshllm --tail 120
 target/release/skippy-quantize status --manifest /tmp/skippy-convert.json --json
 ```
 
-Healthy logs show `convert_window`, `Writing native convert shard`,
-`Published`, and increasing split progress. Stop and diagnose if the same window
-restarts without a new published shard or memory stays pinned near the hardware
-limit.
+For agents, prefer polling `/tmp/skippy-convert-status.json` over ingesting full
+logs. Healthy snapshots show phase movement through `running`, `publishing`,
+and `complete`, with only the last few high-level events retained. Stop and
+diagnose if the same window restarts without a new published shard or memory
+stays pinned near the hardware limit.
 
 ## Record Keeping
 

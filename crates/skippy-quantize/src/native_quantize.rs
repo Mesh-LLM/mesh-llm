@@ -676,6 +676,9 @@ mod tests {
             max_memory: None,
             memory_policy: crate::memory_budget::MemoryPolicy::Hard,
             record_dir: None,
+            json_event_file: None,
+            json_event_interval_seconds: 120,
+            json_event_window: 8,
         }
     }
 

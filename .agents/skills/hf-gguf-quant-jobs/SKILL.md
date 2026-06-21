@@ -102,7 +102,10 @@ target/release/skippy-quantize run-quant \
   --max-memory 32G \
   --work-dir /tmp/skippy-quantize-work \
   --spool-dir /tmp/skippy-quantize-output \
-  --record-dir /tmp/skippy-quantize-records
+  --record-dir /tmp/skippy-quantize-records \
+  --json-event-file /tmp/skippy-quantize-status.json \
+  --json-event-interval-seconds 120 \
+  --json-event-window 8
 ```
 
 For HF Jobs, mount the BF16/FP16 source repo and target quant repo, then run the
@@ -142,6 +145,10 @@ Check status and logs:
 hf jobs inspect <job-id> --namespace meshllm
 hf jobs logs <job-id> --namespace meshllm --tail 120
 ```
+
+For agents, prefer polling `/tmp/skippy-quantize-status.json` over ingesting
+full logs. It is a periodically refreshed compact snapshot with the current
+phase, current split window, and a bounded recent-event window.
 
 Useful healthy markers:
 
