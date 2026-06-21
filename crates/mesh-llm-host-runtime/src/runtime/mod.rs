@@ -52,7 +52,11 @@ use crate::inference::{election, skippy};
 use crate::mesh;
 use crate::mesh::NodeRole;
 use crate::models;
-use crate::network::{affinity, discovery as mesh_discovery, nostr, tunnel};
+use crate::network::{
+    affinity, discovery as mesh_discovery,
+    lan_bootstrap::{LanBootstrapTasks, effective_quic_bind_ip, spawn_mdns_reverse_dial},
+    nostr, tunnel,
+};
 use crate::plugin;
 use crate::system::{autoupdate, backend, benchmark, hardware};
 use anyhow::{Context, Result};
@@ -6061,28 +6065,6 @@ fn relay_policy_for_runtime_options(options: &RuntimeOptions) -> mesh::RelayPoli
     }
 }
 
-/// Resolve the QUIC bind IP for this node.
-///
-/// Honors an explicit `--bind-ip`. Otherwise auto-pins to the detected primary
-/// LAN IPv4 so multi-homed hosts (many `utun`/VPN interfaces) send from the
-/// correct interface. Binding `0.0.0.0` on such hosts lets the kernel pick a
-/// wrong source for an unconnected QUIC `sendmsg`, yielding `EHOSTUNREACH` or a
-/// slow WAN-hairpin path, which breaks or degrades direct LAN connectivity in
-/// either dial direction. Combined with the direct-path repair, this lets two
-/// LAN peers reach a clean direct path from a shared token regardless of which
-/// node started. Falls back to `0.0.0.0` (`None`) only when no LAN IP is found.
-fn effective_quic_bind_ip(options: &RuntimeOptions) -> Option<std::net::IpAddr> {
-    if let Some(ip) = options.bind_ip {
-        return Some(ip);
-    }
-    if let Some(ip) = mesh::detect_primary_lan_ipv4() {
-        tracing::info!("Auto-binding QUIC to detected LAN IP {ip} (multi-homed source pinning)");
-        return Some(ip);
-    }
-    tracing::debug!("Could not detect a primary LAN IP; binding QUIC to 0.0.0.0");
-    None
-}
-
 fn relay_policy_for_mesh_discovery_mode(
     mode: mesh_discovery::MeshDiscoveryMode,
 ) -> mesh::RelayPolicy {
@@ -7957,78 +7939,6 @@ async fn spawn_run_auto_nostr_publisher(
             None
         }
     }
-}
-
-/// Background tasks spawned by [`spawn_mdns_reverse_dial`] for relay-less LAN
-/// direct-path bootstrap. Aborted during runtime shutdown so these loops stop
-/// publishing, dialing, and holding the beacon UDP socket once the runtime is
-/// tearing down (mirrors the handling of `discovery_publisher`).
-#[derive(Default)]
-struct LanBootstrapTasks {
-    handles: Vec<tokio::task::JoinHandle<()>>,
-}
-
-impl LanBootstrapTasks {
-    fn abort(&self) {
-        for handle in &self.handles {
-            handle.abort();
-        }
-    }
-}
-
-/// Spawn the mDNS reverse-dial bootstrap (LAN dial-back) for relay-less direct
-/// paths. Runs on both host and joiner in mDNS mode.
-///
-/// Every node browses the LAN and dials back any advertised peer it is not
-/// already connected to, using the peer's advertised `EndpointAddr`. This
-/// rescues the case where a multi-homed node cannot initiate a relay-less
-/// direct connection itself but can be dialed by a single-homed peer.
-///
-/// Also ensures the node publishes its own `ep_addr` via mDNS when the standard
-/// publish path (gated on `--publish`) is not active, so peers can learn a
-/// dial-back address. Re-registering the same mDNS service is idempotent.
-///
-/// Returns a [`LanBootstrapTasks`] guard holding the spawned task handles so
-/// the runtime can abort them during shutdown.
-fn spawn_mdns_reverse_dial(options: &RuntimeOptions, node: &mesh::Node) -> LanBootstrapTasks {
-    if options.mesh_discovery_mode != mesh_discovery::MeshDiscoveryMode::Mdns {
-        return LanBootstrapTasks::default();
-    }
-
-    let mut handles = Vec::new();
-
-    // Ensure an mDNS advertisement (carrying our ep_addr) exists even without
-    // --publish, so peers can discover a dial-back address. The standard
-    // publish path only runs with --publish; spawn a publisher here otherwise.
-    if !options.publish {
-        handles.push(tokio::spawn(Box::pin(mesh_discovery::publish_lan_loop(
-            node.clone(),
-            mesh_discovery::LanPublishConfig {
-                name: options.mesh_name.clone(),
-                region: options.region.clone(),
-                max_clients: options.max_clients,
-                api_port: options.console,
-                details_reachable: options.listen_all,
-                interval_secs: 30,
-                status_tx: None,
-            },
-        ))));
-    }
-
-    handles.push(tokio::spawn(Box::pin(
-        crate::network::mdns_reverse_dial::run_loop(
-            node.clone(),
-            options.mesh_name.clone(),
-            options.region.clone(),
-        ),
-    )));
-
-    // Raw-multicast LAN beacon: a mDNS-independent direct-path bootstrap that
-    // works on multi-homed hosts where the mDNS service daemon's advertisement
-    // does not reach the LAN. Uses a socket pinned to the bound LAN interface.
-    handles.push(crate::network::lan_beacon::spawn(node.clone()));
-
-    LanBootstrapTasks { handles }
 }
 
 fn spawn_run_auto_mdns_publisher(
