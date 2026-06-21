@@ -474,52 +474,7 @@ fn default_control_bind_addr() -> std::net::SocketAddr {
 /// can never hard-pin relay-less QUIC off-LAN; we fall back to `0.0.0.0`
 /// instead. Public-relay (Nostr) mode keeps its IPv6/relay paths regardless, so
 /// long-haul reachability to a remote mesh is never sacrificed for the LAN hint.
-pub fn detect_primary_lan_ipv4() -> Option<IpAddr> {
-    if let Some(ip) = default_route_source_ipv4().filter(is_private_lan_ipv4) {
-        return Some(IpAddr::V4(ip));
-    }
-    first_private_lan_interface_ipv4().map(IpAddr::V4)
-}
-
-/// True for RFC1918 private LAN IPv4 ranges only.
-///
-/// `Ipv4Addr::is_private` already covers `10/8`, `172.16/12`, and `192.168/16`
-/// and excludes CGNAT (`100.64/10`), link-local, loopback, and public space,
-/// which is exactly the LAN set we want to pin to.
-fn is_private_lan_ipv4(ip: &Ipv4Addr) -> bool {
-    ip.is_private()
-}
-
-/// Source IPv4 the kernel would use for the default route, via a connect-trick.
-///
-/// 192.88.99.1 is a routable, globally-assigned target; connecting a UDP socket
-/// to it only drives route/source selection — it sends nothing. Returns `None`
-/// when there is no default route or the source is unspecified/loopback.
-fn default_route_source_ipv4() -> Option<Ipv4Addr> {
-    let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
-    socket.connect((Ipv4Addr::new(192, 88, 99, 1), 9)).ok()?;
-    match socket.local_addr().ok()?.ip() {
-        IpAddr::V4(v4) if !v4.is_unspecified() && !v4.is_loopback() => Some(v4),
-        _ => None,
-    }
-}
-
-/// First operational private-LAN IPv4 from the local interface table.
-///
-/// Skips loopback, link-local, and point-to-point (VPN/tunnel) interfaces, and
-/// only accepts RFC1918 private addresses so the result is always a real LAN
-/// interface the host can directly reach its LAN peers from.
-fn first_private_lan_interface_ipv4() -> Option<Ipv4Addr> {
-    let interfaces = if_addrs::get_if_addrs().ok()?;
-    interfaces
-        .into_iter()
-        .filter(|iface| !iface.is_loopback() && !iface.is_link_local() && !iface.is_p2p())
-        .filter_map(|iface| match iface.addr {
-            if_addrs::IfAddr::V4(v4) => Some(v4.ip),
-            if_addrs::IfAddr::V6(_) => None,
-        })
-        .find(is_private_lan_ipv4)
-}
+pub use lan_bootstrap::detect_primary_lan_ipv4;
 
 fn is_public_ipv4_candidate(socket: &SocketAddr) -> bool {
     match socket.ip() {
@@ -637,52 +592,6 @@ fn filter_endpoint_addr_for_bind_ip(
         _ => true,
     });
     addr
-}
-
-#[cfg(test)]
-mod lan_detection_tests {
-    use super::{is_private_lan_ipv4, is_public_ipv4_candidate};
-    use std::net::{Ipv4Addr, SocketAddr};
-
-    #[test]
-    fn private_rfc1918_ranges_are_lan() {
-        for ip in [
-            Ipv4Addr::new(10, 0, 0, 5),
-            Ipv4Addr::new(172, 16, 4, 9),
-            Ipv4Addr::new(172, 31, 255, 1),
-            Ipv4Addr::new(192, 168, 86, 60),
-        ] {
-            assert!(is_private_lan_ipv4(&ip), "{ip} should be treated as LAN");
-        }
-    }
-
-    #[test]
-    fn public_cgnat_link_local_and_loopback_are_not_lan() {
-        for ip in [
-            Ipv4Addr::new(8, 8, 8, 8),       // public
-            Ipv4Addr::new(100, 64, 0, 1),    // CGNAT (often VPN/Private Relay)
-            Ipv4Addr::new(169, 254, 10, 10), // link-local
-            Ipv4Addr::new(127, 0, 0, 1),     // loopback
-            Ipv4Addr::new(172, 32, 0, 1),    // just outside 172.16/12
-        ] {
-            assert!(
-                !is_private_lan_ipv4(&ip),
-                "{ip} must not be pinned as a LAN interface"
-            );
-        }
-    }
-
-    #[test]
-    fn public_candidate_classifier_excludes_private_and_cgnat() {
-        let public: SocketAddr = "203.0.113.0:9".parse().unwrap();
-        assert!(!is_public_ipv4_candidate(&public)); // 203.0.113/24 is TEST-NET-3
-        let real_public: SocketAddr = "9.9.9.9:9".parse().unwrap();
-        assert!(is_public_ipv4_candidate(&real_public));
-        let lan: SocketAddr = "192.168.1.50:9".parse().unwrap();
-        assert!(!is_public_ipv4_candidate(&lan));
-        let cgnat: SocketAddr = "100.100.1.1:9".parse().unwrap();
-        assert!(!is_public_ipv4_candidate(&cgnat));
-    }
 }
 
 fn effective_relay_urls(policy: RelayPolicy, relay_urls: &[String]) -> Vec<String> {
@@ -4832,6 +4741,7 @@ impl Node {
     /// established in one direction (multi-homed initiator), the other side
     /// dials back on the direction that works.
     pub async fn dial_peer_addr(&self, addr: EndpointAddr) -> Result<()> {
+        self.state.lock().await.dead_peers.remove(&addr.id);
         self.connect_to_peer(addr).await
     }
 
@@ -4855,11 +4765,7 @@ impl Node {
         let state = self.state.lock().await;
         let mut out = Vec::new();
         for peer in state.peers.values() {
-            for cand in &peer.addr.addrs {
-                if let TransportAddr::Ip(SocketAddr::V4(v4)) = cand {
-                    out.push(*v4);
-                }
-            }
+            out.extend(lan_bootstrap::lan_ipv4_candidates(&peer.addr));
         }
         out
     }
@@ -5011,11 +4917,7 @@ impl Node {
         let targets = self.join_targets.lock().await;
         let mut out = Vec::new();
         for addr in targets.iter() {
-            for cand in &addr.addrs {
-                if let TransportAddr::Ip(SocketAddr::V4(v4)) = cand {
-                    out.push(*v4);
-                }
-            }
+            out.extend(lan_bootstrap::lan_ipv4_candidates(addr));
         }
         out
     }
@@ -10584,6 +10486,7 @@ mod artifact_transfer_io;
 mod direct_path;
 mod gossip;
 mod heartbeat;
+mod lan_bootstrap;
 mod owner_control_response;
 mod plugin_streams;
 pub(crate) mod requirements;

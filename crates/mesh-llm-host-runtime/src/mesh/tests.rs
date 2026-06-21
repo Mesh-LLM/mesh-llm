@@ -3153,42 +3153,140 @@ fn relay_reconnect_controller_applies_cooldown_after_attempt_and_prunes_gone_pee
     );
 }
 
-#[tokio::test]
-async fn remember_join_target_updates_address_on_peer_rebind() {
-    let node = make_test_node(super::NodeRole::Worker).await.unwrap();
-    let peer_id = make_test_endpoint_id(34);
+mod lan_join_target_tracking_tests {
+    use super::*;
 
-    let mut first = EndpointAddr {
-        id: peer_id,
-        addrs: Default::default(),
-    };
-    first
-        .addrs
-        .insert(TransportAddr::Ip("192.168.1.50:47916".parse().unwrap()));
-    node.remember_join_target(first).await;
+    #[tokio::test]
+    async fn remember_join_target_updates_address_on_peer_rebind() {
+        let node = make_test_node(super::super::NodeRole::Worker)
+            .await
+            .unwrap();
+        let peer_id = make_test_endpoint_id(34);
 
-    assert_eq!(
-        node.join_target_lan_ipv4().await,
-        vec!["192.168.1.50:47916".parse().unwrap()],
-        "the first advertised LAN address should be recorded"
-    );
+        let mut first = EndpointAddr {
+            id: peer_id,
+            addrs: Default::default(),
+        };
+        first
+            .addrs
+            .insert(TransportAddr::Ip("192.168.1.50:47916".parse().unwrap()));
+        node.remember_join_target(first).await;
 
-    // The peer restarts/rebinds and re-advertises a new socket address under
-    // the same endpoint id. The stale address must be replaced, not retained.
-    let mut rebound = EndpointAddr {
-        id: peer_id,
-        addrs: Default::default(),
-    };
-    rebound
-        .addrs
-        .insert(TransportAddr::Ip("192.168.1.50:51000".parse().unwrap()));
-    node.remember_join_target(rebound).await;
+        assert_eq!(
+            node.join_target_lan_ipv4().await,
+            vec!["192.168.1.50:47916".parse().unwrap()],
+            "the first advertised LAN address should be recorded"
+        );
 
-    assert_eq!(
-        node.join_target_lan_ipv4().await,
-        vec!["192.168.1.50:51000".parse().unwrap()],
-        "a rebind under the same peer id must replace the stale dial-back address"
-    );
+        let mut rebound = EndpointAddr {
+            id: peer_id,
+            addrs: Default::default(),
+        };
+        rebound
+            .addrs
+            .insert(TransportAddr::Ip("192.168.1.50:51000".parse().unwrap()));
+        node.remember_join_target(rebound).await;
+
+        assert_eq!(
+            node.join_target_lan_ipv4().await,
+            vec!["192.168.1.50:51000".parse().unwrap()],
+            "a rebind under the same peer id must replace the stale dial-back address"
+        );
+    }
+
+    #[tokio::test]
+    async fn join_target_lan_ipv4_keeps_only_lan_addresses() {
+        let node = make_test_node(super::super::NodeRole::Worker)
+            .await
+            .unwrap();
+        let peer_id = make_test_endpoint_id(35);
+        let mut target = EndpointAddr {
+            id: peer_id,
+            addrs: Default::default(),
+        };
+        for addr in [
+            "192.168.1.50:47916",
+            "8.8.8.8:47916",
+            "100.64.0.1:47916",
+            "127.0.0.1:47916",
+            "172.17.0.1:47916",
+        ] {
+            target
+                .addrs
+                .insert(TransportAddr::Ip(addr.parse().unwrap()));
+        }
+        node.remember_join_target(target).await;
+
+        let lan_addrs: HashSet<_> = node
+            .join_target_lan_ipv4()
+            .await
+            .into_iter()
+            .map(|addr| addr.to_string())
+            .collect();
+        assert_eq!(
+            lan_addrs,
+            ["192.168.1.50:47916", "172.17.0.1:47916"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
+    }
+
+    #[tokio::test]
+    async fn known_peer_lan_ipv4_keeps_only_lan_addresses() {
+        let node = make_test_node(super::super::NodeRole::Worker)
+            .await
+            .unwrap();
+        let peer_id = make_test_endpoint_id(36);
+        let mut peer = make_test_peer_info(peer_id);
+        for addr in [
+            "10.0.0.5:47916",
+            "203.0.113.5:47916",
+            "100.64.0.1:47916",
+            "172.17.0.1:47916",
+        ] {
+            peer.addr
+                .addrs
+                .insert(TransportAddr::Ip(addr.parse().unwrap()));
+        }
+        node.state.lock().await.peers.insert(peer_id, peer);
+
+        let lan_addrs: HashSet<_> = node
+            .known_peer_lan_ipv4()
+            .await
+            .into_iter()
+            .map(|addr| addr.to_string())
+            .collect();
+        assert_eq!(
+            lan_addrs,
+            ["10.0.0.5:47916", "172.17.0.1:47916"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
+    }
+
+    #[tokio::test]
+    async fn dial_peer_addr_clears_dead_peer_gate_before_connect() {
+        let node = make_test_node(super::super::NodeRole::Worker)
+            .await
+            .unwrap();
+        let peer_id = make_test_endpoint_id(37);
+        node.state
+            .lock()
+            .await
+            .dead_peers
+            .insert(peer_id, std::time::Instant::now());
+
+        let _ = node
+            .dial_peer_addr(EndpointAddr {
+                id: peer_id,
+                addrs: Default::default(),
+            })
+            .await;
+
+        assert!(!node.state.lock().await.dead_peers.contains_key(&peer_id));
+    }
 }
 
 #[test]
