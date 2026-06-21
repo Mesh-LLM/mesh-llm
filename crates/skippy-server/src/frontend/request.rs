@@ -8,8 +8,6 @@ struct SharedRequestFields<'a> {
     temperature: &'a mut Option<f32>,
     top_p: &'a mut Option<f32>,
     stop: &'a mut Option<openai_frontend::StopSequence>,
-    reasoning: &'a mut Option<openai_frontend::ReasoningConfig>,
-    reasoning_effort: &'a mut Option<openai_frontend::ReasoningEffort>,
     extra: &'a mut std::collections::BTreeMap<String, serde_json::Value>,
 }
 
@@ -26,8 +24,6 @@ pub(super) fn apply_chat_request_defaults(
             temperature: &mut request.temperature,
             top_p: &mut request.top_p,
             stop: &mut request.stop,
-            reasoning: &mut request.reasoning,
-            reasoning_effort: &mut request.reasoning_effort,
             extra: &mut request.extra,
         },
         defaults,
@@ -47,8 +43,6 @@ pub(super) fn apply_completion_request_defaults(
             temperature: &mut request.temperature,
             top_p: &mut request.top_p,
             stop: &mut request.stop,
-            reasoning: &mut request.reasoning,
-            reasoning_effort: &mut request.reasoning_effort,
             extra: &mut request.extra,
         },
         defaults,
@@ -172,8 +166,6 @@ fn apply_shared_request_defaults(
         temperature,
         top_p,
         stop,
-        reasoning,
-        reasoning_effort,
         extra,
     } = fields;
     if presence_penalty.is_none() {
@@ -219,86 +211,6 @@ fn apply_shared_request_defaults(
     ) {
         extra.insert("repeat_last_n".to_string(), serde_json::json!(value));
     }
-    apply_reasoning_defaults(reasoning, reasoning_effort, extra, defaults);
-}
-
-fn apply_reasoning_defaults(
-    reasoning: &mut Option<openai_frontend::ReasoningConfig>,
-    reasoning_effort: &mut Option<openai_frontend::ReasoningEffort>,
-    extra: &mut std::collections::BTreeMap<String, serde_json::Value>,
-    defaults: &EmbeddedOpenAiRequestDefaults,
-) {
-    if explicit_reasoning_toggle_present(reasoning.as_ref(), *reasoning_effort, extra) {
-        return;
-    }
-
-    match defaults.reasoning_enabled {
-        Some(EmbeddedReasoningEnabled::Disabled) => {
-            reasoning.get_or_insert_with(Default::default).enabled = Some(false);
-            return;
-        }
-        Some(EmbeddedReasoningEnabled::Enabled) => {
-            reasoning.get_or_insert_with(Default::default).enabled = Some(true);
-        }
-        Some(EmbeddedReasoningEnabled::Auto) | None => {}
-    }
-
-    match defaults.reasoning_format {
-        Some(EmbeddedReasoningFormat::None) => {
-            reasoning.get_or_insert_with(Default::default).enabled = Some(false);
-            return;
-        }
-        Some(EmbeddedReasoningFormat::Deepseek)
-        | Some(EmbeddedReasoningFormat::DeepseekLegacy)
-        | Some(EmbeddedReasoningFormat::Hidden) => {
-            reasoning.get_or_insert_with(Default::default).enabled = Some(true);
-        }
-        Some(EmbeddedReasoningFormat::Auto) | None => {}
-    }
-
-    if explicit_reasoning_budget_present(reasoning.as_ref(), *reasoning_effort, extra) {
-        return;
-    }
-
-    match defaults.reasoning_budget {
-        Some(EmbeddedReasoningBudget::Tokens(value)) => {
-            reasoning.get_or_insert_with(Default::default).max_tokens = Some(value);
-        }
-        Some(EmbeddedReasoningBudget::Effort(value)) => {
-            reasoning.get_or_insert_with(Default::default).effort = Some(value);
-        }
-        Some(EmbeddedReasoningBudget::Auto) | None => {}
-    }
-}
-
-fn explicit_reasoning_toggle_present(
-    reasoning: Option<&openai_frontend::ReasoningConfig>,
-    reasoning_effort: Option<openai_frontend::ReasoningEffort>,
-    extra: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> bool {
-    reasoning.is_some_and(|value| value.enabled.is_some() || value.effort.is_some())
-        || reasoning_effort.is_some()
-        || openai_frontend::THINKING_BOOLEAN_ALIASES
-            .iter()
-            .any(|field| !extra_value_is_omitted(extra, field))
-        || extra
-            .get("chat_template_kwargs")
-            .and_then(Value::as_object)
-            .is_some_and(|object| {
-                openai_frontend::THINKING_BOOLEAN_ALIASES
-                    .iter()
-                    .any(|field| object.get(*field).is_some_and(|value| !value.is_null()))
-            })
-}
-
-fn explicit_reasoning_budget_present(
-    reasoning: Option<&openai_frontend::ReasoningConfig>,
-    reasoning_effort: Option<openai_frontend::ReasoningEffort>,
-    extra: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> bool {
-    reasoning.is_some_and(|value| value.max_tokens.is_some() || value.effort.is_some())
-        || reasoning_effort.is_some()
-        || !extra_value_is_omitted(extra, "thinking_budget")
 }
 
 fn extra_value_is_omitted(
@@ -345,17 +257,9 @@ pub(super) fn completion_sampling_config(
 }
 
 pub(super) fn chat_template_options(
-    request: &ChatCompletionRequest,
+    _request: &ChatCompletionRequest,
 ) -> OpenAiResult<ChatTemplateOptions> {
-    let reasoning_options = normalize_reasoning_template_options(
-        request.reasoning.as_ref(),
-        request.reasoning_effort,
-        &request.extra,
-    )?;
-    Ok(ChatTemplateOptions {
-        enable_thinking: reasoning_options.enable_thinking,
-        ..ChatTemplateOptions::default()
-    })
+    Ok(ChatTemplateOptions::default())
 }
 
 pub(super) fn ensure_chat_runtime_features_supported(

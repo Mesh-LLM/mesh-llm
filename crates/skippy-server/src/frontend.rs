@@ -30,7 +30,6 @@ use openai_frontend::{
     MessageContentPart, ModelId, ModelObject, OpenAiBackend, OpenAiError, OpenAiErrorKind,
     OpenAiHookPolicy, OpenAiRequestContext, OpenAiResult, PrefillHookSignals, ReasoningEffort,
     StreamingGuardrailMode, Usage, apply_chat_hook_outcome, chat_mesh_hooks_enabled,
-    normalize_reasoning_template_options,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -1517,9 +1516,9 @@ fn tool_calls_requested(request: &ChatCompletionRequest) -> bool {
 
 fn chat_output_parser_required(
     request: &ChatCompletionRequest,
-    template_options: &ChatTemplateOptions,
+    _template_options: &ChatTemplateOptions,
 ) -> bool {
-    tool_calls_requested(request) || template_options.enable_thinking == Some(true)
+    tool_calls_requested(request)
 }
 
 fn chat_response_from_generated_text(

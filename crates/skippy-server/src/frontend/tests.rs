@@ -980,25 +980,10 @@ fn plain_chat_does_not_require_chat_output_parser() {
 }
 
 #[test]
-fn tools_and_enabled_thinking_require_chat_output_parser() {
+fn tools_require_chat_output_parser() {
     assert!(chat_output_parser_required(
         &tool_request(),
         &ChatTemplateOptions::default(),
-    ));
-
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
-        "model": "test",
-        "messages": [{"role": "user", "content": "think"}],
-        "reasoning": {"enabled": true}
-    }))
-    .unwrap();
-
-    assert!(chat_output_parser_required(
-        &request,
-        &ChatTemplateOptions {
-            enable_thinking: Some(true),
-            ..ChatTemplateOptions::default()
-        },
     ));
 }
 
@@ -1904,15 +1889,9 @@ fn request_defaults_fill_omitted_chat_fields_only() {
     assert_eq!(sampling.logit_bias.len(), 2);
     assert_eq!(
         chat_template_options(&request).unwrap().enable_thinking,
-        Some(true)
+        None
     );
-    assert_eq!(
-        request
-            .reasoning
-            .as_ref()
-            .and_then(|value| value.max_tokens),
-        Some(256)
-    );
+    assert_eq!(request.reasoning, None);
     assert_eq!(
         GenerationTokenLimit::from_request(request.effective_max_tokens(), 64),
         GenerationTokenLimit::Default(64)
@@ -2000,7 +1979,7 @@ fn explicit_chat_request_values_override_request_defaults() {
     assert_eq!(sampling.logit_bias.len(), 1);
     assert_eq!(
         chat_template_options(&request).unwrap().enable_thinking,
-        Some(false)
+        None
     );
     assert_eq!(
         GenerationTokenLimit::from_request(request.effective_max_tokens(), 64),
@@ -2069,31 +2048,7 @@ fn request_defaults_do_not_make_structured_output_or_logprobs_executable() {
 }
 
 #[test]
-fn deepseek_legacy_request_default_enables_chat_template_thinking() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
-        "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
-        "messages": [{"role": "user", "content": "hello"}]
-    }))
-    .unwrap();
-
-    let defaults = EmbeddedOpenAiRequestDefaults {
-        reasoning_format: Some(EmbeddedReasoningFormat::DeepseekLegacy),
-        ..EmbeddedOpenAiRequestDefaults::default()
-    };
-    apply_chat_request_defaults(&mut request, &defaults);
-
-    assert_eq!(
-        request.reasoning.as_ref().and_then(|value| value.enabled),
-        Some(true)
-    );
-    assert_eq!(
-        chat_template_options(&request).unwrap().enable_thinking,
-        Some(true)
-    );
-}
-
-#[test]
-fn canonical_reasoning_disabled_turns_off_chat_template_thinking() {
+fn canonical_reasoning_does_not_override_chat_template_thinking() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
@@ -2102,11 +2057,11 @@ fn canonical_reasoning_disabled_turns_off_chat_template_thinking() {
     .unwrap();
 
     let options = chat_template_options(&request).unwrap();
-    assert_eq!(options.enable_thinking, Some(false));
+    assert_eq!(options.enable_thinking, None);
 }
 
 #[test]
-fn reasoning_effort_none_turns_off_chat_template_thinking() {
+fn reasoning_effort_does_not_override_chat_template_thinking() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
@@ -2115,11 +2070,11 @@ fn reasoning_effort_none_turns_off_chat_template_thinking() {
     .unwrap();
 
     let options = chat_template_options(&request).unwrap();
-    assert_eq!(options.enable_thinking, Some(false));
+    assert_eq!(options.enable_thinking, None);
 }
 
 #[test]
-fn top_level_reasoning_effort_none_turns_off_chat_template_thinking() {
+fn top_level_reasoning_effort_does_not_override_chat_template_thinking() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
@@ -2128,11 +2083,11 @@ fn top_level_reasoning_effort_none_turns_off_chat_template_thinking() {
     .unwrap();
 
     let options = chat_template_options(&request).unwrap();
-    assert_eq!(options.enable_thinking, Some(false));
+    assert_eq!(options.enable_thinking, None);
 }
 
 #[test]
-fn provider_enable_thinking_overrides_canonical_reasoning() {
+fn provider_enable_thinking_does_not_override_chat_template_thinking() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
@@ -2142,11 +2097,11 @@ fn provider_enable_thinking_overrides_canonical_reasoning() {
     .unwrap();
 
     let options = chat_template_options(&request).unwrap();
-    assert_eq!(options.enable_thinking, Some(true));
+    assert_eq!(options.enable_thinking, None);
 }
 
 #[test]
-fn chat_template_kwargs_enable_thinking_is_supported() {
+fn chat_template_kwargs_enable_thinking_does_not_override_template() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
@@ -2155,11 +2110,11 @@ fn chat_template_kwargs_enable_thinking_is_supported() {
     .unwrap();
 
     let options = chat_template_options(&request).unwrap();
-    assert_eq!(options.enable_thinking, Some(false));
+    assert_eq!(options.enable_thinking, None);
 }
 
 #[test]
-fn thinking_boolean_aliases_are_supported() {
+fn thinking_boolean_aliases_do_not_override_chat_template_thinking() {
     for field in openai_frontend::THINKING_BOOLEAN_ALIASES {
         let request: ChatCompletionRequest = serde_json::from_value(json!({
             "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
@@ -2169,7 +2124,7 @@ fn thinking_boolean_aliases_are_supported() {
         .unwrap();
         assert_eq!(
             chat_template_options(&request).unwrap().enable_thinking,
-            Some(false),
+            None,
             "top-level alias {field}"
         );
 
@@ -2181,14 +2136,14 @@ fn thinking_boolean_aliases_are_supported() {
         .unwrap();
         assert_eq!(
             chat_template_options(&request).unwrap().enable_thinking,
-            Some(false),
+            None,
             "chat_template_kwargs alias {field}"
         );
     }
 }
 
 #[test]
-fn reasoning_max_tokens_enables_and_zero_budget_disables_thinking() {
+fn reasoning_budget_does_not_override_chat_template_thinking() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
@@ -2197,7 +2152,7 @@ fn reasoning_max_tokens_enables_and_zero_budget_disables_thinking() {
     .unwrap();
     assert_eq!(
         chat_template_options(&request).unwrap().enable_thinking,
-        Some(true)
+        None
     );
 
     let request: ChatCompletionRequest = serde_json::from_value(json!({
@@ -2209,7 +2164,7 @@ fn reasoning_max_tokens_enables_and_zero_budget_disables_thinking() {
     .unwrap();
     assert_eq!(
         chat_template_options(&request).unwrap().enable_thinking,
-        Some(false)
+        None
     );
 }
 
