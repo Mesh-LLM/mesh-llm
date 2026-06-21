@@ -9,11 +9,15 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"
 publish = false
 
+[features]
+default = []
+dynamic-llama-quant = ["llama-quant-ffi/dynamic-runtime"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
 libc = "0.2"
-libloading = "0.8"
+llama-quant-ffi = { path = "../llama-quant-ffi" }
 serde.workspace = true
 serde_json.workspace = true
 skippy-ffi = { path = "../skippy-ffi" }

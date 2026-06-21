@@ -28,7 +28,7 @@ const KV_IMATRIX_CHUNK_COUNT: &str = "imatrix.chunk_count";
 pub(crate) struct NativeImatrix {
     _names: Vec<CString>,
     _values: Vec<Vec<f32>>,
-    entries: Vec<skippy_ffi::LlamaModelImatrixData>,
+    entries: Vec<llama_quant_ffi::LlamaModelImatrixData>,
     source_path: PathBuf,
     dataset: Option<String>,
     chunk_count: i32,
@@ -50,7 +50,7 @@ impl NativeImatrix {
         Self::from_loaded(path, loaded, include_weights, exclude_weights)
     }
 
-    pub(crate) fn as_ptr(&self) -> *const skippy_ffi::LlamaModelImatrixData {
+    pub(crate) fn as_ptr(&self) -> *const llama_quant_ffi::LlamaModelImatrixData {
         self.entries.as_ptr()
     }
 
@@ -97,13 +97,13 @@ impl NativeImatrix {
         let mut entries = names
             .iter()
             .zip(values.iter())
-            .map(|(name, value)| skippy_ffi::LlamaModelImatrixData {
+            .map(|(name, value)| llama_quant_ffi::LlamaModelImatrixData {
                 name: name.as_ptr(),
                 data: value.as_ptr(),
                 size: value.len(),
             })
             .collect::<Vec<_>>();
-        entries.push(skippy_ffi::LlamaModelImatrixData {
+        entries.push(llama_quant_ffi::LlamaModelImatrixData {
             name: std::ptr::null(),
             data: std::ptr::null(),
             size: 0,

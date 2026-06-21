@@ -331,6 +331,10 @@ struct RunQuantWindowArgs {
 struct QuantRunnerArgs {
     #[arg(long, value_enum, default_value_t = BackendKind::LlamaApi)]
     backend: BackendKind,
+    /// Optional dynamic llama.cpp runtime libraries for development builds.
+    ///
+    /// The normal skippy-quantize build statically links the pinned llama.cpp
+    /// quantization ABI and does not require this flag.
     #[arg(long = "native-runtime-library", value_name = "PATH")]
     native_runtime_libraries: Vec<PathBuf>,
     #[arg(long, default_value = "/tmp/skippy-quantize-work")]

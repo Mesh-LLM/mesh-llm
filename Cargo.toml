@@ -54,6 +54,7 @@ members = [
     "crates/skippy-bench",
     "crates/skippy-prompt",
     "crates/mesh-mixture-of-agents",
+    "crates/llama-quant-ffi",
     "tools/xtask",
 ]
 default-members = [

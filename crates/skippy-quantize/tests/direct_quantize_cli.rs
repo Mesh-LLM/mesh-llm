@@ -32,8 +32,6 @@ fn direct_quantize_preflight_reports_requested_window_for_native_backends() {
             "quantize",
             "--backend",
             "llama-api",
-            "--native-runtime-library",
-            env!("CARGO_BIN_EXE_skippy-quantize"),
             "--preflight-only",
             "--json",
             "--keep-split",
@@ -81,8 +79,6 @@ fn direct_quantize_preflight_supports_current_directory_no_output_shape() {
             "quantize",
             "--backend",
             "llama-api",
-            "--native-runtime-library",
-            env!("CARGO_BIN_EXE_skippy-quantize"),
             "--preflight-only",
             "--json",
             "model.gguf",
@@ -96,7 +92,7 @@ fn direct_quantize_preflight_supports_current_directory_no_output_shape() {
         .unwrap_or_else(|err| panic!("parse preflight JSON: {err}\n{stdout}"));
 
     assert_eq!(report["backend_kind"], "llama-api");
-    assert_eq!(report["backend_ready"], false);
+    assert_eq!(report["backend_ready"], true);
     assert_eq!(report["source_complete"], true);
     assert_eq!(report["expected_source_shards"], 1);
     assert_eq!(report["next_window"]["first_split"], 1);
@@ -124,8 +120,6 @@ fn direct_quantize_preflight_accepts_recipe_quant_label_with_tensor_file() {
             "quantize",
             "--backend",
             "llama-api",
-            "--native-runtime-library",
-            env!("CARGO_BIN_EXE_skippy-quantize"),
             "--tensor-type-file",
             "tensor-types.txt",
             "--preflight-only",
@@ -162,8 +156,6 @@ fn direct_quantize_preflight_rejects_recipe_quant_label_without_tensor_file() {
             "quantize",
             "--backend",
             "llama-api",
-            "--native-runtime-library",
-            env!("CARGO_BIN_EXE_skippy-quantize"),
             "--preflight-only",
             "--json",
             "model.gguf",

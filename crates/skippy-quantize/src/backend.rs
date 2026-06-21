@@ -55,12 +55,12 @@ pub fn capabilities(skippy_runtime_libraries: &[PathBuf]) -> BackendCapabilities
     let skippy_abi = skippy_abi_capabilities(skippy_runtime_libraries);
     let llama_api = LlamaApiCapabilities {
         convert_hf_to_gguf: false,
-        llama_quantize: skippy_ffi::native_runtime_loaded(),
-        runtime_loaded: skippy_ffi::native_runtime_loaded(),
-        reason: if skippy_ffi::native_runtime_loaded() {
-            "loaded native runtime exposes llama_model_quantize".to_string()
+        llama_quantize: llama_quant_ffi::native_runtime_loaded(),
+        runtime_loaded: llama_quant_ffi::native_runtime_loaded(),
+        reason: if llama_quant_ffi::native_runtime_loaded() {
+            "linked or loaded llama quant runtime exposes llama_model_quantize".to_string()
         } else {
-            "no native runtime library was loaded for llama API probing".to_string()
+            "no linked llama quant runtime and no native runtime library was loaded for llama API probing".to_string()
         },
     };
     BackendCapabilities {
@@ -245,8 +245,8 @@ mod tests {
         assert!(capabilities.native_rust.convert_hf_to_gguf);
         assert!(!capabilities.native_rust.llama_quantize);
         assert!(!capabilities.llama_api.convert_hf_to_gguf);
-        assert!(!capabilities.llama_api.llama_quantize);
-        assert!(!capabilities.llama_api.runtime_loaded);
+        assert!(capabilities.llama_api.llama_quantize);
+        assert!(capabilities.llama_api.runtime_loaded);
         assert!(!capabilities.skippy_abi.convert_hf_to_gguf);
         assert!(!capabilities.skippy_abi.llama_quantize);
         assert!(!capabilities.skippy_abi.runtime_loaded);

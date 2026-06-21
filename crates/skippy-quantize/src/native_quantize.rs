@@ -3,7 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, ensure};
-use libloading::Library;
 
 use crate::QuantRunnerArgs;
 use crate::backend::BackendRunStatus;
@@ -120,9 +119,8 @@ pub(crate) fn run_native_quantize(
     window: SplitWindow,
 ) -> Result<BackendRunStatus> {
     ensure_native_quantize_supported(args)?;
-    let quantize_api = LlamaQuantizeApi::load(&args.native_runtime_libraries)?;
     let native_inputs = NativeQuantizeInputs::build(args, manifest)?;
-    let mut params = unsafe { (quantize_api.default_params)() };
+    let mut params = unsafe { llama_quant_ffi::llama_model_quantize_default_params() };
     let quant = manifest
         .quant
         .as_deref()
@@ -156,7 +154,7 @@ pub(crate) fn run_native_quantize(
     let native_output_prefix = llama_split_output_prefix(output_prefix);
     let output = path_to_cstring(&native_output_prefix)?;
     let code = with_llama_quantize_memory_budget(args.max_memory, || unsafe {
-        (quantize_api.quantize)(input.as_ptr(), output.as_ptr(), &params)
+        llama_quant_ffi::llama_model_quantize(input.as_ptr(), output.as_ptr(), &params)
     });
     Ok(BackendRunStatus::from_code(code as i32))
 }
@@ -202,10 +200,10 @@ impl Drop for EnvRestoreGuard {
 }
 
 fn ensure_native_quantize_supported(args: &QuantRunnerArgs) -> Result<()> {
+    load_llama_quant_runtime(&args.native_runtime_libraries)?;
     ensure!(
-        !args.native_runtime_libraries.is_empty(),
-        "--native-runtime-library is required for --backend {}",
-        args.backend.as_str()
+        llama_quant_ffi::native_runtime_loaded(),
+        "llama quant runtime is not linked; pass --native-runtime-library or build the standalone static target"
     );
     ensure!(
         args.include_weights.is_empty() || args.exclude_weights.is_empty(),
@@ -214,63 +212,21 @@ fn ensure_native_quantize_supported(args: &QuantRunnerArgs) -> Result<()> {
     Ok(())
 }
 
-type LlamaModelQuantizeDefaultParamsFn =
-    unsafe extern "C" fn() -> skippy_ffi::LlamaModelQuantizeParams;
-type LlamaModelQuantizeFn = unsafe extern "C" fn(
-    fname_inp: *const c_char,
-    fname_out: *const c_char,
-    params: *const skippy_ffi::LlamaModelQuantizeParams,
-) -> u32;
-
-struct LlamaQuantizeApi {
-    _libraries: Vec<Library>,
-    default_params: LlamaModelQuantizeDefaultParamsFn,
-    quantize: LlamaModelQuantizeFn,
-}
-
-impl LlamaQuantizeApi {
-    fn load(paths: &[PathBuf]) -> Result<Self> {
-        let mut libraries = Vec::with_capacity(paths.len());
-        for path in paths {
-            let library = unsafe { Library::new(path) }
-                .with_context(|| format!("load native runtime library {}", path.display()))?;
-            libraries.push(library);
-        }
-        let default_params = lookup_symbol(
-            &libraries,
-            b"llama_model_quantize_default_params\0",
-            "llama_model_quantize_default_params",
-        )?;
-        let quantize = lookup_symbol(
-            &libraries,
-            b"llama_model_quantize\0",
-            "llama_model_quantize",
-        )?;
-        Ok(Self {
-            _libraries: libraries,
-            default_params,
-            quantize,
-        })
+fn load_llama_quant_runtime(libraries: &[PathBuf]) -> Result<()> {
+    if libraries.is_empty() || llama_quant_ffi::native_runtime_loaded() {
+        return Ok(());
     }
-}
-
-fn lookup_symbol<Sym>(libraries: &[Library], name: &[u8], label: &str) -> Result<Sym>
-where
-    Sym: Copy + 'static,
-{
-    for library in libraries.iter().rev() {
-        if let Ok(symbol) = unsafe { library.get::<Sym>(name) } {
-            return Ok(*symbol);
-        }
+    match unsafe { llama_quant_ffi::load_native_runtime_libraries(libraries) } {
+        Ok(()) | Err(llama_quant_ffi::NativeRuntimeLoadError::AlreadyLoaded) => Ok(()),
+        Err(error) => Err(anyhow!("load native llama quant runtime: {error}")),
     }
-    Err(anyhow!("native runtime symbol not found: {label}"))
 }
 
 struct NativeQuantizeInputs {
     _tensor_patterns: Vec<CString>,
-    tensor_overrides: Vec<skippy_ffi::LlamaModelTensorOverride>,
+    tensor_overrides: Vec<llama_quant_ffi::LlamaModelTensorOverride>,
     prune_layers: Vec<i32>,
-    kv_overrides: Vec<skippy_ffi::LlamaModelKvOverride>,
+    kv_overrides: Vec<llama_quant_ffi::LlamaModelKvOverride>,
     imatrix: Option<NativeImatrix>,
 }
 
@@ -291,7 +247,7 @@ impl NativeQuantizeInputs {
         })
     }
 
-    fn tensor_overrides_ptr(&self) -> *const skippy_ffi::LlamaModelTensorOverride {
+    fn tensor_overrides_ptr(&self) -> *const llama_quant_ffi::LlamaModelTensorOverride {
         if self.tensor_overrides.is_empty() {
             std::ptr::null()
         } else {
@@ -307,7 +263,7 @@ impl NativeQuantizeInputs {
         }
     }
 
-    fn kv_overrides_ptr(&self) -> *const skippy_ffi::LlamaModelKvOverride {
+    fn kv_overrides_ptr(&self) -> *const llama_quant_ffi::LlamaModelKvOverride {
         if self.kv_overrides.is_empty() {
             std::ptr::null()
         } else {
@@ -315,7 +271,7 @@ impl NativeQuantizeInputs {
         }
     }
 
-    fn imatrix_ptr(&self) -> *const skippy_ffi::LlamaModelImatrixData {
+    fn imatrix_ptr(&self) -> *const llama_quant_ffi::LlamaModelImatrixData {
         self.imatrix
             .as_ref()
             .map_or(std::ptr::null(), NativeImatrix::as_ptr)
@@ -325,7 +281,7 @@ impl NativeQuantizeInputs {
 fn tensor_overrides(
     args: &QuantRunnerArgs,
     manifest: &Manifest,
-) -> Result<(Vec<CString>, Vec<skippy_ffi::LlamaModelTensorOverride>)> {
+) -> Result<(Vec<CString>, Vec<llama_quant_ffi::LlamaModelTensorOverride>)> {
     let mut entries = args.tensor_type.clone();
     if let Some(path) = manifest.tensor_type_file.as_deref() {
         let text = fs::read_to_string(path)
@@ -353,14 +309,14 @@ fn tensor_overrides(
                 format!("tensor type override requires raw ggml_type, got {raw_type:?}")
             })?;
         patterns.push(CString::new(raw_pattern.to_ascii_lowercase())?);
-        overrides.push(skippy_ffi::LlamaModelTensorOverride {
+        overrides.push(llama_quant_ffi::LlamaModelTensorOverride {
             pattern: patterns.last().expect("just pushed").as_ptr(),
             tensor_type,
         });
     }
-    overrides.push(skippy_ffi::LlamaModelTensorOverride {
+    overrides.push(llama_quant_ffi::LlamaModelTensorOverride {
         pattern: std::ptr::null(),
-        tensor_type: skippy_ffi::GgmlType::Count,
+        tensor_type: llama_quant_ffi::GgmlType::Count,
     });
     Ok((patterns, overrides))
 }
@@ -388,7 +344,7 @@ fn prune_layers(raw: Option<&str>) -> Result<Vec<i32>> {
 fn kv_overrides(
     raw_overrides: &[String],
     imatrix: Option<&NativeImatrix>,
-) -> Result<Vec<skippy_ffi::LlamaModelKvOverride>> {
+) -> Result<Vec<llama_quant_ffi::LlamaModelKvOverride>> {
     if raw_overrides.is_empty() && imatrix.is_none() {
         return Ok(Vec::new());
     }
@@ -416,52 +372,52 @@ fn kv_overrides(
             )?);
         }
     }
-    overrides.push(skippy_ffi::LlamaModelKvOverride {
-        tag: skippy_ffi::LlamaModelKvOverrideType::Int,
+    overrides.push(llama_quant_ffi::LlamaModelKvOverride {
+        tag: llama_quant_ffi::LlamaModelKvOverrideType::Int,
         key: [0; 128],
-        value: skippy_ffi::LlamaModelKvOverrideValue { val_i64: 0 },
+        value: llama_quant_ffi::LlamaModelKvOverrideValue { val_i64: 0 },
     });
     Ok(overrides)
 }
 
-fn int_kv_override(key: &str, value: i64) -> Result<skippy_ffi::LlamaModelKvOverride> {
-    Ok(skippy_ffi::LlamaModelKvOverride {
-        tag: skippy_ffi::LlamaModelKvOverrideType::Int,
+fn int_kv_override(key: &str, value: i64) -> Result<llama_quant_ffi::LlamaModelKvOverride> {
+    Ok(llama_quant_ffi::LlamaModelKvOverride {
+        tag: llama_quant_ffi::LlamaModelKvOverrideType::Int,
         key: fixed_c_char_array(key, "KV override key")?,
-        value: skippy_ffi::LlamaModelKvOverrideValue { val_i64: value },
+        value: llama_quant_ffi::LlamaModelKvOverrideValue { val_i64: value },
     })
 }
 
-fn string_kv_override(key: &str, value: &str) -> Result<skippy_ffi::LlamaModelKvOverride> {
-    Ok(skippy_ffi::LlamaModelKvOverride {
-        tag: skippy_ffi::LlamaModelKvOverrideType::Str,
+fn string_kv_override(key: &str, value: &str) -> Result<llama_quant_ffi::LlamaModelKvOverride> {
+    Ok(llama_quant_ffi::LlamaModelKvOverride {
+        tag: llama_quant_ffi::LlamaModelKvOverrideType::Str,
         key: fixed_c_char_array(key, "KV override key")?,
-        value: skippy_ffi::LlamaModelKvOverrideValue {
+        value: llama_quant_ffi::LlamaModelKvOverrideValue {
             val_str: fixed_c_char_array(value, "KV override string value")?,
         },
     })
 }
 
-fn parse_kv_override(raw: &str) -> Result<skippy_ffi::LlamaModelKvOverride> {
+fn parse_kv_override(raw: &str) -> Result<llama_quant_ffi::LlamaModelKvOverride> {
     let (key, value) = raw
         .split_once('=')
         .ok_or_else(|| anyhow!("malformed KV override {raw:?}"))?;
     ensure!(!key.is_empty(), "KV override has empty key");
     let key = fixed_c_char_array(key, "KV override key")?;
     if let Some(rest) = value.strip_prefix("int:") {
-        return Ok(skippy_ffi::LlamaModelKvOverride {
-            tag: skippy_ffi::LlamaModelKvOverrideType::Int,
+        return Ok(llama_quant_ffi::LlamaModelKvOverride {
+            tag: llama_quant_ffi::LlamaModelKvOverrideType::Int,
             key,
-            value: skippy_ffi::LlamaModelKvOverrideValue {
+            value: llama_quant_ffi::LlamaModelKvOverrideValue {
                 val_i64: rest.parse::<i64>()?,
             },
         });
     }
     if let Some(rest) = value.strip_prefix("float:") {
-        return Ok(skippy_ffi::LlamaModelKvOverride {
-            tag: skippy_ffi::LlamaModelKvOverrideType::Float,
+        return Ok(llama_quant_ffi::LlamaModelKvOverride {
+            tag: llama_quant_ffi::LlamaModelKvOverrideType::Float,
             key,
-            value: skippy_ffi::LlamaModelKvOverrideValue {
+            value: llama_quant_ffi::LlamaModelKvOverrideValue {
                 val_f64: rest.parse::<f64>()?,
             },
         });
@@ -472,17 +428,17 @@ fn parse_kv_override(raw: &str) -> Result<skippy_ffi::LlamaModelKvOverride> {
             "false" => false,
             _ => return Err(anyhow!("invalid bool KV override value {rest:?}")),
         };
-        return Ok(skippy_ffi::LlamaModelKvOverride {
-            tag: skippy_ffi::LlamaModelKvOverrideType::Bool,
+        return Ok(llama_quant_ffi::LlamaModelKvOverride {
+            tag: llama_quant_ffi::LlamaModelKvOverrideType::Bool,
             key,
-            value: skippy_ffi::LlamaModelKvOverrideValue { val_bool },
+            value: llama_quant_ffi::LlamaModelKvOverrideValue { val_bool },
         });
     }
     if let Some(rest) = value.strip_prefix("str:") {
-        return Ok(skippy_ffi::LlamaModelKvOverride {
-            tag: skippy_ffi::LlamaModelKvOverrideType::Str,
+        return Ok(llama_quant_ffi::LlamaModelKvOverride {
+            tag: llama_quant_ffi::LlamaModelKvOverrideType::Str,
             key,
-            value: skippy_ffi::LlamaModelKvOverrideValue {
+            value: llama_quant_ffi::LlamaModelKvOverrideValue {
                 val_str: fixed_c_char_array(rest, "KV override string value")?,
             },
         });
@@ -500,7 +456,7 @@ fn fixed_c_char_array(raw: &str, label: &str) -> Result<[c_char; 128]> {
     Ok(out)
 }
 
-fn optional_ggml_type(raw: Option<&str>, flag: &str) -> Result<Option<skippy_ffi::GgmlType>> {
+fn optional_ggml_type(raw: Option<&str>, flag: &str) -> Result<Option<llama_quant_ffi::GgmlType>> {
     raw.map(|value| {
         let tensor_type = TensorType::parse(value)
             .with_context(|| format!("{flag} has unsupported ggml type {value:?}"))?;
@@ -565,7 +521,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(command[0], "llama-api-quantize");
-        assert!(command.contains(&"--native-runtime-library".to_string()));
+        assert!(!command.contains(&"--native-runtime-library".to_string()));
         assert!(command.contains(&"--keep-split".to_string()));
         assert!(command.contains(&"--tensor-type".to_string()));
         assert!(command.contains(&"--prune-layers".to_string()));
@@ -596,7 +552,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(command[0], "skippy-abi-quantize");
-        assert!(command.contains(&"--native-runtime-library".to_string()));
+        assert!(!command.contains(&"--native-runtime-library".to_string()));
     }
 
     #[test]
@@ -696,7 +652,7 @@ mod tests {
     fn native_args() -> QuantRunnerArgs {
         QuantRunnerArgs {
             backend: BackendKind::LlamaApi,
-            native_runtime_libraries: vec![PathBuf::from("/tmp/libllama.dylib")],
+            native_runtime_libraries: Vec::new(),
             work_dir: PathBuf::from("/tmp/work"),
             print_only: false,
             dry_run: false,

@@ -121,7 +121,8 @@ struct BackendReady {
 
 fn check_backend_ready(backend_kind: BackendKind, backend_path: Option<&Path>) -> BackendReady {
     match backend_kind {
-        BackendKind::LlamaApi | BackendKind::SkippyAbi => check_native_runtime_ready(backend_path),
+        BackendKind::LlamaApi => check_llama_quant_runtime_ready(backend_path),
+        BackendKind::SkippyAbi => check_skippy_runtime_ready(backend_path),
         BackendKind::NativeRust => BackendReady {
             ready: true,
             error: None,
@@ -129,8 +130,31 @@ fn check_backend_ready(backend_kind: BackendKind, backend_path: Option<&Path>) -
     }
 }
 
-fn check_native_runtime_ready(backend_path: Option<&Path>) -> BackendReady {
-    if skippy_ffi::native_runtime_loaded() {
+fn check_llama_quant_runtime_ready(backend_path: Option<&Path>) -> BackendReady {
+    check_runtime_ready(
+        backend_path,
+        llama_quant_ffi::native_runtime_loaded,
+        |libraries| unsafe { llama_quant_ffi::load_native_runtime_libraries(libraries) },
+    )
+}
+
+fn check_skippy_runtime_ready(backend_path: Option<&Path>) -> BackendReady {
+    check_runtime_ready(
+        backend_path,
+        skippy_ffi::native_runtime_loaded,
+        |libraries| unsafe { skippy_ffi::load_native_runtime_libraries(libraries) },
+    )
+}
+
+fn check_runtime_ready<LoadError>(
+    backend_path: Option<&Path>,
+    loaded: impl Fn() -> bool,
+    load: impl FnOnce(&[PathBuf; 1]) -> Result<(), LoadError>,
+) -> BackendReady
+where
+    LoadError: std::fmt::Display,
+{
+    if loaded() {
         return BackendReady {
             ready: true,
             error: None,
@@ -152,7 +176,7 @@ fn check_native_runtime_ready(backend_path: Option<&Path>) -> BackendReady {
         };
     }
     let libraries = [path.to_path_buf()];
-    match unsafe { skippy_ffi::load_native_runtime_libraries(&libraries) } {
+    match load(&libraries) {
         Ok(()) => BackendReady {
             ready: true,
             error: None,

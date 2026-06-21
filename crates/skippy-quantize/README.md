@@ -10,7 +10,7 @@ The crate owns:
 - durable conversion and quantization manifests;
 - split-GGUF progress detection and next-window planning;
 - native SafeTensors-to-GGUF conversion for supported checkpoint families;
-- in-process GGUF quantization through the loaded llama/skippy runtime library;
+- in-process GGUF quantization through the linked llama quantization ABI;
 - bounded source staging for quantization windows;
 - optional output spooling with per-window publish and cleanup;
 - successful-window records and JSON status/preflight output;
@@ -22,6 +22,7 @@ Build through the repo recipes:
 ```bash
 just skippy-quantize-build
 just skippy-quantize-release-build
+just skippy-quantize-standalone-release-build
 ```
 
 ## Backends
@@ -38,19 +39,23 @@ or an output shard in memory. It currently requires tokenizer metadata from
 `tokenizer.json`; checkpoints that only provide SentencePiece `tokenizer.model`
 are rejected with a clear error until native SentencePiece support lands.
 
-`llama-api` and `skippy-abi` are quantization backends. Both call
-`llama_model_quantize` in-process from a supplied native runtime library:
+`llama-api` and `skippy-abi` are quantization backends. The normal
+`skippy-quantize` build links the pinned llama.cpp quantization ABI into the
+binary, so `llama-api` can call `llama_model_quantize` in-process without a
+separate `llama-quantize` executable or a dynamic library flag:
 
 ```bash
 skippy-quantize quantize \
   --backend llama-api \
-  --native-runtime-library /path/to/libllama.dylib \
   /mnt/source/BF16/model-00001-of-00002.gguf \
   /mnt/target/Q2_K/model-q2.gguf \
   Q2_K
 ```
 
-Use `--backend skippy-abi` when the library is the Skippy-patched runtime used
+`--native-runtime-library PATH` remains available for development builds that
+intentionally load a dynamic llama.cpp runtime instead of using the linked ABI;
+build that path with `--features dynamic-llama-quant`. Use
+`--backend skippy-abi` when probing or loading the Skippy-patched runtime used
 by mesh-llm.
 
 ## Convert
@@ -145,7 +150,6 @@ Run one quantization window:
 skippy-quantize run-quant-window \
   --manifest /tmp/skippy-quantize.json \
   --backend llama-api \
-  --native-runtime-library /path/to/libllama.dylib \
   --work-dir /tmp/skippy-quantize-work \
   --spool-dir /tmp/skippy-quantize-output \
   --record-dir /tmp/skippy-quantize-records
@@ -157,7 +161,6 @@ Run until complete:
 skippy-quantize run-quant \
   --manifest /tmp/skippy-quantize.json \
   --backend llama-api \
-  --native-runtime-library /path/to/libllama.dylib \
   --max-memory 32G \
   --work-dir /tmp/skippy-quantize-work \
   --spool-dir /tmp/skippy-quantize-output
@@ -166,8 +169,8 @@ skippy-quantize run-quant \
 Important quantization flags:
 
 - `--backend {llama-api,skippy-abi}` selects the in-process quant backend.
-- `--native-runtime-library PATH` loads the native runtime exposing
-  `llama_model_quantize`.
+- `--native-runtime-library PATH` optionally loads a dynamic native runtime
+  exposing `llama_model_quantize`; normal standalone builds do not need it.
 - `--max-memory SIZE` is passed to the patched quantizer via
   `LLAMA_QUANTIZE_MAX_MEMORY_BYTES`.
 - `--tensor-type-file PATH` applies per-tensor recipe overrides.
@@ -270,11 +273,7 @@ uv run --python 3.12 \
   --skippy-quantize ./target/debug/skippy-quantize \
   --llama-quantize ./.deps/llama.cpp/build-cli/bin/llama-quantize \
   --quant-input /tmp/qwen2-bf16-fixture.gguf \
-  --generate-imatrix \
-  --native-runtime-library ./.deps/llama.cpp/build-cli/bin/libggml-base.dylib \
-  --native-runtime-library ./.deps/llama.cpp/build-cli/bin/libggml-cpu.dylib \
-  --native-runtime-library ./.deps/llama.cpp/build-cli/bin/libggml.dylib \
-  --native-runtime-library ./.deps/llama.cpp/build-cli/bin/libllama.dylib
+  --generate-imatrix
 ```
 
 `--generate-imatrix` creates a deterministic all-ones legacy imatrix from the
