@@ -115,6 +115,7 @@ impl StageOpenAiBackend {
                 prefill_reply_credit_limit,
                 lane_pool,
                 prediction_returns,
+                native_mtp_enabled,
             } => self.generate_embedded_stage_zero_tokens(
                 EmbeddedStageZeroGeneration {
                     config: &config,
@@ -132,6 +133,7 @@ impl StageOpenAiBackend {
                     draft: self.draft.clone(),
                     speculative_window: self.speculative_window,
                     adaptive_speculative_window: self.adaptive_speculative_window,
+                    native_mtp_enabled,
                     prompt_token_ids: &prompt_token_ids,
                     max_tokens,
                     sampling: &sampling,

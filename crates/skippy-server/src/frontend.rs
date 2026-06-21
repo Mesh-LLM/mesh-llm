@@ -57,10 +57,11 @@ use tokio::{
 
 use crate::{
     binary_transport::{
-        DecodeFrameBatcher, PredictionReturnHub, PredictionReturnReceiver, WireCondition,
-        connect_binary_downstream, forwarded_stage_message, forwarded_stage_message_timed,
-        run_binary_stage_message, send_client_ready_hello_if_enabled,
-        stage_output_activation_capacity, write_stage_message_conditioned,
+        BinaryStageExecutionOptions, DecodeFrameBatcher, PredictionReturnHub,
+        PredictionReturnReceiver, WireCondition, connect_binary_downstream,
+        forwarded_stage_message, forwarded_stage_message_timed, run_binary_stage_message,
+        send_client_ready_hello_if_enabled, stage_output_activation_capacity,
+        write_stage_message_conditioned,
     },
     cli::ServeOpenAiArgs,
     config::{load_json, validate_config},
@@ -234,6 +235,7 @@ pub struct EmbeddedOpenAiArgs {
     pub speculative_window: usize,
     pub adaptive_speculative_window: bool,
     pub draft_n_gpu_layers: Option<i32>,
+    pub native_mtp_enabled: bool,
     pub activation_width: i32,
     pub wire_dtype: WireActivationDType,
     pub reply_credit_limit: Option<usize>,
@@ -516,6 +518,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         prefill_reply_credit_limit,
         lane_pool,
         prediction_returns: args.prediction_returns.clone(),
+        native_mtp_enabled: args.native_mtp_enabled,
     };
     args.telemetry
         .emit("stage.openai_server_start", lifecycle_attrs(&args.config));
@@ -830,6 +833,7 @@ enum OpenAiBackendMode {
         prefill_reply_credit_limit: usize,
         lane_pool: Option<Arc<PersistentStageLanePool>>,
         prediction_returns: Option<Arc<PredictionReturnHub>>,
+        native_mtp_enabled: bool,
     },
 }
 
@@ -1748,6 +1752,7 @@ struct EmbeddedStageZeroGeneration<'a> {
     draft: Option<Arc<Mutex<DraftRunner>>>,
     speculative_window: usize,
     adaptive_speculative_window: bool,
+    native_mtp_enabled: bool,
     prompt_token_ids: &'a [i32],
     max_tokens: u32,
     sampling: &'a SamplingConfig,

@@ -229,6 +229,7 @@ fn prefix_cache_test_config() -> StageConfig {
             shared_prefix_stride_tokens: 128,
             shared_prefix_record_limit: 2,
         }),
+        native_mtp_enabled: true,
         load_mode: LoadMode::RuntimeSlice,
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,

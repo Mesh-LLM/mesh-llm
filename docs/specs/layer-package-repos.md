@@ -308,6 +308,11 @@ Draft-model speculation may use the same strategy map with `type:
 Consumers that do not recognize a strategy type MUST ignore it unless it is the
 declared default for a request they are trying to serve.
 
+Operators may override the package recommendation in `config.toml` with
+`speculative.strategy`. Supported values are `auto` (use package/runtime
+defaults), `native-mtp-n1` (force the current native MTP strategy), and
+`disabled` (disable native MTP for the configured model/default scope).
+
 ## Layer Selection
 
 For a stage with `layer_start..layer_end`, consumers select:

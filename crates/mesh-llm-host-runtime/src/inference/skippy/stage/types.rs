@@ -69,6 +69,7 @@ pub(crate) struct StageLoadRequest {
     pub(crate) cache_type_k: String,
     pub(crate) cache_type_v: String,
     pub(crate) flash_attn_type: FlashAttentionType,
+    pub(crate) native_mtp_enabled: bool,
     pub(crate) shutdown_generation: u64,
     pub(crate) coordinator_term: u64,
     pub(crate) coordinator_id: Option<iroh::EndpointId>,

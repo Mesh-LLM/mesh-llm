@@ -46,6 +46,7 @@ impl ResolvedSkippyConfig {
             self.ensure_embedded_openai_safe(true)?;
         }
         let mut options = self.base_model_load_options(telemetry);
+        options.native_mtp_enabled = self.speculative.native_mtp_enabled;
         // Pre-compute the package identity so single_stage_config skips the
         // SHA-256 hash. Without this the same hash runs again in
         // SkippyModelHandle::load_with_hooks, doubling I/O (issue #717).
@@ -105,6 +106,7 @@ impl ResolvedSkippyConfig {
     ) -> Result<StageConfig> {
         self.ensure_embedded_openai_safe(true)?;
         let mut load_options = self.base_model_load_options(SkippyTelemetryOptions::off());
+        load_options.native_mtp_enabled = self.speculative.native_mtp_enabled;
         if let Some(package_identity) = package_identity {
             load_options.package_identity = Some(package_identity.clone());
             if self.hardware.stage_layer_end.is_none() {
@@ -240,6 +242,7 @@ impl ResolvedSkippyConfig {
             } else {
                 None
             },
+            native_mtp_enabled: self.speculative.native_mtp_enabled,
             activation_width,
             wire_dtype: self.skippy.activation_wire_dtype.into(),
             reply_credit_limit: None,
@@ -342,6 +345,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             speculative_window: 0,
             adaptive_speculative_window: false,
             draft_n_gpu_layers: None,
+            native_mtp_enabled: true,
             activation_width: 0,
             wire_dtype,
             reply_credit_limit: None,
@@ -371,6 +375,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             speculative_window: 0,
             adaptive_speculative_window: false,
             draft_n_gpu_layers: None,
+            native_mtp_enabled: true,
             activation_width,
             wire_dtype,
             reply_credit_limit: None,
@@ -404,6 +409,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             speculative_window: self.speculative_window,
             adaptive_speculative_window: self.adaptive_speculative_window,
             draft_n_gpu_layers: self.draft_n_gpu_layers,
+            native_mtp_enabled: self.native_mtp_enabled,
             activation_width: self.activation_width,
             wire_dtype: self.wire_dtype,
             reply_credit_limit: self.reply_credit_limit,

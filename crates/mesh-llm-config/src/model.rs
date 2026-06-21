@@ -425,6 +425,8 @@ pub struct SkippyConfig {
 #[serde(deny_unknown_fields)]
 pub struct SpeculativeConfig {
     #[serde(default)]
+    pub strategy: Option<String>,
+    #[serde(default)]
     pub mode: Option<String>,
     #[serde(default)]
     pub draft_model_path: Option<String>,

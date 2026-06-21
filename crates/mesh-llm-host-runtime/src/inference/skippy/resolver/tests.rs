@@ -776,6 +776,65 @@ draft_selection_policy = "auto"
 }
 
 #[test]
+fn speculative_strategy_defaults_to_native_mtp_enabled() {
+    let mesh_config = parse_config("");
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+    })
+    .expect("default speculative strategy should resolve");
+
+    assert_eq!(resolved.speculative.strategy, "auto");
+    assert!(resolved.speculative.native_mtp_enabled);
+    let stage = resolved
+        .to_stage_config(Some(fake_package_identity(24)), LoadMode::LayerPackage)
+        .expect("stage config should build");
+    assert!(stage.native_mtp_enabled);
+    let openai = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("openai args should build");
+    assert!(openai.native_mtp_enabled);
+}
+
+#[test]
+fn speculative_strategy_disabled_reaches_stage_and_openai_args() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+strategy = "disabled"
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+    })
+    .expect("disabled speculative strategy should resolve");
+
+    assert_eq!(resolved.speculative.strategy, "disabled");
+    assert!(!resolved.speculative.native_mtp_enabled);
+    let stage = resolved
+        .to_stage_config(Some(fake_package_identity(24)), LoadMode::LayerPackage)
+        .expect("stage config should build");
+    assert!(!stage.native_mtp_enabled);
+    let openai = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("openai args should build");
+    assert!(!openai.native_mtp_enabled);
+}
+
+#[test]
 fn staged_only_controls_fail_closed_for_single_stage_loads() {
     let mesh_config = parse_config(
         r#"

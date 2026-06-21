@@ -728,6 +728,11 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> DiagnosticResult {
 
 fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> DiagnosticResult {
     validate_optional_enum(
+        config.strategy.as_deref(),
+        &["auto", "disabled", "native-mtp-n1"],
+        &format!("{base_path}.strategy"),
+    )?;
+    validate_optional_enum(
         config.mode.as_deref(),
         &["auto", "disabled", "draft", "ngram"],
         &format!("{base_path}.mode"),
@@ -1541,6 +1546,29 @@ gpu_id = "metal:0"
         assert_eq!(
             diagnostic.message,
             "models[0].hardware.device must not be set when gpu.assignment = \"auto\""
+        );
+    }
+
+    #[test]
+    fn speculative_strategy_rejects_unknown_values() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.speculative]
+strategy = "mystery-oracle"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].path.as_ref().map(ConfigPath::render),
+            Some("defaults.speculative.strategy".to_string())
+        );
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("defaults.speculative.strategy must be one of")
         );
     }
 

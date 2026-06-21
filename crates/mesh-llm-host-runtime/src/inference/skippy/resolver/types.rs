@@ -87,6 +87,8 @@ pub(crate) struct ResolvedSkippyExecutionConfig {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ResolvedSpeculativeConfig {
+    pub(crate) strategy: String,
+    pub(crate) native_mtp_enabled: bool,
     pub(crate) mode: String,
     pub(crate) draft_model_path: Option<PathBuf>,
     pub(crate) pairing_fault: String,
@@ -148,6 +150,7 @@ pub(crate) struct ResolvedEmbeddedOpenAiArgs {
     pub(crate) speculative_window: usize,
     pub(crate) adaptive_speculative_window: bool,
     pub(crate) draft_n_gpu_layers: Option<i32>,
+    pub(crate) native_mtp_enabled: bool,
     pub(crate) activation_width: i32,
     pub(crate) wire_dtype: skippy_protocol::binary::WireActivationDType,
     pub(crate) reply_credit_limit: Option<usize>,

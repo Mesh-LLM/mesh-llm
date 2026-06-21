@@ -13,6 +13,16 @@ pub(super) fn resolve_speculative_config(
     model_id: &str,
     model_path: &Path,
 ) -> Result<ResolvedSpeculativeConfig> {
+    let strategy = pick_string_owned(
+        model_config.and_then(|config| config.strategy.as_deref()),
+        global_config.and_then(|config| config.strategy.as_deref()),
+        Some("auto"),
+    );
+    let native_mtp_enabled = match strategy.as_str() {
+        "auto" | "native-mtp-n1" => true,
+        "disabled" => false,
+        _ => bail!("skippy speculative.strategy must be auto, disabled, or native-mtp-n1"),
+    };
     let mode = pick_string_owned(
         model_config.and_then(|config| config.mode.as_deref()),
         global_config.and_then(|config| config.mode.as_deref()),
@@ -146,6 +156,8 @@ pub(super) fn resolve_speculative_config(
         draft_model_path = None;
     }
     Ok(ResolvedSpeculativeConfig {
+        strategy,
+        native_mtp_enabled,
         mode,
         draft_model_path,
         pairing_fault,

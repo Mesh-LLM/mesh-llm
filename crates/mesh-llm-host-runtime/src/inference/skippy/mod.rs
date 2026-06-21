@@ -155,6 +155,7 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) projector_path: Option<PathBuf>,
     pub(crate) telemetry: SkippyTelemetryOptions,
     pub(crate) openai_guardrails: Option<OpenAiGuardrailsConfig>,
+    pub(crate) native_mtp_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -238,6 +239,7 @@ impl SkippyModelLoadOptions {
             projector_path: None,
             telemetry: SkippyTelemetryOptions::off(),
             openai_guardrails: Some(OpenAiGuardrailsConfig::disabled_for_skippy()),
+            native_mtp_enabled: true,
         }
     }
 
@@ -444,6 +446,7 @@ impl SkippyModelHandle {
             speculative_window: embedded_args.speculative_window,
             adaptive_speculative_window: embedded_args.adaptive_speculative_window,
             draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
+            native_mtp_enabled: embedded_args.native_mtp_enabled,
             activation_width: embedded_args.activation_width,
             wire_dtype: embedded_args.wire_dtype,
             reply_credit_limit: embedded_args.reply_credit_limit,
@@ -539,6 +542,7 @@ impl SkippyModelHandle {
             speculative_window: embedded_args.speculative_window,
             adaptive_speculative_window: embedded_args.adaptive_speculative_window,
             draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
+            native_mtp_enabled: embedded_args.native_mtp_enabled,
             activation_width: embedded_args.activation_width,
             wire_dtype: embedded_args.wire_dtype,
             reply_credit_limit: embedded_args.reply_credit_limit,
@@ -710,6 +714,7 @@ impl SkippyModelHandle {
             speculative_window: embedded_args.speculative_window,
             adaptive_speculative_window: embedded_args.adaptive_speculative_window,
             draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
+            native_mtp_enabled: embedded_args.native_mtp_enabled,
             activation_width: embedded_args.activation_width,
             wire_dtype: embedded_args.wire_dtype,
             reply_credit_limit: embedded_args.reply_credit_limit,
@@ -832,6 +837,7 @@ impl SkippyModelHandle {
             speculative_window: embedded_args.speculative_window,
             adaptive_speculative_window: embedded_args.adaptive_speculative_window,
             draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
+            native_mtp_enabled: embedded_args.native_mtp_enabled,
             activation_width: embedded_args.activation_width,
             wire_dtype: embedded_args.wire_dtype,
             reply_credit_limit: embedded_args.reply_credit_limit,
@@ -1054,6 +1060,7 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         filter_tensors_on_load: false,
         selected_device: options.selected_device.clone().map(Into::into),
         kv_cache: None,
+        native_mtp_enabled: options.native_mtp_enabled,
         load_mode: LoadMode::RuntimeSlice,
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,

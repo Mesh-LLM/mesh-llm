@@ -100,6 +100,7 @@ fn prefix_cache_test_config() -> StageConfig {
             shared_prefix_stride_tokens: 128,
             shared_prefix_record_limit: 2,
         }),
+        native_mtp_enabled: true,
         load_mode: LoadMode::RuntimeSlice,
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
@@ -1266,6 +1267,7 @@ fn multimodal_stage_config(
         filter_tensors_on_load: layer_start != 0 || layer_end != fixture.layer_end,
         selected_device: None,
         kv_cache: None,
+        native_mtp_enabled: true,
         load_mode: skippy_protocol::LoadMode::RuntimeSlice,
         bind_addr: bind_addr.to_string(),
         upstream: None,
@@ -1438,6 +1440,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             async_prefill_forward: false,
             downstream_wire_condition: WireCondition::new(0.0, None)?,
             downstream_connect_timeout_secs: 5,
+            native_mtp_enabled: true,
             openai: None,
         });
     let ready = connect_endpoint_ready(&stage1_addr.to_string(), 120);
@@ -1479,6 +1482,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             prefill_reply_credit_limit: 0,
             lane_pool: Some(lane_pool),
             prediction_returns: None,
+            native_mtp_enabled: true,
         },
         draft: None,
         speculative_window: 0,

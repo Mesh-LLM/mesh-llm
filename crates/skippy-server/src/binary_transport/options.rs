@@ -22,6 +22,7 @@ pub struct BinaryStageOptions {
     pub async_prefill_forward: bool,
     pub downstream_wire_condition: WireCondition,
     pub downstream_connect_timeout_secs: u64,
+    pub native_mtp_enabled: bool,
     pub openai: Option<EmbeddedOpenAiStageOptions>,
 }
 
@@ -85,6 +86,7 @@ impl BinaryStageOptions {
                 adaptive_speculative_window: args.openai_adaptive_speculative_window,
                 draft_n_gpu_layers: args.openai_draft_n_gpu_layers,
             });
+        let native_mtp_enabled = native_mtp_enabled_from_env();
         Ok(Self {
             config,
             topology,
@@ -99,9 +101,23 @@ impl BinaryStageOptions {
             async_prefill_forward: args.async_prefill_forward || !args.no_async_prefill_forward,
             downstream_wire_condition,
             downstream_connect_timeout_secs: args.downstream_connect_timeout_secs,
+            native_mtp_enabled,
             openai,
         })
     }
+}
+
+fn native_mtp_enabled_from_env() -> bool {
+    !matches!(
+        std::env::var("SKIPPY_NATIVE_MTP_ENABLED")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase()),
+        Some(value)
+            if matches!(
+                value.as_str(),
+                "0" | "false" | "off" | "disable" | "disabled" | "no"
+            )
+    )
 }
 
 pub fn parse_wire_dtype(value: &str) -> Result<WireActivationDType> {

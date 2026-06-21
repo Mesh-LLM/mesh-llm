@@ -70,6 +70,7 @@ fn write_local_configs(
             filter_tensors_on_load: true,
             selected_device: None,
             kv_cache,
+            native_mtp_enabled: true,
             load_mode,
             bind_addr: stage.bind_addr.clone(),
             upstream,

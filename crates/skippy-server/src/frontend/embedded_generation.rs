@@ -247,8 +247,11 @@ impl StageOpenAiBackend {
                                 &message,
                                 chunk,
                                 None,
-                                false,
-                                0,
+                                BinaryStageExecutionOptions::new(
+                                    false,
+                                    0,
+                                    request.native_mtp_enabled,
+                                ),
                             )
                             .map_err(openai_backend_error)?
                             .2;

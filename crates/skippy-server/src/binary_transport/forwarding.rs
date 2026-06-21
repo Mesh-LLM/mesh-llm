@@ -159,6 +159,7 @@ mod tests {
             filter_tensors_on_load: true,
             selected_device: None::<StageDevice>,
             kv_cache: None::<StageKvCacheConfig>,
+            native_mtp_enabled: true,
             load_mode: LoadMode::RuntimeSlice,
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: Some(PeerConfig {

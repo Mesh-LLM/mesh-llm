@@ -66,7 +66,6 @@ pub use self::wire::WireCondition;
 pub(crate) use self::wire::write_stage_message_conditioned;
 
 static BINARY_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
-const NATIVE_MTP_ENABLED_ENV: &str = "SKIPPY_NATIVE_MTP_ENABLED";
 const CLIENT_READY_HELLO_ENV: &str = "SKIPPY_STAGE_CLIENT_READY_HELLO";
 const CLIENT_READY_HELLO_OPT_IN_PEEK_MS: u64 = 500;
 
@@ -199,8 +198,10 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         async_prefill_forward,
         downstream_wire_condition,
         downstream_connect_timeout_secs,
+        native_mtp_enabled,
         openai,
     } = options;
+    let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
     validate_config(&config, topology.as_ref())?;
     let max_inflight = max_inflight.min(config.lane_count as usize);
     let telemetry = Telemetry::new(
@@ -271,6 +272,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                 speculative_window: openai_options.speculative_window,
                 adaptive_speculative_window: openai_options.adaptive_speculative_window,
                 draft_n_gpu_layers: openai_options.draft_n_gpu_layers,
+                native_mtp_enabled,
                 activation_width,
                 wire_dtype,
                 reply_credit_limit,
@@ -364,6 +366,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                     async_prefill_forward,
                     downstream_wire_condition,
                     downstream_connect_timeout_secs,
+                    native_mtp_enabled,
                     &prediction_return_sinks,
                     first_message,
                 )
@@ -458,6 +461,7 @@ fn handle_binary_connection(
     async_prefill_forward: bool,
     downstream_wire_condition: WireCondition,
     downstream_connect_timeout_secs: u64,
+    native_mtp_enabled: bool,
     prediction_return_sinks: &PredictionReturnSinks,
     first_message: StageWireMessage,
 ) -> Result<()> {
@@ -1053,12 +1057,15 @@ fn handle_binary_connection(
                     &message,
                     executable_token_ids,
                     input.as_ref(),
-                    message.kind == WireMessageKind::PrefillFinalEmbd && downstream.is_none(),
-                    stage_output_activation_capacity(
-                        config,
-                        message.token_count,
-                        activation_width,
-                    )?,
+                    BinaryStageExecutionOptions::new(
+                        message.kind == WireMessageKind::PrefillFinalEmbd && downstream.is_none(),
+                        stage_output_activation_capacity(
+                            config,
+                            message.token_count,
+                            activation_width,
+                        )?,
+                        native_mtp_enabled,
+                    ),
                 )
                 .context("execute binary stage message")?;
                 runtime_sessions_after = Some(runtime.session_stats());
@@ -1743,10 +1750,6 @@ fn native_mtp_prediction_tokens(predicted: i32, draft: Option<NativeMtpDraft>) -
     ]
 }
 
-fn native_mtp_enabled() -> bool {
-    native_mtp_enabled_from(env::var(NATIVE_MTP_ENABLED_ENV).ok().as_deref())
-}
-
 fn binary_auto_align_session_enabled() -> bool {
     truthy_env(env::var(AUTO_ALIGN_SESSION_ENV).ok().as_deref())
 }
@@ -1776,6 +1779,7 @@ fn message_pos_start_as_token_count(message: &StageWireMessage) -> Option<u64> {
     u64::try_from(message.pos_start).ok()
 }
 
+#[cfg(test)]
 fn native_mtp_enabled_from(value: Option<&str>) -> bool {
     !matches!(
         value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
@@ -2435,8 +2439,15 @@ fn handle_binary_restore_prefill_decode_control(
             &decode_message,
             &[current_token],
             input.as_ref(),
-            downstream.is_none(),
-            stage_output_activation_capacity(config, decode_message.token_count, activation_width)?,
+            BinaryStageExecutionOptions::new(
+                downstream.is_none(),
+                stage_output_activation_capacity(
+                    config,
+                    decode_message.token_count,
+                    activation_width,
+                )?,
+                config.native_mtp_enabled,
+            ),
         )
         .context("execute restore-decode stage message")?;
         (
@@ -3767,14 +3778,34 @@ pub(crate) fn connect_binary_downstream(
         )))
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BinaryStageExecutionOptions {
+    pub(crate) sample_final_prefill: bool,
+    pub(crate) output_capacity: usize,
+    pub(crate) native_mtp_enabled: bool,
+}
+
+impl BinaryStageExecutionOptions {
+    pub(crate) fn new(
+        sample_final_prefill: bool,
+        output_capacity: usize,
+        native_mtp_enabled: bool,
+    ) -> Self {
+        Self {
+            sample_final_prefill,
+            output_capacity,
+            native_mtp_enabled,
+        }
+    }
+}
+
 pub(crate) fn run_binary_stage_message(
     runtime: &mut RuntimeState,
     session_id: &str,
     message: &StageWireMessage,
     token_ids: &[i32],
     input: Option<&ActivationFrame>,
-    sample_final_prefill: bool,
-    output_capacity: usize,
+    options: BinaryStageExecutionOptions,
 ) -> Result<(i32, Vec<i32>, ActivationFrame)> {
     match message.kind {
         WireMessageKind::PrefillEmbd => {
@@ -3786,7 +3817,7 @@ pub(crate) fn run_binary_stage_message(
             )?;
             Ok((message.state.current_token, Vec::new(), output))
         }
-        WireMessageKind::PrefillFinalEmbd if sample_final_prefill => {
+        WireMessageKind::PrefillFinalEmbd if options.sample_final_prefill => {
             let sampling = runtime_sampling_config(message.sampling.as_ref());
             let (predicted, output) = runtime.prefill_final_frame_sampled(
                 session_id,
@@ -3816,13 +3847,13 @@ pub(crate) fn run_binary_stage_message(
                 .copied()
                 .unwrap_or(message.state.current_token);
             let sampling = runtime_sampling_config(message.sampling.as_ref());
-            if !native_mtp_enabled() {
+            if !options.native_mtp_enabled {
                 let (predicted, output) = runtime.decode_frame_sampled(
                     session_id,
                     token_id,
                     sampling.as_ref(),
                     input,
-                    output_capacity,
+                    options.output_capacity,
                 )?;
                 return Ok((predicted, vec![predicted], output));
             }
@@ -3831,7 +3862,7 @@ pub(crate) fn run_binary_stage_message(
                 token_id,
                 sampling.as_ref(),
                 input,
-                output_capacity,
+                options.output_capacity,
             )?;
             Ok((
                 predicted,
@@ -3846,7 +3877,7 @@ pub(crate) fn run_binary_stage_message(
                 token_ids,
                 sampling.as_ref(),
                 input,
-                output_capacity,
+                options.output_capacity,
             )?;
             let predicted = predicted_tokens.first().copied().unwrap_or(0);
             Ok((predicted, predicted_tokens, output))

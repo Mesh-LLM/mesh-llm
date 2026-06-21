@@ -351,6 +351,7 @@ lifecycle_health_interval_ms    = 5000      # health-check interval (ms)
 
 # --- Speculative decoding ------------------------------------------------
 [defaults.speculative]
+strategy                   = "auto"          # auto disabled native-mtp-n1
 mode                       = "auto"          # auto off draft ngram lookahead
 draft_selection_policy     = "auto"          # auto manual heuristic
 pairing_fault              = "warn_disable"  # warn_disable fail_open fail_closed
@@ -363,6 +364,10 @@ spec_default               = "auto"          # bool or "auto"
 # draft_model_path = "/models/draft.gguf"
 # draft_hf_repo    = "org/draft-GGUF"
 # draft_hf_file    = "draft-q4_k_m.gguf"
+
+# Native MTP strategy override
+# strategy = "native-mtp-n1"  # force native model MTP when available
+# strategy = "disabled"       # disable package/model native MTP
 
 # Draft hardware (leave unset to share host model's device)
 # draft_gpu_layers   = -1
