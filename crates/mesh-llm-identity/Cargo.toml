@@ -19,7 +19,7 @@ chacha20poly1305 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 crypto_box = "0.9"
 dirs = { version = "6.0.0", optional = true }
-ed25519-dalek = { version = "=3.0.0-pre.7", features = ["rand_core"] }
+ed25519-dalek = { version = "=3.0.0-rc.0", features = ["rand_core"] }
 hex = "0.4"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"], optional = true }
 rand = "0.10"

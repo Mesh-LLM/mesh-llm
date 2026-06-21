@@ -57,7 +57,7 @@ skippy-coordinator = { path = "../skippy-coordinator", version = "0.68.0"  }
 skippy-runtime = { path = "../skippy-runtime", version = "0.68.0"  }
 skippy-server = { path = "../skippy-server", version = "0.68.0"  }
 skippy-topology = { path = "../skippy-topology", version = "0.68.0"  }
-iroh = "1.0.0-rc.0"
+iroh = "1.0.0"
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
@@ -83,7 +83,7 @@ futures-util = "0.3"
 semver = "1"
 sha2 = "0.10"
 tar = "0.4"
-ed25519-dalek = { version = "=3.0.0-pre.7", features = ["rand_core"] }
+ed25519-dalek = { version = "=3.0.0-rc.0", features = ["rand_core"] }
 crypto_box = "0.9"
 chacha20poly1305 = "0.10"
 argon2 = "0.5"
@@ -119,5 +119,5 @@ mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = 
 # with AccessConfig::Restricted, then build a real iroh::Endpoint from our
 # relay_map_from_urls output and verify --relay-auth tokens reach the relay
 # on the WebSocket upgrade (and that the wrong token is rejected).
-iroh = { version = "1.0.0-rc.0", features = ["test-utils"] }
-iroh-relay = { version = "1.0.0-rc.0", features = ["server", "test-utils"] }
+iroh = { version = "1.0.0", features = ["test-utils"] }
+iroh-relay = { version = "1.0.0", features = ["server", "test-utils"] }

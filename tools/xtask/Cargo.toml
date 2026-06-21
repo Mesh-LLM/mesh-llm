@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-ed25519-dalek = { version = "=3.0.0-pre.7", features = ["rand_core"] }
+ed25519-dalek = { version = "=3.0.0-rc.0", features = ["rand_core"] }
 getrandom = "0.3"
 hex = "0.4"
 mesh-llm-system = { path = "../../crates/mesh-llm-system" }

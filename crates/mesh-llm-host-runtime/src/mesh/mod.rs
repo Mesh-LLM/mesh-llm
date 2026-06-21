@@ -708,11 +708,11 @@ mod relay_map_tests {
 }
 
 /// End-to-end regression tests for `--relay-auth` against a real in-process
-/// iroh-relay running [`iroh_relay::server::AccessConfig::Restricted`].
+/// iroh-relay running a custom [`iroh_relay::server::AccessControl`].
 ///
 /// These tests do not go through the full `Node::start` path — they exercise
 /// `relay_map_from_urls` (the new wiring) plus the iroh `Endpoint` builder
-/// the same way `bind_mesh_endpoint` does, with `ca_roots_config` overridden
+/// the same way `bind_mesh_endpoint` does, with `ca_tls_config` overridden
 /// for the relay's self-signed test cert. The contract being defended is:
 ///
 ///  1. A token configured for a gated relay URL reaches iroh as
@@ -730,25 +730,31 @@ mod gated_relay_e2e_tests {
     use iroh::Watcher;
     use iroh::endpoint::{Endpoint, RelayMode, presets};
     use iroh::test_utils::run_relay_server_with_access;
-    use iroh_relay::server::{Access, AccessConfig};
-    use iroh_relay::tls::CaRootsConfig;
+    use iroh_relay::server::{Access, AccessControl, AllowAll, ClientRequest};
+    use iroh_relay::tls::CaTlsConfig;
     use std::collections::HashMap;
+    use std::sync::Arc;
     use std::time::Duration;
+
+    #[derive(Debug)]
+    struct TokenAccess(&'static str);
+
+    impl AccessControl for TokenAccess {
+        async fn on_connect(&self, request: &ClientRequest) -> Access {
+            if request.auth_token().as_deref() == Some(self.0) {
+                Access::Allow
+            } else {
+                Access::Deny { reason: None }
+            }
+        }
+    }
 
     /// Spawn an in-process iroh-relay that only admits `expected_token`.
     /// Returns (relay_url_string, drop-guard server).
     async fn spawn_gated_relay(
         expected_token: &'static str,
     ) -> (String, iroh_relay::server::Server) {
-        let access = AccessConfig::Restricted(Box::new(move |request| {
-            Box::pin(async move {
-                if request.auth_token().as_deref() == Some(expected_token) {
-                    Access::Allow
-                } else {
-                    Access::Deny
-                }
-            })
-        }));
+        let access = Arc::new(TokenAccess(expected_token));
         let (_relay_map, relay_url, server) = run_relay_server_with_access(false, access)
             .await
             .expect("spawn gated relay");
@@ -768,7 +774,7 @@ mod gated_relay_e2e_tests {
                 relay_urls,
                 relay_auths,
             )))
-            .ca_roots_config(CaRootsConfig::insecure_skip_verify())
+            .ca_tls_config(CaTlsConfig::insecure_skip_verify())
             .bind()
             .await
             .expect("endpoint bind")
@@ -854,7 +860,7 @@ mod gated_relay_e2e_tests {
         // Spin up a second, fully-open relay to stand in for a public iroh
         // relay sharing the same map.
         let (_public_map, public_url, _public) =
-            run_relay_server_with_access(false, AccessConfig::Everyone)
+            run_relay_server_with_access(false, Arc::new(AllowAll))
                 .await
                 .expect("spawn public relay");
         let public_url = public_url.to_string();
