@@ -238,6 +238,13 @@ scripts/package-native-runtime.sh \
 scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
 ```
 
+Linux runtime packages must be relocatable from the installed cache. Packaged
+ELF shared libraries use `$ORIGIN` in their runtime search path so sibling
+libraries under `lib/` resolve without requiring users, CI, or SDK smoke tests to
+set `LD_LIBRARY_PATH`. The package verifier rejects absolute build or CI
+`RPATH`/`RUNPATH` entries and checks packaged Linux dependencies with
+`LD_LIBRARY_PATH` removed from the environment.
+
 CUDA lanes use `MESH_LLM_CUDA_TOOLKIT_MAJOR` to emit IDs such as `cuda12` or
 `cuda13`. `--backend cuda-blackwell` defaults to `cuda13-sm120`.
 

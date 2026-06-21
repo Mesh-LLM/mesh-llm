@@ -224,6 +224,11 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   runs.
 - Linux CPU artifacts feed inference, two-node, native SDK, and Kotlin SDK
   smokes. macOS CPU artifacts feed Swift SDK smokes.
+- Linux native-runtime packaging uses `patchelf` to make packaged shared
+  libraries relocatable with `$ORIGIN`, then verifies them without
+  `LD_LIBRARY_PATH`. Release native-runtime jobs and Linux SDK smoke jobs need
+  `patchelf` because SDK smoke prepares native runtime packages through
+  `scripts/ci-prepare-native-runtime.sh`.
 - Artifact-consuming smokes are additionally gated on the matching CPU producer
   being eligible, so backend-only or cleanup-only PRs skip those jobs natively
   instead of attempting to download an artifact that was never uploaded.

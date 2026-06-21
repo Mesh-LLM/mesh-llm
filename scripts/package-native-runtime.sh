@@ -278,6 +278,23 @@ rewrite_macos_runtime_paths() {
     done
 }
 
+rewrite_linux_runtime_paths() {
+    case "$TARGET_TRIPLE" in
+        *linux*) ;;
+        *) return 0 ;;
+    esac
+    if ! command -v patchelf >/dev/null 2>&1; then
+        echo "patchelf is required to package Linux native runtimes" >&2
+        exit 1
+    fi
+
+    local rel_path library
+    for rel_path in "${library_paths[@]}"; do
+        library="$stage_dir/$rel_path"
+        patchelf --set-rpath '$ORIGIN' "$library"
+    done
+}
+
 if [[ -z "$TARGET_TRIPLE" ]]; then
     TARGET_TRIPLE="$(default_target_triple)"
 fi
@@ -334,6 +351,7 @@ for library in "${runtime_libraries[@]}"; do
 done
 
 rewrite_macos_runtime_paths
+rewrite_linux_runtime_paths
 
 primary_library="lib/$primary_name"
 primary_sha="$(sha256_file "$stage_dir/$primary_library")"

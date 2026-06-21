@@ -13,6 +13,7 @@ Verifies MeshLLM native runtime artifacts:
   - artifact directory name matches runtime.id
   - all runtime.libraries exist
   - library_sha256 matches the primary library
+  - Linux shared-library RUNPATH/RPATH is relocatable and resolves packaged deps
   - archive checksum sidecar when present
 EOF
 }
@@ -137,6 +138,7 @@ if library_sha256:
         )
 PY
     verify_macos_runtime_paths "$artifact_dir" "$manifest"
+    verify_linux_runtime_paths "$artifact_dir" "$manifest"
     echo "verified native runtime artifact: $artifact_dir"
 }
 
@@ -186,6 +188,106 @@ for rel_path in libraries:
             in_rpath = False
     if not has_loader_path_rpath:
         raise SystemExit(f"{rel_path} is missing @loader_path LC_RPATH")
+PY
+}
+
+verify_linux_runtime_paths() {
+    local artifact_dir="$1"
+    local manifest="$2"
+    if ! python3 - "$manifest" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    manifest = json.load(fh)
+raise SystemExit(0 if manifest["runtime"]["platform"].get("os") == "linux" else 1)
+PY
+    then
+        return 0
+    fi
+    if ! command -v readelf >/dev/null 2>&1; then
+        echo "readelf is required to verify Linux native runtime shared libraries" >&2
+        exit 1
+    fi
+    python3 - "$artifact_dir" "$manifest" <<'PY'
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+
+artifact_dir, manifest_path = sys.argv[1:3]
+with open(manifest_path, encoding="utf-8") as fh:
+    manifest = json.load(fh)
+
+libraries = manifest["runtime"]["libraries"]
+library_names = {os.path.basename(path) for path in libraries}
+artifact_root = os.path.realpath(artifact_dir)
+dynamic_re = re.compile(r"\((NEEDED|RPATH|RUNPATH)\).*\[(.*)\]")
+suspicious_tokens = (
+    "/home/runner/work",
+    ".deps/llama-build",
+    "build-stage-abi",
+)
+
+
+def dynamic_entries(path: str) -> tuple[list[str], list[str]]:
+    output = subprocess.check_output(["readelf", "-d", path], text=True)
+    needed: list[str] = []
+    search_paths: list[str] = []
+    for line in output.splitlines():
+        match = dynamic_re.search(line)
+        if not match:
+            continue
+        tag, value = match.groups()
+        if tag == "NEEDED":
+            needed.append(value)
+        else:
+            search_paths.extend(entry for entry in value.split(":") if entry)
+    return needed, search_paths
+
+
+def verify_ldd_resolution(rel_path: str, needed: list[str]) -> None:
+    packaged_needed = [dep for dep in needed if os.path.basename(dep) in library_names]
+    if not packaged_needed or platform.system() != "Linux":
+        return
+    if shutil.which("ldd") is None:
+        raise SystemExit("ldd is required to verify Linux packaged dependency resolution")
+    path = os.path.join(artifact_dir, rel_path)
+    env = os.environ.copy()
+    env.pop("LD_LIBRARY_PATH", None)
+    output = subprocess.check_output(["ldd", path], env=env, text=True, stderr=subprocess.STDOUT)
+    for dep in packaged_needed:
+        dep_name = os.path.basename(dep)
+        match = re.search(rf"^\s*{re.escape(dep_name)}\s+=>\s+(\S+)", output, re.MULTILINE)
+        if match is None:
+            raise SystemExit(f"{rel_path} ldd output is missing packaged dependency {dep_name}")
+        resolved = match.group(1)
+        if resolved == "not":
+            raise SystemExit(f"{rel_path} does not resolve packaged dependency {dep_name} without LD_LIBRARY_PATH")
+        if not os.path.realpath(resolved).startswith(artifact_root + os.sep):
+            raise SystemExit(
+                f"{rel_path} resolves packaged dependency {dep_name} outside artifact: {resolved}"
+            )
+
+
+for rel_path in libraries:
+    name = os.path.basename(rel_path)
+    if ".so" not in name:
+        continue
+    needed, search_paths = dynamic_entries(os.path.join(artifact_dir, rel_path))
+    packaged_needed = [dep for dep in needed if os.path.basename(dep) in library_names]
+    for entry in search_paths:
+        if any(token in entry for token in suspicious_tokens):
+            raise SystemExit(f"{rel_path} contains build-directory runtime search path: {entry}")
+        if entry.startswith("/"):
+            raise SystemExit(f"{rel_path} contains absolute runtime search path: {entry}")
+    if packaged_needed and not any("$ORIGIN" in entry for entry in search_paths):
+        joined = ", ".join(packaged_needed)
+        raise SystemExit(f"{rel_path} needs packaged libraries ({joined}) but is missing $ORIGIN RPATH/RUNPATH")
+    verify_ldd_resolution(rel_path, needed)
 PY
 }
 
