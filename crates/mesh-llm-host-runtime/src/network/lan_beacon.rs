@@ -31,13 +31,9 @@ use crate::mesh;
 
 /// Dedicated multicast group + port for the LAN direct-path beacon.
 ///
-/// Uses a link-local multicast group (224.0.0.0/24), like mDNS, rather than an
-/// admin-scoped 239.x group. Link-local multicast is always routable on the
-/// local segment and needs no multicast route, so a socket bound to a specific
-/// LAN interface can always send to it. Admin-scoped 239.x groups require a
-/// multicast route, which multi-homed macOS hosts often lack on a specific
-/// interface, causing `EHOSTUNREACH` on send. The port keeps it distinct from
-/// mDNS (5353) so it never interferes with service discovery.
+/// `224.0.0.251` is the IANA-assigned mDNS link-local multicast group. Reusing
+/// that group on the distinct mesh-llm beacon port keeps packets on the local
+/// segment without interacting with mDNS responders on 5353.
 const BEACON_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const BEACON_PORT: u16 = 47654;
 /// How often to emit our beacon.
@@ -154,9 +150,11 @@ async fn emit_beacon(node: &mesh::Node) -> Result<()> {
         p.set_port(BEACON_PORT);
     }
 
-    tokio::task::spawn_blocking(move || emit_blocking(mcast, &peers, &payload))
-        .await
-        .ok();
+    if let Err(err) =
+        tokio::task::spawn_blocking(move || emit_blocking(mcast, &peers, &payload)).await
+    {
+        tracing::warn!(%err, "LAN beacon emit task failed");
+    }
     Ok(())
 }
 
@@ -167,8 +165,9 @@ fn emit_blocking(mcast: SocketAddrV4, peers: &[SocketAddrV4], payload: &[u8]) {
     if let Err(err) = send_multicast(mcast, payload) {
         tracing::trace!("LAN beacon multicast failed: {err}");
     }
-    // Unicast is the reliable carrier (multicast options trigger in-process
-    // EHOSTUNREACH on some multi-homed macOS hosts).
+    // Each send opens a short-lived socket: beacon traffic is tiny, and avoiding
+    // shared multicast socket state keeps interface pins out of unicast sends on
+    // multi-homed hosts.
     for peer in peers {
         let res = send_unicast(*peer, payload);
         tracing::trace!("LAN beacon unicast to {peer}: {res:?}");
