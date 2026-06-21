@@ -24,6 +24,7 @@ pub(crate) struct StageDeploymentContext<'a> {
     pub(crate) kv_cache: KvCachePolicy,
     pub(crate) flash_attn_type: FlashAttentionType,
     pub(crate) projector_path: Option<String>,
+    pub(crate) native_mtp_enabled: bool,
 }
 
 pub(crate) fn remote_stage_load_request(
@@ -57,7 +58,7 @@ pub(crate) fn remote_stage_load_request(
         cache_type_k: context.kv_cache.cache_type_k().to_string(),
         cache_type_v: context.kv_cache.cache_type_v().to_string(),
         flash_attn_type: context.flash_attn_type,
-        native_mtp_enabled: true,
+        native_mtp_enabled: context.native_mtp_enabled,
         shutdown_generation: 1,
         coordinator_term: 0,
         coordinator_id: None,
@@ -106,7 +107,7 @@ pub(crate) fn stage0_config(
         filter_tensors_on_load: true,
         selected_device,
         kv_cache: None,
-        native_mtp_enabled: true,
+        native_mtp_enabled: context.native_mtp_enabled,
         load_mode: LoadMode::LayerPackage,
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
@@ -232,6 +233,7 @@ mod tests {
             kv_cache: KvCachePolicy::for_model_size(0),
             flash_attn_type: FlashAttentionType::Auto,
             projector_path: Some("/models/mmproj.gguf".to_string()),
+            native_mtp_enabled: false,
         };
         let request = remote_stage_load_request(
             &context,
@@ -256,6 +258,7 @@ mod tests {
         );
         assert_eq!((request.layer_start, request.layer_end), (4, 8));
         assert!(request.projector_path.is_none());
+        assert!(!request.native_mtp_enabled);
 
         let stage0 = stage0_config(
             &context,
@@ -282,5 +285,6 @@ mod tests {
             stage0.projector_path.as_deref(),
             Some("/models/mmproj.gguf")
         );
+        assert!(!stage0.native_mtp_enabled);
     }
 }

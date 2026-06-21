@@ -792,6 +792,10 @@ fn speculative_strategy_defaults_to_native_mtp_enabled() {
 
     assert_eq!(resolved.speculative.strategy, "auto");
     assert!(resolved.speculative.native_mtp_enabled);
+    let load_options = resolved
+        .to_model_load_options(SkippyTelemetryOptions::off())
+        .expect("model load options should build");
+    assert!(load_options.native_mtp_enabled);
     let stage = resolved
         .to_stage_config(Some(fake_package_identity(24)), LoadMode::LayerPackage)
         .expect("stage config should build");
@@ -824,6 +828,10 @@ strategy = "disabled"
 
     assert_eq!(resolved.speculative.strategy, "disabled");
     assert!(!resolved.speculative.native_mtp_enabled);
+    let load_options = resolved
+        .to_model_load_options(SkippyTelemetryOptions::off())
+        .expect("model load options should build");
+    assert!(!load_options.native_mtp_enabled);
     let stage = resolved
         .to_stage_config(Some(fake_package_identity(24)), LoadMode::LayerPackage)
         .expect("stage config should build");

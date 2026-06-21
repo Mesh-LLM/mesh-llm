@@ -810,6 +810,7 @@ fn handle_binary_connection(
                     control_stats,
                     &mut prediction_return_streams,
                     downstream_connect_timeout_secs,
+                    native_mtp_enabled,
                 )
                 .context("handle restore-prefill-decode control")?;
                 continue;
@@ -2368,6 +2369,7 @@ fn handle_binary_restore_prefill_decode_control(
     mut control_stats: StageReplyStats,
     prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
     downstream_connect_timeout_secs: u64,
+    native_mtp_enabled: bool,
 ) -> Result<()> {
     let (prefix_tokens, current_token) = restore_decode_sideband(&message)?;
     let local = maybe_prefix_cache_control(
@@ -2446,7 +2448,7 @@ fn handle_binary_restore_prefill_decode_control(
                     decode_message.token_count,
                     activation_width,
                 )?,
-                config.native_mtp_enabled,
+                native_mtp_enabled,
             ),
         )
         .context("execute restore-decode stage message")?;

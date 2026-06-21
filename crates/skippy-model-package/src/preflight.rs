@@ -97,6 +97,16 @@ pub(crate) struct PreflightSpeculativeStrategy {
     pub prediction_depth: Option<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub layer_indices: Vec<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_policy: Option<PreflightWindowPolicy>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PreflightWindowPolicy {
+    pub default: String,
+    pub initial_window: u32,
+    pub min_window: u32,
+    pub max_window: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -556,8 +566,18 @@ fn preflight_speculative_decoding(
                 strategy_type: strategy.strategy_type.clone(),
                 prediction_depth: strategy.prediction_depth,
                 layer_indices: strategy.layer_indices.clone(),
+                window_policy: strategy.window_policy.as_ref().map(preflight_window_policy),
             })
             .collect(),
+    }
+}
+
+fn preflight_window_policy(window: &PackageWindowPolicy) -> PreflightWindowPolicy {
+    PreflightWindowPolicy {
+        default: window.default.clone(),
+        initial_window: window.initial_window,
+        min_window: window.min_window,
+        max_window: window.max_window,
     }
 }
 
@@ -1231,6 +1251,14 @@ mod tests {
         assert_eq!(speculative.strategies[0].strategy_type, "native-mtp");
         assert_eq!(speculative.strategies[0].prediction_depth, Some(1));
         assert_eq!(speculative.strategies[0].layer_indices, [1]);
+        let window_policy = speculative.strategies[0]
+            .window_policy
+            .as_ref()
+            .expect("window policy should be reported");
+        assert_eq!(window_policy.default, "fixed");
+        assert_eq!(window_policy.initial_window, 1);
+        assert_eq!(window_policy.min_window, 1);
+        assert_eq!(window_policy.max_window, 1);
         fs::remove_dir_all(dir).unwrap();
     }
 
