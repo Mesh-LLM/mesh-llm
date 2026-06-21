@@ -53,8 +53,36 @@ pub struct LayerPackageInfo {
     pub source_model_bytes: Option<u64>,
     pub layer_count: u32,
     pub activation_width: Option<u32>,
+    pub generation: Option<PackageGenerationInfo>,
     pub projectors: Vec<PackageProjectorInfo>,
     pub layers: Vec<LayerPackageLayerInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageGenerationInfo {
+    pub speculative_decoding: Option<PackageSpeculativeDecodingInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageSpeculativeDecodingInfo {
+    pub default: String,
+    pub strategies: BTreeMap<String, PackageSpeculativeStrategyInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageSpeculativeStrategyInfo {
+    pub strategy_type: String,
+    pub prediction_depth: Option<u32>,
+    pub layer_indices: Vec<u32>,
+    pub window_policy: Option<PackageWindowPolicyInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageWindowPolicyInfo {
+    pub default: String,
+    pub initial_window: u32,
+    pub min_window: u32,
+    pub max_window: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +167,8 @@ struct PackageManifest {
     layer_count: u32,
     #[serde(default)]
     activation_width: Option<u32>,
+    #[serde(default)]
+    generation: Option<PackageGeneration>,
     shared: PackageShared,
     #[serde(default)]
     projectors: Vec<PackageProjector>,
@@ -171,6 +201,39 @@ struct PackageShared {
     metadata: PackageArtifact,
     embeddings: PackageArtifact,
     output: PackageArtifact,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageGeneration {
+    #[serde(default)]
+    speculative_decoding: Option<PackageSpeculativeDecoding>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageSpeculativeDecoding {
+    default: String,
+    #[serde(default)]
+    strategies: BTreeMap<String, PackageSpeculativeStrategy>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageSpeculativeStrategy {
+    #[serde(rename = "type")]
+    strategy_type: String,
+    #[serde(default)]
+    prediction_depth: Option<u32>,
+    #[serde(default)]
+    layer_indices: Vec<u32>,
+    #[serde(default)]
+    window_policy: Option<PackageWindowPolicy>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageWindowPolicy {
+    default: String,
+    initial_window: u32,
+    min_window: u32,
+    max_window: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -465,6 +528,7 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
             .flatten(),
         layer_count: manifest.layer_count,
         activation_width,
+        generation: manifest.generation.map(package_generation_info),
         projectors,
         layers: manifest
             .layers
@@ -477,6 +541,45 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
             })
             .collect(),
     })
+}
+
+fn package_generation_info(generation: PackageGeneration) -> PackageGenerationInfo {
+    PackageGenerationInfo {
+        speculative_decoding: generation
+            .speculative_decoding
+            .map(package_speculative_decoding_info),
+    }
+}
+
+fn package_speculative_decoding_info(
+    speculative: PackageSpeculativeDecoding,
+) -> PackageSpeculativeDecodingInfo {
+    PackageSpeculativeDecodingInfo {
+        default: speculative.default,
+        strategies: speculative
+            .strategies
+            .into_iter()
+            .map(|(name, strategy)| (name, package_speculative_strategy_info(strategy)))
+            .collect(),
+    }
+}
+
+fn package_speculative_strategy_info(
+    strategy: PackageSpeculativeStrategy,
+) -> PackageSpeculativeStrategyInfo {
+    PackageSpeculativeStrategyInfo {
+        strategy_type: strategy.strategy_type,
+        prediction_depth: strategy.prediction_depth,
+        layer_indices: strategy.layer_indices,
+        window_policy: strategy
+            .window_policy
+            .map(|window| PackageWindowPolicyInfo {
+                default: window.default,
+                initial_window: window.initial_window,
+                min_window: window.min_window,
+                max_window: window.max_window,
+            }),
+    }
 }
 
 fn infer_activation_width_from_layers(

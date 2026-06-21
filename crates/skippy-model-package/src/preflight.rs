@@ -20,6 +20,8 @@ pub(crate) struct PackagePreflightReport {
     pub model_id: Option<String>,
     pub layer_count: Option<u32>,
     pub activation_width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<PreflightGeneration>,
     pub manifest_sha256: Option<String>,
     pub checked_artifact_count: usize,
     pub missing_artifact_count: usize,
@@ -74,6 +76,29 @@ pub(crate) struct PreflightStage {
     pub missing_parts: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct PreflightGeneration {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speculative_decoding: Option<PreflightSpeculativeDecoding>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PreflightSpeculativeDecoding {
+    pub default: String,
+    pub strategies: Vec<PreflightSpeculativeStrategy>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PreflightSpeculativeStrategy {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub strategy_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_depth: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub layer_indices: Vec<u32>,
+}
+
 #[derive(Debug, Deserialize)]
 struct PackageManifest {
     schema_version: u32,
@@ -83,6 +108,8 @@ struct PackageManifest {
     layer_count: u32,
     #[serde(default)]
     activation_width: Option<u32>,
+    #[serde(default)]
+    generation: Option<PackageGeneration>,
     shared: PackageShared,
     #[serde(default)]
     projectors: Vec<PackageProjector>,
@@ -101,6 +128,39 @@ struct PackageShared {
     metadata: PackageArtifact,
     embeddings: PackageArtifact,
     output: PackageArtifact,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageGeneration {
+    #[serde(default)]
+    speculative_decoding: Option<PackageSpeculativeDecoding>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageSpeculativeDecoding {
+    default: String,
+    #[serde(default)]
+    strategies: BTreeMap<String, PackageSpeculativeStrategy>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageSpeculativeStrategy {
+    #[serde(rename = "type")]
+    strategy_type: String,
+    #[serde(default)]
+    prediction_depth: Option<u32>,
+    #[serde(default)]
+    layer_indices: Vec<u32>,
+    #[serde(default)]
+    window_policy: Option<PackageWindowPolicy>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageWindowPolicy {
+    default: String,
+    initial_window: u32,
+    min_window: u32,
+    max_window: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,7 +238,13 @@ pub(crate) fn preflight_package(
     report.model_id = Some(manifest.model_id.clone());
     report.layer_count = Some(manifest.layer_count);
     report.activation_width = manifest.activation_width;
+    report.generation = manifest.generation.as_ref().map(preflight_generation);
     validate_manifest_header(&manifest, &mut report);
+    validate_generation(
+        manifest.generation.as_ref(),
+        manifest.layer_count,
+        &mut report,
+    );
     let artifacts = collect_artifacts(&manifest);
     validate_layer_coverage(&manifest, &mut report);
     validate_artifacts(package, &artifacts, options.verify_sha256, &mut report);
@@ -195,6 +261,7 @@ impl PackagePreflightReport {
             model_id: None,
             layer_count: None,
             activation_width: None,
+            generation: None,
             manifest_sha256: None,
             checked_artifact_count: 0,
             missing_artifact_count: 0,
@@ -320,6 +387,177 @@ fn validate_manifest_header(manifest: &PackageManifest, report: &mut PackagePref
                 "rebuild the package with supported mmproj projector sidecars only",
             );
         }
+    }
+}
+
+fn validate_generation(
+    generation: Option<&PackageGeneration>,
+    layer_count: u32,
+    report: &mut PackagePreflightReport,
+) {
+    let Some(speculative) =
+        generation.and_then(|generation| generation.speculative_decoding.as_ref())
+    else {
+        return;
+    };
+    if speculative.default.trim().is_empty() {
+        report.error(
+            "empty_speculative_default",
+            "generation.speculative_decoding.default must not be empty",
+            Some("model-package.json".to_string()),
+            "set the default speculative decoding strategy name or remove the generation block",
+        );
+    } else if !speculative.strategies.contains_key(&speculative.default) {
+        report.error(
+            "missing_speculative_default_strategy",
+            format!(
+                "generation.speculative_decoding.default {} is not present in strategies",
+                speculative.default
+            ),
+            Some("model-package.json".to_string()),
+            "add the default strategy entry or point default at an existing strategy",
+        );
+    }
+    for (name, strategy) in &speculative.strategies {
+        validate_speculative_strategy(name, strategy, layer_count, report);
+    }
+}
+
+fn validate_speculative_strategy(
+    name: &str,
+    strategy: &PackageSpeculativeStrategy,
+    layer_count: u32,
+    report: &mut PackagePreflightReport,
+) {
+    if name.trim().is_empty() {
+        report.error(
+            "empty_speculative_strategy_name",
+            "generation.speculative_decoding strategy names must not be empty",
+            Some("model-package.json".to_string()),
+            "use a stable non-empty strategy id such as native-mtp-n1",
+        );
+    }
+    if strategy.strategy_type.trim().is_empty() {
+        report.error(
+            "empty_speculative_strategy_type",
+            format!("speculative strategy {name} type must not be empty"),
+            Some("model-package.json".to_string()),
+            "set a supported strategy type such as native-mtp",
+        );
+    }
+    if strategy.strategy_type == "native-mtp" {
+        validate_native_mtp_strategy(name, strategy, layer_count, report);
+    }
+    if let Some(window) = &strategy.window_policy {
+        validate_window_policy(name, window, report);
+    }
+}
+
+fn validate_native_mtp_strategy(
+    name: &str,
+    strategy: &PackageSpeculativeStrategy,
+    layer_count: u32,
+    report: &mut PackagePreflightReport,
+) {
+    if strategy.prediction_depth != Some(1) {
+        report.error(
+            "unsupported_native_mtp_prediction_depth",
+            format!("native MTP strategy {name} must use prediction_depth 1"),
+            Some("model-package.json".to_string()),
+            "rebuild the package with the native-mtp-n1 policy supported by this runtime",
+        );
+    }
+    if strategy.layer_indices.is_empty() {
+        report.error(
+            "missing_native_mtp_layers",
+            format!("native MTP strategy {name} must declare MTP layer_indices"),
+            Some("model-package.json".to_string()),
+            "rebuild the package from a GGUF with native MTP tensors",
+        );
+    }
+    for layer_index in &strategy.layer_indices {
+        if *layer_index >= layer_count {
+            report.error(
+                "native_mtp_layer_out_of_range",
+                format!(
+                    "native MTP strategy {name} references layer {layer_index}, but layer_count is {layer_count}"
+                ),
+                Some("model-package.json".to_string()),
+                "rebuild the package manifest so MTP layer indices are within the package layer range",
+            );
+        }
+    }
+}
+
+fn validate_window_policy(
+    name: &str,
+    window: &PackageWindowPolicy,
+    report: &mut PackagePreflightReport,
+) {
+    if window.default.trim().is_empty() {
+        report.error(
+            "empty_window_policy_default",
+            format!("speculative strategy {name} window_policy.default must not be empty"),
+            Some("model-package.json".to_string()),
+            "set the window policy default to fixed or adaptive",
+        );
+    }
+    if window.min_window == 0 || window.max_window == 0 || window.initial_window == 0 {
+        report.error(
+            "invalid_window_policy_zero",
+            format!("speculative strategy {name} window_policy values must be greater than zero"),
+            Some("model-package.json".to_string()),
+            "use positive window sizes",
+        );
+    }
+    if window.min_window > window.max_window {
+        report.error(
+            "invalid_window_policy_bounds",
+            format!(
+                "speculative strategy {name} window_policy min_window {} exceeds max_window {}",
+                window.min_window, window.max_window
+            ),
+            Some("model-package.json".to_string()),
+            "set min_window less than or equal to max_window",
+        );
+    }
+    if window.initial_window < window.min_window || window.initial_window > window.max_window {
+        report.error(
+            "invalid_window_policy_initial",
+            format!(
+                "speculative strategy {name} window_policy initial_window {} is outside {}..{}",
+                window.initial_window, window.min_window, window.max_window
+            ),
+            Some("model-package.json".to_string()),
+            "set initial_window inside the declared min/max range",
+        );
+    }
+}
+
+fn preflight_generation(generation: &PackageGeneration) -> PreflightGeneration {
+    PreflightGeneration {
+        speculative_decoding: generation
+            .speculative_decoding
+            .as_ref()
+            .map(preflight_speculative_decoding),
+    }
+}
+
+fn preflight_speculative_decoding(
+    speculative: &PackageSpeculativeDecoding,
+) -> PreflightSpeculativeDecoding {
+    PreflightSpeculativeDecoding {
+        default: speculative.default.clone(),
+        strategies: speculative
+            .strategies
+            .iter()
+            .map(|(name, strategy)| PreflightSpeculativeStrategy {
+                name: name.clone(),
+                strategy_type: strategy.strategy_type.clone(),
+                prediction_depth: strategy.prediction_depth,
+                layer_indices: strategy.layer_indices.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -948,6 +1186,93 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn preflight_reports_native_mtp_generation_defaults() {
+        let dir = unique_test_dir("native-mtp-generation");
+        let package = write_package_fixture(&dir, true);
+        write_generation_to_manifest(
+            &package,
+            serde_json::json!({
+                "speculative_decoding": {
+                    "default": "native-mtp-n1",
+                    "strategies": {
+                        "native-mtp-n1": {
+                            "type": "native-mtp",
+                            "prediction_depth": 1,
+                            "layer_indices": [1],
+                            "window_policy": {
+                                "default": "fixed",
+                                "initial_window": 1,
+                                "min_window": 1,
+                                "max_window": 1
+                            }
+                        }
+                    }
+                }
+            }),
+        );
+
+        let report = preflight_package(
+            &package,
+            &PackagePreflightOptions {
+                stages: None,
+                verify_sha256: false,
+            },
+        );
+
+        assert!(report.valid, "{:?}", report.issues);
+        let generation = report.generation.expect("generation should be reported");
+        let speculative = generation
+            .speculative_decoding
+            .expect("speculative decoding should be reported");
+        assert_eq!(speculative.default, "native-mtp-n1");
+        assert_eq!(speculative.strategies.len(), 1);
+        assert_eq!(speculative.strategies[0].name, "native-mtp-n1");
+        assert_eq!(speculative.strategies[0].strategy_type, "native-mtp");
+        assert_eq!(speculative.strategies[0].prediction_depth, Some(1));
+        assert_eq!(speculative.strategies[0].layer_indices, [1]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn preflight_rejects_native_mtp_layer_out_of_range() {
+        let dir = unique_test_dir("native-mtp-out-of-range");
+        let package = write_package_fixture(&dir, true);
+        write_generation_to_manifest(
+            &package,
+            serde_json::json!({
+                "speculative_decoding": {
+                    "default": "native-mtp-n1",
+                    "strategies": {
+                        "native-mtp-n1": {
+                            "type": "native-mtp",
+                            "prediction_depth": 1,
+                            "layer_indices": [2],
+                            "window_policy": {
+                                "default": "fixed",
+                                "initial_window": 1,
+                                "min_window": 1,
+                                "max_window": 1
+                            }
+                        }
+                    }
+                }
+            }),
+        );
+
+        let report = preflight_package(
+            &package,
+            &PackagePreflightOptions {
+                stages: None,
+                verify_sha256: false,
+            },
+        );
+
+        assert!(!report.valid);
+        assert_issue(&report, "native_mtp_layer_out_of_range");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     fn assert_issue(report: &PackagePreflightReport, code: &str) {
         assert!(
             report.issues.iter().any(|issue| issue.code == code),
@@ -994,6 +1319,14 @@ mod tests {
         )
         .unwrap();
         package
+    }
+
+    fn write_generation_to_manifest(package: &Path, generation: serde_json::Value) {
+        let manifest_path = package.join("model-package.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["generation"] = generation;
+        fs::write(manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
     }
 
     fn write_artifact(package: &Path, relative_path: &str, bytes: &[u8]) {

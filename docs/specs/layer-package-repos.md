@@ -184,6 +184,24 @@ Minimal shape:
       "sha256": "<64 hex chars>"
     }
   },
+  "generation": {
+    "speculative_decoding": {
+      "default": "native-mtp-n1",
+      "strategies": {
+        "native-mtp-n1": {
+          "type": "native-mtp",
+          "prediction_depth": 1,
+          "layer_indices": [47],
+          "window_policy": {
+            "default": "fixed",
+            "initial_window": 1,
+            "min_window": 1,
+            "max_window": 1
+          }
+        }
+      }
+    }
+  },
   "layers": [
     {
       "layer_index": 0,
@@ -219,6 +237,7 @@ Required top-level fields:
 | `format` | MUST be `layer-package`. |
 | `layer_count` | MUST match the source model's transformer layer count. |
 | `activation_width` | SHOULD be present; routing and topology planning rely on it. |
+| `generation` | MAY declare package-owned generation defaults, including native speculative decoding strategies. |
 | `shared` | MUST include `metadata`, `embeddings`, and `output` artifacts. |
 | `layers` | MUST include exactly one entry for each layer index `0..layer_count`. |
 | `projectors` | MAY include package-level projector artifacts; currently only `kind: "mmproj"` is defined. |
@@ -249,6 +268,45 @@ Projector entries MUST have non-empty, safe relative paths, positive
 multiple projectors for future model variants, but the current serving default
 is to use the first declared `mmproj` when no explicit projector path is
 configured.
+
+### Generation Defaults
+
+`generation` is optional and defaults to no package-owned generation policy.
+When present, it may declare `speculative_decoding` defaults:
+
+- `default`: the strategy id the package recommends for this distribution.
+- `strategies`: a map of strategy id to strategy configuration.
+
+The current native MTP strategy shape is:
+
+```json
+{
+  "type": "native-mtp",
+  "prediction_depth": 1,
+  "layer_indices": [47],
+  "window_policy": {
+    "default": "fixed",
+    "initial_window": 1,
+    "min_window": 1,
+    "max_window": 1
+  }
+}
+```
+
+Native MTP strategy rules:
+
+- `type` MUST be `native-mtp`.
+- `prediction_depth` MUST be `1` for the current Skippy native MTP path.
+- `layer_indices` MUST list package layer indices containing native MTP/NextN
+  tensors, usually the final `blk.N.nextn.*` block emitted by GLM GGUF
+  conversion.
+- `window_policy` SHOULD be fixed to `1` until runtimes support wider native
+  MTP heads.
+
+Draft-model speculation may use the same strategy map with `type:
+"draft-model"` and fields such as `draft_model` and adaptive `window_policy`.
+Consumers that do not recognize a strategy type MUST ignore it unless it is the
+declared default for a request they are trying to serve.
 
 ## Layer Selection
 
@@ -319,6 +377,8 @@ A published repository SHOULD include a short `README.md` with:
 - projector artifact filenames and checksums, when present;
 - layer count and activation width;
 - skippy ABI version used to write the package;
+- package generation defaults such as native MTP strategy id and prediction
+  depth, when declared;
 - validation command and result;
 - any model-family certification notes, such as supported activation wire dtype
   or exact-cache policy.
