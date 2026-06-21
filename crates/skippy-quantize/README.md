@@ -221,3 +221,62 @@ skippy-quantize verify-job --manifest /tmp/skippy-quantize.json --llama-load
 skippy-quantize validate-tensor-types /mnt/recipe/tensor-types.txt
 skippy-quantize validate-splits --root /mnt/target --prefix UD-Q3_K_S --json
 ```
+
+### Reference parity smoke
+
+Use `scripts/compare-reference-quantization.py` when changing native
+conversion or quantization behavior. It compares the native Rust path against
+the pinned llama.cpp reference tools:
+
+- SafeTensors conversion: upstream `convert_hf_to_gguf.py` and
+  `skippy-quantize convert` must emit the same tensor name set, shapes, types,
+  and tensor payload bytes. Whole-file GGUF byte equality is not required here
+  because the two writers may emit metadata and tensors in different order.
+- Quantization: standalone `llama-quantize --keep-split` and
+  `skippy-quantize quantize --backend llama-api` must emit byte-identical split
+  GGUF outputs for every mode reported by `skippy-quantize list-quants --json`.
+
+Conversion-only smoke:
+
+```bash
+uv run --python 3.12 \
+  --with torch \
+  --with transformers \
+  --with numpy \
+  --with sentencepiece \
+  --with protobuf \
+  --with gguf \
+  --no-project \
+  crates/skippy-quantize/scripts/compare-reference-quantization.py \
+  --work-dir /tmp/skippy-quantize-conversion-parity \
+  --clean \
+  --skippy-quantize ./target/debug/skippy-quantize \
+  --llama-quantize ./.deps/llama.cpp/build-cli/bin/llama-quantize \
+  --python-converter ./.deps/llama.cpp/convert_hf_to_gguf.py \
+  --checkpoint /tmp/qwen2-safetensors-fixture \
+  --skip-quantization
+```
+
+All advertised quant modes:
+
+```bash
+uv run --python 3.12 \
+  --with gguf \
+  --with numpy \
+  --no-project \
+  crates/skippy-quantize/scripts/compare-reference-quantization.py \
+  --work-dir /tmp/skippy-quantize-allmodes \
+  --clean \
+  --skippy-quantize ./target/debug/skippy-quantize \
+  --llama-quantize ./.deps/llama.cpp/build-cli/bin/llama-quantize \
+  --quant-input /tmp/qwen2-bf16-fixture.gguf \
+  --generate-imatrix \
+  --native-runtime-library ./.deps/llama.cpp/build-cli/bin/libggml-base.dylib \
+  --native-runtime-library ./.deps/llama.cpp/build-cli/bin/libggml-cpu.dylib \
+  --native-runtime-library ./.deps/llama.cpp/build-cli/bin/libggml.dylib \
+  --native-runtime-library ./.deps/llama.cpp/build-cli/bin/libllama.dylib
+```
+
+`--generate-imatrix` creates a deterministic all-ones legacy imatrix from the
+GGUF tensor metadata so very low-bit and IQ modes are tested instead of being
+accepted as matching failures.
