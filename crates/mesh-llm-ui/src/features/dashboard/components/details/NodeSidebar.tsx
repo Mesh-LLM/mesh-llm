@@ -263,7 +263,7 @@ export function NodeSidebar({
               <div className="grid gap-3">
                 {node.gpus.map((gpu, index) => (
                   <ModelMetaItem
-                    key={`${node.id}-${gpu.name}-${gpu.vram_bytes}-${gpu.bandwidth_gbps ?? 'unknown'}`}
+                    key={`${node.id}-gpu-${gpu.idx ?? index}`}
                     label={node.isSoc ? `SoC ${index + 1}` : `GPU ${index + 1}`}
                     value={`${trimGpuVendor(gpu.name) || gpu.name} · ${formatGpuMemory(gpu)}${gpu.bandwidth_gbps ? ` · ${gpu.bandwidth_gbps.toFixed(0)} GB/s` : ''}`}
                     icon={node.isSoc ? <Cpu className="h-3.5 w-3.5" /> : <Gpu className="h-3.5 w-3.5" />}

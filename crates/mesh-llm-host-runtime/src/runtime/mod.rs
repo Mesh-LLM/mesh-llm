@@ -10666,7 +10666,8 @@ mod tests {
             n_ubatch: None,
             flash_attention: FlashAttentionType::Auto,
         }];
-        let gpus = vec![synthetic_gpu(3, Some("uuid:GPU-123"), Some("CUDA3"))];
+        let mut gpus = vec![synthetic_gpu(3, Some("uuid:GPU-123"), Some("CUDA3"))];
+        gpus[0].reserved_bytes = Some(500_000_000);
 
         preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
             .unwrap();
@@ -10676,6 +10677,7 @@ mod tests {
         assert_eq!(pinned_gpu.stable_id, "uuid:GPU-123");
         assert_eq!(pinned_gpu.backend_device, "CUDA3");
         assert_eq!(pinned_gpu.vram_bytes, 24_000_000_000);
+        assert_eq!(pinned_gpu.reserved_bytes, Some(500_000_000));
     }
 
     #[test]
