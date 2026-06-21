@@ -98,10 +98,7 @@ export function containerAvailableGB(
   models: ConfigModel[] = CFG_CATALOG
 ): number {
   const scopedAssigns = ignoredAssignId ? assigns.filter((assign) => assign.id !== ignoredAssignId) : assigns
-  return (
-    containerAllocatableGB(node, containerIdx) -
-    containerUsedGB(scopedAssigns, node.id, containerIdx, models)
-  )
+  return containerAllocatableGB(node, containerIdx) - containerUsedGB(scopedAssigns, node.id, containerIdx, models)
 }
 export function canFitModelInContainer(
   model: ConfigModel,
