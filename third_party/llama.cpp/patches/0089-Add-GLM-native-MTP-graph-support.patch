@@ -1,258 +1,19 @@
-From a6b91f629881cf946e5bcb42fd74ad53729a77aa Mon Sep 17 00:00:00 2001
+From 2e7aafec4d0683739d093177653f610451d83621 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 07:36:49 +1000
-Subject: [PATCH 090/108] Add GLM native MTP conversion and graph support
+Subject: [PATCH] Add GLM native MTP graph support
 
 ---
- conversion/glm.py                   |  11 ++
- convert_hf_to_gguf.py               |   6 +-
- gguf-py/gguf/gguf_writer.py         |  44 ++++-
- gguf-py/gguf/tensor_mapping.py      |   1 +
- scripts/check-glm51-mtp-metadata.py | 110 +++++++++++
- src/llama-context.cpp               |  15 +-
- src/llama-model.cpp                 |   8 +
- src/models/deepseek2.cpp            | 284 +++++++++++++++++++++++++++-
- src/models/glm-dsa.cpp              |  12 +-
- src/models/models.h                 |  10 +
- src/skippy.cpp                      |   3 +
- 11 files changed, 490 insertions(+), 14 deletions(-)
- create mode 100755 scripts/check-glm51-mtp-metadata.py
+ src/llama-context.cpp    |  15 ++-
+ src/llama-model.cpp      |   8 ++
+ src/models/deepseek2.cpp | 284 ++++++++++++++++++++++++++++++++++++++-
+ src/models/glm-dsa.cpp   |  12 +-
+ src/models/models.h      |   5 +
+ src/skippy.cpp           |   3 +
+ 6 files changed, 317 insertions(+), 10 deletions(-)
 
-diff --git a/conversion/glm.py b/conversion/glm.py
-index 64193772..87d443fe 100644
---- a/conversion/glm.py
-+++ b/conversion/glm.py
-@@ -204,10 +204,21 @@ class Glm4MoeModel(TextModel):
- @ModelBase.register("Glm4MoeLiteForCausalLM")
- class Glm4MoeLiteModel(DeepseekV2Model):
-     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
-+    skip_mtp = False
-+
-+    def __init__(self, *args, **kwargs):
-+        super().__init__(*args, **kwargs)
-+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
-+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
- 
-     def set_vocab(self):
-         return self._set_vocab_glm()
- 
-+    def set_gguf_parameters(self):
-+        super().set_gguf_parameters()
-+        if (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
-+            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
-+
- 
- @ModelBase.register("GlmMoeDsaForCausalLM")
- class GlmMoeDsaModel(DeepseekV2Model):
-diff --git a/convert_hf_to_gguf.py b/convert_hf_to_gguf.py
-index 3b23d5eb..2678c01f 100755
---- a/convert_hf_to_gguf.py
-+++ b/convert_hf_to_gguf.py
-@@ -212,9 +212,9 @@ def main() -> None:
-     }
- 
-     is_split = args.split_max_tensors > 0 or args.split_max_size != "0"
--    if args.use_temp_file and is_split:
--        logger.error("Error: Cannot use temp file when splitting")
--        sys.exit(1)
-+    if is_split and not args.use_temp_file:
-+        logger.info("Split output requested; using a temporary tensor spool to avoid retaining all tensors in memory")
-+        args.use_temp_file = True
- 
-     if args.outfile is not None:
-         fname_out = args.outfile
-diff --git a/gguf-py/gguf/gguf_writer.py b/gguf-py/gguf/gguf_writer.py
-index f707f29d..bfb0a38d 100644
---- a/gguf-py/gguf/gguf_writer.py
-+++ b/gguf-py/gguf/gguf_writer.py
-@@ -403,6 +403,16 @@ class GGUFWriter:
-         if pad != 0:
-             fp.write(bytes([0] * pad))
- 
-+    @staticmethod
-+    def copy_n_bytes(src: IO[bytes], dst: IO[bytes], n: int) -> None:
-+        remaining = n
-+        while remaining > 0:
-+            chunk = src.read(min(1024 * 1024, remaining))
-+            if not chunk:
-+                raise EOFError("Unexpected end of temporary tensor spool")
-+            dst.write(chunk)
-+            remaining -= len(chunk)
-+
-     def write_tensor_data(self, tensor: np.ndarray[Any, Any], tensor_endianess: GGUFEndian | None = None) -> None:
-         if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
-             raise ValueError(f'Expected output file to contain tensor info or weights, got {self.state}')
-@@ -476,7 +486,39 @@ class GGUFWriter:
-         else:
-             self.temp_file.seek(0)
- 
--            shutil.copyfileobj(self.temp_file, self.fout[0 if not self.small_first_shard else 1])
-+            data_fout = self.fout[1:] if self.small_first_shard else self.fout
-+            if len(data_fout) != len(self.tensors):
-+                raise ValueError(f'Expected {len(self.tensors)} data shards, got {len(data_fout)}')
-+
-+            if len(data_fout) == 1:
-+                shutil.copyfileobj(self.temp_file, data_fout[0])
-+            else:
-+                shard_bar = None
-+                bar = None
-+
-+                if progress:
-+                    from tqdm import tqdm
-+
-+                    total_bytes = sum(ti.nbytes for t in self.tensors for ti in t.values())
-+                    shard_bar = tqdm(desc=f"Shard (0/{len(data_fout)})", total=None, unit="byte", unit_scale=True)
-+                    bar = tqdm(desc="Writing", total=total_bytes, unit="byte", unit_scale=True)
-+
-+                for i, (fout, tensors) in enumerate(zip(data_fout, self.tensors)):
-+                    if shard_bar is not None:
-+                        shard_bar.set_description(f"Shard ({i + 1}/{len(data_fout)})")
-+                        total = sum(ti.nbytes for ti in tensors.values())
-+                        shard_bar.reset(total=(total if total > 0 else None))
-+
-+                    for ti in tensors.values():
-+                        self.copy_n_bytes(self.temp_file, fout, ti.nbytes)
-+                        if shard_bar is not None:
-+                            shard_bar.update(ti.nbytes)
-+                        if bar is not None:
-+                            bar.update(ti.nbytes)
-+
-+                        pad = GGUFWriter.ggml_pad(ti.nbytes, self.data_alignment) - ti.nbytes
-+                        self.copy_n_bytes(self.temp_file, fout, pad)
-+
-             self.flush()
-             self.temp_file.close()
- 
-diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
-index 5f1e2881..0b1614a9 100644
---- a/gguf-py/gguf/tensor_mapping.py
-+++ b/gguf-py/gguf/tensor_mapping.py
-@@ -470,6 +470,7 @@ class TensorNameMap:
- 
-         MODEL_TENSOR.FFN_EXP_PROBS_B: (
-             "model.layers.{bid}.mlp.gate.e_score_correction",               # deepseek-v3 dots1
-+            "model.layers.{bid}.mlp.gate.e_score_correction_bias",          # glm-dsa
-             "model.layers.{bid}.mlp.moe_statics.e_score_correction",        # ernie4.5-moe
-             "model.layers.{bid}.mlp.gate.expert_bias",                      # bailingmoe2
-             "model.layers.{bid}.mlp.expert_bias",                           # afmoe
-diff --git a/scripts/check-glm51-mtp-metadata.py b/scripts/check-glm51-mtp-metadata.py
-new file mode 100755
-index 00000000..208b46b9
---- /dev/null
-+++ b/scripts/check-glm51-mtp-metadata.py
-@@ -0,0 +1,110 @@
-+#!/usr/bin/env python3
-+from __future__ import annotations
-+
-+import argparse
-+import json
-+import sys
-+from pathlib import Path
-+
-+
-+def load_json(path: Path) -> dict:
-+    with path.open("r", encoding="utf-8") as f:
-+        return json.load(f)
-+
-+
-+def import_gguf(repo: Path):
-+    sys.path.insert(0, str(repo / "gguf-py"))
-+    import gguf  # type: ignore
-+
-+    return gguf
-+
-+
-+def map_name(tensor_map, name: str) -> str | None:
-+    return tensor_map.get_name(name, try_suffixes=(".weight", ".bias"))
-+
-+
-+def require(condition: bool, message: str, failures: list[str]) -> None:
-+    if not condition:
-+        failures.append(message)
-+
-+
-+def main() -> int:
-+    parser = argparse.ArgumentParser(description="Validate GLM-5.1 native MTP metadata and GGUF tensor mapping.")
-+    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1], help="llama.cpp checkout")
-+    parser.add_argument("--meta-dir", type=Path, default=Path("/tmp/glm51-meta"), help="directory with config and safetensor index")
-+    args = parser.parse_args()
-+
-+    config = load_json(args.meta_dir / "config.json")
-+    index = load_json(args.meta_dir / "model.safetensors.index.json")
-+    weight_names = set(index["weight_map"].keys())
-+
-+    gguf = import_gguf(args.repo)
-+    block_count = int(config["num_hidden_layers"]) + int(config.get("num_nextn_predict_layers", 0))
-+    tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.GLM_DSA, block_count)
-+
-+    failures: list[str] = []
-+
-+    require(config.get("architectures") == ["GlmMoeDsaForCausalLM"], "unexpected architectures", failures)
-+    require(config.get("model_type") == "glm_moe_dsa", "unexpected model_type", failures)
-+    require(config.get("num_hidden_layers") == 78, "unexpected num_hidden_layers", failures)
-+    require(config.get("num_nextn_predict_layers") == 1, "unexpected num_nextn_predict_layers", failures)
-+
-+    mtp_layer = int(config["num_hidden_layers"])
-+    require(f"model.layers.{mtp_layer}.eh_proj.weight" in weight_names, "missing MTP eh_proj", failures)
-+    require(f"model.layers.{mtp_layer}.enorm.weight" in weight_names, "missing MTP enorm", failures)
-+    require(f"model.layers.{mtp_layer}.hnorm.weight" in weight_names, "missing MTP hnorm", failures)
-+    require(f"model.layers.{mtp_layer}.shared_head.norm.weight" in weight_names, "missing MTP shared head norm", failures)
-+    require(f"model.layers.{mtp_layer}.embed_tokens.weight" not in weight_names, "unexpected MTP-specific embed_tokens", failures)
-+    require(f"model.layers.{mtp_layer}.shared_head.head.weight" not in weight_names, "unexpected MTP-specific shared head", failures)
-+
-+    expected_mappings = {
-+        f"model.layers.{mtp_layer}.eh_proj.weight": f"blk.{mtp_layer}.nextn.eh_proj.weight",
-+        f"model.layers.{mtp_layer}.enorm.weight": f"blk.{mtp_layer}.nextn.enorm.weight",
-+        f"model.layers.{mtp_layer}.hnorm.weight": f"blk.{mtp_layer}.nextn.hnorm.weight",
-+        f"model.layers.{mtp_layer}.shared_head.norm.weight": f"blk.{mtp_layer}.nextn.shared_head_norm.weight",
-+        f"model.layers.{mtp_layer}.input_layernorm.weight": f"blk.{mtp_layer}.attn_norm.weight",
-+        f"model.layers.{mtp_layer}.self_attn.indexer.k_norm.weight": f"blk.{mtp_layer}.indexer.k_norm.weight",
-+        f"model.layers.{mtp_layer}.self_attn.indexer.k_norm.bias": f"blk.{mtp_layer}.indexer.k_norm.bias",
-+        f"model.layers.{mtp_layer}.self_attn.indexer.weights_proj.weight": f"blk.{mtp_layer}.indexer.proj.weight",
-+        f"model.layers.{mtp_layer}.self_attn.indexer.wk.weight": f"blk.{mtp_layer}.indexer.attn_k.weight",
-+        f"model.layers.{mtp_layer}.self_attn.indexer.wq_b.weight": f"blk.{mtp_layer}.indexer.attn_q_b.weight",
-+        f"model.layers.{mtp_layer}.mlp.gate.weight": f"blk.{mtp_layer}.ffn_gate_inp.weight",
-+        f"model.layers.{mtp_layer}.mlp.gate.e_score_correction_bias": f"blk.{mtp_layer}.exp_probs_b",
-+        f"model.layers.{mtp_layer}.mlp.shared_experts.down_proj.weight": f"blk.{mtp_layer}.ffn_down_shexp.weight",
-+        f"model.layers.{mtp_layer}.mlp.shared_experts.gate_proj.weight": f"blk.{mtp_layer}.ffn_gate_shexp.weight",
-+        f"model.layers.{mtp_layer}.mlp.shared_experts.up_proj.weight": f"blk.{mtp_layer}.ffn_up_shexp.weight",
-+    }
-+
-+    for src, expected in expected_mappings.items():
-+        require(src in weight_names, f"missing source tensor {src}", failures)
-+        actual = map_name(tensor_map, src)
-+        require(actual == expected, f"mapping mismatch {src}: expected {expected}, got {actual}", failures)
-+
-+    expert_src = f"model.layers.{mtp_layer}.mlp.experts.down_proj.weight"
-+    expert_expected = f"blk.{mtp_layer}.ffn_down_exps.weight"
-+    expert_actual = map_name(tensor_map, expert_src)
-+    require(expert_actual == expert_expected, f"merged expert mapping mismatch: expected {expert_expected}, got {expert_actual}", failures)
-+
-+    print(f"repo={args.repo}")
-+    print(f"meta_dir={args.meta_dir}")
-+    print(f"architecture={config['architectures'][0]}")
-+    print(f"model_type={config['model_type']}")
-+    print(f"trunk_layers={config['num_hidden_layers']}")
-+    print(f"nextn_layers={config.get('num_nextn_predict_layers', 0)}")
-+    print(f"total_blocks={block_count}")
-+    print(f"mtp_layer={mtp_layer}")
-+    print(f"tensor_count={len(weight_names)}")
-+    print(f"source_total_size={index.get('metadata', {}).get('total_size')}")
-+
-+    if failures:
-+        print("status=FAIL")
-+        for failure in failures:
-+            print(f"failure={failure}")
-+        return 1
-+
-+    print("status=PASS")
-+    return 0
-+
-+
-+if __name__ == "__main__":
-+    raise SystemExit(main())
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index a6e75ba9..d649ffa3 100644
+index 87f75b94..5cf50e6c 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -1972,9 +1972,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
@@ -280,10 +41,10 @@ index a6e75ba9..d649ffa3 100644
          }
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 3b7320ad..9d51c869 100644
+index a1dc66c6..869f80b6 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -2153,6 +2153,14 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2147,6 +2147,14 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          }
                      }
  
@@ -673,40 +434,29 @@ index 11d91312..d7067347 100644
  }
 -
 diff --git a/src/models/models.h b/src/models/models.h
-index 2ac8415a..f1a84e15 100644
+index ee3aff07..75c0ffcf 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -1055,6 +1055,10 @@ struct llama_model_deepseek : public llama_model_base {
-         graph(const llama_model & model, const llm_graph_params & params);
-     };
- 
-+    struct graph_mtp : public llm_graph_context {
-+        graph_mtp(const llama_model & model, const llm_graph_params & params);
-+    };
-+
-     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
- };
- 
-@@ -1068,6 +1072,10 @@ struct llama_model_deepseek2 : public llama_model_base {
-         graph(const llama_model & model, const llm_graph_params & params);
-     };
- 
-+    struct graph_mtp : public llm_graph_context {
-+        graph_mtp(const llama_model & model, const llm_graph_params & params);
-+    };
-+
-     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
- };
- 
-@@ -1091,6 +1099,7 @@ struct llama_model_deepseek2ocr : public llama_model_base {
+@@ -1045,11 +1045,15 @@ struct llama_model_deepseek2 : public llama_model_base {
+     llama_model_deepseek2(const struct llama_model_params & params) : llama_model_base(params) {}
+     void load_arch_hparams(llama_model_loader & ml) override;
      void load_arch_tensors(llama_model_loader & ml) override;
  
-     using graph = llama_model_deepseek2::graph;
-+    using graph_mtp = llama_model_deepseek2::graph_mtp;
+     struct graph : public llm_graph_context {
+         graph(const llama_model & model, const llm_graph_params & params);
+     };
  
++    struct graph_mtp : public llm_graph_context {
++        graph_mtp(const llama_model & model, const llm_graph_params & params);
++    };
++
      std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
  };
-@@ -1102,6 +1111,7 @@ struct llama_model_glm_dsa : public llama_model_base {
+ 
+@@ -1079,9 +1083,10 @@ struct llama_model_glm_dsa : public llama_model_base {
+ struct llama_model_glm_dsa : public llama_model_base {
+     llama_model_glm_dsa(const struct llama_model_params & params) : llama_model_base(params) {}
+     void load_arch_hparams(llama_model_loader & ml) override;
      void load_arch_tensors(llama_model_loader & ml) override;
  
      using graph = llama_model_deepseek2::graph;
@@ -729,5 +479,4 @@ index 4dcd0d96..20cff23f 100644
              filter.include_output = config->include_output;
              llama_model_loader_set_stage_filter(filter);
 -- 
-2.50.1 (Apple Git-155)
-
+2.54.0 (Apple Git-156)

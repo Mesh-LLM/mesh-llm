@@ -467,8 +467,6 @@ pub struct LlamaModelQuantizeParams {
     pub kv_overrides: *const LlamaModelKvOverride,
     pub tt_overrides: *const LlamaModelTensorOverride,
     pub prune_layers: *const i32,
-    pub first_split: i32,
-    pub last_split: i32,
 }
 
 #[repr(C)]

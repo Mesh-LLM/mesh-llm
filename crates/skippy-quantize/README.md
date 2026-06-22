@@ -152,24 +152,27 @@ skippy-quantize run-convert-window \
 skippy-quantize run-quant-window \
   --manifest /tmp/skippy-quantize.json \
   --backend llama-api \
-  --max-memory 32G \
   --work-dir /tmp/skippy-quantize-work \
   --spool-dir /tmp/skippy-quantize-output
 ```
 
 ```text
 🔒 Manifest lock acquired: /tmp/skippy-quantize.json.lock
-📤 Copying /mnt/bf16/BF16/GLM-5.2-BF16-00078-of-00306.gguf -> /tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00078-of-00306.gguf (49.87 GiB)
-ℹ️  Staged source window 78..78 at /tmp/skippy-quantize-work/source-window
-🪟 quant window: 78
+📤 Copying /mnt/bf16/BF16/GLM-5.2-BF16-00001-of-00306.gguf -> /tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00001-of-00306.gguf (49.87 GiB)
+ℹ️  Staged source window 1..306 at /tmp/skippy-quantize-work/source-window
+🪟 quant window: 1..306
 ℹ️  Staged first shard: /tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00001-of-00306.gguf
 ℹ️  Output prefix: /tmp/skippy-quantize-output/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S.gguf
-ℹ️  Command: llama-api-quantize --max-memory 34359738368 --memory-policy hard --tensor-type-file /mnt/recipe/glm-5.2-ud-q3-k-s.txt --keep-split --first-split 78 --last-split 78 /tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00001-of-00306.gguf /tmp/skippy-quantize-output/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S Q3_K_S
-⚠️  quant memory budget: hard cap 32.00 GiB
-✅ Published /mnt/quant/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S-00078-of-00306.gguf (13.42 GiB)
+ℹ️  Command: llama-api-quantize --tensor-type-file /mnt/recipe/glm-5.2-ud-q3-k-s.txt --keep-split /tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00001-of-00306.gguf /tmp/skippy-quantize-output/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S Q3_K_S
+✅ Published /mnt/quant/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S-00001-of-00306.gguf (13.42 GiB)
 🧹 Cleaned staged source: /tmp/skippy-quantize-work/source-window
 🔓 Manifest lock released: /tmp/skippy-quantize.json.lock
 ```
+
+The llama API quantization backend now uses the unpatched llama.cpp quantizer.
+It can preserve split output with `--keep-split`, but it cannot process only a
+partial split window. Use a quant manifest window covering all expected splits
+when selecting `--backend llama-api` or `--backend skippy-abi`.
 
 Validation commands also use the same progress-bar formatter:
 
@@ -192,7 +195,6 @@ Every workflow above can emit JSON for job automation:
 skippy-quantize run-quant-window \
   --manifest /tmp/skippy-quantize.json \
   --backend llama-api \
-  --max-memory 32G \
   --json
 ```
 
@@ -200,21 +202,13 @@ skippy-quantize run-quant-window \
 {
   "event": "quant_window",
   "plan": {
-    "first_split": 78,
-    "last_split": 78,
+    "first_split": 1,
+    "last_split": 306,
     "staged_first_shard": "/tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00001-of-00306.gguf",
     "output_prefix": "/mnt/quant/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S.gguf",
     "command": [
       "llama-api-quantize",
-      "--max-memory",
-      "34359738368",
-      "--memory-policy",
-      "hard",
       "--keep-split",
-      "--first-split",
-      "78",
-      "--last-split",
-      "78",
       "/tmp/skippy-quantize-work/source-window/BF16/GLM-5.2-BF16-00001-of-00306.gguf",
       "/mnt/quant/UD-Q3_K_S/GLM-5.2-UD-Q3_K_S",
       "Q3_K_S"
@@ -378,8 +372,9 @@ Important quantization flags:
 - `--backend {llama-api,skippy-abi}` selects the in-process quant backend.
 - `--native-runtime-library PATH` optionally loads a dynamic native runtime
   exposing `llama_model_quantize`; normal standalone builds do not need it.
-- `--max-memory SIZE` is passed to the patched quantizer via
-  `LLAMA_QUANTIZE_MAX_MEMORY_BYTES`.
+- `--max-memory SIZE` applies to native Rust conversion memory planning. The
+  unpatched llama API quantization backend rejects it because llama.cpp does not
+  expose a quantization memory-budget knob.
 - `--tensor-type-file PATH` applies per-tensor recipe overrides.
 - `--tensor-type NAME=TYPE` adds an inline per-tensor override.
 - `--imatrix PATH` loads legacy `.dat` or GGUF imatrix data.
@@ -402,7 +397,9 @@ Important quantization flags:
 - `--json-event-window N` controls how many recent high-level events are kept,
   default `8`.
 - `--keep-split`, `--first-split`, and `--last-split` can request a manual
-  split window for direct `quantize`.
+  split window for direct `quantize`; llama API quantization accepts only the
+  full split range after the mesh-llm llama-quantize split-window patches were
+  removed.
 - `--no-stage-source` skips local source-window staging.
 - `--keep-staged-source` keeps the staged source window after success.
 

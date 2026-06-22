@@ -19,13 +19,6 @@ impl MemoryPolicy {
     pub(crate) fn is_hard(self) -> bool {
         matches!(self, Self::Hard)
     }
-
-    pub(crate) fn as_arg(self) -> &'static str {
-        match self {
-            Self::Advisory => "advisory",
-            Self::Hard => "hard",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,12 +213,6 @@ mod tests {
             "4G".parse::<MemorySize>().unwrap().bytes(),
             4 * 1024 * 1024 * 1024
         );
-    }
-
-    #[test]
-    fn formats_memory_policy_cli_args() {
-        assert_eq!(MemoryPolicy::Hard.as_arg(), "hard");
-        assert_eq!(MemoryPolicy::Advisory.as_arg(), "advisory");
     }
 
     #[test]

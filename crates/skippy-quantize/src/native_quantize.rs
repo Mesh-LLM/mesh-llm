@@ -1,4 +1,4 @@
-use std::ffi::{CString, OsString, c_char};
+use std::ffi::{CString, c_char};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,12 +8,10 @@ use crate::QuantRunnerArgs;
 use crate::backend::BackendRunStatus;
 use crate::imatrix::NativeImatrix;
 use crate::manifest::Manifest;
-use crate::memory_budget::MemorySize;
 use crate::quantize::normalize_tensor_type_entry;
 use crate::splits::SplitWindow;
 use crate::types::{QuantType, TensorType};
 
-const ENV_LLAMA_QUANTIZE_MAX_MEMORY_BYTES: &str = "LLAMA_QUANTIZE_MAX_MEMORY_BYTES";
 const KV_QUANTIZE_IMATRIX_FILE: &str = "quantize.imatrix.file";
 const KV_QUANTIZE_IMATRIX_DATASET: &str = "quantize.imatrix.dataset";
 const KV_QUANTIZE_IMATRIX_N_ENTRIES: &str = "quantize.imatrix.entries_count";
@@ -27,6 +25,7 @@ pub(crate) fn build_native_quantize_command(
     window: SplitWindow,
 ) -> Result<Vec<String>> {
     ensure_native_quantize_supported(args)?;
+    ensure_full_split_window(manifest, window)?;
     let quant = manifest
         .quant
         .as_deref()
@@ -87,18 +86,8 @@ pub(crate) fn build_native_quantize_command(
         command.push("--override-kv".to_string());
         command.push(override_kv.clone());
     }
-    if let Some(max_memory) = args.max_memory {
-        command.push("--max-memory".to_string());
-        command.push(max_memory.bytes().to_string());
-        command.push("--memory-policy".to_string());
-        command.push(args.memory_policy.as_arg().to_string());
-    }
     command.extend([
         "--keep-split".to_string(),
-        "--first-split".to_string(),
-        window.first_split.to_string(),
-        "--last-split".to_string(),
-        window.last_split.to_string(),
         staged_first_shard.display().to_string(),
         llama_split_output_prefix(output_prefix)
             .display()
@@ -119,6 +108,7 @@ pub(crate) fn run_native_quantize(
     window: SplitWindow,
 ) -> Result<BackendRunStatus> {
     ensure_native_quantize_supported(args)?;
+    ensure_full_split_window(manifest, window)?;
     let native_inputs = NativeQuantizeInputs::build(args, manifest)?;
     let mut params = unsafe { llama_quant_ffi::llama_model_quantize_default_params() };
     let quant = manifest
@@ -143,8 +133,6 @@ pub(crate) fn run_native_quantize(
         "--token-embedding-type",
     )?
     .unwrap_or(params.token_embedding_type);
-    params.first_split = window.first_split as i32;
-    params.last_split = window.last_split as i32;
     params.tt_overrides = native_inputs.tensor_overrides_ptr();
     params.prune_layers = native_inputs.prune_layers_ptr();
     params.kv_overrides = native_inputs.kv_overrides_ptr();
@@ -153,50 +141,9 @@ pub(crate) fn run_native_quantize(
     let input = path_to_cstring(staged_first_shard)?;
     let native_output_prefix = llama_split_output_prefix(output_prefix);
     let output = path_to_cstring(&native_output_prefix)?;
-    let code = with_llama_quantize_memory_budget(args.max_memory, || unsafe {
-        llama_quant_ffi::llama_model_quantize(input.as_ptr(), output.as_ptr(), &params)
-    });
+    let code =
+        unsafe { llama_quant_ffi::llama_model_quantize(input.as_ptr(), output.as_ptr(), &params) };
     Ok(BackendRunStatus::from_code(code as i32))
-}
-
-fn with_llama_quantize_memory_budget(
-    max_memory: Option<MemorySize>,
-    operation: impl FnOnce() -> u32,
-) -> u32 {
-    let Some(max_memory) = max_memory else {
-        return operation();
-    };
-    let previous = std::env::var_os(ENV_LLAMA_QUANTIZE_MAX_MEMORY_BYTES);
-    let _guard = EnvRestoreGuard {
-        key: ENV_LLAMA_QUANTIZE_MAX_MEMORY_BYTES,
-        previous,
-    };
-    // The patched llama quantizer can use this to choose chunk sizes; older
-    // runtimes ignore it.
-    unsafe {
-        std::env::set_var(
-            ENV_LLAMA_QUANTIZE_MAX_MEMORY_BYTES,
-            max_memory.bytes().to_string(),
-        );
-    }
-    operation()
-}
-
-struct EnvRestoreGuard {
-    key: &'static str,
-    previous: Option<OsString>,
-}
-
-impl Drop for EnvRestoreGuard {
-    fn drop(&mut self) {
-        unsafe {
-            if let Some(previous) = self.previous.as_ref() {
-                std::env::set_var(self.key, previous);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
 }
 
 fn ensure_native_quantize_supported(args: &QuantRunnerArgs) -> Result<()> {
@@ -208,6 +155,21 @@ fn ensure_native_quantize_supported(args: &QuantRunnerArgs) -> Result<()> {
     ensure!(
         args.include_weights.is_empty() || args.exclude_weights.is_empty(),
         "--include-weights and --exclude-weights cannot be used together"
+    );
+    ensure!(
+        args.max_memory.is_none(),
+        "--max-memory is not supported by the native llama quantize backend now that mesh-llm no longer patches llama-quantize memory chunking"
+    );
+    Ok(())
+}
+
+fn ensure_full_split_window(manifest: &Manifest, window: SplitWindow) -> Result<()> {
+    ensure!(
+        window.first_split == 1 && window.last_split == manifest.expected_splits,
+        "native llama quantize backend no longer supports partial split windows after removing mesh-llm's patched llama-quantize split-window support; requested {}..{} of {}",
+        window.first_split,
+        window.last_split,
+        manifest.expected_splits
     );
     Ok(())
 }
@@ -495,7 +457,6 @@ fn push_optional(command: &mut Vec<String>, flag: &str, value: &Option<String>) 
 mod tests {
     use crate::MANIFEST_VERSION;
     use crate::backend::BackendKind;
-    use crate::memory_budget::MemorySize;
     use crate::types::JobKind;
 
     use super::*;
@@ -506,7 +467,6 @@ mod tests {
         args.tensor_type = vec!["mtp_head.weight=NVFP4".to_string()];
         args.prune_layers = Some("2,1,2".to_string());
         args.override_kv = vec!["general.name=str:test".to_string()];
-        args.max_memory = Some(MemorySize::from_bytes_for_tests(42));
         let manifest = manifest(None);
         let command = build_native_quantize_command(
             &args,
@@ -515,7 +475,7 @@ mod tests {
             Path::new("/tmp/out/model-q2"),
             SplitWindow {
                 first_split: 1,
-                last_split: 1,
+                last_split: 2,
             },
         )
         .unwrap();
@@ -526,10 +486,7 @@ mod tests {
         assert!(command.contains(&"--tensor-type".to_string()));
         assert!(command.contains(&"--prune-layers".to_string()));
         assert!(command.contains(&"--override-kv".to_string()));
-        assert!(command.contains(&"--max-memory".to_string()));
-        assert!(command.contains(&"42".to_string()));
-        assert!(command.contains(&"--memory-policy".to_string()));
-        assert!(command.contains(&"hard".to_string()));
+        assert!(!command.contains(&"--max-memory".to_string()));
         assert!(command.contains(&"Q2_K".to_string()));
     }
 
@@ -546,7 +503,7 @@ mod tests {
             Path::new("/tmp/out/model-q2"),
             SplitWindow {
                 first_split: 1,
-                last_split: 1,
+                last_split: 2,
             },
         )
         .unwrap();
@@ -567,7 +524,7 @@ mod tests {
             Path::new("/tmp/out/model-q4.gguf"),
             SplitWindow {
                 first_split: 1,
-                last_split: 1,
+                last_split: 2,
             },
         )
         .unwrap();
@@ -577,6 +534,30 @@ mod tests {
         assert_eq!(
             llama_split_output_prefix(Path::new("/tmp/out/model-q4.gguf")),
             PathBuf::from("/tmp/out/model-q4")
+        );
+    }
+
+    #[test]
+    fn rejects_partial_split_window_after_dropping_patched_llama_quantize() {
+        let args = native_args();
+        let manifest = manifest(None);
+
+        let error = build_native_quantize_command(
+            &args,
+            &manifest,
+            Path::new("/tmp/in/model-00001-of-00002.gguf"),
+            Path::new("/tmp/out/model-q2"),
+            SplitWindow {
+                first_split: 1,
+                last_split: 1,
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("no longer supports partial split windows")
         );
     }
 

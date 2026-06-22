@@ -540,6 +540,7 @@ mod tests {
             work_dir.to_str().unwrap(),
             "--spool-dir",
             spool_dir.to_str().unwrap(),
+            "--keep-split",
             first.to_str().unwrap(),
             output.to_str().unwrap(),
             "Q4_K",
