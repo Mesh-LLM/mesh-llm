@@ -365,6 +365,30 @@ console assets. Client-only applications should not pull native-runtime
 install/update APIs. Native runtime source builds are not SDK features; native
 runtimes are release artifacts resolved at install/update time.
 
+## Development Loop Boundary
+
+Native runtime artifacts are a distribution boundary, not the normal way to
+iterate on the Skippy ABI. When changing `third_party/llama.cpp/patches`,
+`skippy-ffi`, hidden-state/tensor surfaces, activation-frame execution, or other
+native ABI behavior, build the branch-local native code and Rust together with
+the standard `just build` path. That path prepares the patched llama.cpp
+checkout, builds the static ABI libraries, builds the UI, and links the local
+debug `mesh-llm` binary against those libraries.
+
+Use dynamic native runtimes when validating release, SDK, installer,
+autoupdate, or packaged-app behavior. A dynamic build must load a runtime
+artifact whose `skippy_abi` matches the Rust loader; downloaded release
+artifacts will not contain new branch-local ABI symbols until that runtime has
+also been packaged from the same branch.
+
+For release-mode performance or behavior testing of a new native ABI before a
+matching native runtime package exists, build the release binary with embedded
+branch-local native libraries instead of the default dynamic release path:
+
+```bash
+MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 just release-build
+```
+
 ## Generated Runtime Crates
 
 Generated Cargo crates are not the supported native runtime distribution story

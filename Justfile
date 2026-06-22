@@ -139,7 +139,9 @@ build-runtime backend="" cuda_arch="" rocm_arch="":
 
 # Build release artifacts for the current platform.
 
-# GitHub release builds use embedded ABI libraries.
+# Release builds default to dynamic native runtimes. Set
+# MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 when validating a release binary with
+# branch-local llama.cpp ABI changes embedded.
 release-build:
     @scripts/build-release.sh
 

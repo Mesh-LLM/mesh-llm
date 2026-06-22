@@ -83,8 +83,14 @@ just ui-clean      # nuke node_modules + dist (fixes stale npm state)
   testing, or deploying to test machines — debug builds are slow and can hide
   or surface bugs that release builds don't.
 - `just release-build` → produces `./target/release/mesh-llm`. Use this for any
-  serious testing, deploying to test machines, bundling, or releases. This is
-  what `just bundle` consumes and what CI builds.
+  serious testing, deploying to test machines, bundling, or releases. Release
+  builds default to `MESH_LLM_DYNAMIC_NATIVE_RUNTIME=1`, so the binary loads a
+  compatible installed native runtime at startup instead of embedding the
+  branch-local llama.cpp ABI libraries. When validating branch-local Skippy ABI,
+  llama.cpp patch, MAS hidden-state, or native tensor changes, either use
+  `just build` for the normal static local dev loop or run
+  `MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 just release-build` before release-mode
+  behavior/performance testing.
 - `./target/release/mesh-llm` may exist from a *previous* `just release-build`
   or `just build-dev` invocation even after you run only `just build` — its
   presence is **not** evidence that your latest code is in it. When in doubt,
@@ -95,7 +101,10 @@ just ui-clean      # nuke node_modules + dist (fixes stale npm state)
   binary at all.
 
 When in doubt for testing or shipping changes: use `just release-build` and
-then copy `./target/release/mesh-llm`.
+then copy `./target/release/mesh-llm`. For native ABI development, first decide
+whether you need the default dynamic release packaging path or an embedded
+branch-local native ABI; do not test new ABI symbols against downloaded release
+native runtimes.
 
 ### npm "Exit handler never called" error
 
@@ -118,6 +127,10 @@ libraries. The only durable llama.cpp patch queue is
 
 - `just build` prepares `.deps/llama.cpp`, applies the ABI patch queue, builds
   the static libraries, builds the UI, and builds `mesh-llm`.
+- The dynamic native-runtime path is for release, SDK, installer, and packaged
+  app flows. It loads a compatible native runtime artifact in-process at
+  startup. It is not the normal development loop for editing the Skippy ABI or
+  llama.cpp patch queue.
 - Do not reintroduce an external `llama-server` / `rpc-server` runtime lane.
 - If you need to update upstream llama.cpp, use `scripts/prepare-llama.sh`,
   `scripts/build-llama.sh`, `scripts/update-llama-pin.sh`, and
