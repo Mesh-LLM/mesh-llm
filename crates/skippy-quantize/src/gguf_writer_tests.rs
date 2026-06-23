@@ -687,6 +687,55 @@ fn writes_only_selected_split_with_split_metadata() {
     assert_eq!(parsed.metadata_count, 4);
     assert_eq!(parsed.tensors[0].name, "c.weight");
     assert_eq!(parsed.tensors[1].name, "d.weight");
+    assert_eq!(parsed.tensors[0].absolute_offset, parsed.data_start);
+    assert_eq!(
+        &bytes[parsed.tensors[0].absolute_offset..parsed.tensors[0].absolute_offset + 4],
+        &[3, 0, 0, 0]
+    );
+    assert_eq!(
+        &bytes[parsed.tensors[1].absolute_offset..parsed.tensors[1].absolute_offset + 4],
+        &[4, 0, 0, 0]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_splits_are_byte_balanced_not_tensor_count_balanced() {
+    let root = unique_temp_dir();
+    fs::create_dir_all(&root).unwrap();
+    write_safetensor(
+        &root.join("model.safetensors"),
+        &[
+            ("a.weight", "F32", &[64], &[1; 256]),
+            ("b.weight", "F32", &[1], &[2, 0, 0, 0]),
+            ("c.weight", "F32", &[1], &[3, 0, 0, 0]),
+            ("d.weight", "F32", &[1], &[4, 0, 0, 0]),
+        ],
+    );
+    let output = root.join("split.gguf");
+
+    write_raw_safetensors_gguf(
+        &root,
+        &output,
+        RawGgufWriteOptions {
+            buffer_size: 64,
+            metadata: None,
+            tensor_name_map: TensorNameMap::Raw,
+            split: Some(GgufSplit {
+                split_index: 1,
+                split_count: 2,
+            }),
+            output_type: None,
+            tensor_selection: TensorSelection::All,
+        },
+    )
+    .unwrap();
+
+    let bytes = fs::read(&output).unwrap();
+    let parsed = parse_test_gguf(&bytes);
+    assert_eq!(parsed.tensor_count, 1);
+    assert_eq!(parsed.tensors[0].name, "a.weight");
+    assert_eq!(parsed.tensors[0].absolute_offset, parsed.data_start);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -727,6 +776,7 @@ fn keeps_rank_one_f32_tensor_as_f32_for_bf16_output() {
 struct ParsedGguf {
     tensor_count: u64,
     metadata_count: u64,
+    data_start: usize,
     tensors: Vec<ParsedTensor>,
 }
 
@@ -800,6 +850,7 @@ fn parse_test_gguf(bytes: &[u8]) -> ParsedGguf {
     ParsedGguf {
         tensor_count,
         metadata_count,
+        data_start,
         tensors: tensors
             .into_iter()
             .map(|(name, dims, ggml_type, relative_offset)| ParsedTensor {

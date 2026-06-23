@@ -131,7 +131,8 @@ fn prepare_raw_safetensors_gguf(
         source.display()
     );
     let total_tensor_count = tensors.len();
-    let tensors = select_split_tensors(tensors, options.split)?;
+    let mut tensors = select_split_tensors(tensors, options.split)?;
+    assign_gguf_offsets(&mut tensors)?;
     let metadata = options
         .metadata
         .clone()
@@ -161,10 +162,9 @@ fn select_split_tensors(
     );
     let split_index =
         usize::try_from(split.split_index).context("split_index does not fit usize")?;
-    let split_count =
-        usize::try_from(split.split_count).context("split_count does not fit usize")?;
-    let start = (split_index - 1) * total_tensors / split_count;
-    let end = split_index * total_tensors / split_count;
+    let boundaries = byte_balanced_split_boundaries(&tensors, split)?;
+    let start = boundaries[split_index - 1];
+    let end = boundaries[split_index];
     ensure!(
         start < end,
         "split {} of {} would contain no tensors",
@@ -176,6 +176,63 @@ fn select_split_tensors(
         .enumerate()
         .filter_map(|(index, tensor)| (start <= index && index < end).then_some(tensor))
         .collect())
+}
+
+fn byte_balanced_split_boundaries(
+    tensors: &[TensorSource],
+    split: GgufSplit,
+) -> Result<Vec<usize>> {
+    split.validate()?;
+    let split_count =
+        usize::try_from(split.split_count).context("split_count does not fit usize")?;
+    ensure!(
+        split_count <= tensors.len(),
+        "split_count {} cannot exceed tensor count {}",
+        split.split_count,
+        tensors.len()
+    );
+    let total_bytes = tensors
+        .iter()
+        .try_fold(0_u128, |acc, tensor| {
+            acc.checked_add(tensor.byte_len as u128)
+        })
+        .context("split tensor byte total overflow")?;
+    let mut boundaries = vec![0_usize];
+    let mut accumulated = 0_u128;
+    for (index, tensor) in tensors.iter().enumerate() {
+        accumulated = accumulated
+            .checked_add(tensor.byte_len as u128)
+            .context("split tensor byte total overflow")?;
+        let remaining_tensors = tensors.len() - (index + 1);
+        let remaining_splits = split_count - boundaries.len();
+        if boundaries.len() < split_count && remaining_tensors >= remaining_splits {
+            let target = total_bytes
+                .checked_mul(boundaries.len() as u128)
+                .context("split target byte overflow")?
+                / split_count as u128;
+            if accumulated >= target {
+                boundaries.push(index + 1);
+            }
+        }
+    }
+    while boundaries.len() < split_count {
+        let next = boundaries.last().copied().unwrap_or(0) + 1;
+        boundaries.push(next);
+    }
+    boundaries.push(tensors.len());
+    Ok(boundaries)
+}
+
+fn assign_gguf_offsets(tensors: &mut [TensorSource]) -> Result<()> {
+    let mut offset = 0_u64;
+    for tensor in tensors {
+        offset = align_to(offset, GGUF_ALIGNMENT);
+        tensor.gguf_offset = offset;
+        offset = offset
+            .checked_add(tensor.byte_len)
+            .with_context(|| format!("GGUF data offset overflow after {}", tensor.name))?;
+    }
+    Ok(())
 }
 
 fn split_metadata(
@@ -269,14 +326,6 @@ fn collect_tensor_sources(
         tensors.push(group.into_tensor_source()?);
     }
     tensors.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut offset = 0_u64;
-    for tensor in &mut tensors {
-        offset = align_to(offset, GGUF_ALIGNMENT);
-        tensor.gguf_offset = offset;
-        offset = offset
-            .checked_add(tensor.byte_len)
-            .with_context(|| format!("GGUF data offset overflow after {}", tensor.name))?;
-    }
     Ok(tensors)
 }
 
