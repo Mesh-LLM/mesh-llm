@@ -50,6 +50,7 @@ pub(crate) fn metadata_from_hf_config_with_options(
     ];
     push_common_llm_metadata(&mut metadata, arch, &config, options)?;
     push_attention_metadata(&mut metadata, arch, &config)?;
+    push_glm_dsa_indexer_metadata(&mut metadata, arch, &config)?;
     push_moe_metadata(&mut metadata, arch, &config);
     push_tokenizer_metadata(&mut metadata, source, &config)?;
     if options.include_mtp {
@@ -220,6 +221,38 @@ fn push_attention_metadata(metadata: &mut Vec<GgufKv>, arch: &str, config: &Valu
     Ok(())
 }
 
+fn push_glm_dsa_indexer_metadata(
+    metadata: &mut Vec<GgufKv>,
+    arch: &str,
+    config: &Value,
+) -> Result<()> {
+    if arch != "glm-dsa" {
+        return Ok(());
+    }
+    push_required_first_u32(
+        metadata,
+        arch,
+        "attention.indexer.head_count",
+        config,
+        &["index_n_heads", "indexer_n_head"],
+    )?;
+    push_required_first_u32(
+        metadata,
+        arch,
+        "attention.indexer.key_length",
+        config,
+        &["index_head_dim", "indexer_head_size"],
+    )?;
+    push_required_first_u32(
+        metadata,
+        arch,
+        "attention.indexer.top_k",
+        config,
+        &["index_topk", "indexer_top_k"],
+    )?;
+    Ok(())
+}
+
 fn push_moe_metadata(metadata: &mut Vec<GgufKv>, arch: &str, config: &Value) {
     push_first_u32(
         metadata,
@@ -269,6 +302,26 @@ fn push_moe_metadata(metadata: &mut Vec<GgufKv>, arch: &str, config: &Value) {
     if let Some(norm) = optional_bool(config, "norm_topk_prob") {
         metadata.push(GgufKv::bool(&format!("{arch}.expert_weights_norm"), norm));
     }
+}
+
+fn push_required_first_u32(
+    metadata: &mut Vec<GgufKv>,
+    arch: &str,
+    gguf_suffix: &str,
+    config: &Value,
+    config_keys: &[&str],
+) -> Result<()> {
+    for config_key in config_keys {
+        if let Some(value) = optional_u32(config, config_key) {
+            ensure!(
+                value > 0,
+                "config value {config_key:?} must be greater than zero"
+            );
+            metadata.push(GgufKv::u32(&format!("{arch}.{gguf_suffix}"), value));
+            return Ok(());
+        }
+    }
+    anyhow::bail!("config missing one of {config_keys:?}")
 }
 
 fn push_first_u32(
@@ -434,6 +487,68 @@ mod tests {
             matches!(
                 kv,
                 GgufKv::U32 { key, .. } if key == "deepseek2.nextn_predict_layers"
+            )
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn builds_glm_dsa_indexer_metadata_from_config() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("config.json"),
+            r#"{
+              "model_type": "glm_moe_dsa",
+              "vocab_size": 154880,
+              "max_position_embeddings": 1048576,
+              "hidden_size": 6144,
+              "intermediate_size": 12288,
+              "num_hidden_layers": 78,
+              "num_nextn_predict_layers": 1,
+              "num_attention_heads": 64,
+              "num_key_value_heads": 64,
+              "qk_nope_head_dim": 192,
+              "qk_rope_head_dim": 64,
+              "v_head_dim": 256,
+              "q_lora_rank": 2048,
+              "kv_lora_rank": 512,
+              "index_n_heads": 32,
+              "index_head_dim": 128,
+              "index_topk": 2048,
+              "n_routed_experts": 256,
+              "num_experts_per_tok": 8,
+              "n_shared_experts": 1,
+              "moe_intermediate_size": 2048,
+              "first_k_dense_replace": 3,
+              "routed_scaling_factor": 2.5,
+              "norm_topk_prob": true,
+              "rms_norm_eps": 1e-5
+            }"#,
+        )
+        .unwrap();
+
+        let metadata = metadata_from_hf_config(&root, 3).unwrap();
+
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.attention.indexer.head_count" && *value == 32
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.attention.indexer.key_length" && *value == 128
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.attention.indexer.top_k" && *value == 2048
             )
         }));
         fs::remove_dir_all(root).unwrap();

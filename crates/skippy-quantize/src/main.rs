@@ -779,6 +779,7 @@ fn write_layer_package_quant_hook(
         script.push_str(&format!(" --nthreads {nthreads}"));
     }
     append_optional_tensor_type_file(&mut script, args.init.tensor_type_file.as_deref());
+    append_override_kv_args(&mut script, &runner.override_kv);
     if runner.allow_requantize {
         script.push_str(" --allow-requantize");
     }
@@ -810,6 +811,12 @@ fn write_layer_package_quant_hook(
 fn append_optional_tensor_type_file(script: &mut String, tensor_type_file: Option<&Path>) {
     if let Some(path) = tensor_type_file {
         script.push_str(&format!(" --tensor-type-file {}", shell_quote(path)));
+    }
+}
+
+fn append_override_kv_args(script: &mut String, overrides: &[String]) {
+    for override_kv in overrides {
+        script.push_str(&format!(" --override-kv {}", shell_quote_str(override_kv)));
     }
 }
 
@@ -857,7 +864,10 @@ fn run_skippy_model_package_write(
 }
 
 fn shell_quote(path: impl AsRef<Path>) -> String {
-    let raw = path.as_ref().display().to_string();
+    shell_quote_str(&path.as_ref().display().to_string())
+}
+
+fn shell_quote_str(raw: &str) -> String {
     format!("'{}'", raw.replace('\'', "'\\''"))
 }
 
@@ -1486,7 +1496,7 @@ fn print_dry_run_complete(json: bool, kind: &str) -> Result<()> {
 mod tests {
     use std::path::Path;
 
-    use super::append_optional_tensor_type_file;
+    use super::{append_optional_tensor_type_file, append_override_kv_args};
 
     #[test]
     fn layer_package_hook_forwards_tensor_type_file() {
@@ -1499,5 +1509,17 @@ mod tests {
 
         assert!(script.contains("--tensor-type-file"));
         assert!(script.contains("'/tmp/recipes/glm 5.2 q2.tensor-types.txt'"));
+    }
+
+    #[test]
+    fn layer_package_hook_forwards_metadata_overrides() {
+        let mut script = String::new();
+
+        append_override_kv_args(
+            &mut script,
+            &["glm-dsa.attention.indexer.head_count=int:32".to_string()],
+        );
+
+        assert!(script.contains("--override-kv 'glm-dsa.attention.indexer.head_count=int:32'"));
     }
 }
