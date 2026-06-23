@@ -1189,16 +1189,22 @@ fn write_package_artifact(
     );
     let path = out_dir.join(&spec.relative_path);
     write_stage_artifact(source, &stage, &path)?;
+    let relative_path = spec.relative_path.display().to_string();
+    run_artifact_hook(artifact_hook, &path, &relative_path)?;
+    let artifact_info = ModelInfo::open(&path)
+        .with_context(|| format!("open package artifact {}", path.display()))?;
+    let artifact_tensors = artifact_info
+        .tensors()
+        .with_context(|| format!("read package artifact tensors {}", path.display()))?;
     let metadata = fs::metadata(&path)
         .with_context(|| format!("read artifact metadata {}", path.display()))?;
     let artifact = PackageArtifact {
-        path: spec.relative_path.display().to_string(),
-        tensor_count: stage.tensor_count,
-        tensor_bytes: stage.tensor_bytes,
+        path: relative_path,
+        tensor_count: artifact_tensors.len(),
+        tensor_bytes: artifact_tensors.iter().map(|tensor| tensor.byte_size).sum(),
         artifact_bytes: metadata.len(),
         sha256: file_sha256(&path)?,
     };
-    run_artifact_hook(artifact_hook, &path, &artifact.path)?;
     Ok(artifact)
 }
 

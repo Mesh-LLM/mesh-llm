@@ -426,6 +426,51 @@ skippy-quantize list-quants --json
 skippy-quantize list-tensor-types --json
 ```
 
+## BF16 to layer package
+
+For lab workflows, keep one reusable split BF16 GGUF artifact as the durable
+source of truth, then build quantized layer packages from it. The quantized
+GGUF shards can be treated as disposable staging once the package preflight
+passes:
+
+```bash
+skippy-quantize quantize-layer-package \
+  --source /Users/lab/glm52-work/bf16-gguf \
+  --source-prefix BF16 \
+  --target /Users/lab/glm52-work/quantized \
+  --target-prefix Q2_K-MTP-Q8 \
+  --manifest /Users/lab/glm52-work/work/q2-k-mtp-q8-package/quant-manifest.json \
+  --package-dir /Users/lab/glm52-work/packages/GLM-5.2-Q2_K-MTP-Q8-layers \
+  --package-model-id meshllm/GLM-5.2-Q2_K-MTP-Q8-GGUF:Q2_K-MTP-Q8 \
+  --package-source-repo meshllm/GLM-5.2-Q2_K-MTP-Q8-GGUF \
+  --package-source-revision local \
+  --work-dir /Users/lab/glm52-work/work/q2-k-mtp-q8-package/native-work \
+  --spool-dir /Users/lab/glm52-work/work/q2-k-mtp-q8-package/spool \
+  --record-dir /Users/lab/glm52-work/work/q2-k-mtp-q8-package/records \
+  --json-event-file /Users/lab/glm52-work/work/q2-k-mtp-q8-package/status.json \
+  --quant Q2_K \
+  --tensor-type-file /Users/lab/glm52-work/recipes/glm-5.2-q2-k-mtp-q8.tensor-types.txt \
+  --output-basename GLM-5.2-Q2_K-MTP-Q8 \
+  --stages 2 \
+  --replace-package \
+  --watchdog-seconds 120
+```
+
+Build prerequisites:
+
+```bash
+just skippy-quantize-standalone-release-build
+cargo build --release --locked -p skippy-model-package
+```
+
+The command validates the source split, writes the package artifacts from the
+BF16 GGUF source, quantizes each artifact in place, then runs package preflight.
+It does not materialize a complete quantized GGUF repo first. By default, the
+temporary quant scratch directory is deleted after package preflight passes;
+pass `--keep-quant` to retain it. It does not pass `--max-memory` to
+quantization because the unpatched llama API quant backend does not expose a
+memory-budget knob.
+
 ## Validation
 
 Useful checks:
