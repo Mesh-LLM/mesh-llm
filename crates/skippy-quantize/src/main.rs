@@ -778,6 +778,7 @@ fn write_layer_package_quant_hook(
     if let Some(nthreads) = runner.nthreads {
         script.push_str(&format!(" --nthreads {nthreads}"));
     }
+    append_optional_tensor_type_file(&mut script, args.init.tensor_type_file.as_deref());
     if runner.allow_requantize {
         script.push_str(" --allow-requantize");
     }
@@ -804,6 +805,12 @@ fn write_layer_package_quant_hook(
     fs::write(&hook, script).with_context(|| format!("write hook {}", hook.display()))?;
     make_executable(&hook)?;
     Ok(hook)
+}
+
+fn append_optional_tensor_type_file(script: &mut String, tensor_type_file: Option<&Path>) {
+    if let Some(path) = tensor_type_file {
+        script.push_str(&format!(" --tensor-type-file {}", shell_quote(path)));
+    }
 }
 
 fn run_skippy_model_package_write(
@@ -1473,4 +1480,24 @@ fn print_dry_run_complete(json: bool, kind: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::append_optional_tensor_type_file;
+
+    #[test]
+    fn layer_package_hook_forwards_tensor_type_file() {
+        let mut script = String::new();
+
+        append_optional_tensor_type_file(
+            &mut script,
+            Some(Path::new("/tmp/recipes/glm 5.2 q2.tensor-types.txt")),
+        );
+
+        assert!(script.contains("--tensor-type-file"));
+        assert!(script.contains("'/tmp/recipes/glm 5.2 q2.tensor-types.txt'"));
+    }
 }
