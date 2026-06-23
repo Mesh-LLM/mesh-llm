@@ -491,6 +491,33 @@ mod tests {
     }
 
     #[test]
+    fn passes_explicit_tensor_type_file_to_command() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        let recipe = root.join("glm-5.2-q2-k-mtp-q8.tensor-types.txt");
+        fs::write(&recipe, "(^|\\.)nextn\\.=Q8_0").unwrap();
+        let args = native_args();
+        let manifest = manifest(Some(recipe.clone()));
+
+        let command = build_native_quantize_command(
+            &args,
+            &manifest,
+            Path::new("/tmp/in/model-00001-of-00002.gguf"),
+            Path::new("/tmp/out/model-q2-mtp-q8"),
+            SplitWindow {
+                first_split: 1,
+                last_split: 2,
+            },
+        )
+        .unwrap();
+
+        assert!(command.contains(&"--tensor-type-file".to_string()));
+        assert!(command.contains(&recipe.display().to_string()));
+        assert!(!command.contains(&"(^|\\.)nextn\\.=Q8_0".to_string()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn builds_skippy_abi_quantize_command_label() {
         let mut args = native_args();
         args.backend = BackendKind::SkippyAbi;
@@ -582,6 +609,38 @@ mod tests {
         assert_eq!(inputs.tensor_overrides.len(), 3);
         assert_eq!(inputs.prune_layers, vec![1, 2, -1]);
         assert_eq!(inputs.kv_overrides.len(), 4);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn appends_tensor_type_file_entries_after_explicit_overrides() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        let recipe = root.join("glm-5.2-q2-k-mtp-q8.tensor-types.txt");
+        fs::write(
+            &recipe,
+            "^token_embd\\.weight$=Q8_0\n(^|\\.)nextn\\.=Q8_0\n",
+        )
+        .unwrap();
+        let mut args = native_args();
+        args.tensor_type = vec!["nextn\\.pre_projection\\.weight=F16".to_string()];
+        let manifest = manifest(Some(recipe));
+
+        let inputs = NativeQuantizeInputs::build(&args, &manifest).unwrap();
+
+        assert_eq!(inputs.tensor_overrides.len(), 4);
+        assert_eq!(
+            inputs._tensor_patterns[0].to_str().unwrap(),
+            "nextn\\.pre_projection\\.weight"
+        );
+        assert_eq!(
+            inputs._tensor_patterns[1].to_str().unwrap(),
+            "^token_embd\\.weight$"
+        );
+        assert_eq!(
+            inputs._tensor_patterns[2].to_str().unwrap(),
+            "(^|\\.)nextn\\."
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -108,7 +108,7 @@ fn direct_quantize_preflight_supports_current_directory_no_output_shape() {
 }
 
 #[test]
-fn direct_quantize_preflight_accepts_recipe_quant_label_with_tensor_file() {
+fn direct_quantize_preflight_accepts_base_quant_with_tensor_file() {
     let root = unique_temp_dir();
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("model.gguf"), b"source shard").unwrap();
@@ -125,7 +125,7 @@ fn direct_quantize_preflight_accepts_recipe_quant_label_with_tensor_file() {
             "--preflight-only",
             "--json",
             "model.gguf",
-            "UD-Q3_K_S",
+            "Q3_K_S",
         ])
         .output()
         .expect("skippy-quantize command should run");
@@ -137,15 +137,15 @@ fn direct_quantize_preflight_accepts_recipe_quant_label_with_tensor_file() {
         .as_str()
         .expect("manifest_path should be a string");
     assert!(
-        manifest_path.ends_with(".ggml-model-UD-Q3_K_S.UD-Q3_K_S.skippy-quantize.json"),
-        "recipe quant label should drive output and sidecar names, got {manifest_path}"
+        manifest_path.ends_with(".ggml-model-Q3_K_S.Q3_K_S.skippy-quantize.json"),
+        "base quant should drive output and sidecar names, got {manifest_path}"
     );
 
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn direct_quantize_preflight_rejects_recipe_quant_label_without_tensor_file() {
+fn direct_quantize_preflight_rejects_profile_quant_label() {
     let root = unique_temp_dir();
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("model.gguf"), b"source shard").unwrap();
@@ -166,12 +166,12 @@ fn direct_quantize_preflight_rejects_recipe_quant_label_without_tensor_file() {
 
     assert!(
         !output.status.success(),
-        "preflight should reject missing recipe"
+        "preflight should reject custom profile labels as quant modes"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("pass --tensor-type-file"),
-        "error should explain missing tensor recipe, got: {stderr}"
+        stderr.contains("custom tensor-type recipes"),
+        "error should explain profile labels are not quant modes, got: {stderr}"
     );
 
     fs::remove_dir_all(root).unwrap();

@@ -406,10 +406,10 @@ Important quantization flags:
 ## Recipes
 
 Top-level quantization modes intentionally mirror the pinned llama.cpp quant
-table. Custom profile labels such as `UD-Q3_K_S` and `Q4_K_XL` are accepted as
-recipe aliases when paired with `--tensor-type-file`. They resolve to the
-corresponding base llama quant for backend execution while preserving the recipe
-label in default output and sidecar names.
+table. Custom profile names such as `Q2_K-MTP-Q8`, `UD-Q3_K_S`, or `Q4_K_XL`
+belong in artifact names such as `--target-prefix` and `--output-basename`, not
+in `--quant`. Pass the base llama quant with `--quant` and express any
+per-tensor policy with `--tensor-type-file` or repeated `--tensor-type`.
 
 The tensor recipe format is one override per line:
 

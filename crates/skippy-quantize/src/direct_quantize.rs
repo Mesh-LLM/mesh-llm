@@ -413,12 +413,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_recipe_quant_label_for_direct_quantize() {
-        let parsed = parse_direct_quantize_positionals(&["UD-Q3_K_S".to_string()]).unwrap();
+    fn rejects_profile_quant_label_for_direct_quantize() {
+        let error = parse_direct_quantize_positionals(&["UD-Q3_K_S".to_string()]).unwrap_err();
 
-        assert_eq!(parsed.output, None);
-        assert_eq!(parsed.quant.base_quant(), QuantType::Q3KS);
-        assert_eq!(parsed.quant.output_name(), "UD-Q3_K_S");
+        assert!(
+            error.to_string().contains("custom tensor-type recipes"),
+            "profile labels should not be accepted as quant modes: {error}"
+        );
     }
 
     #[test]
@@ -611,12 +612,9 @@ mod tests {
             PathBuf::from("ggml-model-Q2_K_S.gguf")
         );
         assert_eq!(
-            default_output_path(
-                Path::new("/repo/BF16/model.gguf"),
-                &"UD-Q3_K_S".parse::<QuantSpec>().unwrap()
-            )
-            .unwrap(),
-            PathBuf::from("/repo/BF16/ggml-model-UD-Q3_K_S.gguf")
+            default_output_path(Path::new("/repo/BF16/model.gguf"), &QuantType::Q3KS.into())
+                .unwrap(),
+            PathBuf::from("/repo/BF16/ggml-model-Q3_K_S.gguf")
         );
     }
 
