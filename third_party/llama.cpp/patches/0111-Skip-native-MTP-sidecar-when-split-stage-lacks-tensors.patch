@@ -1,0 +1,81 @@
+From 4cf0fb2637f16ed7e1af926e836fc2a6e273914d Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 23 Jun 2026 16:00:00 +1000
+Subject: [PATCH 111/111] Skip native MTP sidecar when split stage lacks tensors
+
+---
+ src/skippy.cpp | 44 +++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 41 insertions(+), 3 deletions(-)
+
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 8f7205d2..e81f3786 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -943,6 +943,42 @@ struct skippy_graph_filter_scope {
+     bool enabled = false;
+ };
+ 
++static bool skippy_should_create_native_mtp_sidecar(
++        const llama_model * model,
++        const skippy_runtime_config * config) {
++    if (model == nullptr ||
++        config == nullptr ||
++        !config->include_output ||
++        model->hparams.n_layer_nextn == 0) {
++        return false;
++    }
++
++    if (model->arch != LLM_ARCH_GLM_DSA) {
++        return true;
++    }
++
++    const size_t il = static_cast<size_t>(model->hparams.n_layer());
++    if (il >= model->layers.size()) {
++        return false;
++    }
++
++    const llama_layer_nextn & nextn = model->layers[il].nextn;
++    const bool has_mtp_block = nextn.eh_proj != nullptr &&
++                               nextn.enorm != nullptr &&
++                               nextn.hnorm != nullptr;
++    const bool has_token_embedding = nextn.embed_tokens != nullptr ||
++                                     model->tok_embd != nullptr;
++    const bool has_head_norm = nextn.shared_head_norm != nullptr ||
++                               model->output_norm != nullptr;
++    const bool has_head = nextn.shared_head_head != nullptr ||
++                          model->output != nullptr;
++
++    return has_mtp_block &&
++           has_token_embedding &&
++           has_head_norm &&
++           has_head;
++}
++
+ struct skippy_activation_tokens_scope {
+     skippy_activation_tokens_scope(const llama_token * tokens, size_t token_count) {
+         if (tokens != nullptr && token_count > 0 && token_count <= static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+@@ -2659,9 +2695,7 @@ static enum skippy_status skippy_finish_model_open(
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
+ 
+-    if (config != nullptr &&
+-        config->include_output &&
+-        model->hparams.n_layer_nextn > 0) {
++    if (skippy_should_create_native_mtp_sidecar(model, config)) {
+         llama_context_params mtp_params = params;
+         mtp_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+         mtp_params.embeddings = false;
+@@ -2675,6 +2709,10 @@ static enum skippy_status skippy_finish_model_open(
+         } else {
+             fprintf(stderr, "skippy: native MTP sidecar unavailable for this final stage; continuing without drafts\n");
+         }
++    } else if (config != nullptr &&
++               config->include_output &&
++               model->hparams.n_layer_nextn > 0) {
++        fprintf(stderr, "skippy: native MTP sidecar skipped because this split stage is missing required MTP graph tensors; continuing without drafts\n");
+     }
+ 
+     stage_model->lane_in_use.assign(stage_model->lane_count, false);
+-- 
+2.54.0
+
