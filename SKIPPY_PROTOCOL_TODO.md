@@ -6,6 +6,16 @@ and waits for ACK or predicted-token replies to walk back upstream. That is
 correct, but it exposes one or more network round trips for every prefill
 chunk and every normal decode token.
 
+> **Reconciled with code 2026-06-24.** Several items below shipped since this
+> doc was last revised (2026-05-13) and have been ticked with a `DONE:` note
+> pointing at the landing code. Speculative decode is no longer "defaults off":
+> there is a full `[defaults.speculative]` config surface (`auto / disabled /
+> draft / ngram`), native MTP is implemented in the runtime and defaults on
+> (auto-resolved from layer-package MTP generation metadata, see #888), GLM DSA
+> MTP runs as a split-stage sidecar (#899), and direct (reverse-relay-free)
+> predicted-token / span returns exist (`binary_transport/direct_return.rs`).
+> Checkboxes that remain `[ ]` are still open or unverified.
+
 ## Current Observations
 
 - Prefill and decode use the same neighbor-chain shape:
@@ -19,8 +29,10 @@ chunk and every normal decode token.
 - Normal decode is one `DecodeEmbd` request per token and waits for one
   `PredictedToken` reply from the final stage chain.
 - `VerifySpan` already supports speculative decode windows and batched
-  `PredictedTokens`, but mesh embedded defaults do not enable a draft model or
-  speculative window.
+  `PredictedTokens`. As of 2026-06-24 mesh embedded **does** wire speculative
+  decode: `[defaults.speculative]` config (`auto / disabled / draft / ngram`,
+  `draft_model_path` / `draft_hf_repo` / `draft_max_tokens` / etc.) and native
+  MTP defaulting on via package generation metadata.
 - `TryRestorePrefillDecode` already fuses exact-prefix restore with the first
   decode step for a narrow warm-cache path.
 - Activation transport already supports `f32`, `f16`, and `q8`; decode is
@@ -36,13 +48,22 @@ chunk and every normal decode token.
   - Emit telemetry for prefill credit limit, pending replies, credit waits, and
     deferred replies drained.
 
-- [ ] Enable async prefill forwarding for mesh-launched remote stages.
+- [x] Enable async prefill forwarding for mesh-launched remote stages.
+  - DONE: `async_prefill_forward` exists and defaults on
+    (`skippy-server/src/binary_transport/options.rs`:
+    `async_prefill_forward: args.async_prefill_forward || !args.no_async_prefill_forward`).
+    Revisit credit-limit-from-mesh-policy + flush-on-control if not yet covered.
   - Start with conservative bounded credit.
   - Make the credit limit configurable from mesh stage load policy.
   - Validate that Stop, generation config, checkpoint, restore, trim, and prefix
     cache control all flush pending forwards before continuing.
 
-- [ ] Add direct final-stage predicted-token replies.
+- [x] Add direct final-stage predicted-token replies.
+  - DONE: `skippy-server/src/binary_transport/direct_return.rs` — a direct
+    prediction-return listener (`PredictionReturnKey`, return address bound by
+    stage0; final stage sends `send_reply_predicted_tokens_with_stats` /
+    `send_reply_predicted_with_tokens_and_stats` directly back, bypassing the
+    reverse hop relay).
   - Let stage0 provide a direct reply lane or return address for predicted-token
     replies.
   - Keep intermediate stages on the forward activation path but remove reverse
@@ -50,18 +71,27 @@ chunk and every normal decode token.
   - Define how final-stage errors and per-stage stats are returned or
     summarized when reverse hops are bypassed.
 
-- [ ] Add final-stage direct commit for accepted decode spans.
+- [x] Add final-stage direct commit for accepted decode spans.
+  - DONE (shares the direct-return path above): accepted-span / predicted-token
+    results return directly to stage0 via `direct_return.rs`, avoiding per-hop
+    reverse relay. Verify batched `VerifySpan` windows exercise this lane under
+    benchmark before closing fully.
   - For speculative verification, let the final stage return a span result
     directly to stage0.
   - Avoid per-hop reverse relay for accepted windows.
 
 ## B. RTT Amortization
 
-- [ ] Expose speculative decode controls through mesh skippy config.
-  - Wire draft model path, speculative window, adaptive speculative window, and
-    draft GPU-layer policy through embedded mesh startup.
-  - Add status fields so operators can see whether speculative decode is active.
-  - Benchmark acceptance rate and latency on LAN and higher-RTT links.
+- [x] Expose speculative decode controls through mesh skippy config.
+  - DONE: `[defaults.speculative]` schema in `mesh-llm-config` (strategy
+    `auto/disabled/draft/ngram`, `draft_model_path`, `draft_hf_repo`,
+    `draft_hf_file`, `draft_selection_policy`, `pairing_fault`,
+    `draft_max_tokens`, `draft_min_tokens`, `draft_acceptance_threshold`,
+    `draft_split_probability`, `spec_default`); resolver in
+    `mesh-llm-host-runtime/.../skippy/resolver/speculative.rs`; native MTP
+    defaults on (`native_mtp_enabled.unwrap_or(true)`).
+  - DONE (status): `api/status.rs` exposes `speculative: Option<bool>` per slot.
+  - OPEN: benchmark acceptance rate + latency on LAN and higher-RTT links.
 
 - [ ] Tune prefill chunk policy for RTT.
   - Replace fixed `64` token embedded prefill chunks with an adaptive or
