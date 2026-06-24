@@ -386,6 +386,7 @@ fn test_build_runtime_status_payload_uses_local_processes() {
                 pid: 100,
                 slots: 4,
                 context_length: None,
+                profile: None,
             },
             RuntimeProcessPayload {
                 name: "Llama".into(),
@@ -396,6 +397,7 @@ fn test_build_runtime_status_payload_uses_local_processes() {
                 pid: 101,
                 slots: 4,
                 context_length: None,
+                profile: None,
             },
         ],
     );
@@ -424,6 +426,7 @@ fn test_build_runtime_status_payload_keeps_duplicate_model_instances() {
                 pid: 100,
                 slots: 4,
                 context_length: Some(8192),
+                profile: None,
             },
             RuntimeProcessPayload {
                 name: "Qwen".into(),
@@ -434,6 +437,7 @@ fn test_build_runtime_status_payload_keeps_duplicate_model_instances() {
                 pid: 100,
                 slots: 4,
                 context_length: Some(8192),
+                profile: None,
             },
         ],
     );
@@ -459,6 +463,7 @@ fn test_build_runtime_processes_payload_sorts_processes() {
             pid: 11,
             slots: 4,
             context_length: None,
+            profile: None,
         },
         RuntimeProcessPayload {
             name: "Alpha".into(),
@@ -469,6 +474,7 @@ fn test_build_runtime_processes_payload_sorts_processes() {
             pid: 10,
             slots: 4,
             context_length: None,
+            profile: None,
         },
     ]);
 
@@ -489,6 +495,7 @@ fn test_runtime_processes_payload_includes_context_length() {
             pid: 10,
             slots: 4,
             context_length: Some(65536),
+            profile: None,
         },
         RuntimeProcessPayload {
             name: "model-b".into(),
@@ -499,6 +506,7 @@ fn test_runtime_processes_payload_includes_context_length() {
             pid: 11,
             slots: 2,
             context_length: None,
+            profile: None,
         },
     ]);
 
@@ -2290,6 +2298,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
             pid: 111,
             slots: 4,
             context_length: None,
+            profile: None,
         }];
         inner
             .runtime_data_producer
@@ -2308,6 +2317,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
                 local_processes.push(runtime_data::RuntimeProcessSnapshot {
                     model: "collector-model".into(),
                     instance_id: Some("runtime-1".into()),
+                    profile: None,
                     backend: "collector-backend".into(),
                     pid: 777,
                     port: 9337,
@@ -4280,6 +4290,7 @@ async fn api_runtime_reads_from_collector_snapshot() {
             pid: 111,
             slots: 4,
             context_length: None,
+            profile: None,
         }];
 
         inner
@@ -4299,6 +4310,7 @@ async fn api_runtime_reads_from_collector_snapshot() {
                 local_processes.push(runtime_data::RuntimeProcessSnapshot {
                     model: "collector-model".into(),
                     instance_id: None,
+                    profile: None,
                     backend: "collector-backend".into(),
                     pid: 777,
                     port: 9337,

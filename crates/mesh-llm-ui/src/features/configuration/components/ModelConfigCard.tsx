@@ -401,6 +401,16 @@ export function ModelConfigCard({
           {advanced && (
             <>
               <div className="border-t border-border-soft pt-3" />
+              <ConfigControl label="Profile" override={hasOverride(modelConfig.profile)}>
+                <TextConfigInput
+                  label="Profile"
+                  value={modelConfig.profile ?? ''}
+                  placeholder="default"
+                  tabIndex={controlTabIndex}
+                  onChange={(profile) => patchConfig({ profile })}
+                />
+              </ConfigControl>
+
               <ConfigControl label="Split mode" override={hasOverride(modelConfig.splitMode)}>
                 <SegmentedChoice
                   label="Split mode"

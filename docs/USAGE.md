@@ -455,6 +455,17 @@ alias = "my-cluster"   # friendly name shown in /api/status
 
 # ===========================================================================
 # Per-model entries — each [[models]] block overrides specific defaults
+#
+# The optional `profile` field distinguishes multiple entries for the same
+# model artifact. When omitted, the entry uses the default (unnamed) profile.
+# Two entries with the same `model` but different `profile` load as
+# independent serving instances — each with its own settings and its own
+# copy of the model weights.
+#
+# At the routing layer, named profiles appear as `{model_ref}#{profile}`.
+# For example, `Qwen/Qwen3-8B:Q4_K_M#chat`.
+# The default profile (no `#` suffix) keeps the bare model ref for backward
+# compatibility.
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
@@ -614,6 +625,48 @@ ctx_size = 8192
 
 [models.advanced.server]
 alias = "qwen-vl"
+
+# ---------------------------------------------------------------------------
+# Example 5: Multi-profile — same model, different serving configurations
+# ---------------------------------------------------------------------------
+
+[[models]]
+model = "Qwen/Qwen3-8B:Q4_K_M"
+profile = "deep-context"
+
+[models.model_fit]
+ctx_size = 32768
+prompt_cache = true
+
+[models.throughput]
+parallel = 1
+tuning_profile = "balanced"
+
+[[models]]
+model = "Qwen/Qwen3-8B:Q4_K_M"
+profile = "interactive"
+
+[models.model_fit]
+ctx_size = 8192
+
+[models.throughput]
+parallel = 4
+tuning_profile = "throughput"
+
+[models.hardware]
+device = "cuda:0"
+
+# The first profile ("deep-context") dedicates a large context window with
+# conservative parallelism for document analysis. The second ("interactive")
+# prioritizes throughput for chat-style usage. Each loads independently and
+# appears as a separate model in /v1/models:
+#
+#   Qwen/Qwen3-8B:Q4_K_M             ← default profile (if defined separately)
+#   Qwen/Qwen3-8B:Q4_K_M#deep-context ← named profile
+#   Qwen/Qwen3-8B:Q4_K_M#interactive   ← named profile
+#
+# Weight sharing between profiles is not yet supported — each loads its own
+# copy of the model weights.
 
 # ---------------------------------------------------------------------------
 # Plugin declarations

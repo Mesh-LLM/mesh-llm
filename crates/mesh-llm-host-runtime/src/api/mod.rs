@@ -976,6 +976,7 @@ impl ServingController for MeshApi {
             control_tx
                 .send(RuntimeControlRequest::Load {
                     spec: model_ref.clone(),
+                    profile: request.profile.clone(),
                     resp: resp_tx,
                 })
                 .map_err(|_| runtime_unavailable("runtime control unavailable"))?;
@@ -991,6 +992,7 @@ impl ServingController for MeshApi {
             let capabilities = infer_served_model_capabilities(&model_ref, &loaded.model);
             Ok(ServedModel {
                 model_ref: loaded.model_ref,
+                profile: loaded.profile,
                 model_id: loaded.model,
                 instance_id: Some(loaded.instance_id),
                 state: ServingModelState::Ready,
@@ -1073,8 +1075,14 @@ impl ServingController for MeshApi {
 
 fn served_model_from_runtime_payload(model: RuntimeModelPayload) -> ServedModel {
     let capabilities = infer_served_model_capabilities(&model.name, &model.name);
+    // Build model_ref with profile suffix for non-default profiles
+    let model_ref = match &model.profile {
+        Some(profile) if !profile.is_empty() => format!("{}#{}", model.name, profile),
+        _ => model.name.clone(),
+    };
     ServedModel {
-        model_ref: model.name.clone(),
+        model_ref,
+        profile: model.profile,
         model_id: model.name,
         instance_id: model.instance_id,
         state: serving_model_state_from_runtime_status(&model.status),

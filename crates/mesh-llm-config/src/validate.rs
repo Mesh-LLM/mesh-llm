@@ -35,6 +35,29 @@ pub(crate) fn validation_diagnostic(
     diagnostic
 }
 
+fn validate_duplicate_model_entries(
+    models: &[ModelConfigEntry],
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) {
+    for i in 0..models.len() {
+        for j in (i + 1)..models.len() {
+            if models[i].model == models[j].model && models[i].profile == models[j].profile {
+                let profile_clause = match &models[i].profile {
+                    Some(p) => format!(" and profile=\"{p}\""),
+                    None => " and no profile".to_string(),
+                };
+                diagnostics.push(validation_diagnostic(
+                    "models",
+                    format!(
+                        "duplicate model entry: models[{i}] and models[{j}] both have model=\"{}\"{profile_clause}",
+                        models[i].model,
+                    ),
+                ));
+            }
+        }
+    }
+}
+
 pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic> {
     let mut diagnostics = Vec::new();
 
@@ -136,6 +159,8 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
             diagnostics.push(diagnostic);
         }
     }
+
+    validate_duplicate_model_entries(&config.models, &mut diagnostics);
 
     diagnostics
 }
@@ -1787,6 +1812,91 @@ connect_timeout_secs = 0
         assert_eq!(
             err.to_string(),
             "plugin[0].startup.connect_timeout_secs must be at least 1 when set"
+        );
+    }
+
+    #[test]
+    fn duplicate_model_with_same_profile_is_rejected() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+defaults.runtime = "metal"
+
+[[models]]
+model = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
+profile = "gaming"
+
+[[models]]
+model = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
+profile = "gaming"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(
+            text.contains("duplicate model entry"),
+            "expected duplicate model error, got: {text}"
+        );
+        assert!(
+            text.contains("models[0]"),
+            "expected reference to models[0], got: {text}"
+        );
+        assert!(
+            text.contains("models[1]"),
+            "expected reference to models[1], got: {text}"
+        );
+    }
+
+    #[test]
+    fn duplicate_model_without_profile_is_rejected() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+defaults.runtime = "metal"
+
+[[models]]
+model = "my-model"
+
+[[models]]
+model = "my-model"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(
+            text.contains("duplicate model entry"),
+            "expected duplicate model error, got: {text}"
+        );
+        assert!(
+            text.contains("and no profile"),
+            "expected 'and no profile' in error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn same_model_with_different_profiles_is_allowed() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+defaults.runtime = "metal"
+
+[[models]]
+model = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
+profile = "gaming"
+
+[[models]]
+model = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
+profile = "coding"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(
+            !text.contains("duplicate model entry"),
+            "expected no duplicate error for different profiles, got: {text}"
         );
     }
 }

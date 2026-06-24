@@ -40,6 +40,31 @@ struct AutoRouteDecision {
     required_tokens: Option<u32>,
 }
 
+/// Parse a model identifier that may include a profile suffix.
+///
+/// Returns `(model_ref, profile)` where:
+/// - `model_ref` is the base model identifier (without `#profile`)
+/// - `profile` is `Some(profile_name)` if `#profile` was present, `None` otherwise
+///
+/// Examples:
+/// - `"Qwen/Qwen3-8B:Q4_K_M"` → `("Qwen/Qwen3-8B:Q4_K_M", None)`
+/// - `"Qwen/Qwen3-8B:Q4_K_M#low-ctx"` → `("Qwen/Qwen3-8B:Q4_K_M", Some("low-ctx"))`
+/// - `"model#"` → `("model", None)` (empty profile treated as None)
+pub(super) fn parse_model_with_profile(model: &str) -> (&str, Option<&str>) {
+    if let Some(hash_pos) = model.rfind('#') {
+        let model_ref = &model[..hash_pos];
+        let profile = &model[hash_pos + 1..];
+        if profile.is_empty() {
+            // Empty profile after # is treated as no profile
+            (model_ref, None)
+        } else {
+            (model_ref, Some(profile))
+        }
+    } else {
+        (model, None)
+    }
+}
+
 async fn bind_api_proxy_listener(
     port: u16,
     existing_listener: Option<tokio::net::TcpListener>,
@@ -92,6 +117,7 @@ async fn handle_mesh_load_request(
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         let _ = control_tx.send(api::RuntimeControlRequest::Load {
             spec: spec.clone(),
+            profile: None,
             resp: resp_tx,
         });
         send_runtime_control_response(
@@ -903,4 +929,44 @@ pub(crate) fn callable_models(targets: &election::ModelTargets) -> Vec<String> {
         .collect();
     models.sort();
     models
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_model_with_profile_with_named_profile() {
+        let (model_ref, profile) = parse_model_with_profile("Qwen3-8B#low-ctx");
+        assert_eq!(model_ref, "Qwen3-8B");
+        assert_eq!(profile, Some("low-ctx"));
+    }
+
+    #[test]
+    fn parse_model_with_profile_without_profile() {
+        let (model_ref, profile) = parse_model_with_profile("Qwen3-8B");
+        assert_eq!(model_ref, "Qwen3-8B");
+        assert_eq!(profile, None);
+    }
+
+    #[test]
+    fn parse_model_with_profile_empty_profile_after_hash() {
+        let (model_ref, profile) = parse_model_with_profile("Qwen3-8B#");
+        assert_eq!(model_ref, "Qwen3-8B");
+        assert_eq!(profile, None);
+    }
+
+    #[test]
+    fn parse_model_with_profile_huggingface_ref_with_quant() {
+        let (model_ref, profile) = parse_model_with_profile("org/repo:Q4_K_M#profile");
+        assert_eq!(model_ref, "org/repo:Q4_K_M");
+        assert_eq!(profile, Some("profile"));
+    }
+
+    #[test]
+    fn parse_model_with_profile_multiple_hashes_uses_last() {
+        let (model_ref, profile) = parse_model_with_profile("model#with#hash#profile");
+        assert_eq!(model_ref, "model#with#hash");
+        assert_eq!(profile, Some("profile"));
+    }
 }

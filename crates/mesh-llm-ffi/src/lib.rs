@@ -265,6 +265,7 @@ pub enum DevicePolicy {
 #[derive(uniffi::Record)]
 pub struct LoadModelOptions {
     pub device_policy: DevicePolicy,
+    pub profile: Option<String>,
 }
 
 #[derive(uniffi::Enum)]
@@ -280,6 +281,7 @@ pub enum ServingModelState {
 #[derive(uniffi::Record)]
 pub struct ServedModel {
     pub model_ref: String,
+    pub profile: Option<String>,
     pub model_id: String,
     pub instance_id: Option<String>,
     pub state: ServingModelState,
@@ -908,6 +910,7 @@ impl MeshNodeHandle {
             model_ref,
             sdk_node::LoadModelOptions {
                 device_policy: options.device_policy.into(),
+                profile: options.profile,
             },
         ))
         .map(ServedModel::from)
@@ -1343,6 +1346,7 @@ impl From<sdk_node::ServedModel> for ServedModel {
     fn from(value: sdk_node::ServedModel) -> Self {
         Self {
             model_ref: value.model_ref,
+            profile: value.profile,
             model_id: value.model_id,
             instance_id: value.instance_id,
             state: value.state.into(),

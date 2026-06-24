@@ -399,6 +399,7 @@ mod tests {
     fn test_model(name: &str) -> ModelConfigEntry {
         ModelConfigEntry {
             model: name.into(),
+            profile: None,
             mmproj: None,
             ctx_size: None,
             gpu_id: None,

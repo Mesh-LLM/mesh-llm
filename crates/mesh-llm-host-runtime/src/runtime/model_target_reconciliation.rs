@@ -32,31 +32,36 @@ impl Default for ModelTargetReconciliationPolicy {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ModelTargetReconciliationState {
-    in_flight_model_refs: BTreeSet<String>,
-    failed_until_secs: BTreeMap<String, u64>,
-    manual_unload_until_secs: BTreeMap<String, u64>,
+    in_flight_models: BTreeSet<(String, String)>,
+    failed_models: BTreeMap<(String, String), u64>,
+    manual_unload_models: BTreeMap<(String, String), u64>,
 }
 
 impl ModelTargetReconciliationState {
-    pub(crate) fn mark_load_started(&mut self, model_ref: &str) {
-        self.in_flight_model_refs.insert(model_ref.to_string());
+    pub(crate) fn mark_load_started(&mut self, model_ref: &str, profile: &str) {
+        self.in_flight_models
+            .insert((model_ref.to_string(), profile.to_string()));
     }
 
-    pub(crate) fn record_load_success(&mut self, model_ref: &str) {
-        self.in_flight_model_refs.remove(model_ref);
-        self.failed_until_secs.remove(model_ref);
+    pub(crate) fn record_load_success(&mut self, model_ref: &str, profile: &str) {
+        self.in_flight_models
+            .remove(&(model_ref.to_string(), profile.to_string()));
+        self.failed_models
+            .remove(&(model_ref.to_string(), profile.to_string()));
     }
 
     pub(crate) fn record_load_failure(
         &mut self,
         model_ref: &str,
+        profile: &str,
         now_secs: u64,
         policy: &ModelTargetReconciliationPolicy,
     ) {
-        self.in_flight_model_refs.remove(model_ref);
+        self.in_flight_models
+            .remove(&(model_ref.to_string(), profile.to_string()));
         if policy.failure_cooldown_secs > 0 {
-            self.failed_until_secs.insert(
-                model_ref.to_string(),
+            self.failed_models.insert(
+                (model_ref.to_string(), profile.to_string()),
                 now_secs.saturating_add(policy.failure_cooldown_secs),
             );
         }
@@ -65,32 +70,46 @@ impl ModelTargetReconciliationState {
     pub(crate) fn record_manual_unload(
         &mut self,
         model_ref: &str,
+        profile: &str,
         now_secs: u64,
         policy: &ModelTargetReconciliationPolicy,
     ) {
-        self.in_flight_model_refs.remove(model_ref);
+        self.in_flight_models
+            .remove(&(model_ref.to_string(), profile.to_string()));
         if policy.manual_unload_cooldown_secs > 0 {
-            self.manual_unload_until_secs.insert(
-                model_ref.to_string(),
+            self.manual_unload_models.insert(
+                (model_ref.to_string(), profile.to_string()),
                 now_secs.saturating_add(policy.manual_unload_cooldown_secs),
             );
         }
     }
 
     pub(crate) fn prune_expired(&mut self, now_secs: u64) {
-        self.failed_until_secs.retain(|_, until| *until > now_secs);
-        self.manual_unload_until_secs
+        self.failed_models.retain(|_, until| *until > now_secs);
+        self.manual_unload_models
             .retain(|_, until| *until > now_secs);
     }
 
-    fn suppressed(&self, model_ref: &str, model_name: Option<&str>, now_secs: u64) -> bool {
-        self.in_flight_model_refs
-            .iter()
-            .any(|in_flight| model_identity_matches(in_flight, model_ref))
-            || self.cooldown_active(&self.failed_until_secs, model_ref, model_name, now_secs)
+    fn suppressed(
+        &self,
+        model_ref: &str,
+        profile: &str,
+        model_name: Option<&str>,
+        now_secs: u64,
+    ) -> bool {
+        let compound_key = (model_ref.to_string(), profile.to_string());
+        self.in_flight_models.contains(&compound_key)
             || self.cooldown_active(
-                &self.manual_unload_until_secs,
+                &self.failed_models,
                 model_ref,
+                profile,
+                model_name,
+                now_secs,
+            )
+            || self.cooldown_active(
+                &self.manual_unload_models,
+                model_ref,
+                profile,
                 model_name,
                 now_secs,
             )
@@ -98,15 +117,18 @@ impl ModelTargetReconciliationState {
 
     fn cooldown_active(
         &self,
-        cooldowns: &BTreeMap<String, u64>,
+        cooldowns: &BTreeMap<(String, String), u64>,
         model_ref: &str,
+        profile: &str,
         model_name: Option<&str>,
         now_secs: u64,
     ) -> bool {
+        let compound_key = (model_ref.to_string(), profile.to_string());
         cooldowns.iter().any(|(key, until)| {
             *until > now_secs
-                && (model_identity_matches(key, model_ref)
-                    || model_name.is_some_and(|name| model_identity_matches(key, name)))
+                && (key == &compound_key
+                    || model_identity_matches(&key.0, model_ref)
+                    || model_name.is_some_and(|name| model_identity_matches(&key.0, name)))
         })
     }
 }
@@ -124,6 +146,7 @@ pub(crate) struct ModelTargetReconciliationInput<'a> {
 pub(crate) struct ModelTargetReconciliationCandidate {
     pub(crate) rank: usize,
     pub(crate) model_ref: String,
+    pub(crate) profile: String,
     pub(crate) model_name: Option<String>,
     pub(crate) wanted: bool,
     pub(crate) wanted_reason: Option<&'static str>,
@@ -162,6 +185,7 @@ impl From<ModelTargetCapacityAdviceState> for ModelTargetReconciliationCapacityS
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ModelTargetReconciliationAction {
     pub(crate) model_ref: String,
+    pub(crate) profile: Option<String>,
     pub(crate) model_name: Option<String>,
     pub(crate) load_spec: PathBuf,
     pub(crate) replace_model_ref: Option<String>,
@@ -198,6 +222,7 @@ pub(crate) fn plan_model_target_reconciliation(
             || loaded_target(input.loaded_model_refs, target)
             || state.suppressed(
                 &target.model_ref,
+                &target.profile,
                 target.model_name.as_deref(),
                 input.now_secs,
             )
@@ -207,6 +232,7 @@ pub(crate) fn plan_model_target_reconciliation(
 
         actions.push(ModelTargetReconciliationAction {
             model_ref: target.model_ref.clone(),
+            profile: Some(target.profile.clone()),
             model_name: target.model_name.clone(),
             load_spec,
             replace_model_ref,
@@ -274,6 +300,7 @@ fn loaded_target(
     })
 }
 
+#[allow(dead_code)]
 fn model_target_matches_loaded(
     target: &ModelTargetReconciliationCandidate,
     loaded_model_ref: &str,
@@ -330,6 +357,7 @@ mod tests {
         ModelTargetReconciliationCandidate {
             rank: 1,
             model_ref: model_ref.to_string(),
+            profile: String::new(),
             model_name: Some("Qwen3-8B-Q4_K_M".to_string()),
             wanted: true,
             wanted_reason: Some("explicit_interest"),
@@ -388,6 +416,7 @@ mod tests {
             actions,
             vec![ModelTargetReconciliationAction {
                 model_ref: "org/model@main:file.gguf".to_string(),
+                profile: Some(String::new()),
                 model_name: Some("Qwen3-8B-Q4_K_M".to_string()),
                 load_spec: PathBuf::from("/models/qwen.gguf"),
                 replace_model_ref: None,
@@ -427,6 +456,7 @@ mod tests {
             actions,
             vec![ModelTargetReconciliationAction {
                 model_ref: "org/large@main:file.gguf".to_string(),
+                profile: Some(String::new()),
                 model_name: Some("Large".to_string()),
                 load_spec: PathBuf::from("/models/large.gguf"),
                 replace_model_ref: Some("Small".to_string()),
@@ -573,7 +603,7 @@ mod tests {
         let loaded = BTreeSet::new();
         let policy = enabled_policy();
         let mut state = ModelTargetReconciliationState::default();
-        state.record_load_failure("org/model@main:file.gguf", NOW, &policy);
+        state.record_load_failure("org/model@main:file.gguf", "", NOW, &policy);
 
         let actions = plan_model_target_reconciliation(
             &policy,
@@ -711,7 +741,7 @@ mod tests {
         let loaded = BTreeSet::new();
         let policy = enabled_policy();
         let mut state = ModelTargetReconciliationState::default();
-        state.mark_load_started("org/model@main:file.gguf");
+        state.mark_load_started("org/model@main:file.gguf", "");
 
         let actions = plan_model_target_reconciliation(
             &policy,
@@ -720,7 +750,7 @@ mod tests {
         );
         assert!(actions.is_empty());
 
-        state.record_load_success("org/model@main:file.gguf");
+        state.record_load_success("org/model@main:file.gguf", "");
         let actions = plan_model_target_reconciliation(
             &policy,
             &mut state,
@@ -738,7 +768,7 @@ mod tests {
         let loaded = BTreeSet::new();
         let policy = enabled_policy();
         let mut state = ModelTargetReconciliationState::default();
-        state.record_manual_unload("unsloth/Qwen3-8B-GGUF:Q4_K_M", NOW, &policy);
+        state.record_manual_unload("unsloth/Qwen3-8B-GGUF:Q4_K_M", "", NOW, &policy);
 
         let actions = plan_model_target_reconciliation(
             &policy,
@@ -756,7 +786,7 @@ mod tests {
         let loaded = BTreeSet::new();
         let policy = enabled_policy();
         let mut state = ModelTargetReconciliationState::default();
-        state.record_manual_unload("Qwen3-8B-Q4_K_M", NOW, &policy);
+        state.record_manual_unload("Qwen3-8B-Q4_K_M", "", NOW, &policy);
 
         let actions = plan_model_target_reconciliation(
             &policy,
@@ -774,5 +804,84 @@ mod tests {
             },
         );
         assert_eq!(actions.len(), 1);
+    }
+
+    #[test]
+    fn reconciliation_tracks_profiles_independently() {
+        // Two candidates for the same model but different profiles.
+        // The cross-profile cooldown (model_identity_matches) means a failure
+        // for one profile suppresses all profiles of the same model during
+        // the cooldown window. This test verifies that state tracking is
+        // profile-aware (load_success/unload for one profile doesn't affect
+        // the other) even though the cooldown is cross-profile.
+        let mut default_profile = target("org/model@main:file.gguf");
+        default_profile.profile = String::new();
+        let mut low_ctx_profile = target("org/model@main:file.gguf");
+        low_ctx_profile.profile = "low-ctx".to_string();
+        let targets = vec![default_profile.clone(), low_ctx_profile.clone()];
+        let local_interests = BTreeSet::from(["org/model@main:file.gguf".to_string()]);
+        let loaded = BTreeSet::new();
+        let policy = enabled_policy();
+        let mut state = ModelTargetReconciliationState::default();
+
+        // Record failure for "low-ctx" profile — cross-profile cooldown
+        // suppresses BOTH profiles of this model.
+        state.record_load_failure("org/model@main:file.gguf", "low-ctx", NOW, &policy);
+
+        let actions = plan_model_target_reconciliation(
+            &policy,
+            &mut state,
+            input(&local_interests, &loaded, &targets),
+        );
+        assert!(
+            actions.is_empty(),
+            "cross-profile cooldown should suppress both profiles, got {} actions",
+            actions.len()
+        );
+
+        // After cooldown expires, candidates become actionable again.
+        // The planner emits at most 1 action per model_ref per tick,
+        // so we get 1 action (the first candidate in the list).
+        let after_cooldown = NOW + policy.failure_cooldown_secs + 1;
+        let actions = plan_model_target_reconciliation(
+            &policy,
+            &mut state,
+            ModelTargetReconciliationInput {
+                now_secs: after_cooldown,
+                ..input(&local_interests, &loaded, &targets)
+            },
+        );
+        assert_eq!(
+            actions.len(),
+            1,
+            "one profile should be actionable after cooldown"
+        );
+
+        // Record load success for "low-ctx" profile — this should NOT
+        // mark the default profile as loaded in state tracking.
+        state.record_load_success("org/model@main:file.gguf", "low-ctx");
+
+        // Verify that record_load_success for "low-ctx" did NOT add
+        // the default profile to in_flight_models.
+        let default_compound = ("org/model@main:file.gguf".to_string(), String::new());
+        assert!(
+            !state.in_flight_models.contains(&default_compound),
+            "load_success for low-ctx should not add default profile to in_flight"
+        );
+
+        // Record manual unload for "low-ctx" — should NOT affect default profile.
+        state.record_manual_unload(
+            "org/model@main:file.gguf",
+            "low-ctx",
+            after_cooldown,
+            &policy,
+        );
+
+        // Verify that manual_unload for "low-ctx" did NOT add
+        // the default profile to manual_unload_models.
+        assert!(
+            !state.manual_unload_models.contains_key(&default_compound),
+            "manual_unload for low-ctx should not add default profile to manual_unload"
+        );
     }
 }

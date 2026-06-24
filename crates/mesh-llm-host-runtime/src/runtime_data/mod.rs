@@ -172,6 +172,7 @@ pub(crate) mod tests {
             local_processes.push(RuntimeProcessSnapshot {
                 model: "Qwen3-8B".into(),
                 instance_id: None,
+                profile: None,
                 backend: "metal".into(),
                 pid: 4242,
                 port: 9337,
@@ -303,6 +304,7 @@ pub(crate) mod tests {
             RuntimeProcessPayload {
                 name: "Zulu".into(),
                 instance_id: None,
+                profile: None,
                 backend: "llama".into(),
                 status: "ready".into(),
                 port: 9444,
@@ -313,6 +315,7 @@ pub(crate) mod tests {
             RuntimeProcessPayload {
                 name: "Alpha".into(),
                 instance_id: None,
+                profile: None,
                 backend: "llama".into(),
                 status: "starting".into(),
                 port: 9337,

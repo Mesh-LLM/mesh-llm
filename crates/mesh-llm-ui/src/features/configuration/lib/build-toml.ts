@@ -449,6 +449,10 @@ function appendSelectedModelConfig(
 ) {
   if (!config) return
 
+  if (config.profile?.trim()) {
+    appendModelConfigLine(modelLines, sectionLines, 'models.<model-ref>.profile', config.profile.trim())
+  }
+
   if (config.slots !== undefined) {
     appendModelConfigLine(modelLines, sectionLines, 'models.<model-ref>.throughput.parallel', config.slots)
   }

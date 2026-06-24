@@ -258,6 +258,7 @@ export type ConfigModel = {
   tags: string[]
 }
 export type ConfigAssignModelConfig = {
+  profile?: string
   slots?: number
   batchProfile?: 'auto' | 'balanced' | 'throughput' | 'saver'
   splitMode?: 'auto' | 'layer' | 'row'

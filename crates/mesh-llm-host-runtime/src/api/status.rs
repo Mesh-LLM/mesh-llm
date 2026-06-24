@@ -577,6 +577,8 @@ pub(crate) struct ModelTargetPayload {
     pub(crate) model_ref: String,
     pub(crate) display_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) model_name: Option<String>,
     pub(crate) explicit_interest_count: usize,
     pub(crate) request_count: u64,
@@ -647,6 +649,7 @@ pub(crate) fn build_runtime_status_payload(
         .map(|process| RuntimeModelPayload {
             name: process.name,
             instance_id: process.instance_id,
+            profile: process.profile,
             backend: process.backend,
             status: process.status,
             port: Some(process.port),
@@ -661,6 +664,7 @@ pub(crate) fn build_runtime_status_payload(
             RuntimeModelPayload {
                 name: model_name.to_string(),
                 instance_id: None,
+                profile: None,
                 backend: primary_backend.unwrap_or_else(|| "unknown".into()),
                 status: "starting".into(),
                 port: llama_port,

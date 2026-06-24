@@ -1137,6 +1137,8 @@ function modelConfigFromEntry(
     placementPaths.cacheTypeV ?? DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeV!
   )
 
+  config.profile = stringModelEntryValue(entry, 'models.<model-ref>.profile')
+
   const kvCachePolicy = stringModelEntryValue(
     entry,
     placementPaths.kvCachePolicy ?? DEFAULT_MODEL_PLACEMENT_PATHS.kvCachePolicy!
@@ -1820,6 +1822,7 @@ function writeSelectedModelConfig(
     placementPaths.kvCachePolicy ?? DEFAULT_MODEL_PLACEMENT_PATHS.kvCachePolicy!,
     config?.kvCachePolicy
   )
+  writeOptionalModelEntryPath(entry, 'models.<model-ref>.profile', config?.profile?.trim())
 }
 
 export function mergeConfigurationIntoMeshConfig(
