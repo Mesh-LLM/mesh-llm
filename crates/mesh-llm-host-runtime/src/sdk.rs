@@ -1,11 +1,15 @@
 use crate::inference::skippy::{SkippyDeviceDescriptor, SkippyModelHandle, SkippyModelLoadOptions};
 use crate::models;
 use anyhow::{Context, Result};
+#[cfg(test)]
+use mesh_llm_node::serving::UnloadOptions;
 use mesh_llm_node::serving::{
     DevicePolicy, LoadModelRequest, ServedModel, ServingController, ServingFuture,
     ServingModelState, ServingStatus, UnloadModelRequest, UnloadTarget,
 };
 use mesh_llm_system::hardware::{self, Metric};
+#[cfg(test)]
+use mesh_llm_types::models::capabilities::ModelCapabilities;
 use openai_frontend::{ChatCompletionRequest, ChatMessage, MessageContent, OpenAiBackend};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
@@ -363,12 +367,15 @@ pub struct EmbeddedServingController {
 struct EmbeddedServingState {
     next_instance_id: u64,
     default_device_policy: DevicePolicy,
-    models: HashMap<String, Arc<EmbeddedServedModel>>,
+    /// Maps (model_ref, profile) -> served model.
+    /// The compound key ensures two profiles of the same model coexist
+    /// without silently replacing each other.
+    models: HashMap<(String, Option<String>), Arc<EmbeddedServedModel>>,
 }
 
 struct EmbeddedServedModel {
     served: ServedModel,
-    handle: SkippyModelHandle,
+    handle: Option<SkippyModelHandle>,
 }
 
 impl Default for EmbeddedServingController {
@@ -429,8 +436,11 @@ impl EmbeddedServingController {
             stream_options: None,
             extra: BTreeMap::new(),
         };
-        let response = loaded
+        let handle = loaded
             .handle
+            .as_ref()
+            .context("model handle not available")?;
+        let response = handle
             .chat_completion(request)
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -447,14 +457,12 @@ impl EmbeddedServingController {
             .await
             .models
             .values()
-            .fold(BTreeMap::new(), |mut models, model| {
-                models.insert(
+            .map(|model| {
+                (
                     model.served.model_id.clone(),
                     model.served.model_ref.clone(),
-                );
-                models
+                )
             })
-            .into_iter()
             .collect()
     }
 
@@ -501,8 +509,11 @@ impl ServingController for EmbeddedServingController {
             let mut state = self.inner.lock().await;
             let instance_id = format!("embedded-{}", state.next_instance_id);
             state.next_instance_id += 1;
+            let model_ref = request.model_ref.clone();
+            let profile = request.profile.clone();
             let served = ServedModel {
                 model_ref: request.model_ref,
+                profile: profile.clone(),
                 model_id: model_id.clone(),
                 instance_id: Some(instance_id),
                 state: ServingModelState::Ready,
@@ -512,10 +523,10 @@ impl ServingController for EmbeddedServingController {
                 error: None,
             };
             state.models.insert(
-                model_id,
+                (model_ref, profile),
                 Arc::new(EmbeddedServedModel {
                     served: served.clone(),
-                    handle,
+                    handle: Some(handle),
                 }),
             );
             Ok(served)
@@ -862,6 +873,102 @@ mod tests {
         assert!(status.payload.is_object());
 
         handle.stop().await.expect("stop embedded mesh client");
+    }
+
+    fn make_served_model(
+        model_ref: &str,
+        profile: Option<&str>,
+        instance_id: u64,
+    ) -> Arc<EmbeddedServedModel> {
+        Arc::new(EmbeddedServedModel {
+            served: ServedModel {
+                model_ref: model_ref.to_string(),
+                profile: profile.map(String::from),
+                model_id: format!("{model_ref}-model-id"),
+                instance_id: Some(format!("embedded-{instance_id}")),
+                state: ServingModelState::Ready,
+                backend: Some("skippy".to_string()),
+                capabilities: ModelCapabilities::default(),
+                context_length: Some(4096),
+                error: None,
+            },
+            handle: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn model_list_returns_both_profiles_for_same_model() {
+        let controller = EmbeddedServingController::new();
+        {
+            let mut state = controller.inner.lock().await;
+            state.models.insert(
+                ("model-a".to_string(), Some("gaming".to_string())),
+                make_served_model("model-a", Some("gaming"), 1),
+            );
+            state.models.insert(
+                ("model-a".to_string(), Some("coding".to_string())),
+                make_served_model("model-a", Some("coding"), 2),
+            );
+        }
+
+        let models = controller.model_list().await;
+        assert_eq!(models.len(), 2, "should return both profile entries");
+        assert_eq!(models[0].1, "model-a", "model_ref matches");
+        assert_eq!(models[1].1, "model-a", "both entries have same model_ref");
+    }
+
+    #[tokio::test]
+    async fn served_models_returns_both_profiles() {
+        let controller = EmbeddedServingController::new();
+        {
+            let mut state = controller.inner.lock().await;
+            state.models.insert(
+                ("model-a".to_string(), Some("gaming".to_string())),
+                make_served_model("model-a", Some("gaming"), 1),
+            );
+            state.models.insert(
+                ("model-a".to_string(), Some("coding".to_string())),
+                make_served_model("model-a", Some("coding"), 2),
+            );
+        }
+
+        let list = controller.served_models().await.unwrap();
+        assert_eq!(list.len(), 2, "should return both profile entries");
+        let profiles: Vec<Option<&str>> = list.iter().map(|m| m.profile.as_deref()).collect();
+        assert!(profiles.contains(&Some("gaming")));
+        assert!(profiles.contains(&Some("coding")));
+    }
+
+    #[tokio::test]
+    async fn unload_by_instance_id_removes_only_target_entry() {
+        let controller = EmbeddedServingController::new();
+        {
+            let mut state = controller.inner.lock().await;
+            state.models.insert(
+                ("model-a".to_string(), Some("gaming".to_string())),
+                make_served_model("model-a", Some("gaming"), 1),
+            );
+            state.models.insert(
+                ("model-a".to_string(), Some("coding".to_string())),
+                make_served_model("model-a", Some("coding"), 2),
+            );
+        }
+
+        controller
+            .unload(UnloadModelRequest {
+                target: UnloadTarget::Instance("embedded-1".to_string()),
+                options: UnloadOptions::default(),
+            })
+            .await
+            .expect("unload gaming profile");
+
+        let remaining = controller.served_models().await.unwrap();
+        assert_eq!(remaining.len(), 1, "one entry should remain");
+        assert_eq!(
+            remaining[0].profile.as_deref(),
+            Some("coding"),
+            "coding profile should survive"
+        );
     }
 
     fn test_load_options() -> SkippyModelLoadOptions {

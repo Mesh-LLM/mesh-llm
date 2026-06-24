@@ -411,7 +411,7 @@ impl ConfigEditor {
         if node.owner_control_advertise_addr.is_some() {
             self.set_owner_control_advertise_addr(node.owner_control_advertise_addr);
         }
-        let mut model = self.upsert_model(node.model)?;
+        let mut model = self.upsert_model(node.model, None)?;
         if let Some(runtime) = node.runtime {
             model.runtime(runtime);
         }
@@ -430,18 +430,23 @@ impl ConfigEditor {
         Ok(self)
     }
 
-    pub fn upsert_model(&mut self, model_ref: impl AsRef<str>) -> Result<ModelConfigEditor<'_>> {
+    pub fn upsert_model(
+        &mut self,
+        model_ref: impl AsRef<str>,
+        profile: Option<String>,
+    ) -> Result<ModelConfigEditor<'_>> {
         let model_ref = normalize_non_empty(model_ref.as_ref(), "model ref")?;
         let index = match self
             .config
             .models
             .iter()
-            .position(|entry| entry.model == model_ref)
+            .position(|entry| entry.model == model_ref && entry.profile == profile)
         {
             Some(index) => index,
             None => {
                 self.config.models.push(ModelConfigEntry {
                     model: model_ref,
+                    profile,
                     ..ModelConfigEntry::default()
                 });
                 self.config.models.len() - 1
@@ -452,9 +457,15 @@ impl ConfigEditor {
         })
     }
 
-    pub fn remove_model(&mut self, model_ref: impl AsRef<str>) -> Result<&mut Self> {
+    pub fn remove_model(
+        &mut self,
+        model_ref: impl AsRef<str>,
+        profile: Option<String>,
+    ) -> Result<&mut Self> {
         let model_ref = normalize_non_empty(model_ref.as_ref(), "model ref")?;
-        self.config.models.retain(|entry| entry.model != model_ref);
+        self.config
+            .models
+            .retain(|entry| !(entry.model == model_ref && entry.profile == profile));
         Ok(self)
     }
 
@@ -720,7 +731,7 @@ mod schema_tests {
     use super::*;
     use crate::{
         ConfigAliasPolicy, ConfigConditionOperator, ConfigConditionValue, ConfigPathAliasKind,
-        ConfigVisibility,
+        ConfigVisibility, config_to_toml, parse_config_toml,
     };
     use toml::Value;
 
@@ -1001,5 +1012,158 @@ mod schema_tests {
             behavior.disable_when[0].write_policy,
             ConfigDisabledWritePolicy::OmitWhenDisabled
         );
+    }
+
+    #[test]
+    fn model_config_entry_roundtrips_with_profile() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor
+            .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", Some("low-ctx".into()))
+            .unwrap()
+            .context_size(4096);
+        editor
+            .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", Some("high-ctx".into()))
+            .unwrap()
+            .context_size(16384);
+
+        let config = editor.into_config();
+        let serialized = config_to_toml(&config).expect("should serialize");
+        let deserialized = parse_config_toml(&serialized).expect("should deserialize");
+
+        assert_eq!(deserialized.models.len(), 2);
+        let low_ctx = deserialized
+            .models
+            .iter()
+            .find(|e| e.profile.as_deref() == Some("low-ctx"))
+            .expect("should have low-ctx entry");
+        let high_ctx = deserialized
+            .models
+            .iter()
+            .find(|e| e.profile.as_deref() == Some("high-ctx"))
+            .expect("should have high-ctx entry");
+
+        assert_eq!(low_ctx.model, "Qwen/Qwen3-8B-GGUF:Q4_K_M");
+        assert_eq!(low_ctx.model_fit.as_ref().unwrap().ctx_size, Some(4096));
+        assert_eq!(high_ctx.model, "Qwen/Qwen3-8B-GGUF:Q4_K_M");
+        assert_eq!(high_ctx.model_fit.as_ref().unwrap().ctx_size, Some(16384));
+    }
+
+    #[test]
+    fn model_config_entry_without_profile_omits_profile_key() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor
+            .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", None)
+            .unwrap()
+            .context_size(8192);
+
+        let config = editor.into_config();
+        let serialized = config_to_toml(&config).expect("should serialize");
+        let toml_str = serialized.to_string();
+
+        assert!(!toml_str.contains("profile"));
+        let deserialized = parse_config_toml(&serialized).expect("should deserialize");
+        assert_eq!(deserialized.models.len(), 1);
+        assert_eq!(deserialized.models[0].model, "Qwen/Qwen3-8B-GGUF:Q4_K_M");
+        assert_eq!(deserialized.models[0].profile, None);
+    }
+
+    #[test]
+    fn upsert_model_dedup_by_profile() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor
+            .upsert_model("Qwen3-8B", Some("low-ctx".into()))
+            .unwrap()
+            .context_size(4096);
+        editor
+            .upsert_model("Qwen3-8B", Some("low-ctx".into()))
+            .unwrap()
+            .context_size(8192);
+
+        let config = editor.into_config();
+        assert_eq!(config.models.len(), 1);
+        assert_eq!(
+            config.models[0].model_fit.as_ref().unwrap().ctx_size,
+            Some(8192)
+        );
+    }
+
+    #[test]
+    fn upsert_model_coexists_with_different_profiles() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor
+            .upsert_model("Qwen3-8B", Some("low-ctx".into()))
+            .unwrap();
+        editor
+            .upsert_model("Qwen3-8B", Some("high-ctx".into()))
+            .unwrap();
+
+        let config = editor.into_config();
+        assert_eq!(config.models.len(), 2);
+    }
+
+    #[test]
+    fn upsert_model_none_profile_is_distinct() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor
+            .upsert_model("Qwen3-8B", Some("low-ctx".into()))
+            .unwrap();
+        editor.upsert_model("Qwen3-8B", None).unwrap();
+
+        let config = editor.into_config();
+        assert_eq!(config.models.len(), 2);
+    }
+
+    #[test]
+    fn remove_model_by_profile() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor
+            .upsert_model("Qwen3-8B", Some("low-ctx".into()))
+            .unwrap();
+        editor
+            .upsert_model("Qwen3-8B", Some("high-ctx".into()))
+            .unwrap();
+        editor.upsert_model("Qwen3-8B", None).unwrap();
+
+        editor
+            .remove_model("Qwen3-8B", Some("low-ctx".into()))
+            .unwrap();
+
+        let config = editor.into_config();
+        assert_eq!(config.models.len(), 2);
+        assert!(
+            config
+                .models
+                .iter()
+                .any(|e| e.profile.as_deref() == Some("high-ctx"))
+        );
+        assert!(config.models.iter().any(|e| e.profile.is_none()));
+    }
+
+    #[test]
+    fn backwards_compat_parse_model_without_profile_field() {
+        let toml_str = r#"
+version = 1
+
+[[models]]
+model = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
+runtime = "metal"
+
+[models.model_fit]
+ctx_size = 8192
+"#;
+
+        let config = parse_config_toml(toml_str).expect("should parse");
+        assert_eq!(config.models.len(), 1);
+        assert_eq!(config.models[0].model, "Qwen/Qwen3-8B-GGUF:Q4_K_M");
+        assert_eq!(config.models[0].profile, None);
+        assert_eq!(
+            config.models[0].model_fit.as_ref().unwrap().ctx_size,
+            Some(8192)
+        );
+
+        let serialized = config_to_toml(&config).expect("should serialize");
+        let deserialized = parse_config_toml(&serialized).expect("should re-parse");
+        assert_eq!(deserialized.models.len(), 1);
+        assert_eq!(deserialized.models[0].profile, None);
     }
 }

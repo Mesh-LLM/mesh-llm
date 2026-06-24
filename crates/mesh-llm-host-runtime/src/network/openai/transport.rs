@@ -4157,12 +4157,14 @@ fn models_list_json(
     let mut data: Vec<serde_json::Value> = models
         .iter()
         .filter_map(|m| {
-            let descriptor = descriptor_for_model(descriptors, m);
-            let public_id = public_model_id(m, descriptor);
+            let (base_model, profile) =
+                crate::network::openai::ingress::parse_model_with_profile(m);
+            let descriptor = descriptor_for_model(descriptors, base_model);
+            let public_id = public_model_id(base_model, descriptor, profile);
             if !seen.insert(public_id.clone()) {
                 return None;
             }
-            let capabilities = capabilities_for_model(m, descriptors);
+            let capabilities = capabilities_for_model(base_model, descriptors);
             let has_multimodal = capabilities.supports_multimodal_runtime();
             let has_vision = capabilities.supports_vision_runtime();
             let has_audio = capabilities.supports_audio_runtime();
@@ -4180,7 +4182,7 @@ fn models_list_json(
                 caps.push("reasoning");
             }
             let display_name = if public_id == *m {
-                crate::models::installed_model_display_name(m)
+                crate::models::installed_model_display_name(base_model)
             } else {
                 public_id.clone()
             };
@@ -4195,7 +4197,7 @@ fn models_list_json(
                 "audio_status": capabilities.audio_status(),
                 "reasoning_status": capabilities.reasoning_status(),
             });
-            if let Some(metadata) = model_metadata_json(m, descriptor, runtimes)
+            if let Some(metadata) = model_metadata_json(base_model, descriptor, runtimes)
                 && let Some(object) = model.as_object_mut()
             {
                 object.insert("metadata".to_string(), metadata);
@@ -4340,9 +4342,23 @@ fn internal_model_for_public_id(
     models: &[String],
     descriptors: &[mesh::ServedModelDescriptor],
 ) -> Option<String> {
+    let (requested_base, requested_profile) =
+        crate::network::openai::ingress::parse_model_with_profile(requested);
+
     models.iter().find_map(|model| {
-        let descriptor = descriptor_for_model(descriptors, model);
-        (public_model_id(model, descriptor) == requested).then(|| model.clone())
+        let (model_base, model_profile) =
+            crate::network::openai::ingress::parse_model_with_profile(model);
+        let descriptor = descriptor_for_model(descriptors, model_base);
+        let public_id = public_model_id(model_base, descriptor, model_profile);
+        if public_id == requested {
+            return Some(model.clone());
+        }
+        let (public_base, _public_profile) =
+            crate::network::openai::ingress::parse_model_with_profile(&public_id);
+        if public_base == requested_base && requested_profile.is_none() {
+            return Some(model.clone());
+        }
+        None
     })
 }
 
@@ -4355,7 +4371,11 @@ fn descriptor_for_model<'a>(
         .find(|descriptor| descriptor.identity.model_name == model_name)
 }
 
-fn public_model_id(model_name: &str, descriptor: Option<&mesh::ServedModelDescriptor>) -> String {
+fn public_model_id(
+    model_name: &str,
+    descriptor: Option<&mesh::ServedModelDescriptor>,
+    profile: Option<&str>,
+) -> String {
     // A descriptor with an `artifact` field has enough information to
     // produce a public ID that round-trips to the same model. Without
     // it, the HuggingFace path collapses to just the repo name and
@@ -4366,18 +4386,22 @@ fn public_model_id(model_name: &str, descriptor: Option<&mesh::ServedModelDescri
     // local models), and finally the internal model_name (which
     // always carries the quant suffix our resolver knows how to
     // route).
-    if let Some(descriptor) = descriptor
+    let base_id = if let Some(descriptor) = descriptor
         && descriptor_can_produce_lossless_id(&descriptor.identity)
         && let Some(id) = public_model_id_from_identity(&descriptor.identity)
     {
-        return id;
-    }
+        id
+    } else if let Some(id) = public_model_id_from_local_path(model_name) {
+        id
+    } else {
+        model_name.to_string()
+    };
 
-    if let Some(id) = public_model_id_from_local_path(model_name) {
-        return id;
+    // Append profile suffix for non-default profiles
+    match profile.filter(|p| !p.is_empty()) {
+        Some(p) => format!("{}#{}", base_id, p),
+        None => base_id,
     }
-
-    model_name.to_string()
 }
 
 /// A descriptor identity carries enough information for
@@ -6662,5 +6686,29 @@ mod tests {
             body.contains("\"type\":\"response.completed\""),
             "missing completed event:\n{body}"
         );
+    }
+
+    #[test]
+    fn public_model_id_with_named_profile() {
+        let result = public_model_id("Qwen3-8B", None, Some("low-ctx"));
+        assert_eq!(result, "Qwen3-8B#low-ctx");
+    }
+
+    #[test]
+    fn public_model_id_without_profile() {
+        let result = public_model_id("Qwen3-8B", None, None);
+        assert_eq!(result, "Qwen3-8B");
+    }
+
+    #[test]
+    fn public_model_id_with_empty_profile() {
+        let result = public_model_id("Qwen3-8B", None, Some(""));
+        assert_eq!(result, "Qwen3-8B");
+    }
+
+    #[test]
+    fn public_model_id_with_huggingface_ref_and_profile() {
+        let result = public_model_id("org/repo:Q4_K_M", None, Some("high-ctx"));
+        assert_eq!(result, "org/repo:Q4_K_M#high-ctx");
     }
 }

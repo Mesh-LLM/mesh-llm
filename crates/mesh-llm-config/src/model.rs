@@ -173,6 +173,7 @@ pub struct ModelConfigEntry {
     pub request_defaults: Option<RequestDefaultsConfig>,
     pub multimodal: Option<MultimodalConfig>,
     pub advanced: Option<AdvancedConfig>,
+    pub profile: Option<String>,
     pub gpu_id_from_legacy_shim: bool,
 }
 
@@ -181,7 +182,7 @@ impl Serialize for ModelConfigEntry {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("ModelConfigEntry", 18)?;
+        let mut state = serializer.serialize_struct("ModelConfigEntry", 19)?;
         state.serialize_field("model", &self.model)?;
         if let Some(value) = &self.mmproj {
             state.serialize_field("mmproj", value)?;
@@ -235,6 +236,9 @@ impl Serialize for ModelConfigEntry {
         }
         if let Some(value) = &self.advanced {
             state.serialize_field("advanced", value)?;
+        }
+        if let Some(value) = &self.profile {
+            state.serialize_field("profile", value)?;
         }
         state.end()
     }
@@ -758,6 +762,8 @@ struct RawModelConfigEntry {
     multimodal: Option<MultimodalConfig>,
     #[serde(default)]
     advanced: Option<AdvancedConfig>,
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for MeshConfig {
@@ -884,6 +890,7 @@ impl ModelConfigEntry {
             request_defaults: raw.request_defaults,
             multimodal,
             advanced: raw.advanced,
+            profile: raw.profile,
             gpu_id_from_legacy_shim,
         }
     }

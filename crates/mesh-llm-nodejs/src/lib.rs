@@ -649,6 +649,7 @@ fn parse_load_options(source: Option<String>) -> Result<LoadModelOptions> {
         .unwrap_or(DevicePolicy::Auto);
     Ok(LoadModelOptions {
         device_policy: policy,
+        profile: None,
     })
 }
 

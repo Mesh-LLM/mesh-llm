@@ -867,6 +867,7 @@ async fn handle_load_model(
                 let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                 let _ = control_tx.send(RuntimeControlRequest::Load {
                     spec,
+                    profile: None,
                     resp: resp_tx,
                 });
                 match resp_rx.await {

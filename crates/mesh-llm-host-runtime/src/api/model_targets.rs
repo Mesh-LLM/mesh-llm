@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 struct ModelTargetAccumulator {
     model_ref: String,
     display_name: String,
+    profile: Option<String>,
     model_name: Option<String>,
     explicit_interest_count: usize,
     request_count: u64,
@@ -314,6 +315,7 @@ fn build_target_payloads(
                 rank: index + 1,
                 model_ref: target.model_ref,
                 display_name: target.display_name,
+                profile: target.profile,
                 model_name: target.model_name,
                 explicit_interest_count: target.explicit_interest_count,
                 request_count: target.request_count,
@@ -434,6 +436,7 @@ fn ensure_model_target(
         .or_insert_with(|| ModelTargetAccumulator {
             model_ref,
             display_name,
+            profile: None,
             model_name,
             explicit_interest_count: 0,
             request_count: 0,
@@ -479,6 +482,7 @@ mod tests {
         ModelTargetAccumulator {
             model_ref: model_ref.to_string(),
             display_name: model_ref.to_string(),
+            profile: None,
             model_name: Some(model_ref.to_string()),
             explicit_interest_count: 0,
             request_count: 0,

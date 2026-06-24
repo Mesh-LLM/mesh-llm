@@ -427,12 +427,17 @@ pub(super) async fn advertise_model_ready(
     node: &mesh::Node,
     primary_model_name: &str,
     model_name: &str,
+    profile: Option<&str>,
 ) {
     let mut hosted_models = node.hosted_models().await;
-    if hosted_models.iter().any(|m| m == model_name) {
+    let public_id = match profile.filter(|p| !p.is_empty()) {
+        Some(p) => format!("{}#{}", model_name, p),
+        None => model_name.to_string(),
+    };
+    if hosted_models.iter().any(|m| m == &public_id) {
         return;
     }
-    hosted_models.push(model_name.to_string());
+    hosted_models.push(public_id);
     hosted_models.sort();
     if let Some(pos) = hosted_models.iter().position(|m| m == primary_model_name) {
         let primary = hosted_models.remove(pos);
@@ -452,10 +457,18 @@ pub(super) async fn set_advertised_model_context(
     node.regossip().await;
 }
 
-pub(super) async fn withdraw_advertised_model(node: &mesh::Node, model_name: &str) {
+pub(super) async fn withdraw_advertised_model(
+    node: &mesh::Node,
+    model_name: &str,
+    profile: Option<&str>,
+) {
     let mut hosted_models = node.hosted_models().await;
+    let public_id = match profile.filter(|p| !p.is_empty()) {
+        Some(p) => format!("{}#{}", model_name, p),
+        None => model_name.to_string(),
+    };
     let old_len = hosted_models.len();
-    hosted_models.retain(|m| m != model_name);
+    hosted_models.retain(|m| m != &public_id);
     if hosted_models.len() == old_len {
         return;
     }
@@ -3749,9 +3762,11 @@ async fn start_runtime_layer_package_model(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn local_process_payload(
     model_name: &str,
     instance_id: Option<&str>,
+    profile: Option<&str>,
     backend: &str,
     port: u16,
     pid: u32,
@@ -3761,6 +3776,7 @@ pub(super) fn local_process_payload(
     local_process_snapshot(
         model_name,
         instance_id,
+        profile,
         backend,
         port,
         pid,
@@ -3770,9 +3786,11 @@ pub(super) fn local_process_payload(
     .to_payload()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn local_process_snapshot(
     model_name: &str,
     instance_id: Option<&str>,
+    profile: Option<&str>,
     backend: &str,
     port: u16,
     pid: u32,
@@ -3782,6 +3800,7 @@ pub(super) fn local_process_snapshot(
     crate::runtime_data::RuntimeProcessSnapshot {
         model: model_name.to_string(),
         instance_id: instance_id.map(str::to_string),
+        profile: profile.map(str::to_string),
         backend: backend.into(),
         pid,
         slots,

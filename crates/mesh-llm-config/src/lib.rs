@@ -226,7 +226,7 @@ ctx_size = 4096
                     ..LocalServingNodeConfig::default()
                 })?;
                 config
-                    .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M")?
+                    .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", None)?
                     .max_tokens(1024)
                     .temperature(0.2);
                 Ok(())
@@ -720,22 +720,22 @@ gpu_id = "pci:0000:65:00.0"
             "strategy",
         ];
 
-        occurrences
-            .iter()
-            .map(|(name, multiplier)| {
-                let leafs = extract_struct_fields(source, name)
-                    .into_iter()
-                    .filter(|(field, ty)| {
-                        !ignored.contains(&field.as_str())
-                            && !is_legacy_flat_model_field(name, field)
-                            && !nested
-                                .iter()
-                                .any(|nested_ty| contains_nested_type(ty, nested_ty))
-                    })
-                    .count();
-                leafs * multiplier
-            })
-            .sum()
+        let mut total = 0usize;
+        for (name, multiplier) in occurrences.iter() {
+            let leafs = extract_struct_fields(source, name)
+                .into_iter()
+                .filter(|(field, ty)| {
+                    !ignored.contains(&field.as_str())
+                        && !is_legacy_flat_model_field(name, field)
+                        && !nested
+                            .iter()
+                            .any(|nested_ty| contains_nested_type(ty, nested_ty))
+                })
+                .count();
+            let contribution = leafs * multiplier;
+            total += contribution;
+        }
+        total
     }
 
     fn extract_struct_fields(source: &str, struct_name: &str) -> Vec<(String, String)> {
