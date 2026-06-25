@@ -1,14 +1,14 @@
-From b41e4a5262995b0d5ce95093eedf63ca13a3e745 Mon Sep 17 00:00:00 2001
+From 69425475d1e735b38ced83024815d8222244e15a Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 27 Apr 2026 21:35:20 +1000
-Subject: [PATCH 025/108] Fix staged verification activation handoff
+Subject: [PATCH 25/95] Fix staged verification activation handoff
 
 ---
  src/skippy.cpp | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 5abd16aa..36e8826d 100644
+index 5abd16aaf..36e8826df 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1511,7 +1511,7 @@ enum skippy_status skippy_verify_tokens_frame(

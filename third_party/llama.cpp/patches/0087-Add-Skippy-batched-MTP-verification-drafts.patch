@@ -1,7 +1,7 @@
-From e506504c390369492cfa3c2168b3b703309a5691 Mon Sep 17 00:00:00 2001
+From 591e1b96c695c7d2c193daddaa4667bab0aa3f6b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 07:39:00 +1000
-Subject: [PATCH 103/108] Add Skippy batched MTP verification drafts
+Subject: [PATCH 87/95] Add Skippy batched MTP verification drafts
 
 ---
  include/skippy.h | 16 ++++++++++
@@ -9,7 +9,7 @@ Subject: [PATCH 103/108] Add Skippy batched MTP verification drafts
  2 files changed, 87 insertions(+), 6 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index c4da8e28..8d52c199 100644
+index c4da8e28c..8d52c199b 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -419,6 +419,22 @@ LLAMA_API enum skippy_status skippy_verify_tokens_frame(
@@ -36,7 +36,7 @@ index c4da8e28..8d52c199 100644
          struct skippy_session * session,
          size_t token_count,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index f8c07856..6de92990 100644
+index f8c078568..6de929901 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1513,17 +1513,18 @@ static llama_token skippy_greedy_sample(skippy_session * session) {

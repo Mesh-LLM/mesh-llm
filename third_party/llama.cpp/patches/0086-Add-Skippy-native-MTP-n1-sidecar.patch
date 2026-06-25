@@ -1,7 +1,7 @@
-From ddd3ec994bd48986841223027f1d16f106b341ea Mon Sep 17 00:00:00 2001
+From a6039ec0db5abfcaae85341af9d61b08d356ebbf Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 07:37:38 +1000
-Subject: [PATCH 102/108] Add Skippy native MTP n1 sidecar
+Subject: [PATCH 86/95] Add Skippy native MTP n1 sidecar
 
 ---
  include/skippy.h        |  21 +++
@@ -10,7 +10,7 @@ Subject: [PATCH 102/108] Add Skippy native MTP n1 sidecar
  3 files changed, 328 insertions(+), 11 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 7cace0a4..c4da8e28 100644
+index 7cace0a41..c4da8e28c 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -131,6 +131,13 @@ struct skippy_kv_page_desc {
@@ -49,7 +49,7 @@ index 7cace0a4..c4da8e28 100644
          struct skippy_session * const * sessions,
          const llama_token * token_ids,
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 7009d98c..cf97f7ab 100644
+index 7009d98c8..cf97f7ab1 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -54,6 +54,7 @@ enum skippy_feature {
@@ -61,7 +61,7 @@ index 7009d98c..cf97f7ab 100644
  
  enum skippy_status {
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 49db9189..f8c07856 100644
+index 49db9189a..f8c078568 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -6,6 +6,7 @@

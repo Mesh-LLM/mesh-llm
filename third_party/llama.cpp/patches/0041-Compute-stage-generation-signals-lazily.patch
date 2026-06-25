@@ -1,14 +1,14 @@
-From 03ae607b0c40436b4e873104c02e557b88865d1e Mon Sep 17 00:00:00 2001
+From 47b2467a876c2673881f4c4e060976a9dbac0b6f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 5 May 2026 19:35:00 +1000
-Subject: [PATCH 041/108] Compute stage generation signals lazily
+Subject: [PATCH 41/95] Compute stage generation signals lazily
 
 ---
  src/skippy.cpp | 6 +++---
  1 file changed, 3 insertions(+), 3 deletions(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index bea61d65..81e661eb 100644
+index bea61d65c..81e661ebf 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -773,9 +773,6 @@ static enum skippy_status skippy_decode_tokens(

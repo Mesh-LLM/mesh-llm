@@ -1,7 +1,7 @@
-From e6be2b9b0dc2d5e798b2060ece69cfabfbedc17a Mon Sep 17 00:00:00 2001
+From 668db38705c80861f9419dcad80557f933a5fc55 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 25 Apr 2026 15:44:46 +1000
-Subject: [PATCH 010/108] Handle Qwen35MoE recurrent-only runtime slices
+Subject: [PATCH 10/95] Handle Qwen35MoE recurrent-only runtime slices
 
 ---
  src/llama-graph.cpp      | 24 +++++++++++++++++-------
@@ -9,7 +9,7 @@ Subject: [PATCH 010/108] Handle Qwen35MoE recurrent-only runtime slices
  2 files changed, 25 insertions(+), 8 deletions(-)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index c39487b8..110f4f6a 100644
+index c39487b86..110f4f6af 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -680,17 +680,22 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
@@ -58,7 +58,7 @@ index c39487b8..110f4f6a 100644
      const int64_t n_rs = mctx->get_recr()->get_n_rs();
  
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index 86777f4b..7755e65e 100644
+index 64813b817..f119cb0c1 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
 @@ -172,6 +172,13 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p

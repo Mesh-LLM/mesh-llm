@@ -1,7 +1,7 @@
-From 68bb4eac40f2671d4800f48b469f1d8a9cc1efdc Mon Sep 17 00:00:00 2001
+From 9052e263eac074a8007f937996f2ae34811c5eea Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 07:39:07 +1000
-Subject: [PATCH 105/108] Remove unused Skippy ABI exports
+Subject: [PATCH 89/95] Remove unused Skippy ABI exports
 
 ---
  include/skippy.h        | 41 -----------------
@@ -10,7 +10,7 @@ Subject: [PATCH 105/108] Remove unused Skippy ABI exports
  3 files changed, 142 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 8d52c199..0e94e95b 100644
+index 8d52c199b..0e94e95bd 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -192,9 +192,6 @@ LLAMA_API struct llama_context * skippy_session_llama_context(
@@ -83,7 +83,7 @@ index 8d52c199..0e94e95b 100644
          struct skippy_session * session,
          const llama_token * token_ids,
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index cf97f7ab..cfb4a8fa 100644
+index cf97f7ab1..cfb4a8fa9 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -164,8 +164,6 @@ LLAMA_API struct skippy_abi_version skippy_abi_version(void);
@@ -96,7 +96,7 @@ index cf97f7ab..cfb4a8fa 100644
  
  #ifdef __cplusplus
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 57ae2aaa..57592c7f 100644
+index 57ae2aaaa..57592c7f6 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -2310,21 +2310,6 @@ uint64_t skippy_abi_features(void) {

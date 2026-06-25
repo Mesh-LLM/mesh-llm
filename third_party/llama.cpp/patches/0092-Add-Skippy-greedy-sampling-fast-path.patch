@@ -1,14 +1,14 @@
-From 2064e11e8d55fd63c7f94332b92f8a602b0922ce Mon Sep 17 00:00:00 2001
+From a32b7d1c35a9752cb94305f2d66d28c90480ef8a Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 21:29:11 +1000
-Subject: [PATCH 108/108] Add Skippy greedy sampling fast path
+Subject: [PATCH 92/95] Add Skippy greedy sampling fast path
 
 ---
  src/skippy.cpp | 36 ++++++++++++++++++++++++++++++++++++
  1 file changed, 36 insertions(+)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 04f01eac..8f7205d2 100644
+index 04f01eac7..8f7205d20 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1255,6 +1255,21 @@ static bool skippy_mtp_available(const skippy_session * session) {

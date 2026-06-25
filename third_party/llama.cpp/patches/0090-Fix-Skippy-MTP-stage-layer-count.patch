@@ -1,7 +1,7 @@
-From 9a6872289bd9d3f409c675e23d97506725b7925e Mon Sep 17 00:00:00 2001
+From fb123ae74de8703cdf900672c08dde1c0ccce9f5 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 09:05:21 +1000
-Subject: [PATCH 106/108] Fix Skippy MTP stage layer count
+Subject: [PATCH 90/95] Fix Skippy MTP stage layer count
 
 ---
  src/models/deepseek2.cpp |  4 +++-
@@ -9,7 +9,7 @@ Subject: [PATCH 106/108] Fix Skippy MTP stage layer count
  2 files changed, 16 insertions(+), 3 deletions(-)
 
 diff --git a/src/models/deepseek2.cpp b/src/models/deepseek2.cpp
-index d0ddb3c5..180fb082 100644
+index d0ddb3c5e..180fb0829 100644
 --- a/src/models/deepseek2.cpp
 +++ b/src/models/deepseek2.cpp
 @@ -194,7 +194,9 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
@@ -24,7 +24,7 @@ index d0ddb3c5..180fb082 100644
      // {n_embd, n_tokens}
      inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 57592c7f..9d6c4fbd 100644
+index 57592c7f6..9d6c4fbdb 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -181,6 +181,17 @@ static enum skippy_status skippy_success(skippy_error ** out_error) {

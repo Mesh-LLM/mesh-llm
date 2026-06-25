@@ -1,0 +1,68 @@
+From d947286ab181f1a7d6eee9d8f359e636822c3353 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 22 Jun 2026 10:54:53 +1000
+Subject: [PATCH 94/95] Support GLM DSA IndexShare layers
+
+---
+ src/llama-graph.cpp       |  2 ++
+ src/models/deepseek32.cpp | 16 +++++++++++++++-
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 64d38fc46..d79bda767 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -2639,6 +2639,8 @@ ggml_tensor * llm_graph_context::build_attn(
+ 
+     const auto & kq_mask = inp->get_kq_mask_mla();
+ 
++    GGML_ASSERT(top_k != nullptr);
++
+     // prepare new kq mask - starts filled with -INFINITY
+     ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
+ 
+diff --git a/src/models/deepseek32.cpp b/src/models/deepseek32.cpp
+index 9a20e2ce9..2cc134915 100644
+--- a/src/models/deepseek32.cpp
++++ b/src/models/deepseek32.cpp
+@@ -202,6 +202,8 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+ 
+     ggml_tensor * inp_out_ids = build_inp_out_ids();
+ 
++    ggml_tensor * shared_top_k = nullptr;
++
+     for (int il = 0; il < n_layer; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+@@ -219,8 +221,15 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+ 
+             ggml_tensor * top_k = nullptr;
+ 
++            const bool has_indexer =
++                model.layers[il].indexer_attn_q_b &&
++                model.layers[il].indexer_attn_k &&
++                model.layers[il].indexer_k_norm &&
++                model.layers[il].indexer_k_norm_b &&
++                model.layers[il].indexer_proj;
++
+             // lightning indexer
+-            {
++            if (has_indexer) {
+                 ggml_tensor * indexer_q = ggml_mul_mat(ctx0, model.layers[il].indexer_attn_q_b, qr);
+                 cb(indexer_q, "indexer_q", il);
+ 
+@@ -343,6 +352,11 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
+                 top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
+                 cb(top_k, "top_k", il);
++                shared_top_k = top_k;
++            } else {
++                GGML_ASSERT(shared_top_k != nullptr && "DSA IndexShare layer requires a previous top-k");
++                top_k = shared_top_k;
++                cb(top_k, "top_k_shared", il);
+             }
+ 
+             ggml_tensor * q = ggml_mul_mat(ctx0, model.layers[il].wq_b, qr);
+-- 
+2.50.1 (Apple Git-155)
+

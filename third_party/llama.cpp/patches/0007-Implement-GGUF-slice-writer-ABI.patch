@@ -1,14 +1,14 @@
-From b1d101d5828c493455ba2bc00debea2be7c3d588 Mon Sep 17 00:00:00 2001
+From e9c2a6220ef46f27814a4c5bfc8375174a2e9901 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 25 Apr 2026 14:39:10 +1000
-Subject: [PATCH 007/108] Implement GGUF slice writer ABI
+Subject: [PATCH 07/95] Implement GGUF slice writer ABI
 
 ---
  src/skippy.cpp | 413 +++++++++++++++++++++++++++++++++++++++++++++++++
  1 file changed, 413 insertions(+)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 732a1a15..2b54a7db 100644
+index 732a1a15c..2b54a7db7 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -11,9 +11,12 @@

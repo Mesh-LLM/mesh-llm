@@ -1,7 +1,7 @@
-From d2e848507b23deb086474d3714f5ec3a4bf05edb Mon Sep 17 00:00:00 2001
+From 3ad64e0f53471990de938083622d2452e20b5dc5 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 07:36:49 +1000
-Subject: [PATCH 101/108] Add Skippy batched stage execution ABI
+Subject: [PATCH 85/95] Add Skippy batched stage execution ABI
 
 ---
  include/skippy.h        |  24 ++++
@@ -10,7 +10,7 @@ Subject: [PATCH 101/108] Add Skippy batched stage execution ABI
  3 files changed, 295 insertions(+), 28 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 075850e3..7cace0a4 100644
+index 075850e38..7cace0a41 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -278,6 +278,15 @@ LLAMA_API enum skippy_status skippy_decode_step_sampled(
@@ -52,7 +52,7 @@ index 075850e3..7cace0a4 100644
          struct skippy_session * session,
          const llama_token * token_ids,
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index a6bd7fd9..7009d98c 100644
+index a6bd7fd9c..7009d98c8 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -65,7 +65,7 @@ index a6bd7fd9..7009d98c 100644
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 20cff23f..49db9189 100644
+index 20cff23fc..49db9189a 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1335,23 +1335,6 @@ static enum skippy_status skippy_verify_token_batch(

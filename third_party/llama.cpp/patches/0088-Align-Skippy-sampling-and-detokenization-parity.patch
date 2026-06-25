@@ -1,14 +1,14 @@
-From d71210469ed8048fdc4ed4b8fbb3837ac3527f63 Mon Sep 17 00:00:00 2001
+From c6a4602312f49baa4559735a7eb07b0ea1e5b0d8 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 17 Jun 2026 07:39:00 +1000
-Subject: [PATCH 104/108] Align Skippy sampling and detokenization parity
+Subject: [PATCH 88/95] Align Skippy sampling and detokenization parity
 
 ---
  src/skippy.cpp | 155 ++++++++++++++++++++++++++++++++++++++-----------
  1 file changed, 121 insertions(+), 34 deletions(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 6de92990..57ae2aaa 100644
+index 6de929901..57ae2aaaa 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -72,6 +72,8 @@ struct skippy_session {

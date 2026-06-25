@@ -1,7 +1,7 @@
-From a5e022b7d4768c57542fd32261f16c8aafaea134 Mon Sep 17 00:00:00 2001
+From ae26a9f8a3fe3baffd058700055630947448d50a Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 11:23:13 +1000
-Subject: [PATCH 057/108] Support RWKV7 activation sideband
+Subject: [PATCH 57/95] Support RWKV7 activation sideband
 
 ---
  include/skippy.h      |   2 +
@@ -15,7 +15,7 @@ Subject: [PATCH 057/108] Support RWKV7 activation sideband
  8 files changed, 253 insertions(+), 21 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 84169398..1c6d2c9f 100644
+index 84169398f..1c6d2c9f0 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -99,6 +99,8 @@ enum skippy_activation_layout {
@@ -28,10 +28,10 @@ index 84169398..1c6d2c9f 100644
  struct skippy_session;
  struct skippy_model_info;
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 529bc4a5..a6e75ba9 100644
+index 220240ea9..c10fa290e 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2331,6 +2331,10 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
+@@ -2335,6 +2335,10 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
      return static_cast<llm_graph_result *>(gf_res_reserve.get());
  }
  
@@ -43,10 +43,10 @@ index 529bc4a5..a6e75ba9 100644
          uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
      LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 853052be..e8756743 100644
+index f8b780587..b8fe101c4 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -242,6 +242,7 @@ public:
+@@ -243,6 +243,7 @@ public:
  
      // can reuse the llm_graph_result instance of the context (for example to update a memory module)
      llm_graph_result * get_gf_res_reserve() const;
@@ -55,7 +55,7 @@ index 853052be..e8756743 100644
      // returns the result of ggml_backend_sched_graph_compute_async execution
      ggml_status graph_compute(ggml_cgraph * gf, bool batched);
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index f975b84f..57c02537 100644
+index f975b84fe..57c025374 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -21,6 +21,7 @@
@@ -124,7 +124,7 @@ index f975b84f..57c02537 100644
          const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
          for (size_t il = 0; il < embeddings_layer_inp.size(); ++il) {
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 9c4a7849..2a7bd2be 100644
+index bc1e10e2e..2099ff40c 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -41,12 +41,21 @@ struct skippy_activation_tokens {
@@ -171,7 +171,7 @@ index 9c4a7849..2a7bd2be 100644
  class llm_graph_input_pos : public llm_graph_input_i {
  public:
      llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
-@@ -736,6 +760,7 @@ public:
+@@ -743,6 +767,7 @@ public:
      ggml_tensor * get_embd()        const { return t_embd; }
      ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }
      ggml_tensor * get_h_nextn()     const { return t_h_nextn; }
@@ -179,7 +179,7 @@ index 9c4a7849..2a7bd2be 100644
  
      ggml_tensor * get_layer_inp(int il) const { return t_layer_inp[il]; }
  
-@@ -767,6 +792,7 @@ public:
+@@ -774,6 +799,7 @@ public:
      ggml_tensor * t_embd        = nullptr;
      ggml_tensor * t_embd_pooled = nullptr;
      ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
@@ -188,7 +188,7 @@ index 9c4a7849..2a7bd2be 100644
      std::vector<ggml_tensor *> t_layer_inp;
  
 diff --git a/src/models/arwkv7.cpp b/src/models/arwkv7.cpp
-index b38b2064..85c073c9 100644
+index b38b20647..85c073c93 100644
 --- a/src/models/arwkv7.cpp
 +++ b/src/models/arwkv7.cpp
 @@ -124,7 +124,12 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para
@@ -259,7 +259,7 @@ index b38b2064..85c073c9 100644
      cur = build_norm(cur, model.output_norm, model.output_norm_b, LLM_NORM_RMS, -1);
  
 diff --git a/src/models/rwkv7.cpp b/src/models/rwkv7.cpp
-index 67c51f5b..5c499117 100644
+index 67c51f5b5..5c4991177 100644
 --- a/src/models/rwkv7.cpp
 +++ b/src/models/rwkv7.cpp
 @@ -129,8 +129,15 @@ llama_model_rwkv7::graph::graph(const llama_model & model, const llm_graph_param
@@ -334,7 +334,7 @@ index 67c51f5b..5c499117 100644
      cur = build_norm(cur, model.output_norm, model.output_norm_b, LLM_NORM, -1);
  
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 1df8a462..4b6e06be 100644
+index 1df8a462e..4b6e06be5 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -631,6 +631,34 @@ struct skippy_activation_tokens_scope {

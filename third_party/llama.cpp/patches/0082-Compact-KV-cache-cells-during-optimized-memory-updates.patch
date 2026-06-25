@@ -1,8 +1,7 @@
-From 7388b833720fc1a6aecc9e708f553d685a0f2222 Mon Sep 17 00:00:00 2001
+From 33099acf1614cc9b0e829a621cbf2e46acd26252 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 30 May 2026 13:13:23 -0700
-Subject: [PATCH 082/108] Compact KV cache cells during optimized memory
- updates
+Subject: [PATCH 82/95] Compact KV cache cells during optimized memory updates
 
 ---
  include/skippy/common.h |   2 +-
@@ -12,7 +11,7 @@ Subject: [PATCH 082/108] Compact KV cache cells during optimized memory
  4 files changed, 145 insertions(+), 21 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 26e944d8..a680d342 100644
+index 26e944d8b..a680d3421 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -25,7 +24,7 @@ index 26e944d8..a680d342 100644
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 8a3fb548..0957c6c8 100644
+index 8a3fb5482..0957c6c8b 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -751,11 +751,28 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
@@ -167,7 +166,7 @@ index 8a3fb548..0957c6c8 100644
      }
  }
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 52a013fc..c1fdfbd5 100644
+index 52a013fc7..c1fdfbd5c 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -95,6 +95,12 @@ public:
@@ -205,7 +204,7 @@ index 52a013fc..c1fdfbd5 100644
      // used to create a batch processing context from a batch
      llama_kv_cache_context(
 diff --git a/src/llama-kv-cells.h b/src/llama-kv-cells.h
-index fddd31a0..c1c8dad9 100644
+index fddd31a0b..c1c8dad93 100644
 --- a/src/llama-kv-cells.h
 +++ b/src/llama-kv-cells.h
 @@ -97,24 +97,32 @@ public:

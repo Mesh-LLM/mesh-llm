@@ -1,14 +1,14 @@
-From 4cf0fb2637f16ed7e1af926e836fc2a6e273914d Mon Sep 17 00:00:00 2001
+From c19c900e38deca1158b016087df8ce683f05cf4f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 23 Jun 2026 16:00:00 +1000
-Subject: [PATCH 111/111] Skip native MTP sidecar when split stage lacks tensors
+Subject: [PATCH 95/95] Skip native MTP sidecar when split stage lacks tensors
 
 ---
  src/skippy.cpp | 44 +++++++++++++++++++++++++++++++++++++++++---
  1 file changed, 41 insertions(+), 3 deletions(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 8f7205d2..e81f3786 100644
+index 8f7205d20..e81f37864 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -943,6 +943,42 @@ struct skippy_graph_filter_scope {
@@ -77,5 +77,5 @@ index 8f7205d2..e81f3786 100644
  
      stage_model->lane_in_use.assign(stage_model->lane_count, false);
 -- 
-2.54.0
+2.50.1 (Apple Git-155)
 

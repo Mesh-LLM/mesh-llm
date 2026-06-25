@@ -1,7 +1,7 @@
-From d6764ab444ec9405760aed7d3cfa2aa0b56e50aa Mon Sep 17 00:00:00 2001
+From ae9bc82ef7dea087afdaaeb1635207e538c69775 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 9 May 2026 13:58:47 +1000
-Subject: [PATCH 079/108] Trigger lazy chat grammar before trailing whitespace
+Subject: [PATCH 79/95] Trigger lazy chat grammar before trailing whitespace
 
 ---
  common/chat-auto-parser-generator.cpp | 14 +++++++++++++-
@@ -9,7 +9,7 @@ Subject: [PATCH 079/108] Trigger lazy chat grammar before trailing whitespace
  2 files changed, 39 insertions(+), 2 deletions(-)
 
 diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
-index 37ca55c8..b85118d9 100644
+index 36aab7ecb..1ebff8177 100644
 --- a/common/chat-auto-parser-generator.cpp
 +++ b/common/chat-auto-parser-generator.cpp
 @@ -23,6 +23,18 @@ static void foreach_function(const json & tools, const std::function<void(const
@@ -41,7 +41,7 @@ index 37ca55c8..b85118d9 100644
              if (autoparser.tools.format.openai_wrapper_trigger) {
                  // model emits the OpenAI function wrapper, trigger on it
 diff --git a/tests/test-chat-auto-parser.cpp b/tests/test-chat-auto-parser.cpp
-index 5cc10575..ad3276e7 100644
+index 5cc105753..ad3276e71 100644
 --- a/tests/test-chat-auto-parser.cpp
 +++ b/tests/test-chat-auto-parser.cpp
 @@ -57,6 +57,7 @@ static void test_seed_oss_tool_with_reasoning(testing & t);

@@ -1,7 +1,7 @@
-From 9865e7456137323cf467190ff8cb50b00ac52406 Mon Sep 17 00:00:00 2001
+From accdf94ff8c94e60096e115d714d0477f022a9ba Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 18:14:02 +1000
-Subject: [PATCH 071/108] Expose external decode stage filter ABI
+Subject: [PATCH 71/95] Expose external decode stage filter ABI
 
 ---
  include/skippy.h |  8 ++++++++
@@ -9,7 +9,7 @@ Subject: [PATCH 071/108] Expose external decode stage filter ABI
  2 files changed, 41 insertions(+)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 1c6d2c9f..c48bc240 100644
+index 1c6d2c9f0..c48bc2407 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -252,6 +252,14 @@ LLAMA_API int32_t skippy_session_native_seq_id(
@@ -28,7 +28,7 @@ index 1c6d2c9f..c48bc240 100644
          struct skippy_session * session,
          int32_t n_past,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 0290f045..f0a154b4 100644
+index 0290f045b..f0a154b4f 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1937,6 +1937,39 @@ int32_t skippy_session_batch_size(

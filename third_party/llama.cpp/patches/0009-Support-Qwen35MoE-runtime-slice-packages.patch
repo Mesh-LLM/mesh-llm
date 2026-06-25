@@ -1,7 +1,7 @@
-From 0a72b6c425707f567d71464fc8fd70ce33b44784 Mon Sep 17 00:00:00 2001
+From 3897c6ea14fe61f6ff6ce2a96b991dee9426d253 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 25 Apr 2026 15:29:59 +1000
-Subject: [PATCH 009/108] Support Qwen35MoE runtime slice packages
+Subject: [PATCH 09/95] Support Qwen35MoE runtime slice packages
 
 ---
  src/llama-model-loader.cpp | 34 ++++++++++++++++++----------------
@@ -10,7 +10,7 @@ Subject: [PATCH 009/108] Support Qwen35MoE runtime slice packages
  3 files changed, 35 insertions(+), 21 deletions(-)
 
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 86909230..c1e51288 100644
+index 869092306..c1e512883 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -1088,13 +1088,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
@@ -68,7 +68,7 @@ index 86909230..c1e51288 100644
          if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
              const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index eb5e9a40..86777f4b 100644
+index 7b0876cbb..64813b817 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
 @@ -168,17 +168,22 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
@@ -94,10 +94,10 @@ index eb5e9a40..86777f4b 100644
      // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
 -    for (int il = 0; il < n_layer; ++il) {
 +    for (int il = il_start; il < il_end; ++il) {
-         ggml_tensor * inpSA = inpL;
+         res->t_layer_inp[il] = inpL;
  
-         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
-@@ -227,6 +232,13 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
+         ggml_tensor * inpSA = inpL;
+@@ -229,6 +234,13 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
      }
      cur = inpL;
  
@@ -112,7 +112,7 @@ index eb5e9a40..86777f4b 100644
      cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
  
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 26169320..f85da964 100644
+index 261693203..f85da9640 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -854,9 +854,9 @@ enum skippy_status skippy_model_open(

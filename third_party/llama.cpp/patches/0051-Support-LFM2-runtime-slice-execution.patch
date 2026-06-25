@@ -1,7 +1,7 @@
-From 43973496e1565f7a26816e4e8a653e8d01b3a792 Mon Sep 17 00:00:00 2001
+From 7f7f2eff9f408e7eae92761e76db5891f3fa919c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 09:27:42 +1000
-Subject: [PATCH 051/108] Support LFM2 runtime-slice execution
+Subject: [PATCH 51/95] Support LFM2 runtime-slice execution
 
 ---
  src/models/lfm2.cpp | 30 +++++++++++++++++++++++++-----
@@ -9,10 +9,10 @@ Subject: [PATCH 051/108] Support LFM2 runtime-slice execution
  2 files changed, 26 insertions(+), 5 deletions(-)
 
 diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
-index 97da8a6a..9265223e 100644
+index 07b7346ee..c497c3afa 100644
 --- a/src/models/lfm2.cpp
 +++ b/src/models/lfm2.cpp
-@@ -217,7 +217,20 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -225,7 +225,20 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
      };
  
      // actual graph construction starts here
@@ -34,7 +34,7 @@ index 97da8a6a..9265223e 100644
      cb(cur, "model.embed_tokens", -1);
  
      ggml_build_forward_expand(gf, cur);
-@@ -229,10 +242,10 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -237,10 +250,10 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
          inp_hybrid = build_inp_mem_hybrid();
      }
  
@@ -48,7 +48,7 @@ index 97da8a6a..9265223e 100644
          const bool is_moe_layer = il >= static_cast<int>(hparams.n_layer_dense_lead);
  
          auto * prev_cur = cur;
-@@ -242,7 +255,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -250,7 +263,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
          cur = hparams.is_recr(il) ? build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
                                      build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
  
@@ -57,7 +57,7 @@ index 97da8a6a..9265223e 100644
              cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
              prev_cur = ggml_get_rows(ctx0, prev_cur, inp_out_ids);
          }
-@@ -262,6 +275,13 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -270,6 +283,13 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
          cb(cur, "l_out", il);
      }
  
@@ -72,7 +72,7 @@ index 97da8a6a..9265223e 100644
      cb(cur, "result_norm", -1);
      res->t_embd = cur;
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 5eadfbee..daa3b249 100644
+index 5eadfbeec..daa3b249a 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1472,6 +1472,7 @@ static enum skippy_status skippy_finish_model_open(
