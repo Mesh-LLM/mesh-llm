@@ -6,7 +6,7 @@ use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler};
 #[cfg(test)]
 use hf_hub::progress::{FileProgress, FileStatus};
 use mesh_llm_events::terminal_progress::{
-    SpinnerHandle, ratio_complete_u64, render_inline_gauge_with_reserved_width, start_spinner,
+    SpinnerHandle, clear_stderr_line, ratio_complete_u64, render_inline_progress_bar, start_spinner,
 };
 use mesh_llm_events::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
 #[cfg(test)]
@@ -290,6 +290,7 @@ struct MeshDownloadProgressState {
     total: u64,
     downloaded: u64,
     bytes_per_sec: Option<f64>,
+    drawn_line: bool,
     last_draw: Option<std::time::Instant>,
 }
 
@@ -313,6 +314,7 @@ impl MeshDownloadProgress {
                 total: 0,
                 downloaded: 0,
                 bytes_per_sec: None,
+                drawn_line: false,
                 last_draw: None,
             }),
         }
@@ -337,8 +339,17 @@ impl MeshDownloadProgress {
                 Some(&state.filename),
                 Some(state.downloaded),
                 (state.total > 0).then_some(state.total),
-                ModelProgressStatus::Downloading,
+                if force {
+                    ModelProgressStatus::Ready
+                } else {
+                    ModelProgressStatus::Downloading
+                },
             );
+            return;
+        }
+        if force {
+            let _ = clear_stderr_line();
+            state.drawn_line = false;
             return;
         }
         let percent = if state.total == 0 {
@@ -351,7 +362,7 @@ impl MeshDownloadProgress {
         let speed_suffix = state
             .bytes_per_sec
             .filter(|bytes_per_sec| *bytes_per_sec > 0.0)
-            .map(|bytes_per_sec| format!(" at {}/s", format_download_bytes(bytes_per_sec as u64)))
+            .map(|bytes_per_sec| format!(" · {}/s", format_download_bytes(bytes_per_sec as u64)))
             .unwrap_or_default();
         let (ratio, total_display) = match state.total {
             0 => (0.0, "?".to_string()),
@@ -360,24 +371,18 @@ impl MeshDownloadProgress {
                 format_download_bytes(total),
             ),
         };
-        let gauge = render_inline_gauge_with_reserved_width(
-            ratio,
-            &format!(
-                "⏬ {} {:>3}.{:01}% ({}/{}){}",
-                state.filename,
-                percent_major,
-                percent_minor,
-                format_download_bytes(state.downloaded),
-                total_display,
-                speed_suffix,
-            ),
-            3,
+        let bar = render_inline_progress_bar(ratio, 32);
+        eprint!(
+            "\r\x1b[KDownloading  {:>3}.{:01}%  {}  {} / {}{}",
+            percent_major,
+            percent_minor,
+            bar,
+            format_download_bytes(state.downloaded),
+            total_display,
+            speed_suffix,
         );
-        eprint!("\r\x1b[K   {gauge}");
+        state.drawn_line = true;
         let _ = std::io::stderr().flush();
-        if force {
-            eprintln!();
-        }
     }
 
     fn apply_download_event(state: &mut MeshDownloadProgressState, event: &DownloadEvent) {
@@ -459,6 +464,15 @@ impl Drop for MeshDownloadProgress {
     fn drop(&mut self) {
         if let Ok(mut spinner) = self.preflight_spinner.lock() {
             spinner.take();
+        }
+        if !interactive_tui_active()
+            && self
+                .state
+                .lock()
+                .map(|state| state.drawn_line)
+                .unwrap_or(false)
+        {
+            let _ = clear_stderr_line();
         }
     }
 }
@@ -590,7 +604,7 @@ fn download_hf_assets_sync(
         {
             Ok(path) => {
                 if progress {
-                    if required {
+                    if required && interactive_tui_active() {
                         let showed_progress = progress_tracker
                             .as_ref()
                             .is_some_and(|tracker| tracker.showed_meaningful_progress());
@@ -628,7 +642,7 @@ fn download_hf_assets_sync(
                                 || eprintln!("   ✅ Ready {}", asset.file),
                             );
                         }
-                    } else {
+                    } else if interactive_tui_active() {
                         eprintln!("   🧾 Downloaded model metadata");
                     }
                 }
@@ -977,6 +991,7 @@ mod tests {
             total: 0,
             downloaded: 0,
             bytes_per_sec: None,
+            drawn_line: false,
             last_draw: None,
         };
 
@@ -1023,6 +1038,7 @@ mod tests {
             total: 0,
             downloaded: 0,
             bytes_per_sec: None,
+            drawn_line: false,
             last_draw: None,
         };
 
@@ -1059,6 +1075,7 @@ mod tests {
             total: 1_000,
             downloaded: 700,
             bytes_per_sec: Some(42_000_000.0),
+            drawn_line: false,
             last_draw: None,
         };
 

@@ -136,6 +136,25 @@ pub fn render_inline_gauge_with_reserved_width(
     render_inline_gauge_in_width(ratio, label, width)
 }
 
+pub fn render_inline_progress_bar(ratio: f64, width: u16) -> String {
+    let area = Rect::new(0, 0, width.max(1).saturating_add(1), 1);
+    let mut buffer = Buffer::empty(area);
+    LineGauge::default()
+        .ratio(ratio.clamp(0.0, 1.0))
+        .label("")
+        .style(Style::default().fg(Color::Gray))
+        .filled_symbol("━")
+        .unfilled_symbol("·")
+        .filled_style(
+            Style::default()
+                .fg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .unfilled_style(Style::default().fg(Color::DarkGray))
+        .render(area, &mut buffer);
+    format!("[{}]", styled_cells_line(&buffer.content()[1..]))
+}
+
 fn render_inline_gauge_in_width(ratio: f64, label: &str, width: u16) -> String {
     let area = Rect::new(0, 0, width, 1);
     let mut buffer = Buffer::empty(area);
@@ -186,17 +205,18 @@ fn fit_inline_gauge_label(label: &str, width: u16) -> String {
 }
 
 fn styled_buffer_line(buffer: &Buffer) -> String {
-    let last_visible = buffer
-        .content()
-        .iter()
-        .rposition(|cell| cell.symbol() != " ");
+    styled_cells_line(buffer.content())
+}
+
+fn styled_cells_line(cells: &[ratatui::buffer::Cell]) -> String {
+    let last_visible = cells.iter().rposition(|cell| cell.symbol() != " ");
     let Some(last_visible) = last_visible else {
         return String::new();
     };
     let mut line = String::new();
     let mut active_style = InlineCellStyle::default();
     let mut used_style = false;
-    for cell in &buffer.content()[..=last_visible] {
+    for cell in &cells[..=last_visible] {
         let style = InlineCellStyle::from_cell(cell);
         if style != active_style {
             if let Some(sequence) = style.ansi_sequence() {
@@ -302,7 +322,7 @@ pub fn ratio_complete_u64(current: u64, total: u64) -> f64 {
 mod tests {
     use super::{
         available_inline_gauge_width, ratio_complete_u64, render_inline_gauge,
-        render_inline_gauge_in_width,
+        render_inline_gauge_in_width, render_inline_progress_bar,
     };
 
     #[test]
@@ -359,6 +379,17 @@ mod tests {
         let visible = strip_ansi(&line);
 
         assert_eq!(visible.chars().count(), 93);
+    }
+
+    #[test]
+    fn inline_progress_bar_keeps_brackets_outside_bar() {
+        let line = render_inline_progress_bar(0.5, 12);
+        let visible = strip_ansi(&line);
+
+        assert!(visible.starts_with('['));
+        assert!(visible.ends_with(']'));
+        assert_eq!(visible.chars().nth(1), Some('━'));
+        assert_eq!(visible.chars().count(), 14);
     }
 
     fn strip_ansi(line: &str) -> String {

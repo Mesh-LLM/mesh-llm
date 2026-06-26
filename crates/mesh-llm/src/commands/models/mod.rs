@@ -3,6 +3,7 @@ mod formatters_console;
 mod formatters_json;
 
 use anyhow::{Result, anyhow, bail};
+use formatters::DownloadStats;
 use mesh_llm_cli::models::ModelSearchSort;
 use mesh_llm_cli::models::ModelsCommand;
 use mesh_llm_host_runtime::command_support::models::skippy::{
@@ -403,13 +404,25 @@ pub async fn run_model_download(
         return formatter.render_layer_package_download(model_ref, &package_ref, &package_dir);
     }
 
+    let download_started = Instant::now();
     let (path, details) = if direct {
         download_model_ref_with_progress_details_direct(model_ref, !json_output, true).await?
     } else {
         download_model_ref_with_progress_details(model_ref, !json_output).await?
     };
+    let download_stats = DownloadStats {
+        bytes: std::fs::metadata(&path).ok().map(|metadata| metadata.len()),
+        elapsed: download_started.elapsed(),
+    };
     if !include_draft {
-        return formatter.render_download(model_ref, &path, details.as_ref(), false, None);
+        return formatter.render_download(
+            model_ref,
+            &path,
+            details.as_ref(),
+            Some(&download_stats),
+            false,
+            None,
+        );
     }
 
     let mut draft_out: Option<(String, std::path::PathBuf)> = None;
@@ -436,6 +449,7 @@ pub async fn run_model_download(
         model_ref,
         &path,
         details.as_ref(),
+        Some(&download_stats),
         true,
         draft_out.as_ref().map(|(n, p)| (n.as_str(), p.as_path())),
     )

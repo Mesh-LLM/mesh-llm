@@ -10,6 +10,7 @@ use mesh_llm_host_runtime::command_support::models::{
 use mesh_llm_system::hardware;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub(crate) trait SearchFormatter {
     fn is_json(&self) -> bool;
@@ -58,6 +59,12 @@ pub(crate) struct InstalledRow {
     pub(crate) last_used_at: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DownloadStats {
+    pub(crate) bytes: Option<u64>,
+    pub(crate) elapsed: Duration,
+}
+
 pub(crate) trait ModelsFormatter: SearchFormatter {
     fn render_recommended(&self, models: &[remote_catalog::RemoteCatalogModel]) -> Result<()>;
     fn render_installed(&self, rows: &[InstalledRow]) -> Result<()>;
@@ -67,6 +74,7 @@ pub(crate) trait ModelsFormatter: SearchFormatter {
         model_ref: &str,
         path: &Path,
         details: Option<&ModelDetails>,
+        stats: Option<&DownloadStats>,
         include_draft: bool,
         draft: Option<(&str, &Path)>,
     ) -> Result<()>;

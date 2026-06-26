@@ -1,8 +1,9 @@
 use super::formatters::{
-    ConsoleFormatter, InstalledRow, ModelsFormatter, SearchFormatter, catalog_model_capabilities,
-    filter_label, fit_hint_for_size_label, format_count, format_installed_size,
-    format_relative_timestamp, format_source_label, huggingface_cache_dir, huggingface_repo_url,
-    installed_model_kind, model_kind_code, sort_label, variant_selector_label,
+    ConsoleFormatter, DownloadStats, InstalledRow, ModelsFormatter, SearchFormatter,
+    catalog_model_capabilities, filter_label, fit_hint_for_size_label, format_count,
+    format_installed_size, format_relative_timestamp, format_source_label, huggingface_cache_dir,
+    huggingface_repo_url, installed_model_kind, model_kind_code, sort_label,
+    variant_selector_label,
 };
 use anyhow::Result;
 use mesh_llm_host_runtime::command_support::models::{
@@ -11,8 +12,121 @@ use mesh_llm_host_runtime::command_support::models::{
     remote_catalog_model_ref,
 };
 use std::fmt::Write as FmtWrite;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
+use std::time::Duration;
 use tabwriter::TabWriter;
+
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_BOLD_GREEN: &str = "\x1b[1;32m";
+const ANSI_BRIGHT_CYAN: &str = "\x1b[96m";
+const ANSI_DIM: &str = "\x1b[2m";
+const ANSI_MUTED: &str = "\x1b[90m";
+
+fn downloaded_model_headline(stats: Option<&DownloadStats>, colors: bool) -> String {
+    let Some(stats) = stats else {
+        return styled_download_success("✓ Downloaded model", colors);
+    };
+
+    let title = styled_download_success("✓ Downloaded model", colors);
+    let divider = styled_muted(" ─ ", colors);
+    let Some(bytes) = stats.bytes else {
+        return format!(
+            "{title}{divider}{}",
+            styled_stat(&format!("in {}", format_elapsed(stats.elapsed)), colors)
+        );
+    };
+
+    let mut headline = format!(
+        "{title}{divider}{}",
+        styled_stat(
+            &format!(
+                "{} in {}",
+                format_download_stat_bytes(bytes),
+                format_elapsed(stats.elapsed)
+            ),
+            colors
+        )
+    );
+    if let Some(avg_bytes_per_sec) = average_bytes_per_sec(stats) {
+        let _ = write!(
+            headline,
+            " {} {}",
+            styled_muted("· avg", colors),
+            styled_stat(
+                &format!("{}/s", format_download_stat_bytes(avg_bytes_per_sec)),
+                colors
+            )
+        );
+    }
+    headline
+}
+
+fn styled_download_success(value: &str, colors: bool) -> String {
+    if colors {
+        format!("{ANSI_BOLD_GREEN}{value}{ANSI_RESET}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn styled_stat(value: &str, colors: bool) -> String {
+    if colors {
+        format!("{ANSI_BRIGHT_CYAN}{value}{ANSI_RESET}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn styled_muted(value: &str, colors: bool) -> String {
+    if colors {
+        format!("{ANSI_MUTED}{value}{ANSI_RESET}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn styled_label(value: &str, colors: bool) -> String {
+    if colors {
+        format!("{ANSI_DIM}{value}{ANSI_RESET}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn plain_model_kind(kind: &str) -> &'static str {
+    match model_kind_code(kind) {
+        "gguf" => "GGUF",
+        "mlx" => "MLX",
+        _ => "unknown",
+    }
+}
+
+fn average_bytes_per_sec(stats: &DownloadStats) -> Option<u64> {
+    let bytes = stats.bytes?;
+    let elapsed = stats.elapsed.as_secs_f64();
+    (elapsed > 0.0).then(|| (bytes as f64 / elapsed).round() as u64)
+}
+
+fn format_elapsed(duration: Duration) -> String {
+    let seconds = duration.as_secs_f64();
+    if seconds < 60.0 {
+        format!("{seconds:.1}s")
+    } else {
+        format!("{seconds:.0}s")
+    }
+}
+
+fn format_download_stat_bytes(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.1} GB", bytes as f64 / 1e9)
+    } else if bytes >= 1_000_000 {
+        format!("{:.1} MB", bytes as f64 / 1e6)
+    } else if bytes >= 1_000 {
+        format!("{:.1} KB", bytes as f64 / 1e3)
+    } else {
+        format!("{bytes}B")
+    }
+}
 
 impl SearchFormatter for ConsoleFormatter {
     fn is_json(&self) -> bool {
@@ -390,17 +504,35 @@ impl ModelsFormatter for ConsoleFormatter {
         _model_ref: &str,
         path: &std::path::Path,
         details: Option<&ModelDetails>,
+        stats: Option<&DownloadStats>,
         _include_draft: bool,
         draft: Option<(&str, &std::path::Path)>,
     ) -> Result<()> {
-        println!("✅ Downloaded model");
+        let colors = std::io::stdout().is_terminal();
+        println!("{}", downloaded_model_headline(stats, colors));
+        println!();
+        let model_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        println!("   {}  {model_name}", styled_label("model", colors));
         if let Some(details) = details {
-            println!("   type: {}", details.kind);
+            println!(
+                "   {}   {}",
+                styled_label("type", colors),
+                plain_model_kind(details.kind)
+            );
         }
-        println!("   {}", path.display());
+        println!("   {}   {}", styled_label("path", colors), path.display());
         if let Some((_draft_name, draft_path)) = draft {
-            println!("🧠 Downloaded draft");
-            println!("   {}", draft_path.display());
+            println!();
+            println!("{}", styled_download_success("✓ Downloaded draft", colors));
+            println!(
+                "   {}   {}",
+                styled_label("path", colors),
+                draft_path.display()
+            );
         }
         Ok(())
     }
@@ -486,5 +618,37 @@ impl ModelsFormatter for ConsoleFormatter {
             result.removed_derived_cache_files
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DownloadStats, downloaded_model_headline};
+    use std::time::Duration;
+
+    #[test]
+    fn downloaded_model_headline_includes_inline_stats() {
+        let stats = DownloadStats {
+            bytes: Some(105_000_000),
+            elapsed: Duration::from_millis(14_800),
+        };
+
+        assert_eq!(
+            downloaded_model_headline(Some(&stats), false),
+            "✓ Downloaded model ─ 105.0 MB in 14.8s · avg 7.1 MB/s"
+        );
+    }
+
+    #[test]
+    fn downloaded_model_headline_styles_terminal_output() {
+        let stats = DownloadStats {
+            bytes: Some(105_000_000),
+            elapsed: Duration::from_millis(14_800),
+        };
+
+        assert_eq!(
+            downloaded_model_headline(Some(&stats), true),
+            "\u{1b}[1;32m✓ Downloaded model\u{1b}[0m\u{1b}[90m ─ \u{1b}[0m\u{1b}[96m105.0 MB in 14.8s\u{1b}[0m \u{1b}[90m· avg\u{1b}[0m \u{1b}[96m7.1 MB/s\u{1b}[0m"
+        );
     }
 }

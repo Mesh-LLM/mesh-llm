@@ -1,8 +1,8 @@
 use super::formatters::{
-    InstalledRow, JsonFormatter, ModelsFormatter, SearchFormatter, capabilities_json,
-    catalog_model_capabilities, catalog_model_kind_code, fit_code_for_size_label,
-    format_installed_size, huggingface_cache_dir, installed_model_kind_code, local_capacity_json,
-    model_kind_code, print_json,
+    DownloadStats, InstalledRow, JsonFormatter, ModelsFormatter, SearchFormatter,
+    capabilities_json, catalog_model_capabilities, catalog_model_kind_code,
+    fit_code_for_size_label, format_installed_size, huggingface_cache_dir,
+    installed_model_kind_code, local_capacity_json, model_kind_code, print_json,
 };
 use anyhow::Result;
 use mesh_llm_host_runtime::command_support::models::{
@@ -169,6 +169,7 @@ impl ModelsFormatter for JsonFormatter {
         model_ref: &str,
         path: &Path,
         details: Option<&ModelDetails>,
+        stats: Option<&DownloadStats>,
         include_draft: bool,
         draft: Option<(&str, &Path)>,
     ) -> Result<()> {
@@ -178,6 +179,16 @@ impl ModelsFormatter for JsonFormatter {
             "type": details.as_ref().map(|d| model_kind_code(d.kind)),
             "resolved_ref": details.as_ref().map(|d| d.exact_ref.clone()),
         });
+        if let Some(stats) = stats {
+            let elapsed = stats.elapsed.as_secs_f64();
+            payload["download"] = json!({
+                "bytes": stats.bytes,
+                "elapsed_seconds": elapsed,
+                "avg_bytes_per_second": stats
+                    .bytes
+                    .and_then(|bytes| (elapsed > 0.0).then(|| (bytes as f64 / elapsed).round() as u64)),
+            });
+        }
         if include_draft {
             payload["draft"] = match draft {
                 Some((name, draft_path)) => json!({
