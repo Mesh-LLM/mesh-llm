@@ -530,7 +530,6 @@ export function TomlView({
           <LaunchSummaryPanel
             nodes={nodes}
             assigns={assigns}
-            defaults={defaults}
             defaultsValues={defaultsValues}
             launchSummaryConfig={launchSummaryConfig}
             className="flex-1 min-h-0"
