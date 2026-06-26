@@ -535,24 +535,30 @@ impl ServingController for EmbeddedServingController {
 
     fn unload<'a>(&'a self, request: UnloadModelRequest) -> ServingFuture<'a, ()> {
         Box::pin(async move {
-            let target = request.target.as_runtime_target().to_string();
             let mut state = self.inner.lock().await;
-            let key = state.models.iter().find_map(|(key, loaded)| {
-                let matches = loaded.served.model_id == target
-                    || loaded.served.model_ref == target
-                    || loaded.served.instance_id.as_deref() == Some(target.as_str());
-                matches.then(|| key.clone())
-            });
-            if let Some(key) = key {
-                state.models.remove(&key);
-                return Ok(());
-            }
             match request.target {
                 UnloadTarget::Model(model_ref) => {
-                    anyhow::bail!("model is not loaded for local serving: {model_ref}")
+                    let key = resolve_model_unload_key(&state.models, &model_ref)?;
+                    state.models.remove(&key);
+                    Ok(())
                 }
                 UnloadTarget::Instance(instance_id) => {
-                    anyhow::bail!("instance is not loaded for local serving: {instance_id}")
+                    let keys = matching_instance_unload_keys(&state.models, &instance_id);
+                    match keys.as_slice() {
+                        [key] => {
+                            state.models.remove(key);
+                            Ok(())
+                        }
+                        [] => {
+                            anyhow::bail!("instance is not loaded for local serving: {instance_id}")
+                        }
+                        _ => {
+                            anyhow::bail!(
+                                "ambiguous instance unload target {instance_id}: matched {} loaded instances",
+                                keys.len()
+                            )
+                        }
+                    }
                 }
             }
         })
@@ -595,6 +601,58 @@ impl EmbeddedServingController {
             DevicePolicy::Auto => self.inner.lock().await.default_device_policy.clone(),
             explicit => explicit.clone(),
         }
+    }
+}
+
+fn resolve_model_unload_key(
+    models: &HashMap<(String, String), Arc<EmbeddedServedModel>>,
+    target: &str,
+) -> Result<(String, String)> {
+    let keys = matching_model_unload_keys(models, target);
+    match keys.as_slice() {
+        [key] => Ok(key.clone()),
+        [] => anyhow::bail!("model is not loaded for local serving: {target}"),
+        _ => anyhow::bail!(
+            "ambiguous model unload target {target}: matched {} loaded profiles; use model#profile or an instance id",
+            keys.len()
+        ),
+    }
+}
+
+fn matching_model_unload_keys(
+    models: &HashMap<(String, String), Arc<EmbeddedServedModel>>,
+    target: &str,
+) -> Vec<(String, String)> {
+    let (model_target, profile_target) = split_model_ref_and_profile(target);
+    models
+        .iter()
+        .filter_map(|(key, loaded)| {
+            let model_matches =
+                loaded.served.model_id == model_target || loaded.served.model_ref == model_target;
+            let profile_matches = profile_target
+                .map(|profile| loaded.served.profile == profile)
+                .unwrap_or(true);
+            (model_matches && profile_matches).then(|| key.clone())
+        })
+        .collect()
+}
+
+fn matching_instance_unload_keys(
+    models: &HashMap<(String, String), Arc<EmbeddedServedModel>>,
+    instance_id: &str,
+) -> Vec<(String, String)> {
+    models
+        .iter()
+        .filter(|(_, loaded)| loaded.served.instance_id.as_deref() == Some(instance_id))
+        .map(|(key, _)| key.clone())
+        .collect()
+}
+
+fn split_model_ref_and_profile(model_ref: &str) -> (&str, Option<&str>) {
+    if let Some(hash_pos) = model_ref.rfind('#') {
+        (&model_ref[..hash_pos], Some(&model_ref[hash_pos + 1..]))
+    } else {
+        (model_ref, None)
     }
 }
 
@@ -937,6 +995,73 @@ mod tests {
         let profiles: Vec<&str> = list.iter().map(|m| m.profile.as_str()).collect();
         assert!(profiles.contains(&"gaming"));
         assert!(profiles.contains(&"coding"));
+    }
+
+    #[tokio::test]
+    async fn unload_by_bare_model_rejects_ambiguous_profiles() {
+        let controller = EmbeddedServingController::new();
+        {
+            let mut state = controller.inner.lock().await;
+            state.models.insert(
+                ("model-a".to_string(), "gaming".to_string()),
+                make_served_model("model-a", "gaming", 1),
+            );
+            state.models.insert(
+                ("model-a".to_string(), "coding".to_string()),
+                make_served_model("model-a", "coding", 2),
+            );
+        }
+
+        let err = controller
+            .unload(UnloadModelRequest {
+                target: UnloadTarget::Model("model-a".to_string()),
+                options: UnloadOptions::default(),
+            })
+            .await
+            .expect_err("bare model unload should reject ambiguous profiles");
+
+        assert!(
+            err.to_string().contains("ambiguous"),
+            "error should explain ambiguity: {err}"
+        );
+        let remaining = controller.served_models().await.unwrap();
+        assert_eq!(
+            remaining.len(),
+            2,
+            "ambiguous bare unload must not remove an arbitrary profile"
+        );
+    }
+
+    #[tokio::test]
+    async fn unload_by_profile_qualified_model_removes_only_target_profile() {
+        let controller = EmbeddedServingController::new();
+        {
+            let mut state = controller.inner.lock().await;
+            state.models.insert(
+                ("model-a".to_string(), "gaming".to_string()),
+                make_served_model("model-a", "gaming", 1),
+            );
+            state.models.insert(
+                ("model-a".to_string(), "coding".to_string()),
+                make_served_model("model-a", "coding", 2),
+            );
+        }
+
+        controller
+            .unload(UnloadModelRequest {
+                target: UnloadTarget::Model("model-a#gaming".to_string()),
+                options: UnloadOptions::default(),
+            })
+            .await
+            .expect("unload gaming profile");
+
+        let remaining = controller.served_models().await.unwrap();
+        assert_eq!(remaining.len(), 1, "one entry should remain");
+        assert_eq!(
+            remaining[0].profile.as_str(),
+            "coding",
+            "coding profile should survive"
+        );
     }
 
     #[tokio::test]
