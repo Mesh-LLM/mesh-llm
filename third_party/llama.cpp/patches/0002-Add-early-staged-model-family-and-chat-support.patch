@@ -1,34 +1,255 @@
-From f81624dfb0319182d25aafad54d65820fa0bf1cc Mon Sep 17 00:00:00 2001
+From 459e05b46cc375894b3386f6f732f6028a9a6699 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Mon, 27 Apr 2026 16:07:00 +1000
-Subject: [PATCH 18/95] Support more runtime-slice model families
+Date: Fri, 26 Jun 2026 13:47:52 +1000
+Subject: [PATCH 02/10] Add early staged model-family and chat support
 
+Squashes the first Qwen MoE staged-runtime support, native KV page basics, session reset, token EOG exposure, batched token verification, chat-template ABI, and the first wider model-family support pass.
 ---
- include/skippy.h           |  17 +++
- src/llama-graph.cpp        |  25 ++++
- src/llama-graph.h          |  20 +++
- src/llama-model-loader.cpp |   7 ++
+ common/CMakeLists.txt      |   1 +
+ common/stage-chat.cpp      | 122 +++++++++
+ include/skippy.h           |  94 ++++++-
+ src/llama-graph.cpp        |  49 +++-
+ src/llama-graph.h          |  20 ++
+ src/llama-kv-cache.cpp     | 347 ++++++++++++++++++++++++++
+ src/llama-kv-cache.h       |  19 ++
+ src/llama-model-loader.cpp |  41 ++--
  src/llama-model.cpp        |   6 +-
- src/models/deepseek2.cpp   |  21 +++-
- src/models/falcon-h1.cpp   |  20 ++-
- src/models/gemma.cpp       |  26 +++-
- src/models/gemma2.cpp      |  26 +++-
- src/models/gemma3.cpp      |  26 +++-
- src/models/gemma4.cpp      |  61 +++++++--
- src/models/glm4.cpp        |  29 ++++-
- src/models/minimax-m2.cpp  |  20 ++-
- src/models/olmo.cpp        |  20 ++-
- src/models/qwen2.cpp       |  20 ++-
- src/models/qwen3.cpp       |  20 ++-
- src/models/qwen3next.cpp   |  29 ++++-
- src/skippy.cpp             | 250 ++++++++++++++++++++++++++++++++++---
- 18 files changed, 560 insertions(+), 83 deletions(-)
+ src/models/deepseek2.cpp   |  21 +-
+ src/models/falcon-h1.cpp   |  20 +-
+ src/models/gemma.cpp       |  26 +-
+ src/models/gemma2.cpp      |  26 +-
+ src/models/gemma3.cpp      |  26 +-
+ src/models/gemma4.cpp      |  61 ++++-
+ src/models/glm4.cpp        |  29 ++-
+ src/models/minimax-m2.cpp  |  20 +-
+ src/models/olmo.cpp        |  20 +-
+ src/models/qwen2.cpp       |  20 +-
+ src/models/qwen3.cpp       |  20 +-
+ src/models/qwen35moe.cpp   |  27 +-
+ src/models/qwen3next.cpp   |  29 ++-
+ src/skippy.cpp             | 490 +++++++++++++++++++++++++++++++++++--
+ 23 files changed, 1418 insertions(+), 116 deletions(-)
+ create mode 100644 common/stage-chat.cpp
 
+diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
+index fc16b21c..4e5a28c0 100644
+--- a/common/CMakeLists.txt
++++ b/common/CMakeLists.txt
+@@ -100,6 +100,7 @@ add_library(${TARGET}
+     regex-partial.h
+     sampling.cpp
+     sampling.h
++    stage-chat.cpp
+     speculative.cpp
+     speculative.h
+     unicode.cpp
+diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
+new file mode 100644
+index 00000000..39d6331a
+--- /dev/null
++++ b/common/stage-chat.cpp
+@@ -0,0 +1,122 @@
++#include "chat.h"
++#include "skippy.h"
++
++#include <cstdlib>
++#include <cstring>
++#include <exception>
++#include <limits>
++#include <string>
++
++static skippy_error * skippy_common_make_error(enum skippy_status status, const char * message) {
++    skippy_error * error = new skippy_error{};
++    error->status = status;
++
++    if (message == nullptr) {
++        error->message = nullptr;
++        return error;
++    }
++
++    const size_t len = std::strlen(message);
++    char * owned = static_cast<char *>(std::malloc(len + 1));
++    if (owned == nullptr) {
++        error->status = SKIPPY_STATUS_ERROR;
++        error->message = nullptr;
++        return error;
++    }
++
++    std::memcpy(owned, message, len + 1);
++    error->message = owned;
++    return error;
++}
++
++static void skippy_common_set_error(
++        skippy_error ** out_error,
++        enum skippy_status status,
++        const char * message) {
++    if (out_error != nullptr) {
++        *out_error = skippy_common_make_error(status, message);
++    }
++}
++
++static enum skippy_status skippy_common_success(skippy_error ** out_error) {
++    if (out_error != nullptr) {
++        *out_error = nullptr;
++    }
++    return SKIPPY_STATUS_OK;
++}
++
++enum skippy_status skippy_apply_chat_template(
++        struct skippy_model * model,
++        const struct llama_chat_message * messages,
++        size_t message_count,
++        bool add_assistant,
++        char * output_text,
++        size_t output_text_capacity,
++        size_t * out_text_bytes,
++        struct skippy_error ** out_error) {
++    if (out_text_bytes == nullptr) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "out_text_bytes is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (message_count > 0 && messages == nullptr) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "messages are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (output_text_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
++        skippy_common_set_error(
++                out_error,
++                SKIPPY_STATUS_INVALID_ARGUMENT,
++                "chat template output capacity exceeds int32_t range");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    const llama_model * native_model = skippy_model_native_model(model);
++    if (native_model == nullptr) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    common_chat_templates_ptr tmpls;
++    common_chat_templates_inputs inputs;
++    inputs.add_generation_prompt = add_assistant;
++    inputs.use_jinja             = true;
++    inputs.messages.reserve(message_count);
++
++    for (size_t i = 0; i < message_count; ++i) {
++        if (messages[i].role == nullptr || messages[i].content == nullptr) {
++            skippy_common_set_error(
++                    out_error,
++                    SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "message role and content are required");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        common_chat_msg msg;
++        msg.role = messages[i].role;
++        msg.content = messages[i].content;
++        inputs.messages.emplace_back(std::move(msg));
++    }
++
++    std::string prompt;
++    try {
++        tmpls = common_chat_templates_init(native_model, "");
++        prompt = common_chat_templates_apply(tmpls.get(), inputs).prompt;
++    } catch (const std::exception & e) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, e.what());
++        return SKIPPY_STATUS_UNSUPPORTED;
++    } catch (...) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "failed to apply chat template");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++
++    *out_text_bytes = prompt.size();
++    if (output_text == nullptr || output_text_capacity < prompt.size()) {
++        skippy_common_set_error(
++                out_error,
++                SKIPPY_STATUS_BUFFER_TOO_SMALL,
++                "chat template output buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++    if (!prompt.empty()) {
++        std::memcpy(output_text, prompt.data(), prompt.size());
++    }
++    return skippy_common_success(out_error);
++}
 diff --git a/include/skippy.h b/include/skippy.h
-index 6dc5af7b1..23a46e0f2 100644
+index 7ab93d35..23a46e0f 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -258,6 +258,23 @@ LLAMA_API enum skippy_status skippy_import_state(
+@@ -26,7 +26,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 0
++#define SKIPPY_ABI_VERSION_PATCH 2
+ 
+ enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
+@@ -37,6 +37,14 @@ enum skippy_feature {
+     SKIPPY_FEATURE_STATE_IMPORT_EXPORT    = 1 << 5,
+     SKIPPY_FEATURE_TOKENIZE_DETOKENIZE    = 1 << 6,
+     SKIPPY_FEATURE_ACTIVATION_FRAME       = 1 << 7,
++    SKIPPY_FEATURE_NATIVE_KV_PAGE         = 1 << 8,
++    SKIPPY_FEATURE_SESSION_RESET          = 1 << 9,
++    SKIPPY_FEATURE_BATCH_VERIFY           = 1 << 10,
++    SKIPPY_FEATURE_CHAT_TEMPLATE          = 1 << 11,
++};
++
++enum skippy_kv_page_flag {
++    SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,
+ };
+ 
+ enum skippy_status {
+@@ -125,6 +133,22 @@ struct skippy_activation_desc {
+     uint64_t flags;
+ };
+ 
++struct skippy_kv_page_desc {
++    uint32_t version;
++    int32_t layer_start;
++    int32_t layer_end;
++    uint64_t token_start;
++    uint64_t token_count;
++    uint32_t layer_count;
++    uint32_t k_type;
++    uint32_t v_type;
++    uint32_t k_row_bytes;
++    uint32_t v_row_bytes;
++    uint32_t v_element_bytes;
++    uint64_t payload_bytes;
++    uint64_t flags;
++};
++
+ struct skippy_abi_version {
+     uint32_t major;
+     uint32_t minor;
+@@ -154,6 +178,10 @@ LLAMA_API enum skippy_status skippy_session_create(
+         struct skippy_session ** out_session,
+         struct skippy_error ** out_error);
+ 
++LLAMA_API enum skippy_status skippy_session_reset(
++        struct skippy_session * session,
++        struct skippy_error ** out_error);
++
+ LLAMA_API enum skippy_status skippy_session_free(
+         struct skippy_session * session,
+         struct skippy_error ** out_error);
+@@ -180,6 +208,15 @@ LLAMA_API enum skippy_status skippy_decode_step(
+         llama_token * out_predicted_token,
+         struct skippy_error ** out_error);
+ 
++LLAMA_API enum skippy_status skippy_verify_tokens(
++        struct skippy_session * session,
++        const llama_token * token_ids,
++        size_t token_count,
++        llama_token * output_tokens,
++        size_t output_token_capacity,
++        size_t * out_token_count,
++        struct skippy_error ** out_error);
++
+ LLAMA_API enum skippy_status skippy_prefill_chunk_frame(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -221,6 +258,42 @@ LLAMA_API enum skippy_status skippy_import_state(
          size_t input_bytes,
          struct skippy_error ** out_error);
  
@@ -49,11 +270,56 @@ index 6dc5af7b1..23a46e0f2 100644
 +        size_t input_bytes,
 +        struct skippy_error ** out_error);
 +
- LLAMA_API enum skippy_status skippy_export_kv_page(
-         struct skippy_session * session,
-         int32_t layer_start,
++LLAMA_API enum skippy_status skippy_export_kv_page(
++        struct skippy_session * session,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        struct skippy_kv_page_desc * out_desc,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error);
++
++LLAMA_API enum skippy_status skippy_import_kv_page(
++        struct skippy_session * session,
++        const struct skippy_kv_page_desc * desc,
++        const void * input,
++        size_t input_bytes,
++        struct skippy_error ** out_error);
++
+ LLAMA_API enum skippy_status skippy_tokenize(
+         struct skippy_model * model,
+         const char * text,
+@@ -239,6 +312,25 @@ LLAMA_API enum skippy_status skippy_detokenize(
+         size_t * out_text_bytes,
+         struct skippy_error ** out_error);
+ 
++LLAMA_API enum skippy_status skippy_token_is_eog(
++        struct skippy_model * model,
++        llama_token token,
++        bool * out_is_eog,
++        struct skippy_error ** out_error);
++
++LLAMA_API const struct llama_model * skippy_model_native_model(
++        const struct skippy_model * model);
++
++LLAMA_API enum skippy_status skippy_apply_chat_template(
++        struct skippy_model * model,
++        const struct llama_chat_message * messages,
++        size_t message_count,
++        bool add_assistant,
++        char * output_text,
++        size_t output_text_capacity,
++        size_t * out_text_bytes,
++        struct skippy_error ** out_error);
++
+ LLAMA_API enum skippy_status skippy_model_info_open(
+         const char * path,
+         struct skippy_model_info ** out_info,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 110f4f6af..126261f26 100644
+index c39487b8..126261f2 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -20,6 +20,7 @@
@@ -102,8 +368,53 @@ index 110f4f6af..126261f26 100644
  void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
      if (ubatch->pos && pos) {
          const int64_t n_tokens = ubatch->n_tokens;
+@@ -680,17 +705,22 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
+ }
+ 
+ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
+-    mctx->get_attn()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
+-    mctx->get_attn()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);
++    const auto * attn_ctx = mctx->get_attn();
+ 
+-    mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
++    // These tensors may not be allocated for staged slices that contain only
++    // recurrent layers.
++    if (inp_attn->self_k_idxs && inp_attn->self_k_idxs->buffer) {
++        attn_ctx->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
++        attn_ctx->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);
++        attn_ctx->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
++    }
+ 
+     if (inp_attn->self_k_rot) {
+-        mctx->get_attn()->set_input_k_rot(inp_attn->self_k_rot);
++        attn_ctx->set_input_k_rot(inp_attn->self_k_rot);
+     }
+ 
+     if (inp_attn->self_v_rot) {
+-        mctx->get_attn()->set_input_v_rot(inp_attn->self_v_rot);
++        attn_ctx->set_input_v_rot(inp_attn->self_v_rot);
+     }
+ 
+     const int64_t n_rs = mctx->get_recr()->get_n_rs();
+@@ -733,9 +763,14 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
+ // Instead of creating a hybrid input, the graph can simply create 2 separate inputs.
+ // Refactoring is required in the future.
+ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
+-    mctx->get_attn()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
++    const auto * attn_ctx = mctx->get_attn();
+ 
+-    mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
++    // These tensors may not be allocated for staged slices that contain only
++    // recurrent layers.
++    if (inp_attn->self_k_idxs && inp_attn->self_k_idxs->buffer) {
++        attn_ctx->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
++        attn_ctx->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
++    }
+ 
+     const int64_t n_rs = mctx->get_recr()->get_n_rs();
+ 
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 00170956a..bc1e10e2e 100644
+index 00170956..bc1e10e2 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -36,9 +36,17 @@ struct skippy_graph_filter {
@@ -143,11 +454,433 @@ index 00170956a..bc1e10e2e 100644
  class llm_graph_input_pos : public llm_graph_input_i {
  public:
      llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 2802103b..400a9d29 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -4,6 +4,7 @@
+ #include "llama-io.h"
+ #include "llama-model.h"
+ #include "llama-context.h"
++#include "skippy.h"
+ 
+ #include <algorithm>
+ #include <cassert>
+@@ -1220,6 +1221,352 @@ ggml_type llama_kv_cache::type_v() const {
+     return layers[0].v->type;
+ }
+ 
++bool llama_kv_cache::stage_export_kv_page(
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        skippy_kv_page_desc * out_desc,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        std::string & error) const {
++    if (out_desc == nullptr || out_bytes == nullptr) {
++        error = "out_desc and out_bytes are required";
++        return false;
++    }
++    if (layer_start < 0 || layer_end <= layer_start) {
++        error = "invalid layer range";
++        return false;
++    }
++    if (token_count == 0) {
++        error = "token_count must be greater than zero";
++        return false;
++    }
++    if (token_start > static_cast<uint64_t>(std::numeric_limits<llama_pos>::max()) ||
++            token_count > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) ||
++            token_start + token_count < token_start ||
++            token_start + token_count > static_cast<uint64_t>(std::numeric_limits<llama_pos>::max())) {
++        error = "token range is too large";
++        return false;
++    }
++    if (seq_to_stream.empty() || v_cells.empty()) {
++        error = "KV cache has no stream";
++        return false;
++    }
++
++    const uint32_t strm = seq_to_stream[0];
++    if (strm >= v_cells.size()) {
++        error = "sequence 0 is mapped to an invalid KV stream";
++        return false;
++    }
++    const auto & cells = v_cells[strm];
++
++    std::vector<uint32_t> cell_idxs(static_cast<size_t>(token_count), std::numeric_limits<uint32_t>::max());
++    uint32_t found_cells = 0;
++    const llama_pos pos_start = static_cast<llama_pos>(token_start);
++    const llama_pos pos_end = static_cast<llama_pos>(token_start + token_count);
++    for (uint32_t i = 0; i < cells.size() && found_cells < token_count; ++i) {
++        if (!cells.seq_has(i, 0) || !cells.pos_in(i, pos_start, pos_end)) {
++            continue;
++        }
++        const size_t token_index = static_cast<size_t>(cells.pos_get(i) - pos_start);
++        if (token_index < cell_idxs.size() && cell_idxs[token_index] == std::numeric_limits<uint32_t>::max()) {
++            cell_idxs[token_index] = i;
++            ++found_cells;
++        }
++    }
++    if (found_cells != token_count) {
++        error = "requested token position is not present in the KV cache";
++        return false;
++    }
++
++    std::vector<const kv_layer *> selected;
++    selected.reserve(layers.size());
++    uint32_t k_row_bytes = 0;
++    uint32_t v_row_bytes = 0;
++    uint32_t v_element_bytes = 0;
++    uint32_t k_type = GGML_TYPE_COUNT;
++    uint32_t v_type = GGML_TYPE_COUNT;
++    uint64_t payload_bytes = 0;
++
++    for (const auto & layer : layers) {
++        const uint32_t il = layer.il;
++        if (il < static_cast<uint32_t>(layer_start) || il >= static_cast<uint32_t>(layer_end)) {
++            continue;
++        }
++        if (layer.k_stream.size() <= strm || layer.v_stream.size() <= strm || layer.k_stream[strm] == nullptr || layer.v_stream[strm] == nullptr) {
++            error = "KV layer stream is unavailable";
++            return false;
++        }
++
++        const size_t k_row = ggml_row_size(layer.k_stream[strm]->type, hparams.n_embd_k_gqa(il));
++        const size_t v_row = !v_trans ? ggml_row_size(layer.v_stream[strm]->type, hparams.n_embd_v_gqa(il)) : 0;
++        const size_t v_el  =  v_trans ? ggml_type_size(layer.v_stream[strm]->type) : 0;
++
++        if (k_row > std::numeric_limits<uint32_t>::max() ||
++                v_row > std::numeric_limits<uint32_t>::max() ||
++                v_el > std::numeric_limits<uint32_t>::max()) {
++            error = "KV row size exceeds descriptor capacity";
++            return false;
++        }
++        if (selected.empty()) {
++            k_row_bytes = static_cast<uint32_t>(k_row);
++            v_row_bytes = static_cast<uint32_t>(v_row);
++            v_element_bytes = static_cast<uint32_t>(v_el);
++            k_type = static_cast<uint32_t>(layer.k_stream[strm]->type);
++            v_type = static_cast<uint32_t>(layer.v_stream[strm]->type);
++        } else if (k_row_bytes != k_row ||
++                v_row_bytes != v_row ||
++                v_element_bytes != v_el ||
++                k_type != static_cast<uint32_t>(layer.k_stream[strm]->type) ||
++                v_type != static_cast<uint32_t>(layer.v_stream[strm]->type)) {
++            error = "native KV page export requires uniform K/V types and row sizes across selected layers";
++            return false;
++        }
++
++        const uint64_t v_bytes = v_trans ?
++            static_cast<uint64_t>(hparams.n_embd_v_gqa(il)) * token_count * v_el :
++            token_count * v_row;
++        const uint64_t k_bytes = token_count * k_row;
++        if (payload_bytes > std::numeric_limits<uint64_t>::max() - k_bytes ||
++                payload_bytes + k_bytes > std::numeric_limits<uint64_t>::max() - v_bytes) {
++            error = "KV page payload is too large";
++            return false;
++        }
++        payload_bytes += k_bytes + v_bytes;
++        selected.push_back(&layer);
++    }
++
++    if (selected.empty()) {
++        error = "no KV cache layers selected by layer range";
++        return false;
++    }
++    if (payload_bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
++        error = "KV page payload exceeds addressable memory";
++        return false;
++    }
++
++    out_desc->version = 1;
++    out_desc->layer_start = layer_start;
++    out_desc->layer_end = layer_end;
++    out_desc->token_start = token_start;
++    out_desc->token_count = token_count;
++    out_desc->layer_count = static_cast<uint32_t>(selected.size());
++    out_desc->k_type = k_type;
++    out_desc->v_type = v_type;
++    out_desc->k_row_bytes = k_row_bytes;
++    out_desc->v_row_bytes = v_row_bytes;
++    out_desc->v_element_bytes = v_element_bytes;
++    out_desc->payload_bytes = payload_bytes;
++    out_desc->flags = v_trans ? SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED : 0;
++    *out_bytes = static_cast<size_t>(payload_bytes);
++
++    if (output == nullptr) {
++        return true;
++    }
++    if (output_capacity < static_cast<size_t>(payload_bytes)) {
++        error = "output buffer is too small";
++        return false;
++    }
++
++    char * dst = static_cast<char *>(output);
++    for (const auto * layer : selected) {
++        auto * k = layer->k_stream[strm];
++        for (uint32_t cell_idx : cell_idxs) {
++            ggml_backend_tensor_get(k, dst, static_cast<size_t>(cell_idx) * k_row_bytes, k_row_bytes);
++            dst += k_row_bytes;
++        }
++    }
++
++    if (!v_trans) {
++        for (const auto * layer : selected) {
++            auto * v = layer->v_stream[strm];
++            for (uint32_t cell_idx : cell_idxs) {
++                ggml_backend_tensor_get(v, dst, static_cast<size_t>(cell_idx) * v_row_bytes, v_row_bytes);
++                dst += v_row_bytes;
++            }
++        }
++    } else {
++        for (const auto * layer : selected) {
++            auto * v = layer->v_stream[strm];
++            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
++            for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
++                for (uint32_t cell_idx : cell_idxs) {
++                    const size_t src_offset = (static_cast<size_t>(cell_idx) + static_cast<size_t>(j) * cells.size()) * v_element_bytes;
++                    ggml_backend_tensor_get(v, dst, src_offset, v_element_bytes);
++                    dst += v_element_bytes;
++                }
++            }
++        }
++    }
++
++    return true;
++}
++
++bool llama_kv_cache::stage_import_kv_page(
++        const skippy_kv_page_desc & desc,
++        const void * input,
++        size_t input_bytes,
++        std::string & error) {
++    if (input == nullptr) {
++        error = "input payload is required";
++        return false;
++    }
++    if (desc.version != 1) {
++        error = "unsupported native KV page descriptor version";
++        return false;
++    }
++    if (desc.layer_start < 0 || desc.layer_end <= desc.layer_start || desc.token_count == 0) {
++        error = "invalid native KV page descriptor";
++        return false;
++    }
++    if (desc.payload_bytes != input_bytes) {
++        error = "native KV page payload size does not match descriptor";
++        return false;
++    }
++    if (desc.token_start > static_cast<uint64_t>(std::numeric_limits<llama_pos>::max()) ||
++            desc.token_count > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) ||
++            desc.token_start + desc.token_count < desc.token_start ||
++            desc.token_start + desc.token_count > static_cast<uint64_t>(std::numeric_limits<llama_pos>::max())) {
++        error = "token range is too large";
++        return false;
++    }
++    if ((desc.flags & SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED) != (v_trans ? SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED : 0)) {
++        error = "native KV page V transposition does not match runtime";
++        return false;
++    }
++    if (seq_to_stream.empty() || v_cells.empty()) {
++        error = "KV cache has no stream";
++        return false;
++    }
++
++    const uint32_t strm = seq_to_stream[0];
++    if (strm >= v_cells.size()) {
++        error = "sequence 0 is mapped to an invalid KV stream";
++        return false;
++    }
++
++    std::vector<const kv_layer *> selected;
++    selected.reserve(layers.size());
++    for (const auto & layer : layers) {
++        const uint32_t il = layer.il;
++        if (il < static_cast<uint32_t>(desc.layer_start) || il >= static_cast<uint32_t>(desc.layer_end)) {
++            continue;
++        }
++        if (layer.k_stream.size() <= strm || layer.v_stream.size() <= strm || layer.k_stream[strm] == nullptr || layer.v_stream[strm] == nullptr) {
++            error = "KV layer stream is unavailable";
++            return false;
++        }
++        const size_t k_row = ggml_row_size(layer.k_stream[strm]->type, hparams.n_embd_k_gqa(il));
++        const size_t v_row = !v_trans ? ggml_row_size(layer.v_stream[strm]->type, hparams.n_embd_v_gqa(il)) : 0;
++        const size_t v_el  =  v_trans ? ggml_type_size(layer.v_stream[strm]->type) : 0;
++        if (desc.k_type != static_cast<uint32_t>(layer.k_stream[strm]->type) ||
++                desc.v_type != static_cast<uint32_t>(layer.v_stream[strm]->type) ||
++                desc.k_row_bytes != k_row ||
++                desc.v_row_bytes != v_row ||
++                desc.v_element_bytes != v_el) {
++            error = "native KV page descriptor does not match runtime KV cache layout";
++            return false;
++        }
++        selected.push_back(&layer);
++    }
++    if (selected.size() != desc.layer_count) {
++        error = "native KV page layer count does not match runtime";
++        return false;
++    }
++
++    uint64_t expected_bytes = 0;
++    for (const auto * layer : selected) {
++        expected_bytes += desc.token_count * desc.k_row_bytes;
++        expected_bytes += v_trans ?
++            static_cast<uint64_t>(hparams.n_embd_v_gqa(layer->il)) * desc.token_count * desc.v_element_bytes :
++            desc.token_count * desc.v_row_bytes;
++    }
++    if (expected_bytes != desc.payload_bytes) {
++        error = "native KV page descriptor payload size is inconsistent";
++        return false;
++    }
++
++    llama_ubatch ubatch = {};
++    auto udata = std::make_shared<llama_ubatch::data_t>();
++    const uint32_t n_tokens = static_cast<uint32_t>(desc.token_count);
++    const uint32_t n_pos = hparams.n_pos_per_embd();
++    udata->token.resize(n_tokens);
++    udata->pos.resize(static_cast<size_t>(n_tokens) * n_pos);
++    udata->n_seq_id.resize(n_tokens, 1);
++    udata->seq_id.resize(n_tokens);
++    udata->seq_id_unq = { 0 };
++    udata->seq_idx.resize(LLAMA_MAX_SEQ, -1);
++    udata->seq_idx[0] = 0;
++    udata->output.resize(n_tokens, 0);
++    udata->seq_id_data.resize(n_tokens, 0);
++    for (uint32_t i = 0; i < n_tokens; ++i) {
++        const llama_pos pos = static_cast<llama_pos>(desc.token_start + i);
++        for (uint32_t j = 0; j < n_pos; ++j) {
++            udata->pos[static_cast<size_t>(j) * n_tokens + i] = pos;
++        }
++        udata->seq_id[i] = &udata->seq_id_data[i];
++    }
++    ubatch.b_equal_seqs = true;
++    ubatch.n_tokens = n_tokens;
++    ubatch.n_seq_tokens = n_tokens;
++    ubatch.n_seqs = 1;
++    ubatch.n_seqs_unq = 1;
++    ubatch.n_pos = n_pos;
++    ubatch.token = udata->token.data();
++    ubatch.embd = nullptr;
++    ubatch.pos = udata->pos.data();
++    ubatch.n_seq_id = udata->n_seq_id.data();
++    ubatch.seq_id = udata->seq_id.data();
++    ubatch.seq_id_unq = udata->seq_id_unq.data();
++    ubatch.seq_idx = udata->seq_idx.data();
++    ubatch.output = udata->output.data();
++    ubatch.data = std::move(udata);
++
++    seq_rm(0, static_cast<llama_pos>(desc.token_start), static_cast<llama_pos>(desc.token_start + desc.token_count));
++    const slot_info sinfo = find_slot(ubatch, false);
++    if (sinfo.empty()) {
++        error = "failed to allocate KV cache cells for imported page";
++        return false;
++    }
++    apply_ubatch(sinfo, ubatch);
++
++    const char * src = static_cast<const char *>(input);
++    for (const auto * layer : selected) {
++        auto * k = layer->k_stream[strm];
++        for (uint32_t i = 0; i < n_tokens; ++i) {
++            ggml_backend_tensor_set(k, src, static_cast<size_t>(sinfo.idxs[0][i]) * desc.k_row_bytes, desc.k_row_bytes);
++            src += desc.k_row_bytes;
++        }
++    }
++
++    auto & cells = v_cells[strm];
++    if (!v_trans) {
++        for (const auto * layer : selected) {
++            auto * v = layer->v_stream[strm];
++            for (uint32_t i = 0; i < n_tokens; ++i) {
++                ggml_backend_tensor_set(v, src, static_cast<size_t>(sinfo.idxs[0][i]) * desc.v_row_bytes, desc.v_row_bytes);
++                src += desc.v_row_bytes;
++            }
++        }
++    } else {
++        for (const auto * layer : selected) {
++            auto * v = layer->v_stream[strm];
++            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
++            for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
++                for (uint32_t i = 0; i < n_tokens; ++i) {
++                    const size_t dst_offset = (static_cast<size_t>(sinfo.idxs[0][i]) + static_cast<size_t>(j) * cells.size()) * desc.v_element_bytes;
++                    ggml_backend_tensor_set(v, src, dst_offset, desc.v_element_bytes);
++                    src += desc.v_element_bytes;
++                }
++            }
++        }
++    }
++
++    return src == static_cast<const char *>(input) + input_bytes;
++}
++
+ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
+     uint32_t result = 0;
+ 
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 3d68f98c..83cee5f9 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -6,12 +6,14 @@
+ #include "llama-memory.h"
+ 
+ #include <unordered_map>
++#include <string>
+ #include <vector>
+ 
+ struct llama_cparams;
+ struct llama_hparams;
+ struct llama_model;
+ struct llama_context;
++struct skippy_kv_page_desc;
+ 
+ //
+ // llama_kv_cache
+@@ -161,6 +163,23 @@ public:
+     ggml_type type_k() const;
+     ggml_type type_v() const;
+ 
++    bool stage_export_kv_page(
++            int32_t layer_start,
++            int32_t layer_end,
++            uint64_t token_start,
++            uint64_t token_count,
++            skippy_kv_page_desc * out_desc,
++            void * output,
++            size_t output_capacity,
++            size_t * out_bytes,
++            std::string & error) const;
++
++    bool stage_import_kv_page(
++            const skippy_kv_page_desc & desc,
++            const void * input,
++            size_t input_bytes,
++            std::string & error);
++
+     //
+     // graph_build API
+     //
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index c1e512883..622b228e6 100644
+index 86909230..622b228e 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1121,6 +1121,13 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1088,13 +1088,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+     };
+ 
+     auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
+-        if (!t_meta) {
+-            if (flags & TENSOR_NOT_REQUIRED) {
+-                return nullptr;
+-            }
+-            throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
+-        }
+-
+         // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
+         // the tensor is duplicated
+         // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
+@@ -1128,22 +1121,38 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                      break;
              }
  
@@ -159,10 +892,44 @@ index c1e512883..622b228e6 100644
 +            }
 +
              if (!keep) {
-                 if (t_meta) {
-                     const size_t nbytes = ggml_nbytes(t_meta);
+-                const size_t nbytes = ggml_nbytes(t_meta);
+-                LLAMA_LOG_DEBUG(
+-                        "llama_model_loader: stage filter skipping tensor %s (size = %zu bytes)\n",
+-                        tn.str().c_str(),
+-                        nbytes);
+-
+-                size_data -= nbytes;
+-                if (!(flags & TENSOR_DUPLICATED)) {
+-                    n_created++;
++                if (t_meta) {
++                    const size_t nbytes = ggml_nbytes(t_meta);
++                    LLAMA_LOG_DEBUG(
++                            "llama_model_loader: stage filter skipping tensor %s (size = %zu bytes)\n",
++                            tn.str().c_str(),
++                            nbytes);
++
++                    size_data -= nbytes;
++                    if (!(flags & TENSOR_DUPLICATED)) {
++                        n_created++;
++                    }
+                 }
+ 
+                 return nullptr;
+             }
+         }
+ 
++        if (!t_meta) {
++            if (flags & TENSOR_NOT_REQUIRED) {
++                return nullptr;
++            }
++            throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
++        }
++
+         // skip unused tensors
+         if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
+             const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index d041a9ce3..fc13d414b 100644
+index d041a9ce..fc13d414 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1360,13 +1360,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
@@ -183,7 +950,7 @@ index d041a9ce3..fc13d414b 100644
              }
  
 diff --git a/src/models/deepseek2.cpp b/src/models/deepseek2.cpp
-index a9e8bc514..d1b261b4c 100644
+index a9e8bc51..d1b261b4 100644
 --- a/src/models/deepseek2.cpp
 +++ b/src/models/deepseek2.cpp
 @@ -174,8 +174,14 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
@@ -238,7 +1005,7 @@ index a9e8bc514..d1b261b4c 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/falcon-h1.cpp b/src/models/falcon-h1.cpp
-index d6ef2d519..1222a5d49 100644
+index d6ef2d51..1222a5d4 100644
 --- a/src/models/falcon-h1.cpp
 +++ b/src/models/falcon-h1.cpp
 @@ -116,7 +116,12 @@ llama_model_falcon_h1::graph::graph(const llama_model & model, const llm_graph_p
@@ -291,7 +1058,7 @@ index d6ef2d519..1222a5d49 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/gemma.cpp b/src/models/gemma.cpp
-index 651cd7e64..d6d7cae7d 100644
+index 651cd7e6..d6d7cae7 100644
 --- a/src/models/gemma.cpp
 +++ b/src/models/gemma.cpp
 @@ -44,19 +44,26 @@ llama_model_gemma::graph::graph(const llama_model & model, const llm_graph_param
@@ -350,7 +1117,7 @@ index 651cd7e64..d6d7cae7d 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/gemma2.cpp b/src/models/gemma2.cpp
-index 2fbfb15a9..7e1154a92 100644
+index 2fbfb15a..7e1154a9 100644
 --- a/src/models/gemma2.cpp
 +++ b/src/models/gemma2.cpp
 @@ -65,19 +65,26 @@ llama_model_gemma2::graph::graph(const llama_model & model, const llm_graph_para
@@ -409,7 +1176,7 @@ index 2fbfb15a9..7e1154a92 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/gemma3.cpp b/src/models/gemma3.cpp
-index 690194529..de94cdb53 100644
+index 69019452..de94cdb5 100644
 --- a/src/models/gemma3.cpp
 +++ b/src/models/gemma3.cpp
 @@ -87,11 +87,18 @@ llama_model_gemma3::graph<iswa>::graph(const llama_model & model, const llm_grap
@@ -470,7 +1237,7 @@ index 690194529..de94cdb53 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/gemma4.cpp b/src/models/gemma4.cpp
-index 6a96979ce..afac5ed5e 100644
+index 6a96979c..afac5ed5 100644
 --- a/src/models/gemma4.cpp
 +++ b/src/models/gemma4.cpp
 @@ -98,8 +98,9 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
@@ -594,7 +1361,7 @@ index 6a96979ce..afac5ed5e 100644
          // Multimodal embedding path: use padding token (ID=0) embedding
          // TODO: verify if this is the correct behavior in transformers implementation
 diff --git a/src/models/glm4.cpp b/src/models/glm4.cpp
-index b4326c5f2..c4e951a1e 100644
+index b4326c5f..c4e951a1 100644
 --- a/src/models/glm4.cpp
 +++ b/src/models/glm4.cpp
 @@ -80,10 +80,18 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
@@ -661,7 +1428,7 @@ index b4326c5f2..c4e951a1e 100644
      cb(cur, "result_norm", -1);
      res->t_embd = cur;
 diff --git a/src/models/minimax-m2.cpp b/src/models/minimax-m2.cpp
-index b25435e4d..522e6fceb 100644
+index b25435e4..522e6fce 100644
 --- a/src/models/minimax-m2.cpp
 +++ b/src/models/minimax-m2.cpp
 @@ -53,13 +53,18 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
@@ -710,7 +1477,7 @@ index b25435e4d..522e6fceb 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/olmo.cpp b/src/models/olmo.cpp
-index 9f7a2ba60..162cb4bc9 100644
+index 9f7a2ba6..162cb4bc 100644
 --- a/src/models/olmo.cpp
 +++ b/src/models/olmo.cpp
 @@ -49,16 +49,21 @@ llama_model_olmo::graph::graph(const llama_model & model, const llm_graph_params
@@ -762,7 +1529,7 @@ index 9f7a2ba60..162cb4bc9 100644
              NULL, NULL,
              LLM_NORM, -1);
 diff --git a/src/models/qwen2.cpp b/src/models/qwen2.cpp
-index e9c2ea80a..6362851e7 100644
+index e9c2ea80..6362851e 100644
 --- a/src/models/qwen2.cpp
 +++ b/src/models/qwen2.cpp
 @@ -59,16 +59,21 @@ llama_model_qwen2::graph::graph(const llama_model & model, const llm_graph_param
@@ -814,7 +1581,7 @@ index e9c2ea80a..6362851e7 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/qwen3.cpp b/src/models/qwen3.cpp
-index f4b2a2aeb..9991ce56b 100644
+index f4b2a2ae..9991ce56 100644
 --- a/src/models/qwen3.cpp
 +++ b/src/models/qwen3.cpp
 @@ -59,16 +59,21 @@ llama_model_qwen3::graph::graph(const llama_model & model, const llm_graph_param
@@ -865,8 +1632,60 @@ index f4b2a2aeb..9991ce56b 100644
      cur = build_norm(cur,
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
+diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
+index 7b0876cb..f119cb0c 100644
+--- a/src/models/qwen35moe.cpp
++++ b/src/models/qwen35moe.cpp
+@@ -168,17 +168,29 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? std::min<int>(stage_filter.layer_start, static_cast<int>(n_layer)) : 0;
++    const int il_end   = stage_filtered ? std::min<int>(stage_filter.layer_end,   static_cast<int>(n_layer)) : n_layer;
++    bool has_attention_layer = false;
++    for (int il = il_start; il < il_end; ++il) {
++        if (!hparams.is_recr(il)) {
++            has_attention_layer = true;
++            break;
++        }
++    }
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     cb(inpL, "model.input_embed", -1);
+ 
+     auto * inp = build_inp_mem_hybrid();
+ 
+-    ggml_tensor * inp_pos     = build_inp_pos();
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_pos     = has_attention_layer ? build_inp_pos() : nullptr;
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         res->t_layer_inp[il] = inpL;
+ 
+         ggml_tensor * inpSA = inpL;
+@@ -229,6 +241,13 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     // post-norm hidden state feeds both the LM head and the MTP seed below
+     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
+ 
 diff --git a/src/models/qwen3next.cpp b/src/models/qwen3next.cpp
-index 97200a440..e68c24ddb 100644
+index 97200a44..e68c24dd 100644
 --- a/src/models/qwen3next.cpp
 +++ b/src/models/qwen3next.cpp
 @@ -112,15 +112,27 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
@@ -925,10 +1744,21 @@ index 97200a440..e68c24ddb 100644
      cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
  
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index f0b70b962..50e25c8f5 100644
+index 26169320..50e25c8f 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
-@@ -500,6 +500,26 @@ struct skippy_graph_filter_scope {
+@@ -1,7 +1,10 @@
+ #include "skippy.h"
+ 
+ #include "gguf.h"
++#include "llama-context.h"
+ #include "llama-graph.h"
++#include "llama-kv-cache.h"
++#include "llama-memory-hybrid.h"
+ #include "llama-model.h"
+ #include "llama-model-loader.h"
+ 
+@@ -497,6 +500,26 @@ struct skippy_graph_filter_scope {
      bool enabled = false;
  };
  
@@ -955,7 +1785,59 @@ index f0b70b962..50e25c8f5 100644
  static bool skippy_is_filtered(const skippy_session * session) {
      return session != nullptr &&
             session->stage_model != nullptr &&
-@@ -771,6 +791,7 @@ static enum skippy_status skippy_decode_activation_frame(
+@@ -657,11 +680,20 @@ static enum skippy_status skippy_decode_tokens(
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+ 
+-    llama_batch batch = llama_batch_get_one(
+-            const_cast<llama_token *>(token_ids),
+-            static_cast<int32_t>(token_count));
++    const int32_t n_tokens = static_cast<int32_t>(token_count);
++    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
++    batch.n_tokens = n_tokens;
++    for (int32_t i = 0; i < n_tokens; ++i) {
++        batch.token[i] = token_ids[i];
++        batch.pos[i] = session->n_past + i;
++        batch.n_seq_id[i] = 1;
++        batch.seq_id[i][0] = 0;
++        batch.logits[i] = request_logits && i == n_tokens - 1 ? 1 : 0;
++    }
+ 
+-    return skippy_decode_batch(session, batch, token_count, out_error);
++    enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
++    llama_batch_free(batch);
++    return status;
+ }
+ 
+ static llama_token skippy_greedy_sample(skippy_session * session) {
+@@ -681,6 +713,26 @@ static llama_token skippy_greedy_sample(skippy_session * session) {
+     return best;
+ }
+ 
++static llama_token skippy_greedy_sample_ith(skippy_session * session, int32_t index) {
++    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
++    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
++    const float * logits = llama_get_logits_ith(session->ctx, index);
++    if (logits == nullptr) {
++        return 0;
++    }
++
++    llama_token best = 0;
++    float best_logit = -std::numeric_limits<float>::infinity();
++    for (int32_t token = 0; token < n_vocab; ++token) {
++        if (logits[token] > best_logit) {
++            best_logit = logits[token];
++            best = token;
++        }
++    }
++
++    return best;
++}
++
+ static enum skippy_status skippy_prepare_empty_activation_frame(
+         skippy_session * session,
+         size_t token_count,
+@@ -739,6 +791,7 @@ static enum skippy_status skippy_decode_activation_frame(
          skippy_session * session,
          const skippy_activation_desc * input_desc,
          const void * input_payload,
@@ -963,7 +1845,7 @@ index f0b70b962..50e25c8f5 100644
          size_t token_count,
          bool request_logits,
          struct skippy_error ** out_error) {
-@@ -796,6 +817,7 @@ static enum skippy_status skippy_decode_activation_frame(
+@@ -764,6 +817,7 @@ static enum skippy_status skippy_decode_activation_frame(
          batch.logits[i] = request_logits && i == n_tokens - 1 ? 1 : 0;
      }
  
@@ -971,19 +1853,25 @@ index f0b70b962..50e25c8f5 100644
      enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
      llama_batch_free(batch);
      return status;
-@@ -815,6 +837,7 @@ uint64_t skippy_abi_features(void) {
+@@ -783,8 +837,12 @@ uint64_t skippy_abi_features(void) {
      return SKIPPY_FEATURE_RUNTIME_SLICE |
             SKIPPY_FEATURE_MODEL_INTROSPECTION |
             SKIPPY_FEATURE_GGUF_SLICE_WRITE |
 +           SKIPPY_FEATURE_STATE_IMPORT_EXPORT |
             SKIPPY_FEATURE_TOKENIZE_DETOKENIZE |
-            SKIPPY_FEATURE_ACTIVATION_FRAME |
-            SKIPPY_FEATURE_NATIVE_KV_PAGE |
-@@ -889,9 +912,22 @@ enum skippy_status skippy_model_open(
+-           SKIPPY_FEATURE_ACTIVATION_FRAME;
++           SKIPPY_FEATURE_ACTIVATION_FRAME |
++           SKIPPY_FEATURE_NATIVE_KV_PAGE |
++           SKIPPY_FEATURE_SESSION_RESET |
++           SKIPPY_FEATURE_BATCH_VERIFY;
+ }
+ 
+ const char * skippy_status_string(enum skippy_status status) {
+@@ -854,9 +912,22 @@ enum skippy_status skippy_model_open(
  
      if (config != nullptr && config->filter_tensors_on_load) {
          const int32_t n_layer = llama_model_n_layer(model);
--        if (model->arch != LLM_ARCH_LLAMA && model->arch != LLM_ARCH_QWEN35MOE) {
+-        if (model->arch != LLM_ARCH_LLAMA) {
 +        if (model->arch != LLM_ARCH_LLAMA &&
 +            model->arch != LLM_ARCH_QWEN2 &&
 +            model->arch != LLM_ARCH_QWEN3 &&
@@ -999,12 +1887,96 @@ index f0b70b962..50e25c8f5 100644
 +            model->arch != LLM_ARCH_MINIMAX_M2 &&
 +            model->arch != LLM_ARCH_OLMO) {
              llama_model_free(model);
--            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime-slice execution is currently supported for LLaMA-family and Qwen35MoE graphs only");
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime-slice execution is currently supported for LLaMA-family graphs only");
 +            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime-slice execution is not supported for this model architecture yet");
              return SKIPPY_STATUS_UNSUPPORTED;
          }
          if (config->layer_end > n_layer) {
-@@ -1143,7 +1179,7 @@ enum skippy_status skippy_prefill_chunk_frame(
+@@ -932,6 +1003,27 @@ enum skippy_status skippy_session_create(
+     return skippy_success(out_error);
+ }
+ 
++enum skippy_status skippy_session_reset(
++        struct skippy_session * session,
++        struct skippy_error ** out_error) {
++    if (session == nullptr || session->ctx == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    session->ctx->synchronize();
++    llama_memory_t memory = session->ctx->get_memory();
++    if (memory == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "runtime memory is unavailable");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
++    llama_memory_clear(memory, true);
++    session->n_past = 0;
++    session->ctx->synchronize();
++    return skippy_success(out_error);
++}
++
+ enum skippy_status skippy_session_free(
+         struct skippy_session * session,
+         struct skippy_error ** out_error) {
+@@ -995,6 +1087,55 @@ enum skippy_status skippy_decode_step(
+     return skippy_success(out_error);
+ }
+ 
++enum skippy_status skippy_verify_tokens(
++        struct skippy_session * session,
++        const llama_token * token_ids,
++        size_t token_count,
++        llama_token * output_tokens,
++        size_t output_token_capacity,
++        size_t * out_token_count,
++        struct skippy_error ** out_error) {
++    if (out_token_count != nullptr) {
++        *out_token_count = token_count;
++    }
++    if (session == nullptr || session->ctx == nullptr || token_ids == nullptr || token_count == 0 || out_token_count == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session, token_ids, token_count, and out_token_count are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (token_count > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token_count exceeds int32_t range");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (output_tokens == nullptr || output_token_capacity < token_count) {
++        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "token output buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++    if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "non-first runtime slices require activation input");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    const int32_t n_tokens = static_cast<int32_t>(token_count);
++    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
++    batch.n_tokens = n_tokens;
++    for (int32_t i = 0; i < n_tokens; ++i) {
++        batch.token[i] = token_ids[i];
++        batch.pos[i] = session->n_past + i;
++        batch.n_seq_id[i] = 1;
++        batch.seq_id[i][0] = 0;
++        batch.logits[i] = 1;
++    }
++
++    enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
++    if (status == SKIPPY_STATUS_OK) {
++        for (int32_t i = 0; i < n_tokens; ++i) {
++            output_tokens[i] = skippy_greedy_sample_ith(session, i);
++        }
++    }
++    llama_batch_free(batch);
++    return status;
++}
++
+ enum skippy_status skippy_prefill_chunk_frame(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -1038,7 +1179,7 @@ enum skippy_status skippy_prefill_chunk_frame(
      }
  
      if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
@@ -1013,7 +1985,7 @@ index f0b70b962..50e25c8f5 100644
      } else {
          status = skippy_decode_tokens(session, token_ids, token_count, false, out_error);
      }
-@@ -1188,7 +1224,7 @@ enum skippy_status skippy_decode_step_frame(
+@@ -1083,7 +1224,7 @@ enum skippy_status skippy_decode_step_frame(
      }
  
      if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
@@ -1022,7 +1994,7 @@ index f0b70b962..50e25c8f5 100644
      } else {
          status = skippy_decode_tokens(session, &token_id, 1, true, out_error);
      }
-@@ -1211,14 +1247,51 @@ enum skippy_status skippy_export_state(
+@@ -1106,14 +1247,51 @@ enum skippy_status skippy_export_state(
          size_t output_capacity,
          size_t * out_bytes,
          struct skippy_error ** out_error) {
@@ -1082,7 +2054,7 @@ index f0b70b962..50e25c8f5 100644
  }
  
  enum skippy_status skippy_import_state(
-@@ -1228,13 +1301,152 @@ enum skippy_status skippy_import_state(
+@@ -1123,13 +1301,254 @@ enum skippy_status skippy_import_state(
          const void * input,
          size_t input_bytes,
          struct skippy_error ** out_error) {
@@ -1239,9 +2211,141 @@ index f0b70b962..50e25c8f5 100644
 +    session->ctx->synchronize();
 +
 +    return skippy_success(out_error);
++}
++
++static llama_kv_cache * skippy_get_kv_cache(
++        skippy_session * session,
++        skippy_error ** out_error) {
++    if (session == nullptr || session->ctx == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
++        return nullptr;
++    }
++
++    llama_memory_t memory = session->ctx->get_memory();
++    if (memory == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "runtime memory is unavailable");
++        return nullptr;
++    }
++
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
++        llama_kv_cache * kv = hybrid->get_mem_attn();
++        if (kv == nullptr) {
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime has no attention KV cache");
++        }
++        return kv;
++    }
++    if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
++        return kv;
++    }
++
++    skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime memory type is not supported for native KV pages");
++    return nullptr;
++}
++
++enum skippy_status skippy_export_kv_page(
++        struct skippy_session * session,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        struct skippy_kv_page_desc * out_desc,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error) {
++    llama_kv_cache * kv = skippy_get_kv_cache(session, out_error);
++    if (kv == nullptr) {
++        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    session->ctx->synchronize();
++
++    std::string error;
++    const bool ok = kv->stage_export_kv_page(
++            layer_start,
++            layer_end,
++            token_start,
++            token_count,
++            out_desc,
++            output,
++            output_capacity,
++            out_bytes,
++            error);
++    if (!ok) {
++        const bool too_small = out_bytes != nullptr && *out_bytes > output_capacity;
++        const enum skippy_status status = too_small ? SKIPPY_STATUS_BUFFER_TOO_SMALL : SKIPPY_STATUS_RUNTIME_ERROR;
++        skippy_set_error(out_error, status, error.c_str());
++        return status;
++    }
++    if (output == nullptr || (out_bytes != nullptr && *out_bytes > output_capacity)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "native KV page output buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++
++    return skippy_success(out_error);
++}
++
++enum skippy_status skippy_import_kv_page(
++        struct skippy_session * session,
++        const struct skippy_kv_page_desc * desc,
++        const void * input,
++        size_t input_bytes,
++        struct skippy_error ** out_error) {
++    if (desc == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "native KV page descriptor is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    llama_kv_cache * kv = skippy_get_kv_cache(session, out_error);
++    if (kv == nullptr) {
++        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
++    std::string error;
++    if (!kv->stage_import_kv_page(*desc, input, input_bytes, error)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, error.c_str());
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    session->n_past = std::max<int32_t>(
++            session->n_past,
++            static_cast<int32_t>(std::min<uint64_t>(
++                    desc->token_start + desc->token_count,
++                    static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))));
++    session->ctx->synchronize();
++
++    return skippy_success(out_error);
  }
  
- static llama_kv_cache * skippy_get_kv_cache(
+ enum skippy_status skippy_tokenize(
+@@ -1205,6 +1624,29 @@ enum skippy_status skippy_detokenize(
+     return skippy_success(out_error);
+ }
+ 
++enum skippy_status skippy_token_is_eog(
++        struct skippy_model * model,
++        llama_token token,
++        bool * out_is_eog,
++        struct skippy_error ** out_error) {
++    if (model == nullptr || model->model == nullptr || out_is_eog == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and out_is_eog are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    const llama_vocab * vocab = llama_model_get_vocab(model->model);
++    *out_is_eog = llama_vocab_is_eog(vocab, token);
++    return skippy_success(out_error);
++}
++
++const struct llama_model * skippy_model_native_model(
++        const struct skippy_model * model) {
++    if (model == nullptr) {
++        return nullptr;
++    }
++    return model->model;
++}
++
+ enum skippy_status skippy_model_info_open(
+         const char * path,
+         struct skippy_model_info ** out_info,
 -- 
-2.50.1 (Apple Git-155)
+2.53.0
 

@@ -1,0 +1,1517 @@
+From d0277a060caf50075309793f8766d659c0738945 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 26 Jun 2026 13:47:53 +1000
+Subject: [PATCH 06/10] Expand staged execution across dense and recurrent
+ families
+
+Squashes the dense and decoder family support waves through LFM2, Mamba, Jamba, RWKV6, Qwen2MoE, and native sequence id exposure.
+---
+ include/skippy.h          |  3 +++
+ src/llama-graph.cpp       |  7 ++++++-
+ src/models/baichuan.cpp   | 20 ++++++++++++++++----
+ src/models/bloom.cpp      | 32 +++++++++++++++++++++++---------
+ src/models/cohere2.cpp    | 20 ++++++++++++++++----
+ src/models/command-r.cpp  | 20 ++++++++++++++++----
+ src/models/exaone.cpp     | 20 ++++++++++++++++----
+ src/models/exaone4.cpp    | 20 ++++++++++++++++----
+ src/models/falcon.cpp     | 20 ++++++++++++++++----
+ src/models/gpt2.cpp       | 33 +++++++++++++++++++++++----------
+ src/models/gptneox.cpp    | 20 ++++++++++++++++----
+ src/models/granite.cpp    | 20 ++++++++++++++++----
+ src/models/internlm2.cpp  | 20 ++++++++++++++++----
+ src/models/jamba.cpp      | 20 ++++++++++++++++----
+ src/models/lfm2.cpp       | 30 +++++++++++++++++++++++++-----
+ src/models/mamba.cpp      | 20 ++++++++++++++++----
+ src/models/mistral3.cpp   | 20 ++++++++++++++++----
+ src/models/mpt.cpp        | 22 +++++++++++++++++-----
+ src/models/olmo2.cpp      | 20 ++++++++++++++++----
+ src/models/olmoe.cpp      | 20 ++++++++++++++++----
+ src/models/phi3.cpp       | 21 +++++++++++++++++----
+ src/models/qwen2moe.cpp   | 25 ++++++++++++++++++++-----
+ src/models/qwen2vl.cpp    | 20 ++++++++++++++++----
+ src/models/qwen3vl.cpp    | 22 +++++++++++++++++-----
+ src/models/rwkv6.cpp      | 25 +++++++++++++++++++------
+ src/models/stablelm.cpp   | 20 ++++++++++++++++----
+ src/models/starcoder2.cpp | 20 ++++++++++++++++----
+ src/skippy.cpp            | 33 ++++++++++++++++++++++++++++++++-
+ 28 files changed, 474 insertions(+), 119 deletions(-)
+
+diff --git a/include/skippy.h b/include/skippy.h
+index deb5151e..84169398 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -244,6 +244,9 @@ LLAMA_API struct llama_context * skippy_session_llama_context(
+ LLAMA_API int32_t skippy_session_position(
+         const struct skippy_session * session);
+ 
++LLAMA_API int32_t skippy_session_native_seq_id(
++        const struct skippy_session * session);
++
+ LLAMA_API int32_t skippy_session_batch_size(
+         const struct skippy_session * session);
+ 
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 126261f2..f975b84f 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -1951,10 +1951,15 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+ 
+     res->t_inp_embd = cur;
+ 
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool skippy_mid_stage_input = stage_filter.enabled && stage_filter.layer_start > 0;
++
+     // For Granite architecture
+     // NOTE: For deepstack models, only apply scale to token inputs (ie text-only input).
+     //  Raw embeddings are assumed to be multimodal inputs that should not be scaled.
+-    if (hparams.f_embedding_scale != 0.0f && (ubatch.token || hparams.n_deepstack_layers == 0)) {
++    // A skippy mid-stage vector input is already a post-layer activation, not a
++    // raw embedding, so do not scale it again.
++    if (!skippy_mid_stage_input && hparams.f_embedding_scale != 0.0f && (ubatch.token || hparams.n_deepstack_layers == 0)) {
+         if (!ggml_is_contiguous(cur)) {
+             cur = ggml_cont(ctx0, cur);
+         }
+diff --git a/src/models/baichuan.cpp b/src/models/baichuan.cpp
+index 585f3614..8e9dc302 100644
+--- a/src/models/baichuan.cpp
++++ b/src/models/baichuan.cpp
+@@ -52,16 +52,21 @@ llama_model_baichuan::graph::graph(const llama_model & model, const llm_graph_pa
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = model.type == LLM_TYPE_7B ? build_inp_pos() : nullptr;
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+         cur = build_norm(inpL,
+@@ -103,7 +108,7 @@ llama_model_baichuan::graph::graph(const llama_model & model, const llm_graph_pa
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -138,6 +143,13 @@ llama_model_baichuan::graph::graph(const llama_model & model, const llm_graph_pa
+ 
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur,
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
+diff --git a/src/models/bloom.cpp b/src/models/bloom.cpp
+index 609d2ddf..021ea67a 100644
+--- a/src/models/bloom.cpp
++++ b/src/models/bloom.cpp
+@@ -70,19 +70,26 @@ llama_model_bloom::graph::graph(const llama_model & model, const llm_graph_param
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    inpL = build_norm(inpL,
+-            model.tok_norm,
+-            model.tok_norm_b,
+-            LLM_NORM, 0);
+-    cb(inpL, "inp_norm", 0);
++    if (!stage_filtered || il_start == 0) {
++        inpL = build_norm(inpL,
++                model.tok_norm,
++                model.tok_norm_b,
++                LLM_NORM, 0);
++        cb(inpL, "inp_norm", 0);
++    }
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         cur = build_norm(inpL,
+                 model.layers[il].attn_norm,
+                 model.layers[il].attn_norm_b,
+@@ -99,7 +106,7 @@ llama_model_bloom::graph::graph(const llama_model & model, const llm_graph_param
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
+             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+         }
+@@ -134,6 +141,13 @@ llama_model_bloom::graph::graph(const llama_model & model, const llm_graph_param
+         inpL = cur;
+     }
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(inpL, "stage_boundary", il_end - 1);
++        res->t_embd = inpL;
++        ggml_build_forward_expand(gf, inpL);
++        return;
++    }
++
+     cur = build_norm(inpL,
+             model.output_norm,
+             model.output_norm_b,
+diff --git a/src/models/cohere2.cpp b/src/models/cohere2.cpp
+index e2b36625..1223aae3 100644
+--- a/src/models/cohere2.cpp
++++ b/src/models/cohere2.cpp
+@@ -59,16 +59,21 @@ llama_model_cohere2::graph::graph(const llama_model & model, const llm_graph_par
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+ 
+     auto * inp_attn = build_attn_inp_kv_iswa();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         const bool is_swa = hparams.is_swa(il);
+         // UNUSED:
+         // const float freq_base_l  = model.get_rope_freq_base (cparams, il);
+@@ -111,7 +116,7 @@ llama_model_cohere2::graph::graph(const llama_model & model, const llm_graph_par
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur     = ggml_get_rows(ctx0, cur, inp_out_ids);
+             inpL    = ggml_get_rows(ctx0, inpL, inp_out_ids);
+             ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+@@ -142,6 +147,13 @@ llama_model_cohere2::graph::graph(const llama_model & model, const llm_graph_par
+ 
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM, -1);
+ 
+     cb(cur, "result_norm", -1);
+diff --git a/src/models/command-r.cpp b/src/models/command-r.cpp
+index 94a46188..26001255 100644
+--- a/src/models/command-r.cpp
++++ b/src/models/command-r.cpp
+@@ -54,16 +54,21 @@ llama_model_command_r::graph::graph(const llama_model & model, const llm_graph_p
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         // norm
+         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM, il);
+         cb(cur, "attn_norm", il);
+@@ -98,7 +103,7 @@ llama_model_command_r::graph::graph(const llama_model & model, const llm_graph_p
+                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur     = ggml_get_rows(ctx0, cur, inp_out_ids);
+             inpL    = ggml_get_rows(ctx0, inpL, inp_out_ids);
+             ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+@@ -126,6 +131,13 @@ llama_model_command_r::graph::graph(const llama_model & model, const llm_graph_p
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM, -1);
+ 
+     cb(cur, "result_norm", -1);
+diff --git a/src/models/exaone.cpp b/src/models/exaone.cpp
+index 676fb37b..22daba94 100644
+--- a/src/models/exaone.cpp
++++ b/src/models/exaone.cpp
+@@ -53,16 +53,21 @@ llama_model_exaone::graph::graph(const llama_model & model, const llm_graph_para
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+         // norm
+@@ -92,7 +97,7 @@ llama_model_exaone::graph::graph(const llama_model & model, const llm_graph_para
+                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -121,6 +126,13 @@ llama_model_exaone::graph::graph(const llama_model & model, const llm_graph_para
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+ 
+     cb(cur, "result_norm", -1);
+diff --git a/src/models/exaone4.cpp b/src/models/exaone4.cpp
+index 863268ab..306d73a9 100644
+--- a/src/models/exaone4.cpp
++++ b/src/models/exaone4.cpp
+@@ -94,7 +94,12 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+@@ -107,9 +112,9 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
+     } else {
+         inp_attn = build_attn_inp_kv();
+     }
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+         // use RoPE for SWA layers or non-SWA models
+@@ -145,7 +150,7 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+             cb(cur, "attn_out", il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -176,6 +181,13 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+ 
+     cb(cur, "result_norm", -1);
+diff --git a/src/models/falcon.cpp b/src/models/falcon.cpp
+index b2ad90b3..00f3bd4f 100644
+--- a/src/models/falcon.cpp
++++ b/src/models/falcon.cpp
+@@ -56,16 +56,21 @@ llama_model_falcon::graph::graph(const llama_model & model, const llm_graph_para
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * attn_norm;
+ 
+         attn_norm = build_norm(inpL,
+@@ -112,7 +117,7 @@ llama_model_falcon::graph::graph(const llama_model & model, const llm_graph_para
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur       = ggml_get_rows(ctx0,       cur, inp_out_ids);
+             inpL      = ggml_get_rows(ctx0,      inpL, inp_out_ids);
+             attn_norm = ggml_get_rows(ctx0, attn_norm, inp_out_ids);
+@@ -143,6 +148,13 @@ llama_model_falcon::graph::graph(const llama_model & model, const llm_graph_para
+ 
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     // norm
+     cur = build_norm(cur,
+             model.output_norm,
+diff --git a/src/models/gpt2.cpp b/src/models/gpt2.cpp
+index 45afbccc..cf3c658a 100644
+--- a/src/models/gpt2.cpp
++++ b/src/models/gpt2.cpp
+@@ -64,22 +64,28 @@ llama_model_gpt2::graph::graph(const llama_model & model, const llm_graph_params
+     ggml_tensor * pos;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
+ 
+-    // inp_pos - contains the positions
+-    ggml_tensor * inp_pos = build_inp_pos();
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    pos = ggml_get_rows(ctx0, model.pos_embd, inp_pos);
+-    cb(pos, "pos_embd", -1);
++    if (!stage_filtered || il_start == 0) {
++        // inp_pos - contains the positions
++        ggml_tensor * inp_pos = build_inp_pos();
++        pos = ggml_get_rows(ctx0, model.pos_embd, inp_pos);
++        cb(pos, "pos_embd", -1);
+ 
+-    inpL = ggml_add(ctx0, inpL, pos);
+-    cb(inpL, "inpL", -1);
++        inpL = ggml_add(ctx0, inpL, pos);
++        cb(inpL, "inpL", -1);
++    }
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         cur = build_norm(inpL,
+                 model.layers[il].attn_norm,
+                 model.layers[il].attn_norm_b,
+@@ -96,7 +102,7 @@ llama_model_gpt2::graph::graph(const llama_model & model, const llm_graph_params
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
+             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+         }
+@@ -131,6 +137,13 @@ llama_model_gpt2::graph::graph(const llama_model & model, const llm_graph_params
+         inpL = cur;
+     }
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(inpL, "stage_boundary", il_end - 1);
++        res->t_embd = inpL;
++        ggml_build_forward_expand(gf, inpL);
++        return;
++    }
++
+     cur = build_norm(inpL,
+             model.output_norm,
+             model.output_norm_b,
+diff --git a/src/models/gptneox.cpp b/src/models/gptneox.cpp
+index ed5e8c50..d5e4a720 100644
+--- a/src/models/gptneox.cpp
++++ b/src/models/gptneox.cpp
+@@ -92,16 +92,21 @@ llama_model_gptneox::graph::graph(const llama_model & model, const llm_graph_par
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         cur = build_norm(inpL,
+                 model.layers[il].attn_norm,
+                 model.layers[il].attn_norm_b,
+@@ -134,7 +139,7 @@ llama_model_gptneox::graph::graph(const llama_model & model, const llm_graph_par
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
+             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+         }
+@@ -202,6 +207,13 @@ llama_model_gptneox::graph::graph(const llama_model & model, const llm_graph_par
+         }
+     }
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(inpL, "stage_boundary", il_end - 1);
++        res->t_embd = inpL;
++        ggml_build_forward_expand(gf, inpL);
++        return;
++    }
++
+     cur = build_norm(inpL,
+             model.output_norm,
+             model.output_norm_b,
+diff --git a/src/models/granite.cpp b/src/models/granite.cpp
+index 4a75c5ff..fb75406f 100644
+--- a/src/models/granite.cpp
++++ b/src/models/granite.cpp
+@@ -123,7 +123,12 @@ llama_model_granite::graph::graph(
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - built only if rope enabled
+     ggml_tensor * inp_pos = nullptr;
+@@ -132,9 +137,9 @@ llama_model_granite::graph::graph(
+     }
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+ 
+         // Granite Vision 4.1 deepstack: inject the projector stream that
+         // targets decoder layer `il` before the decoder runs.
+@@ -162,7 +167,7 @@ llama_model_granite::graph::graph(
+             cur, inp_pos, inp_attn,
+             model, n_embd_head, il);
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -174,6 +179,13 @@ llama_model_granite::graph::graph(
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur,
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
+diff --git a/src/models/internlm2.cpp b/src/models/internlm2.cpp
+index f6cfdfb9..c44bc35f 100644
+--- a/src/models/internlm2.cpp
++++ b/src/models/internlm2.cpp
+@@ -47,16 +47,21 @@ llama_model_internlm2::graph::graph(const llama_model & model, const llm_graph_p
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+         // norm
+@@ -91,7 +96,7 @@ llama_model_internlm2::graph::graph(const llama_model & model, const llm_graph_p
+                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -122,6 +127,13 @@ llama_model_internlm2::graph::graph(const llama_model & model, const llm_graph_p
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur,
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
+diff --git a/src/models/jamba.cpp b/src/models/jamba.cpp
+index dba160b0..2b69aaba 100644
+--- a/src/models/jamba.cpp
++++ b/src/models/jamba.cpp
+@@ -111,14 +111,19 @@ llama_model_jamba::graph::graph(const llama_model & model, const llm_graph_param
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
+     // {n_embd, n_tokens}
+-    inpL = build_inp_embd(model.tok_embd);
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     auto * inp_hybrid = build_inp_mem_hybrid();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         const int64_t n_head_kv = hparams.n_head_kv(il);
+ 
+         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+@@ -137,7 +142,7 @@ llama_model_jamba::graph::graph(const llama_model & model, const llm_graph_param
+                     model.layers[il].wo, NULL, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, NULL, NULL, NULL, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
+             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+         }
+@@ -182,6 +187,13 @@ llama_model_jamba::graph::graph(const llama_model & model, const llm_graph_param
+         // input for next layer
+         inpL = cur;
+     }
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(inpL, "stage_boundary", il_end - 1);
++        res->t_embd = inpL;
++        ggml_build_forward_expand(gf, inpL);
++        return;
++    }
++
+     // final rmsnorm
+     cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);
+ 
+diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
+index 07b7346e..c497c3af 100644
+--- a/src/models/lfm2.cpp
++++ b/src/models/lfm2.cpp
+@@ -225,7 +225,20 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+     };
+ 
+     // actual graph construction starts here
+-    ggml_tensor * cur = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    bool has_attention_layer = false;
++    for (int il = il_start; il < il_end; ++il) {
++        if (!hparams.is_recr(il)) {
++            has_attention_layer = true;
++            break;
++        }
++    }
++
++    ggml_tensor * cur = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+     cb(cur, "model.embed_tokens", -1);
+ 
+     ggml_build_forward_expand(gf, cur);
+@@ -237,10 +250,10 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         inp_hybrid = build_inp_mem_hybrid();
+     }
+ 
+-    ggml_tensor * inp_pos     = build_inp_pos();
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_pos     = has_attention_layer ? build_inp_pos() : nullptr;
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         const bool is_moe_layer = il >= static_cast<int>(hparams.n_layer_dense_lead);
+ 
+         auto * prev_cur = cur;
+@@ -250,7 +263,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         cur = hparams.is_recr(il) ? build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
+                                     build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
+             prev_cur = ggml_get_rows(ctx0, prev_cur, inp_out_ids);
+         }
+@@ -270,6 +283,13 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         cb(cur, "l_out", il);
+     }
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+     cb(cur, "result_norm", -1);
+     res->t_embd = cur;
+diff --git a/src/models/mamba.cpp b/src/models/mamba.cpp
+index 0d94e982..99e2c825 100644
+--- a/src/models/mamba.cpp
++++ b/src/models/mamba.cpp
+@@ -88,14 +88,19 @@ llama_model_mamba::graph::graph(const llama_model & model, const llm_graph_param
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
+     // {n_embd, n_tokens}
+-    inpL = build_inp_embd(model.tok_embd);
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     auto * rs_inp = build_rs_inp();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         // norm
+         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+         cb(cur, "attn_norm", il);
+@@ -106,7 +111,7 @@ llama_model_mamba::graph::graph(const llama_model & model, const llm_graph_param
+             cur = build_mamba_layer(rs_inp, cur, model, ubatch, il);
+         }
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur  = ggml_get_rows(ctx0, cur, inp_out_ids);
+             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+         }
+@@ -121,6 +126,13 @@ llama_model_mamba::graph::graph(const llama_model & model, const llm_graph_param
+         inpL = cur;
+     }
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(inpL, "stage_boundary", il_end - 1);
++        res->t_embd = inpL;
++        ggml_build_forward_expand(gf, inpL);
++        return;
++    }
++
+     // final rmsnorm
+     cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);
+ 
+diff --git a/src/models/mistral3.cpp b/src/models/mistral3.cpp
+index 9a8e3f9a..4203192b 100644
+--- a/src/models/mistral3.cpp
++++ b/src/models/mistral3.cpp
+@@ -99,7 +99,12 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+@@ -114,9 +119,9 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
+ 
+     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+         // norm
+@@ -161,7 +166,7 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+             cb(cur, "attn_out", il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -218,6 +223,13 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur,
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
+diff --git a/src/models/mpt.cpp b/src/models/mpt.cpp
+index d094fd9f..3b008a5d 100644
+--- a/src/models/mpt.cpp
++++ b/src/models/mpt.cpp
+@@ -73,11 +73,16 @@ llama_model_mpt::graph::graph(const llama_model & model, const llm_graph_params
+     ggml_tensor * pos;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    if (model.pos_embd) {
++    if ((!stage_filtered || il_start == 0) && model.pos_embd) {
+         // inp_pos - contains the positions
+         ggml_tensor * inp_pos = build_inp_pos();
+         pos                   = ggml_get_rows(ctx0, model.pos_embd, inp_pos);
+@@ -87,9 +92,9 @@ llama_model_mpt::graph::graph(const llama_model & model, const llm_graph_params
+         cb(inpL, "inpL", -1);
+     }
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * attn_norm;
+ 
+         attn_norm = build_norm(inpL, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, il);
+@@ -124,7 +129,7 @@ llama_model_mpt::graph::graph(const llama_model & model, const llm_graph_params
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+         }
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur  = ggml_get_rows(ctx0, cur, inp_out_ids);
+             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+         }
+@@ -156,6 +161,13 @@ llama_model_mpt::graph::graph(const llama_model & model, const llm_graph_params
+ 
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur, model.output_norm, model.output_norm_b, LLM_NORM, -1);
+ 
+     cb(cur, "result_norm", -1);
+diff --git a/src/models/olmo2.cpp b/src/models/olmo2.cpp
+index cb52cdef..38b3de36 100644
+--- a/src/models/olmo2.cpp
++++ b/src/models/olmo2.cpp
+@@ -71,7 +71,12 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+@@ -84,9 +89,9 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
+     } else {
+         inp_attn = build_attn_inp_kv();
+     }
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+         cur = inpL;
+@@ -153,7 +158,7 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
+                     model.layers[il].wo, NULL, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -190,6 +195,13 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur,
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
+diff --git a/src/models/olmoe.cpp b/src/models/olmoe.cpp
+index 1e2baeb2..4c6c4ef8 100644
+--- a/src/models/olmoe.cpp
++++ b/src/models/olmoe.cpp
+@@ -59,16 +59,21 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+         // norm
+@@ -121,7 +126,7 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
+                     model.layers[il].wo, NULL, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -157,6 +162,13 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur,
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
+diff --git a/src/models/phi3.cpp b/src/models/phi3.cpp
+index 716ff814..6d302690 100644
+--- a/src/models/phi3.cpp
++++ b/src/models/phi3.cpp
+@@ -73,7 +73,12 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+@@ -86,9 +91,9 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
+     } else {
+         inp_attn = build_attn_inp_kv();
+     }
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         auto * residual = inpL;
+ 
+         // self-attention
+@@ -127,7 +132,7 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
+                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur      = ggml_get_rows(ctx0, cur,      inp_out_ids);
+             residual = ggml_get_rows(ctx0, residual, inp_out_ids);
+         }
+@@ -171,6 +176,14 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         // input for next layer
+         inpL = cur;
+     }
++
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(inpL, "stage_boundary", il_end - 1);
++        res->t_embd = inpL;
++        ggml_build_forward_expand(gf, inpL);
++        return;
++    }
++
+     cur = build_norm(inpL,
+             model.output_norm,
+             model.output_norm_b,
+diff --git a/src/models/qwen2moe.cpp b/src/models/qwen2moe.cpp
+index e831ed11..9f02cec3 100644
+--- a/src/models/qwen2moe.cpp
++++ b/src/models/qwen2moe.cpp
+@@ -20,7 +20,10 @@ void llama_model_qwen2moe::load_arch_tensors(llama_model_loader &) {
+ 
+     // output
+     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+-    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
++    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
++    if (output == NULL) {
++        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
++    }
+ 
+     for (int i = 0; i < n_layer; ++i) {
+         auto & layer = layers[i];
+@@ -71,16 +74,21 @@ llama_model_qwen2moe::graph::graph(const llama_model & model, const llm_graph_pa
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+         // norm
+@@ -115,7 +123,7 @@ llama_model_qwen2moe::graph::graph(const llama_model & model, const llm_graph_pa
+                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -177,6 +185,13 @@ llama_model_qwen2moe::graph::graph(const llama_model & model, const llm_graph_pa
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur,
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
+diff --git a/src/models/qwen2vl.cpp b/src/models/qwen2vl.cpp
+index d79db682..d5f8ba3a 100644
+--- a/src/models/qwen2vl.cpp
++++ b/src/models/qwen2vl.cpp
+@@ -48,7 +48,12 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+@@ -58,9 +63,9 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
+     int sections[4];
+     std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+         // norm
+@@ -95,7 +100,7 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
+                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -126,6 +131,13 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur,
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
+diff --git a/src/models/qwen3vl.cpp b/src/models/qwen3vl.cpp
+index 724d6140..f5a2a691 100644
+--- a/src/models/qwen3vl.cpp
++++ b/src/models/qwen3vl.cpp
+@@ -63,7 +63,12 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     int sections[4];
+     std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
+@@ -73,9 +78,9 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+         // norm
+@@ -117,7 +122,7 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -144,7 +149,7 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+         cur = build_cvec(cur, il);
+         cb(cur, "l_out", il);
+ 
+-        if (il < (int) n_deepstack_layers) {
++        if ((!stage_filtered || il_start == 0) && il < (int) n_deepstack_layers) {
+             ggml_tensor * ds = ggml_view_2d(ctx0, res->t_inp_embd, n_embd, n_tokens, res->t_inp_embd->nb[1], (il + 1) * n_embd * sizeof(float));
+             cur = ggml_add(ctx0, cur, ds);
+             cb(cur, "deepstack_out", il);
+@@ -156,6 +161,13 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+ 
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur,
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
+diff --git a/src/models/rwkv6.cpp b/src/models/rwkv6.cpp
+index 0b5013dc..bb9471ea 100644
+--- a/src/models/rwkv6.cpp
++++ b/src/models/rwkv6.cpp
+@@ -62,7 +62,7 @@ void llama_model_rwkv6::load_arch_tensors(llama_model_loader &) {
+         layer.time_mix_lerp_r = create_tensor(tn(LLM_TENSOR_TIME_MIX_LERP_R, "weight", i), {n_embd, 1, 1}, TENSOR_NOT_REQUIRED);
+         layer.time_mix_lerp_g = create_tensor(tn(LLM_TENSOR_TIME_MIX_LERP_G, "weight", i), {n_embd, 1, 1}, TENSOR_NOT_REQUIRED);
+         layer.time_mix_lerp_fused = create_tensor(tn(LLM_TENSOR_TIME_MIX_LERP_FUSED, "weight", i), {n_embd, 1, 1, 5}, TENSOR_NOT_REQUIRED);
+-        GGML_ASSERT(!(layer.time_mix_lerp_fused == NULL && layer.time_mix_lerp_w == NULL));
++        GGML_ASSERT(layer.time_mix_lerp_x == NULL || !(layer.time_mix_lerp_fused == NULL && layer.time_mix_lerp_w == NULL));
+ 
+         layer.time_mix_first = create_tensor(tn(LLM_TENSOR_TIME_MIX_FIRST, "weight", i), {head_size, n_embd / head_size}, 0);
+         layer.time_mix_decay = create_tensor(tn(LLM_TENSOR_TIME_MIX_DECAY, "weight", i), {n_embd}, 0);
+@@ -98,8 +98,15 @@ llama_model_rwkv6::graph::graph(const llama_model & model, const llm_graph_param
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
+-    inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, 0);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
++    if (il_start == 0) {
++        inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, 0);
++    }
+ 
+     auto * rs_inp = build_rs_inp();
+ 
+@@ -107,9 +114,9 @@ llama_model_rwkv6::graph::graph(const llama_model & model, const llm_graph_param
+     const auto n_seq_tokens = ubatch.n_seq_tokens;
+     const auto n_seqs       = ubatch.n_seqs;
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         const llama_layer * layer = &model.layers[il];
+         inpL                      = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
+ 
+@@ -152,7 +159,7 @@ llama_model_rwkv6::graph::graph(const llama_model & model, const llm_graph_param
+         x_prev   = ggml_reshape_2d(ctx0, x_prev, n_embd, n_tokens);
+         cur      = ggml_reshape_2d(ctx0, cur, n_embd, n_tokens);
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             ffn_inp  = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+             ffn_norm = ggml_get_rows(ctx0, ffn_norm, inp_out_ids);
+             x_prev   = ggml_get_rows(ctx0, x_prev, inp_out_ids);
+@@ -170,6 +177,12 @@ llama_model_rwkv6::graph::graph(const llama_model & model, const llm_graph_param
+         // input for next layer
+         inpL = cur;
+     }
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(inpL, "stage_boundary", il_end - 1);
++        res->t_embd = inpL;
++        ggml_build_forward_expand(gf, inpL);
++        return;
++    }
+     cur = inpL;
+     cur = build_norm(cur, model.output_norm, model.output_norm_b, LLM_NORM, -1);
+ 
+diff --git a/src/models/stablelm.cpp b/src/models/stablelm.cpp
+index bf6087b8..767cb1da 100644
+--- a/src/models/stablelm.cpp
++++ b/src/models/stablelm.cpp
+@@ -56,16 +56,21 @@ llama_model_stablelm::graph::graph(const llama_model & model, const llm_graph_pa
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         // norm
+         cur = build_norm(inpL,
+                 model.layers[il].attn_norm,
+@@ -116,7 +121,7 @@ llama_model_stablelm::graph::graph(const llama_model & model, const llm_graph_pa
+                     model.layers[il].wo, NULL, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpL  = ggml_get_rows(ctx0,  inpL, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+@@ -154,6 +159,13 @@ llama_model_stablelm::graph::graph(const llama_model & model, const llm_graph_pa
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur,
+             model.output_norm,
+             model.output_norm_b,
+diff --git a/src/models/starcoder2.cpp b/src/models/starcoder2.cpp
+index b81b4693..af2bc112 100644
+--- a/src/models/starcoder2.cpp
++++ b/src/models/starcoder2.cpp
+@@ -65,16 +65,21 @@ llama_model_starcoder2::graph::graph(const llama_model & model, const llm_graph_
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+ 
+     auto * inp_attn = build_attn_inp_kv();
+ 
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+         // norm
+@@ -109,7 +114,7 @@ llama_model_starcoder2::graph::graph(const llama_model & model, const llm_graph_
+                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -141,6 +146,13 @@ llama_model_starcoder2::graph::graph(const llama_model & model, const llm_graph_
+     }
+     cur = inpL;
+ 
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur,
+             model.output_norm, model.output_norm_b,
+             LLM_NORM, -1);
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index f078f0b9..1df8a462 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -1461,11 +1461,34 @@ static enum skippy_status skippy_finish_model_open(
+     if (config != nullptr && config->filter_tensors_on_load) {
+         const int32_t n_layer = llama_model_n_layer(model);
+         if (model->arch != LLM_ARCH_LLAMA &&
++            model->arch != LLM_ARCH_BAICHUAN &&
++            model->arch != LLM_ARCH_BLOOM &&
++            model->arch != LLM_ARCH_COHERE2 &&
++            model->arch != LLM_ARCH_COMMAND_R &&
++            model->arch != LLM_ARCH_EXAONE &&
++            model->arch != LLM_ARCH_EXAONE4 &&
++            model->arch != LLM_ARCH_FALCON &&
++            model->arch != LLM_ARCH_GPT2 &&
++            model->arch != LLM_ARCH_GPTNEOX &&
++            model->arch != LLM_ARCH_GRANITE &&
++            model->arch != LLM_ARCH_INTERNLM2 &&
++            model->arch != LLM_ARCH_JAMBA &&
++            model->arch != LLM_ARCH_LFM2 &&
++            model->arch != LLM_ARCH_MAMBA &&
++            model->arch != LLM_ARCH_MAMBA2 &&
++            model->arch != LLM_ARCH_MISTRAL3 &&
++            model->arch != LLM_ARCH_MPT &&
++            model->arch != LLM_ARCH_OLMO2 &&
++            model->arch != LLM_ARCH_OLMOE &&
+             model->arch != LLM_ARCH_QWEN2 &&
+             model->arch != LLM_ARCH_QWEN3 &&
+             model->arch != LLM_ARCH_QWEN3NEXT &&
++            model->arch != LLM_ARCH_QWEN2VL &&
++            model->arch != LLM_ARCH_QWEN3VL &&
++            model->arch != LLM_ARCH_QWEN2MOE &&
+             model->arch != LLM_ARCH_QWEN35MOE &&
+             model->arch != LLM_ARCH_QWEN3MOE &&
++            model->arch != LLM_ARCH_RWKV6 &&
+             model->arch != LLM_ARCH_GEMMA &&
+             model->arch != LLM_ARCH_GEMMA2 &&
+             model->arch != LLM_ARCH_GEMMA3 &&
+@@ -1474,7 +1497,10 @@ static enum skippy_status skippy_finish_model_open(
+             model->arch != LLM_ARCH_DEEPSEEK2 &&
+             model->arch != LLM_ARCH_FALCON_H1 &&
+             model->arch != LLM_ARCH_MINIMAX_M2 &&
+-            model->arch != LLM_ARCH_OLMO) {
++            model->arch != LLM_ARCH_OLMO &&
++            model->arch != LLM_ARCH_PHI3 &&
++            model->arch != LLM_ARCH_STARCODER2 &&
++            model->arch != LLM_ARCH_STABLELM) {
+             llama_model_free(model);
+             skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime-slice execution is not supported for this model architecture yet");
+             return SKIPPY_STATUS_UNSUPPORTED;
+@@ -1725,6 +1751,11 @@ int32_t skippy_session_position(
+     return session != nullptr ? session->n_past : -1;
+ }
+ 
++int32_t skippy_session_native_seq_id(
++        const struct skippy_session * session) {
++    return session != nullptr ? session->seq_id : -1;
++}
++
+ int32_t skippy_session_batch_size(
+         const struct skippy_session * session) {
+     return session != nullptr && session->ctx != nullptr ? llama_n_batch(session->ctx) : 0;
+-- 
+2.53.0
+

@@ -1,0 +1,2182 @@
+From 57b2b3d52428a53df6fe9dc406686ea53858f629 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 26 Jun 2026 13:47:53 +1000
+Subject: [PATCH 10/10] Add MTP execution support and sampling cleanup
+
+Squashes GLM MTP graph support, batched stage execution, native MTP sidecar support, batched MTP verification drafts, sampling and detokenization parity, unused ABI removal, MTP layer-count and sidecar fixes, VerifySpan copy avoidance, greedy sampling fast path, GLM chat fallback, and GLM DSA IndexShare support.
+---
+ common/chat.cpp           |  111 ++++
+ include/skippy.h          |   54 +-
+ include/skippy/common.h   |    5 +-
+ src/llama-context.cpp     |   15 +-
+ src/llama-graph.cpp       |    2 +
+ src/llama-model.cpp       |    8 +
+ src/models/deepseek2.cpp  |  288 ++++++++++-
+ src/models/deepseek32.cpp |   16 +-
+ src/models/glm-dsa.cpp    |   12 +-
+ src/models/models.h       |    5 +
+ src/skippy.cpp            | 1008 +++++++++++++++++++++++++++++++------
+ 11 files changed, 1341 insertions(+), 183 deletions(-)
+
+diff --git a/common/chat.cpp b/common/chat.cpp
+index 0cee8043..8e95d5b0 100644
+--- a/common/chat.cpp
++++ b/common/chat.cpp
+@@ -663,6 +663,113 @@ std::string common_chat_format_example(const struct common_chat_templates *
+     "  {{- '<|im_start|>assistant\n' -}}\n"                                               \
+     "{%- endif -%}"
+ 
++// Fallback copied from the official zai-org/GLM-4.7-Flash chat_template.jinja.
++// In particular, the generation-prompt branch that emits a leading </think>
++// when enable_thinking=false is upstream GLM template behavior, not skippy policy.
++static const char * GLM_4_7_FALLBACK_TEMPLATE_SRC = R"jinja([gMASK]<sop>
++{%- if tools -%}
++<|system|>
++# Tools
++
++You may call one or more functions to assist with the user query.
++
++You are provided with function signatures within <tools></tools> XML tags:
++<tools>
++{% for tool in tools %}
++{{ tool | tojson(ensure_ascii=False) }}
++{% endfor %}
++</tools>
++
++For each function call, output the function name and arguments within the following XML format:
++<tool_call>{function-name}<arg_key>{arg-key-1}</arg_key><arg_value>{arg-value-1}</arg_value><arg_key>{arg-key-2}</arg_key><arg_value>{arg-value-2}</arg_value>...</tool_call>{%- endif -%}
++{%- macro visible_text(content) -%}
++    {%- if content is string -%}
++        {{- content }}
++    {%- elif content is iterable and content is not mapping -%}
++        {%- for item in content -%}
++            {%- if item is mapping and item.type == 'text' -%}
++                {{- item.text }}
++            {%- elif item is string -%}
++                {{- item }}
++            {%- endif -%}
++        {%- endfor -%}
++    {%- else -%}
++        {{- content }}
++    {%- endif -%}
++{%- endmacro -%}
++{%- set ns = namespace(last_user_index=-1) %}
++{%- for m in messages %}
++    {%- if m.role == 'user' %}
++        {% set ns.last_user_index = loop.index0 -%}
++    {%- endif %}
++{%- endfor %}
++{% for m in messages %}
++{%- if m.role == 'user' -%}<|user|>{{ visible_text(m.content) }}
++{%- elif m.role == 'assistant' -%}
++<|assistant|>
++{%- set reasoning_content = '' %}
++{%- set content = visible_text(m.content) %}
++{%- if m.reasoning_content is string %}
++    {%- set reasoning_content = m.reasoning_content %}
++{%- else %}
++    {%- if '</think>' in content %}
++        {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
++        {%- set content = content.split('</think>')[-1].lstrip('\n') %}
++    {%- endif %}
++{%- endif %}
++{%- if ((clear_thinking is defined and not clear_thinking) or loop.index0 > ns.last_user_index) and reasoning_content -%}
++{{ '<think>' + reasoning_content.strip() +  '</think>'}}
++{%- else -%}
++{{ '</think>' }}
++{%- endif -%}
++{%- if content.strip() -%}
++{{ content.strip() }}
++{%- endif -%}
++{% if m.tool_calls %}
++{% for tc in m.tool_calls %}
++{%- if tc.function %}
++    {%- set tc = tc.function %}
++{%- endif %}
++{{- '<tool_call>' + tc.name -}}
++{% set _args = tc.arguments %}{% for k, v in _args.items() %}<arg_key>{{ k }}</arg_key><arg_value>{{ v | tojson(ensure_ascii=False) if v is not string else v }}</arg_value>{% endfor %}</tool_call>{% endfor %}
++{% endif %}
++{%- elif m.role == 'tool' -%}
++{%- if m.content is string -%}
++{%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
++    {{- '<|observation|>' }}
++{%- endif %}
++{{- '<tool_response>' }}
++{{- m.content }}
++{{- '</tool_response>' }}
++{%- else -%}
++<|observation|>{% for tr in m.content %}
++<tool_response>{{ tr.output if tr.output is defined else tr }}</tool_response>{% endfor -%}
++{% endif -%}
++{%- elif m.role == 'system' -%}
++<|system|>{{ visible_text(m.content) }}
++{%- endif -%}
++{%- endfor -%}
++{%- if add_generation_prompt -%}
++    <|assistant|>{{- '</think>' if (enable_thinking is defined and not enable_thinking) else '<think>' -}}
++{%- endif -%})jinja";
++
++static std::string common_chat_vocab_piece(const struct llama_vocab * vocab, llama_token token) {
++    return token == LLAMA_TOKEN_NULL ? std::string() : common_token_to_piece(vocab, token, true);
++}
++
++static bool common_chat_model_has_glm4_vocab(const struct llama_model * model) {
++    if (model == nullptr) {
++        return false;
++    }
++    const auto * vocab = llama_model_get_vocab(model);
++    if (vocab == nullptr) {
++        return false;
++    }
++    return common_chat_vocab_piece(vocab, llama_vocab_bos(vocab)) == "[gMASK]" &&
++           common_chat_vocab_piece(vocab, llama_vocab_eos(vocab)) == "<|endoftext|>" &&
++           common_chat_vocab_piece(vocab, llama_vocab_eot(vocab)) == "<|user|>";
++}
++
+ void common_chat_templates_free(struct common_chat_templates * tmpls) {
+     delete tmpls;
+ }
+@@ -727,6 +834,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
+     } else {
+         default_template_src = chat_template_override;
+     }
++    if (default_template_src.empty() && template_tool_use_src.empty() && common_chat_model_has_glm4_vocab(model)) {
++        LOG_DBG("%s: using built-in GLM 4.7 fallback chat template\n", __func__);
++        default_template_src = GLM_4_7_FALLBACK_TEMPLATE_SRC;
++    }
+     if (default_template_src.empty() || default_template_src == "chatml") {
+         if (!template_tool_use_src.empty()) {
+             default_template_src = template_tool_use_src;
+diff --git a/include/skippy.h b/include/skippy.h
+index 075850e3..0e94e95b 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -131,6 +131,13 @@ struct skippy_kv_page_desc {
+     uint64_t flags;
+ };
+ 
++struct skippy_native_mtp_draft {
++    uint32_t version;
++    bool available;
++    llama_token token_id;
++    int64_t proposal_compute_us;
++};
++
+ LLAMA_API enum skippy_status skippy_model_open(
+         const char * path,
+         const struct skippy_runtime_config * config,
+@@ -185,9 +192,6 @@ LLAMA_API struct llama_context * skippy_session_llama_context(
+ LLAMA_API int32_t skippy_session_position(
+         const struct skippy_session * session);
+ 
+-LLAMA_API int32_t skippy_session_native_seq_id(
+-        const struct skippy_session * session);
+-
+ LLAMA_API int32_t skippy_session_batch_size(
+         const struct skippy_session * session);
+ 
+@@ -246,17 +250,6 @@ LLAMA_API enum skippy_status skippy_prefill_chunk(
+         size_t * out_output_activation_bytes,
+         struct skippy_error ** out_error);
+ 
+-LLAMA_API enum skippy_status skippy_decode_step(
+-        struct skippy_session * session,
+-        llama_token token_id,
+-        const void * input_activation,
+-        size_t input_activation_bytes,
+-        void * output_activation,
+-        size_t output_activation_capacity,
+-        size_t * out_output_activation_bytes,
+-        llama_token * out_predicted_token,
+-        struct skippy_error ** out_error);
+-
+ LLAMA_API enum skippy_status skippy_verify_tokens(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -278,6 +271,15 @@ LLAMA_API enum skippy_status skippy_decode_step_sampled(
+         llama_token * out_predicted_token,
+         struct skippy_error ** out_error);
+ 
++LLAMA_API enum skippy_status skippy_decode_batch_sampled(
++        struct skippy_session * const * sessions,
++        const llama_token * token_ids,
++        const struct skippy_sampling_config * const * sampling,
++        size_t request_count,
++        llama_token * out_predicted_tokens,
++        size_t predicted_token_capacity,
++        struct skippy_error ** out_error);
++
+ LLAMA_API enum skippy_status skippy_prefill_chunk_frame(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -334,9 +336,10 @@ LLAMA_API enum skippy_status skippy_prefill_chunk_frame_sampled_with_positions(
+         llama_token * out_predicted_token,
+         struct skippy_error ** out_error);
+ 
+-LLAMA_API enum skippy_status skippy_decode_step_frame(
++LLAMA_API enum skippy_status skippy_decode_step_frame_sampled(
+         struct skippy_session * session,
+         llama_token token_id,
++        const struct skippy_sampling_config * sampling,
+         const struct skippy_activation_desc * input_desc,
+         const void * input_payload,
+         struct skippy_activation_desc * output_desc,
+@@ -346,7 +349,7 @@ LLAMA_API enum skippy_status skippy_decode_step_frame(
+         llama_token * out_predicted_token,
+         struct skippy_error ** out_error);
+ 
+-LLAMA_API enum skippy_status skippy_decode_step_frame_sampled(
++LLAMA_API enum skippy_status skippy_decode_step_frame_sampled_mtp_n1(
+         struct skippy_session * session,
+         llama_token token_id,
+         const struct skippy_sampling_config * sampling,
+@@ -357,12 +360,29 @@ LLAMA_API enum skippy_status skippy_decode_step_frame_sampled(
+         size_t output_payload_capacity,
+         size_t * out_output_payload_bytes,
+         llama_token * out_predicted_token,
++        struct skippy_native_mtp_draft * out_mtp_draft,
++        struct skippy_error ** out_error);
++
++LLAMA_API enum skippy_status skippy_decode_step_frame_batch_sampled(
++        struct skippy_session * const * sessions,
++        const llama_token * token_ids,
++        const struct skippy_sampling_config * const * sampling,
++        const struct skippy_activation_desc * const * input_descs,
++        const void * const * input_payloads,
++        struct skippy_activation_desc * output_descs,
++        void * const * output_payloads,
++        const size_t * output_payload_capacities,
++        size_t * out_output_payload_bytes,
++        llama_token * out_predicted_tokens,
++        size_t predicted_token_capacity,
++        size_t request_count,
+         struct skippy_error ** out_error);
+ 
+-LLAMA_API enum skippy_status skippy_verify_tokens_frame(
++LLAMA_API enum skippy_status skippy_verify_tokens_frame_sampled(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+         size_t token_count,
++        const struct skippy_sampling_config * sampling,
+         const struct skippy_activation_desc * input_desc,
+         const void * input_payload,
+         struct skippy_activation_desc * output_desc,
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index a6bd7fd9..cfb4a8fa 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -26,7 +26,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 26
++#define SKIPPY_ABI_VERSION_PATCH 27
+ 
+ enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
+@@ -54,6 +54,7 @@ enum skippy_feature {
+     SKIPPY_FEATURE_CHAT_SAMPLING_GRAMMAR  = 1 << 22,
+     SKIPPY_FEATURE_BACKEND_DEVICES        = 1 << 23,
+     SKIPPY_FEATURE_RUNTIME_EVENTS         = 1 << 24,
++    SKIPPY_FEATURE_NATIVE_MTP_N1          = 1 << 25,
+ };
+ 
+ enum skippy_status {
+@@ -163,8 +164,6 @@ LLAMA_API struct skippy_abi_version skippy_abi_version(void);
+ 
+ LLAMA_API uint64_t skippy_abi_features(void);
+ 
+-LLAMA_API const char * skippy_status_string(enum skippy_status status);
+-
+ LLAMA_API void skippy_error_free(struct skippy_error * error);
+ 
+ #ifdef __cplusplus
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index c10fa290..2fcbd757 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1976,9 +1976,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
+ 
+                 const uint32_t n_embd  = hparams.n_embd_out();
+                 float * embd_nextn_out = embd_nextn.data + offset*n_embd;
++                const size_t n_bytes = (size_t) n_rows*n_embd*sizeof(float);
+ 
+                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
+-                ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
++                if (n_bytes > ggml_nbytes(t_h_nextn)) {
++                    LLAMA_LOG_ERROR(
++                        "%s: nextn embedding tensor is too small: masked=%d, n_rows=%lld, offset=%lld, "
++                        "n_embd=%u, want=%zu bytes, have=%zu bytes, ne=[%lld, %lld, %lld, %lld], "
++                        "ubatch.n_tokens=%u, n_outputs=%d, n_outputs_prev=%lld, n_tokens_prev=%lld\n",
++                        __func__, (int) masked, (long long) n_rows, (long long) offset,
++                        n_embd, n_bytes, ggml_nbytes(t_h_nextn),
++                        (long long) t_h_nextn->ne[0], (long long) t_h_nextn->ne[1],
++                        (long long) t_h_nextn->ne[2], (long long) t_h_nextn->ne[3],
++                        ubatch.n_tokens, n_outputs, (long long) n_outputs_prev, (long long) n_tokens_prev);
++                    return -3;
++                }
++                ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_bytes);
+             }
+         }
+ 
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 64d38fc4..d79bda76 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -2639,6 +2639,8 @@ ggml_tensor * llm_graph_context::build_attn(
+ 
+     const auto & kq_mask = inp->get_kq_mask_mla();
+ 
++    GGML_ASSERT(top_k != nullptr);
++
+     // prepare new kq mask - starts filled with -INFINITY
+     ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
+ 
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index eab46cf8..47a375e8 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -2153,6 +2153,14 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                         }
+                     }
+ 
++                    if ((arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA) && hparams.n_layer_nextn > 0) {
++                        if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
++                            filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
++                        } else {
++                            filter = [&](uint32_t il) { return il <  hparams.n_layer(); };
++                        }
++                    }
++
+                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                         GGML_ASSERT(hparams.is_swa_any());
+ 
+diff --git a/src/models/deepseek2.cpp b/src/models/deepseek2.cpp
+index d1b261b4..180fb082 100644
+--- a/src/models/deepseek2.cpp
++++ b/src/models/deepseek2.cpp
+@@ -20,6 +20,9 @@ void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,       hparams.expert_weights_scale, false);
+     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,        hparams.expert_weights_norm, false);
+     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,         hparams.expert_gating_func, false);
++    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,       hparams.n_layer_nextn, false);
++    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_impl");
++
+     if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE) {
+         // for compatibility with existing DeepSeek V2 and V2.5 GGUFs
+         // that have no expert_gating_func model parameter set
+@@ -81,7 +84,7 @@ void llama_model_deepseek2::load_arch_tensors(llama_model_loader &) {
+         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+     }
+ 
+-    for (int i = 0; i < n_layer; ++i) {
++    for (int i = 0; i < n_layer_all; ++i) {
+         auto & layer = layers[i];
+ 
+         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+@@ -136,10 +139,23 @@ void llama_model_deepseek2::load_arch_tensors(llama_model_loader &) {
+             layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd}, 0);
+             layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
+         }
++
++        if (i >= n_layer) {
++            layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ,          "weight", i), {2 * n_embd, n_embd}, 0);
++            layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM,            "weight", i), {n_embd},            0);
++            layer.nextn.hnorm            = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM,            "weight", i), {n_embd},            0);
++            layer.nextn.embed_tokens     = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS,     "weight", i), {n_embd, n_vocab},   TENSOR_NOT_REQUIRED);
++            layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), {n_embd, n_vocab},   TENSOR_NOT_REQUIRED);
++            layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), {n_embd},            TENSOR_NOT_REQUIRED);
++        }
+     }
+ }
+ 
+ std::unique_ptr<llm_graph_context> llama_model_deepseek2::build_arch_graph(const llm_graph_params & params) const {
++    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
++        return std::make_unique<graph_mtp>(*this, params);
++    }
++
+     return std::make_unique<graph>(*this, params);
+ }
+ 
+@@ -178,7 +194,9 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+     const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
+     const bool stage_filtered = stage_filter.enabled;
+     const int il_start = stage_filtered ? stage_filter.layer_start : 0;
+-    const int il_end   = stage_filtered ? stage_filter.layer_end   : effective_n_layers;
++    const int il_end   = stage_filtered ?
++            std::min(stage_filter.layer_end, effective_n_layers) :
++            effective_n_layers;
+ 
+     // {n_embd, n_tokens}
+     inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+@@ -371,7 +389,7 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+                             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+             }
+         }
+-        if (il == il_end - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -430,6 +448,10 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+     cur = inpL;
+ 
+     if (stage_filtered && !stage_filter.include_output) {
++        if (!cparams.embeddings_nextn_masked && inp_out_ids) {
++            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
++        }
++
+         cb(cur, "stage_boundary", il_end - 1);
+         res->t_embd = cur;
+         ggml_build_forward_expand(gf, cur);
+@@ -438,6 +460,13 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+ 
+     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+ 
++    cb(cur, "h_nextn", -1);
++    res->t_h_nextn = cur;
++
++    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
++        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
++    }
++
+     cb(cur, "result_norm", -1);
+     res->t_embd = cur;
+ 
+@@ -449,3 +478,256 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+ 
+     ggml_build_forward_expand(gf, cur);
+ }
++
++llama_model_deepseek2::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
++    llm_graph_context(params) {
++    GGML_ASSERT(model.arch != LLM_ARCH_DEEPSEEK2OCR && "DEEPSEEK2 OCR MTP is not supported");
++    GGML_ASSERT(hparams.n_layer_nextn > 0 && "DEEPSEEK2 MTP requires n_layer_nextn > 0");
++
++    const bool is_mla = hparams.is_mla();
++
++    const int il = hparams.n_layer();
++    const auto & layer = model.layers[il];
++
++    GGML_ASSERT(layer.nextn.eh_proj && "MTP block missing nextn.eh_proj");
++    GGML_ASSERT(layer.nextn.enorm   && "MTP block missing nextn.enorm");
++    GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
++
++    const int64_t n_embd_head_k = hparams.n_embd_head_k_mla();
++    const int64_t n_embd_head_v = hparams.n_embd_head_v_mla();
++
++    const int64_t n_embd_head_qk_rope = hparams.n_rot();
++    const int64_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope;
++
++    const uint32_t kv_lora_rank = hparams.n_lora_kv;
++
++    GGML_ASSERT(n_embd_head_qk_nope >= 1);
++
++    float kq_scale = 1.0f / sqrtf(float(n_embd_head_k));
++    ggml_tensor * inp_attn_scale = nullptr;
++    if (hparams.f_attn_temp_scale != 0.0f) {
++        inp_attn_scale = build_inp_attn_scale();
++
++        GGML_ASSERT(ext_factor >= 0.0f);
++        const float attn_factor_org = attn_factor * (1.0f + 0.1f * logf(1.0f / freq_scale));
++        const float mscale = attn_factor_org * (1.0f + 0.1f * hparams.rope_yarn_log_mul * logf(1.0f / freq_scale));
++        kq_scale = mscale * mscale / sqrtf(float(n_embd_head_k));
++    }
++
++    auto inp = std::make_unique<llm_graph_input_embd>(hparams.n_embd);
++
++    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
++    ggml_set_input(inp->tokens);
++
++    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
++    ggml_set_input(inp->embd);
++    ggml_set_name(inp->embd, "mtp_h_input");
++
++    ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
++    ggml_tensor * h_input  = inp->embd;
++    ggml_tensor * tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
++    cb(tok_embd, "mtp_tok_embd", il);
++
++    res->add_input(std::move(inp));
++
++    ggml_tensor * inp_pos = build_inp_pos();
++    auto * inp_attn_kv = !is_mla ? build_attn_inp_kv() : nullptr;
++    auto * inp_attn_k  =  is_mla ? build_attn_inp_k()  : nullptr;
++
++    ggml_tensor * h_norm = build_norm(h_input, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
++    cb(h_norm, "mtp_hnorm", il);
++
++    ggml_tensor * e_norm = build_norm(tok_embd, layer.nextn.enorm, nullptr, LLM_NORM_RMS, il);
++    cb(e_norm, "mtp_enorm", il);
++
++    ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, 0);
++    cb(concat, "mtp_concat", il);
++
++    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat, layer.nextn.eh_proj_s);
++    cb(cur, "mtp_eh_proj", il);
++
++    ggml_tensor * inpSA = cur;
++
++    cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
++    cb(cur, "mtp_attn_norm", il);
++
++    ggml_tensor * q = nullptr;
++    const bool is_lite = layer.wq;
++
++    if (!is_lite) {
++        q = ggml_mul_mat(ctx0, layer.wq_a, cur);
++        cb(q, "mtp_q", il);
++
++        q = build_norm(q, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
++        cb(q, "mtp_q_norm", il);
++
++        q = ggml_mul_mat(ctx0, layer.wq_b, q);
++        cb(q, "mtp_q_proj", il);
++    } else {
++        q = ggml_mul_mat(ctx0, layer.wq, cur);
++        cb(q, "mtp_q", il);
++    }
++
++    ggml_tensor * q_nope =
++        ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens, ggml_row_size(q->type, n_embd_head_k),
++                     ggml_row_size(q->type, n_embd_head_k) * n_head, 0);
++    cb(q_nope, "mtp_q_nope", il);
++
++    ggml_tensor * q_pe = ggml_view_3d(
++        ctx0, q, n_embd_head_qk_rope, n_head, n_tokens, ggml_row_size(q->type, n_embd_head_k),
++        ggml_row_size(q->type, n_embd_head_k) * n_head, ggml_row_size(q->type, n_embd_head_qk_nope));
++    cb(q_pe, "mtp_q_pe", il);
++
++    ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
++    cb(kv_cmpr_pe, "mtp_kv_cmpr_pe", il);
++
++    ggml_tensor * kv_cmpr =
++        ggml_view_2d(ctx0, kv_cmpr_pe, kv_lora_rank, n_tokens,
++                     ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope), 0);
++    cb(kv_cmpr, "mtp_kv_cmpr", il);
++
++    ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_cmpr_pe, n_embd_head_qk_rope, 1, n_tokens,
++                                      ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope),
++                                      ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope),
++                                      ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
++    cb(k_pe, "mtp_k_pe", il);
++
++    q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
++                         ext_factor, attn_factor, beta_fast, beta_slow);
++    cb(q_pe, "mtp_q_pe_pos", il);
++
++    k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
++                         ext_factor, attn_factor, beta_fast, beta_slow);
++    cb(k_pe, "mtp_k_pe_pos", il);
++
++    kv_cmpr = build_norm(kv_cmpr, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
++    cb(kv_cmpr, "mtp_kv_cmpr_norm", il);
++
++    if (is_mla) {
++        q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
++        cb(q_nope, "mtp_q_nope_perm", il);
++
++        ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
++        cb(q_nope_absorbed, "mtp_q_nope_absorbed", il);
++
++        q_nope_absorbed = ggml_permute(ctx0, q_nope_absorbed, 0, 2, 1, 3);
++        cb(q_nope_absorbed, "mtp_q_nope_absorbed_perm", il);
++
++        ggml_tensor * Qcur = ggml_concat(ctx0, q_nope_absorbed, q_pe, 0);
++        cb(Qcur, "mtp_Qcur", il);
++
++        kv_cmpr = ggml_reshape_3d(ctx0, kv_cmpr, kv_lora_rank, 1, n_tokens);
++        cb(kv_cmpr, "mtp_kv_cmpr_reshape", il);
++
++        ggml_tensor * Kcur = ggml_concat(ctx0, kv_cmpr, k_pe, 0);
++        cb(Kcur, "mtp_Kcur", il);
++
++        ggml_tensor * Vcur = kv_cmpr;
++        cb(Vcur, "mtp_Vcur", il);
++
++        if (inp_attn_scale) {
++            Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
++            cb(Qcur, "mtp_Qcur_attn_temp_scaled", il);
++        }
++
++        cur = build_attn(inp_attn_k,
++                layer.wo, nullptr, layer.wo_s,
++                Qcur, Kcur, Vcur, nullptr, nullptr, layer.wv_b, kq_scale, il);
++    } else {
++        ggml_tensor * kv = ggml_mul_mat(ctx0, layer.wkv_b, kv_cmpr);
++        cb(kv, "mtp_kv", il);
++
++        ggml_tensor * k_nope =
++            ggml_view_3d(ctx0, kv, n_embd_head_qk_nope, n_head, n_tokens,
++                         ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
++                         ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head, 0);
++        cb(k_nope, "mtp_k_nope_view", il);
++
++        ggml_tensor * Vcur = ggml_view_3d(ctx0, kv, n_embd_head_v, n_head, n_tokens,
++                                          ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
++                                          ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head,
++                                          ggml_row_size(kv->type, n_embd_head_qk_nope));
++        cb(Vcur, "mtp_Vcur_view", il);
++
++        Vcur = ggml_cont(ctx0, Vcur);
++        cb(Vcur, "mtp_Vcur_cont", il);
++
++        ggml_tensor * Qcur = ggml_concat(ctx0, q_nope, q_pe, 0);
++        cb(Qcur, "mtp_Qcur", il);
++
++        ggml_tensor * Kcur = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_pe, q_pe), 0);
++        cb(Kcur, "mtp_Kcur", il);
++
++        if (inp_attn_scale) {
++            Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
++            cb(Qcur, "mtp_Qcur_attn_temp_scaled", il);
++        }
++
++        cur = build_attn(inp_attn_kv,
++                layer.wo, nullptr, layer.wo_s,
++                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
++    }
++    cb(cur, "mtp_attn_out", il);
++
++    ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
++    cb(ffn_inp, "mtp_ffn_inp", il);
++
++    cur = build_norm(ffn_inp, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
++    cb(cur, "mtp_ffn_norm", il);
++
++    if ((uint32_t) il < hparams.n_layer_dense_lead) {
++        cur = build_ffn(cur,
++            layer.ffn_up, nullptr, nullptr,
++            layer.ffn_gate, nullptr, nullptr,
++            layer.ffn_down, nullptr, nullptr,
++            nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
++        cb(cur, "mtp_ffn_out", il);
++    } else {
++        ggml_tensor * moe_out = build_moe_ffn(cur,
++            layer.ffn_gate_inp,
++            layer.ffn_up_exps,
++            layer.ffn_gate_exps,
++            layer.ffn_down_exps,
++            layer.ffn_exp_probs_b,
++            n_expert, n_expert_used,
++            LLM_FFN_SILU, hparams.expert_weights_norm,
++            hparams.expert_weights_scale,
++            (llama_expert_gating_func_type) hparams.expert_gating_func,
++            il,
++            nullptr,
++            layer.ffn_gate_up_exps);
++        cb(moe_out, "mtp_ffn_moe_out", il);
++
++        ggml_tensor * ffn_shexp =
++            build_ffn(cur,
++                layer.ffn_up_shexp, nullptr, nullptr,
++                layer.ffn_gate_shexp, nullptr, nullptr,
++                layer.ffn_down_shexp, nullptr, nullptr,
++                nullptr,
++                LLM_FFN_SILU, LLM_FFN_PAR, il);
++        cb(ffn_shexp, "mtp_ffn_shexp", il);
++
++        cur = ggml_add(ctx0, moe_out, ffn_shexp);
++        cb(cur, "mtp_ffn_out", il);
++    }
++
++    cur = ggml_add(ctx0, cur, ffn_inp);
++    cb(cur, "mtp_post_ffn", il);
++
++    cb(cur, "h_nextn", -1);
++    res->t_h_nextn = cur;
++
++    ggml_tensor * head_norm_w = layer.nextn.shared_head_norm ? layer.nextn.shared_head_norm : model.output_norm;
++    GGML_ASSERT(head_norm_w && "DEEPSEEK2 MTP: missing both nextn.shared_head_norm and output_norm");
++    cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM_RMS, -1);
++    cb(cur, "mtp_head_norm", -1);
++
++    ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
++    ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
++    GGML_ASSERT(head_w && "DEEPSEEK2 MTP: missing LM head (nextn.shared_head_head or model.output)");
++    cur = build_lora_mm(head_w, cur, head_s);
++    cb(cur, "result_output", -1);
++
++    res->t_logits = cur;
++    ggml_build_forward_expand(gf, cur);
++}
+diff --git a/src/models/deepseek32.cpp b/src/models/deepseek32.cpp
+index 9a20e2ce..2cc13491 100644
+--- a/src/models/deepseek32.cpp
++++ b/src/models/deepseek32.cpp
+@@ -202,6 +202,8 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+ 
+     ggml_tensor * inp_out_ids = build_inp_out_ids();
+ 
++    ggml_tensor * shared_top_k = nullptr;
++
+     for (int il = 0; il < n_layer; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+@@ -219,8 +221,15 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+ 
+             ggml_tensor * top_k = nullptr;
+ 
++            const bool has_indexer =
++                model.layers[il].indexer_attn_q_b &&
++                model.layers[il].indexer_attn_k &&
++                model.layers[il].indexer_k_norm &&
++                model.layers[il].indexer_k_norm_b &&
++                model.layers[il].indexer_proj;
++
+             // lightning indexer
+-            {
++            if (has_indexer) {
+                 ggml_tensor * indexer_q = ggml_mul_mat(ctx0, model.layers[il].indexer_attn_q_b, qr);
+                 cb(indexer_q, "indexer_q", il);
+ 
+@@ -343,6 +352,11 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
+                 top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
+                 cb(top_k, "top_k", il);
++                shared_top_k = top_k;
++            } else {
++                GGML_ASSERT(shared_top_k != nullptr && "DSA IndexShare layer requires a previous top-k");
++                top_k = shared_top_k;
++                cb(top_k, "top_k_shared", il);
+             }
+ 
+             ggml_tensor * q = ggml_mul_mat(ctx0, model.layers[il].wq_b, qr);
+diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
+index 32fe6def..10bf235f 100644
+--- a/src/models/glm-dsa.cpp
++++ b/src/models/glm-dsa.cpp
+@@ -75,11 +75,6 @@ void llama_model_glm_dsa::load_arch_tensors(llama_model_loader &) {
+ 
+     for (int i = 0; i < n_layer_all; ++i) {
+         int flags = 0;
+-        if (i >= n_layer) {
+-            // skip all tensors in the NextN layers
+-            // TODO @ngxson : TENSOR_NOT_REQUIRED was a hack, need to remove it later
+-            flags |= TENSOR_SKIP | TENSOR_NOT_REQUIRED;
+-        }
+ 
+         auto & layer = layers[i];
+ 
+@@ -132,7 +127,7 @@ void llama_model_glm_dsa::load_arch_tensors(llama_model_loader &) {
+             layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, flags);
+         }
+ 
+-        // NextN/MTP tensors (preserved but unused) - conditionally load for last n_layer_nextn
++        // NextN/MTP tensors - conditionally load for last n_layer_nextn
+         if (i >= n_layer) {
+             layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), { 2 * n_embd, n_embd }, flags);
+             layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, "weight", i), { n_embd }, flags);
+@@ -147,6 +142,9 @@ void llama_model_glm_dsa::load_arch_tensors(llama_model_loader &) {
+ }
+ 
+ std::unique_ptr<llm_graph_context> llama_model_glm_dsa::build_arch_graph(const llm_graph_params & params) const {
++    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
++        return std::make_unique<graph_mtp>(*this, params);
++    }
++
+     return std::make_unique<graph>(*this, params);
+ }
+-
+diff --git a/src/models/models.h b/src/models/models.h
+index 2ac8415a..6a7ec717 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -1068,6 +1068,10 @@ struct llama_model_deepseek2 : public llama_model_base {
+         graph(const llama_model & model, const llm_graph_params & params);
+     };
+ 
++    struct graph_mtp : public llm_graph_context {
++        graph_mtp(const llama_model & model, const llm_graph_params & params);
++    };
++
+     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+ };
+ 
+@@ -1102,6 +1106,7 @@ struct llama_model_glm_dsa : public llama_model_base {
+     void load_arch_tensors(llama_model_loader & ml) override;
+ 
+     using graph = llama_model_deepseek2::graph;
++    using graph_mtp = llama_model_deepseek2::graph_mtp;
+ 
+     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+ };
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 4dcd0d96..e81f3786 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -6,6 +6,7 @@
+ #include "gguf.h"
+ #include "llama-arch.h"
+ #include "llama-context.h"
++#include "llama-ext.h"
+ #include "llama-graph.h"
+ #include "llama-kv-cache.h"
+ #include "llama-memory-hybrid.h"
+@@ -45,6 +46,7 @@ using json = nlohmann::ordered_json;
+ struct skippy_model {
+     llama_model * model = nullptr;
+     llama_context * ctx = nullptr;
++    llama_context * mtp_ctx = nullptr;
+     skippy_runtime_config config = {};
+     bool executable = true;
+     uint32_t lane_count = 1;
+@@ -70,9 +72,17 @@ struct skippy_session {
+     std::vector<skippy_token_signal> signal_history;
+     llama_sampler * sampling_chain = nullptr;
+     llama_sampler * grammar_sampler = nullptr;
++    skippy_sampling_config sampling_config = {};
++    bool sampling_config_valid = false;
+     std::string chat_sampling_metadata;
+     uint64_t grammar_generated_start = 0;
+     size_t sampling_accepted_token_count = 0;
++    int32_t mtp_next_pos = 0;
++    bool mtp_has_pending_h = false;
++    std::vector<float> mtp_pending_h;
++    bool mtp_has_pending_draft = false;
++    llama_pos mtp_pending_draft_pos = 0;
++    llama_token mtp_pending_draft_token = -1;
+ };
+ 
+ struct skippy_tensor_meta {
+@@ -171,6 +181,17 @@ static enum skippy_status skippy_success(skippy_error ** out_error) {
+     return SKIPPY_STATUS_OK;
+ }
+ 
++static int32_t skippy_stage_layer_count(const llama_model * model) {
++    if (model == nullptr) {
++        return 0;
++    }
++    const auto & hparams = model->hparams;
++    if (hparams.n_layer_nextn > 0) {
++        return static_cast<int32_t>(hparams.n_layer_all);
++    }
++    return llama_model_n_layer(model);
++}
++
+ static enum skippy_backend_device_type skippy_backend_device_type_from_ggml(
+         enum ggml_backend_dev_type type) {
+     switch (type) {
+@@ -880,6 +901,9 @@ struct skippy_filter_scope {
+             filter.enabled = true;
+             filter.layer_start = config->layer_start;
+             filter.layer_end = config->layer_end;
++            if (config->include_output && filter.layer_end < std::numeric_limits<int32_t>::max()) {
++                filter.layer_end += 1;
++            }
+             filter.include_embeddings = config->include_embeddings;
+             filter.include_output = config->include_output;
+             llama_model_loader_set_stage_filter(filter);
+@@ -919,6 +943,42 @@ struct skippy_graph_filter_scope {
+     bool enabled = false;
+ };
+ 
++static bool skippy_should_create_native_mtp_sidecar(
++        const llama_model * model,
++        const skippy_runtime_config * config) {
++    if (model == nullptr ||
++        config == nullptr ||
++        !config->include_output ||
++        model->hparams.n_layer_nextn == 0) {
++        return false;
++    }
++
++    if (model->arch != LLM_ARCH_GLM_DSA) {
++        return true;
++    }
++
++    const size_t il = static_cast<size_t>(model->hparams.n_layer());
++    if (il >= model->layers.size()) {
++        return false;
++    }
++
++    const llama_layer_nextn & nextn = model->layers[il].nextn;
++    const bool has_mtp_block = nextn.eh_proj != nullptr &&
++                               nextn.enorm != nullptr &&
++                               nextn.hnorm != nullptr;
++    const bool has_token_embedding = nextn.embed_tokens != nullptr ||
++                                     model->tok_embd != nullptr;
++    const bool has_head_norm = nextn.shared_head_norm != nullptr ||
++                               model->output_norm != nullptr;
++    const bool has_head = nextn.shared_head_head != nullptr ||
++                          model->output != nullptr;
++
++    return has_mtp_block &&
++           has_token_embedding &&
++           has_head_norm &&
++           has_head;
++}
++
+ struct skippy_activation_tokens_scope {
+     skippy_activation_tokens_scope(const llama_token * tokens, size_t token_count) {
+         if (tokens != nullptr && token_count > 0 && token_count <= static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+@@ -1224,6 +1284,150 @@ static enum skippy_status skippy_decode_batch(
+     return skippy_success(out_error);
+ }
+ 
++static bool skippy_mtp_available(const skippy_session * session) {
++    return session != nullptr &&
++           session->stage_model != nullptr &&
++           session->stage_model->mtp_ctx != nullptr &&
++           session->stage_model->config.include_output;
++}
++
++static bool skippy_env_enabled(const char * name) {
++    const char * value = std::getenv(name);
++    if (value == nullptr || value[0] == '\0') {
++        return false;
++    }
++    return std::strcmp(value, "0") != 0 &&
++           std::strcmp(value, "false") != 0 &&
++           std::strcmp(value, "off") != 0 &&
++           std::strcmp(value, "no") != 0;
++}
++
++static bool skippy_mtp_greedy_sampling_fastpath_enabled() {
++    return skippy_env_enabled("SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH");
++}
++
++static void skippy_mtp_clear_session_state(skippy_session * session) {
++    if (session == nullptr) {
++        return;
++    }
++    session->mtp_next_pos = session->n_past;
++    session->mtp_has_pending_h = false;
++    session->mtp_pending_h.clear();
++    session->mtp_has_pending_draft = false;
++    session->mtp_pending_draft_pos = 0;
++    session->mtp_pending_draft_token = -1;
++    if (skippy_mtp_available(session)) {
++        if (llama_memory_t memory = session->stage_model->mtp_ctx->get_memory()) {
++            llama_memory_seq_rm(memory, session->seq_id, -1, -1);
++        }
++    }
++}
++
++static enum skippy_status skippy_mtp_sync_target_tokens(
++        skippy_session * session,
++        const llama_token * token_ids,
++        size_t token_count,
++        llama_pos token_start,
++        struct skippy_error ** out_error) {
++    if (!skippy_mtp_available(session) || token_ids == nullptr || token_count == 0) {
++        return skippy_success(out_error);
++    }
++    if (token_count > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "MTP token_count exceeds int32_t range");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    llama_context * mtp_ctx = session->stage_model->mtp_ctx;
++    const int32_t n_embd = llama_model_n_embd(session->stage_model->model);
++    const size_t row_bytes = static_cast<size_t>(n_embd)*sizeof(float);
++    if (session->mtp_pending_h.size() != static_cast<size_t>(n_embd)) {
++        session->mtp_pending_h.assign(static_cast<size_t>(n_embd), 0.0f);
++        session->mtp_has_pending_h = false;
++    }
++
++    if (session->mtp_has_pending_draft) {
++        const llama_pos token_end = token_start + static_cast<llama_pos>(token_count);
++        if (session->mtp_pending_draft_pos >= token_start &&
++                session->mtp_pending_draft_pos < token_end) {
++            const size_t draft_index = static_cast<size_t>(session->mtp_pending_draft_pos - token_start);
++            if (token_ids[draft_index] == session->mtp_pending_draft_token) {
++                session->mtp_next_pos = std::max(session->mtp_next_pos, session->mtp_pending_draft_pos + 1);
++            } else {
++                if (llama_memory_t memory = mtp_ctx->get_memory()) {
++                    llama_memory_seq_rm(memory, session->seq_id, session->mtp_pending_draft_pos, -1);
++                }
++                session->mtp_next_pos = std::min(session->mtp_next_pos, static_cast<int32_t>(session->mtp_pending_draft_pos));
++            }
++        }
++        session->mtp_has_pending_draft = false;
++        session->mtp_pending_draft_pos = 0;
++        session->mtp_pending_draft_token = -1;
++    }
++
++    size_t first_index = 0;
++    if (session->mtp_next_pos > token_start) {
++        first_index = static_cast<size_t>(std::min<llama_pos>(
++                static_cast<llama_pos>(token_count),
++                session->mtp_next_pos - token_start));
++    }
++
++    const int32_t n_decode = static_cast<int32_t>(token_count - first_index);
++    if (n_decode > 0) {
++        llama_batch batch = llama_batch_init(n_decode, n_embd, 1);
++        batch.token = static_cast<llama_token *>(std::malloc(sizeof(llama_token)*static_cast<size_t>(n_decode)));
++        if (batch.token == nullptr) {
++            llama_batch_free(batch);
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to allocate MTP token batch");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        batch.n_tokens = n_decode;
++
++        for (int32_t out_i = 0; out_i < n_decode; ++out_i) {
++            const size_t src_i = first_index + static_cast<size_t>(out_i);
++            batch.token[out_i] = token_ids[src_i];
++            batch.pos[out_i] = token_start + static_cast<llama_pos>(src_i);
++            batch.n_seq_id[out_i] = 1;
++            batch.seq_id[out_i][0] = session->seq_id;
++            batch.logits[out_i] = 0;
++
++            float * dst = batch.embd + static_cast<size_t>(out_i)*n_embd;
++            if (src_i == 0) {
++                std::memcpy(dst, session->mtp_pending_h.data(), row_bytes);
++            } else {
++                const float * h_prev = llama_get_embeddings_nextn_ith(session->ctx, static_cast<int32_t>(src_i - 1));
++                if (h_prev == nullptr) {
++                    std::free(batch.token);
++                    batch.token = nullptr;
++                    llama_batch_free(batch);
++                    skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "target pre-norm hidden row was not available");
++                    return SKIPPY_STATUS_RUNTIME_ERROR;
++                }
++                std::memcpy(dst, h_prev, row_bytes);
++            }
++        }
++
++        skippy_graph_filter_scope graph_filter_scope(&session->stage_model->config);
++        const int32_t rc = llama_decode(mtp_ctx, batch);
++        std::free(batch.token);
++        batch.token = nullptr;
++        llama_batch_free(batch);
++        if (rc != 0) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed for MTP sidecar sync");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        session->mtp_next_pos = token_start + static_cast<int32_t>(token_count);
++    }
++
++    const float * h_last = llama_get_embeddings_nextn_ith(session->ctx, static_cast<int32_t>(token_count - 1));
++    if (h_last == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "target pre-norm hidden row was not available");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    std::memcpy(session->mtp_pending_h.data(), h_last, row_bytes);
++    session->mtp_has_pending_h = true;
++    return skippy_success(out_error);
++}
++
+ static void skippy_record_tokens(
+         skippy_session * session,
+         const llama_token * token_ids,
+@@ -1274,12 +1478,16 @@ static enum skippy_status skippy_decode_tokens(
+             /*logits   =*/ &logits,
+         };
+         enum skippy_status status = skippy_decode_batch(session, batch, 1, out_error);
++        if (status == SKIPPY_STATUS_OK) {
++            status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, pos, out_error);
++        }
+         if (status == SKIPPY_STATUS_OK) {
+             skippy_record_tokens(session, token_ids, token_count);
+         }
+         return status;
+     }
+ 
++    const llama_pos token_start = session->n_past;
+     llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+     batch.n_tokens = n_tokens;
+     for (int32_t i = 0; i < n_tokens; ++i) {
+@@ -1292,6 +1500,9 @@ static enum skippy_status skippy_decode_tokens(
+ 
+     enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
+     llama_batch_free(batch);
++    if (status == SKIPPY_STATUS_OK) {
++        status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, token_start, out_error);
++    }
+     if (status == SKIPPY_STATUS_OK) {
+         skippy_record_tokens(session, token_ids, token_count);
+     }
+@@ -1332,27 +1543,17 @@ static enum skippy_status skippy_verify_token_batch(
+     return status;
+ }
+ 
+-static llama_token skippy_greedy_sample(skippy_session * session) {
+-    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
+-    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+-    const float * logits = llama_get_logits_ith(session->ctx, -1);
+-
+-    llama_token best = 0;
+-    float best_logit = -std::numeric_limits<float>::infinity();
+-    for (int32_t token = 0; token < n_vocab; ++token) {
+-        if (logits[token] > best_logit) {
+-            best_logit = logits[token];
+-            best = token;
+-        }
++static llama_token skippy_greedy_sample_context(
++        llama_model * model,
++        llama_context * ctx,
++        int32_t index) {
++    if (model == nullptr || ctx == nullptr) {
++        return 0;
+     }
+-
+-    return best;
+-}
+-
+-static llama_token skippy_greedy_sample_ith(skippy_session * session, int32_t index) {
+-    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
++    const llama_vocab * vocab = llama_model_get_vocab(model);
+     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+-    const float * logits = llama_get_logits_ith(session->ctx, index);
++    llama_synchronize(ctx);
++    const float * logits = llama_get_logits_ith(ctx, index);
+     if (logits == nullptr) {
+         return 0;
+     }
+@@ -1369,17 +1570,26 @@ static llama_token skippy_greedy_sample_ith(skippy_session * session, int32_t in
+     return best;
+ }
+ 
+-static bool skippy_compute_token_signal(
+-        skippy_session * session,
++static llama_token skippy_greedy_sample_ith(skippy_session * session, int32_t index) {
++    return skippy_greedy_sample_context(session->stage_model->model, session->ctx, index);
++}
++
++static llama_token skippy_greedy_sample(skippy_session * session) {
++    return skippy_greedy_sample_ith(session, -1);
++}
++
++static bool skippy_compute_token_signal_context(
++        const llama_model * model,
++        llama_context * ctx,
+         int32_t logits_index,
+         skippy_token_signal * out_signal) {
+-    if (session == nullptr || session->ctx == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr || out_signal == nullptr) {
++    if (model == nullptr || ctx == nullptr || out_signal == nullptr) {
+         return false;
+     }
+ 
+-    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
++    const llama_vocab * vocab = llama_model_get_vocab(model);
+     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+-    const float * logits = llama_get_logits_ith(session->ctx, logits_index);
++    const float * logits = llama_get_logits_ith(ctx, logits_index);
+     if (logits == nullptr || n_vocab <= 0) {
+         return false;
+     }
+@@ -1436,6 +1646,20 @@ static bool skippy_compute_token_signal(
+     return true;
+ }
+ 
++static bool skippy_compute_token_signal(
++        skippy_session * session,
++        int32_t logits_index,
++        skippy_token_signal * out_signal) {
++    if (session == nullptr || session->stage_model == nullptr) {
++        return false;
++    }
++    return skippy_compute_token_signal_context(
++            session->stage_model->model,
++            session->ctx,
++            logits_index,
++            out_signal);
++}
++
+ static void skippy_record_signal(skippy_session * session, int32_t logits_index) {
+     skippy_token_signal signal = {};
+     if (skippy_compute_token_signal(session, logits_index, &signal)) {
+@@ -1451,6 +1675,8 @@ static void skippy_clear_chat_sampling(skippy_session * session) {
+     llama_sampler_free(session->grammar_sampler);
+     session->sampling_chain = nullptr;
+     session->grammar_sampler = nullptr;
++    session->sampling_config = {};
++    session->sampling_config_valid = false;
+     session->chat_sampling_metadata.clear();
+     session->grammar_generated_start = 0;
+     session->sampling_accepted_token_count = 0;
+@@ -1489,6 +1715,46 @@ static bool skippy_sampling_enabled(const skippy_sampling_config * sampling) {
+     return true;
+ }
+ 
++static bool skippy_sampling_is_greedy_equivalent(const skippy_sampling_config * sampling) {
++    if (!skippy_sampling_enabled(sampling)) {
++        return true;
++    }
++    const float repeat_penalty = sampling->repeat_penalty == 0.0f ? 1.0f : sampling->repeat_penalty;
++    return sampling->temperature <= 0.0f &&
++           sampling->presence_penalty == 0.0f &&
++           sampling->frequency_penalty == 0.0f &&
++           repeat_penalty == 1.0f &&
++           sampling->logit_bias_count == 0;
++}
++
++static bool skippy_sampling_configs_equal(
++        const skippy_sampling_config & lhs,
++        const skippy_sampling_config & rhs) {
++    if (lhs.version != rhs.version ||
++            lhs.flags != rhs.flags ||
++            lhs.seed != rhs.seed ||
++            lhs.top_k != rhs.top_k ||
++            lhs.penalty_last_n != rhs.penalty_last_n ||
++            lhs.temperature != rhs.temperature ||
++            lhs.top_p != rhs.top_p ||
++            lhs.presence_penalty != rhs.presence_penalty ||
++            lhs.frequency_penalty != rhs.frequency_penalty ||
++            lhs.repeat_penalty != rhs.repeat_penalty ||
++            lhs.logit_bias_count != rhs.logit_bias_count ||
++            lhs.min_p != rhs.min_p) {
++        return false;
++    }
++
++    const uint32_t logit_bias_count = std::min<uint32_t>(lhs.logit_bias_count, SKIPPY_MAX_LOGIT_BIAS);
++    for (uint32_t i = 0; i < logit_bias_count; ++i) {
++        if (lhs.logit_bias[i].token != rhs.logit_bias[i].token ||
++                lhs.logit_bias[i].bias != rhs.logit_bias[i].bias) {
++            return false;
++        }
++    }
++    return true;
++}
++
+ static llama_sampler * skippy_build_sampling_chain(
+         skippy_session * session,
+         const skippy_sampling_config * sampling) {
+@@ -1528,21 +1794,40 @@ static llama_sampler * skippy_build_sampling_chain(
+         llama_sampler_chain_add(sampler, llama_sampler_init_top_k(sampling->top_k));
+     }
+     if (sampling->top_p > 0.0f && sampling->top_p < 1.0f) {
+-        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(sampling->top_p, 1));
++        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(sampling->top_p, 0));
+     }
+     if (sampling->min_p > 0.0f && sampling->min_p < 1.0f) {
+-        llama_sampler_chain_add(sampler, llama_sampler_init_min_p(sampling->min_p, 1));
++        llama_sampler_chain_add(sampler, llama_sampler_init_min_p(sampling->min_p, 0));
+     }
+-    if (sampling->temperature != 1.0f) {
+-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(sampling->temperature));
++    llama_sampler_chain_add(sampler, llama_sampler_init_temp_ext(sampling->temperature, 0.0f, 1.0f));
++    const uint32_t seed = sampling->seed == 0 ? LLAMA_DEFAULT_SEED : sampling->seed;
++    llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed));
++    return sampler;
++}
++
++static bool skippy_ensure_plain_sampling_chain(
++        skippy_session * session,
++        const skippy_sampling_config * sampling) {
++    if (session == nullptr || !skippy_sampling_enabled(sampling)) {
++        return false;
+     }
+-    if (sampling->temperature <= 0.0f) {
+-        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
+-    } else {
+-        const uint32_t seed = sampling->seed == 0 ? LLAMA_DEFAULT_SEED : sampling->seed + static_cast<uint32_t>(session->n_past);
+-        llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed));
++
++    if (session->sampling_chain != nullptr &&
++            session->chat_sampling_metadata.empty() &&
++            session->sampling_config_valid &&
++            skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
++        return true;
+     }
+-    return sampler;
++
++    skippy_clear_chat_sampling(session);
++    session->sampling_chain = skippy_build_sampling_chain(session, sampling);
++    if (session->sampling_chain == nullptr) {
++        return false;
++    }
++    session->sampling_config = *sampling;
++    session->sampling_config_valid = true;
++    session->sampling_accepted_token_count = 0;
++    return true;
+ }
+ 
+ static bool skippy_init_chat_grammar_sampler(
+@@ -1653,14 +1938,15 @@ static void skippy_sync_chat_sampling_history(skippy_session * session) {
+     }
+ }
+ 
+-static llama_token skippy_chat_sample_token(skippy_session * session) {
++static llama_token skippy_chat_sample_token(skippy_session * session, int32_t logits_index) {
+     skippy_sync_chat_sampling_history(session);
++    llama_synchronize(session->ctx);
+ 
+     const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
+     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+-    const float * logits = llama_get_logits_ith(session->ctx, -1);
++    const float * logits = llama_get_logits_ith(session->ctx, logits_index);
+     if (logits == nullptr) {
+-        return skippy_greedy_sample(session);
++        return skippy_greedy_sample_ith(session, logits_index);
+     }
+ 
+     std::vector<llama_token_data> candidates;
+@@ -1685,25 +1971,45 @@ static llama_token skippy_chat_sample_token(skippy_session * session) {
+     }
+     llama_sampler_apply(session->sampling_chain, &cur);
+     if (cur.selected < 0 || static_cast<size_t>(cur.selected) >= cur.size) {
+-        return skippy_greedy_sample(session);
++        return skippy_greedy_sample_ith(session, logits_index);
+     }
+     return cur.data[cur.selected].id;
+ }
+ 
+-static llama_token skippy_sample_token(
++static llama_token skippy_sample_token_ith(
+         skippy_session * session,
+-        const skippy_sampling_config * sampling) {
++        const skippy_sampling_config * sampling,
++        int32_t logits_index) {
++    if (skippy_mtp_greedy_sampling_fastpath_enabled() &&
++            session != nullptr &&
++            session->grammar_sampler == nullptr &&
++            skippy_sampling_is_greedy_equivalent(sampling)) {
++        if (session->sampling_chain != nullptr) {
++            skippy_clear_chat_sampling(session);
++        }
++        return skippy_greedy_sample_ith(session, logits_index);
++    }
+     if (session != nullptr && session->sampling_chain != nullptr) {
+-        return skippy_chat_sample_token(session);
++        if (!session->chat_sampling_metadata.empty() ||
++                (skippy_sampling_enabled(sampling) &&
++                 session->sampling_config_valid &&
++                 skippy_sampling_configs_equal(session->sampling_config, *sampling))) {
++            return skippy_chat_sample_token(session, logits_index);
++        }
++        skippy_clear_chat_sampling(session);
+     }
+     if (!skippy_sampling_enabled(sampling)) {
+-        return skippy_greedy_sample(session);
++        return skippy_greedy_sample_ith(session, logits_index);
++    }
++    if (skippy_ensure_plain_sampling_chain(session, sampling)) {
++        return skippy_chat_sample_token(session, logits_index);
+     }
++    llama_synchronize(session->ctx);
+ 
+     llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
+     llama_sampler * sampler = llama_sampler_chain_init(chain_params);
+     if (sampler == nullptr) {
+-        return skippy_greedy_sample(session);
++        return skippy_greedy_sample_ith(session, logits_index);
+     }
+ 
+     const int32_t penalty_last_n = sampling->penalty_last_n == 0 ? -1 : sampling->penalty_last_n;
+@@ -1731,29 +2037,89 @@ static llama_token skippy_sample_token(
+         llama_sampler_chain_add(sampler, llama_sampler_init_top_k(sampling->top_k));
+     }
+     if (sampling->top_p > 0.0f && sampling->top_p < 1.0f) {
+-        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(sampling->top_p, 1));
++        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(sampling->top_p, 0));
+     }
+     if (sampling->min_p > 0.0f && sampling->min_p < 1.0f) {
+-        llama_sampler_chain_add(sampler, llama_sampler_init_min_p(sampling->min_p, 1));
+-    }
+-    if (sampling->temperature != 1.0f) {
+-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(sampling->temperature));
+-    }
+-    if (sampling->temperature <= 0.0f) {
+-        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
+-    } else {
+-        const uint32_t seed = sampling->seed == 0 ? LLAMA_DEFAULT_SEED : sampling->seed + static_cast<uint32_t>(session->n_past);
+-        llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed));
++        llama_sampler_chain_add(sampler, llama_sampler_init_min_p(sampling->min_p, 0));
+     }
++    llama_sampler_chain_add(sampler, llama_sampler_init_temp_ext(sampling->temperature, 0.0f, 1.0f));
++    const uint32_t seed = sampling->seed == 0 ? LLAMA_DEFAULT_SEED : sampling->seed;
++    llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed));
+ 
+     for (const llama_token token : session->token_history) {
+         llama_sampler_accept(sampler, token);
+     }
+-    llama_token token = llama_sampler_sample(sampler, session->ctx, -1);
++    llama_token token = llama_sampler_sample(sampler, session->ctx, logits_index);
+     llama_sampler_free(sampler);
+     return token;
+ }
+ 
++static llama_token skippy_sample_token(
++        skippy_session * session,
++        const skippy_sampling_config * sampling) {
++    return skippy_sample_token_ith(session, sampling, -1);
++}
++
++static enum skippy_status skippy_mtp_propose_next(
++        skippy_session * session,
++        llama_token predicted_token,
++        skippy_native_mtp_draft * out_mtp_draft,
++        struct skippy_error ** out_error) {
++    if (out_mtp_draft != nullptr) {
++        *out_mtp_draft = {
++            1,
++            false,
++            -1,
++            0,
++        };
++    }
++    if (!skippy_mtp_available(session) || predicted_token < 0 || !session->mtp_has_pending_h) {
++        return skippy_success(out_error);
++    }
++
++    llama_context * mtp_ctx = session->stage_model->mtp_ctx;
++    const int32_t n_embd = llama_model_n_embd(session->stage_model->model);
++    if (session->mtp_pending_h.size() != static_cast<size_t>(n_embd)) {
++        return skippy_success(out_error);
++    }
++
++    llama_token token = predicted_token;
++    llama_pos pos = session->n_past;
++    int32_t n_seq_id = 1;
++    llama_seq_id seq_id = session->seq_id;
++    llama_seq_id * seq_ids = &seq_id;
++    int8_t logits = 1;
++    llama_batch batch = {
++        /*n_tokens =*/ 1,
++        /*token    =*/ &token,
++        /*embd     =*/ session->mtp_pending_h.data(),
++        /*pos      =*/ &pos,
++        /*n_seq_id =*/ &n_seq_id,
++        /*seq_id   =*/ &seq_ids,
++        /*logits   =*/ &logits,
++    };
++
++    const int64_t t_start_us = ggml_time_us();
++    skippy_graph_filter_scope graph_filter_scope(&session->stage_model->config);
++    const int32_t rc = llama_decode(mtp_ctx, batch);
++    const int64_t elapsed_us = ggml_time_us() - t_start_us;
++    if (rc != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed for MTP sidecar proposal");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
++    if (out_mtp_draft != nullptr) {
++        out_mtp_draft->version = 1;
++        out_mtp_draft->available = true;
++        out_mtp_draft->token_id = skippy_greedy_sample_context(session->stage_model->model, mtp_ctx, -1);
++        out_mtp_draft->proposal_compute_us = elapsed_us;
++        session->mtp_has_pending_draft = true;
++        session->mtp_pending_draft_pos = session->n_past;
++        session->mtp_pending_draft_token = out_mtp_draft->token_id;
++    }
++    return skippy_success(out_error);
++}
++
+ static enum skippy_status skippy_prepare_empty_activation_frame(
+         skippy_session * session,
+         size_t token_count,
+@@ -1942,7 +2308,11 @@ static enum skippy_status skippy_decode_activation_frame(
+     skippy_activation_tokens_scope activation_tokens_scope(token_ids, token_count);
+     skippy_rwkv7_v_first_scope rwkv7_v_first_scope(input_desc, input_payload, hidden_bytes, n_embd);
+     skippy_gemma3n_altup_scope gemma3n_altup_scope(input_desc, input_payload, n_embd, n_altup);
++    const llama_pos token_start = pos_storage.empty() ? session->n_past : pos_storage[0];
+     enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
++    if (status == SKIPPY_STATUS_OK && token_ids != nullptr) {
++        status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, token_start, out_error);
++    }
+     return status;
+ }
+ 
+@@ -1950,6 +2320,7 @@ static enum skippy_status skippy_verify_activation_frame(
+         skippy_session * session,
+         const skippy_activation_desc * input_desc,
+         const void * input_payload,
++        const llama_token * token_ids,
+         size_t token_count,
+         struct skippy_error ** out_error) {
+     if (session == nullptr || session->ctx == nullptr || input_desc == nullptr || input_payload == nullptr || token_count == 0) {
+@@ -1964,10 +2335,35 @@ static enum skippy_status skippy_verify_activation_frame(
+     const int32_t n_tokens = static_cast<int32_t>(token_count);
+     const int32_t n_embd = llama_model_n_embd(session->stage_model->model);
+     const int32_t n_altup = static_cast<int32_t>(session->stage_model->model->hparams.n_altup);
+-    llama_batch batch = llama_batch_init(n_tokens, n_embd, 1);
+-    batch.n_tokens = n_tokens;
+     const size_t hidden_bytes = skippy_activation_hidden_bytes(session, token_count);
+-    std::memcpy(batch.embd, input_payload, hidden_bytes);
++    const bool alias_input_payload = input_desc->flags == 0;
++
++    llama_batch batch = {};
++    std::vector<llama_pos> pos_storage;
++    std::vector<int32_t> n_seq_id_storage;
++    std::vector<llama_seq_id> seq_id_0;
++    std::vector<llama_seq_id *> seq_id_storage;
++    std::vector<int8_t> logits_storage;
++    if (alias_input_payload) {
++        pos_storage.resize(n_tokens);
++        n_seq_id_storage.resize(n_tokens);
++        seq_id_0.assign(1, session->seq_id);
++        seq_id_storage.resize(n_tokens, seq_id_0.data());
++        logits_storage.resize(n_tokens, 1);
++        batch = {
++            /*n_tokens =*/ n_tokens,
++            /*token    =*/ nullptr,
++            /*embd     =*/ const_cast<float *>(static_cast<const float *>(input_payload)),
++            /*pos      =*/ pos_storage.data(),
++            /*n_seq_id =*/ n_seq_id_storage.data(),
++            /*seq_id   =*/ seq_id_storage.data(),
++            /*logits   =*/ logits_storage.data(),
++        };
++    } else {
++        batch = llama_batch_init(n_tokens, n_embd, 1);
++        std::memcpy(batch.embd, input_payload, hidden_bytes);
++    }
++    batch.n_tokens = n_tokens;
+ 
+     for (int32_t i = 0; i < n_tokens; ++i) {
+         batch.pos[i] = session->n_past + i;
+@@ -1978,8 +2374,14 @@ static enum skippy_status skippy_verify_activation_frame(
+ 
+     skippy_rwkv7_v_first_scope rwkv7_v_first_scope(input_desc, input_payload, hidden_bytes, n_embd);
+     skippy_gemma3n_altup_scope gemma3n_altup_scope(input_desc, input_payload, n_embd, n_altup);
++    const llama_pos token_start = session->n_past;
+     enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
+-    llama_batch_free(batch);
++    if (!alias_input_payload) {
++        llama_batch_free(batch);
++    }
++    if (status == SKIPPY_STATUS_OK && token_ids != nullptr) {
++        status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, token_start, out_error);
++    }
+     return status;
+ }
+ 
+@@ -2014,22 +2416,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_GENERATION_SIGNALS |
+            SKIPPY_FEATURE_EXTERNAL_MEDIA_PREFILL |
+            SKIPPY_FEATURE_RUNTIME_EVENTS |
+-           SKIPPY_FEATURE_BACKEND_DEVICES;
+-}
+-
+-const char * skippy_status_string(enum skippy_status status) {
+-    switch (status) {
+-        case SKIPPY_STATUS_OK:               return "ok";
+-        case SKIPPY_STATUS_ERROR:            return "error";
+-        case SKIPPY_STATUS_INVALID_ARGUMENT: return "invalid_argument";
+-        case SKIPPY_STATUS_UNSUPPORTED:      return "unsupported";
+-        case SKIPPY_STATUS_BUFFER_TOO_SMALL: return "buffer_too_small";
+-        case SKIPPY_STATUS_IO_ERROR:         return "io_error";
+-        case SKIPPY_STATUS_MODEL_ERROR:      return "model_error";
+-        case SKIPPY_STATUS_RUNTIME_ERROR:    return "runtime_error";
+-    }
+-
+-    return "unknown";
++           SKIPPY_FEATURE_BACKEND_DEVICES |
++           SKIPPY_FEATURE_NATIVE_MTP_N1;
+ }
+ 
+ void skippy_error_free(struct skippy_error * error) {
+@@ -2114,7 +2502,7 @@ static enum skippy_status skippy_finish_model_open(
+         struct skippy_model ** out_model,
+         struct skippy_error ** out_error) {
+     if (config != nullptr && config->filter_tensors_on_load) {
+-        const int32_t n_layer = llama_model_n_layer(model);
++        const int32_t n_layer = skippy_stage_layer_count(model);
+         if (model->arch != LLM_ARCH_LLAMA &&
+             model->arch != LLM_ARCH_AFMOE &&
+             model->arch != LLM_ARCH_APERTUS &&
+@@ -2290,6 +2678,7 @@ static enum skippy_status skippy_finish_model_open(
+     params.embeddings = config != nullptr && config->filter_tensors_on_load && !config->include_output;
+     if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
+         params.n_seq_max = std::max<uint32_t>(2, stage_model->lane_count * 2);
++        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, 2);
+         params.kv_unified = true;
+     }
+ 
+@@ -2305,6 +2694,27 @@ static enum skippy_status skippy_finish_model_open(
+         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, message);
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
++
++    if (skippy_should_create_native_mtp_sidecar(model, config)) {
++        llama_context_params mtp_params = params;
++        mtp_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
++        mtp_params.embeddings = false;
++        {
++            skippy_graph_filter_scope graph_filter_scope(config);
++            stage_model->mtp_ctx = llama_init_from_model(model, mtp_params);
++        }
++        if (stage_model->mtp_ctx != nullptr) {
++            llama_set_embeddings_nextn(stage_model->ctx, true, false);
++            llama_set_embeddings_nextn(stage_model->mtp_ctx, true, true);
++        } else {
++            fprintf(stderr, "skippy: native MTP sidecar unavailable for this final stage; continuing without drafts\n");
++        }
++    } else if (config != nullptr &&
++               config->include_output &&
++               model->hparams.n_layer_nextn > 0) {
++        fprintf(stderr, "skippy: native MTP sidecar skipped because this split stage is missing required MTP graph tensors; continuing without drafts\n");
++    }
++
+     stage_model->lane_in_use.assign(stage_model->lane_count, false);
+     stage_model->lane_resident_prefix_tokens.resize(stage_model->lane_count);
+ 
+@@ -2518,6 +2928,9 @@ enum skippy_status skippy_model_free(
+         struct skippy_model * model,
+         struct skippy_error ** out_error) {
+     if (model != nullptr) {
++        if (model->mtp_ctx != nullptr) {
++            llama_free(model->mtp_ctx);
++        }
+         if (model->ctx != nullptr) {
+             llama_free(model->ctx);
+         }
+@@ -2565,6 +2978,11 @@ enum skippy_status skippy_session_create(
+     session->n_past = 0;
+     session->checkpoint_valid = false;
+     session->checkpoint_n_past = 0;
++    session->mtp_next_pos = 0;
++    if (skippy_mtp_available(session)) {
++        session->mtp_pending_h.assign(static_cast<size_t>(llama_model_n_embd(model->model)), 0.0f);
++        skippy_mtp_clear_session_state(session);
++    }
+     *out_session = session;
+     if (static_cast<size_t>(seq_id) < model->lane_resident_prefix_tokens.size()) {
+         model->lane_resident_prefix_tokens[static_cast<size_t>(seq_id)].clear();
+@@ -2585,11 +3003,6 @@ int32_t skippy_session_position(
+     return session != nullptr ? session->n_past : -1;
+ }
+ 
+-int32_t skippy_session_native_seq_id(
+-        const struct skippy_session * session) {
+-    return session != nullptr ? session->seq_id : -1;
+-}
+-
+ int32_t skippy_session_batch_size(
+         const struct skippy_session * session) {
+     return session != nullptr && session->ctx != nullptr ? llama_n_batch(session->ctx) : 0;
+@@ -2648,6 +3061,7 @@ enum skippy_status skippy_session_set_position(
+     if (session->signal_history.size() > static_cast<size_t>(n_past)) {
+         session->signal_history.resize(static_cast<size_t>(n_past));
+     }
++    skippy_mtp_clear_session_state(session);
+     return skippy_success(out_error);
+ }
+ 
+@@ -2688,6 +3102,10 @@ enum skippy_status skippy_session_configure_chat_sampling(
+             return SKIPPY_STATUS_RUNTIME_ERROR;
+         }
+         session->chat_sampling_metadata = metadata_json;
++        if (sampling != nullptr) {
++            session->sampling_config = *sampling;
++            session->sampling_config_valid = true;
++        }
+         session->grammar_generated_start = prompt_token_count;
+         session->sampling_accepted_token_count = 0;
+         if (!skippy_init_chat_grammar_sampler(session, metadata, out_error)) {
+@@ -2741,6 +3159,7 @@ enum skippy_status skippy_session_reset(
+     }
+     session->signal_history.clear();
+     skippy_clear_chat_sampling(session);
++    skippy_mtp_clear_session_state(session);
+     session->ctx->synchronize();
+     return skippy_success(out_error);
+ }
+@@ -2777,6 +3196,7 @@ enum skippy_status skippy_session_free(
+                 session->stage_model->lane_in_use[lane] = false;
+             }
+         }
++        skippy_mtp_clear_session_state(session);
+         delete session;
+     }
+     return skippy_success(out_error);
+@@ -2882,29 +3302,6 @@ enum skippy_status skippy_prefill_chunk(
+     return skippy_decode_tokens(session, token_ids, token_count, false, out_error);
+ }
+ 
+-enum skippy_status skippy_decode_step(
+-        struct skippy_session * session,
+-        llama_token token_id,
+-        const void * input_activation,
+-        size_t input_activation_bytes,
+-        void * output_activation,
+-        size_t output_activation_capacity,
+-        size_t * out_output_activation_bytes,
+-        llama_token * out_predicted_token,
+-        struct skippy_error ** out_error) {
+-    return skippy_decode_step_sampled(
+-            session,
+-            token_id,
+-            nullptr,
+-            input_activation,
+-            input_activation_bytes,
+-            output_activation,
+-            output_activation_capacity,
+-            out_output_activation_bytes,
+-            out_predicted_token,
+-            out_error);
+-}
+-
+ enum skippy_status skippy_decode_step_sampled(
+         struct skippy_session * session,
+         llama_token token_id,
+@@ -2937,6 +3334,80 @@ enum skippy_status skippy_decode_step_sampled(
+     return skippy_success(out_error);
+ }
+ 
++enum skippy_status skippy_decode_batch_sampled(
++        struct skippy_session * const * sessions,
++        const llama_token * token_ids,
++        const struct skippy_sampling_config * const * sampling,
++        size_t request_count,
++        llama_token * out_predicted_tokens,
++        size_t predicted_token_capacity,
++        struct skippy_error ** out_error) {
++    if (sessions == nullptr || token_ids == nullptr || request_count == 0 || out_predicted_tokens == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "sessions, token_ids, request_count, and out_predicted_tokens are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (predicted_token_capacity < request_count) {
++        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "predicted token output buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++    if (request_count > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "request_count exceeds int32_t range");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    skippy_session * first = sessions[0];
++    if (first == nullptr || first->ctx == nullptr || first->stage_model == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "sessions must be active");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (skippy_is_filtered(first) && first->stage_model->config.layer_start > 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched token decode requires the first runtime slice or a full model");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++
++    const int32_t n_tokens = static_cast<int32_t>(request_count);
++    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
++    batch.n_tokens = n_tokens;
++    for (int32_t i = 0; i < n_tokens; ++i) {
++        skippy_session * session = sessions[i];
++        if (session == nullptr || session->ctx != first->ctx || session->stage_model != first->stage_model) {
++            llama_batch_free(batch);
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "all sessions must belong to the same stage model");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
++            llama_batch_free(batch);
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched token decode requires the first runtime slice or a full model");
++            return SKIPPY_STATUS_UNSUPPORTED;
++        }
++        batch.token[i] = token_ids[i];
++        batch.pos[i] = session->n_past;
++        batch.n_seq_id[i] = 1;
++        batch.seq_id[i][0] = session->seq_id;
++        batch.logits[i] = 1;
++    }
++
++    skippy_graph_filter_scope graph_filter_scope(&first->stage_model->config);
++    const int32_t rc = llama_decode(first->ctx, batch);
++    if (rc != 0) {
++        llama_batch_free(batch);
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    llama_batch_free(batch);
++
++    for (int32_t i = 0; i < n_tokens; ++i) {
++        skippy_session * session = sessions[i];
++        session->n_past += 1;
++        skippy_record_tokens(session, &token_ids[i], 1);
++        skippy_record_signal(session, i);
++        const skippy_sampling_config * request_sampling = sampling != nullptr ? sampling[i] : nullptr;
++        out_predicted_tokens[i] = skippy_sample_token_ith(session, request_sampling, i);
++    }
++
++    return skippy_success(out_error);
++}
++
+ enum skippy_status skippy_verify_tokens(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+@@ -3167,31 +3638,6 @@ enum skippy_status skippy_prefill_chunk_frame_sampled_with_positions(
+             out_error);
+ }
+ 
+-enum skippy_status skippy_decode_step_frame(
+-        struct skippy_session * session,
+-        llama_token token_id,
+-        const struct skippy_activation_desc * input_desc,
+-        const void * input_payload,
+-        struct skippy_activation_desc * output_desc,
+-        void * output_payload,
+-        size_t output_payload_capacity,
+-        size_t * out_output_payload_bytes,
+-        llama_token * out_predicted_token,
+-        struct skippy_error ** out_error) {
+-    return skippy_decode_step_frame_sampled(
+-            session,
+-            token_id,
+-            nullptr,
+-            input_desc,
+-            input_payload,
+-            output_desc,
+-            output_payload,
+-            output_payload_capacity,
+-            out_output_payload_bytes,
+-            out_predicted_token,
+-            out_error);
+-}
+-
+ enum skippy_status skippy_decode_step_frame_sampled(
+         struct skippy_session * session,
+         llama_token token_id,
+@@ -3243,10 +3689,227 @@ enum skippy_status skippy_decode_step_frame_sampled(
+     return skippy_copy_output_activation_frame(session, 1, output_payload, input_desc, input_payload, out_error);
+ }
+ 
+-enum skippy_status skippy_verify_tokens_frame(
++enum skippy_status skippy_decode_step_frame_sampled_mtp_n1(
++        struct skippy_session * session,
++        llama_token token_id,
++        const struct skippy_sampling_config * sampling,
++        const struct skippy_activation_desc * input_desc,
++        const void * input_payload,
++        struct skippy_activation_desc * output_desc,
++        void * output_payload,
++        size_t output_payload_capacity,
++        size_t * out_output_payload_bytes,
++        llama_token * out_predicted_token,
++        struct skippy_native_mtp_draft * out_mtp_draft,
++        struct skippy_error ** out_error) {
++    if (out_mtp_draft != nullptr) {
++        *out_mtp_draft = {
++            1,
++            false,
++            -1,
++            0,
++        };
++    }
++
++    enum skippy_status status = skippy_decode_step_frame_sampled(
++            session,
++            token_id,
++            sampling,
++            input_desc,
++            input_payload,
++            output_desc,
++            output_payload,
++            output_payload_capacity,
++            out_output_payload_bytes,
++            out_predicted_token,
++            out_error);
++    if (status != SKIPPY_STATUS_OK || out_predicted_token == nullptr || *out_predicted_token < 0) {
++        return status;
++    }
++
++    return skippy_mtp_propose_next(session, *out_predicted_token, out_mtp_draft, out_error);
++}
++
++enum skippy_status skippy_decode_step_frame_batch_sampled(
++        struct skippy_session * const * sessions,
++        const llama_token * token_ids,
++        const struct skippy_sampling_config * const * sampling,
++        const struct skippy_activation_desc * const * input_descs,
++        const void * const * input_payloads,
++        struct skippy_activation_desc * output_descs,
++        void * const * output_payloads,
++        const size_t * output_payload_capacities,
++        size_t * out_output_payload_bytes,
++        llama_token * out_predicted_tokens,
++        size_t predicted_token_capacity,
++        size_t request_count,
++        struct skippy_error ** out_error) {
++    if (sessions == nullptr || token_ids == nullptr || request_count == 0 || out_predicted_tokens == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "sessions, token_ids, request_count, and out_predicted_tokens are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (predicted_token_capacity < request_count) {
++        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "predicted token output buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++    if (request_count > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "request_count exceeds int32_t range");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    skippy_session * first = sessions[0];
++    if (first == nullptr || first->ctx == nullptr || first->stage_model == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "sessions must be active");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    const int32_t n_tokens = static_cast<int32_t>(request_count);
++    const int32_t n_embd = llama_model_n_embd(first->stage_model->model);
++    const int32_t n_embd_inp = llama_model_n_embd_inp(first->stage_model->model);
++    const int32_t n_pos_per_embd = first->stage_model->model->hparams.n_pos_per_embd();
++    const bool activation_input = skippy_is_filtered(first) && first->stage_model->config.layer_start > 0;
++    const bool request_logits = first->stage_model->config.include_output;
++    const bool request_embeddings = skippy_emits_activation_frame(first);
++
++    if (activation_input && (input_descs == nullptr || input_payloads == nullptr)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "batched downstream decode requires activation frame inputs");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    const size_t hidden_bytes_per_request = skippy_activation_hidden_bytes(first, 1);
++    for (int32_t i = 0; i < n_tokens; ++i) {
++        skippy_session * session = sessions[i];
++        if (session == nullptr || session->ctx != first->ctx || session->stage_model != first->stage_model) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "all sessions must belong to the same stage model");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        const skippy_activation_desc * input_desc = input_descs != nullptr ? input_descs[i] : nullptr;
++        const void * input_payload = input_payloads != nullptr ? input_payloads[i] : nullptr;
++        enum skippy_status status = skippy_validate_frame_input(session, input_desc, input_payload, 1, out_error);
++        if (status != SKIPPY_STATUS_OK) {
++            return status;
++        }
++        if (input_desc != nullptr && input_desc->flags != 0) {
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched activation decode does not support activation sidebands yet");
++            return SKIPPY_STATUS_UNSUPPORTED;
++        }
++        if (skippy_output_activation_flags(session, input_desc) != 0) {
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched activation decode does not support output activation sidebands yet");
++            return SKIPPY_STATUS_UNSUPPORTED;
++        }
++        status = skippy_prepare_output_activation_frame(
++                session,
++                1,
++                output_payloads != nullptr ? output_payloads[i] : nullptr,
++                output_payload_capacities != nullptr ? output_payload_capacities[i] : 0,
++                out_output_payload_bytes != nullptr ? &out_output_payload_bytes[i] : nullptr,
++                output_descs != nullptr ? &output_descs[i] : nullptr,
++                input_desc,
++                out_error);
++        if (status != SKIPPY_STATUS_OK) {
++            return status;
++        }
++    }
++
++    std::vector<float> embd_storage;
++    std::vector<llama_token> token_storage;
++    if (activation_input) {
++        embd_storage.resize(static_cast<size_t>(n_tokens)*n_embd_inp);
++        for (int32_t i = 0; i < n_tokens; ++i) {
++            const skippy_activation_desc * input_desc = input_descs[i];
++            const void * input_payload = input_payloads[i];
++            float * dst = embd_storage.data() + static_cast<size_t>(i)*n_embd_inp;
++            if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP) != 0) {
++                return SKIPPY_STATUS_UNSUPPORTED;
++            } else if (n_embd_inp == n_embd) {
++                std::memcpy(dst, input_payload, hidden_bytes_per_request);
++            } else {
++                std::memcpy(dst, input_payload, static_cast<size_t>(n_embd)*sizeof(float));
++                std::memset(dst + n_embd, 0, static_cast<size_t>(n_embd_inp - n_embd)*sizeof(float));
++            }
++        }
++    } else {
++        token_storage.assign(token_ids, token_ids + request_count);
++    }
++
++    std::vector<llama_pos> pos_storage(static_cast<size_t>(n_tokens)*n_pos_per_embd);
++    std::vector<int32_t> n_seq_id_storage(n_tokens, 1);
++    std::vector<llama_seq_id> seq_id_values(n_tokens);
++    std::vector<llama_seq_id *> seq_id_storage(n_tokens, nullptr);
++    std::vector<int8_t> logits_storage(n_tokens);
++    for (int32_t i = 0; i < n_tokens; ++i) {
++        skippy_session * session = sessions[i];
++        seq_id_values[i] = session->seq_id;
++        seq_id_storage[i] = &seq_id_values[i];
++        logits_storage[i] = (request_logits || request_embeddings) ? 1 : 0;
++        if (n_pos_per_embd == 4) {
++            const llama_pos position = session->n_past;
++            pos_storage[               i] = position;
++            pos_storage[    n_tokens + i] = position;
++            pos_storage[2 * n_tokens + i] = position;
++            pos_storage[3 * n_tokens + i] = 0;
++        } else {
++            pos_storage[i] = session->n_past;
++        }
++    }
++
++    llama_batch batch = {
++        /*n_tokens =*/ n_tokens,
++        /*token    =*/ activation_input ? nullptr : token_storage.data(),
++        /*embd     =*/ activation_input ? embd_storage.data() : nullptr,
++        /*pos      =*/ pos_storage.data(),
++        /*n_seq_id =*/ n_seq_id_storage.data(),
++        /*seq_id   =*/ seq_id_storage.data(),
++        /*logits   =*/ logits_storage.data(),
++    };
++
++    skippy_activation_tokens_scope activation_tokens_scope(token_ids, request_count);
++    skippy_graph_filter_scope graph_filter_scope(&first->stage_model->config);
++    const int32_t rc = llama_decode(first->ctx, batch);
++    if (rc != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
++    float * embeddings = nullptr;
++    if (skippy_emits_activation_frame(first)) {
++        embeddings = llama_get_embeddings(first->ctx);
++        if (embeddings == nullptr) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama embeddings output was not available");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++    }
++
++    for (int32_t i = 0; i < n_tokens; ++i) {
++        skippy_session * session = sessions[i];
++        session->n_past += 1;
++        if (!activation_input) {
++            skippy_record_tokens(session, &token_ids[i], 1);
++        }
++        if (request_logits) {
++            skippy_record_signal(session, i);
++            const skippy_sampling_config * request_sampling = sampling != nullptr ? sampling[i] : nullptr;
++            out_predicted_tokens[i] = skippy_sample_token_ith(session, request_sampling, i);
++        } else {
++            out_predicted_tokens[i] = -1;
++        }
++
++        if (embeddings != nullptr && output_payloads != nullptr && output_payloads[i] != nullptr) {
++            std::memcpy(
++                    output_payloads[i],
++                    embeddings + static_cast<size_t>(i)*n_embd,
++                    hidden_bytes_per_request);
++        }
++    }
++
++    return skippy_success(out_error);
++}
++
++enum skippy_status skippy_verify_tokens_frame_sampled(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+         size_t token_count,
++        const struct skippy_sampling_config * sampling,
+         const struct skippy_activation_desc * input_desc,
+         const void * input_payload,
+         struct skippy_activation_desc * output_desc,
+@@ -3310,7 +3973,7 @@ enum skippy_status skippy_verify_tokens_frame(
+ 
+     if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
+         status = session->stage_model->config.include_output ?
+-                skippy_verify_activation_frame(session, input_desc, input_payload, token_count, out_error) :
++                skippy_verify_activation_frame(session, input_desc, input_payload, token_ids, token_count, out_error) :
+                 skippy_decode_activation_frame(session, input_desc, input_payload, token_ids, nullptr, 0, token_count, false, out_error);
+     } else {
+         status = session->stage_model->config.include_output ?
+@@ -3329,7 +3992,25 @@ enum skippy_status skippy_verify_tokens_frame(
+     if (session->stage_model->config.include_output) {
+         const int32_t n_tokens = static_cast<int32_t>(token_count);
+         for (int32_t i = 0; i < n_tokens; ++i) {
+-            output_tokens[i] = skippy_greedy_sample_ith(session, i);
++            output_tokens[i] = skippy_sample_token_ith(session, sampling, i);
++        }
++        if (output_token_capacity >= token_count + 2 && token_count > 0) {
++            skippy_native_mtp_draft mtp_draft = {};
++            status = skippy_mtp_propose_next(
++                    session,
++                    output_tokens[token_count - 1],
++                    &mtp_draft,
++                    out_error);
++            if (status != SKIPPY_STATUS_OK) {
++                return status;
++            }
++            if (mtp_draft.available) {
++                output_tokens[token_count] = mtp_draft.token_id;
++                output_tokens[token_count + 1] = static_cast<llama_token>(std::min<int64_t>(
++                        std::max<int64_t>(mtp_draft.proposal_compute_us, 0),
++                        std::numeric_limits<llama_token>::max()));
++                *out_token_count = token_count + 2;
++            }
+         }
+     }
+ 
+@@ -3375,7 +4056,7 @@ static enum skippy_status skippy_validate_state_range(
+     const skippy_runtime_config & config = session->stage_model->config;
+     const int32_t expected_layer_start = config.filter_tensors_on_load ? config.layer_start : 0;
+     const int32_t expected_layer_end = config.filter_tensors_on_load ?
+-            config.layer_end : llama_model_n_layer(session->stage_model->model);
++            config.layer_end : skippy_stage_layer_count(session->stage_model->model);
+     if (layer_start != expected_layer_start || layer_end != expected_layer_end) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "state range must match the session layer range");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+@@ -3832,15 +4513,13 @@ enum skippy_status skippy_trim_session(
+     }
+     const llama_pos p0 = static_cast<llama_pos>(token_count);
+     if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
+-        llama_kv_cache * kv = hybrid->get_mem_attn();
+-        if (kv != nullptr && !kv->seq_rm(session->seq_id, p0, -1)) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to trim hybrid attention KV suffix");
++        if (!hybrid->seq_rm(session->seq_id, p0, -1)) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to trim hybrid memory suffix");
+             return SKIPPY_STATUS_RUNTIME_ERROR;
+         }
+     } else if (auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
+-        llama_kv_cache_iswa * kv = hybrid_iswa->get_mem_attn();
+-        if (kv != nullptr && !kv->seq_rm(session->seq_id, p0, -1)) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to trim hybrid ISWA attention KV suffix");
++        if (!hybrid_iswa->seq_rm(session->seq_id, p0, -1)) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to trim hybrid ISWA memory suffix");
+             return SKIPPY_STATUS_RUNTIME_ERROR;
+         }
+     } else if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
+@@ -3860,6 +4539,7 @@ enum skippy_status skippy_trim_session(
+     if (session->signal_history.size() > token_count) {
+         session->signal_history.resize(static_cast<size_t>(token_count));
+     }
++    skippy_mtp_clear_session_state(session);
+     session->ctx->synchronize();
+ 
+     return skippy_success(out_error);
+@@ -4285,21 +4965,47 @@ enum skippy_status skippy_detokenize(
+     }
+ 
+     const llama_vocab * vocab = llama_model_get_vocab(model->model);
+-    const int32_t result = llama_detokenize(
+-            vocab,
+-            tokens,
+-            static_cast<int32_t>(token_count),
+-            output_text,
+-            static_cast<int32_t>(output_text_capacity),
+-            true,
+-            false);
+-    if (result < 0) {
+-        *out_text_bytes = static_cast<size_t>(-result);
++    std::string text;
++    for (size_t i = 0; i < token_count; ++i) {
++        std::string piece;
++        piece.resize(piece.capacity());
++        int32_t piece_bytes = llama_token_to_piece(
++                vocab,
++                tokens[i],
++                piece.data(),
++                static_cast<int32_t>(piece.size()),
++                0,
++                true);
++        if (piece_bytes < 0) {
++            piece.resize(static_cast<size_t>(-piece_bytes));
++            piece_bytes = llama_token_to_piece(
++                    vocab,
++                    tokens[i],
++                    piece.data(),
++                    static_cast<int32_t>(piece.size()),
++                    0,
++                    true);
++        }
++        if (piece_bytes < 0) {
++            skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "token piece output buffer is too small");
++            return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++        }
++        piece.resize(static_cast<size_t>(piece_bytes));
++        text += piece;
++    }
++
++    *out_text_bytes = text.size();
++    if (output_text_capacity < text.size()) {
+         skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "text output buffer is too small");
+         return SKIPPY_STATUS_BUFFER_TOO_SMALL;
+     }
+-
+-    *out_text_bytes = static_cast<size_t>(result);
++    if (!text.empty() && output_text == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "output_text is required when output capacity is sufficient");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (!text.empty()) {
++        std::memcpy(output_text, text.data(), text.size());
++    }
+     return skippy_success(out_error);
+ }
+ 
+-- 
+2.53.0
+
