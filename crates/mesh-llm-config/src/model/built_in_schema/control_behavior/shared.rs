@@ -116,6 +116,18 @@ pub(super) fn push_range_constraint(
     push_constraint(setting, ConfigConstraint::Range { min, max });
 }
 
+pub(super) fn push_allowed_pattern_constraint(
+    setting: &mut ConfigSettingSchema,
+    pattern: impl AsRef<str>,
+) {
+    push_constraint(
+        setting,
+        ConfigConstraint::AllowedPattern {
+            pattern: pattern.as_ref().to_string(),
+        },
+    );
+}
+
 pub(super) fn equals_string_condition(path: &str, value: &str) -> ConfigControlCondition {
     ConfigControlCondition {
         path: schema_path(path),

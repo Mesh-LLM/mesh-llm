@@ -936,12 +936,11 @@ describe('ConfigurationPage', () => {
     await user.click(screen.getByRole('tab', { name: 'TOML Output' }))
 
     await waitFor(() =>
-      expect(
-        screen.getByText(
-          'defaults.speculative.draft_max_tokens: draft_max_tokens requires defaults.speculative.mode = draft'
-        )
-      ).toBeInTheDocument()
+      expect(screen.getByText('draft_max_tokens requires defaults.speculative.mode = draft')).toHaveClass(
+        'toml-warning-message'
+      )
     )
+    expect(screen.getByText('defaults.speculative.draft_max_tokens')).toHaveClass('toml-warning-path')
     expect(getTomlSource().value).toContain('[defaults.speculative]')
     expect(getTomlSource().value).toContain('mode = "ngram"')
     expect(getTomlSource().value).toContain('draft_max_tokens = 16')
@@ -1403,6 +1402,25 @@ describe('ConfigurationPage', () => {
     expect(screen.queryByRole('button', { name: /remove glm-4\.7-flash-q4_k_m from gpu 0/i })).not.toBeInTheDocument()
   })
 
+  it('keeps model configuration open when clicking undo but closes it on page background', async () => {
+    const user = userEvent.setup()
+
+    render(<ConfigurationPage initialTab="local-deployment" enableNavigationBlocker={false} />)
+
+    await user.keyboard('{ArrowDown}')
+    const contextEvent = await dispatchShortcut('ArrowRight', { altKey: true })
+    expect(contextEvent.defaultPrevented).toBe(true)
+    expect(screen.getByRole('button', { name: /remove qwen3\.5-27b-q4_k_m from gpu 2/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /undo/i }))
+
+    expect(screen.getByRole('button', { name: /remove qwen3\.5-27b-q4_k_m from gpu 2/i })).toBeInTheDocument()
+
+    fireEvent.pointerDown(document.body)
+
+    expect(screen.queryByRole('button', { name: /remove qwen3\.5-27b-q4_k_m from gpu 2/i })).not.toBeInTheDocument()
+  })
+
   it('keeps keyboard edits scoped to the local node when remote assignments exist', async () => {
     const user = userEvent.setup()
     const data = {
@@ -1558,6 +1576,32 @@ describe('ConfigurationPage', () => {
     expect(saveButton).toBeDisabled()
     expect(countTomlOccurrences('[models.hardware]')).toBe(0)
     expect(screen.queryByRole('button', { name: /phi-4-mini, .* weights/i })).not.toBeInTheDocument()
+  })
+
+  it('preserves dirty edits when refreshed configuration data arrives', async () => {
+    const user = userEvent.setup()
+    const refreshedData: ConfigurationHarnessData = {
+      ...CONFIGURATION_HARNESS,
+      nodes: CONFIGURATION_HARNESS.nodes.map((node) =>
+        node.id === 'carrack'
+          ? {
+              ...node,
+              gpus: node.gpus.map((gpu) => ({ ...gpu, reservedGB: (gpu.reservedGB ?? 0) + 1 }))
+            }
+          : node
+      )
+    }
+
+    const { rerender } = render(<ConfigurationPage initialTab="local-deployment" enableNavigationBlocker={false} />)
+
+    await user.click(within(getCarrackSection()).getByRole('radio', { name: 'pooled' }))
+    expect(within(getCarrackSection()).getByRole('radio', { name: 'pooled' })).toBeChecked()
+    expect(screen.getByRole('button', { name: /save config/i })).toBeEnabled()
+
+    rerender(<ConfigurationPage data={refreshedData} initialTab="local-deployment" enableNavigationBlocker={false} />)
+
+    expect(within(getCarrackSection()).getByRole('radio', { name: 'pooled' })).toBeChecked()
+    expect(screen.getByRole('button', { name: /save config/i })).toBeEnabled()
   })
 
   it('tracks configuration history with Ctrl+Z and Ctrl+R', async () => {

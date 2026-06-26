@@ -64,12 +64,27 @@ describe('ModelConfigCard', () => {
     expect(screen.getByRole('heading', { name: model.name })).toBeInTheDocument()
     expect(screen.getAllByText('16K ctx').length).toBeGreaterThan(0)
     expect(screen.getByText('GPU 1 · RTX 6000 Pro')).toBeInTheDocument()
+    expect(screen.getByText('Headroom')).toBeInTheDocument()
+    expect(screen.getByText('Memory')).toHaveClass('font-semibold', 'uppercase', 'text-foreground')
+    expect(screen.getByText('Model')).toHaveClass('font-semibold', 'uppercase', 'text-foreground')
+    expect(screen.queryByText(/^max ≈/i)).not.toBeInTheDocument()
+    expect(screen.getByText('Runtime').compareDocumentPosition(screen.getByText('Context'))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    )
+    expect(screen.getByText('Runtime')).toHaveClass('font-semibold', 'uppercase', 'text-foreground')
 
     fireEvent.click(screen.getByRole('radio', { name: '5 slots' }))
     expect(onConfigChange).toHaveBeenLastCalledWith({ slots: 5, cacheTypeK: 'q8_0', cacheTypeV: 'q4_0' })
 
+    fireEvent.click(screen.getByRole('radio', { name: '32 slots' }))
+    expect(onConfigChange).toHaveBeenLastCalledWith({ slots: 32, cacheTypeK: 'q8_0', cacheTypeV: 'q4_0' })
+
     // Open advanced controls to reveal Split mode, mmproj, Flash attention, Cache types
     fireEvent.click(screen.getByRole('button', { name: 'Toggle advanced controls' }))
+
+    for (const title of ['Placement', 'Assets', 'Tuning']) {
+      expect(screen.getByText(title)).toHaveClass('font-semibold', 'uppercase', 'text-foreground')
+    }
 
     fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Split mode' })).getByRole('radio', { name: 'Row' }))
     expect(onConfigChange).toHaveBeenLastCalledWith({

@@ -97,6 +97,27 @@ function objectTomlScalar(value: string): string {
   return tomlString(value)
 }
 
+function isTelemetryHeadersSetting(setting: ConfigurationDefaultsSetting): boolean {
+  return setting.canonicalPath === 'telemetry.headers'
+}
+
+function isEmptyObjectTextValue(value: string): boolean {
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return true
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 0
+  } catch {
+    return false
+  }
+}
+
+export function shouldOmitDefaultSettingValue(setting: ConfigurationDefaultsSetting, value: string): boolean {
+  if (setting.control.kind === 'text' && value.trim().length === 0) return true
+  return isTelemetryHeadersSetting(setting) && isEmptyObjectTextValue(value)
+}
+
 function isBooleanToggleChoice(setting: ConfigurationDefaultsSetting): boolean {
   return (
     setting.control.kind === 'choice' &&
@@ -104,6 +125,29 @@ function isBooleanToggleChoice(setting: ConfigurationDefaultsSetting): boolean {
     setting.control.options.length === 2 &&
     setting.control.options.every((option) => option.value === 'on' || option.value === 'off')
   )
+}
+
+const boolOrAutoSettingNames = new Set([
+  'context_shift',
+  'continuous_batching',
+  'cpu_moe',
+  'fit_context',
+  'kv_offload',
+  'kv_unified',
+  'mmap',
+  'mmproj_offload',
+  'prompt_cache',
+  'spec_default',
+  'warmup'
+])
+
+function isBooleanChoiceValue(setting: ConfigurationDefaultsSetting, value: string): boolean {
+  if (setting.control.kind !== 'choice') return false
+  if (value !== 'on' && value !== 'off') return false
+  const optionValues = new Set(setting.control.options.map((option) => option.value))
+  if (!optionValues.has('on') || !optionValues.has('off')) return false
+  if (hasSchemaKind(setting.valueSchema, 'boolean')) return true
+  return 'name' in setting.control && boolOrAutoSettingNames.has(setting.control.name)
 }
 
 function hasSchemaKind(
@@ -131,6 +175,7 @@ function numericSchemaTomlScalar(setting: ConfigurationDefaultsSetting, value: s
 
 export function defaultSettingTomlScalar(setting: ConfigurationDefaultsSetting, value: string): string {
   if (isBooleanToggleChoice(setting)) return value === 'on' ? 'true' : 'false'
+  if (isBooleanChoiceValue(setting, value)) return value === 'on' ? 'true' : 'false'
   if (
     setting.canonicalPath?.endsWith('.gpu_layers') ||
     ('name' in setting.control && setting.control.name === 'gpu_layers')
@@ -255,11 +300,12 @@ function pluginTomlKey(setting: ConfigurationDefaultsSetting, path: readonly str
 }
 
 function modelPlacementSectionAndKey(path: string): { section?: string; key: string } {
-  const suffix = path.replace(/^models\.<model-ref>\.?/, '')
+  const suffix = path.replace(/^models\.(?:<model-ref>\.)?/, '')
   const segments = suffix.split('.').filter(Boolean)
   const key = segments.pop() ?? 'model'
 
   if (segments.length === 0) return { key }
+
   if (
     segments.join('.') === 'model_fit' &&
     ['ctx_size', 'cache_type_k', 'cache_type_v', 'batch', 'ubatch', 'flash_attention'].includes(key)
@@ -267,7 +313,6 @@ function modelPlacementSectionAndKey(path: string): { section?: string; key: str
     return { key }
   }
   if (segments.join('.') === 'throughput' && key === 'parallel') return { key }
-  if (segments.join('.') === 'multimodal' && key === 'mmproj') return { key }
   if (segments.join('.') === 'hardware' && key === 'device') return { key: 'gpu_id' }
 
   return {
@@ -371,12 +416,11 @@ const BATCH_PROFILE_VALUES: Record<
   throughput: { batch: 1024, ubatch: 256 },
   saver: { batch: 256, ubatch: 64 }
 }
-
 function readModelFitOverride(entry: Record<string, unknown>, path: string, key: string): unknown {
   const configured = readModelEntryPath(entry, path)
   if (configured !== undefined) return configured
 
-  const modelFit = entry.model_fit
+  const modelFit = entry.model_fit as Record<string, unknown> | undefined
   if (isRecord(modelFit) && modelFit[key] !== undefined) return modelFit[key]
   return entry[key]
 }
@@ -385,7 +429,7 @@ function readModelThroughputOverride(entry: Record<string, unknown>, path: strin
   const configured = readModelEntryPath(entry, path)
   if (configured !== undefined) return configured
 
-  const throughput = entry.throughput
+  const throughput = entry.throughput as Record<string, unknown> | undefined
   if (isRecord(throughput) && throughput[key] !== undefined) return throughput[key]
   return entry[key]
 }
@@ -394,7 +438,8 @@ function appendPreservedModelFitOverrides(
   entry: Record<string, unknown> | undefined,
   modelLines: string[],
   sectionLines: Map<string, string[]>,
-  placementPaths: ConfigurationModelPlacementPaths
+  placementPaths: ConfigurationModelPlacementPaths,
+  emittedKeys: Set<string>
 ) {
   if (!entry) return
 
@@ -403,6 +448,8 @@ function appendPreservedModelFitOverrides(
     if (value === undefined || value === null) continue
 
     const { section, key } = modelPlacementSectionAndKey(path)
+    if (emittedKeys.has(key)) continue
+    emittedKeys.add(key)
     appendModelPlacementLine(modelLines, sectionLines, section, `${tomlKey(key)} = ${tomlInlineValue(value)}`)
   }
 }
@@ -410,7 +457,8 @@ function appendPreservedModelFitOverrides(
 function appendPreservedModelThroughputOverrides(
   entry: Record<string, unknown> | undefined,
   modelLines: string[],
-  sectionLines: Map<string, string[]>
+  sectionLines: Map<string, string[]>,
+  emittedKeys: Set<string>
 ) {
   if (!entry) return
 
@@ -419,6 +467,8 @@ function appendPreservedModelThroughputOverrides(
     if (value === undefined || value === null) continue
 
     const { section, key } = modelPlacementSectionAndKey(path)
+    if (emittedKeys.has(key)) continue
+    emittedKeys.add(key)
     appendModelPlacementLine(modelLines, sectionLines, section, `${tomlKey(key)} = ${tomlInlineValue(value)}`)
   }
 }
@@ -433,36 +483,38 @@ function appendModelConfigLine(
   appendModelPlacementLine(modelLines, sectionLines, section, `${tomlKey(key)} = ${tomlInlineValue(value)}`)
 }
 
-function appendCanonicalModelConfigLine(
+export function appendCanonicalModelConfigLine(
   sectionLines: Map<string, string[]>,
-  section: string,
+  sectionPath: string,
   key: string,
   value: unknown
 ) {
-  appendModelPlacementLine([], sectionLines, section, `${tomlKey(key)} = ${tomlInlineValue(value)}`)
+  const { section, key: normalizedKey } = modelPlacementSectionAndKey(`${sectionPath}.${key}`)
+  appendModelPlacementLine([], sectionLines, section, `${tomlKey(normalizedKey)} = ${tomlInlineValue(value)}`)
 }
 
-function appendSelectedModelConfig(
+export function appendSelectedModelConfig(
   config: ConfigAssignModelConfig | undefined,
   modelLines: string[],
-  sectionLines: Map<string, string[]>
+  sectionLines: Map<string, string[]>,
+  emittedKeys: Set<string>
 ) {
   if (!config) return
 
-  if (config.profile?.trim()) {
-    appendModelConfigLine(modelLines, sectionLines, 'models.<model-ref>.profile', config.profile.trim())
-  }
-
   if (config.slots !== undefined) {
     appendModelConfigLine(modelLines, sectionLines, 'models.<model-ref>.throughput.parallel', config.slots)
+    emittedKeys.add('parallel')
   }
   const batchProfile = config.batchProfile ? BATCH_PROFILE_VALUES[config.batchProfile] : undefined
   if (batchProfile) {
-    appendCanonicalModelConfigLine(sectionLines, 'models.model_fit', 'batch', batchProfile.batch)
-    appendCanonicalModelConfigLine(sectionLines, 'models.model_fit', 'ubatch', batchProfile.ubatch)
+    appendModelConfigLine(modelLines, sectionLines, 'models.<model-ref>.model_fit.batch', batchProfile.batch)
+    emittedKeys.add('batch')
+    appendModelConfigLine(modelLines, sectionLines, 'models.<model-ref>.model_fit.ubatch', batchProfile.ubatch)
+    emittedKeys.add('ubatch')
   }
   if (config.splitMode) {
     appendModelConfigLine(modelLines, sectionLines, 'models.<model-ref>.hardware.split_mode', config.splitMode)
+    emittedKeys.add('split_mode')
   }
   if (config.tensorSplit?.trim()) {
     appendModelConfigLine(
@@ -471,9 +523,11 @@ function appendSelectedModelConfig(
       'models.<model-ref>.hardware.tensor_split',
       config.tensorSplit.trim()
     )
+    emittedKeys.add('tensor_split')
   }
   if (config.mmproj?.trim()) {
-    appendCanonicalModelConfigLine(sectionLines, 'models.multimodal', 'mmproj', config.mmproj.trim())
+    appendModelConfigLine(modelLines, sectionLines, 'models.<model-ref>.multimodal.mmproj', config.mmproj.trim())
+    emittedKeys.add('mmproj')
   }
   if (config.draftModelPath?.trim()) {
     appendModelConfigLine(
@@ -482,18 +536,33 @@ function appendSelectedModelConfig(
       'models.<model-ref>.speculative.draft_model_path',
       config.draftModelPath.trim()
     )
+    emittedKeys.add('draft_model_path')
   }
   if (config.flashAttention) {
-    appendCanonicalModelConfigLine(sectionLines, 'models.model_fit', 'flash_attention', config.flashAttention)
+    appendModelConfigLine(
+      modelLines,
+      sectionLines,
+      'models.<model-ref>.model_fit.flash_attention',
+      config.flashAttention
+    )
+    emittedKeys.add('flash_attention')
   }
   if (config.cacheTypeK) {
-    appendCanonicalModelConfigLine(sectionLines, 'models.model_fit', 'cache_type_k', config.cacheTypeK)
+    appendModelConfigLine(modelLines, sectionLines, 'models.<model-ref>.model_fit.cache_type_k', config.cacheTypeK)
+    emittedKeys.add('cache_type_k')
   }
   if (config.cacheTypeV) {
-    appendCanonicalModelConfigLine(sectionLines, 'models.model_fit', 'cache_type_v', config.cacheTypeV)
+    appendModelConfigLine(modelLines, sectionLines, 'models.<model-ref>.model_fit.cache_type_v', config.cacheTypeV)
+    emittedKeys.add('cache_type_v')
   }
   if (config.kvCachePolicy) {
-    appendCanonicalModelConfigLine(sectionLines, 'models.model_fit', 'kv_cache_policy', config.kvCachePolicy)
+    appendModelConfigLine(
+      modelLines,
+      sectionLines,
+      'models.<model-ref>.model_fit.kv_cache_policy',
+      config.kvCachePolicy
+    )
+    emittedKeys.add('kv_cache_policy')
   }
 }
 
@@ -525,7 +594,7 @@ export function buildTOML(
 
       const value = getSettingValue(setting, defaultsValues)
       if (value === getSettingBaselineValue(setting)) continue
-      if (setting.control.kind === 'text' && value.trim().length === 0) continue
+      if (shouldOmitDefaultSettingValue(setting, value)) continue
 
       const pluginPath = pluginPathParts(setting)
       if (pluginPath) {
@@ -610,9 +679,10 @@ export function buildTOML(
     const modelLines: string[] = []
 
     appendModelPlacementLine(modelLines, sectionLines, ctxPath.section, `${tomlKey(ctxPath.key)} = ${assign.ctx}`)
-    appendPreservedModelFitOverrides(modelConfigEntry, modelLines, sectionLines, modelPlacementPaths)
-    appendPreservedModelThroughputOverrides(modelConfigEntry, modelLines, sectionLines)
-    appendSelectedModelConfig(assign.config, modelLines, sectionLines)
+    const emittedKeys = new Set<string>()
+    appendSelectedModelConfig(assign.config, modelLines, sectionLines, emittedKeys)
+    appendPreservedModelFitOverrides(modelConfigEntry, modelLines, sectionLines, modelPlacementPaths, emittedKeys)
+    appendPreservedModelThroughputOverrides(modelConfigEntry, modelLines, sectionLines, emittedKeys)
     if (emitsPerGpuDevice) {
       appendModelPlacementLine(
         modelLines,

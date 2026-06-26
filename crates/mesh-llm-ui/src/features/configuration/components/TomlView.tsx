@@ -15,6 +15,7 @@ import type {
 } from '@/features/app-tabs/types'
 import { copyStateLabel } from '@/lib/copyStateLabel'
 import { useClipboardCopy } from '@/lib/useClipboardCopy'
+import ReactDiffViewer from 'react-diff-viewer-continued'
 
 type TomlViewProps = {
   nodes: ConfigNode[]
@@ -25,6 +26,7 @@ type TomlViewProps = {
   modelPlacementPaths?: ConfigurationModelPlacementPaths
   modelConfigEntries?: readonly Record<string, unknown>[]
   reviewMode?: boolean
+  previousToml?: string
   validationEnabled?: boolean
   configPath?: string
   validationWarnings?: TomlValidationWarning[]
@@ -118,6 +120,169 @@ function TomlEditorPanel({
   )
 }
 
+function TomlDiffPanel({
+  oldToml,
+  newToml,
+  lineCount,
+  copyLabel,
+  onCopy,
+  reviewMode,
+  configPath
+}: {
+  oldToml: string
+  newToml: string
+  lineCount: number
+  copyLabel: string
+  onCopy: () => void
+  reviewMode: boolean
+  configPath?: string
+}) {
+  const diffViewerStyles = {
+    diffContainer: {
+      background: 'var(--color-background)',
+      border: `1px solid var(--color-border-soft)`,
+      borderRadius: 'var(--radius)',
+      minWidth: '100%',
+      width: '100%',
+      fontSize: 'var(--density-type-caption-lg)',
+      color: 'var(--color-foreground)'
+    },
+    summary: { background: 'var(--color-panel-strong)' },
+    titleBlock: {
+      background: 'var(--color-panel-strong)',
+      color: 'var(--color-fg-dim)',
+      borderBottom: `1px solid var(--color-border-soft)`,
+      borderLeft: 0,
+      fontSize: 'var(--density-type-control-lg)',
+      padding: '0.45em 0.6em',
+      '&& pre': {
+        color: 'inherit'
+      },
+      '&:last-child:not(:only-child)': {
+        borderLeft: 0
+      }
+    },
+    contentText: {
+      fontFamily: 'var(--font-mono)',
+      fontSize: 'var(--density-type-caption-lg)',
+      lineHeight: 'var(--toml-source-line-height)',
+      color: 'inherit'
+    },
+    gutter: {
+      background: 'var(--color-panel)',
+      borderRight: `1px solid var(--color-border-soft)`,
+      color: 'var(--color-fg-dim)',
+      '&:hover': {
+        background: 'var(--color-panel-strong)'
+      }
+    },
+    lineContent: {
+      paddingTop: '0.04em',
+      paddingBottom: '0.04em'
+    },
+    diffRemoved: {
+      backgroundColor: 'color-mix(in oklch, var(--color-bad) 12%, transparent)',
+      color: 'var(--color-fg-dim)',
+      '&:hover': {
+        backgroundColor: 'color-mix(in oklch, var(--color-bad) 22%, transparent)'
+      }
+    },
+    diffAdded: {
+      backgroundColor: 'color-mix(in oklch, var(--color-good) 14%, transparent)',
+      color: 'var(--color-fg-dim)',
+      pre: { color: 'inherit' },
+      '&:hover': {
+        backgroundColor: 'color-mix(in oklch, var(--color-good) 22%, transparent)'
+      }
+    },
+    diffChanged: {
+      backgroundColor: 'color-mix(in oklch, var(--color-accent) 10%, transparent)',
+      color: 'var(--color-fg-dim)'
+    },
+    highlightedLine: {
+      backgroundColor: 'color-mix(in oklch, var(--color-accent) 18%, transparent)'
+    },
+    highlightedGutter: {
+      backgroundColor: 'color-mix(in oklch, var(--color-accent) 18%, transparent)',
+      color: 'var(--color-foreground)'
+    },
+    lineNumber: { color: 'var(--color-fg-faint)' },
+    emptyGutter: {
+      background: 'var(--color-panel)'
+    },
+    emptyLine: {
+      background: 'var(--color-background)'
+    },
+    marker: {
+      color: 'var(--color-fg-faint)'
+    },
+    codeFold: {
+      background: 'var(--color-panel-strong)',
+      color: 'var(--color-fg-dim)'
+    },
+    codeFoldGutter: {
+      background: 'var(--color-panel)'
+    },
+    codeFoldExpandButton: {
+      background: 'transparent'
+    },
+    codeFoldContent: {
+      color: 'inherit'
+    }
+  }
+
+  return (
+    <section className="toml-panel panel-shell flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-panel">
+      <header className="toml-panel-header panel-divider flex items-center justify-between border-b border-border-soft">
+        <div className="toml-panel-heading flex min-w-0 items-baseline">
+          <h2 className="type-panel-title shrink-0">{reviewMode ? 'Generated TOML' : 'Configuration TOML'}</h2>
+          {reviewMode && configPath ? (
+            <span className="toml-config-path mono truncate font-normal text-fg-faint">{configPath}</span>
+          ) : null}
+        </div>
+        <div className="toml-panel-actions flex shrink-0 items-center">
+          <span className="type-caption tabular-nums text-fg-faint">{lineCount} lines</span>
+          <span className="toml-review-badge rounded-full border border-border-soft text-fg-faint">
+            edits this node only
+          </span>
+          <button
+            className="toml-copy-button ui-control inline-flex shrink-0 items-center justify-center rounded border"
+            onClick={onCopy}
+            type="button"
+            aria-label={copyLabel}
+            title={copyLabel}
+          >
+            <Copy className="toml-copy-icon" strokeWidth={1.75} />
+          </button>
+        </div>
+      </header>
+      <div className="toml-diff-body relative flex-1 overflow-hidden bg-background">
+        <div className="toml-diff-viewer toml-source-content">
+          <ReactDiffViewer
+            oldValue={oldToml}
+            newValue={newToml}
+            splitView
+            disableWordDiff
+            hideSummary
+            showDiffOnly={false}
+            leftTitle="Saved TOML"
+            rightTitle="Current TOML"
+            styles={diffViewerStyles}
+            renderContent={(line: string) => <HighlightedTomlLines toml={line || ' '}></HighlightedTomlLines>}
+          />
+        </div>
+        <textarea
+          aria-label="Configuration TOML source"
+          className="toml-source-content toml-source-input sr-only"
+          readOnly
+          value={newToml}
+          wrap="off"
+        />
+      </div>
+    </section>
+  )
+}
+
 function ReviewPanel({ title, children, className }: { title: string; children: ReactNode; className?: string }) {
   return (
     <section
@@ -137,11 +302,32 @@ function warningDotClass(kind: TomlValidationWarning['kind']): string {
   return 'toml-status-dot shrink-0 rounded-full bg-fg-faint'
 }
 
+type ValidationMessageParts = {
+  path?: string
+  message: string
+}
+
+function parseValidationMessage(text: string): ValidationMessageParts {
+  const separatorIndex = text.indexOf(': ')
+  if (separatorIndex <= 0) return { message: text }
+
+  const path = text.slice(0, separatorIndex).trim()
+  const message = text.slice(separatorIndex + 2).trim()
+  if (!path || !message) return { message: text }
+
+  return { path, message }
+}
+
 function WarningItem({ kind, text }: TomlValidationWarning) {
+  const { path, message } = parseValidationMessage(text)
+
   return (
-    <div className="toml-warning-item flex items-start border-t border-border-soft first:border-t-0">
+    <div className="toml-warning-item flex items-start" data-kind={kind}>
       <span aria-hidden="true" className={warningDotClass(kind)} />
-      <span className="type-caption text-fg-dim">{text}</span>
+      <div className="toml-warning-content min-w-0">
+        {path ? <span className="toml-warning-path font-mono">{path}</span> : null}
+        <span className="toml-warning-message">{message}</span>
+      </div>
     </div>
   )
 }
@@ -263,6 +449,7 @@ export function TomlView({
   modelPlacementPaths,
   modelConfigEntries,
   reviewMode = false,
+  previousToml,
   validationEnabled = false,
   configPath,
   validationWarnings,
@@ -277,6 +464,7 @@ export function TomlView({
   const lineCount = lines.length
   const sourceStyle: TomlSourceStyle | undefined = reviewMode ? undefined : { '--toml-line-count': lineCount }
   const highlighted = <HighlightedTomlLines toml={toml} />
+  const hasTomlDiff = previousToml !== undefined && previousToml !== toml
   const validationRequestKey = reviewMode && validationEnabled ? `${configPath ?? ''}\n${toml}` : undefined
   const resolvedValidationWarnings =
     validationRequestKey === undefined
@@ -322,6 +510,35 @@ export function TomlView({
       configPath={configPath}
     />
   )
+
+  if (reviewMode && hasTomlDiff) {
+    return (
+      <div className="toml-review-layout grid xl:items-stretch">
+        <TomlDiffPanel
+          oldToml={previousToml}
+          newToml={toml}
+          lineCount={lineCount}
+          copyLabel={copyLabel}
+          onCopy={() => {
+            void copyText(toml)
+          }}
+          reviewMode={reviewMode}
+          configPath={configPath}
+        />
+        <aside className="toml-review-aside flex flex-col" aria-label="TOML review actions">
+          <ValidationPanel warnings={resolvedValidationWarnings} className="flex-1 min-h-0" />
+          <LaunchSummaryPanel
+            nodes={nodes}
+            assigns={assigns}
+            defaults={defaults}
+            defaultsValues={defaultsValues}
+            launchSummaryConfig={launchSummaryConfig}
+            className="flex-1 min-h-0"
+          />
+        </aside>
+      </div>
+    )
+  }
 
   if (!reviewMode) return editor
 

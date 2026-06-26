@@ -129,6 +129,7 @@ type RuntimeConfigConstraint =
   | { kind: 'range'; min?: string; max?: string }
   | { kind: 'requires'; path: unknown }
   | { kind: 'allowed_values'; values: string[] }
+  | { kind: 'allowed_pattern'; pattern: string }
 
 export type RuntimeControlConfigSnapshot = {
   revision: number
@@ -177,6 +178,59 @@ class RuntimeControlSaveBlockedError extends Error {
   }
 }
 
+/**
+ * Format a severity level as a readable uppercase badge.
+ */
+function formatSeverity(severity: string): string {
+  return `\`${severity.toUpperCase()}\``
+}
+
+/**
+ * Format a single diagnostic as a pretty markdown block.
+ *
+ * Produces output like:
+ *
+ *   **`path.to.setting`** · `ERROR`
+ *
+ *   The validation message explaining what is wrong.
+ *
+ *   > **Help:** guidance on how to fix the issue
+ */
+function formatDiagnosticBlock(diagnostic: RuntimeControlDiagnostic): string {
+  const lines: string[] = []
+
+  // Header: path + severity
+  const headerParts: string[] = []
+  if (diagnostic.path) headerParts.push(`**\`${diagnostic.path}\`**`)
+  headerParts.push(formatSeverity(diagnostic.severity))
+  lines.push(headerParts.join(' · '))
+  lines.push('')
+
+  // Body: message
+  lines.push(diagnostic.message)
+
+  // Footer: help text
+  if (diagnostic.help) {
+    lines.push('')
+    lines.push(`> **Help:** ${diagnostic.help}`)
+  }
+
+  return lines.join('\n')
+}
+
+/**
+ * Format an array of runtime-control diagnostics as pretty-printed markdown.
+ *
+ * Each diagnostic is rendered as a block with path, severity, message, and
+ * optional help text. Multiple diagnostics are separated by horizontal rules.
+ *
+ * Returns `undefined` when the array is empty.
+ */
+export function formatConfigDiagnostics(diagnostics: readonly RuntimeControlDiagnostic[]): string | undefined {
+  if (diagnostics.length === 0) return undefined
+  return diagnostics.map(formatDiagnosticBlock).join('\n\n---\n\n')
+}
+
 export type RuntimeConfigValidateResponse = {
   ok: boolean
   path?: string
@@ -204,10 +258,15 @@ export type ConfigurationDefaultsSchemaPathEntry = {
 
 export function runtimeControlApplyErrorMessage(response: RuntimeControlApplyResponse | null | undefined) {
   if (!response) return undefined
-  return (
-    runtimeControlErrorMessage(response.error) ??
-    response.diagnostics?.find((diagnostic) => diagnostic.severity === 'error')?.message
-  )
+  const errorText = runtimeControlErrorMessage(response.error)
+  if (errorText) return errorText
+
+  const errorDiagnostics = response.diagnostics?.filter((d) => d.severity === 'error')
+  if (errorDiagnostics && errorDiagnostics.length > 0) {
+    return formatConfigDiagnostics(errorDiagnostics) ?? errorDiagnostics[0].message
+  }
+
+  return response.diagnostics?.find((d) => d.severity === 'warning')?.message ?? undefined
 }
 
 function runtimeControlErrorMessage(error: unknown): string | undefined {
@@ -458,9 +517,9 @@ function bespokeControlForRenderer(entry: RuntimeConfigSchemaEntry): Configurati
     return {
       kind: 'range',
       name,
-      value: '512',
-      min: 512,
-      max: 32768,
+      value: '2048',
+      min: 2048,
+      max: 262144,
       step: 512,
       unit: entry.presentation?.unit ?? 'tokens'
     }
@@ -950,6 +1009,15 @@ function finiteNumber(value: unknown, fallback = 0): number {
   return fallback
 }
 
+function optionalPositiveNumber(value: unknown): number | undefined {
+  const parsed = finiteNumber(value)
+  return parsed > 0 ? parsed : undefined
+}
+
+function optionalNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
 function parameterCountBFromText(text: string): number {
   const multiplied = [...text.matchAll(/(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*([bm])\b/gi)]
     .map((match) => {
@@ -1046,6 +1114,10 @@ function adaptModelToConfigModel(model: MeshModelRaw): ConfigModel {
     sizeGB,
     diskGB: finiteNumber(model.disk_gb, sizeGB),
     ctxMaxK: contextLength > 0 ? Math.round(contextLength / 1000) : 0,
+    layers: optionalPositiveNumber(model.layer_count),
+    heads: optionalPositiveNumber(model.head_count),
+    embed: optionalPositiveNumber(model.embedding_size),
+    tokenizer: optionalNonEmptyString(model.tokenizer),
     moe: model.capabilities?.moe ?? model.moe ?? false,
     vision: model.capabilities?.vision ?? model.vision ?? model.tags?.includes('vision') ?? false,
     tags: model.tags ?? []
@@ -1136,8 +1208,6 @@ function modelConfigFromEntry(
     entry,
     placementPaths.cacheTypeV ?? DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeV!
   )
-
-  config.profile = stringModelEntryValue(entry, 'models.<model-ref>.profile')
 
   const kvCachePolicy = stringModelEntryValue(
     entry,
@@ -1314,7 +1384,15 @@ function serializeDefaultSettingValue(setting: ConfigurationDefaultsSetting, val
   }
   if (typeof value === 'string' && setting.control.kind === 'choice') return normalizedChoiceValue(value)
   if (Array.isArray(value) && setting.control.kind === 'text') return value.join(',')
-  if (value && typeof value === 'object' && setting.control.kind === 'text') return JSON.stringify(value)
+  if (value && typeof value === 'object' && setting.control.kind === 'text') {
+    if (
+      setting.canonicalPath === 'telemetry.headers' &&
+      !Array.isArray(value) &&
+      Object.keys(value as Record<string, unknown>).length === 0
+    )
+      return ''
+    return JSON.stringify(value)
+  }
   if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   if (setting.control.kind === 'choice') return String(value)
@@ -1822,7 +1900,6 @@ function writeSelectedModelConfig(
     placementPaths.kvCachePolicy ?? DEFAULT_MODEL_PLACEMENT_PATHS.kvCachePolicy!,
     config?.kvCachePolicy
   )
-  writeOptionalModelEntryPath(entry, 'models.<model-ref>.profile', config?.profile?.trim())
 }
 
 export function mergeConfigurationIntoMeshConfig(

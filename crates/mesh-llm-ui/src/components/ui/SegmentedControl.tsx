@@ -18,6 +18,7 @@ type SegmentedControlProps = {
   ariaLabelledBy?: string
   className?: string
   disabled?: boolean
+  invalid?: boolean
   itemClassName?: string
   itemTabIndex?: number
   name?: string
@@ -46,6 +47,7 @@ export function SegmentedControl({
   ariaLabelledBy,
   className,
   disabled = false,
+  invalid = false,
   itemClassName,
   itemTabIndex,
   name,
@@ -59,9 +61,14 @@ export function SegmentedControl({
   return (
     <RadioGroup.Root
       aria-describedby={ariaDescribedBy}
+      aria-invalid={invalid ? 'true' : undefined}
       aria-label={ariaLabel}
       aria-labelledby={ariaLabelledBy}
-      className={cn(rootClassNameByVariant[variant], className)}
+      className={cn(
+        rootClassNameByVariant[variant],
+        variant === 'pill' && invalid && 'border-bad shadow-[var(--shadow-surface-error-inset)]',
+        className
+      )}
       disabled={disabled}
       name={name}
       onValueChange={onValueChange}

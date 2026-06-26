@@ -9,7 +9,7 @@ import type {
   ConfigurationDefaultsValues
 } from '@/features/app-tabs/types'
 import { env } from '@/lib/env'
-import { RESTART_REQUIRED_TOOLTIP } from '@/features/configuration/components/settings/RestartRequiredIndicator'
+import { SETTING_RESET_TOOLTIP } from '@/features/configuration/components/settings/SettingResetButton'
 
 const SHOW_ADVANCED_STORAGE_KEY = `${env.storageNamespace}:configuration-defaults:show-advanced:v1`
 
@@ -363,6 +363,9 @@ const schemaDrivenControlSettings = [
     label: 'Telemetry headers',
     description: 'Schema object control.',
     inheritedLabel: 'Inherited by telemetry defaults',
+    canonicalPath: 'telemetry.headers',
+    tomlSection: 'telemetry',
+    tomlKey: 'headers',
     valueSchema: { kind: 'object' },
     control: {
       kind: 'text',
@@ -665,7 +668,7 @@ describe('DefaultsTab', () => {
     expect(previewSource().value).toContain('mlock = true')
     expect(previewSource().value).toContain('[defaults.multimodal]')
     expect(previewSource().value).toContain('image_min_tokens = 64')
-    expect(previewSource().value).toContain('mmproj_offload = "on"')
+    expect(previewSource().value).toContain('mmproj_offload = true')
     expect(previewSource().value).toContain('[defaults.advanced.server]')
     expect(previewSource().value).toContain('alias = "carrack-mesh"')
 
@@ -766,28 +769,57 @@ describe('DefaultsTab', () => {
     expect(previewSource().value).not.toContain('[defaults.request_defaults]')
   })
 
-  it('shows restart indicators only for restart-required settings and exposes the exact tooltip copy on hover and focus', async () => {
+  it('shows reset actions beside controls for restart-required settings and resets only that setting', async () => {
     const user = userEvent.setup()
+    const onSettingValueChange = vi.fn()
 
-    const { unmount } = renderDefaultsTab({ data: CONFIGURATION_DEFAULTS })
+    const { rerender } = renderDefaultsTab({
+      data: CONFIGURATION_DEFAULTS,
+      values: {
+        threads: '12',
+        'top-k': '55'
+      },
+      onSettingValueChange
+    })
 
     const cpuThreadsRow = within(settingsRow('CPU threads'))
     const topKRow = within(settingsRow('Top-k'))
-    const restartIndicator = cpuThreadsRow.getByRole('button', { name: 'Restart required' })
+    const resetButton = cpuThreadsRow.getByRole('button', { name: 'Reset CPU threads to default' })
 
-    expect(restartIndicator).toBeInTheDocument()
-    expect(topKRow.queryByRole('button', { name: 'Restart required' })).not.toBeInTheDocument()
+    expect(resetButton).toBeInTheDocument()
+    expect(topKRow.queryByRole('button', { name: /reset top-k to default/i })).not.toBeInTheDocument()
+    expect(
+      screen.getByText('CPU threads').compareDocumentPosition(resetButton) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      resetButton.compareDocumentPosition(screen.getByRole('slider', { name: 'CPU threads' })) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
 
-    await user.hover(restartIndicator)
-    expect(await screen.findByText(RESTART_REQUIRED_TOOLTIP, { selector: 'div' })).toBeInTheDocument()
-
-    unmount()
-    renderDefaultsTab({ data: CONFIGURATION_DEFAULTS })
+    await user.hover(resetButton)
+    expect(await screen.findByText(SETTING_RESET_TOOLTIP, { selector: 'div' })).toBeInTheDocument()
+    await user.unhover(resetButton)
 
     await act(async () => {
-      within(settingsRow('CPU threads')).getByRole('button', { name: 'Restart required' }).focus()
+      resetButton.focus()
     })
-    expect(await screen.findByText(RESTART_REQUIRED_TOOLTIP, { selector: 'div' })).toBeInTheDocument()
+    expect(await screen.findByText(SETTING_RESET_TOOLTIP, { selector: 'div' })).toBeInTheDocument()
+
+    await user.click(resetButton)
+    expect(onSettingValueChange).toHaveBeenCalledWith('threads', '0')
+    expect(onSettingValueChange).not.toHaveBeenCalledWith('top-k', expect.anything())
+
+    rerender(
+      <DefaultsTab
+        data={CONFIGURATION_DEFAULTS}
+        values={{}}
+        onSettingValueChange={onSettingValueChange}
+        onResetAll={vi.fn()}
+      />
+    )
+    expect(
+      within(settingsRow('CPU threads')).queryByRole('button', { name: 'Reset CPU threads to default' })
+    ).toBeNull()
   })
 
   it('keeps advanced filtering consistent across real category counts, rows, and section visibility', async () => {
@@ -1028,7 +1060,7 @@ describe('DefaultsTab', () => {
   it('renders schema-driven controls with bounds, hints, runtime notes, disabled framing, arrays, objects, and conflicts', async () => {
     const user = userEvent.setup()
 
-    renderDefaultsTab({ data: schemaDrivenControlData })
+    const { rerender } = renderDefaultsTab({ data: schemaDrivenControlData })
 
     expect(screen.getByRole('slider', { name: 'Context window' })).toHaveValue('4')
     expect(screen.queryByRole('spinbutton', { name: 'Context window' })).not.toBeInTheDocument()
@@ -1066,7 +1098,9 @@ describe('DefaultsTab', () => {
 
     const preservedDeviceRow = settingsRow('Pinned GPU device')
     expect(preservedDeviceRow).toHaveAttribute('data-settings-row-disabled', 'true')
-    expect(within(preservedDeviceRow).getByRole('button', { name: 'Restart required' })).toBeInTheDocument()
+    expect(
+      within(preservedDeviceRow).queryByRole('button', { name: 'Reset Pinned GPU device to default' })
+    ).not.toBeInTheDocument()
     expect(screen.queryByText('Requires gpu.assignment = pinned')).not.toBeInTheDocument()
     expect(within(preservedDeviceRow).queryByText('Preserve value on save')).not.toBeInTheDocument()
 
@@ -1074,6 +1108,24 @@ describe('DefaultsTab', () => {
       disabledInfoTrigger(preservedDeviceRow).focus()
     })
     expect(await screen.findByText('Requires gpu.assignment = pinned', { selector: 'div' })).toBeInTheDocument()
+
+    rerender(
+      <DefaultsTab
+        data={schemaDrivenControlData}
+        values={{ 'schema-preserved-device': 'cuda:1' }}
+        onSettingValueChange={vi.fn()}
+        onResetAll={vi.fn()}
+      />
+    )
+
+    const dirtyPreservedDeviceRow = settingsRow('Pinned GPU device')
+    const unavailableInfoTrigger = disabledInfoTrigger(dirtyPreservedDeviceRow)
+    const dirtyPreservedReset = within(dirtyPreservedDeviceRow).getByRole('button', {
+      name: 'Reset Pinned GPU device to default'
+    })
+    expect(
+      unavailableInfoTrigger.compareDocumentPosition(dirtyPreservedReset) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
 
     const arrayControl = screen.getByRole('textbox', { name: 'Allowed peers' })
     expect(arrayControl).toBeInTheDocument()

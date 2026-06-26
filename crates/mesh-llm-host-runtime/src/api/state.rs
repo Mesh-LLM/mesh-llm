@@ -49,7 +49,7 @@ pub enum RuntimeControlRequest {
     },
     Load {
         spec: String,
-        profile: Option<String>,
+        profile: String,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<RuntimeLoadResponse>>,
     },
     Unload {
@@ -72,8 +72,8 @@ pub struct RuntimeLoadResponse {
     pub model: String,
     pub instance_id: String,
     #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub profile: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -100,8 +100,8 @@ pub struct RuntimeModelPayload {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub profile: String,
     pub backend: String,
     pub status: String,
     pub port: Option<u16>,
@@ -114,8 +114,8 @@ pub struct RuntimeProcessPayload {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub profile: String,
     pub backend: String,
     pub status: String,
     pub port: u16,

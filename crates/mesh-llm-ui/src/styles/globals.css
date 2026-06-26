@@ -740,6 +740,9 @@ textarea:focus-visible,
   opacity: 0.45;
   box-shadow: none;
 }
+.ui-control[aria-invalid='true'] {
+  border-color: var(--color-bad);
+}
 
 .ui-field {
   border-color: var(--color-border);
@@ -991,24 +994,68 @@ textarea:focus-visible,
   line-height: var(--toml-source-line-height);
 }
 
+.toml-diff-body {
+  min-height: min(42vh, 34rem);
+  flex: 1;
+}
+
+.toml-diff-viewer {
+  min-height: 100%;
+  height: 100%;
+  padding: 0;
+}
+
 .toml-source-input:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: calc(var(--density-type-micro) * -0.18);
 }
 
 .toml-warning-list {
-  padding-block: calc(var(--density-type-caption) * 0.64);
+  display: grid;
+  gap: calc(var(--density-type-caption) * 0.78);
+  padding: calc(var(--density-type-control-lg) * 0.94) var(--toml-panel-pad-x);
 }
 
 .toml-warning-item {
-  gap: calc(var(--density-type-caption) * 0.68);
-  padding: calc(var(--density-type-caption) * 0.68) var(--toml-panel-pad-x);
+  gap: calc(var(--density-type-caption) * 0.84);
+  padding: calc(var(--density-type-control) * 0.9);
+  border: 1px solid color-mix(in oklab, var(--color-accent) 26%, var(--color-border-soft));
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--color-accent) 8%, var(--color-panel));
+}
+
+.toml-warning-item[data-kind='warn'] {
+  border-color: color-mix(in oklab, var(--color-accent) 42%, var(--color-border-soft));
+  background: color-mix(in oklab, var(--color-accent) 11%, var(--color-panel));
+}
+
+.toml-warning-item[data-kind='ok'] {
+  border-color: color-mix(in oklab, var(--color-accent) 34%, var(--color-border-soft));
+  background: color-mix(in oklab, var(--color-accent) 9%, var(--color-panel));
 }
 
 .toml-status-dot {
-  width: calc(var(--density-type-caption) * 0.56);
-  height: calc(var(--density-type-caption) * 0.56);
-  margin-top: calc(var(--density-type-caption) * 0.36);
+  width: calc(var(--density-type-caption) * 0.68);
+  height: calc(var(--density-type-caption) * 0.68);
+  margin-top: calc(var(--density-type-control-lg) * 0.35);
+}
+
+.toml-warning-content {
+  display: grid;
+  gap: calc(var(--density-type-micro) * 0.42);
+  line-height: 1.55;
+}
+
+.toml-warning-path {
+  color: var(--color-foreground);
+  font-size: var(--density-type-control);
+  overflow-wrap: anywhere;
+}
+
+.toml-warning-message {
+  color: var(--color-fg-dim);
+  font-size: var(--density-type-control-lg);
+  overflow-wrap: anywhere;
 }
 
 .toml-status-dot-ok {

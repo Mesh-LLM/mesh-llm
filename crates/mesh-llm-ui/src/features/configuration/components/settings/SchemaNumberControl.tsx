@@ -2,6 +2,8 @@ import * as RadioGroup from '@radix-ui/react-radio-group'
 import type { PointerEvent } from 'react'
 import { Slider, type SliderBoundary } from '@/components/ui/Slider'
 import { cn } from '@/lib/cn'
+import { CtxSlider } from '@/features/configuration/components/CtxSlider'
+import { NumberField } from '@/features/configuration/components/settings/NumberField'
 import {
   effectiveRendererId,
   numericMetadataForSetting,
@@ -173,17 +175,40 @@ export function SchemaNumberControl({
     )
   }
 
+  if (rendererId === 'context-slider') {
+    const minCtx = sliderMin ?? 512
+    const selectedCtx = finiteNumber(value, minCtx)
+    const maxCtx = sliderMax ?? selectedCtx
+
+    return (
+      <div className="min-w-[320px]">
+        <CtxSlider
+          ariaDescribedBy={ariaDescribedBy}
+          ariaLabel={setting.label}
+          disabled={disabled}
+          exactValuePosition="top-right"
+          exactValueVisibility="shown"
+          invalid={invalid}
+          maxCtx={maxCtx}
+          maxSelectableCtx={maxCtx}
+          minSelectableCtx={minCtx}
+          onChange={(nextValue) => onChange(String(nextValue))}
+          showHeader={false}
+          value={selectedCtx}
+        />
+      </div>
+    )
+  }
+
   if (showSlider) {
     return (
-      <div
-        aria-invalid={invalid ? 'true' : undefined}
-        className={cn(invalid && 'rounded-[var(--radius)] ring-1 ring-bad/70')}
-      >
+      <div>
         <Slider
           ariaDescribedBy={ariaDescribedBy}
           ariaLabel={setting.label}
           disabled={disabled}
           formatValue={(nextValue) => formatNumberValue(setting, nextValue)}
+          invalid={invalid}
           lowerBound={lowerBound}
           max={sliderMax}
           min={sliderMin}
@@ -202,27 +227,20 @@ export function SchemaNumberControl({
 
   return (
     <div className="grid min-w-[280px] justify-items-end gap-2">
-      <div className="flex items-center justify-end gap-2">
-        <input
-          aria-describedby={ariaDescribedBy}
-          aria-invalid={invalid ? 'true' : undefined}
-          aria-label={setting.label}
-          className={cn(
-            'ui-control h-[32px] w-[108px] rounded-[var(--radius)] border bg-surface px-2.5 font-mono text-[length:var(--density-type-control)] text-foreground outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent',
-            disabled && 'cursor-not-allowed opacity-60',
-            invalid && 'border-bad shadow-[var(--shadow-surface-error-inset)]'
-          )}
-          disabled={disabled}
-          max={numeric.max}
-          min={numeric.min}
-          name={'name' in setting.control ? setting.control.name : setting.id}
-          onChange={(event) => onChange(event.currentTarget.value)}
-          step={step}
-          type="number"
-          value={value}
-        />
-        {unit ? <span className="font-mono text-[length:var(--density-type-caption)] text-fg-dim">{unit}</span> : null}
-      </div>
+      <NumberField
+        aria-describedby={ariaDescribedBy}
+        aria-label={setting.label}
+        disabled={disabled}
+        invalid={invalid}
+        max={numeric.max}
+        min={numeric.min}
+        name={'name' in setting.control ? setting.control.name : setting.id}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        step={step}
+        type="number"
+        unit={unit}
+        value={value}
+      />
     </div>
   )
 }

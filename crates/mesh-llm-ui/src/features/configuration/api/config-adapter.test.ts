@@ -8,6 +8,7 @@ import {
   createConfigurationMeshLLMSettingsFromSchema,
   createConfigurationModelSettingsFromSchema,
   createConfigurationNetworkSettingsFromSchema,
+  formatConfigDiagnostics,
   mergeConfigurationIntoMeshConfig,
   mergeConfigurationDefaultsIntoMeshConfig,
   runtimeControlApplyErrorMessage,
@@ -16,6 +17,7 @@ import {
   type RuntimeControlMeshConfig
 } from '@/features/configuration/api/config-adapter'
 import type { MeshModelRaw, StatusPayload } from '@/lib/api/types'
+import { validateConfigurationSettingValue } from '@/features/configuration/components/settings/schema-field-validation'
 
 type DefaultsUiSchemaReference = {
   readonly settings: readonly {
@@ -202,6 +204,29 @@ const SCHEMA_REFERENCE: RuntimeConfigSchemaReference = {
         setting_order: 10,
         unit: 'GB',
         control_hint: 'range'
+      }
+    },
+    {
+      canonical_path: 'defaults.model_fit.ctx_size',
+      owner: 'built_in',
+      source: { kind: 'built_in' },
+      value_schema: { kind: 'integer' },
+      support: 'supported',
+      control_surfaces: ['config_file'],
+      apply_mode: 'static_on_load',
+      restart_scope: 'model_reload',
+      visibility: 'user',
+      presentation: {
+        label: 'Context window size',
+        help: 'Set the default context window size in tokens.',
+        category_id: 'memory',
+        category_label: 'Memory',
+        category_summary: 'Memory defaults',
+        category_order: 20,
+        setting_order: 15,
+        unit: 'tokens',
+        control_hint: 'range',
+        renderer_id: 'context-slider'
       }
     },
     {
@@ -523,6 +548,10 @@ describe('adaptStatusToConfiguration', () => {
         size_gb: 4.4,
         node_count: 1,
         quantization: 'Q4_K_M',
+        tokenizer: 'gpt2',
+        layer_count: 32,
+        head_count: 32,
+        embedding_size: 4096,
         moe: false,
         vision: false
       }
@@ -535,6 +564,10 @@ describe('adaptStatusToConfiguration', () => {
         id: 'Hermes-2-Pro-Mistral-7B-Q4_K_M',
         sizeGB: 4.4,
         ctxMaxK: 0,
+        layers: 32,
+        heads: 32,
+        embed: 4096,
+        tokenizer: 'gpt2',
         moe: false,
         vision: false
       })
@@ -603,6 +636,7 @@ describe('adaptStatusToConfiguration', () => {
       (setting) => setting.id === 'defaults.request_defaults.reasoning_enabled'
     )
     const kvCache = defaults.settings.find((setting) => setting.id === 'defaults.model_fit.kv_cache_policy')
+    const ctxSize = defaults.settings.find((setting) => setting.id === 'defaults.model_fit.ctx_size')
 
     expect(temperature).toMatchObject({
       id: 'defaults.request_defaults.temperature',
@@ -630,6 +664,63 @@ describe('adaptStatusToConfiguration', () => {
         kind: 'choice',
         options: expect.arrayContaining([{ value: 'quality', label: 'quality' }])
       })
+    })
+    expect(ctxSize).toMatchObject({
+      rendererId: 'context-slider',
+      control: expect.objectContaining({
+        kind: 'range',
+        value: '2048',
+        min: 2048,
+        max: 262144,
+        step: 512
+      })
+    })
+  })
+
+  it('plumbs schema constraints onto generated UI settings and validation honors them', () => {
+    const schema: RuntimeConfigSchemaReference = {
+      settings: [
+        {
+          canonical_path: 'telemetry.service_name',
+          owner: 'built_in',
+          source: { kind: 'built_in' },
+          value_schema: { kind: 'string' },
+          support: 'supported',
+          control_surfaces: ['config_file'],
+          apply_mode: 'static_on_load',
+          restart_scope: 'model_reload',
+          visibility: 'user',
+          constraints: [{ kind: 'allowed_pattern', pattern: '^[A-Za-z0-9_-]+$' }],
+          presentation: {
+            label: 'Service name',
+            help: 'Human-readable service name.',
+            category_id: 'telemetry',
+            category_label: 'Telemetry',
+            category_summary: 'Telemetry settings',
+            category_order: 10,
+            setting_order: 10,
+            control_hint: 'text'
+          }
+        }
+      ]
+    }
+
+    const meshllmSettings = createConfigurationMeshLLMSettingsFromSchema(schema)
+    const serviceName = meshllmSettings.settings.find((setting) => setting.id === 'telemetry.service_name')
+
+    expect(serviceName).toMatchObject({
+      id: 'telemetry.service_name',
+      canonicalPath: 'telemetry.service_name',
+      validationConstraints: [{ kind: 'allowed_pattern', pattern: '^[A-Za-z0-9_-]+$' }]
+    })
+
+    expect(serviceName).not.toBeUndefined()
+    if (!serviceName) return
+
+    expect(validateConfigurationSettingValue(serviceName, 'good_service-name_01')).toEqual({ valid: true })
+    expect(validateConfigurationSettingValue(serviceName, '@@*(!111---aa')).toMatchObject({
+      valid: false,
+      message: expect.stringContaining('invalid format')
     })
   })
 
@@ -1165,6 +1256,9 @@ describe('adaptStatusToConfiguration', () => {
   it('hydrates and merges schema-derived defaults and plugin settings', () => {
     const values = createConfigurationDefaultsValuesFromMeshConfig(
       {
+        telemetry: {
+          headers: {}
+        },
         defaults: {
           request_defaults: {
             reasoning_enabled: false
@@ -1218,6 +1312,34 @@ describe('adaptStatusToConfiguration', () => {
         }
       ]
     })
+  })
+
+  it('hydrates empty telemetry headers as an empty editable object value', () => {
+    const schema: RuntimeConfigSchemaReference = {
+      settings: [
+        {
+          ...schemaSetting('telemetry.headers', 'telemetry-headers', { kind: 'object' }),
+          presentation: {
+            label: 'Telemetry headers',
+            category_id: 'telemetry',
+            category_label: 'Telemetry',
+            category_summary: 'Telemetry settings',
+            control_hint: 'text'
+          }
+        }
+      ]
+    }
+
+    const values = createConfigurationDefaultsValuesFromMeshConfig(
+      {
+        telemetry: {
+          headers: {}
+        }
+      },
+      schema
+    )
+
+    expect(values['telemetry.headers']).toBe('')
   })
 
   it('preserves dotted plugin names and literal dotted plugin setting keys in runtime-control merges', () => {
@@ -2061,7 +2183,99 @@ describe('adaptStatusToConfiguration', () => {
           }
         ]
       })
-    ).toBe('reasoning_format must be one of: auto, none, deepseek, deepseek-legacy, hidden')
+    ).toBe(
+      [
+        '**`models[0].request_defaults.reasoning_format`** · `ERROR`',
+        '',
+        'reasoning_format must be one of: auto, none, deepseek, deepseek-legacy, hidden',
+        '',
+        '> **Help:** choose one of the supported reasoning formats'
+      ].join('\n')
+    )
+  })
+
+  it('formats a single error diagnostic as markdown', () => {
+    expect(
+      formatConfigDiagnostics([
+        {
+          code: 'invalid_value',
+          severity: 'error',
+          source: 'validation',
+          path: 'mesh_requirements.require_release_attestation',
+          message:
+            'mesh_requirements.require_release_attestation is true but mesh_requirements.release_signer_keys is empty',
+          help: 'set at least one release signer key or disable require_release_attestation'
+        }
+      ])
+    ).toBe(
+      [
+        '**`mesh_requirements.require_release_attestation`** · `ERROR`',
+        '',
+        'mesh_requirements.require_release_attestation is true but mesh_requirements.release_signer_keys is empty',
+        '',
+        '> **Help:** set at least one release signer key or disable require_release_attestation'
+      ].join('\n')
+    )
+  })
+
+  it('formats multiple diagnostics separated by a horizontal rule', () => {
+    const result = formatConfigDiagnostics([
+      {
+        code: 'missing_value',
+        severity: 'error',
+        source: 'validation',
+        path: 'mesh_requirements.release_signer_keys',
+        message: 'release_signer_keys is empty',
+        help: 'add at least one signer key'
+      },
+      {
+        code: 'conflict',
+        severity: 'warning',
+        source: 'validation',
+        path: 'mesh_requirements.some_other',
+        message: 'this setting conflicts with another',
+        help: 'resolve the conflict'
+      }
+    ])
+
+    const blocks = result!.split('\n\n---\n\n')
+    expect(blocks).toHaveLength(2)
+
+    expect(blocks[0]).toBe(
+      [
+        '**`mesh_requirements.release_signer_keys`** · `ERROR`',
+        '',
+        'release_signer_keys is empty',
+        '',
+        '> **Help:** add at least one signer key'
+      ].join('\n')
+    )
+    expect(blocks[1]).toBe(
+      [
+        '**`mesh_requirements.some_other`** · `WARNING`',
+        '',
+        'this setting conflicts with another',
+        '',
+        '> **Help:** resolve the conflict'
+      ].join('\n')
+    )
+  })
+
+  it('omits path and help when they are not provided', () => {
+    expect(
+      formatConfigDiagnostics([
+        {
+          code: 'general_error',
+          severity: 'error',
+          source: 'validation',
+          message: 'something went wrong'
+        }
+      ])
+    ).toBe(['`ERROR`', '', 'something went wrong'].join('\n'))
+  })
+
+  it('returns undefined for an empty diagnostics array', () => {
+    expect(formatConfigDiagnostics([])).toBeUndefined()
   })
 
   it('keeps values keyed by canonical schema paths', () => {
@@ -2070,6 +2284,7 @@ describe('adaptStatusToConfiguration', () => {
     expect(defaults.settings.map((setting) => setting.id)).toEqual([
       'defaults.throughput.parallel',
       'defaults.hardware.safety_margin_gb',
+      'defaults.model_fit.ctx_size',
       'defaults.model_fit.kv_cache_policy',
       'defaults.request_defaults.temperature',
       'defaults.request_defaults.reasoning_enabled'

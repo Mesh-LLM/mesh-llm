@@ -4355,7 +4355,7 @@ fn internal_model_for_public_id(
         }
         let (public_base, _public_profile) =
             crate::network::openai::ingress::parse_model_with_profile(&public_id);
-        if public_base == requested_base && requested_profile.is_none() {
+        if public_base == requested_base && requested_profile.is_empty() {
             return Some(model.clone());
         }
         None
@@ -4374,7 +4374,7 @@ fn descriptor_for_model<'a>(
 fn public_model_id(
     model_name: &str,
     descriptor: Option<&mesh::ServedModelDescriptor>,
-    profile: Option<&str>,
+    profile: &str,
 ) -> String {
     // A descriptor with an `artifact` field has enough information to
     // produce a public ID that round-trips to the same model. Without
@@ -4398,9 +4398,10 @@ fn public_model_id(
     };
 
     // Append profile suffix for non-default profiles
-    match profile.filter(|p| !p.is_empty()) {
-        Some(p) => format!("{}#{}", base_id, p),
-        None => base_id,
+    if profile.is_empty() {
+        base_id
+    } else {
+        format!("{}#{}", base_id, profile)
     }
 }
 
@@ -6690,25 +6691,25 @@ mod tests {
 
     #[test]
     fn public_model_id_with_named_profile() {
-        let result = public_model_id("Qwen3-8B", None, Some("low-ctx"));
+        let result = public_model_id("Qwen3-8B", None, "low-ctx");
         assert_eq!(result, "Qwen3-8B#low-ctx");
     }
 
     #[test]
     fn public_model_id_without_profile() {
-        let result = public_model_id("Qwen3-8B", None, None);
+        let result = public_model_id("Qwen3-8B", None, "");
         assert_eq!(result, "Qwen3-8B");
     }
 
     #[test]
     fn public_model_id_with_empty_profile() {
-        let result = public_model_id("Qwen3-8B", None, Some(""));
+        let result = public_model_id("Qwen3-8B", None, "");
         assert_eq!(result, "Qwen3-8B");
     }
 
     #[test]
     fn public_model_id_with_huggingface_ref_and_profile() {
-        let result = public_model_id("org/repo:Q4_K_M", None, Some("high-ctx"));
+        let result = public_model_id("org/repo:Q4_K_M", None, "high-ctx");
         assert_eq!(result, "org/repo:Q4_K_M#high-ctx");
     }
 }

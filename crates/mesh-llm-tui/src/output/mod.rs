@@ -933,7 +933,7 @@ pub struct LlamaInstanceState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunningModelState {
     pub model: String,
-    pub profile: Option<String>,
+    pub profile: String,
     pub status: RuntimeStatus,
     pub internal_port: Option<u16>,
     pub role: Option<String>,
@@ -2129,7 +2129,14 @@ impl DashboardState {
     }
 
     fn apply_model_queue_event(&mut self, model: &str) {
-        self.upsert_model(model, None, RuntimeStatus::Loading, None, None, None);
+        self.upsert_model(
+            model,
+            String::new(),
+            RuntimeStatus::Loading,
+            None,
+            None,
+            None,
+        );
         self.upsert_loading_model_row(model);
         self.upsert_loading_process_row(model);
     }
@@ -2142,7 +2149,7 @@ impl DashboardState {
     ) {
         self.upsert_model(
             model,
-            None,
+            String::new(),
             RuntimeStatus::Ready,
             internal_port,
             role.clone(),
@@ -2171,7 +2178,14 @@ impl DashboardState {
                 self.apply_model_queue_event(model);
             }
             OutputEvent::ModelUnloading { model } | OutputEvent::ModelUnloaded { model } => {
-                self.upsert_model(model, None, RuntimeStatus::Stopped, None, None, None);
+                self.upsert_model(
+                    model,
+                    String::new(),
+                    RuntimeStatus::Stopped,
+                    None,
+                    None,
+                    None,
+                );
             }
             OutputEvent::ModelReady {
                 model,
@@ -2186,7 +2200,7 @@ impl DashboardState {
             } => {
                 self.upsert_model(
                     model,
-                    None,
+                    String::new(),
                     RuntimeStatus::Starting,
                     None,
                     role.clone(),
@@ -2305,7 +2319,7 @@ impl DashboardState {
                 if let Some(model) = model {
                     self.upsert_model(
                         model,
-                        None,
+                        String::new(),
                         RuntimeStatus::Error,
                         Some(*http_port),
                         None,
@@ -2916,7 +2930,7 @@ impl DashboardState {
     fn upsert_model(
         &mut self,
         model: &str,
-        profile: Option<String>,
+        profile: String,
         status: RuntimeStatus,
         internal_port: Option<u16>,
         role: Option<String>,
@@ -3841,14 +3855,15 @@ fn render_models(state: &DashboardState) -> Vec<String> {
     }
 
     lines.extend(state.running_models.iter().map(|model| {
-        let mut line = if let Some(profile) = &model.profile {
-            if !profile.is_empty() {
-                format!("{} [{}]   {}", model.model, profile, model.status.as_str())
-            } else {
-                format!("{}   {}", model.model, model.status.as_str())
-            }
-        } else {
+        let mut line = if model.profile.is_empty() {
             format!("{}   {}", model.model, model.status.as_str())
+        } else {
+            format!(
+                "{} [{}]   {}",
+                model.model,
+                model.profile,
+                model.status.as_str()
+            )
         };
         if let Some(port) = model.internal_port {
             line.push_str(&format!("   port={port}"));

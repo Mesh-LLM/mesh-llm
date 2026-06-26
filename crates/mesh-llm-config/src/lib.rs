@@ -225,8 +225,17 @@ ctx_size = 4096
                     gpu_assignment: Some(GpuAssignment::Pinned),
                     ..LocalServingNodeConfig::default()
                 })?;
+                let derived_profile = {
+                    let entry = config
+                        .config()
+                        .models
+                        .iter()
+                        .find(|m| m.model == "Qwen/Qwen3-8B-GGUF:Q4_K_M")
+                        .expect("model entry exists after configure_local_serving_node");
+                    entry.derived_profile()
+                };
                 config
-                    .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", None)?
+                    .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", derived_profile)?
                     .max_tokens(1024)
                     .temperature(0.2);
                 Ok(())
@@ -640,6 +649,7 @@ gpu_id = "pci:0000:65:00.0"
             "ConfigEditor::model_refs",
             "ConfigEditor::upsert_plugin",
             "ModelConfigEditor::model_ref",
+            "ModelConfigEditor::derived_profile",
             "PluginConfigEditor::name",
         ]);
         let actual = authoring_public_methods();

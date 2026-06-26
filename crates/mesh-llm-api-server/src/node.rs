@@ -31,7 +31,7 @@ pub struct DeleteModelOptions {
 #[derive(Clone, Debug, Default)]
 pub struct LoadModelOptions {
     pub device_policy: DevicePolicy,
-    pub profile: Option<String>,
+    pub profile: String,
 }
 
 #[derive(Clone, Debug)]
@@ -143,7 +143,7 @@ pub struct PruneResult {
 #[derive(Clone, Debug)]
 pub struct ServedModel {
     pub model_ref: String,
-    pub profile: Option<String>,
+    pub profile: String,
     pub model_id: String,
     pub instance_id: Option<String>,
     pub state: ServingModelState,

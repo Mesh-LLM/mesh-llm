@@ -23,6 +23,7 @@ export type SliderProps = {
   disabled?: boolean
   formatValue?: (value: string) => ReactNode
   inputClassName?: string
+  invalid?: boolean
   label?: ReactNode
   lowerBound?: SliderBoundary
   max: number
@@ -117,6 +118,7 @@ export function Slider({
   disabled = false,
   formatValue,
   inputClassName,
+  invalid = false,
   label,
   lowerBound,
   max,
@@ -150,7 +152,14 @@ export function Slider({
   )
 
   return (
-    <div className={cn('grid min-w-[280px] gap-1.5', disabled && 'opacity-60', className)}>
+    <div
+      className={cn(
+        'grid min-w-[280px] gap-1.5',
+        disabled && 'opacity-60',
+        invalid && 'rounded-[var(--radius)] ring-1 ring-bad/70',
+        className
+      )}
+    >
       {hasLabel || valueLabelPlacement === 'top' ? (
         <div className="flex items-baseline justify-between gap-3">
           {hasLabel ? (
@@ -164,6 +173,7 @@ export function Slider({
       <div className="flex items-center gap-3">
         <input
           aria-describedby={ariaDescribedBy}
+          aria-invalid={invalid ? 'true' : undefined}
           aria-label={ariaLabel}
           aria-valuetext={resolvedAriaValueText}
           className={cn(

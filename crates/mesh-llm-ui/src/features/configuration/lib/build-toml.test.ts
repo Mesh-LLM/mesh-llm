@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CONFIGURATION_DEFAULTS, CONFIGURATION_HARNESS } from '@/features/app-tabs/data'
 import type { ConfigAssign, ConfigModel, ConfigNode, ConfigurationDefaultsHarnessData } from '@/features/app-tabs/types'
-import { buildTOML } from '@/features/configuration/lib/build-toml'
+import { buildTOML, defaultSettingTomlScalar } from '@/features/configuration/lib/build-toml'
 
 describe('buildTOML', () => {
   it('escapes generated string values and omits legacy model keys', () => {
@@ -92,6 +92,54 @@ describe('buildTOML', () => {
     expect(toml).not.toContain('chat_template =')
     expect(toml).not.toContain('model_runtime')
     expect(toml).not.toContain(`id = ${JSON.stringify(CONFIGURATION_HARNESS.assigns[0]?.id)}`)
+  })
+
+  it('omits empty telemetry headers while preserving non-empty header objects', () => {
+    const telemetryDefaults: ConfigurationDefaultsHarnessData = {
+      categories: [
+        {
+          id: 'telemetry',
+          label: 'Telemetry',
+          summary: 'Telemetry defaults.',
+          help: 'Telemetry defaults',
+          tomlSection: 'telemetry'
+        }
+      ],
+      settings: [
+        {
+          id: 'telemetry.headers',
+          categoryId: 'telemetry',
+          canonicalPath: 'telemetry.headers',
+          tomlSection: 'telemetry',
+          tomlKey: 'headers',
+          icon: 'gauge',
+          label: 'Telemetry headers',
+          description: 'Telemetry request headers.',
+          inheritedLabel: 'Inherited by telemetry exporters',
+          valueSchema: { kind: 'object' },
+          control: {
+            kind: 'text',
+            name: 'headers',
+            value: ''
+          }
+        }
+      ],
+      preview: []
+    }
+
+    const emptyToml = buildTOML([], [], [], {
+      defaults: telemetryDefaults,
+      defaultsValues: { 'telemetry.headers': '{}' }
+    })
+    const nonEmptyToml = buildTOML([], [], [], {
+      defaults: telemetryDefaults,
+      defaultsValues: { 'telemetry.headers': '{"Authorization":"Bearer test"}' }
+    })
+
+    expect(emptyToml).not.toContain('[telemetry]')
+    expect(emptyToml).not.toContain('headers =')
+    expect(nonEmptyToml).toContain('[telemetry]')
+    expect(nonEmptyToml).toContain('headers = { Authorization = "Bearer test" }')
   })
 
   it('omits disabled draft speculative settings unless draft mode is selected and changed', () => {
@@ -335,6 +383,31 @@ describe('buildTOML', () => {
     expect(toml).toContain('[defaults.hardware]')
     expect(toml).toContain('gpu_layers = -1')
     expect(toml).not.toContain('gpu_layers = "-1"')
+  })
+
+  it('emits bool-or-auto choices as booleans while preserving auto as a string sentinel', () => {
+    const continuousBatching = CONFIGURATION_DEFAULTS.settings.find((setting) => setting.id === 'continuous-batching')
+    expect(continuousBatching).toBeDefined()
+
+    const enabledToml = buildTOML([], [], [], {
+      defaults: CONFIGURATION_DEFAULTS,
+      defaultsValues: { 'continuous-batching': 'on' }
+    })
+    const disabledToml = buildTOML([], [], [], {
+      defaults: CONFIGURATION_DEFAULTS,
+      defaultsValues: { 'continuous-batching': 'off' }
+    })
+    const autoToml = buildTOML([], [], [], {
+      defaults: CONFIGURATION_DEFAULTS,
+      defaultsValues: { 'continuous-batching': 'auto' }
+    })
+
+    expect(enabledToml).toContain('continuous_batching = true')
+    expect(enabledToml).not.toContain('continuous_batching = "on"')
+    expect(disabledToml).toContain('continuous_batching = false')
+    expect(disabledToml).not.toContain('continuous_batching = "off"')
+    expect(autoToml).not.toContain('continuous_batching')
+    expect(defaultSettingTomlScalar(continuousBatching!, 'auto')).toBe('"auto"')
   })
 
   it('quotes numeric-looking text defaults while keeping numeric controls unquoted', () => {
@@ -677,6 +750,71 @@ describe('buildTOML', () => {
     expect(toml).toContain('flash_attention = "enabled"')
     expect(toml).toContain('cache_type_k = "q8_0"')
     expect(toml).toContain('cache_type_v = "q5_1"')
+  })
+
+  it('deduplicates keys when explicit config overlaps with preserved model config entry', () => {
+    const node: ConfigNode = {
+      id: 'self',
+      hostname: 'local',
+      region: 'local',
+      status: 'online',
+      cpu: 'cpu',
+      ramGB: 64,
+      gpus: [{ idx: 0, name: 'RTX 4090', totalGB: 24 }],
+      placement: 'pooled'
+    }
+    const model: ConfigModel = {
+      id: 'qwen4',
+      name: 'Qwen3.5-4B-Q4_K_XL',
+      family: 'qwen3',
+      paramsB: 4,
+      quant: 'Q4_K_XL',
+      sizeGB: 2.5,
+      diskGB: 2.5,
+      ctxMaxK: 256,
+      moe: false,
+      vision: false,
+      tags: []
+    }
+    const assign: ConfigAssign = {
+      id: 'assign-qwen',
+      modelId: model.id,
+      nodeId: node.id,
+      containerIdx: 0,
+      ctx: 262144,
+      config: {
+        slots: 4,
+        flashAttention: 'enabled',
+        cacheTypeK: 'q8_0'
+      }
+    }
+
+    const toml = buildTOML([node], [assign], [model], {
+      modelConfigEntries: [
+        {
+          model: model.name,
+          model_fit: {
+            cache_type_k: 'f16',
+            cache_type_v: 'q4_0',
+            flash_attention: 'disabled'
+          },
+          throughput: {
+            parallel: 2
+          }
+        }
+      ]
+    })
+
+    // Explicit config values win over preserved entry values
+    expect(toml).toContain('parallel = 4')
+    expect(toml).toContain('flash_attention = "enabled"')
+    expect(toml).toContain('cache_type_k = "q8_0"')
+    // Preserved-only values still appear
+    expect(toml).toContain('cache_type_v = "q4_0"')
+    // No duplicate keys — regression test for parallel duplication
+    expect(toml.match(/^parallel = /gm)).toHaveLength(1)
+    expect(toml.match(/^flash_attention = /gm)).toHaveLength(1)
+    expect(toml.match(/^cache_type_k = /gm)).toHaveLength(1)
   })
 
   it('writes pinned GPU defaults only after a runtime GPU option is explicitly selected', () => {

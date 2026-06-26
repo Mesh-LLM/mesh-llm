@@ -580,6 +580,9 @@ pub enum ConfigConstraint {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max: Option<String>,
     },
+    AllowedPattern {
+        pattern: String,
+    },
     Requires {
         path: ConfigPath,
     },

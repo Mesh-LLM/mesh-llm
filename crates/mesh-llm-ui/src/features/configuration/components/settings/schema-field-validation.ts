@@ -4,7 +4,7 @@ import type {
   ConfigurationSettingValueSchema,
   ConfigurationSettingValidationConstraint
 } from '@/features/app-tabs/types'
-import { acceptedValuesForSetting, numericMetadataForSetting } from './schema-control-utils'
+import { acceptedValuesForSetting, hasSchemaKind, numericMetadataForSetting } from './schema-control-utils'
 
 export type SchemaFieldValidationResult = {
   readonly message?: string
@@ -35,8 +35,12 @@ function firstIssueMessage(result: ReturnType<typeof v.safeParse>) {
   return result.issues[0]?.message
 }
 
-function validateNumber(value: string, setting: ConfigurationDefaultsSetting, integer: boolean) {
+function validateNumber(value: string, setting: ConfigurationDefaultsSetting, integer: boolean): string | undefined {
+  if (value.trim().length === 0) return undefined
   const parsed = numericValue(value)
+  if (parsed === undefined) {
+    return `${setting.label} must be a number.`
+  }
   const label = setting.label
   const numeric = numericMetadataForSetting(setting)
   const schema = integer
@@ -67,6 +71,56 @@ function validateNumber(value: string, setting: ConfigurationDefaultsSetting, in
   return firstIssueMessage(v.safeParse(schema, parsed))
 }
 
+/**
+ * Returns true when `value` parses as a URL with a well-formed hostname.
+ * Rejects incomplete numeric hosts like `http://21.131.41:1311` that the
+ * browser URL constructor silently pads to `21.131.0.41`.
+ */
+function isValidUrl(value: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return false
+  }
+  const host = parsed.hostname
+
+  // IPv6 in brackets — always valid when the URL constructor accepted it.
+  if (host.startsWith('[') && host.endsWith(']')) return true
+
+  // All-numeric host. Reject unless every octet is 0-255 and there are exactly 4.
+  if (/^\d+(\.\d+)*$/.test(host)) {
+    const octets = host.split('.')
+    if (octets.length !== 4) return false
+    if (
+      !octets.every((o) => {
+        const n = Number(o)
+        return Number.isInteger(n) && n >= 0 && n <= 255
+      })
+    )
+      return false
+    // The URL constructor normalizes incomplete numeric hosts (e.g. 21.131.41 → 21.131.0.41).
+    // Compare the reconstructed host against the original authority to catch this.
+    const originalAuthority = value.match(/^https?:\/\/([^/]+)/)?.[1] ?? ''
+    const originalHost = originalAuthority.replace(/:\d+$/, '')
+    if (originalHost !== host) return false
+    return true
+  }
+
+  // Port must be in the valid TCP/UDP range 1–65535. Port 0 is rejected (not a
+  // usable endpoint). The URL constructor silently accepts out-of-range and
+  // negative ports, so we must check explicitly.
+  if (parsed.port !== '' && (Number(parsed.port) < 1 || Number(parsed.port) > 65535)) return false
+
+  return true
+}
+
+function validateUrl(value: string, label: string): string | undefined {
+  if (value.trim().length === 0) return undefined
+  if (!isValidUrl(value)) return `${label} must be a valid URL.`
+  return undefined
+}
+
 function validateObject(value: string, label: string) {
   if (value.trim().length === 0) return undefined
 
@@ -89,12 +143,28 @@ function validateObject(value: string, label: string) {
   }
 }
 
+function validateAllowedPattern(value: string, pattern: string, label: string): string | undefined {
+  if (value.trim().length === 0) return undefined
+
+  let compiled: RegExp
+  try {
+    compiled = new RegExp(pattern)
+  } catch {
+    return `${label} has an invalid validation pattern.`
+  }
+
+  return compiled.test(value) ? undefined : `${label} has an invalid format.`
+}
+
 function validateSchemaKind(
   value: string,
   setting: ConfigurationDefaultsSetting,
   schema: ConfigurationSettingValueSchema
 ): string | undefined {
   const label = setting.label
+
+  // Skip schema-level validation for empty values — only validate format when a value is provided.
+  if (value.trim().length === 0) return undefined
 
   switch (schema.kind) {
     case 'boolean':
@@ -132,8 +202,7 @@ function validateSchemaKind(
     case 'object':
       return validateObject(value, label)
     case 'url':
-      if (value.trim().length === 0) return undefined
-      return firstIssueMessage(v.safeParse(v.pipe(v.string(), v.url(`${label} must be a full URL.`)), value))
+      return validateUrl(value, label)
     case 'path':
     case 'socket_addr':
     case 'string':
@@ -156,15 +225,18 @@ function validateConstraint(
 
   switch (constraint.kind) {
     case 'non_empty':
-      return firstIssueMessage(v.safeParse(v.pipe(v.string(), v.nonEmpty(`${label} cannot be empty.`)), value.trim()))
+      // Empty fields are allowed — validation applies only when a value is provided.
+      return undefined
     case 'positive': {
       const parsed = numericValue(value)
+      if (parsed === undefined) return undefined
       return firstIssueMessage(
         v.safeParse(v.pipe(v.number(`${label} must be a number.`), v.minValue(1, `${label} must be positive.`)), parsed)
       )
     }
     case 'range': {
       const parsed = numericValue(value)
+      if (parsed === undefined) return undefined
       const min = numericConstraintValue(constraint.min)
       const max = numericConstraintValue(constraint.max)
       return firstIssueMessage(
@@ -179,6 +251,7 @@ function validateConstraint(
       )
     }
     case 'allowed_values':
+      if (value.trim().length === 0) return undefined
       return firstIssueMessage(
         v.safeParse(
           v.pipe(
@@ -191,23 +264,37 @@ function validateConstraint(
           value
         )
       )
+    case 'allowed_pattern':
+      return validateAllowedPattern(value, constraint.pattern, label)
     case 'requires':
       return undefined
   }
+}
+
+function shouldValidateAcceptedValues(setting: ConfigurationDefaultsSetting, value: string): boolean {
+  const schema = setting.valueSchema
+  if (!schema) return true
+
+  const acceptsNumeric = hasSchemaKind(schema, 'integer') || hasSchemaKind(schema, 'float')
+  if (acceptsNumeric && numericValue(value) !== undefined) return false
+
+  const acceptsBoolean = hasSchemaKind(schema, 'boolean')
+  if (acceptsBoolean && ['on', 'off', 'true', 'false'].includes(value)) return false
+
+  return true
 }
 
 export function validateConfigurationSettingValue(
   setting: ConfigurationDefaultsSetting,
   value: string
 ): SchemaFieldValidationResult {
-  const requiresValue = (setting.validationConstraints ?? []).some((constraint) => constraint.kind === 'non_empty')
-  if (!requiresValue && value.trim().length === 0) return { valid: true }
+  if (value.trim().length === 0) return { valid: true }
 
   const schemaMessage = setting.valueSchema ? validateSchemaKind(value, setting, setting.valueSchema) : undefined
   if (schemaMessage) return { valid: false, message: schemaMessage }
 
   const acceptedValues = acceptedValuesForSetting(setting)
-  if (acceptedValues.length > 0) {
+  if (acceptedValues.length > 0 && shouldValidateAcceptedValues(setting, value)) {
     const acceptedMessage = validateConstraint(value, setting, { kind: 'allowed_values', values: acceptedValues })
     if (acceptedMessage) return { valid: false, message: acceptedMessage }
   }

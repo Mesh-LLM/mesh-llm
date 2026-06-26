@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, Blocks, Brackets, Computer, Cpu, Network, ShieldCheck, SlidersHorizontal } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { CatalogPopover } from '@/features/configuration/components/CatalogPopover'
 import { ConfigurationHeader } from '@/features/configuration/components/ConfigurationHeader'
@@ -14,6 +15,7 @@ import { ConfigurationTabs, type ConfigurationTabItem } from '@/features/configu
 import { ConfigurationWakePolicyTab } from '@/features/configuration/components/ConfigurationWakePolicyTab'
 import type { ConfigurationTabId } from '@/features/configuration/components/configuration-tab-ids'
 import { jumpCtxPower, stepCtx } from '@/features/configuration/components/ctx-slider-utils'
+import { buildTOML } from '@/features/configuration/lib/build-toml'
 import { DefaultsTab } from '@/features/configuration/components/DefaultsTab'
 import { NodeRail } from '@/features/configuration/components/NodeRail'
 import { NodeSection } from '@/features/configuration/components/NodeSection'
@@ -253,6 +255,9 @@ function ConfigurationEditorPage({
     () => (localNodeId ? assigns.filter((assign) => assign.nodeId === localNodeId) : []),
     [assigns, localNodeId]
   )
+  const [savedConfiguration, setSavedConfiguration] = useState<ConfigurationState>(() =>
+    cloneConfigurationState(initialConfiguration)
+  )
   const localInitialConfiguration = useMemo(
     () =>
       createInitialConfigurationState(
@@ -262,24 +267,21 @@ function ConfigurationEditorPage({
       ),
     [initialConfiguration, localNodeId]
   )
+  const localSavedConfiguration = useMemo(
+    () =>
+      createInitialConfigurationState(
+        savedConfiguration.nodes.filter((node) => node.id === localNodeId),
+        savedConfiguration.assigns.filter((assign) => assign.nodeId === localNodeId),
+        savedConfiguration.defaultsValues
+      ),
+    [localNodeId, savedConfiguration]
+  )
   const [activeTabState, setActiveTabState] = useState<ConfigurationTabId>(initialTab)
   const activeTab = controlledActiveTab ?? activeTabState
   const [collapsedMap, setCollapsedMap] = useState<Record<string, boolean>>({})
-  const [savedConfiguration, setSavedConfiguration] = useState<ConfigurationState>(() =>
-    cloneConfigurationState(initialConfiguration)
-  )
   const [isSavingConfiguration, setIsSavingConfiguration] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const appliedConfigurationSourceKeyRef = useRef(configurationSourceKey)
-  useEffect(() => {
-    if (appliedConfigurationSourceKeyRef.current === configurationSourceKey) return
-
-    const nextConfiguration = latestInitialConfigurationRef.current
-    resetConfiguration(nextConfiguration)
-    setSavedConfiguration(cloneConfigurationState(nextConfiguration))
-    setSaveError(null)
-    appliedConfigurationSourceKeyRef.current = configurationSourceKey
-  }, [configurationSourceKey, resetConfiguration])
   const {
     selectedId,
     selectedNodeId,
@@ -362,6 +364,15 @@ function ConfigurationEditorPage({
     [savedConfiguration]
   )
   const hasUnsavedChanges = currentSnapshot !== savedSnapshot
+  useEffect(() => {
+    if (appliedConfigurationSourceKeyRef.current === configurationSourceKey || hasUnsavedChanges) return
+
+    const nextConfiguration = latestInitialConfigurationRef.current
+    resetConfiguration(nextConfiguration)
+    setSavedConfiguration(cloneConfigurationState(nextConfiguration))
+    setSaveError(null)
+    appliedConfigurationSourceKeyRef.current = configurationSourceKey
+  }, [configurationSourceKey, hasUnsavedChanges, resetConfiguration])
   const saveAlertMessage = useMemo(() => {
     if (!hasUnsavedChanges || !saveError) return null
     if (saveError === RUNTIME_CONTROL_SAVE_UNAVAILABLE_ERROR) {
@@ -646,6 +657,24 @@ function ConfigurationEditorPage({
       pluginsSettingsData
     ]
   )
+  const previousToml = useMemo(
+    () =>
+      buildTOML(localSavedConfiguration.nodes, localSavedConfiguration.assigns, displayData.catalog, {
+        defaults: tomlSettings,
+        defaultsValues: localSavedConfiguration.defaultsValues,
+        modelPlacementPaths: displayData.modelPlacementPaths,
+        modelConfigEntries: displayData.modelConfigEntries
+      }),
+    [
+      displayData.catalog,
+      displayData.modelConfigEntries,
+      displayData.modelPlacementPaths,
+      localSavedConfiguration.assigns,
+      localSavedConfiguration.defaultsValues,
+      localSavedConfiguration.nodes,
+      tomlSettings
+    ]
+  )
 
   const tabs: ConfigurationTabItem[] = [
     {
@@ -896,6 +925,7 @@ function ConfigurationEditorPage({
           models={displayData.catalog}
           defaults={tomlSettings}
           defaultsValues={defaultsValues}
+          previousToml={previousToml}
           modelPlacementPaths={displayData.modelPlacementPaths}
           modelConfigEntries={displayData.modelConfigEntries}
           reviewMode
@@ -941,8 +971,26 @@ function ConfigurationEditorPage({
         {saveAlertMessage ? (
           <div className="px-5 pb-3">
             <Alert variant="destructive">
-              <AlertTriangle aria-hidden="true" className="size-4" />
-              <AlertDescription>{saveAlertMessage}</AlertDescription>
+              <AlertTriangle aria-hidden="true" className="size-4 shrink-0 mt-0.5" />
+              <AlertDescription className="min-w-0">
+                <ReactMarkdown
+                  components={{
+                    p: ({ children }) => <>{children}</>,
+                    blockquote: ({ children }) => (
+                      <div className="mt-1 border-l-2 border-destructive/40 pl-2 text-xs text-foreground/70">
+                        {children}
+                      </div>
+                    ),
+                    hr: () => <div className="my-2 border-t border-destructive/20" />,
+                    strong: ({ children }) => <span className="font-semibold">{children}</span>,
+                    code: ({ children }) => (
+                      <code className="rounded bg-destructive/10 px-1 py-0.5 text-xs font-mono">{children}</code>
+                    )
+                  }}
+                >
+                  {saveAlertMessage}
+                </ReactMarkdown>
+              </AlertDescription>
             </Alert>
           </div>
         ) : null}

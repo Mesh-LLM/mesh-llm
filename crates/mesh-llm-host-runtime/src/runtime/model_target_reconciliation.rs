@@ -185,7 +185,7 @@ impl From<ModelTargetCapacityAdviceState> for ModelTargetReconciliationCapacityS
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ModelTargetReconciliationAction {
     pub(crate) model_ref: String,
-    pub(crate) profile: Option<String>,
+    pub(crate) profile: String,
     pub(crate) model_name: Option<String>,
     pub(crate) load_spec: PathBuf,
     pub(crate) replace_model_ref: Option<String>,
@@ -232,7 +232,7 @@ pub(crate) fn plan_model_target_reconciliation(
 
         actions.push(ModelTargetReconciliationAction {
             model_ref: target.model_ref.clone(),
-            profile: Some(target.profile.clone()),
+            profile: target.profile.clone(),
             model_name: target.model_name.clone(),
             load_spec,
             replace_model_ref,
@@ -416,7 +416,7 @@ mod tests {
             actions,
             vec![ModelTargetReconciliationAction {
                 model_ref: "org/model@main:file.gguf".to_string(),
-                profile: Some(String::new()),
+                profile: String::new(),
                 model_name: Some("Qwen3-8B-Q4_K_M".to_string()),
                 load_spec: PathBuf::from("/models/qwen.gguf"),
                 replace_model_ref: None,
@@ -456,7 +456,7 @@ mod tests {
             actions,
             vec![ModelTargetReconciliationAction {
                 model_ref: "org/large@main:file.gguf".to_string(),
-                profile: Some(String::new()),
+                profile: String::new(),
                 model_name: Some("Large".to_string()),
                 load_spec: PathBuf::from("/models/large.gguf"),
                 replace_model_ref: Some("Small".to_string()),

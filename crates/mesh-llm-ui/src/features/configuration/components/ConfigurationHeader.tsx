@@ -68,7 +68,11 @@ export function ConfigurationHistoryActions({
           : 'No changes to save'
 
   return (
-    <fieldset aria-label="Configuration history actions" className="flex items-center gap-1.5 border-0 p-0">
+    <fieldset
+      aria-label="Configuration history actions"
+      className="flex items-center gap-1.5 border-0 p-0"
+      data-config-selection-area="true"
+    >
       <button
         className={iconActionClass}
         disabled={!canUndo}

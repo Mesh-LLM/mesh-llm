@@ -411,7 +411,7 @@ impl ConfigEditor {
         if node.owner_control_advertise_addr.is_some() {
             self.set_owner_control_advertise_addr(node.owner_control_advertise_addr);
         }
-        let mut model = self.upsert_model(node.model, None)?;
+        let mut model = self.upsert_model(node.model, String::new())?;
         if let Some(runtime) = node.runtime {
             model.runtime(runtime);
         }
@@ -433,20 +433,16 @@ impl ConfigEditor {
     pub fn upsert_model(
         &mut self,
         model_ref: impl AsRef<str>,
-        profile: Option<String>,
+        derived_profile: String,
     ) -> Result<ModelConfigEditor<'_>> {
         let model_ref = normalize_non_empty(model_ref.as_ref(), "model ref")?;
-        let index = match self
-            .config
-            .models
-            .iter()
-            .position(|entry| entry.model == model_ref && entry.profile == profile)
-        {
+        let index = match self.config.models.iter().position(|entry| {
+            entry.model == model_ref && entry.derived_profile() == derived_profile
+        }) {
             Some(index) => index,
             None => {
                 self.config.models.push(ModelConfigEntry {
                     model: model_ref,
-                    profile,
                     ..ModelConfigEntry::default()
                 });
                 self.config.models.len() - 1
@@ -460,12 +456,12 @@ impl ConfigEditor {
     pub fn remove_model(
         &mut self,
         model_ref: impl AsRef<str>,
-        profile: Option<String>,
+        derived_profile: String,
     ) -> Result<&mut Self> {
         let model_ref = normalize_non_empty(model_ref.as_ref(), "model ref")?;
-        self.config
-            .models
-            .retain(|entry| !(entry.model == model_ref && entry.profile == profile));
+        self.config.models.retain(|entry| {
+            !(entry.model == model_ref && entry.derived_profile() == derived_profile)
+        });
         Ok(self)
     }
 
@@ -591,6 +587,10 @@ pub struct ModelConfigEditor<'a> {
 impl ModelConfigEditor<'_> {
     pub fn model_ref(&self) -> &str {
         &self.model.model
+    }
+
+    pub fn derived_profile(&self) -> String {
+        self.model.derived_profile()
     }
 
     pub fn runtime(&mut self, runtime: ModelRuntimeKind) -> &mut Self {
@@ -1015,14 +1015,14 @@ mod schema_tests {
     }
 
     #[test]
-    fn model_config_entry_roundtrips_with_profile() {
+    fn model_config_entry_roundtrips_with_derived_profile() {
         let mut editor = ConfigEditor::new(MeshConfig::default());
         editor
-            .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", Some("low-ctx".into()))
+            .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", String::new())
             .unwrap()
             .context_size(4096);
         editor
-            .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", Some("high-ctx".into()))
+            .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", String::new())
             .unwrap()
             .context_size(16384);
 
@@ -1031,28 +1031,23 @@ mod schema_tests {
         let deserialized = parse_config_toml(&serialized).expect("should deserialize");
 
         assert_eq!(deserialized.models.len(), 2);
-        let low_ctx = deserialized
+        let profiles: Vec<String> = deserialized
             .models
             .iter()
-            .find(|e| e.profile.as_deref() == Some("low-ctx"))
-            .expect("should have low-ctx entry");
-        let high_ctx = deserialized
-            .models
-            .iter()
-            .find(|e| e.profile.as_deref() == Some("high-ctx"))
-            .expect("should have high-ctx entry");
-
-        assert_eq!(low_ctx.model, "Qwen/Qwen3-8B-GGUF:Q4_K_M");
-        assert_eq!(low_ctx.model_fit.as_ref().unwrap().ctx_size, Some(4096));
-        assert_eq!(high_ctx.model, "Qwen/Qwen3-8B-GGUF:Q4_K_M");
-        assert_eq!(high_ctx.model_fit.as_ref().unwrap().ctx_size, Some(16384));
+            .map(|e| e.derived_profile())
+            .collect();
+        let profile_strs: Vec<&str> = profiles.iter().map(|s| s.as_str()).collect();
+        assert_ne!(
+            profile_strs[0], profile_strs[1],
+            "different ctx_size must produce different derived profiles"
+        );
     }
 
     #[test]
     fn model_config_entry_without_profile_omits_profile_key() {
         let mut editor = ConfigEditor::new(MeshConfig::default());
         editor
-            .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", None)
+            .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", String::new())
             .unwrap()
             .context_size(8192);
 
@@ -1064,18 +1059,33 @@ mod schema_tests {
         let deserialized = parse_config_toml(&serialized).expect("should deserialize");
         assert_eq!(deserialized.models.len(), 1);
         assert_eq!(deserialized.models[0].model, "Qwen/Qwen3-8B-GGUF:Q4_K_M");
-        assert_eq!(deserialized.models[0].profile, None);
+        assert!(!deserialized.models[0].derived_profile().is_empty());
     }
 
     #[test]
-    fn upsert_model_dedup_by_profile() {
+    fn upsert_model_dedup_by_derived_profile() {
         let mut editor = ConfigEditor::new(MeshConfig::default());
         editor
-            .upsert_model("Qwen3-8B", Some("low-ctx".into()))
+            .upsert_model("Qwen3-8B", String::new())
             .unwrap()
             .context_size(4096);
         editor
-            .upsert_model("Qwen3-8B", Some("low-ctx".into()))
+            .upsert_model("Qwen3-8B", String::new())
+            .unwrap()
+            .context_size(8192);
+
+        let config = editor.into_config();
+        assert_eq!(config.models.len(), 2);
+    }
+
+    #[test]
+    fn upsert_model_dedup_same_config() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        let mut model_a = editor.upsert_model("Qwen3-8B", String::new()).unwrap();
+        model_a.context_size(4096);
+        let profile_str = model_a.derived_profile();
+        editor
+            .upsert_model("Qwen3-8B", profile_str)
             .unwrap()
             .context_size(8192);
 
@@ -1088,55 +1098,54 @@ mod schema_tests {
     }
 
     #[test]
-    fn upsert_model_coexists_with_different_profiles() {
+    fn upsert_model_coexists_with_different_config() {
         let mut editor = ConfigEditor::new(MeshConfig::default());
         editor
-            .upsert_model("Qwen3-8B", Some("low-ctx".into()))
-            .unwrap();
+            .upsert_model("Qwen3-8B", String::new())
+            .unwrap()
+            .context_size(4096);
         editor
-            .upsert_model("Qwen3-8B", Some("high-ctx".into()))
-            .unwrap();
+            .upsert_model("Qwen3-8B", String::new())
+            .unwrap()
+            .context_size(8192);
 
         let config = editor.into_config();
+        // Different ctx_size → different derived profile → both coexist.
         assert_eq!(config.models.len(), 2);
     }
 
     #[test]
-    fn upsert_model_none_profile_is_distinct() {
+    fn remove_model_by_derived_profile() {
         let mut editor = ConfigEditor::new(MeshConfig::default());
         editor
-            .upsert_model("Qwen3-8B", Some("low-ctx".into()))
-            .unwrap();
-        editor.upsert_model("Qwen3-8B", None).unwrap();
+            .upsert_model("Qwen3-8B", String::new())
+            .unwrap()
+            .context_size(4096);
+        {
+            let mut e = editor.upsert_model("Qwen3-8B", String::new()).unwrap();
+            e.context_size(16384);
+        }
+        editor.upsert_model("Qwen3-8B", String::new()).unwrap();
+
+        assert_eq!(editor.into_config().models.len(), 3);
+
+        // Re-create editor for the remove step (into_config consumes self).
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor
+            .upsert_model("Qwen3-8B", String::new())
+            .unwrap()
+            .context_size(4096);
+        let high_ctx_profile = {
+            let mut e = editor.upsert_model("Qwen3-8B", String::new()).unwrap();
+            e.context_size(16384);
+            e.derived_profile()
+        };
+        editor.upsert_model("Qwen3-8B", String::new()).unwrap();
+
+        editor.remove_model("Qwen3-8B", high_ctx_profile).unwrap();
 
         let config = editor.into_config();
         assert_eq!(config.models.len(), 2);
-    }
-
-    #[test]
-    fn remove_model_by_profile() {
-        let mut editor = ConfigEditor::new(MeshConfig::default());
-        editor
-            .upsert_model("Qwen3-8B", Some("low-ctx".into()))
-            .unwrap();
-        editor
-            .upsert_model("Qwen3-8B", Some("high-ctx".into()))
-            .unwrap();
-        editor.upsert_model("Qwen3-8B", None).unwrap();
-
-        editor
-            .remove_model("Qwen3-8B", Some("low-ctx".into()))
-            .unwrap();
-
-        let config = editor.into_config();
-        assert_eq!(config.models.len(), 2);
-        assert!(
-            config
-                .models
-                .iter()
-                .any(|e| e.profile.as_deref() == Some("high-ctx"))
-        );
-        assert!(config.models.iter().any(|e| e.profile.is_none()));
     }
 
     #[test]
@@ -1155,7 +1164,7 @@ ctx_size = 8192
         let config = parse_config_toml(toml_str).expect("should parse");
         assert_eq!(config.models.len(), 1);
         assert_eq!(config.models[0].model, "Qwen/Qwen3-8B-GGUF:Q4_K_M");
-        assert_eq!(config.models[0].profile, None);
+        assert!(!config.models[0].derived_profile().is_empty());
         assert_eq!(
             config.models[0].model_fit.as_ref().unwrap().ctx_size,
             Some(8192)
@@ -1164,6 +1173,9 @@ ctx_size = 8192
         let serialized = config_to_toml(&config).expect("should serialize");
         let deserialized = parse_config_toml(&serialized).expect("should re-parse");
         assert_eq!(deserialized.models.len(), 1);
-        assert_eq!(deserialized.models[0].profile, None);
+        assert_eq!(
+            deserialized.models[0].derived_profile(),
+            config.models[0].derived_profile()
+        );
     }
 }

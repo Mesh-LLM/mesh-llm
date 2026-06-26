@@ -2,7 +2,7 @@ import { LoadingGhostBlock } from '@/components/ui/LoadingGhostBlock'
 
 const TAB_GHOST_ROWS = ['defaults', 'deployment', 'signing', 'integrations', 'toml']
 const CATEGORY_GHOST_ROWS = ['runtime', 'memory', 'speculative', 'request', 'transport', 'multimodal', 'server']
-const DEFAULT_SETTING_GHOST_ROWS = ['threads', 'batch', 'continuous', 'gpu-layers', 'parallel', 'profile', 'attention']
+const DEFAULT_SETTING_GHOST_ROWS = ['threads', 'batch', 'continuous', 'gpu-layers', 'parallel', 'attention']
 
 export function ConfigurationHeaderLoadingGhost() {
   return (

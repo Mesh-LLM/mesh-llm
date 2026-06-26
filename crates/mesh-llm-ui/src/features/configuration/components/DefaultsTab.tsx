@@ -23,7 +23,7 @@ import {
 } from '@/features/configuration/components/settings/SettingsScaffold'
 import { ConfigurationDefaultsControl } from '@/features/configuration/components/settings/ConfigurationDefaultsControl'
 import { SettingInfoTrigger } from '@/features/configuration/components/settings/DisabledControlFrame'
-import { RestartRequiredIndicator } from '@/features/configuration/components/settings/RestartRequiredIndicator'
+import { SettingResetButton } from '@/features/configuration/components/settings/SettingResetButton'
 import { validateConfigurationSettingValue } from '@/features/configuration/components/settings/schema-field-validation'
 import { configurationControlDetailBuckets } from '@/features/configuration/components/settings/ConfigurationDefaultsControl'
 import { useDefaultsSettingsState } from '@/features/configuration/hooks/useDefaultsSettingsState'
@@ -35,6 +35,7 @@ import {
 import {
   defaultSettingTomlPlacement,
   defaultSettingTomlScalar,
+  shouldOmitDefaultSettingValue,
   shouldOmitSettingFromGeneratedToml
 } from '@/features/configuration/lib/build-toml'
 import type {
@@ -141,7 +142,7 @@ function buildDefaultsPreviewLines(
 
     const value = getSettingValue(setting, values)
     if (value === getSettingBaselineValue(setting)) continue
-    if (setting.control.kind === 'text' && value.trim().length === 0) continue
+    if (shouldOmitDefaultSettingValue(setting, value)) continue
 
     const placement = defaultSettingTomlPlacement(setting, categoryById)
     const line: DefaultsPreviewLine = {
@@ -199,15 +200,14 @@ function settingDescription(setting: ConfigurationDefaultsSetting) {
 
 function settingLabelAccessory(
   setting: ConfigurationDefaultsSetting,
-  restartRequired: boolean,
   visibleDetails: readonly string[],
-  disabledDetails: readonly string[]
+  disabledDetails: readonly string[],
+  resetAction?: ReactNode
 ) {
-  if (!restartRequired && visibleDetails.length === 0 && disabledDetails.length === 0) return undefined
+  if (visibleDetails.length === 0 && disabledDetails.length === 0 && !resetAction) return undefined
 
   return (
     <div className="flex items-center gap-1.5">
-      {restartRequired ? <RestartRequiredIndicator /> : null}
       {visibleDetails.length > 0 ? (
         <SettingInfoTrigger
           details={visibleDetails}
@@ -222,6 +222,7 @@ function settingLabelAccessory(
           label={`Why unavailable: ${setting.label}`}
         />
       ) : null}
+      {resetAction}
     </div>
   )
 }
@@ -299,6 +300,13 @@ function DefaultsSection({
         const descriptionId = `${setting.id}-description`
         const validationId = `${setting.id}-validation`
         const ariaDescribedBy = validation.message ? `${descriptionId} ${validationId}` : descriptionId
+        const resetAction =
+          dirty && setting.mutability === 'restart-required' ? (
+            <SettingResetButton
+              label={`Reset ${setting.label} to default`}
+              onClick={() => onSettingValueChange(setting.id, setting.control.value)}
+            />
+          ) : undefined
 
         return (
           <SettingsRow
@@ -313,9 +321,9 @@ function DefaultsSection({
             label={setting.label}
             labelAccessory={settingLabelAccessory(
               setting,
-              setting.mutability === 'restart-required',
               details.visibleDetails,
-              details.disabledDetails
+              details.disabledDetails,
+              resetAction
             )}
             hint={settingDescription(setting)}
             showDisabledReason={false}

@@ -554,6 +554,13 @@ fn build_model_payload_from_catalog_entry(
         .map(|m| m.context_length)
         .filter(|value| *value > 0);
     let quantization = model_quantization_for_view(metadata, catalog_entry.as_ref());
+    let tokenizer = metadata
+        .map(|m| m.tokenizer_model_name.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let layer_count = compact_metadata_nonzero(metadata, |m| m.layer_count);
+    let head_count = compact_metadata_nonzero(metadata, |m| m.head_count);
+    let embedding_size = compact_metadata_nonzero(metadata, |m| m.embedding_size);
     let draft_model = catalog_entry
         .as_ref()
         .and_then(crate::models::remote_catalog_model_draft_ref);
@@ -600,6 +607,10 @@ fn build_model_payload_from_catalog_entry(
         architecture,
         context_length,
         quantization,
+        tokenizer,
+        layer_count,
+        head_count,
+        embedding_size,
         description,
         multimodal: capability_view.multimodal,
         multimodal_status: capability_view.multimodal_status,
@@ -629,6 +640,13 @@ fn build_model_payload_from_catalog_entry(
         run_command: format!("mesh-llm serve --model {}", command_ref),
         auto_command: format!("mesh-llm serve --auto --model {}", command_ref),
     }
+}
+
+fn compact_metadata_nonzero(
+    metadata: Option<&crate::proto::node::CompactModelMetadata>,
+    field: impl FnOnce(&crate::proto::node::CompactModelMetadata) -> u32,
+) -> Option<u32> {
+    metadata.map(field).filter(|value| *value > 0)
 }
 
 fn model_size_gb_for_view(

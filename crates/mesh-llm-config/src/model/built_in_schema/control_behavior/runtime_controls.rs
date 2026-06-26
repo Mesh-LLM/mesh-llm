@@ -1,7 +1,8 @@
 use super::shared::{
-    absent_condition, equals_bool_condition, present_condition, push_dependency_disable,
-    push_non_empty_constraint, push_range_constraint, push_requires_constraint, set_numeric,
-    set_static_options, set_static_unavailable, set_text_format,
+    absent_condition, equals_bool_condition, present_condition, push_allowed_pattern_constraint,
+    push_dependency_disable, push_non_empty_constraint, push_range_constraint,
+    push_requires_constraint, set_numeric, set_static_options, set_static_unavailable,
+    set_text_format,
 };
 use super::*;
 
@@ -19,7 +20,11 @@ pub(super) fn apply_runtime_controls_behavior(setting: &mut ConfigSettingSchema,
             push_requires_constraint(setting, "owner_control.bind");
         }
         "telemetry.enabled" => set_static_options(setting),
-        "telemetry.service_name" | "telemetry.endpoint" | "telemetry.metrics.endpoint" => {
+        "telemetry.service_name" => {
+            push_non_empty_constraint(setting);
+            push_allowed_pattern_constraint(setting, r"^[A-Za-z0-9_-]+$");
+        }
+        "telemetry.endpoint" | "telemetry.metrics.endpoint" => {
             push_non_empty_constraint(setting);
         }
         "telemetry.export_interval_secs" => {

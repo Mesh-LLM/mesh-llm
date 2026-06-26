@@ -1010,7 +1010,7 @@ export const CONFIGURATION_DEFAULTS = {
       inheritedLabel: 'Applied when a placement does not override context size',
       tomlSection: MODEL_FIT_TOML_SECTION,
       mutability: 'restart-required',
-      control: { kind: 'range', name: 'ctx_size', value: '512', min: 512, max: 131072, step: 512, unit: 'tokens' }
+      control: { kind: 'range', name: 'ctx_size', value: '2048', min: 2048, max: 262144, step: 512, unit: 'tokens' }
     },
     {
       id: 'batch',

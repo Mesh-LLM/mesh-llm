@@ -13,6 +13,7 @@ type SchemaControlConstraint =
   | { readonly kind: 'range'; readonly min?: string; readonly max?: string }
   | { readonly kind: 'requires'; readonly path: unknown }
   | { readonly kind: 'allowed_values'; readonly values: readonly string[] }
+  | { readonly kind: 'allowed_pattern'; readonly pattern: string }
 
 type SchemaControlPresentation = {
   readonly placeholder?: string

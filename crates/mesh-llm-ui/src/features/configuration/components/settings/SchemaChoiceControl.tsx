@@ -65,11 +65,9 @@ export function SchemaChoiceControl({
   return (
     <div
       aria-disabled={disabled ? 'true' : undefined}
-      aria-invalid={invalid ? 'true' : undefined}
       className={cn(
         'min-w-0',
-        effectiveRendererId(setting) === 'kv-cache-policy' && 'flex flex-col items-stretch md:items-end',
-        invalid && 'rounded-[var(--radius)] ring-1 ring-bad/70'
+        effectiveRendererId(setting) === 'kv-cache-policy' && 'flex flex-col items-stretch md:items-end'
       )}
       data-setting-control-disabled={disabled ? 'true' : undefined}
     >
@@ -78,6 +76,7 @@ export function SchemaChoiceControl({
           ariaDescribedBy={ariaDescribedBy}
           ariaLabel={setting.label}
           disabled={disabled}
+          invalid={invalid}
           name={'name' in setting.control ? setting.control.name : setting.id}
           onValueChange={onChange}
           options={options}
@@ -88,6 +87,7 @@ export function SchemaChoiceControl({
           ariaDescribedBy={ariaDescribedBy}
           ariaLabel={setting.label}
           disabled={disabled}
+          invalid={invalid}
           itemClassName={choiceItemClassName(setting)}
           name={'name' in setting.control ? setting.control.name : setting.id}
           onValueChange={onChange}

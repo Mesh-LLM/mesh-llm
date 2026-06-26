@@ -78,6 +78,15 @@ function formatOptional(value: number | string | undefined): string {
   return value === undefined ? 'auto' : `${value}`
 }
 
+const summarySectionClass = 'text-[length:var(--density-type-caption)] font-semibold uppercase text-foreground'
+const summaryListClass = 'mt-2 space-y-1.5 text-[length:var(--density-type-caption)]'
+const summaryRowClass = 'flex justify-between gap-3'
+const summaryLabelClass = 'text-fg-faint'
+const summaryValueClass = 'font-mono text-[length:var(--density-type-label)] font-medium tabular-nums text-foreground'
+const summaryMutedValueClass =
+  'font-mono text-[length:var(--density-type-label)] font-medium tabular-nums text-fg-faint'
+const summaryTotalLabelClass = 'font-medium text-foreground'
+
 function hasOverride(value: string | number | undefined): boolean {
   if (value === undefined || value === 'auto' || value === '') return false
   if (typeof value === 'number') return value !== 1
@@ -102,6 +111,19 @@ function ConfigControl({
       >
         OVERRIDE
       </div>
+    </div>
+  )
+}
+
+function ConfigSectionTitle({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div
+      className={cn(
+        'text-balance border-t border-border-soft pt-3 text-[length:var(--density-type-caption)] font-semibold uppercase text-foreground',
+        className
+      )}
+    >
+      {children}
     </div>
   )
 }
@@ -186,7 +208,7 @@ function SlotMeter({
   onChange: (value: number) => void
 }) {
   const min = 1
-  const max = 16
+  const max = 32
   const slotRange = Math.max(1, Math.floor(max - min + 1))
   const slotOptions = Array.from({ length: slotRange }, (_, index) => min + index)
   const selectedSlots = Math.max(min, Math.min(max, value))
@@ -301,6 +323,7 @@ export function ModelConfigCard({
   const displayKV = kvGB(model, assign.ctx)
   const weightsGB = modelWeightsGB(model)
   const total = weightsGB + kv
+  const headroomGB = Math.max(0, containerFreeGB - kv)
   const ctxGBPerK = contextGBPerK(model)
   const maxAllowedCtx = Math.max(CTX_MIN, ctxGBPerK > 0 ? (Math.max(0, containerFreeGB) / ctxGBPerK) * 1024 : CTX_MIN)
   const safeCtx = Math.min(CTX_MAX, maxAllowedCtx)
@@ -373,6 +396,9 @@ export function ModelConfigCard({
       ) : null}
 
       <div className="mt-2.5">
+        <span className="mb-2 block text-[length:var(--density-type-caption)] font-semibold uppercase text-foreground">
+          Runtime
+        </span>
         <CtxSlider
           value={assign.ctx}
           onChange={onCtxChange}
@@ -380,16 +406,10 @@ export function ModelConfigCard({
           invalid={hasError}
           controlTabIndex={controlTabIndex}
         />
-        <p className="mt-1.5 text-right text-[length:var(--density-type-label)] text-fg-faint">
-          max ≈ {fmtCtx(snapCtx(maxAllowedCtx))} on this {node.placement === 'pooled' ? 'pool' : 'GPU'}
-        </p>
       </div>
 
       <div className="mt-4 grid gap-x-6 border-t border-border-soft pt-4 md:grid-cols-[minmax(0,1fr)_240px]">
         <div className="min-w-0 flex flex-col gap-3">
-          <span className="text-[length:var(--density-type-caption)] font-semibold uppercase text-fg-faint">
-            Runtime
-          </span>
           <ConfigControl label="Slots" override={hasOverride(modelConfig.slots)}>
             <SlotMeter
               value={modelConfig.slots ?? 1}
@@ -400,16 +420,7 @@ export function ModelConfigCard({
 
           {advanced && (
             <>
-              <div className="border-t border-border-soft pt-3" />
-              <ConfigControl label="Profile" override={hasOverride(modelConfig.profile)}>
-                <TextConfigInput
-                  label="Profile"
-                  value={modelConfig.profile ?? ''}
-                  placeholder="default"
-                  tabIndex={controlTabIndex}
-                  onChange={(profile) => patchConfig({ profile })}
-                />
-              </ConfigControl>
+              <ConfigSectionTitle>Placement</ConfigSectionTitle>
 
               <ConfigControl label="Split mode" override={hasOverride(modelConfig.splitMode)}>
                 <SegmentedChoice
@@ -431,7 +442,8 @@ export function ModelConfigCard({
                 />
               </ConfigControl>
 
-              <div className="border-t border-border-soft pt-3" />
+              <ConfigSectionTitle>Assets</ConfigSectionTitle>
+
               <ConfigControl label="mmproj" override={hasOverride(modelConfig.mmproj)}>
                 <TextConfigInput
                   label="mmproj"
@@ -452,7 +464,8 @@ export function ModelConfigCard({
                 />
               </ConfigControl>
 
-              <div className="border-t border-border-soft pt-3" />
+              <ConfigSectionTitle>Tuning</ConfigSectionTitle>
+
               <ConfigControl label="Flash attention" override={hasOverride(modelConfig.flashAttention)}>
                 <SegmentedChoice
                   label="Flash attention"
@@ -510,44 +523,48 @@ export function ModelConfigCard({
             </>
           )}
         </div>
-        <aside className="w-[240px] shrink-0 self-start rounded-[var(--radius-lg)] border border-border-soft bg-background/45 p-3">
-          <div className="text-[length:var(--density-type-caption)] font-semibold uppercase text-fg-faint">Memory</div>
-          <dl className="mt-2 space-y-1.5 text-[length:var(--density-type-caption)]">
-            <div className="flex justify-between gap-3">
-              <dt className="text-fg-dim">Weights</dt>
-              <dd className="font-mono text-foreground">{formatGBLabel(weightsGB)}</dd>
+        <aside className="w-[240px] shrink-0 self-start rounded-[var(--radius-lg)] border border-[color:color-mix(in_oklab,var(--color-border-soft)_72%,transparent)] bg-[color:color-mix(in_oklab,var(--color-background)_82%,black_18%)] p-3 shadow-[inset_0_1px_0_color-mix(in_oklab,var(--color-foreground)_4%,transparent)]">
+          <div className={summarySectionClass}>Memory</div>
+          <dl className={summaryListClass}>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Weights</dt>
+              <dd className={summaryValueClass}>{formatGBLabel(weightsGB)}</dd>
             </div>
-            <div className="flex justify-between gap-3">
-              <dt className="text-fg-dim">KV cache</dt>
-              <dd className="font-mono text-foreground">{formatGBLabel(displayKV)}</dd>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>KV cache</dt>
+              <dd className={summaryValueClass}>{formatGBLabel(displayKV)}</dd>
             </div>
-            <div className="flex justify-between gap-3 border-t border-border-soft pt-1.5">
-              <dt className="text-foreground">Total</dt>
-              <dd className="font-mono text-foreground">{formatGBLabel(total)}</dd>
+            <div className={`${summaryRowClass} border-t border-border-soft/60 pt-1.5`}>
+              <dt className={summaryTotalLabelClass}>Total</dt>
+              <dd className={summaryValueClass}>{formatGBLabel(total)}</dd>
+            </div>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Headroom</dt>
+              <dd className={summaryMutedValueClass}>{formatGBLabel(headroomGB)}</dd>
             </div>
           </dl>
-          <div className="mt-4 text-[length:var(--density-type-caption)] font-semibold uppercase text-fg-faint">
-            Model
+          <div className="mt-3 border-t border-border-soft/60 pt-3">
+            <div className={summarySectionClass}>Model</div>
           </div>
-          <dl className="mt-2 space-y-1.5 text-[length:var(--density-type-caption)]">
-            <div className="flex justify-between gap-3">
-              <dt className="text-fg-dim">Layers</dt>
-              <dd className="font-mono text-foreground">{formatOptional(model.layers)}</dd>
+          <dl className={summaryListClass}>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Layers</dt>
+              <dd className={summaryValueClass}>{formatOptional(model.layers)}</dd>
             </div>
-            <div className="flex justify-between gap-3">
-              <dt className="text-fg-dim">Heads</dt>
-              <dd className="font-mono text-foreground">{formatOptional(model.heads)}</dd>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Heads</dt>
+              <dd className={summaryValueClass}>{formatOptional(model.heads)}</dd>
             </div>
-            <div className="flex justify-between gap-3">
-              <dt className="text-fg-dim">Embed</dt>
-              <dd className="font-mono text-foreground">{formatOptional(model.embed)}</dd>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Embed</dt>
+              <dd className={summaryValueClass}>{formatOptional(model.embed)}</dd>
             </div>
-            <div className="flex justify-between gap-3">
-              <dt className="text-fg-dim">Tokenizer</dt>
-              <dd className="font-mono text-foreground">{formatOptional(model.tokenizer)}</dd>
+            <div className={summaryRowClass}>
+              <dt className={summaryLabelClass}>Tokenizer</dt>
+              <dd className={summaryValueClass}>{formatOptional(model.tokenizer)}</dd>
             </div>
           </dl>
-          <p className="mt-4 border-t border-border-soft pt-2 text-[length:var(--density-type-label)] text-fg-faint">
+          <p className="mt-3 border-t border-border-soft/60 pt-2 text-[length:var(--density-type-label)] font-medium text-fg-faint">
             max ctx ≈ {fmtCtx(snapCtx(maxAllowedCtx))} on this {node.placement === 'pooled' ? 'pool' : 'GPU'}
           </p>
         </aside>

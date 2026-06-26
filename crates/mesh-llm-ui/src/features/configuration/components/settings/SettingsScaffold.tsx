@@ -145,9 +145,8 @@ export function SettingsRow({
   return (
     <div
       className={cn(
-        'grid gap-3 border-t border-border-soft py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center',
+        'grid min-h-[68px] gap-3 border-t border-border-soft py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-start',
         disabled && 'opacity-55',
-        errorMessage && 'border-bad/55',
         className
       )}
       data-settings-row="true"
@@ -156,7 +155,7 @@ export function SettingsRow({
       aria-disabled={disabled ? 'true' : undefined}
     >
       <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex min-h-6 flex-wrap items-start gap-2">
           <p
             className={cn(
               'text-[length:var(--density-type-control)] font-medium leading-tight text-foreground',
@@ -165,7 +164,7 @@ export function SettingsRow({
           >
             {label}
           </p>
-          {labelAccessory ? <div className="shrink-0">{labelAccessory}</div> : null}
+          {labelAccessory ? <div className="-mt-0.5 shrink-0">{labelAccessory}</div> : null}
         </div>
         <p className="mt-1 type-caption text-fg-dim" id={hintId}>
           {hint}
@@ -179,7 +178,7 @@ export function SettingsRow({
           <p className="mt-1 type-caption text-fg-dim">{disabledReason}</p>
         ) : null}
       </div>
-      <div className="flex min-w-0 justify-end md:justify-self-stretch">{children}</div>
+      <div className="flex min-w-0 justify-end md:justify-self-stretch md:pt-0.5">{children}</div>
     </div>
   )
 }

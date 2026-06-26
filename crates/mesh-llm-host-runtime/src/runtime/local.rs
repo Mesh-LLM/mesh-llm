@@ -64,6 +64,7 @@ pub(super) enum RuntimeEvent {
     },
     ModelTargetReconciliationLoadFinished {
         model_ref: String,
+        profile: String,
         result: std::result::Result<api::RuntimeLoadResponse, String>,
     },
 }
@@ -427,12 +428,13 @@ pub(super) async fn advertise_model_ready(
     node: &mesh::Node,
     primary_model_name: &str,
     model_name: &str,
-    profile: Option<&str>,
+    profile: &str,
 ) {
     let mut hosted_models = node.hosted_models().await;
-    let public_id = match profile.filter(|p| !p.is_empty()) {
-        Some(p) => format!("{}#{}", model_name, p),
-        None => model_name.to_string(),
+    let public_id = if profile.is_empty() {
+        model_name.to_string()
+    } else {
+        format!("{}#{}", model_name, profile)
     };
     if hosted_models.iter().any(|m| m == &public_id) {
         return;
@@ -457,15 +459,12 @@ pub(super) async fn set_advertised_model_context(
     node.regossip().await;
 }
 
-pub(super) async fn withdraw_advertised_model(
-    node: &mesh::Node,
-    model_name: &str,
-    profile: Option<&str>,
-) {
+pub(super) async fn withdraw_advertised_model(node: &mesh::Node, model_name: &str, profile: &str) {
     let mut hosted_models = node.hosted_models().await;
-    let public_id = match profile.filter(|p| !p.is_empty()) {
-        Some(p) => format!("{}#{}", model_name, p),
-        None => model_name.to_string(),
+    let public_id = if profile.is_empty() {
+        model_name.to_string()
+    } else {
+        format!("{}#{}", model_name, profile)
     };
     let old_len = hosted_models.len();
     hosted_models.retain(|m| m != &public_id);
@@ -3766,7 +3765,7 @@ async fn start_runtime_layer_package_model(
 pub(super) fn local_process_payload(
     model_name: &str,
     instance_id: Option<&str>,
-    profile: Option<&str>,
+    profile: &str,
     backend: &str,
     port: u16,
     pid: u32,
@@ -3790,7 +3789,7 @@ pub(super) fn local_process_payload(
 pub(super) fn local_process_snapshot(
     model_name: &str,
     instance_id: Option<&str>,
-    profile: Option<&str>,
+    profile: &str,
     backend: &str,
     port: u16,
     pid: u32,
@@ -3800,7 +3799,7 @@ pub(super) fn local_process_snapshot(
     crate::runtime_data::RuntimeProcessSnapshot {
         model: model_name.to_string(),
         instance_id: instance_id.map(str::to_string),
-        profile: profile.map(str::to_string),
+        profile: profile.to_string(),
         backend: backend.into(),
         pid,
         slots,

@@ -265,7 +265,7 @@ pub enum DevicePolicy {
 #[derive(uniffi::Record)]
 pub struct LoadModelOptions {
     pub device_policy: DevicePolicy,
-    pub profile: Option<String>,
+    pub profile: String,
 }
 
 #[derive(uniffi::Enum)]
@@ -281,7 +281,7 @@ pub enum ServingModelState {
 #[derive(uniffi::Record)]
 pub struct ServedModel {
     pub model_ref: String,
-    pub profile: Option<String>,
+    pub profile: String,
     pub model_id: String,
     pub instance_id: Option<String>,
     pub state: ServingModelState,

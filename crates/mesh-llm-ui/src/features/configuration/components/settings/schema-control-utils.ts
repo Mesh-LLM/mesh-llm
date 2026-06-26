@@ -64,6 +64,10 @@ function enumValues(schema: ConfigurationSettingValueSchema | undefined): string
   return []
 }
 
+function booleanValues(schema: ConfigurationSettingValueSchema | undefined): string[] {
+  return hasSchemaKind(schema, 'boolean') ? ['on', 'off'] : []
+}
+
 function pathSegmentsLabel(segments: readonly unknown[]) {
   const labels = segments
     .map((segment) => {
@@ -134,7 +138,10 @@ export function numericMetadataForSetting(setting: ConfigurationDefaultsSetting)
 }
 
 export function acceptedValuesForSetting(setting: ConfigurationDefaultsSetting) {
-  const fromSchema = enumValues(setting.valueSchema).map(normalizedChoiceValue)
+  const fromSchema = [
+    ...enumValues(setting.valueSchema).map(normalizedChoiceValue),
+    ...booleanValues(setting.valueSchema)
+  ]
   const fromControl = setting.control.kind === 'choice' ? setting.control.options.map((option) => option.value) : []
   return Array.from(new Set([...fromSchema, ...fromControl]))
 }

@@ -522,6 +522,14 @@ pub(crate) struct MeshModelPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) quantization: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tokenizer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) layer_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) head_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) embedding_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
     pub(crate) multimodal: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -576,8 +584,8 @@ pub(crate) struct ModelTargetPayload {
     pub(crate) rank: usize,
     pub(crate) model_ref: String,
     pub(crate) display_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) profile: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub(crate) profile: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) model_name: Option<String>,
     pub(crate) explicit_interest_count: usize,
@@ -664,7 +672,7 @@ pub(crate) fn build_runtime_status_payload(
             RuntimeModelPayload {
                 name: model_name.to_string(),
                 instance_id: None,
-                profile: None,
+                profile: String::new(),
                 backend: primary_backend.unwrap_or_else(|| "unknown".into()),
                 status: "starting".into(),
                 port: llama_port,

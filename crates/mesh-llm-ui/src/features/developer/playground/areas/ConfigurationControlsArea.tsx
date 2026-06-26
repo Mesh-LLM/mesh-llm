@@ -1,5 +1,8 @@
 import { useState } from 'react'
 import { Blocks, Brackets, Computer, Cpu, Network, ShieldCheck, SlidersHorizontal } from 'lucide-react'
+import { NativeSelect } from '@/components/ui/NativeSelect'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
+import { Slider } from '@/components/ui/Slider'
 import { LiveDataUnavailableOverlay } from '@/components/ui/LiveDataUnavailableOverlay'
 import { ModelSelect } from '@/features/chat/components/ModelSelect'
 import { CatalogPopover } from '@/features/configuration/components/CatalogPopover'
@@ -14,6 +17,7 @@ import { NodeSection } from '@/features/configuration/components/NodeSection'
 import { PlacementToggle } from '@/features/configuration/components/PlacementToggle'
 import { ReservedConfigCard } from '@/features/configuration/components/ReservedConfigCard'
 import { TomlView } from '@/features/configuration/components/TomlView'
+import PlaygroundTomlDiff from '@/features/app-shell/playground/components/PlaygroundTomlDiff'
 import { VRAMBar } from '@/features/configuration/components/VRAMBar'
 import { createDefaultsValues } from '@/features/configuration/hooks/useDefaultsSettingsState'
 import {
@@ -32,6 +36,7 @@ export function ConfigurationControlsArea({ state }: { state: DeveloperPlaygroun
   const [collapsedMap, setCollapsedMap] = useState<Record<string, boolean>>({})
   const [catalogNode, setCatalogNode] = useState<ConfigNode | null>(null)
   const [defaultsValues, setDefaultsValues] = useState(() => createDefaultsValues(CONFIGURATION_HARNESS.defaults))
+  const [tomlMode, setTomlMode] = useState<'output' | 'diff'>('output')
 
   const sectionTabs: ConfigurationTabItem[] = [
     {
@@ -365,11 +370,31 @@ export function ConfigurationControlsArea({ state }: { state: DeveloperPlaygroun
             value: 'toml',
             label: 'TOML',
             content: (
-              <TomlView
-                assigns={state.configAssigns}
-                models={CONFIGURATION_HARNESS.catalog}
-                nodes={state.configNodes}
-              />
+              <div className="flex h-full flex-col">
+                <div className="flex items-center justify-between border-b border-border-soft px-3 py-2">
+                  <SegmentedControl
+                    ariaLabel="TOML view mode"
+                    options={[
+                      { value: 'output', label: 'Output' },
+                      { value: 'diff', label: 'Diff' }
+                    ]}
+                    value={tomlMode}
+                    variant="pill"
+                    onValueChange={(v) => setTomlMode(v as 'output' | 'diff')}
+                  />
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  {tomlMode === 'output' ? (
+                    <TomlView
+                      assigns={state.configAssigns}
+                      models={CONFIGURATION_HARNESS.catalog}
+                      nodes={state.configNodes}
+                    />
+                  ) : (
+                    <PlaygroundTomlDiff />
+                  )}
+                </div>
+              </div>
             )
           },
           {
@@ -488,6 +513,87 @@ export function ConfigurationControlsArea({ state }: { state: DeveloperPlaygroun
                   nodes={state.configNodes}
                 />
               </LiveDataUnavailableOverlay>
+            )
+          },
+          {
+            value: 'error-states',
+            label: 'Error states',
+            content: (
+              <PlaygroundPanel
+                title="Control error states"
+                description="Each shared UI component rendered with its invalid prop active, showing the error ring, border, and aria-invalid attribute."
+              >
+                <div className="space-y-6">
+                  <div>
+                    <div className="type-label text-fg-faint mb-2">NativeSelect — invalid</div>
+                    <NativeSelect
+                      ariaLabel="Error demo select"
+                      invalid
+                      name="demo-select-error"
+                      onValueChange={() => undefined}
+                      options={[
+                        { value: 'a', label: 'Option A' },
+                        { value: 'b', label: 'Option B' }
+                      ]}
+                      value="a"
+                    />
+                  </div>
+                  <div>
+                    <div className="type-label text-fg-faint mb-2">SegmentedControl (pill) — invalid</div>
+                    <SegmentedControl
+                      ariaLabel="Error demo segmented"
+                      invalid
+                      name="demo-segmented-error"
+                      onValueChange={() => undefined}
+                      options={[
+                        { value: 'on', label: 'On' },
+                        { value: 'off', label: 'Off' },
+                        { value: 'auto', label: 'Auto' }
+                      ]}
+                      value="on"
+                      variant="pill"
+                    />
+                  </div>
+                  <div>
+                    <div className="type-label text-fg-faint mb-2">SegmentedControl (buttons) — valid (no error)</div>
+                    <SegmentedControl
+                      ariaLabel="Valid demo segmented"
+                      name="demo-segmented-valid"
+                      onValueChange={() => undefined}
+                      options={[
+                        { value: 'on', label: 'On' },
+                        { value: 'off', label: 'Off' },
+                        { value: 'auto', label: 'Auto' }
+                      ]}
+                      value="on"
+                      variant="buttons"
+                    />
+                  </div>
+                  <div>
+                    <div className="type-label text-fg-faint mb-2">Slider — invalid</div>
+                    <Slider
+                      ariaLabel="Error demo slider"
+                      invalid
+                      max={100}
+                      min={0}
+                      name="demo-slider-error"
+                      onValueChange={() => undefined}
+                      value="50"
+                    />
+                  </div>
+                  <div>
+                    <div className="type-label text-fg-faint mb-2">Slider — valid (no error)</div>
+                    <Slider
+                      ariaLabel="Valid demo slider"
+                      max={100}
+                      min={0}
+                      name="demo-slider-valid"
+                      onValueChange={() => undefined}
+                      value="50"
+                    />
+                  </div>
+                </div>
+              </PlaygroundPanel>
             )
           }
         ]}

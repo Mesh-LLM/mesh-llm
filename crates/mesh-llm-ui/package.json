@@ -49,6 +49,7 @@
     "mermaid": "^11.14.0",
     "pdfjs-dist": "^4.10.38",
     "react": "19.2.5",
+    "react-diff-viewer-continued": "^4.2.2",
     "react-dom": "19.2.5",
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",

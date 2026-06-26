@@ -41,10 +41,14 @@ fn validate_duplicate_model_entries(
 ) {
     for i in 0..models.len() {
         for j in (i + 1)..models.len() {
-            if models[i].model == models[j].model && models[i].profile == models[j].profile {
-                let profile_clause = match &models[i].profile {
-                    Some(p) => format!(" and profile=\"{p}\""),
-                    None => " and no profile".to_string(),
+            if models[i].model == models[j].model
+                && models[i].derived_profile() == models[j].derived_profile()
+            {
+                let profile_i = models[i].derived_profile();
+                let profile_clause = if profile_i.is_empty() {
+                    " and default profile".to_string()
+                } else {
+                    format!(" and profile=\"{profile_i}\"")
                 };
                 diagnostics.push(validation_diagnostic(
                     "models",
@@ -1870,8 +1874,8 @@ model = "my-model"
             "expected duplicate model error, got: {text}"
         );
         assert!(
-            text.contains("and no profile"),
-            "expected 'and no profile' in error, got: {text}"
+            text.contains("and default profile"),
+            "expected 'and default profile' in error, got: {text}"
         );
     }
 
@@ -1883,11 +1887,11 @@ defaults.runtime = "metal"
 
 [[models]]
 model = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
-profile = "gaming"
+ctx_size = 4096
 
 [[models]]
 model = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
-profile = "coding"
+ctx_size = 8192
 "#,
         )
         .expect("config should parse before validation");
@@ -1896,7 +1900,7 @@ profile = "coding"
         let text = legacy_validation_error_text(&diagnostics);
         assert!(
             !text.contains("duplicate model entry"),
-            "expected no duplicate error for different profiles, got: {text}"
+            "expected no duplicate error for different derived profiles, got: {text}"
         );
     }
 }

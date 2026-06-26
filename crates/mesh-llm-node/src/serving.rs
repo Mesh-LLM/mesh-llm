@@ -24,8 +24,8 @@ pub struct LoadModelRequest {
     pub model_ref: String,
     pub device_policy: DevicePolicy,
     #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub profile: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,8 +89,8 @@ pub enum ServingModelState {
 pub struct ServedModel {
     pub model_ref: String,
     #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub profile: String,
     pub model_id: String,
     pub instance_id: Option<String>,
     pub state: ServingModelState,

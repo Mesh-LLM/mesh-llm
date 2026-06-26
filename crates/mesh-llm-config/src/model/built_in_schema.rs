@@ -215,13 +215,10 @@ fn model_defaults_settings() -> Vec<ConfigSettingSchema> {
 
 fn model_entry_settings() -> Vec<ConfigSettingSchema> {
     let model_prefix = format!("models.{CANONICAL_MODEL_REF_SEGMENT}");
-    let mut settings = vec![
-        basic_setting(&format!("{model_prefix}.model"), ConfigValueSchema::String),
-        basic_setting(
-            &format!("{model_prefix}.profile"),
-            ConfigValueSchema::String,
-        ),
-    ];
+    let mut settings = vec![basic_setting(
+        &format!("{model_prefix}.model"),
+        ConfigValueSchema::String,
+    )];
     settings.extend(model_fit_settings(
         &format!("{model_prefix}.model_fit"),
         &[

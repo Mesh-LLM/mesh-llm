@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 struct ModelTargetAccumulator {
     model_ref: String,
     display_name: String,
-    profile: Option<String>,
+    profile: String,
     model_name: Option<String>,
     explicit_interest_count: usize,
     request_count: u64,
@@ -217,21 +217,23 @@ fn apply_explicit_interest_signals(
 ) {
     let mut local_explicit_refs = HashSet::new();
     for interest in local_interests {
-        let model_ref = interest.model_ref;
-        local_explicit_refs.insert(model_ref.clone());
-        increment_explicit_interest(targets, model_ref, index);
+        let (model_ref, profile) = split_model_ref_and_profile(&interest.model_ref);
+        local_explicit_refs.insert(model_ref.to_string());
+        increment_explicit_interest(targets, model_ref.to_string(), profile, index);
     }
     for model_ref in node_explicit_model_interests {
-        if local_explicit_refs.insert(model_ref.clone()) {
-            increment_explicit_interest(targets, model_ref, index);
+        let (model_ref, profile) = split_model_ref_and_profile(&model_ref);
+        if local_explicit_refs.insert(model_ref.to_string()) {
+            increment_explicit_interest(targets, model_ref.to_string(), profile, index);
         }
     }
 
     for peer in peers {
         let mut peer_interests = HashSet::new();
         for model_ref in &peer.explicit_model_interests {
-            if peer_interests.insert(model_ref.clone()) {
-                increment_explicit_interest(targets, model_ref.clone(), index);
+            let (model_ref, profile) = split_model_ref_and_profile(model_ref);
+            if peer_interests.insert(model_ref.to_string()) {
+                increment_explicit_interest(targets, model_ref.to_string(), profile, index);
             }
         }
     }
@@ -240,11 +242,13 @@ fn apply_explicit_interest_signals(
 fn increment_explicit_interest(
     targets: &mut HashMap<String, ModelTargetAccumulator>,
     model_ref: String,
+    profile: &str,
     index: &CatalogTargetIndex,
 ) {
     let model_name = model_name_for_model_ref(&model_ref, index);
     let display_name = display_name_for_model_ref(&model_ref, index);
-    ensure_model_target(targets, model_ref, model_name, display_name).explicit_interest_count += 1;
+    ensure_model_target(targets, model_ref, model_name, display_name, profile)
+        .explicit_interest_count += 1;
 }
 
 fn apply_active_demand_signals(
@@ -254,11 +258,12 @@ fn apply_active_demand_signals(
     index: &CatalogTargetIndex,
 ) {
     for (model_name, demand) in active_demand {
-        let model_ref = preferred_target_ref_for_model_name(&model_name, index, targets);
+        let (model_ref, profile) = split_model_ref_and_profile(&model_name);
+        let model_ref = preferred_target_ref_for_model_name(model_ref, index, targets);
         let model_name =
             model_name_for_model_ref(&model_ref, index).or_else(|| Some(model_name.clone()));
         let display_name = display_name_for_model_ref(&model_ref, index);
-        let target = ensure_model_target(targets, model_ref, model_name, display_name);
+        let target = ensure_model_target(targets, model_ref, model_name, display_name, profile);
         target.request_count = target.request_count.max(demand.request_count);
         target.last_active_secs_ago = Some(now.saturating_sub(demand.last_active));
     }
@@ -270,11 +275,12 @@ fn apply_requested_model_signals(
     index: &CatalogTargetIndex,
 ) {
     for requested_model in requested_models {
-        let model_ref = preferred_target_ref_for_model_name(&requested_model, index, targets);
-        let model_name =
-            model_name_for_model_ref(&model_ref, index).or_else(|| Some(requested_model.clone()));
+        let (requested_model, profile) = split_model_ref_and_profile(&requested_model);
+        let model_ref = preferred_target_ref_for_model_name(requested_model, index, targets);
+        let model_name = model_name_for_model_ref(&model_ref, index)
+            .or_else(|| Some(requested_model.to_string()));
         let display_name = display_name_for_model_ref(&model_ref, index);
-        ensure_model_target(targets, model_ref, model_name, display_name).requested = true;
+        ensure_model_target(targets, model_ref, model_name, display_name, profile).requested = true;
     }
 }
 
@@ -425,25 +431,45 @@ fn model_name_for_model_ref(model_ref: &str, index: &CatalogTargetIndex) -> Opti
     index.model_name_by_ref.get(model_ref).cloned()
 }
 
-fn ensure_model_target(
-    targets: &mut HashMap<String, ModelTargetAccumulator>,
+fn ensure_model_target<'a>(
+    targets: &'a mut HashMap<String, ModelTargetAccumulator>,
     model_ref: String,
     model_name: Option<String>,
     display_name: String,
-) -> &mut ModelTargetAccumulator {
-    targets
+    profile: &str,
+) -> &'a mut ModelTargetAccumulator {
+    let target = targets
         .entry(model_ref.clone())
         .or_insert_with(|| ModelTargetAccumulator {
             model_ref,
             display_name,
-            profile: None,
+            profile: profile.to_string(),
             model_name,
             explicit_interest_count: 0,
             request_count: 0,
             last_active_secs_ago: None,
             serving_node_count: 0,
             requested: false,
-        })
+        });
+    if target.profile.is_empty() {
+        target.profile = profile.to_string();
+    }
+    target
+}
+
+fn split_model_ref_and_profile(model_ref: &str) -> (&str, &str) {
+    if let Some(hash_pos) = model_ref.rfind('#') {
+        let model_name_with_profile = model_ref;
+        let model_ref = &model_name_with_profile[..hash_pos];
+        let profile = &model_name_with_profile[hash_pos + 1..];
+        if profile.is_empty() {
+            (model_ref, "")
+        } else {
+            (model_ref, profile)
+        }
+    } else {
+        (model_ref, "")
+    }
 }
 
 fn preferred_target_ref_for_model_name(
@@ -482,7 +508,7 @@ mod tests {
         ModelTargetAccumulator {
             model_ref: model_ref.to_string(),
             display_name: model_ref.to_string(),
-            profile: None,
+            profile: String::new(),
             model_name: Some(model_ref.to_string()),
             explicit_interest_count: 0,
             request_count: 0,
@@ -506,6 +532,19 @@ mod tests {
 
         assert_eq!(targets[0].model_ref, "a-demand-only");
         assert_eq!(targets[1].model_ref, "z-requested-with-demand");
+    }
+
+    #[test]
+    fn requested_model_profile_is_preserved() {
+        let mut targets = HashMap::new();
+        let index = CatalogTargetIndex::default();
+
+        apply_requested_model_signals(&mut targets, vec!["model#low-ctx".to_string()], &index);
+
+        assert_eq!(
+            targets.get("model").expect("missing model target").profile,
+            "low-ctx"
+        );
     }
 
     #[test]

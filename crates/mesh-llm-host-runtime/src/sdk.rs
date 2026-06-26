@@ -370,7 +370,7 @@ struct EmbeddedServingState {
     /// Maps (model_ref, profile) -> served model.
     /// The compound key ensures two profiles of the same model coexist
     /// without silently replacing each other.
-    models: HashMap<(String, Option<String>), Arc<EmbeddedServedModel>>,
+    models: HashMap<(String, String), Arc<EmbeddedServedModel>>,
 }
 
 struct EmbeddedServedModel {
@@ -877,13 +877,13 @@ mod tests {
 
     fn make_served_model(
         model_ref: &str,
-        profile: Option<&str>,
+        profile: &str,
         instance_id: u64,
     ) -> Arc<EmbeddedServedModel> {
         Arc::new(EmbeddedServedModel {
             served: ServedModel {
                 model_ref: model_ref.to_string(),
-                profile: profile.map(String::from),
+                profile: profile.to_string(),
                 model_id: format!("{model_ref}-model-id"),
                 instance_id: Some(format!("embedded-{instance_id}")),
                 state: ServingModelState::Ready,
@@ -902,12 +902,12 @@ mod tests {
         {
             let mut state = controller.inner.lock().await;
             state.models.insert(
-                ("model-a".to_string(), Some("gaming".to_string())),
-                make_served_model("model-a", Some("gaming"), 1),
+                ("model-a".to_string(), "gaming".to_string()),
+                make_served_model("model-a", "gaming", 1),
             );
             state.models.insert(
-                ("model-a".to_string(), Some("coding".to_string())),
-                make_served_model("model-a", Some("coding"), 2),
+                ("model-a".to_string(), "coding".to_string()),
+                make_served_model("model-a", "coding", 2),
             );
         }
 
@@ -923,20 +923,20 @@ mod tests {
         {
             let mut state = controller.inner.lock().await;
             state.models.insert(
-                ("model-a".to_string(), Some("gaming".to_string())),
-                make_served_model("model-a", Some("gaming"), 1),
+                ("model-a".to_string(), "gaming".to_string()),
+                make_served_model("model-a", "gaming", 1),
             );
             state.models.insert(
-                ("model-a".to_string(), Some("coding".to_string())),
-                make_served_model("model-a", Some("coding"), 2),
+                ("model-a".to_string(), "coding".to_string()),
+                make_served_model("model-a", "coding", 2),
             );
         }
 
         let list = controller.served_models().await.unwrap();
         assert_eq!(list.len(), 2, "should return both profile entries");
-        let profiles: Vec<Option<&str>> = list.iter().map(|m| m.profile.as_deref()).collect();
-        assert!(profiles.contains(&Some("gaming")));
-        assert!(profiles.contains(&Some("coding")));
+        let profiles: Vec<&str> = list.iter().map(|m| m.profile.as_str()).collect();
+        assert!(profiles.contains(&"gaming"));
+        assert!(profiles.contains(&"coding"));
     }
 
     #[tokio::test]
@@ -945,12 +945,12 @@ mod tests {
         {
             let mut state = controller.inner.lock().await;
             state.models.insert(
-                ("model-a".to_string(), Some("gaming".to_string())),
-                make_served_model("model-a", Some("gaming"), 1),
+                ("model-a".to_string(), "gaming".to_string()),
+                make_served_model("model-a", "gaming", 1),
             );
             state.models.insert(
-                ("model-a".to_string(), Some("coding".to_string())),
-                make_served_model("model-a", Some("coding"), 2),
+                ("model-a".to_string(), "coding".to_string()),
+                make_served_model("model-a", "coding", 2),
             );
         }
 
@@ -965,8 +965,8 @@ mod tests {
         let remaining = controller.served_models().await.unwrap();
         assert_eq!(remaining.len(), 1, "one entry should remain");
         assert_eq!(
-            remaining[0].profile.as_deref(),
-            Some("coding"),
+            remaining[0].profile.as_str(),
+            "coding",
             "coding profile should survive"
         );
     }

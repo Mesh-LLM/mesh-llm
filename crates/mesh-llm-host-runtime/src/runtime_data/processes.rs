@@ -4,7 +4,7 @@ use crate::api::RuntimeProcessPayload;
 pub(crate) struct RuntimeProcessSnapshot {
     pub model: String,
     pub instance_id: Option<String>,
-    pub profile: Option<String>,
+    pub profile: String,
     pub backend: String,
     pub pid: u32,
     pub port: u16,
@@ -105,7 +105,7 @@ mod tests {
         RuntimeProcessSnapshot {
             model: model.to_string(),
             instance_id: instance_id.map(str::to_string),
-            profile: None,
+            profile: String::new(),
             backend: "skippy".to_string(),
             pid: 100,
             port,

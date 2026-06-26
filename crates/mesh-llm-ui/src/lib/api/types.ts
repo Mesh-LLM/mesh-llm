@@ -47,6 +47,10 @@ export interface MeshModelRaw {
   capabilities?: ModelCapabilities
   quantization?: string
   context_length?: number
+  tokenizer?: string
+  layer_count?: number
+  head_count?: number
+  embedding_size?: number
   family?: string
   tags?: string[]
   params_b?: number

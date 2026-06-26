@@ -172,7 +172,7 @@ pub(crate) mod tests {
             local_processes.push(RuntimeProcessSnapshot {
                 model: "Qwen3-8B".into(),
                 instance_id: None,
-                profile: None,
+                profile: String::new(),
                 backend: "metal".into(),
                 pid: 4242,
                 port: 9337,
@@ -304,7 +304,7 @@ pub(crate) mod tests {
             RuntimeProcessPayload {
                 name: "Zulu".into(),
                 instance_id: None,
-                profile: None,
+                profile: String::new(),
                 backend: "llama".into(),
                 status: "ready".into(),
                 port: 9444,
@@ -315,7 +315,7 @@ pub(crate) mod tests {
             RuntimeProcessPayload {
                 name: "Alpha".into(),
                 instance_id: None,
-                profile: None,
+                profile: String::new(),
                 backend: "llama".into(),
                 status: "starting".into(),
                 port: 9337,
@@ -751,7 +751,19 @@ pub(crate) mod tests {
         let local_inventory = LocalModelInventorySnapshot {
             model_names: HashSet::from(["Example-Model".to_string()]),
             size_by_name: HashMap::from([("Example-Model".to_string(), 8_000_000_000)]),
-            metadata_by_name: HashMap::new(),
+            metadata_by_name: HashMap::from([(
+                "Example-Model".to_string(),
+                crate::proto::node::CompactModelMetadata {
+                    model_key: "Example-Model".to_string(),
+                    context_length: 131_072,
+                    embedding_size: 4096,
+                    head_count: 32,
+                    layer_count: 36,
+                    tokenizer_model_name: "gpt2".to_string(),
+                    quantization_type: "Q4_K_M".to_string(),
+                    ..Default::default()
+                },
+            )]),
         };
         let snapshot = collector.build_model_view(ModelViewInput {
             peers: vec![],
@@ -776,6 +788,12 @@ pub(crate) mod tests {
         assert_eq!(payload[0].name, "Example-Model");
         assert_eq!(payload[0].status, "cold");
         assert_eq!(payload[0].size_gb, 8.0);
+        assert_eq!(payload[0].context_length, Some(131_072));
+        assert_eq!(payload[0].quantization, Some("Q4_K_M".to_string()));
+        assert_eq!(payload[0].tokenizer, Some("gpt2".to_string()));
+        assert_eq!(payload[0].layer_count, Some(36));
+        assert_eq!(payload[0].head_count, Some(32));
+        assert_eq!(payload[0].embedding_size, Some(4096));
         assert_eq!(
             payload[0].download_command,
             "mesh-llm models download Example-Model"

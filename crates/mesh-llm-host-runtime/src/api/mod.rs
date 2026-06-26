@@ -1076,9 +1076,10 @@ impl ServingController for MeshApi {
 fn served_model_from_runtime_payload(model: RuntimeModelPayload) -> ServedModel {
     let capabilities = infer_served_model_capabilities(&model.name, &model.name);
     // Build model_ref with profile suffix for non-default profiles
-    let model_ref = match &model.profile {
-        Some(profile) if !profile.is_empty() => format!("{}#{}", model.name, profile),
-        _ => model.name.clone(),
+    let model_ref = if model.profile.is_empty() {
+        model.name.clone()
+    } else {
+        format!("{}#{}", model.name, model.profile)
     };
     ServedModel {
         model_ref,

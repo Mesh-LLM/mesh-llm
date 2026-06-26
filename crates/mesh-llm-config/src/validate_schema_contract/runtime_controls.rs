@@ -4,8 +4,8 @@ use super::{
     schema_setting,
 };
 use crate::{
-    ConfigConditionValue, ConfigDiagnosticCode, ConfigDisabledWritePolicy, ConfigOptionsSource,
-    ConfigTextFormat, ConfigValueSchema,
+    ConfigConditionValue, ConfigConstraint, ConfigDiagnosticCode, ConfigDisabledWritePolicy,
+    ConfigOptionsSource, ConfigTextFormat, ConfigValueSchema,
 };
 
 #[test]
@@ -53,6 +53,15 @@ fn validate_schema_contract_covers_owner_control_attestation_and_plugin_timeouts
         Some("sec")
     );
 
+    let telemetry_service_name = schema_setting("telemetry.service_name");
+    assert!(telemetry_service_name.constraints.iter().any(|constraint| {
+        matches!(
+            constraint,
+            ConfigConstraint::AllowedPattern { pattern }
+                if pattern == "^[A-Za-z0-9_-]+$"
+        )
+    }));
+
     let advertise_diagnostics =
         diagnostics_from_toml("[owner_control]\nadvertise_addr = \"127.0.0.1:17001\"\n");
     let advertise_diagnostic =
@@ -88,6 +97,19 @@ connect_timeout_secs = 0
         "plugin.<plugin-name>.startup.connect_timeout_secs",
     );
     assert_eq!(timeout_diagnostic.code, ConfigDiagnosticCode::InvalidValue);
+
+    let service_name_diagnostics = diagnostics_from_toml(
+        r#"
+[telemetry]
+service_name = "@@*(!111---aa"
+"#,
+    );
+    let service_name_diagnostic =
+        diagnostic_for_canonical(&service_name_diagnostics, "telemetry.service_name");
+    assert_eq!(
+        service_name_diagnostic.code,
+        ConfigDiagnosticCode::InvalidValue
+    );
 }
 
 #[test]
