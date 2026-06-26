@@ -5,7 +5,9 @@ use anyhow::{Context, Result};
 use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler};
 #[cfg(test)]
 use hf_hub::progress::{FileProgress, FileStatus};
-use mesh_llm_events::terminal_progress::{SpinnerHandle, start_spinner};
+use mesh_llm_events::terminal_progress::{
+    SpinnerHandle, ratio_complete_u64, render_inline_gauge, start_spinner,
+};
 use mesh_llm_events::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
 #[cfg(test)]
 use std::collections::HashMap;
@@ -351,15 +353,19 @@ impl MeshDownloadProgress {
             .filter(|bytes_per_sec| *bytes_per_sec > 0.0)
             .map(|bytes_per_sec| format!(" at {}/s", format_download_bytes(bytes_per_sec as u64)))
             .unwrap_or_default();
-        eprint!(
-            "\r\x1b[K   ⏬ {} {:>3}.{:01}% ({}/{}){}",
-            state.filename,
-            percent_major,
-            percent_minor,
-            format_download_bytes(state.downloaded),
-            format_download_bytes(state.total),
-            speed_suffix,
+        let gauge = render_inline_gauge(
+            ratio_complete_u64(state.downloaded, state.total),
+            &format!(
+                "⏬ {} {:>3}.{:01}% ({}/{}){}",
+                state.filename,
+                percent_major,
+                percent_minor,
+                format_download_bytes(state.downloaded),
+                format_download_bytes(state.total),
+                speed_suffix,
+            ),
         );
+        eprint!("\r\x1b[K   {gauge}");
         let _ = std::io::stderr().flush();
         if force {
             eprintln!();

@@ -3913,6 +3913,7 @@ version = "0.68.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ratatui",
  "serde_json",
 ]
 

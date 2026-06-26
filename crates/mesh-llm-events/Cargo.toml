@@ -16,4 +16,5 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+ratatui = "0.30"
 serde_json.workspace = true

@@ -16,7 +16,9 @@ use skippy_runtime::package::{
     self, LayerPackageInfo, PackageIntegrityOptions, PackageStageRequest,
 };
 
-use mesh_llm_events::terminal_progress::{SpinnerHandle, start_spinner};
+use mesh_llm_events::terminal_progress::{
+    SpinnerHandle, ratio_complete_u64, render_inline_gauge, start_spinner,
+};
 use mesh_llm_events::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
 
 use super::StageLoadRequest;
@@ -242,17 +244,21 @@ impl LayerPackageDownloadScope {
                 )
             })
             .unwrap_or_default();
-        eprint!(
-            "\r\x1b[K   ⏬ {} {:>3}.{:01}% ({}/{}){}   📄 files {}/{} complete",
-            layer_package_artifact_display_for_package(&self.package, file),
-            percent_major,
-            percent_minor,
-            format_layer_package_download_bytes(downloaded),
-            format_layer_package_download_bytes(total),
-            speed_suffix,
-            self.complete_count(completed_files),
-            self.total_files,
+        let gauge = render_inline_gauge(
+            ratio_complete_u64(downloaded, total),
+            &format!(
+                "⏬ {} {:>3}.{:01}% ({}/{}){}   files {}/{} complete",
+                layer_package_artifact_display_for_package(&self.package, file),
+                percent_major,
+                percent_minor,
+                format_layer_package_download_bytes(downloaded),
+                format_layer_package_download_bytes(total),
+                speed_suffix,
+                self.complete_count(completed_files),
+                self.total_files,
+            ),
         );
+        eprint!("\r\x1b[K   {gauge}");
         let _ = std::io::stderr().flush();
         scope_state.drawn_line = true;
         if force {
@@ -543,15 +549,19 @@ fn draw_layer_package_file_progress(
             )
         })
         .unwrap_or_default();
-    eprint!(
-        "\r\x1b[K   ⏬ {} {:>3}.{:01}% ({}/{}){}",
-        file,
-        percent_major,
-        percent_minor,
-        format_layer_package_download_bytes(downloaded),
-        format_layer_package_download_bytes(total),
-        speed_suffix,
+    let gauge = render_inline_gauge(
+        ratio_complete_u64(downloaded, total),
+        &format!(
+            "⏬ {} {:>3}.{:01}% ({}/{}){}",
+            file,
+            percent_major,
+            percent_minor,
+            format_layer_package_download_bytes(downloaded),
+            format_layer_package_download_bytes(total),
+            speed_suffix,
+        ),
     );
+    eprint!("\r\x1b[K   {gauge}");
     let _ = std::io::stderr().flush();
     if force {
         eprintln!();

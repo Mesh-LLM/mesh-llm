@@ -7,6 +7,7 @@ use mesh_llm_runtime_install::{
     NativeRuntimeManifestOptions, host_runtime_profile, install_native_runtime,
     load_release_manifest, native_runtime_cache,
 };
+use mesh_llm_tui::terminal_progress::{ratio_complete_u64, render_inline_gauge};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -201,19 +202,29 @@ impl DownloadProgress {
         if should_print {
             self.last_tick = Instant::now();
             match total {
-                Some(total) if total > 0 => eprintln!(
-                    "   downloaded {} / {} ({})",
-                    human_bytes(downloaded),
-                    human_bytes(total),
-                    format_args!("{}%", self.last_percent.unwrap_or(0))
-                ),
-                _ => eprintln!("   downloaded {}", human_bytes(downloaded)),
+                Some(total) if total > 0 => {
+                    let gauge = render_inline_gauge(
+                        ratio_complete_u64(downloaded, total),
+                        &format!(
+                            "downloaded {} / {} ({}%)",
+                            human_bytes(downloaded),
+                            human_bytes(total),
+                            self.last_percent.unwrap_or(0)
+                        ),
+                    );
+                    eprint!("\r\x1b[2K   {gauge}");
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
+                }
+                _ => {
+                    eprint!("\r\x1b[2K   downloaded {}", human_bytes(downloaded));
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
+                }
             }
         }
     }
 
     fn finish(&mut self, downloaded: u64) {
-        eprintln!("   downloaded {}", human_bytes(downloaded));
+        eprintln!("\r\x1b[2K   downloaded {}", human_bytes(downloaded));
     }
 }
 

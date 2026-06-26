@@ -8,7 +8,9 @@ use mesh_llm_plugin_manager::{
 use reqwest::Client;
 
 use mesh_llm_cli::PluginCommand;
-use mesh_llm_tui::terminal_progress::{SpinnerHandle, clear_stderr_line, start_spinner};
+use mesh_llm_tui::terminal_progress::{
+    SpinnerHandle, clear_stderr_line, ratio_complete_u64, render_inline_gauge, start_spinner,
+};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PluginListRows {
@@ -217,13 +219,17 @@ impl CliPluginProgress {
                 return;
             }
             self.last_percent = Some(percent);
-            eprint!(
-                "\r\x1b[2K⬇️  {} {} / {} ({}%)",
-                asset,
-                format_bytes(downloaded),
-                format_bytes(total),
-                percent
+            let gauge = render_inline_gauge(
+                ratio_complete_u64(downloaded, total),
+                &format!(
+                    "⬇️  {} {} / {} ({}%)",
+                    asset,
+                    format_bytes(downloaded),
+                    format_bytes(total),
+                    percent
+                ),
             );
+            eprint!("\r\x1b[2K{gauge}");
             let _ = std::io::stderr().flush();
         }
     }
