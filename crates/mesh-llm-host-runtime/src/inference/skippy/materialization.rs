@@ -17,7 +17,7 @@ use skippy_runtime::package::{
 };
 
 use mesh_llm_events::terminal_progress::{
-    SpinnerHandle, ratio_complete_u64, render_inline_gauge, start_spinner,
+    SpinnerHandle, ratio_complete_u64, render_inline_gauge_with_reserved_width, start_spinner,
 };
 use mesh_llm_events::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
 
@@ -244,19 +244,27 @@ impl LayerPackageDownloadScope {
                 )
             })
             .unwrap_or_default();
-        let gauge = render_inline_gauge(
-            ratio_complete_u64(downloaded, total),
+        let (ratio, total_display) = match total {
+            0 => (0.0, "?".to_string()),
+            total => (
+                ratio_complete_u64(downloaded, total),
+                format_layer_package_download_bytes(total),
+            ),
+        };
+        let gauge = render_inline_gauge_with_reserved_width(
+            ratio,
             &format!(
                 "⏬ {} {:>3}.{:01}% ({}/{}){}   files {}/{} complete",
                 layer_package_artifact_display_for_package(&self.package, file),
                 percent_major,
                 percent_minor,
                 format_layer_package_download_bytes(downloaded),
-                format_layer_package_download_bytes(total),
+                total_display,
                 speed_suffix,
                 self.complete_count(completed_files),
                 self.total_files,
             ),
+            3,
         );
         eprint!("\r\x1b[K   {gauge}");
         let _ = std::io::stderr().flush();
@@ -549,17 +557,25 @@ fn draw_layer_package_file_progress(
             )
         })
         .unwrap_or_default();
-    let gauge = render_inline_gauge(
-        ratio_complete_u64(downloaded, total),
+    let (ratio, total_display) = match total {
+        0 => (0.0, "?".to_string()),
+        total => (
+            ratio_complete_u64(downloaded, total),
+            format_layer_package_download_bytes(total),
+        ),
+    };
+    let gauge = render_inline_gauge_with_reserved_width(
+        ratio,
         &format!(
             "⏬ {} {:>3}.{:01}% ({}/{}){}",
             file,
             percent_major,
             percent_minor,
             format_layer_package_download_bytes(downloaded),
-            format_layer_package_download_bytes(total),
+            total_display,
             speed_suffix,
         ),
+        3,
     );
     eprint!("\r\x1b[K   {gauge}");
     let _ = std::io::stderr().flush();

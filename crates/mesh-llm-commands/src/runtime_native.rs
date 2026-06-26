@@ -7,7 +7,9 @@ use mesh_llm_runtime_install::{
     NativeRuntimeManifestOptions, host_runtime_profile, install_native_runtime,
     load_release_manifest, native_runtime_cache,
 };
-use mesh_llm_tui::terminal_progress::{ratio_complete_u64, render_inline_gauge};
+use mesh_llm_tui::terminal_progress::{
+    ratio_complete_u64, render_inline_gauge_with_reserved_width,
+};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -203,7 +205,7 @@ impl DownloadProgress {
             self.last_tick = Instant::now();
             match total {
                 Some(total) if total > 0 => {
-                    let gauge = render_inline_gauge(
+                    let gauge = render_inline_gauge_with_reserved_width(
                         ratio_complete_u64(downloaded, total),
                         &format!(
                             "downloaded {} / {} ({}%)",
@@ -211,6 +213,7 @@ impl DownloadProgress {
                             human_bytes(total),
                             self.last_percent.unwrap_or(0)
                         ),
+                        3,
                     );
                     eprint!("\r\x1b[2K   {gauge}");
                     let _ = std::io::Write::flush(&mut std::io::stderr());

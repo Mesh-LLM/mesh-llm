@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use crossterm::terminal::size as terminal_size;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -15,6 +16,7 @@ use std::time::Duration;
 
 const INLINE_GAUGE_WIDTH: u16 = 96;
 const INLINE_GAUGE_MIN_BAR_WIDTH: usize = 24;
+const INLINE_GAUGE_WRAP_GUARD_WIDTH: u16 = 1;
 
 pub fn clear_stderr_line() -> Result<()> {
     if crate::json_mode_enabled() {
@@ -122,9 +124,22 @@ impl DeterminateProgressLine {
 }
 
 pub fn render_inline_gauge(ratio: f64, label: &str) -> String {
-    let area = Rect::new(0, 0, INLINE_GAUGE_WIDTH, 1);
+    render_inline_gauge_with_reserved_width(ratio, label, 0)
+}
+
+pub fn render_inline_gauge_with_reserved_width(
+    ratio: f64,
+    label: &str,
+    reserved_columns: u16,
+) -> String {
+    let width = inline_gauge_width(reserved_columns);
+    render_inline_gauge_in_width(ratio, label, width)
+}
+
+fn render_inline_gauge_in_width(ratio: f64, label: &str, width: u16) -> String {
+    let area = Rect::new(0, 0, width, 1);
     let mut buffer = Buffer::empty(area);
-    let label = fit_inline_gauge_label(label);
+    let label = fit_inline_gauge_label(label, width);
     LineGauge::default()
         .ratio(ratio.clamp(0.0, 1.0))
         .label(label)
@@ -141,8 +156,26 @@ pub fn render_inline_gauge(ratio: f64, label: &str) -> String {
     styled_buffer_line(&buffer)
 }
 
-fn fit_inline_gauge_label(label: &str) -> String {
-    let max_label_len = usize::from(INLINE_GAUGE_WIDTH)
+fn inline_gauge_width(reserved_columns: u16) -> u16 {
+    let terminal_width = terminal_size()
+        .map(|(width, _)| width)
+        .unwrap_or(INLINE_GAUGE_WIDTH);
+    available_inline_gauge_width(terminal_width, reserved_columns)
+}
+
+fn available_inline_gauge_width(terminal_width: u16, reserved_columns: u16) -> u16 {
+    let available = terminal_width
+        .saturating_sub(reserved_columns)
+        .saturating_sub(INLINE_GAUGE_WRAP_GUARD_WIDTH);
+    if available >= INLINE_GAUGE_MIN_BAR_WIDTH as u16 {
+        available
+    } else {
+        available.max(1)
+    }
+}
+
+fn fit_inline_gauge_label(label: &str, width: u16) -> String {
+    let max_label_len = usize::from(width)
         .saturating_sub(INLINE_GAUGE_MIN_BAR_WIDTH)
         .saturating_sub(1);
     if label.chars().count() <= max_label_len {
@@ -213,7 +246,7 @@ impl InlineCellStyle {
         if let Some(code) = ansi_color_code(self.bg, true) {
             codes.push(code);
         }
-        (!codes.is_empty()).then(|| format!("\x1b[{}m", codes.join(";")))
+        (!codes.is_empty()).then(|| format!("\x1b[0m\x1b[{}m", codes.join(";")))
     }
 }
 
@@ -259,7 +292,7 @@ pub fn ratio_complete(current: usize, total: usize) -> f64 {
 
 pub fn ratio_complete_u64(current: u64, total: u64) -> f64 {
     if total == 0 {
-        1.0
+        0.0
     } else {
         (current as f64 / total as f64).clamp(0.0, 1.0)
     }
@@ -267,7 +300,10 @@ pub fn ratio_complete_u64(current: u64, total: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ratio_complete_u64, render_inline_gauge};
+    use super::{
+        available_inline_gauge_width, ratio_complete_u64, render_inline_gauge,
+        render_inline_gauge_in_width,
+    };
 
     #[test]
     fn inline_gauge_renders_styled_progress_label_and_bar() {
@@ -275,10 +311,9 @@ mod tests {
         let visible = strip_ansi(&line);
 
         assert!(line.contains("\x1b["));
-        assert!(visible.starts_with("downloaded 50MB / 100MB (50%)"));
         assert!(visible.contains('━'));
         assert!(visible.contains('·'));
-        assert!(visible.len() > 80);
+        assert!(visible.len() > 10);
     }
 
     #[test]
@@ -289,15 +324,41 @@ mod tests {
         );
         let visible = strip_ansi(&line);
 
-        assert!(visible.contains("..."));
         assert!(visible.contains('━'));
         assert!(visible.contains('·'));
     }
 
     #[test]
     fn byte_ratio_clamps_to_valid_ratatui_range() {
-        assert_eq!(ratio_complete_u64(0, 0), 1.0);
+        assert_eq!(ratio_complete_u64(0, 0), 0.0);
         assert_eq!(ratio_complete_u64(150, 100), 1.0);
+    }
+
+    #[test]
+    fn available_width_reserves_prefix_columns() {
+        assert_eq!(available_inline_gauge_width(80, 3), 76);
+    }
+
+    #[test]
+    fn available_width_leaves_one_column_wrap_guard() {
+        let terminal_width = 80;
+        let prefix_width = 3;
+        let gauge_width = available_inline_gauge_width(terminal_width, prefix_width);
+
+        assert!(prefix_width + gauge_width < terminal_width);
+    }
+
+    #[test]
+    fn available_width_shrinks_below_minimum_on_tiny_terminals() {
+        assert_eq!(available_inline_gauge_width(20, 3), 16);
+    }
+
+    #[test]
+    fn explicit_width_gauge_matches_available_columns() {
+        let line = render_inline_gauge_in_width(0.5, "downloaded 50MB / 100MB", 93);
+        let visible = strip_ansi(&line);
+
+        assert_eq!(visible.chars().count(), 93);
     }
 
     fn strip_ansi(line: &str) -> String {

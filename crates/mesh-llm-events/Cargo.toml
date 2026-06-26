@@ -16,5 +16,6 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+crossterm = "0.28"
 ratatui = "0.30"
 serde_json.workspace = true
