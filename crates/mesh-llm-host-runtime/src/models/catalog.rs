@@ -642,7 +642,11 @@ fn download_hf_assets_sync(
                 terminal_frame_mode,
             );
         }
-        if progress && required {
+        let multipart_controls_terminal = progress
+            && multipart_progress.is_multipart()
+            && is_required_primary_asset(required, &asset)
+            && !interactive_tui_active();
+        if should_emit_required_asset_ensuring(progress, required, multipart_controls_terminal) {
             emit_or_print_model_progress(
                 label,
                 Some(&asset.file),
@@ -800,6 +804,14 @@ fn emit_required_asset_ready_progress(
 
 fn is_required_primary_asset(required: bool, asset: &HfAsset) -> bool {
     required && asset.file != "config.json"
+}
+
+fn should_emit_required_asset_ensuring(
+    progress: bool,
+    required: bool,
+    multipart_controls_terminal: bool,
+) -> bool {
+    progress && required && !multipart_controls_terminal
 }
 
 fn emit_multipart_progress(
@@ -1456,6 +1468,14 @@ mod tests {
         assert!(next_asset.starts_with("\x1b[1A\r\x1b[2KParts"));
         assert_eq!(first_asset.matches('\n').count(), 1);
         assert_eq!(next_asset.matches('\n').count(), 1);
+    }
+
+    #[test]
+    fn multipart_non_tui_progress_suppresses_interleaved_asset_ensuring() {
+        assert!(!should_emit_required_asset_ensuring(true, true, true));
+        assert!(should_emit_required_asset_ensuring(true, true, false));
+        assert!(!should_emit_required_asset_ensuring(true, false, false));
+        assert!(!should_emit_required_asset_ensuring(false, true, false));
     }
 
     #[tokio::test]
