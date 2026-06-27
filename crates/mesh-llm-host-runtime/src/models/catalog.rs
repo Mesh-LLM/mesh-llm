@@ -623,16 +623,25 @@ fn download_hf_assets_sync(
             .count(),
     );
     let mut multipart_terminal_line_drawn = false;
-    if progress && multipart_progress.is_multipart() {
-        emit_multipart_progress(
-            &multipart_progress,
-            ModelProgressStatus::Downloading,
-            &mut multipart_terminal_line_drawn,
-        );
-    }
     for (required, asset) in download_plan {
         let (owner, name) = asset.repo_parts();
         let api_repo = api.model(owner, name);
+        if progress
+            && multipart_progress.is_multipart()
+            && is_required_primary_asset(required, &asset)
+        {
+            let terminal_frame_mode = if multipart_terminal_line_drawn {
+                MultipartTerminalFrameMode::RepaintPreviousLine
+            } else {
+                multipart_terminal_line_drawn = true;
+                MultipartTerminalFrameMode::AppendFreshLine
+            };
+            emit_multipart_progress(
+                &multipart_progress,
+                ModelProgressStatus::Downloading,
+                terminal_frame_mode,
+            );
+        }
         if progress && required {
             emit_or_print_model_progress(
                 label,
@@ -710,7 +719,7 @@ fn download_hf_assets_sync(
                 emit_multipart_progress(
                     &multipart_progress,
                     ModelProgressStatus::Downloading,
-                    &mut multipart_terminal_line_drawn,
+                    MultipartTerminalFrameMode::RepaintPreviousLine,
                 );
             }
         } else {
@@ -734,7 +743,14 @@ fn emit_completed_asset_progress(
     if required && interactive_tui_active() {
         emit_required_asset_ready_progress(label, asset_file, path, visible_tracker);
     } else if interactive_tui_active() {
-        eprintln!("   🧾 Downloaded model metadata");
+        emit_or_print_model_progress(
+            label,
+            Some(asset_file),
+            None,
+            None,
+            ModelProgressStatus::Ready,
+            || eprintln!("   Downloaded model metadata {asset_file}"),
+        );
     }
 }
 
@@ -789,7 +805,7 @@ fn is_required_primary_asset(required: bool, asset: &HfAsset) -> bool {
 fn emit_multipart_progress(
     progress: &MultipartDownloadProgress,
     status: ModelProgressStatus,
-    terminal_line_drawn: &mut bool,
+    terminal_frame_mode: MultipartTerminalFrameMode,
 ) {
     let (completed, total) = progress.snapshot();
     let completed = u64::try_from(completed).unwrap_or(u64::MAX);
@@ -798,28 +814,35 @@ fn emit_multipart_progress(
     if interactive_tui_active() {
         emit_model_progress(&label, None, Some(completed), Some(total), status);
     } else {
-        print_multipart_terminal_progress(progress, *terminal_line_drawn);
-        *terminal_line_drawn = true;
+        print_multipart_terminal_progress(progress, terminal_frame_mode);
     }
 }
 
-fn print_multipart_terminal_progress(progress: &MultipartDownloadProgress, already_drawn: bool) {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MultipartTerminalFrameMode {
+    AppendFreshLine,
+    RepaintPreviousLine,
+}
+
+fn print_multipart_terminal_progress(
+    progress: &MultipartDownloadProgress,
+    terminal_frame_mode: MultipartTerminalFrameMode,
+) {
     eprint!(
         "{}",
-        multipart_progress_terminal_frame(progress, already_drawn)
+        multipart_progress_terminal_frame(progress, terminal_frame_mode)
     );
     let _ = std::io::stderr().flush();
 }
 
 fn multipart_progress_terminal_frame(
     progress: &MultipartDownloadProgress,
-    already_drawn: bool,
+    terminal_frame_mode: MultipartTerminalFrameMode,
 ) -> String {
     let line = multipart_progress_terminal_line(progress);
-    if already_drawn {
-        format!("\x1b[1A\r\x1b[2K{line}\n")
-    } else {
-        format!("\r\x1b[2K{line}\n")
+    match terminal_frame_mode {
+        MultipartTerminalFrameMode::AppendFreshLine => format!("\r\x1b[2K{line}\n"),
+        MultipartTerminalFrameMode::RepaintPreviousLine => format!("\x1b[1A\r\x1b[2K{line}\n"),
     }
 }
 
@@ -1400,13 +1423,39 @@ mod tests {
         let mut progress = MultipartDownloadProgress::new("repo/model", 3);
         progress.complete_required_part();
 
-        let first = multipart_progress_terminal_frame(&progress, false);
-        let next = multipart_progress_terminal_frame(&progress, true);
+        let first = multipart_progress_terminal_frame(
+            &progress,
+            MultipartTerminalFrameMode::AppendFreshLine,
+        );
+        let next = multipart_progress_terminal_frame(
+            &progress,
+            MultipartTerminalFrameMode::RepaintPreviousLine,
+        );
 
         assert!(first.starts_with("\r\x1b[2KParts"));
         assert_eq!(first.matches('\n').count(), 1);
         assert!(next.starts_with("\x1b[1A\r\x1b[2KParts"));
         assert_eq!(next.matches('\n').count(), 1);
+    }
+
+    #[test]
+    fn multipart_progress_terminal_frame_repaints_after_first_asset_boundary() {
+        let mut progress = MultipartDownloadProgress::new("repo/model", 3);
+        progress.complete_required_part();
+
+        let first_asset = multipart_progress_terminal_frame(
+            &progress,
+            MultipartTerminalFrameMode::AppendFreshLine,
+        );
+        let next_asset = multipart_progress_terminal_frame(
+            &progress,
+            MultipartTerminalFrameMode::RepaintPreviousLine,
+        );
+
+        assert!(first_asset.starts_with("\r\x1b[2KParts"));
+        assert!(next_asset.starts_with("\x1b[1A\r\x1b[2KParts"));
+        assert_eq!(first_asset.matches('\n').count(), 1);
+        assert_eq!(next_asset.matches('\n').count(), 1);
     }
 
     #[tokio::test]

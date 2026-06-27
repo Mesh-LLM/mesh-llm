@@ -194,14 +194,23 @@ fn available_inline_gauge_width(terminal_width: u16, reserved_columns: u16) -> u
 }
 
 fn fit_inline_gauge_label(label: &str, width: u16) -> String {
+    const ELLIPSIS: &str = "...";
+
     let max_label_len = usize::from(width)
         .saturating_sub(INLINE_GAUGE_MIN_BAR_WIDTH)
         .saturating_sub(1);
     if label.chars().count() <= max_label_len {
         return label.to_string();
     }
-    let keep_len = max_label_len.saturating_sub(3);
-    format!("{}...", label.chars().take(keep_len).collect::<String>())
+    if max_label_len <= ELLIPSIS.len() {
+        return ELLIPSIS.chars().take(max_label_len).collect();
+    }
+    let keep_len = max_label_len - ELLIPSIS.len();
+    format!(
+        "{}{}",
+        label.chars().take(keep_len).collect::<String>(),
+        ELLIPSIS
+    )
 }
 
 fn styled_buffer_line(buffer: &Buffer) -> String {
@@ -321,8 +330,8 @@ pub fn ratio_complete_u64(current: u64, total: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        available_inline_gauge_width, ratio_complete_u64, render_inline_gauge,
-        render_inline_gauge_in_width, render_inline_progress_bar,
+        available_inline_gauge_width, fit_inline_gauge_label, ratio_complete_u64,
+        render_inline_gauge, render_inline_gauge_in_width, render_inline_progress_bar,
     };
 
     #[test]
@@ -379,6 +388,18 @@ mod tests {
         let visible = strip_ansi(&line);
 
         assert_eq!(visible.chars().count(), 93);
+    }
+
+    #[test]
+    fn inline_gauge_label_never_exceeds_narrow_budget() {
+        for (width, budget) in [(25, 0), (26, 1), (27, 2), (28, 3)] {
+            let label = fit_inline_gauge_label("very-long-model-name", width);
+
+            assert!(
+                label.chars().count() <= budget,
+                "width {width} returned label {label:?} longer than budget {budget}"
+            );
+        }
     }
 
     #[test]
