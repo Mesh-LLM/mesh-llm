@@ -1,5 +1,7 @@
 //! Managed model acquisition helpers.
 
+use super::download_parts::MultipartDownloadProgress;
+use super::download_transfer::{DownloadTransferStats, DownloadTransferTracker};
 use super::track_managed_model_usage;
 use anyhow::{Context, Result};
 use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler};
@@ -16,6 +18,9 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
+
+const DOWNLOAD_PROGRESS_PREFIX_WIDTH: usize = "Downloading  100.0%  ".len();
+const DOWNLOAD_PROGRESS_BAR_WIDTH: u16 = 32;
 
 /// Get the canonical managed model root (the Hugging Face hub cache).
 pub fn models_dir() -> PathBuf {
@@ -267,7 +272,7 @@ async fn download_hf_assets(
     label: &str,
     assets: Vec<HfAsset>,
     progress: bool,
-) -> Result<Vec<PathBuf>> {
+) -> Result<HfAssetsDownload> {
     let label = label.to_string();
     #[cfg(test)]
     {
@@ -277,12 +282,47 @@ async fn download_hf_assets(
             .get(&label)
             .cloned();
         if let Some(func) = func {
-            return func(&label, assets);
+            return Ok(HfAssetsDownload {
+                paths: func(&label, assets)?,
+                transfer_stats: None,
+            });
         }
     }
     tokio::task::spawn_blocking(move || download_hf_assets_blocking(&label, assets, progress))
         .await
         .context("Join Hugging Face download task")?
+}
+
+#[derive(Debug)]
+struct HfAssetsDownload {
+    paths: Vec<PathBuf>,
+    transfer_stats: Option<DownloadTransferStats>,
+}
+
+#[derive(Debug)]
+pub struct HfDownload {
+    pub path: PathBuf,
+    pub paths: Vec<PathBuf>,
+    pub transfer_stats: Option<DownloadTransferStats>,
+}
+
+struct HfDownloadProgress {
+    visible: Option<Arc<MeshDownloadProgress>>,
+    transfer: Arc<Mutex<DownloadTransferTracker>>,
+}
+
+impl ProgressHandler for HfDownloadProgress {
+    fn on_progress(&self, event: &ProgressEvent) {
+        if let Some(visible) = &self.visible {
+            visible.on_progress(event);
+        }
+        let ProgressEvent::Download(event) = event else {
+            return;
+        };
+        if let Ok(mut transfer) = self.transfer.lock() {
+            transfer.apply_download_event(event);
+        }
+    }
 }
 
 struct MeshDownloadProgressState {
@@ -371,7 +411,7 @@ impl MeshDownloadProgress {
                 format_download_bytes(total),
             ),
         };
-        let bar = render_inline_progress_bar(ratio, 32);
+        let bar = render_inline_progress_bar(ratio, DOWNLOAD_PROGRESS_BAR_WIDTH);
         eprint!(
             "\r\x1b[KDownloading  {:>3}.{:01}%  {}  {} / {}{}",
             percent_major,
@@ -520,7 +560,7 @@ fn download_hf_assets_blocking(
     label: &str,
     assets: Vec<HfAsset>,
     progress: bool,
-) -> Result<Vec<PathBuf>> {
+) -> Result<HfAssetsDownload> {
     let label = label.to_string();
     super::run_hf_sync(move || download_hf_assets_sync(&label, assets, progress))
 }
@@ -529,7 +569,7 @@ fn download_hf_assets_sync(
     label: &str,
     assets: Vec<HfAsset>,
     progress: bool,
-) -> Result<Vec<PathBuf>> {
+) -> Result<HfAssetsDownload> {
     let api = super::build_hf_api(false)?;
     let mut download_plan = initial_download_plan_for_assets(assets)?;
     let current_plan: Vec<(bool, HfAsset)> = download_plan.iter().cloned().collect();
@@ -574,6 +614,22 @@ fn download_hf_assets_sync(
     }
 
     let mut primary_paths = Vec::new();
+    let mut transfer_stats = Vec::new();
+    let mut multipart_progress = MultipartDownloadProgress::new(
+        label,
+        download_plan
+            .iter()
+            .filter(|(required, asset)| is_required_primary_asset(*required, asset))
+            .count(),
+    );
+    let mut multipart_terminal_line_drawn = false;
+    if progress && multipart_progress.is_multipart() {
+        emit_multipart_progress(
+            &multipart_progress,
+            ModelProgressStatus::Downloading,
+            &mut multipart_terminal_line_drawn,
+        );
+    }
     for (required, asset) in download_plan {
         let (owner, name) = asset.repo_parts();
         let api_repo = api.model(owner, name);
@@ -587,14 +643,28 @@ fn download_hf_assets_sync(
                 || eprintln!("   📥 Ensuring model {}", asset.file),
             );
         }
-        let progress_tracker = if progress && required {
+        let visible_tracker = if progress && required {
             Some(Arc::new(MeshDownloadProgress::new(asset.file.clone())))
         } else {
             None
         };
-        let progress_handler: Option<Progress> = progress_tracker
-            .as_ref()
-            .map(|tracker| tracker.clone().into());
+        let transfer_tracker =
+            required.then(|| Arc::new(Mutex::new(DownloadTransferTracker::default())));
+        let progress_handler: Option<Progress> = transfer_tracker.as_ref().map(|tracker| {
+            Arc::new(HfDownloadProgress {
+                visible: visible_tracker.clone(),
+                transfer: Arc::clone(tracker),
+            })
+            .into()
+        });
+        let cached_before = transfer_tracker.is_some()
+            && api_repo
+                .download_file()
+                .filename(asset.file.clone())
+                .revision(asset.revision.clone())
+                .local_files_only(true)
+                .send()
+                .is_ok();
         let path = match api_repo
             .download_file()
             .filename(asset.file.clone())
@@ -604,47 +674,13 @@ fn download_hf_assets_sync(
         {
             Ok(path) => {
                 if progress {
-                    if required && interactive_tui_active() {
-                        let showed_progress = progress_tracker
-                            .as_ref()
-                            .is_some_and(|tracker| tracker.showed_meaningful_progress());
-                        if showed_progress {
-                            emit_or_print_model_progress(
-                                label,
-                                Some(&asset.file),
-                                None,
-                                None,
-                                ModelProgressStatus::Ready,
-                                || eprintln!("   ✅ Ready {}", asset.file),
-                            );
-                        } else if let Ok(meta) = std::fs::metadata(&path) {
-                            emit_or_print_model_progress(
-                                label,
-                                Some(&asset.file),
-                                Some(meta.len()),
-                                Some(meta.len()),
-                                ModelProgressStatus::Ready,
-                                || {
-                                    eprintln!(
-                                        "   ✅ Ready {} ({})",
-                                        asset.file,
-                                        format_download_bytes(meta.len())
-                                    )
-                                },
-                            );
-                        } else {
-                            emit_or_print_model_progress(
-                                label,
-                                Some(&asset.file),
-                                None,
-                                None,
-                                ModelProgressStatus::Ready,
-                                || eprintln!("   ✅ Ready {}", asset.file),
-                            );
-                        }
-                    } else if interactive_tui_active() {
-                        eprintln!("   🧾 Downloaded model metadata");
-                    }
+                    emit_completed_asset_progress(
+                        required,
+                        label,
+                        &asset.file,
+                        &path,
+                        visible_tracker.as_ref(),
+                    );
                 }
                 path
             }
@@ -660,12 +696,149 @@ fn download_hf_assets_sync(
                 });
             }
         };
-        if required && asset.file != "config.json" {
+        if let Some(tracker) = transfer_tracker
+            && let Ok(mut tracker) = tracker.lock()
+            && let Some(stats) =
+                std::mem::take(&mut *tracker).finish_with_file_fallback(cached_before, &path)
+        {
+            transfer_stats.push(stats);
+        }
+        if is_required_primary_asset(required, &asset) {
             primary_paths.push(path);
+            multipart_progress.complete_required_part();
+            if progress && multipart_progress.is_multipart() {
+                emit_multipart_progress(
+                    &multipart_progress,
+                    ModelProgressStatus::Downloading,
+                    &mut multipart_terminal_line_drawn,
+                );
+            }
+        } else {
+            multipart_progress.complete_optional_metadata();
         }
     }
 
-    Ok(primary_paths)
+    Ok(HfAssetsDownload {
+        paths: primary_paths,
+        transfer_stats: DownloadTransferStats::combine(transfer_stats),
+    })
+}
+
+fn emit_completed_asset_progress(
+    required: bool,
+    label: &str,
+    asset_file: &str,
+    path: &Path,
+    visible_tracker: Option<&Arc<MeshDownloadProgress>>,
+) {
+    if required && interactive_tui_active() {
+        emit_required_asset_ready_progress(label, asset_file, path, visible_tracker);
+    } else if interactive_tui_active() {
+        eprintln!("   🧾 Downloaded model metadata");
+    }
+}
+
+fn emit_required_asset_ready_progress(
+    label: &str,
+    asset_file: &str,
+    path: &Path,
+    visible_tracker: Option<&Arc<MeshDownloadProgress>>,
+) {
+    let showed_progress =
+        visible_tracker.is_some_and(|tracker| tracker.showed_meaningful_progress());
+    if showed_progress {
+        emit_or_print_model_progress(
+            label,
+            Some(asset_file),
+            None,
+            None,
+            ModelProgressStatus::Ready,
+            || eprintln!("   ✅ Ready {asset_file}"),
+        );
+    } else if let Ok(meta) = std::fs::metadata(path) {
+        emit_or_print_model_progress(
+            label,
+            Some(asset_file),
+            Some(meta.len()),
+            Some(meta.len()),
+            ModelProgressStatus::Ready,
+            || {
+                eprintln!(
+                    "   ✅ Ready {} ({})",
+                    asset_file,
+                    format_download_bytes(meta.len())
+                )
+            },
+        );
+    } else {
+        emit_or_print_model_progress(
+            label,
+            Some(asset_file),
+            None,
+            None,
+            ModelProgressStatus::Ready,
+            || eprintln!("   ✅ Ready {asset_file}"),
+        );
+    }
+}
+
+fn is_required_primary_asset(required: bool, asset: &HfAsset) -> bool {
+    required && asset.file != "config.json"
+}
+
+fn emit_multipart_progress(
+    progress: &MultipartDownloadProgress,
+    status: ModelProgressStatus,
+    terminal_line_drawn: &mut bool,
+) {
+    let (completed, total) = progress.snapshot();
+    let completed = u64::try_from(completed).unwrap_or(u64::MAX);
+    let total = u64::try_from(total).unwrap_or(u64::MAX);
+    let label = multipart_progress_label(progress.label());
+    if interactive_tui_active() {
+        emit_model_progress(&label, None, Some(completed), Some(total), status);
+    } else {
+        print_multipart_terminal_progress(progress, *terminal_line_drawn);
+        *terminal_line_drawn = true;
+    }
+}
+
+fn print_multipart_terminal_progress(progress: &MultipartDownloadProgress, already_drawn: bool) {
+    eprint!(
+        "{}",
+        multipart_progress_terminal_frame(progress, already_drawn)
+    );
+    let _ = std::io::stderr().flush();
+}
+
+fn multipart_progress_terminal_frame(
+    progress: &MultipartDownloadProgress,
+    already_drawn: bool,
+) -> String {
+    let line = multipart_progress_terminal_line(progress);
+    if already_drawn {
+        format!("\x1b[1A\r\x1b[2K{line}\n")
+    } else {
+        format!("\r\x1b[2K{line}\n")
+    }
+}
+
+fn multipart_progress_terminal_line(progress: &MultipartDownloadProgress) -> String {
+    let (completed, total) = progress.snapshot();
+    let completed = u64::try_from(completed).unwrap_or(u64::MAX);
+    let total = u64::try_from(total).unwrap_or(u64::MAX);
+    let percent = ratio_complete_u64(completed, total);
+    let prefix = format!(
+        "{:<width$}",
+        "Parts",
+        width = DOWNLOAD_PROGRESS_PREFIX_WIDTH
+    );
+    let bar = render_inline_progress_bar(percent, DOWNLOAD_PROGRESS_BAR_WIDTH);
+    format!("{prefix}{bar}  {completed}/{total}")
+}
+
+fn multipart_progress_label(label: &str) -> String {
+    format!("parts::{label}")
 }
 
 fn initial_download_plan_for_assets(
@@ -719,6 +892,7 @@ pub async fn download_hf_repo_file_with_progress(
         progress,
     )
     .await
+    .map(|download| download.path)
 }
 
 pub async fn download_hf_repo_file_with_progress_label(
@@ -727,18 +901,22 @@ pub async fn download_hf_repo_file_with_progress_label(
     file: &str,
     label: &str,
     progress: bool,
-) -> Result<PathBuf> {
+) -> Result<HfDownload> {
     let revision = revision.unwrap_or("main").to_string();
     let asset = HfAsset {
         repo: repo.to_string(),
         revision: revision.clone(),
         file: file.to_string(),
     };
-    let mut paths = download_hf_assets(label, vec![asset.clone()], progress).await?;
+    let HfAssetsDownload {
+        mut paths,
+        transfer_stats,
+    } = download_hf_assets(label, vec![asset.clone()], progress).await?;
     paths.sort();
     let path = paths
-        .into_iter()
+        .iter()
         .find(|path| path_suffix_matches_ignore_case(path, &asset.file))
+        .cloned()
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "Downloaded Hugging Face asset not found in cache: {repo}/{file}@{revision}"
@@ -749,19 +927,19 @@ pub async fn download_hf_repo_file_with_progress_label(
         .and_then(|value| value.to_str())
         .unwrap_or(&asset.file);
     let model_ref = format!("{repo}@{revision}/{file}");
-    if let Err(err) = track_managed_model_usage(
-        &path,
-        std::slice::from_ref(&path),
-        display_name,
-        Some(&model_ref),
-        "huggingface",
-    ) {
+    if let Err(err) =
+        track_managed_model_usage(&path, &paths, display_name, Some(&model_ref), "huggingface")
+    {
         tracing::warn!(
             "failed to record managed model usage for {}: {err}",
             path.display()
         );
     }
-    Ok(path)
+    Ok(HfDownload {
+        path,
+        paths,
+        transfer_stats,
+    })
 }
 
 fn path_suffix_matches_ignore_case(path: &Path, expected: &str) -> bool {
@@ -1087,6 +1265,29 @@ mod tests {
     }
 
     #[test]
+    fn silent_download_progress_records_transfer_stats() {
+        let transfer = Arc::new(Mutex::new(DownloadTransferTracker::default()));
+        let progress = HfDownloadProgress {
+            visible: None,
+            transfer: Arc::clone(&transfer),
+        };
+
+        progress.on_progress(&ProgressEvent::Download(DownloadEvent::Progress {
+            files: vec![FileProgress {
+                filename: "model.gguf".to_string(),
+                bytes_completed: 1_024,
+                total_bytes: 2_048,
+                status: FileStatus::InProgress,
+            }],
+        }));
+
+        let stats = std::mem::take(&mut *transfer.lock().unwrap())
+            .finish()
+            .expect("silent transfer stats");
+        assert_eq!(stats.bytes, 1_024);
+    }
+
+    #[test]
     fn is_split_mlx_first_shard_file_identifies_correct_patterns() {
         assert!(is_split_mlx_first_shard_file(
             "model-00001-of-00004.safetensors"
@@ -1161,6 +1362,97 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn multipart_download_progress_tracks_required_parts_only() {
+        let mut progress = MultipartDownloadProgress::new("repo/model", 3);
+
+        assert_eq!(progress.snapshot(), (0, 3));
+        progress.complete_optional_metadata();
+        assert_eq!(progress.snapshot(), (0, 3));
+        progress.complete_required_part();
+        assert_eq!(progress.snapshot(), (1, 3));
+        progress.complete_required_part();
+        assert_eq!(progress.snapshot(), (2, 3));
+        progress.complete_required_part();
+        assert_eq!(progress.snapshot(), (3, 3));
+        progress.complete_required_part();
+        assert_eq!(progress.snapshot(), (3, 3));
+    }
+
+    #[test]
+    fn multipart_progress_terminal_line_reports_part_counts() {
+        let mut progress = MultipartDownloadProgress::new("repo/model", 3);
+        progress.complete_required_part();
+        progress.complete_required_part();
+
+        let line = multipart_progress_terminal_line(&progress);
+
+        assert!(line.contains("Parts"));
+        assert!(line.contains("2/3"));
+        assert!(!line.contains('📦'));
+        assert_eq!(line.find('['), Some(21));
+    }
+
+    #[test]
+    fn multipart_progress_terminal_frame_repaints_in_place() {
+        let mut progress = MultipartDownloadProgress::new("repo/model", 3);
+        progress.complete_required_part();
+
+        let first = multipart_progress_terminal_frame(&progress, false);
+        let next = multipart_progress_terminal_frame(&progress, true);
+
+        assert!(first.starts_with("\r\x1b[2KParts"));
+        assert_eq!(first.matches('\n').count(), 1);
+        assert!(next.starts_with("\x1b[1A\r\x1b[2KParts"));
+        assert_eq!(next.matches('\n').count(), 1);
+    }
+
+    #[tokio::test]
+    async fn download_hf_repo_file_returns_all_split_primary_paths() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let cache_dir = std::env::temp_dir().join(format!("mesh-llm-hf-split-repo-{unique}"));
+        let shard_one = cache_dir.join("model-00001-of-00003.gguf");
+        let shard_two = cache_dir.join("model-00002-of-00003.gguf");
+        let shard_three = cache_dir.join("model-00003-of-00003.gguf");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(&shard_one, b"gguf").unwrap();
+        std::fs::write(&shard_two, b"gguf").unwrap();
+        std::fs::write(&shard_three, b"gguf").unwrap();
+
+        let label = "org/repo/model-00001-of-00003.gguf@main".to_string();
+        let _guard = DownloadHfAssetsOverrideGuard::set(
+            label,
+            Arc::new({
+                let shard_one = shard_one.clone();
+                let shard_two = shard_two.clone();
+                let shard_three = shard_three.clone();
+                move |_, _| {
+                    Ok(vec![
+                        shard_three.clone(),
+                        shard_one.clone(),
+                        shard_two.clone(),
+                    ])
+                }
+            }),
+        );
+
+        let download = download_hf_repo_file_with_progress_label(
+            "org/repo",
+            Some("main"),
+            "model-00001-of-00003.gguf",
+            "org/repo/model-00001-of-00003.gguf@main",
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(download.path, shard_one);
+        assert_eq!(download.paths, vec![shard_one, shard_two, shard_three]);
     }
 
     #[test]

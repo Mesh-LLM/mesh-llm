@@ -856,6 +856,18 @@ fn format_model_download_progress_message(
     status: &ModelProgressStatus,
 ) -> String {
     let target = file.unwrap_or(label);
+    if let Some(model) = label.strip_prefix("parts::") {
+        return match status {
+            ModelProgressStatus::Ensuring => format!("ensuring model parts for {model}"),
+            ModelProgressStatus::Downloading => match (downloaded_bytes, total_bytes) {
+                (Some(completed), Some(total)) if total > 0 => {
+                    format!("downloading model parts for {model} {completed}/{total}")
+                }
+                _ => format!("downloading model parts for {model}"),
+            },
+            ModelProgressStatus::Ready => format!("model parts ready for {model}"),
+        };
+    }
     if let Some(package) = label.strip_prefix("layer package ") {
         return match status {
             ModelProgressStatus::Ensuring => {
@@ -8868,6 +8880,19 @@ mod tests {
             message,
             "downloading layer package artifact shared/embeddings.gguf for meshllm/demo-layers 256MB/512MB"
         );
+    }
+
+    #[test]
+    fn multipart_model_progress_message_reports_part_counts() {
+        let message = format_model_download_progress_message(
+            "parts::org/repo:model",
+            None,
+            Some(2),
+            Some(3),
+            &ModelProgressStatus::Downloading,
+        );
+
+        assert_eq!(message, "downloading model parts for org/repo:model 2/3");
     }
 
     fn sample_endpoint_row(label: &str, port: u16) -> DashboardEndpointRow {

@@ -1,8 +1,8 @@
 use super::formatters::{
-    ConsoleFormatter, DownloadStats, InstalledRow, ModelsFormatter, SearchFormatter,
-    catalog_model_capabilities, filter_label, fit_hint_for_size_label, format_count,
-    format_installed_size, format_relative_timestamp, format_source_label, huggingface_cache_dir,
-    huggingface_repo_url, installed_model_kind, model_kind_code, sort_label,
+    ConsoleFormatter, DownloadRenderInput, DownloadStats, InstalledRow, ModelsFormatter,
+    SearchFormatter, catalog_model_capabilities, filter_label, fit_hint_for_size_label,
+    format_count, format_installed_size, format_relative_timestamp, format_source_label,
+    huggingface_cache_dir, huggingface_repo_url, installed_model_kind, model_kind_code, sort_label,
     variant_selector_label,
 };
 use anyhow::Result;
@@ -47,13 +47,13 @@ fn downloaded_model_headline(stats: Option<&DownloadStats>, colors: bool) -> Str
             colors
         )
     );
-    if let Some(avg_bytes_per_sec) = average_bytes_per_sec(stats) {
+    if let Some((bytes_per_sec, label)) = download_bytes_per_sec(stats) {
         let _ = write!(
             headline,
             " {} {}",
-            styled_muted("· avg", colors),
+            styled_muted(&format!("· {label}"), colors),
             styled_stat(
-                &format!("{}/s", format_download_stat_bytes(avg_bytes_per_sec)),
+                &format!("{}/s", format_download_stat_bytes(bytes_per_sec)),
                 colors
             )
         );
@@ -107,6 +107,13 @@ fn average_bytes_per_sec(stats: &DownloadStats) -> Option<u64> {
     (elapsed > 0.0).then(|| (bytes as f64 / elapsed).round() as u64)
 }
 
+fn download_bytes_per_sec(stats: &DownloadStats) -> Option<(u64, &'static str)> {
+    if let Some(bytes_per_second) = stats.bytes_per_second {
+        return Some((bytes_per_second, "speed"));
+    }
+    average_bytes_per_sec(stats).map(|bytes_per_second| (bytes_per_second, "avg"))
+}
+
 fn format_elapsed(duration: Duration) -> String {
     let seconds = duration.as_secs_f64();
     if seconds < 60.0 {
@@ -126,6 +133,46 @@ fn format_download_stat_bytes(bytes: u64) -> String {
     } else {
         format!("{bytes}B")
     }
+}
+
+fn download_summary_lines(input: &DownloadRenderInput<'_>, colors: bool) -> Vec<String> {
+    let model_name = input
+        .path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| input.path.to_string_lossy().to_string());
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "   {}  {model_name}",
+        styled_label("model", colors)
+    ));
+    if let Some(details) = input.details {
+        lines.push(format!(
+            "   {}   {}",
+            styled_label("type", colors),
+            plain_model_kind(details.kind)
+        ));
+    }
+    let paths = input.all_paths();
+    let part_count = input.part_count();
+    if part_count > 1 {
+        lines.push(format!(
+            "   {}  {part_count}",
+            styled_label("parts", colors)
+        ));
+        lines.push(format!("   {}", styled_label("paths", colors)));
+        for path in paths {
+            lines.push(format!("      {}", path.display()));
+        }
+    } else {
+        lines.push(format!(
+            "   {}   {}",
+            styled_label("path", colors),
+            input.path.display()
+        ));
+    }
+    lines
 }
 
 impl SearchFormatter for ConsoleFormatter {
@@ -499,33 +546,14 @@ impl ModelsFormatter for ConsoleFormatter {
         Ok(())
     }
 
-    fn render_download(
-        &self,
-        _model_ref: &str,
-        path: &std::path::Path,
-        details: Option<&ModelDetails>,
-        stats: Option<&DownloadStats>,
-        _include_draft: bool,
-        draft: Option<(&str, &std::path::Path)>,
-    ) -> Result<()> {
+    fn render_download(&self, input: DownloadRenderInput<'_>) -> Result<()> {
         let colors = std::io::stdout().is_terminal();
-        println!("{}", downloaded_model_headline(stats, colors));
+        println!("{}", downloaded_model_headline(input.stats, colors));
         println!();
-        let model_name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| path.to_string_lossy().to_string());
-        println!("   {}  {model_name}", styled_label("model", colors));
-        if let Some(details) = details {
-            println!(
-                "   {}   {}",
-                styled_label("type", colors),
-                plain_model_kind(details.kind)
-            );
+        for line in download_summary_lines(&input, colors) {
+            println!("{line}");
         }
-        println!("   {}   {}", styled_label("path", colors), path.display());
-        if let Some((_draft_name, draft_path)) = draft {
+        if let Some((_draft_name, draft_path)) = input.draft {
             println!();
             println!("{}", styled_download_success("✓ Downloaded draft", colors));
             println!(
@@ -623,7 +651,9 @@ impl ModelsFormatter for ConsoleFormatter {
 
 #[cfg(test)]
 mod tests {
-    use super::{DownloadStats, downloaded_model_headline};
+    use super::{DownloadStats, download_summary_lines, downloaded_model_headline};
+    use crate::commands::models::formatters::DownloadRenderInput;
+    use std::path::Path;
     use std::time::Duration;
 
     #[test]
@@ -631,6 +661,7 @@ mod tests {
         let stats = DownloadStats {
             bytes: Some(105_000_000),
             elapsed: Duration::from_millis(14_800),
+            bytes_per_second: None,
         };
 
         assert_eq!(
@@ -644,11 +675,59 @@ mod tests {
         let stats = DownloadStats {
             bytes: Some(105_000_000),
             elapsed: Duration::from_millis(14_800),
+            bytes_per_second: None,
         };
 
         assert_eq!(
             downloaded_model_headline(Some(&stats), true),
             "\u{1b}[1;32m✓ Downloaded model\u{1b}[0m\u{1b}[90m ─ \u{1b}[0m\u{1b}[96m105.0 MB in 14.8s\u{1b}[0m \u{1b}[90m· avg\u{1b}[0m \u{1b}[96m7.1 MB/s\u{1b}[0m"
+        );
+    }
+
+    #[test]
+    fn multipart_download_summary_lists_all_parts() {
+        let paths = vec![
+            Path::new("/cache/model-00001-of-00003.gguf"),
+            Path::new("/cache/model-00002-of-00003.gguf"),
+            Path::new("/cache/model-00003-of-00003.gguf"),
+        ];
+        let input = DownloadRenderInput {
+            model_ref: "org/repo:model",
+            path: paths[0],
+            paths: &paths,
+            details: None,
+            stats: None,
+            include_draft: false,
+            draft: None,
+        };
+
+        let lines = download_summary_lines(&input, false);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("parts") && line.contains("3"))
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.split_whitespace().next() == Some("path"))
+        );
+        assert!(lines.iter().any(|line| line.trim_start() == "paths"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("model-00001-of-00003.gguf"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("model-00002-of-00003.gguf"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("model-00003-of-00003.gguf"))
         );
     }
 }

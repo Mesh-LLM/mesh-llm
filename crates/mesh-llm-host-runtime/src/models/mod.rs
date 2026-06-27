@@ -3,6 +3,8 @@ pub mod capabilities;
 pub mod catalog;
 pub mod delete;
 pub use delete::DeleteResult;
+mod download_parts;
+mod download_transfer;
 mod external_inference;
 pub mod gguf;
 pub mod inventory;
@@ -25,6 +27,7 @@ pub use capabilities::{
     CapabilityLevel, ModelCapabilities, RuntimeMediaCapabilityEvidence,
     runtime_verified_model_capabilities,
 };
+pub use download_transfer::DownloadTransferStats;
 pub(crate) use external_inference::append_external_inference_models;
 pub use inventory::{LocalModelInventorySnapshot, scan_local_inventory_snapshot_with_progress};
 pub use local::{

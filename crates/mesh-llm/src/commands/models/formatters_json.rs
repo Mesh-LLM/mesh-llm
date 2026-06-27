@@ -1,5 +1,5 @@
 use super::formatters::{
-    DownloadStats, InstalledRow, JsonFormatter, ModelsFormatter, SearchFormatter,
+    DownloadRenderInput, InstalledRow, JsonFormatter, ModelsFormatter, SearchFormatter,
     capabilities_json, catalog_model_capabilities, catalog_model_kind_code,
     fit_code_for_size_label, format_installed_size, huggingface_cache_dir,
     installed_model_kind_code, local_capacity_json, model_kind_code, print_json,
@@ -51,6 +51,41 @@ fn show_payload(details: &ModelDetails, variants: Option<&[ModelDetails]>) -> Va
             })
             .collect::<Vec<_>>(),
     })
+}
+
+fn download_payload(input: &DownloadRenderInput<'_>) -> Value {
+    let paths = input.all_paths();
+    let mut payload = json!({
+        "requested_ref": input.model_ref,
+        "path": input.path,
+        "type": input.details.as_ref().map(|d| model_kind_code(d.kind)),
+        "resolved_ref": input.details.as_ref().map(|d| d.exact_ref.clone()),
+    });
+    if paths.len() > 1 {
+        payload["part_count"] = json!(input.part_count());
+        payload["paths"] = json!(paths);
+    }
+    if let Some(stats) = input.stats {
+        let elapsed = stats.elapsed.as_secs_f64();
+        payload["download"] = json!({
+            "bytes": stats.bytes,
+            "elapsed_seconds": elapsed,
+            "bytes_per_second": stats.bytes_per_second,
+            "avg_bytes_per_second": stats
+                .bytes
+                .and_then(|bytes| (elapsed > 0.0).then(|| (bytes as f64 / elapsed).round() as u64)),
+        });
+    }
+    if input.include_draft {
+        payload["draft"] = match input.draft {
+            Some((name, draft_path)) => json!({
+                "name": name,
+                "path": draft_path,
+            }),
+            None => Value::Null,
+        };
+    }
+    payload
 }
 
 impl SearchFormatter for JsonFormatter {
@@ -164,41 +199,8 @@ impl ModelsFormatter for JsonFormatter {
         print_json(show_payload(details, variants))
     }
 
-    fn render_download(
-        &self,
-        model_ref: &str,
-        path: &Path,
-        details: Option<&ModelDetails>,
-        stats: Option<&DownloadStats>,
-        include_draft: bool,
-        draft: Option<(&str, &Path)>,
-    ) -> Result<()> {
-        let mut payload = json!({
-            "requested_ref": model_ref,
-            "path": path,
-            "type": details.as_ref().map(|d| model_kind_code(d.kind)),
-            "resolved_ref": details.as_ref().map(|d| d.exact_ref.clone()),
-        });
-        if let Some(stats) = stats {
-            let elapsed = stats.elapsed.as_secs_f64();
-            payload["download"] = json!({
-                "bytes": stats.bytes,
-                "elapsed_seconds": elapsed,
-                "avg_bytes_per_second": stats
-                    .bytes
-                    .and_then(|bytes| (elapsed > 0.0).then(|| (bytes as f64 / elapsed).round() as u64)),
-            });
-        }
-        if include_draft {
-            payload["draft"] = match draft {
-                Some((name, draft_path)) => json!({
-                    "name": name,
-                    "path": draft_path,
-                }),
-                None => Value::Null,
-            };
-        }
-        print_json(payload)
+    fn render_download(&self, input: DownloadRenderInput<'_>) -> Result<()> {
+        print_json(download_payload(&input))
     }
 
     fn render_layer_package_download(
@@ -266,7 +268,9 @@ impl ModelsFormatter for JsonFormatter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::models::formatters::DownloadRenderInput;
     use mesh_llm_host_runtime::command_support::models::ModelCapabilities;
+    use std::path::Path;
 
     #[test]
     fn show_payload_includes_variants_for_selected_gguf_ref() {
@@ -319,5 +323,30 @@ mod tests {
             emitted_variants[1]["ref"],
             "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
         );
+    }
+
+    #[test]
+    fn download_payload_includes_all_multipart_paths() {
+        let paths = vec![
+            Path::new("/cache/model-00001-of-00003.gguf"),
+            Path::new("/cache/model-00002-of-00003.gguf"),
+            Path::new("/cache/model-00003-of-00003.gguf"),
+        ];
+        let input = DownloadRenderInput {
+            model_ref: "org/repo:model",
+            path: paths[0],
+            paths: &paths,
+            details: None,
+            stats: None,
+            include_draft: false,
+            draft: None,
+        };
+
+        let payload = download_payload(&input);
+
+        assert_eq!(payload["path"], "/cache/model-00001-of-00003.gguf");
+        assert_eq!(payload["part_count"], 3);
+        assert_eq!(payload["paths"].as_array().expect("paths array").len(), 3);
+        assert_eq!(payload["paths"][1], "/cache/model-00002-of-00003.gguf");
     }
 }

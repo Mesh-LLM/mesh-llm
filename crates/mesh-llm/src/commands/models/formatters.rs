@@ -63,21 +63,38 @@ pub(crate) struct InstalledRow {
 pub(crate) struct DownloadStats {
     pub(crate) bytes: Option<u64>,
     pub(crate) elapsed: Duration,
+    pub(crate) bytes_per_second: Option<u64>,
+}
+
+pub(crate) struct DownloadRenderInput<'a> {
+    pub(crate) model_ref: &'a str,
+    pub(crate) path: &'a Path,
+    pub(crate) paths: &'a [&'a Path],
+    pub(crate) details: Option<&'a ModelDetails>,
+    pub(crate) stats: Option<&'a DownloadStats>,
+    pub(crate) include_draft: bool,
+    pub(crate) draft: Option<(&'a str, &'a Path)>,
+}
+
+impl<'a> DownloadRenderInput<'a> {
+    pub(crate) fn all_paths(&self) -> Vec<&'a Path> {
+        if self.paths.is_empty() {
+            vec![self.path]
+        } else {
+            self.paths.to_vec()
+        }
+    }
+
+    pub(crate) fn part_count(&self) -> usize {
+        self.all_paths().len()
+    }
 }
 
 pub(crate) trait ModelsFormatter: SearchFormatter {
     fn render_recommended(&self, models: &[remote_catalog::RemoteCatalogModel]) -> Result<()>;
     fn render_installed(&self, rows: &[InstalledRow]) -> Result<()>;
     fn render_show(&self, details: &ModelDetails, variants: Option<&[ModelDetails]>) -> Result<()>;
-    fn render_download(
-        &self,
-        model_ref: &str,
-        path: &Path,
-        details: Option<&ModelDetails>,
-        stats: Option<&DownloadStats>,
-        include_draft: bool,
-        draft: Option<(&str, &Path)>,
-    ) -> Result<()>;
+    fn render_download(&self, input: DownloadRenderInput<'_>) -> Result<()>;
     fn render_layer_package_download(
         &self,
         model_ref: &str,

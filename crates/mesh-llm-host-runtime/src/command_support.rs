@@ -36,18 +36,19 @@ pub mod models {
 
     pub use crate::models::remote_catalog;
     pub use crate::models::{
-        DeleteResult, ModelCapabilities, ModelCleanupPlan, ModelCleanupResult, ModelDetails,
-        ResolvedModel, SearchArtifactFilter, SearchHit, SearchProgress, SearchSort,
-        ShowVariantsProgress, delete, download_model_ref_with_progress_details,
-        download_model_ref_with_progress_details_direct, execute_model_cleanup, find_model_path,
-        find_remote_catalog_model_exact, huggingface_hub_cache_dir, huggingface_identity_for_path,
-        installed_model_capabilities, installed_model_display_name,
-        installed_model_huggingface_ref, layered_package_layer_count_for_path,
-        layered_package_total_bytes_for_path, load_model_usage_record_for_path,
-        model_usage_cache_dir, plan_model_cleanup, remote_catalog_model_draft_ref,
-        remote_catalog_model_ref, run_update, scan_installed_models, search_catalog_json_payload,
-        search_catalog_models, search_huggingface, search_huggingface_json_payload,
-        show_exact_model, show_model_variants_with_progress,
+        DeleteResult, DownloadTransferStats, ModelCapabilities, ModelCleanupPlan,
+        ModelCleanupResult, ModelDetails, ResolvedModel, SearchArtifactFilter, SearchHit,
+        SearchProgress, SearchSort, ShowVariantsProgress, delete,
+        download_model_ref_with_progress_details, download_model_ref_with_progress_details_direct,
+        execute_model_cleanup, find_model_path, find_remote_catalog_model_exact,
+        huggingface_hub_cache_dir, huggingface_identity_for_path, installed_model_capabilities,
+        installed_model_display_name, installed_model_huggingface_ref,
+        layered_package_layer_count_for_path, layered_package_total_bytes_for_path,
+        load_model_usage_record_for_path, model_usage_cache_dir, plan_model_cleanup,
+        remote_catalog_model_draft_ref, remote_catalog_model_ref, run_update,
+        scan_installed_models, search_catalog_json_payload, search_catalog_models,
+        search_huggingface, search_huggingface_json_payload, show_exact_model,
+        show_model_variants_with_progress,
     };
     pub use crate::models::{capabilities, catalog};
 }

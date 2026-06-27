@@ -1,5 +1,5 @@
-use super::ModelCapabilities;
 use super::local::HuggingFaceModelIdentity;
+use super::{DownloadTransferStats, ModelCapabilities};
 use super::{
     capabilities, catalog, find_model_path, format_size_bytes, huggingface_identity_for_path,
     remote_catalog, track_model_usage,
@@ -138,15 +138,22 @@ pub fn remote_catalog_model_draft_ref(
 pub async fn download_model_ref_with_progress_details(
     input: &str,
     progress: bool,
-) -> Result<(PathBuf, Option<ModelDetails>)> {
+) -> Result<ModelDownload> {
     download_model_ref_with_progress_details_direct(input, progress, false).await
+}
+
+pub struct ModelDownload {
+    pub path: PathBuf,
+    pub paths: Vec<PathBuf>,
+    pub details: Option<ModelDetails>,
+    pub transfer_stats: Option<DownloadTransferStats>,
 }
 
 pub async fn download_model_ref_with_progress_details_direct(
     input: &str,
     progress: bool,
     direct: bool,
-) -> Result<(PathBuf, Option<ModelDetails>)> {
+) -> Result<ModelDownload> {
     let details = if progress {
         let mut spinner = start_spinner(&format!("Resolving {input}"));
         let details = show_exact_model(input).await.ok();
@@ -159,19 +166,26 @@ pub async fn download_model_ref_with_progress_details_direct(
         .as_ref()
         .map(|detail| detail.download_url.as_str())
         .unwrap_or(input);
-    let path = download_exact_ref_with_progress_direct(download_ref, progress, direct).await?;
-    Ok((path, details))
+    let download = download_exact_ref_with_progress_direct(download_ref, progress, direct).await?;
+    Ok(ModelDownload {
+        path: download.path,
+        paths: download.paths,
+        details,
+        transfer_stats: download.transfer_stats,
+    })
 }
 
 pub async fn download_exact_ref_with_progress(input: &str, progress: bool) -> Result<PathBuf> {
-    download_exact_ref_with_progress_direct(input, progress, false).await
+    download_exact_ref_with_progress_direct(input, progress, false)
+        .await
+        .map(|download| download.path)
 }
 
 async fn download_exact_ref_with_progress_direct(
     input: &str,
     progress: bool,
     direct: bool,
-) -> Result<PathBuf> {
+) -> Result<catalog::HfDownload> {
     let input = canonicalize_model_ref_input(input).await?;
     match parse_exact_model_ref(&input)? {
         ExactModelRef::Catalog(model) => download_remote_catalog_model(&model, progress).await,
@@ -244,7 +258,8 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
                 &hf_ref.name,
                 progress,
             )
-            .await;
+            .await
+            .map(|download| download.path);
         }
         let installed_path = find_model_path(installed_name);
         if installed_path.exists() {
@@ -273,10 +288,10 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
         return Ok(installed_path);
     }
 
-    let (path, _) = download_model_ref_with_progress_details(&raw, progress)
+    let download = download_model_ref_with_progress_details(&raw, progress)
         .await
         .with_context(|| format!("Resolve model spec {raw}"))?;
-    Ok(path)
+    Ok(download.path)
 }
 
 fn record_resolved_model_usage(path: &Path, model_ref: Option<&str>) {
@@ -1079,7 +1094,7 @@ async fn remote_size_label(url: &str) -> Option<String> {
 async fn download_remote_catalog_model(
     model: &remote_catalog::RemoteCatalogModel,
     progress: bool,
-) -> Result<PathBuf> {
+) -> Result<catalog::HfDownload> {
     catalog::download_hf_repo_file_with_progress_label(
         &model.repo,
         model.revision.as_deref(),

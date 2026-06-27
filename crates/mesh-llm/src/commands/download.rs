@@ -11,10 +11,11 @@ pub(crate) async fn dispatch_download_command(name: Option<&str>, draft: bool) -
                     mesh_llm_host_runtime::command_support::models::remote_catalog_model_ref(&model)
                 })
                 .unwrap_or_else(|| query.to_string());
-            let (_path, details) =
+            let download =
                 mesh_llm_host_runtime::command_support::models::download_model_ref_with_progress_details(&model_ref, true).await?;
             if draft {
-                if let Some(draft_name) = details
+                if let Some(draft_name) = download
+                    .details
                     .as_ref()
                     .and_then(|details| details.draft.as_deref())
                 {
