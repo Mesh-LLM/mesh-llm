@@ -149,10 +149,10 @@ fn cuda_majors_from_nvidia_smi_output(output: &str) -> BTreeSet<u32> {
         }
     }
     for line in output.lines() {
-        if let Some((_, version)) = line.split_once("CUDA Version:") {
-            if let Some(major) = leading_major_version(version) {
-                majors.insert(major);
-            }
+        if let Some((_, version)) = line.split_once("CUDA Version:")
+            && let Some(major) = leading_major_version(version)
+        {
+            majors.insert(major);
         }
     }
     majors
