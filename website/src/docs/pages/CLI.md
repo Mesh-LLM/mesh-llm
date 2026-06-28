@@ -10,9 +10,16 @@ Catalog id definition: a catalog id is the model id shown in `mesh-llm models re
 ```bash
 mesh-llm --help
 mesh-llm <command> --help
+mesh-llm serve --help
+mesh-llm client --help
+mesh-llm --help-advanced
 mesh-llm models --help
 mesh-llm models <subcommand> --help
 ```
+
+`serve --help` and `client --help` show concise runtime-entrypoint help for the
+most common serving and client-only options. Use `--help-advanced` when you need
+the complete runtime option surface.
 
 ## Check the running version
 
@@ -69,6 +76,11 @@ mesh-llm serve
 mesh-llm serve --model Qwen3-0.6B-Q4_K_M
 mesh-llm client --auto
 ```
+
+Use `mesh-llm serve --help` for the common serving flags, including `--model`,
+`--gguf`, `--auto`, `--join`, ports, and logging. Use
+`mesh-llm client --help` for client-only mesh operation when this machine should
+join or discover a mesh without serving a local model.
 
 Runtime switches:
 
