@@ -8,40 +8,6 @@ mod commands;
 
 pub use mesh_llm_host_runtime::*;
 
-#[cfg(test)]
-mod cli_entrypoint_tests {
-    use std::ffi::OsString;
-
-    #[test]
-    fn runtime_surface_help_request_handles_serve_and_client_help() {
-        assert_eq!(
-            super::runtime_surface_help_request([
-                OsString::from("mesh-llm"),
-                OsString::from("serve"),
-                OsString::from("--help"),
-            ]),
-            Some(mesh_llm_cli::RuntimeSurface::Serve)
-        );
-        assert_eq!(
-            super::runtime_surface_help_request([
-                OsString::from("mesh-llm"),
-                OsString::from("client"),
-                OsString::from("-h"),
-            ]),
-            Some(mesh_llm_cli::RuntimeSurface::Client)
-        );
-    }
-
-    #[test]
-    fn binary_help_request_handles_help_help() {
-        assert!(super::binary_help_request([
-            OsString::from("mesh-llm"),
-            OsString::from("help"),
-            OsString::from("--help"),
-        ]));
-    }
-}
-
 pub async fn run_main() -> i32 {
     match run_cli_entrypoint().await {
         Ok(()) => 0,
@@ -302,5 +268,39 @@ fn map_trust_policy(
         mesh_llm_cli::TrustPolicy::Allowlist => {
             mesh_llm_host_runtime::crypto::TrustPolicy::Allowlist
         }
+    }
+}
+
+#[cfg(test)]
+mod cli_entrypoint_tests {
+    use std::ffi::OsString;
+
+    #[test]
+    fn runtime_surface_help_request_handles_serve_and_client_help() {
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("serve"),
+                OsString::from("--help"),
+            ]),
+            Some(mesh_llm_cli::RuntimeSurface::Serve)
+        );
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("client"),
+                OsString::from("-h"),
+            ]),
+            Some(mesh_llm_cli::RuntimeSurface::Client)
+        );
+    }
+
+    #[test]
+    fn binary_help_request_handles_help_help() {
+        assert!(super::binary_help_request([
+            OsString::from("mesh-llm"),
+            OsString::from("help"),
+            OsString::from("--help"),
+        ]));
     }
 }
