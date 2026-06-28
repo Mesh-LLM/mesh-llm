@@ -180,6 +180,22 @@ class NightlyStabilityHarnessTests(unittest.TestCase):
         self.assertIsNone(result.actual_model)
         self.assertIsNone(result.tok_per_sec)
 
+    def test_chat_probe_reports_validation_failure_with_response_metadata(self) -> None:
+        response = {
+            "model": "auto-resolved",
+            "usage": {"completion_tokens": 8},
+            "choices": [{"message": {"content": "WRONG"}}],
+        }
+        with mock.patch.object(self.harness, "post_json", return_value=(response, 202)):
+            result = self.harness.run_chat_probe("https://meshllm.cloud/v1", "auto", 1, 1.0)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status_code, 202)
+        self.assertIsNone(result.ttft_ms)
+        self.assertEqual(result.actual_model, "auto-resolved")
+        self.assertIsNotNone(result.tok_per_sec)
+        self.assertIn("expected exactly STABILITY_OK", result.detail)
+
     def test_stream_chat_probe_reports_http_failure_without_crashing(self) -> None:
         with mock.patch.object(
             self.harness,
@@ -195,6 +211,21 @@ class NightlyStabilityHarnessTests(unittest.TestCase):
         self.assertIn("HTTP 403", result.detail)
         self.assertIsNone(result.actual_model)
         self.assertIsNone(result.tok_per_sec)
+
+    def test_stream_chat_probe_reports_validation_failure_with_response_metadata(self) -> None:
+        chunks = [
+            {"model": "mesh-resolved", "choices": [{"delta": {"content": "WRONG"}}]},
+            {"usage": {"completion_tokens": 7}},
+        ]
+        with mock.patch.object(self.harness, "post_json_stream", return_value=(chunks, 206, 123)):
+            result = self.harness.run_stream_chat_probe("https://meshllm.cloud/v1", "mesh", 1, 1.0)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status_code, 206)
+        self.assertEqual(result.ttft_ms, 123)
+        self.assertEqual(result.actual_model, "mesh-resolved")
+        self.assertIsNotNone(result.tok_per_sec)
+        self.assertIn("expected exactly STREAM_OK", result.detail)
 
     def test_write_evidence_outputs_machine_readable_files(self) -> None:
         rows = [
