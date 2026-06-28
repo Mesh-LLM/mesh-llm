@@ -200,11 +200,22 @@ mod dynamic {
                     manifest_url = ?options.manifest_url,
                     bundle_dirs = ?options.bundle_dirs,
                     allow_download = options.allow_download,
-                    "Failed to install a compatible MeshLLM native runtime during startup; continuing without dynamic native runtime"
+                    "Failed to install a compatible MeshLLM native runtime during startup; stopping before Skippy FFI load"
                 );
-                Ok(None)
+                Err(err.context(startup_missing_native_runtime_guidance(&options)))
             }
         }
+    }
+
+    fn startup_missing_native_runtime_guidance(options: &NativeRuntimeInstallOptions) -> String {
+        let abi = options
+            .skippy_abi_version
+            .as_deref()
+            .unwrap_or("the configured Skippy ABI");
+        format!(
+            "no compatible MeshLLM native runtime is installed or installable for MeshLLM {} / Skippy ABI {abi}; run `mesh-llm runtime install` or inspect available runtimes with `mesh-llm runtime list --available`",
+            options.mesh_version
+        )
     }
 
     fn resolve_installed_native_runtime_plan(
@@ -676,13 +687,13 @@ mod dynamic {
         }
 
         #[tokio::test]
-        async fn cache_miss_install_failure_returns_none_without_retry() {
+        async fn cache_miss_install_failure_stops_startup_before_ffi_load() {
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
             let install_calls = Arc::new(Mutex::new(Vec::<NativeRuntimeInstallOptions>::new()));
             let load_calls = Arc::new(Mutex::new(0_usize));
 
-            let runtime = try_load_installed_native_runtime_with(
+            let error = try_load_installed_native_runtime_with(
                 || false,
                 || Ok(cache.clone()),
                 HostRuntimeProfile::current_without_gpu_probe,
@@ -713,9 +724,12 @@ mod dynamic {
                 },
             )
             .await
-            .unwrap();
+            .expect_err("missing native runtime should stop startup");
 
-            assert!(runtime.is_none());
+            let message = error.to_string();
+            assert!(message.contains("no compatible MeshLLM native runtime"));
+            assert!(message.contains("mesh-llm runtime install"));
+            assert!(message.contains("mesh-llm runtime list --available"));
             assert_eq!(install_calls.lock().unwrap().len(), 1);
             assert_eq!(*load_calls.lock().unwrap(), 0);
         }

@@ -13,6 +13,14 @@ use std::time::{Duration, Instant};
 
 use formatters::{AvailableRuntimeRow, NativeRuntimeDoctorReport, runtime_native_formatter};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NativeRuntimeDoctorReadiness {
+    healthy: bool,
+    status: String,
+    blockers: Vec<String>,
+    recommendations: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeRuntimeConfigSelection<'a> {
     pub mesh_version: Option<&'a str>,
@@ -314,8 +322,14 @@ pub fn run_native_runtime_doctor(
                 && runtime.manifest.runtime.skippy_abi == candidate.artifact.skippy_abi
         })
     });
+    let readiness =
+        native_runtime_doctor_readiness(selected.map(|runtime| runtime.native_runtime_id.as_str()));
 
     let report = NativeRuntimeDoctorReport {
+        healthy: readiness.healthy,
+        status: readiness.status,
+        blockers: readiness.blockers,
+        recommendations: readiness.recommendations,
         running_mesh_version: CURRENT_MESH_VERSION.to_string(),
         selected_mesh_version: selected_mesh_version.to_string(),
         configured_skippy_abi: skippy_abi_version.map(ToString::to_string),
@@ -329,5 +343,82 @@ pub fn run_native_runtime_doctor(
         selected_version_installed_count: selected_version_runtimes.len(),
     };
 
-    runtime_native_formatter(json_output).render_doctor(&report)
+    runtime_native_formatter(json_output).render_doctor(&report)?;
+    if !report.healthy {
+        anyhow::bail!(
+            "{}",
+            report
+                .blockers
+                .first()
+                .map(String::as_str)
+                .unwrap_or("native runtime doctor found a blocking readiness issue")
+        );
+    }
+    Ok(())
+}
+
+fn native_runtime_doctor_readiness(
+    selected_runtime_id: Option<&str>,
+) -> NativeRuntimeDoctorReadiness {
+    if selected_runtime_id.is_some() {
+        return NativeRuntimeDoctorReadiness {
+            healthy: true,
+            status: "ok".to_string(),
+            blockers: Vec::new(),
+            recommendations: Vec::new(),
+        };
+    }
+    NativeRuntimeDoctorReadiness {
+        healthy: false,
+        status: "unhealthy".to_string(),
+        blockers: vec![
+            "No compatible native runtime is installed for the selected MeshLLM version and host."
+                .to_string(),
+        ],
+        recommendations: vec![
+            "Run `mesh-llm runtime install` to install the recommended native runtime.".to_string(),
+            "Run `mesh-llm runtime list --available` to inspect compatible and rejected runtimes."
+                .to_string(),
+        ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn doctor_readiness_blocks_missing_selected_runtime() {
+        let readiness = native_runtime_doctor_readiness(None);
+
+        assert!(!readiness.healthy);
+        assert_eq!(readiness.status, "unhealthy");
+        assert!(
+            readiness
+                .blockers
+                .iter()
+                .any(|item| item.contains("No compatible native runtime"))
+        );
+        assert!(
+            readiness
+                .recommendations
+                .iter()
+                .any(|item| item.contains("mesh-llm runtime install"))
+        );
+        assert!(
+            readiness
+                .recommendations
+                .iter()
+                .any(|item| item.contains("mesh-llm runtime list --available"))
+        );
+    }
+
+    #[test]
+    fn doctor_readiness_accepts_selected_runtime() {
+        let readiness = native_runtime_doctor_readiness(Some("meshllm-native-runtime-test-cpu"));
+
+        assert!(readiness.healthy);
+        assert_eq!(readiness.status, "ok");
+        assert!(readiness.blockers.is_empty());
+    }
 }
