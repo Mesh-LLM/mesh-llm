@@ -151,7 +151,10 @@ async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {
 }
 
 async fn run_plugin_command(command: &mesh_llm_cli::PluginCommand, cli: &Cli) -> Result<()> {
-    let rows = if matches!(command, mesh_llm_cli::PluginCommand::List) {
+    let rows = if matches!(
+        command,
+        mesh_llm_cli::PluginCommand::List | mesh_llm_cli::PluginCommand::Info { .. }
+    ) {
         Some(resolved_plugin_list_rows(cli)?)
     } else {
         None

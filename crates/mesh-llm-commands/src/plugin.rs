@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use mesh_llm_plugin_manager::{
     PluginCatalog, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter, PluginStore,
     default_store_root, install_plugin, update_plugin,
@@ -41,7 +41,7 @@ pub async fn run_plugin_command(
         PluginCommand::Enable { name } => set_enabled(name, true)?,
         PluginCommand::Disable { name } => set_enabled(name, false)?,
         PluginCommand::Delete { name } => delete(name)?,
-        PluginCommand::Info { name } => info(name)?,
+        PluginCommand::Info { name } => info(name, runtime_rows)?,
         PluginCommand::Search { query } => search(query.as_deref()).await?,
         PluginCommand::List => {
             let Some(runtime_rows) = runtime_rows else {
@@ -99,26 +99,46 @@ fn delete(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn info(name: &str) -> Result<()> {
+fn info(name: &str, runtime_rows: Option<&PluginListRows>) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
-    let metadata = store.load(name)?;
-    println!("name\t{}", metadata.name);
-    println!("version\t{}", metadata.installed_version);
-    println!("enabled\t{}", metadata.enabled);
-    println!("source\t{}", metadata.source_repository);
-    println!("target\t{}", metadata.target_triple);
-    println!("asset\t{}", metadata.downloaded_asset_name);
-    println!("path\t{}", metadata.install_path.display());
-    if let Some(protocol) = metadata.last_protocol_version {
-        println!("protocol\t{protocol}");
+    if let Some(metadata) = store.load_optional(name)? {
+        println!("name\t{}", metadata.name);
+        println!("version\t{}", metadata.installed_version);
+        println!("enabled\t{}", metadata.enabled);
+        println!("source\t{}", metadata.source_repository);
+        println!("target\t{}", metadata.target_triple);
+        println!("asset\t{}", metadata.downloaded_asset_name);
+        println!("path\t{}", metadata.install_path.display());
+        if let Some(protocol) = metadata.last_protocol_version {
+            println!("protocol\t{protocol}");
+        }
+        if let Some(status) = metadata.last_status {
+            println!("status\t{status}");
+        }
+        if let Some(error) = metadata.last_error {
+            println!("error\t{error}");
+        }
+        return Ok(());
     }
-    if let Some(status) = metadata.last_status {
-        println!("status\t{status}");
+    if let Some(row) =
+        runtime_rows.and_then(|rows| rows.externals.iter().find(|row| row.name == name))
+    {
+        for line in runtime_plugin_info_lines(row) {
+            println!("{line}");
+        }
+        return Ok(());
     }
-    if let Some(error) = metadata.last_error {
-        println!("error\t{error}");
-    }
-    Ok(())
+    bail!("plugin '{name}' is not installed")
+}
+
+fn runtime_plugin_info_lines(row: &RuntimePluginRow) -> Vec<String> {
+    vec![
+        format!("name\t{}", row.name),
+        "kind\truntime".to_string(),
+        format!("command\t{}", row.command),
+        format!("args\t{}", row.args.join(" ")),
+        "source\tbuilt-in/runtime".to_string(),
+    ]
 }
 
 async fn search(query: Option<&str>) -> Result<()> {
@@ -286,5 +306,35 @@ fn format_bytes(bytes: u64) -> String {
         format!("{bytes} {unit}")
     } else {
         format!("{value:.1} {unit}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_plugin_info_lines_describe_builtin_runtime_plugin() {
+        let row = RuntimePluginRow {
+            name: "blobstore".to_string(),
+            command: "/tmp/mesh-llm".to_string(),
+            args: vec![
+                "--log-format".to_string(),
+                "json".to_string(),
+                "--plugin".to_string(),
+                "blobstore".to_string(),
+            ],
+        };
+
+        assert_eq!(
+            runtime_plugin_info_lines(&row),
+            vec![
+                "name\tblobstore".to_string(),
+                "kind\truntime".to_string(),
+                "command\t/tmp/mesh-llm".to_string(),
+                "args\t--log-format json --plugin blobstore".to_string(),
+                "source\tbuilt-in/runtime".to_string(),
+            ]
+        );
     }
 }

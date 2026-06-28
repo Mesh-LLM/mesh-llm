@@ -516,6 +516,7 @@ fn display_runtime_state(value: &str) -> &'static str {
 fn display_backend_label(value: &str) -> &'static str {
     match value {
         "llama" => "Llama",
+        "skippy" => "Skippy",
         _ => "Unknown",
     }
 }
@@ -561,7 +562,7 @@ fn find_pid(processes: &[serde_json::Value], model: &serde_json::Value) -> Optio
 mod tests {
     use super::{
         build_apply_config_request, build_control_endpoint_request, build_guardrail_mode_request,
-        control_bootstrap_lines, runtime_success_lines, yes_no,
+        control_bootstrap_lines, display_backend_label, runtime_success_lines, yes_no,
     };
     use mesh_llm_cli::MeshGuardrailCliMode;
     use mesh_llm_host_runtime::command_support::plugin::{GpuAssignment, GpuConfig, MeshConfig};
@@ -622,6 +623,12 @@ mod tests {
     fn control_plane_bootstrap_yes_no_labels_are_stable() {
         assert_eq!(yes_no(true), "yes");
         assert_eq!(yes_no(false), "no");
+    }
+
+    #[test]
+    fn status_backend_labels_include_skippy() {
+        assert_eq!(display_backend_label("skippy"), "Skippy");
+        assert_eq!(display_backend_label("llama"), "Llama");
     }
 
     #[test]
