@@ -197,6 +197,11 @@ jobs:
             backend: cpu
             target: x86_64-unknown-linux-gnu
             artifact_suffix: linux-x86_64-cpu
+          - name: Linux aarch64 CPU
+            os: ubuntu-24.04-arm
+            backend: cpu
+            target: aarch64-unknown-linux-gnu
+            artifact_suffix: linux-aarch64-cpu
     env:
       LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
       MESH_NATIVE_SDK_TARGET: ${{ matrix.target }}
@@ -302,6 +307,65 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: release-native-runtime-${{ matrix.artifact_suffix }}
+          path: |
+            dist/native-runtimes/*.tar.gz
+            dist/native-runtimes/*.sha256
+          if-no-files-found: error
+
+  build_native_runtime_linux_aarch64_cuda:
+    name: Build native runtime Linux aarch64 CUDA (${{ matrix.cuda_major }})
+    needs: metadata
+    if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cuda_version: '12.9.2'
+            cuda_major: '12'
+          - cuda_version: '13.1.2'
+            cuda_major: '13'
+    container:
+      image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
+    env:
+      LLAMA_STAGE_BACKEND: cuda
+      MESH_NATIVE_RUNTIME_TARGET: aarch64-unknown-linux-gnu
+      MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
+    steps:
+      - name: Install base packages
+        run: |
+          for attempt in 1 2 3; do
+            apt-get -o Acquire::Retries=5 update &&
+              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld patchelf &&
+              break
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
+          rm -rf /var/lib/apt/lists/*
+      - uses: actions/checkout@v5
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Package native runtime
+        run: |
+          scripts/package-native-runtime.sh \
+            --build \
+            --backend cuda \
+            --target aarch64-unknown-linux-gnu \
+            --out dist/native-runtimes
+      - name: Verify native runtime artifact
+        run: scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
+      - name: Upload native runtime
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-native-runtime-linux-aarch64-cuda-${{ matrix.cuda_major }}
           path: |
             dist/native-runtimes/*.tar.gz
             dist/native-runtimes/*.sha256
@@ -828,6 +892,7 @@ jobs:
       - inference_smoke_tests
       - build_native_sdk_runtime
       - build_native_runtime
+      - build_native_runtime_linux_aarch64_cuda
       - build_swift_sdk_artifact
       - build_linux_arm64
       - build_linux_aarch64_cuda
@@ -836,7 +901,7 @@ jobs:
       - build_linux_vulkan
       - build_windows_cpu
       - build_windows_gpu
-    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
+    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -879,6 +944,9 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --out release-artifacts/native-runtimes.json \
             release-artifacts/meshllm-native-runtime-*.tar.gz
+          scripts/validate-release-native-runtime-matrix.py \
+            --manifest release-artifacts/native-runtimes.json \
+            release-artifacts/*
           shasum -a 256 release-artifacts/native-runtimes.json | awk '{print $1 "  native-runtimes.json"}' > release-artifacts/native-runtimes.json.sha256
 
       - name: Download generated SwiftPM manifest
