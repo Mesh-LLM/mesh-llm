@@ -111,17 +111,33 @@ fi
 
 configure_lld_linker
 
-echo "Preparing patched llama.cpp ABI checkout..."
-LLAMA_WORKDIR="$LLAMA_DIR" "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
+if [[ "${MESH_LLM_SKIP_LLAMA:-0}" == "1" ]]; then
+    if ! find "$LLAMA_STAGE_BUILD_DIR" -type f \( -name '*.a' -o -name '*.lib' \) -print -quit 2>/dev/null | grep -q .; then
+        echo "MESH_LLM_SKIP_LLAMA=1, but no cached native libraries were found in $LLAMA_STAGE_BUILD_DIR" >&2
+        exit 1
+    fi
+    echo "Reusing validated patched llama.cpp ABI: $LLAMA_STAGE_BUILD_DIR"
+else
+    echo "Preparing patched llama.cpp ABI checkout..."
+    LLAMA_WORKDIR="$LLAMA_DIR" "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
 
-echo "Building patched llama.cpp ABI ($BACKEND)..."
-LLAMA_WORKDIR="$LLAMA_DIR" \
-    LLAMA_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
-    LLAMA_STAGE_BACKEND="$BACKEND" \
-    "$SCRIPT_DIR/build-llama.sh"
+    echo "Building patched llama.cpp ABI ($BACKEND)..."
+    LLAMA_WORKDIR="$LLAMA_DIR" \
+        LLAMA_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
+        LLAMA_STAGE_BACKEND="$BACKEND" \
+        "$SCRIPT_DIR/build-llama.sh"
+fi
 
-echo "Building UI..."
-MESH_LLM_BUILD_PROFILE=release "$SCRIPT_DIR/build-ui.sh" "$UI_DIR"
+if [[ "${MESH_LLM_SKIP_UI:-0}" == "1" ]]; then
+    if [[ ! -f "$UI_DIR/dist/index.html" ]]; then
+        echo "MESH_LLM_SKIP_UI=1, but the cached UI artifact is missing $UI_DIR/dist/index.html" >&2
+        exit 1
+    fi
+    echo "Reusing cached UI artifact: $UI_DIR/dist"
+else
+    echo "Building UI..."
+    MESH_LLM_BUILD_PROFILE=release "$SCRIPT_DIR/build-ui.sh" "$UI_DIR"
+fi
 
 echo "Building mesh-llm..."
 (cd "$REPO_ROOT" && cargo build --release --locked -p mesh-llm)

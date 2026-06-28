@@ -7,7 +7,7 @@ import { APP_STORAGE_KEYS } from '@/features/app-tabs/data'
 import { ChatSessionProvider } from '@/features/chat/api/chat-session'
 import { loadChatState, saveChatState, trimThreadMessages } from '@/features/chat/api/chat-storage'
 import { ChatLayout } from '@/features/chat/layouts/ChatLayout'
-import { ChatPage, ChatPageContent } from '@/features/chat/pages/ChatPage'
+import { ChatPage, ChatPageContent, resolveAutomaticBackendModel } from '@/features/chat/pages/ChatPage'
 import { adaptModelsToSummary } from '@/features/network/api/models-adapter'
 import { DataModeProvider } from '@/lib/data-mode/DataModeContext'
 import { FeatureFlagProvider } from '@/lib/feature-flags'
@@ -1463,7 +1463,7 @@ describe('ChatPage', () => {
 
   it('persists submitted live message model labels with the conversation thread', async () => {
     const user = userEvent.setup()
-    const submittedModel = 'mesh'
+    const submittedModel = CHAT_HARNESS.models[0]?.name ?? 'auto'
 
     renderChatPage({ mode: 'live' })
 
@@ -1481,6 +1481,49 @@ describe('ChatPage', () => {
         ])
       )
     })
+  })
+
+  it('resolves automatic chat model from mesh-routable status when no warm model is listed', () => {
+    expect(
+      resolveAutomaticBackendModel([], {
+        node_id: 'node-1',
+        node_state: 'standby',
+        model_name: 'local-gguf/sha256-qwen3',
+        peers: [],
+        models: [],
+        my_vram_gb: 0,
+        gpus: [],
+        serving_models: ['unsloth/Qwen3-8B-GGUF']
+      })
+    ).toBe('unsloth/Qwen3-8B-GGUF')
+  })
+
+  it('prefers a warm model list entry over standby status model names', () => {
+    expect(
+      resolveAutomaticBackendModel(
+        [
+          {
+            name: 'local-gguf/sha256-current',
+            family: 'Qwen',
+            size: '8B',
+            context: '40K',
+            status: 'warm',
+            tags: [],
+            nodeCount: 1
+          }
+        ],
+        {
+          node_id: 'node-1',
+          node_state: 'standby',
+          model_name: 'unsloth/Qwen3-8B-GGUF',
+          peers: [],
+          models: [],
+          my_vram_gb: 0,
+          gpus: [],
+          serving_models: ['unsloth/Qwen3-8B-GGUF']
+        }
+      )
+    ).toBe('local-gguf/sha256-current')
   })
 
   it('hides the transparency tab by default', () => {

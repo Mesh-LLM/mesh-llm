@@ -615,6 +615,9 @@ pub fn evaluate_direct_peer_admission(
     policy: Option<&MeshGenesisPolicy>,
     input: &MeshRequirementEvaluationInput,
 ) -> MeshRequirementDecision {
+    if direct_admission_override_applies() {
+        return MeshRequirementDecision::Accepted;
+    }
     let Some(policy) = policy else {
         return MeshRequirementDecision::Accepted;
     };
@@ -628,6 +631,36 @@ pub fn evaluate_direct_peer_admission(
             MeshRequirementDecision::Rejected(MeshRequirementRejectReason::DirectProofMissing)
         }
     }
+}
+
+fn direct_admission_override_applies() -> bool {
+    if std::env::var("MESH_LLM_FORCE_DIRECT_ADMISSION")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+    {
+        return true;
+    }
+
+    std::env::var("MESH_LLM_FORCE_DIRECT_ADMISSION_NODE_IDS")
+        .ok()
+        .is_some_and(|raw| {
+            raw.split(',')
+                .map(|item| item.trim())
+                .filter(|item| !item.is_empty())
+                .any(|item| {
+                    item.eq_ignore_ascii_case(
+                        std::env::var("MESH_LLM_FORCE_DIRECT_ADMISSION_NODE_ID")
+                            .ok()
+                            .as_deref()
+                            .unwrap_or(""),
+                    )
+                })
+        })
 }
 
 impl NodeVersionBounds {

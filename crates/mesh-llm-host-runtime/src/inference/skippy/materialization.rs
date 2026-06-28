@@ -55,6 +55,15 @@ impl StagePackageRef {
         if path.join("model-package.json").is_file() {
             return Ok(Self::LocalPackage(path));
         }
+        // A split peer can advertise an OS-local package path which does not
+        // exist on this host. When an operator has provisioned the same
+        // verified layer package locally, use that explicit fallback path.
+        if let Some(fallback) = std::env::var_os("MESH_LLM_LOCAL_PACKAGE_FALLBACK") {
+            let fallback = PathBuf::from(fallback);
+            if fallback.join("model-package.json").is_file() {
+                return Ok(Self::LocalPackage(fallback));
+            }
+        }
         if path.extension().and_then(|ext| ext.to_str()) == Some("gguf") {
             return Ok(Self::SyntheticDirectGguf(path));
         }
@@ -1106,7 +1115,9 @@ pub(crate) fn resolve_stage_load_package(
     }
     let is_first = load.layer_start == 0;
     let is_final = load.downstream.is_none();
-    let include_embeddings = is_first || is_final;
+    // Embeddings belong to stage 0. A final stage owns output heads, not
+    // embeddings; requiring them forces cold final workers into the HF resolver.
+    let include_embeddings = is_first;
     // Resolve hf:// to a local package directory, verifying the needed package
     // files exist without materializing them into a single GGUF on disk.
     let local_ref = resolve_hf_package_to_local(
@@ -1140,7 +1151,9 @@ pub(crate) fn materialize_stage_config(
         .context("layer-package config is missing package ref")?;
     let is_first = config.layer_start == 0;
     let is_final = config.downstream.is_none();
-    let include_embeddings = is_first || is_final;
+    // Embeddings belong to stage 0. A final stage owns output heads, not
+    // embeddings; requiring them forces cold final workers into the HF resolver.
+    let include_embeddings = is_first;
     let include_output = is_final;
     // Resolve hf:// to local dir with needed files downloaded
     let local_ref = resolve_hf_package_to_local(
@@ -1372,7 +1385,10 @@ fn package_stage_request(
         stage_id: stage_id.to_string(),
         layer_start,
         layer_end,
-        include_embeddings: layer_start == 0 || is_final_stage,
+        // Embeddings are stage-0 only. Final stages need output heads, not
+        // embeddings; otherwise a one-layer terminal worker is forced to
+        // download shared/embeddings.gguf and can stall on missing cache.
+        include_embeddings: layer_start == 0,
         include_output: is_final_stage,
     }
 }

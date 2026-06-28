@@ -209,7 +209,9 @@ describe('createMeshConnectionAdapter', () => {
     const request = fetchMock.mock.calls[0]?.[1]
     const body = JSON.parse(String(request?.body)) as { input: Array<{ role: string; content: string }> }
 
-    expect(body.input[0]).toEqual({ role: 'system', content: 'Prefer operational checklists.' })
+    expect(body.input[0]?.role).toBe('system')
+    expect(body.input[0]?.content).toContain('You are Flushnet AI Runner in a local Mesh-LLM webchat.')
+    expect(body.input[0]?.content).toContain('Additional user chat instructions:\nPrefer operational checklists.')
     expect(body.input[1]).toEqual({ role: 'user', content: 'Hello mesh' })
     expect(chunks.map((chunk) => chunk.type)).toEqual([EventType.RUN_STARTED, EventType.RUN_FINISHED])
   })

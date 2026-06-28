@@ -261,6 +261,8 @@ export interface ResponsesRequest {
   client_id: string
   request_id: string
   input: ResponsesInputMessage[]
+  // Match the established NVIDIA external-provider baseline.
+  temperature?: number
   stream: boolean
   stream_options?: { include_usage: boolean }
 }

@@ -56,6 +56,11 @@ message PeerAnnouncement {
   optional SignedMeshGenesisPolicy genesis_policy = 46;
   optional ReleaseBuildAttestation release_attestation = 47;
   optional DirectNodeAdmissionProof direct_admission_proof = 48;
+  // CPU-only split-stage capacity, independently measured by this node.
+  // This is deliberately separate from GPU VRAM and is ignored when absent/stale.
+  optional uint64 cpu_stage_capacity_bytes = 49;
+  optional uint64 cpu_stage_capacity_observed_unix_ms = 50;
+  optional string cpu_stage_capacity_source = 51;
 }
 
 enum LatencySource {

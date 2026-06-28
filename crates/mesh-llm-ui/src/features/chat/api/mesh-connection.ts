@@ -8,6 +8,8 @@ import { getClientId } from '@/lib/api/client-id'
 import { generateRequestId } from '@/lib/api/request-id'
 import type { ChatSSEEvent } from '@/lib/api/types'
 import { buildResponsesInput } from '@/features/chat/api/build-input'
+import { extractFlushnetAccessCode, runFlushnetToolChat } from '@/features/chat/api/flushnet-tool-loop'
+import { composeFlushnetSystemPrompt } from '@/features/chat/api/flushnet-system-prompt'
 import type { ChatResponseMetadata } from '@/features/chat/api/response-metadata'
 
 function nowMs() {
@@ -175,12 +177,41 @@ async function* runConnect(
   const requestId = generateRequestId()
   const messageId = generateRequestId()
   const requestStartedAt = nowMs()
+  const flushnetSystemPrompt = composeFlushnetSystemPrompt(systemPrompt)
 
   yield { type: EventType.RUN_STARTED, threadId: requestId, runId: requestId }
 
+  // Match the NVIDIA external-provider contract only when the user supplies a
+  // Flushnet access code: local Qwen chooses a canonical Gateway function,
+  // Gateway/module registry executes it, then Qwen receives the result.
+  const accessCode = extractFlushnetAccessCode(messages)
+  if (accessCode) {
+    try {
+      const toolRun = await runFlushnetToolChat(
+        messages,
+        model,
+        clientId,
+        requestId,
+        accessCode,
+        flushnetSystemPrompt,
+        abortSignal
+      )
+      if (abortSignal?.aborted) return
+      yield { type: EventType.TEXT_MESSAGE_START, messageId, role: 'assistant' }
+      yield { type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: toolRun.content }
+      yield { type: EventType.TEXT_MESSAGE_END, messageId }
+      onResponseMetadata?.({ messageId, model: toolRun.model })
+      yield { type: EventType.RUN_FINISHED, threadId: requestId, runId: requestId }
+      return
+    } catch (error) {
+      if (isAbortError(error)) return
+      throw error
+    }
+  }
+
   let response: Response
   try {
-    const requestBody = await buildResponsesInput(messages, model, clientId, requestId, systemPrompt)
+    const requestBody = await buildResponsesInput(messages, model, clientId, requestId, flushnetSystemPrompt)
     response = await fetch(`${env.managementApiUrl}/api/responses`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

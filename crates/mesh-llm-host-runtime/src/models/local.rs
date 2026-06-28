@@ -601,6 +601,12 @@ fn layered_package_snapshot_root(
     Some(root)
 }
 
+fn layered_package_snapshot_root_for_path(path: &Path) -> Option<PathBuf> {
+    let identity = huggingface_identity_for_path(path)?;
+    layered_package_model_ref(&identity)?;
+    layered_package_snapshot_root(path, &identity)
+}
+
 fn layered_package_gguf_paths(path: &Path) -> Option<(PathBuf, Vec<PathBuf>)> {
     let identity = huggingface_identity_for_path(path)?;
     layered_package_model_ref(&identity)?;
@@ -741,7 +747,11 @@ fn find_hf_cache_model_ref_path(root: &Path, model: &model_ref::ModelRef) -> Opt
         }
     }
     candidates.sort_by_key(|path| model_ref_path_preference_key_for_cache_root(root, path));
-    candidates.into_iter().next()
+    let selected = candidates.into_iter().next()?;
+    if model.repo.ends_with("-layers") {
+        return layered_package_snapshot_root_for_path(&selected).or(Some(selected));
+    }
+    Some(selected)
 }
 
 fn find_synthetic_local_gguf_path(root: &Path, model: &model_ref::ModelRef) -> Option<PathBuf> {
@@ -792,7 +802,11 @@ fn find_hf_cache_model_path(root: &Path, stem: &str) -> Option<PathBuf> {
                 };
                 if name == filename || (name.starts_with(&split_prefix) && name.ends_with(".gguf"))
                 {
-                    return Some(cache_scanned_file_path(&cache_root, repo, revision, file));
+                    let path = cache_scanned_file_path(&cache_root, repo, revision, file);
+                    if repo.repo_id.ends_with("-layers") {
+                        return layered_package_snapshot_root_for_path(&path).or(Some(path));
+                    }
+                    return Some(path);
                 }
             }
         }

@@ -77,7 +77,6 @@ use zeroize::Zeroizing;
 const PRETTY_DASHBOARD_INVENTORY_CACHE_TTL: Duration = Duration::from_secs(5);
 const DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const DASHBOARD_FIRST_PAINT_TIMEOUT: Duration = Duration::from_secs(2);
-const SPLIT_STANDBY_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 const MODEL_TARGET_RECONCILIATION_INTERVAL: Duration = Duration::from_secs(15);
 
 type DashboardContextUsage =
@@ -94,7 +93,7 @@ struct DashboardContextUsageSource {
 struct RuntimeModelHandleEntry {
     model_name: String,
     handle: LocalRuntimeModelHandle,
-    capacity_reservation: RuntimeCapacityReservation,
+    capacity_reservation: Option<RuntimeCapacityReservation>,
 }
 
 type BootstrapProxyStopTx =
@@ -1399,13 +1398,13 @@ where
         startup_load_gate,
         stop_rx,
         launch_failure,
-        make_survey_spec,
+        make_survey_spec: _,
         announce_capacity_fallback,
     } = params;
     let StartupLaunchFailureContext {
         target_tx,
         console_state,
-        survey_telemetry,
+        survey_telemetry: _,
     } = launch_failure;
 
     if announce_capacity_fallback {
@@ -1424,6 +1423,25 @@ where
     }
 
     let mut peer_rx = node.peer_change_rx.clone();
+    tracing::info!(
+        model = model_ref,
+        "split startup loop entered; waiting for peer-settle window"
+    );
+    // A joined worker needs a short gossip/control-settling interval before it
+    // becomes eligible for split planning. Without this grace period the host
+    // can take a one-node snapshot and miss the later peer transition.
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+        result = stop_rx.changed() => {
+            if result.is_err() || *stop_rx.borrow() {
+                return None;
+            }
+        }
+    }
+    tracing::info!(
+        model = model_ref,
+        "split peer-settle window complete; beginning topology planning"
+    );
     loop {
         let startup_load_guard = startup_load_gate.lock().await;
         let launch_started = Instant::now();
@@ -1466,17 +1484,16 @@ where
                         context: Some(format!("model={model_name}")),
                     });
                 } else {
-                    startup_emit_launch_failure(
-                        survey_telemetry,
-                        make_survey_spec(),
-                        launch_started,
-                        err,
-                        target_tx,
-                        model_name,
-                        console_state,
-                    )
-                    .await;
-                    return None;
+                    // Split membership can settle after the first planning attempt
+                    // (especially when a worker joins with an already-warm package
+                    // cache). Keep the startup target alive and retry rather than
+                    // permanently dropping it on a transient control/peer error.
+                    tracing::warn!(model = model_name, error = %err_msg,
+                        "split startup attempt failed; retaining target for retry");
+                    let _ = emit_event(OutputEvent::Info {
+                        message: format!("Split startup retrying: {err_msg}"),
+                        context: Some(format!("model={model_name}")),
+                    });
                 }
             }
         }
@@ -1495,7 +1512,9 @@ where
                     }
                 }
             }
-            _ = tokio::time::sleep(SPLIT_STANDBY_RETRY_INTERVAL) => {}
+            // Poll quickly as well as reacting to peer-change notifications: some
+            // transports establish a usable stage connection after gossip state.
+            _ = tokio::time::sleep(Duration::from_secs(3)) => {}
             result = stop_rx.changed() => {
                 if result.is_err() || *stop_rx.borrow() {
                     return None;
@@ -2024,6 +2043,15 @@ async fn startup_prepare_launch(
         .unwrap_or_else(|| ctx.node.vram_bytes());
     let model_bytes = startup_planning_model_bytes(&ctx).await?;
     let runtime_plan = startup_runtime_plan(ctx.split, local_capacity, model_bytes);
+    tracing::info!(
+        model = ctx.model_name,
+        split = ctx.split,
+        model_path = %ctx.model_path.display(),
+        local_capacity_bytes = local_capacity,
+        model_bytes,
+        plan = ?runtime_plan,
+        "startup runtime plan selected"
+    );
     let launch_kind = startup_launch_kind(runtime_plan, ctx.survey_launch_kind);
     Some(StartupPreparedLaunch {
         local_capacity,
@@ -3668,6 +3696,23 @@ fn runtime_unix_secs() -> u64 {
 
 fn cli_has_explicit_models(cli: &Cli) -> bool {
     !cli.model.is_empty() || !cli.gguf.is_empty()
+}
+
+fn startup_explicit_model_interests() -> Vec<String> {
+    let mut interests = std::env::var("MESH_LLM_EXPLICIT_MODEL_INTERESTS")
+        .ok()
+        .into_iter()
+        .flat_map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|model_ref| !model_ref.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    interests.sort();
+    interests.dedup();
+    interests
 }
 
 fn build_startup_model_specs(
@@ -6368,8 +6413,28 @@ async fn spawn_run_auto_startup_model_tasks(
     let primary_mmproj = primary_startup_model.and_then(|model| model.mmproj_path.clone());
     let primary_ctx_size = primary_startup_model.and_then(|model| model.ctx_size);
     let primary_pinned_gpu = primary_startup_model.and_then(|model| model.pinned_gpu.clone());
-    let primary_cache_type_k = primary_startup_model.and_then(|model| model.cache_type_k.clone());
-    let primary_cache_type_v = primary_startup_model.and_then(|model| model.cache_type_v.clone());
+    // CLI-started models do not have a per-model StartupModelPlan entry for
+    // model-fit defaults. Preserve explicit per-model values, then inherit the
+    // active config defaults so capacity planning and stage load use the same
+    // KV cache dtypes.
+    let primary_cache_type_k = primary_startup_model
+        .and_then(|model| model.cache_type_k.clone())
+        .or_else(|| {
+            config
+                .defaults
+                .as_ref()
+                .and_then(|defaults| defaults.model_fit.as_ref())
+                .and_then(|fit| fit.cache_type_k.clone())
+        });
+    let primary_cache_type_v = primary_startup_model
+        .and_then(|model| model.cache_type_v.clone())
+        .or_else(|| {
+            config
+                .defaults
+                .as_ref()
+                .and_then(|defaults| defaults.model_fit.as_ref())
+                .and_then(|fit| fit.cache_type_v.clone())
+        });
     let primary_n_batch = primary_startup_model.and_then(|model| model.n_batch);
     let primary_n_ubatch = primary_startup_model.and_then(|model| model.n_ubatch);
     let primary_flash_attention = primary_startup_model
@@ -6639,11 +6704,32 @@ async fn run_auto_load_runtime_model(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
     spec: String,
 ) -> Result<api::RuntimeLoadResponse> {
-    let model_path = resolve_model(&PathBuf::from(&spec)).await?;
+    let requested_ref = spec.clone();
+    let model_ref_for_catalog = PathBuf::from(&spec);
+    let model_path = if let Some(package_ref) = tokio::task::spawn_blocking(move || {
+        resolve_split_layer_package(&requested_ref, &model_ref_for_catalog)
+    })
+    .await
+    .context("join resolve runtime layer package task")?
+    {
+        PathBuf::from(package_ref)
+    } else {
+        resolve_model(&PathBuf::from(&spec)).await?
+    };
     let runtime_model_name = find_remote_catalog_model_exact_blocking(spec.clone())
         .await
         .map(|model| models::remote_catalog_model_ref(&model))
-        .unwrap_or_else(|| models::model_ref_for_path(&model_path));
+        .unwrap_or_else(|| {
+            let path_str = model_path.to_string_lossy();
+            if path_str.starts_with("hf://") {
+                spec.clone()
+            } else if model_path.join("model-package.json").is_file() {
+                read_layer_package_model_id(&model_path)
+                    .unwrap_or_else(|| models::model_ref_for_path(&model_path))
+            } else {
+                models::model_ref_for_path(&model_path)
+            }
+        });
     let requested_model = spec.clone();
     let model_bytes = {
         let p = model_path.clone();
@@ -6670,17 +6756,25 @@ async fn run_auto_load_runtime_model(
         .and_then(|m| m.parallel)
         .or(ctx.config.gpu.parallel);
     let instance_id = next_runtime_instance_id(ctx.next_runtime_instance_sequence);
-    let capacity_reservation = reserve_runtime_capacity_for_model(
-        ctx.runtime_capacity_ledger,
-        &instance_id,
-        &runtime_model_name,
-        None,
-        ctx.node.vram_bytes(),
-        model_bytes,
-    )?;
+    let split_package_request = model_path.to_string_lossy().starts_with("hf://")
+        || model_path.join("model-package.json").is_file();
+    let capacity_reservation = if split_package_request {
+        None
+    } else {
+        Some(reserve_runtime_capacity_for_model(
+            ctx.runtime_capacity_ledger,
+            &instance_id,
+            &runtime_model_name,
+            None,
+            ctx.node.vram_bytes(),
+            model_bytes,
+        )?)
+    };
     add_serving_assignment(ctx.node, ctx.primary_model_name, &runtime_model_name).await;
     let launch_started = Instant::now();
-    let capacity_budget_bytes = capacity_reservation.capacity_budget_bytes();
+    let capacity_budget_bytes = capacity_reservation
+        .as_ref()
+        .map(|reservation| reservation.capacity_budget_bytes());
     let (loaded_name, handle, death_rx) = match start_runtime_local_model(
         LocalRuntimeModelStartSpec {
             node: ctx.node,
@@ -6691,7 +6785,7 @@ async fn run_auto_load_runtime_model(
             mmproj_override: None,
             ctx_size_override: ctx.cli.ctx_size,
             pinned_gpu: None,
-            capacity_budget_bytes: Some(capacity_budget_bytes),
+            capacity_budget_bytes,
             cache_type_k_override: model_overrides.and_then(|m| m.cache_type_k.as_deref()),
             cache_type_v_override: model_overrides.and_then(|m| m.cache_type_v.as_deref()),
             n_batch_override: model_overrides.and_then(|m| m.batch),
@@ -7827,9 +7921,21 @@ async fn run_auto(
     )
     .await?;
 
-    // Advertise what we have on disk and what we want the mesh to serve
+    // Advertise what we have on disk and what we want the mesh to serve.
+    // A headless offload worker may intentionally start without a local model;
+    // in that case an explicit interest lets the coordinator choose it and
+    // materialize only the assigned stage through artifact transfer.
     node.set_requested_models(requested_model_names.clone())
         .await;
+    let startup_model_interests = startup_explicit_model_interests();
+    if !startup_model_interests.is_empty() {
+        tracing::info!(
+            model_interests = ?startup_model_interests,
+            "advertising explicit startup model interests"
+        );
+        node.set_explicit_model_interests(startup_model_interests)
+            .await;
+    }
 
     run_auto_join_mesh_phase(&mut cli, &node, &auto_join_candidates).await?;
 

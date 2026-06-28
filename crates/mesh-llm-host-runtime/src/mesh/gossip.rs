@@ -175,6 +175,9 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.first_joined_mesh_ts != new.first_joined_mesh_ts
         || old.models != new.models
         || old.vram_bytes != new.vram_bytes
+        || old.cpu_stage_capacity_bytes != new.cpu_stage_capacity_bytes
+        || old.cpu_stage_capacity_observed_unix_ms != new.cpu_stage_capacity_observed_unix_ms
+        || old.cpu_stage_capacity_source != new.cpu_stage_capacity_source
         || old.rtt_ms != new.rtt_ms
         || old.model_source != new.model_source
         || old.serving_models != new.serving_models
@@ -222,6 +225,9 @@ pub(super) fn apply_transitive_ann(
     existing.role = ann.role.clone();
     merge_first_joined_mesh_ts(&mut existing.first_joined_mesh_ts, ann.first_joined_mesh_ts);
     existing.vram_bytes = ann.vram_bytes;
+    existing.cpu_stage_capacity_bytes = ann.cpu_stage_capacity_bytes;
+    existing.cpu_stage_capacity_observed_unix_ms = ann.cpu_stage_capacity_observed_unix_ms;
+    existing.cpu_stage_capacity_source = ann.cpu_stage_capacity_source.clone();
     // Only advance addr if the transitive announcement is at least as path-rich,
     // so a direct peer's richer address is not overwritten by a weaker transitive one.
     if !addr.addrs.is_empty() && addr.addrs.len() >= existing.addr.addrs.len() {
@@ -535,6 +541,9 @@ impl Node {
         existing.models = ann.models.clone();
         merge_first_joined_mesh_ts(&mut existing.first_joined_mesh_ts, ann.first_joined_mesh_ts);
         existing.vram_bytes = ann.vram_bytes;
+        existing.cpu_stage_capacity_bytes = ann.cpu_stage_capacity_bytes;
+        existing.cpu_stage_capacity_observed_unix_ms = ann.cpu_stage_capacity_observed_unix_ms;
+        existing.cpu_stage_capacity_source = ann.cpu_stage_capacity_source.clone();
         if ann.model_source.is_some() {
             existing.model_source = ann.model_source.clone();
         }
@@ -846,6 +855,9 @@ impl Node {
             first_joined_mesh_ts: peer.first_joined_mesh_ts,
             models: peer.models.clone(),
             vram_bytes: peer.vram_bytes,
+            cpu_stage_capacity_bytes: peer.cpu_stage_capacity_bytes,
+            cpu_stage_capacity_observed_unix_ms: peer.cpu_stage_capacity_observed_unix_ms,
+            cpu_stage_capacity_source: peer.cpu_stage_capacity_source.clone(),
             model_source: peer.model_source.clone(),
             serving_models: peer.serving_models.clone(),
             hosted_models: peer.hosted_models_known.then(|| peer.hosted_models.clone()),
@@ -901,12 +913,18 @@ impl Node {
     }
 
     fn build_local_announcement(&self, data: LocalAnnouncementData) -> PeerAnnouncement {
+        let cpu_stage_capacity = crate::mesh::cpu_stage_capacity_advertisement();
         PeerAnnouncement {
             addr: self.endpoint_addr_for_advertisement(),
             role: data.role,
             first_joined_mesh_ts: data.first_joined_mesh_ts,
             models: data.models,
             vram_bytes: self.vram_bytes,
+            cpu_stage_capacity_bytes: cpu_stage_capacity.as_ref().map(|v| v.bytes),
+            cpu_stage_capacity_observed_unix_ms: cpu_stage_capacity
+                .as_ref()
+                .map(|v| v.observed_unix_ms),
+            cpu_stage_capacity_source: cpu_stage_capacity.map(|v| v.source),
             model_source: data.model_source,
             serving_models: data.serving_models,
             hosted_models: Some(data.hosted_models),

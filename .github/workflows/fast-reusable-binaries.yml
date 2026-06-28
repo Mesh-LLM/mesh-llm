@@ -1,0 +1,211 @@
+name: Fast reusable Mac and Windows binaries
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'Justfile'
+      - 'crates/**'
+      - 'third_party/llama.cpp/**'
+      - 'scripts/build-llama.sh'
+      - 'scripts/build-release.sh'
+      - 'scripts/build-ui.sh'
+      - 'scripts/build-windows.ps1'
+      - 'scripts/prepare-llama.sh'
+      - '.cargo/**'
+      - '.github/cache-version.txt'
+      - '.github/workflows/fast-reusable-binaries.yml'
+  workflow_dispatch:
+    inputs:
+      force_native_rebuild:
+        description: Ignore the reusable patched llama ABI cache
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      force_native_rebuild:
+        description: Ignore the reusable patched llama ABI cache
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: fast-binaries-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CACHE_NAMESPACE: mesh-llm-fast-v1
+  SCCACHE_GHA_ENABLED: 'true'
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Mac arm64 Metal
+            runner: blacksmith-6vcpu-macos-15
+            platform: mac
+            backend: metal
+            native_dir: .deps/llama-build/build-stage-abi-metal
+            native_glob: '*.a'
+            binary_path: target/release/mesh-llm
+            artifact: mesh-llm-mac-arm64-metal
+          - name: Windows x64 CPU
+            runner: blacksmith-8vcpu-windows-2025
+            platform: windows
+            backend: cpu
+            native_dir: .deps/llama.cpp/build-stage-abi-cpu
+            native_glob: '*.lib'
+            binary_path: target/release/mesh-llm.exe
+            artifact: mesh-llm-win3-x64-cpu
+    env:
+      LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
+      LLAMA_STAGE_BUILD_DIR: ${{ matrix.native_dir }}
+      MESH_LLM_BUILD_PROFILE: release
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@just
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          cache-bin: 'false'
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: ${{ matrix.platform }}-${{ matrix.backend }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: crates/mesh-llm-ui/pnpm-lock.yaml
+
+      - name: Restore reusable UI artifact
+        id: ui_cache
+        uses: actions/cache@v5
+        with:
+          path: crates/mesh-llm-ui/dist
+          key: ${{ env.CACHE_NAMESPACE }}-ui-release-${{ hashFiles('scripts/build-ui.sh', 'crates/mesh-llm-ui/package.json', 'crates/mesh-llm-ui/pnpm-lock.yaml', 'crates/mesh-llm-ui/index.html', 'crates/mesh-llm-ui/src/**', 'crates/mesh-llm-ui/vite.config.*', 'crates/mesh-llm-ui/tsconfig*.json') }}
+
+      - name: Restore reusable patched llama ABI
+        if: ${{ !inputs.force_native_rebuild }}
+        id: native_cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ matrix.native_dir }}
+          key: ${{ env.CACHE_NAMESPACE }}-native-${{ matrix.platform }}-${{ matrix.backend }}-${{ hashFiles('third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'scripts/prepare-llama.sh', 'scripts/build-llama.sh', 'scripts/build-release.sh', 'scripts/build-windows.ps1', 'Justfile', '.github/cache-version.txt') }}
+
+      - name: Validate restored native ABI
+        id: native
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.native_cache.outputs.cache-hit }}
+          NATIVE_DIR: ${{ matrix.native_dir }}
+          NATIVE_GLOB: ${{ matrix.native_glob }}
+        run: |
+          reusable=false
+          if [[ "$CACHE_HIT" == "true" ]] && find "$NATIVE_DIR" -type f -name "$NATIVE_GLOB" -print -quit | grep -q .; then
+            reusable=true
+            echo "Reusing native ABI from $NATIVE_DIR"
+          fi
+          echo "reusable=$reusable" >> "$GITHUB_OUTPUT"
+
+      - name: Restore reusable final binary
+        id: binary_cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ matrix.binary_path }}
+          key: ${{ env.CACHE_NAMESPACE }}-binary-${{ matrix.platform }}-${{ matrix.backend }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'Justfile', '.cargo/**', 'crates/**', 'scripts/build-release.sh', 'scripts/build-windows.ps1', 'scripts/build-ui.sh', 'scripts/prepare-llama.sh', '.github/cache-version.txt') }}
+
+      - name: Install macOS build dependencies
+        if: matrix.platform == 'mac'
+        run: brew install cmake ninja lld
+
+      - name: Build only missing or changed layers on macOS
+        if: matrix.platform == 'mac' && steps.binary_cache.outputs.cache-hit != 'true'
+        env:
+          MESH_LLM_SKIP_LLAMA: ${{ steps.native.outputs.reusable == 'true' && '1' || '0' }}
+          MESH_LLM_SKIP_UI: ${{ steps.ui_cache.outputs.cache-hit == 'true' && '1' || '0' }}
+        run: just --shell bash --shell-arg -c release-build
+
+      - name: Build only missing or changed layers on Windows
+        if: matrix.platform == 'windows' && steps.binary_cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          MESH_LLM_SKIP_LLAMA: ${{ steps.native.outputs.reusable == 'true' && '1' || '0' }}
+          MESH_LLM_SKIP_UI: ${{ steps.ui_cache.outputs.cache-hit == 'true' && '1' || '0' }}
+          MESH_LLM_REQUIRE_SCCACHE: '1'
+        run: just release-build-windows
+
+      - name: Save newly built native ABI
+        if: steps.native.outputs.reusable != 'true' && !inputs.force_native_rebuild
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ matrix.native_dir }}
+          key: ${{ env.CACHE_NAMESPACE }}-native-${{ matrix.platform }}-${{ matrix.backend }}-${{ hashFiles('third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'scripts/prepare-llama.sh', 'scripts/build-llama.sh', 'scripts/build-release.sh', 'scripts/build-windows.ps1', 'Justfile', '.github/cache-version.txt') }}
+
+      - name: Package Mac binary
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/mesh-llm-mac-arm64-metal
+          cp ${{ matrix.binary_path }} dist/mesh-llm-mac-arm64-metal/
+          chmod +x dist/mesh-llm-mac-arm64-metal/mesh-llm
+          (cd dist && tar -czf mesh-llm-mac-arm64-metal.tar.gz mesh-llm-mac-arm64-metal)
+          (cd dist && shasum -a 256 mesh-llm-mac-arm64-metal.tar.gz > mesh-llm-mac-arm64-metal.tar.gz.sha256)
+
+      - name: Package Windows binary
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist\mesh-llm-win3-x64-cpu | Out-Null
+          Copy-Item ${{ matrix.binary_path }} dist\mesh-llm-win3-x64-cpu\mesh-llm.exe
+          Compress-Archive -Path dist\mesh-llm-win3-x64-cpu -DestinationPath dist\mesh-llm-win3-x64-cpu.zip -Force
+          $hash = (Get-FileHash dist\mesh-llm-win3-x64-cpu.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  mesh-llm-win3-x64-cpu.zip" | Set-Content dist\mesh-llm-win3-x64-cpu.zip.sha256
+
+      - name: Smoke Mac binary
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: ./target/release/mesh-llm --version
+
+      - name: Smoke Windows binary
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: .\target\release\mesh-llm.exe --version
+
+      - name: Save reusable final binary
+        if: steps.binary_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ matrix.binary_path }}
+          key: ${{ env.CACHE_NAMESPACE }}-binary-${{ matrix.platform }}-${{ matrix.backend }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'Justfile', '.cargo/**', 'crates/**', 'scripts/build-release.sh', 'scripts/build-windows.ps1', 'scripts/build-ui.sh', 'scripts/prepare-llama.sh', '.github/cache-version.txt') }}
+
+      - name: Upload reusable runnable artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/${{ matrix.artifact }}.*
+          if-no-files-found: error
+          retention-days: 30

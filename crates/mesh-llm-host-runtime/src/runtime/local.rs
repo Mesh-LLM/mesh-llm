@@ -663,6 +663,9 @@ fn scan_layer_package_metadata(
 }
 
 pub(super) fn runtime_model_planning_bytes(model_path: &Path) -> Result<u64> {
+    if let Some(bytes) = forced_model_source_bytes() {
+        return Ok(bytes);
+    }
     let package_ref = model_path.to_string_lossy().to_string();
     if skippy::is_layer_package_ref(&package_ref) {
         return Ok(skippy::identity_from_layer_package(&package_ref)?.source_model_bytes);
@@ -2742,6 +2745,22 @@ async fn collect_split_participants(
     )];
     let mut excluded = Vec::new();
     for peer in node.peers().await {
+        if split_force_override_applies() {
+            let peer_vram_bytes = split_forced_peer_vram_bytes(&peer).unwrap_or(peer.vram_bytes);
+            participants.push(
+                SplitParticipant::new(peer.id, peer_vram_bytes, peer.first_joined_mesh_ts)
+                    .with_package_signals(
+                        SplitParticipantPackageSignal {
+                            cached_slice_bytes: 0,
+                            missing_artifact_bytes: package.source_model_bytes,
+                            availability_score: 0,
+                        },
+                        peer.rtt_ms,
+                        true,
+                    ),
+            );
+            continue;
+        }
         if let Some(reason) = split_peer_preflight_exclusion_reason(&peer, model_name, model_ref) {
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,
@@ -2759,13 +2778,14 @@ async fn collect_split_participants(
             continue;
         }
 
+        let peer_vram_bytes = split_forced_peer_vram_bytes(&peer).unwrap_or(peer.vram_bytes);
         if let Some(package_signal) =
             split_peer_package_signal(node, peer.id, model_ref, package).await
         {
             let artifact_transfer_allowed = node.artifact_transfer_allowed_for_peer(&peer).await;
             if package_signal.can_stage_with(package, artifact_transfer_allowed) {
                 participants.push(
-                    SplitParticipant::new(peer.id, peer.vram_bytes, peer.first_joined_mesh_ts)
+                    SplitParticipant::new(peer.id, peer_vram_bytes, peer.first_joined_mesh_ts)
                         .with_package_signals(
                             package_signal,
                             peer.rtt_ms,
@@ -2800,6 +2820,9 @@ fn split_peer_preflight_exclusion_reason(
     model_name: &str,
     model_ref: &str,
 ) -> Option<SplitParticipantExclusionReason> {
+    if split_force_override_applies() {
+        return None;
+    }
     if let Some(reason) = split_peer_stage_host_exclusion_reason(peer) {
         return Some(reason);
     }
@@ -2831,6 +2854,9 @@ fn split_peer_stage_path_exclusion_reason(
 fn split_peer_stage_host_exclusion_reason(
     peer: &mesh::PeerInfo,
 ) -> Option<SplitParticipantExclusionReason> {
+    if split_force_override_applies() {
+        return None;
+    }
     if !split_peer_can_run_stage_runtime(peer) {
         return Some(SplitParticipantExclusionReason::Client);
     }
@@ -2858,6 +2884,58 @@ fn split_peer_wants_model(peer: &mesh::PeerInfo, model_name: &str, model_ref: &s
             .explicit_model_interests
             .iter()
             .any(|model| model == model_ref)
+}
+
+fn split_force_override_applies() -> bool {
+    std::env::var("MESH_LLM_FORCE_SPLIT_ELIGIBLE")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+fn forced_model_source_bytes() -> Option<u64> {
+    std::env::var("MESH_LLM_FORCE_MODEL_SOURCE_BYTES")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|bytes| *bytes > 0)
+        .or_else(|| {
+            std::env::var("MESH_LLM_FORCE_MODEL_SOURCE_GB")
+                .ok()
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .and_then(|gb| {
+                    if gb.is_finite() && gb > 0.0 {
+                        Some((gb * 1_000_000_000.0) as u64)
+                    } else {
+                        None
+                    }
+                })
+        })
+}
+
+fn split_forced_peer_vram_bytes(peer: &mesh::PeerInfo) -> Option<u64> {
+    if !split_force_override_applies() {
+        return None;
+    }
+    std::env::var("MESH_LLM_FORCE_SPLIT_PARTICIPANT_VRAM_BYTES")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .or_else(|| {
+            std::env::var("MESH_LLM_FORCE_SPLIT_PARTICIPANT_VRAM_GB")
+                .ok()
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .and_then(|gb| {
+                    if gb.is_finite() && gb >= 0.0 {
+                        Some((gb * 1_000_000_000.0) as u64)
+                    } else {
+                        None
+                    }
+                })
+        })
+        .filter(|bytes| *bytes > 0 || peer.vram_bytes == 0)
 }
 
 async fn split_peer_package_signal(

@@ -168,6 +168,19 @@ fn parallel_lane_candidates(
 }
 
 pub fn minimum_valid_context(native_context: u32) -> u32 {
+    // Test-only escape hatch for constrained split validation. It deliberately
+    // accepts only known planner steps and never exceeds the model's native
+    // context, so production behavior remains unchanged unless explicitly set.
+    if let Ok(raw) = std::env::var("MESH_LLM_TEST_MIN_SPLIT_CONTEXT") {
+        if let Ok(requested) = raw.trim().parse::<u32>() {
+            if requested > 0
+                && requested <= native_context
+                && CONTEXT_STEPS.contains(&requested)
+            {
+                return requested;
+            }
+        }
+    }
     native_context.clamp(1, MINIMUM_AUTO_CONTEXT_LENGTH)
 }
 

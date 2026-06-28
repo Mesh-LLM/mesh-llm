@@ -1882,6 +1882,11 @@ pub fn rewrite_model_field(request: &mut BufferedHttpRequest, model: &str) {
     request.model_name = Some(model.to_string());
 }
 
+pub fn is_api_index_request(method: &str, path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or(path);
+    method == "GET" && (path == "/" || path == "/v1")
+}
+
 pub fn is_models_list_request(method: &str, path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
     method == "GET" && (path == "/v1/models" || path == "/models")
@@ -2790,6 +2795,21 @@ pub async fn handle_mesh_request(
             completion_tokens: request.completion_tokens,
             stream: request.stream,
         });
+    }
+
+    // Handle the API base paths locally. The Network UI exposes the API target
+    // as a clickable URL, so opening `/` or `/v1` must not be forwarded to a
+    // model target.
+    if is_api_index_request(&request.method, &request.path) {
+        let data = serde_json::json!({
+            "object": "api",
+            "version": "v1",
+            "models": "/v1/models",
+            "chat_completions": "/v1/chat/completions",
+            "responses": "/v1/responses"
+        });
+        let _ = send_json_ok(tcp_stream, &data).await;
+        return;
     }
 
     // Handle /v1/models

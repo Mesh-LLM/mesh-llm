@@ -667,6 +667,9 @@ pub(crate) fn local_ann_to_proto_ann(
             .direct_admission_proof
             .as_ref()
             .map(crate::DirectNodeAdmissionProof::to_proto),
+        cpu_stage_capacity_bytes: ann.cpu_stage_capacity_bytes,
+        cpu_stage_capacity_observed_unix_ms: ann.cpu_stage_capacity_observed_unix_ms,
+        cpu_stage_capacity_source: ann.cpu_stage_capacity_source.clone(),
         // Legacy GPU metric fields (29-32) are populated alongside `hardware` so that
         // pre-v0.60.0 peers that do not decode the new `hardware` block can still read
         // bandwidth/tflops/reserved data from the flat fields they already know.
@@ -758,6 +761,9 @@ pub(crate) fn proto_ann_to_local(
         first_joined_mesh_ts: pa.first_joined_mesh_ts,
         models: pa.catalog_models.clone(),
         vram_bytes: pa.vram_bytes,
+        cpu_stage_capacity_bytes: pa.cpu_stage_capacity_bytes,
+        cpu_stage_capacity_observed_unix_ms: pa.cpu_stage_capacity_observed_unix_ms,
+        cpu_stage_capacity_source: pa.cpu_stage_capacity_source.clone(),
         model_source: pa.model_source.clone(),
         serving_models: pa.serving_models.clone(),
         hosted_models,

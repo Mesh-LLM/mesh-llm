@@ -45,6 +45,7 @@ import { cn } from '@/lib/utils'
 import { useDataMode } from '@/lib/data-mode'
 import { useBooleanFeatureFlag } from '@/lib/feature-flags'
 import { CHAT_HARNESS } from '@/features/app-tabs/data'
+import type { ServingModelEntry, StatusPayload } from '@/lib/api/types'
 import type {
   ChatActionMetric,
   ChatHarnessData,
@@ -87,19 +88,10 @@ type FailedSubmission = ComposerSubmission & {
 }
 type DeleteConversationOptions = { returnFocusElement?: HTMLElement | null }
 
-// The dropdown shows a single "Mesh — automatic" entry. Selecting it
-// keeps `model === AUTO_MODEL_VALUE` in UI state (so the Radix Select
-// can highlight it correctly) but sends `AUTO_BACKEND_MODEL` on the
-// wire so requests fan out through the Mixture-of-Agents gateway.
-//
-// To flip the chat default back to the single-model router when peer
-// health is reliable enough, change AUTO_BACKEND_MODEL to 'auto'. The
-// two-variable split (selectedModelValue for UI, activeModelName for
-// the wire) is already in place exactly so this stays a one-line
-// change with no other UI surgery. See PR #615 and Issue #617 for the
-// trade-offs that led to the current 'mesh' default.
+// The dropdown shows one automatic entry. The request model is resolved
+// from live runtime state so chat follows the actual served Qwen/split
+// model instead of depending on a hard-coded catalog ref.
 const AUTO_MODEL_VALUE = 'auto'
-const AUTO_BACKEND_MODEL = 'mesh'
 const AUTO_MODEL_LABEL = 'Mesh — automatic'
 const AUTO_MODEL_OPTION: ModelSelectOption = {
   value: AUTO_MODEL_VALUE,
@@ -463,6 +455,26 @@ function isChatSelectableModel(model: ModelSummary): boolean {
   return model.status === 'ready' || model.status === 'warm'
 }
 
+function servingModelName(model: ServingModelEntry): string {
+  return typeof model === 'string' ? model : model.name
+}
+
+export function resolveAutomaticBackendModel(
+  selectableModels: ModelSummary[],
+  liveStatus: StatusPayload | undefined
+): string {
+  const warmModel = selectableModels[0]?.name
+  if (warmModel) return warmModel
+
+  const servingModel = liveStatus?.serving_models.map(servingModelName).find(Boolean)
+  if (servingModel) return servingModel
+
+  const statusModel = liveStatus?.model_name?.trim()
+  if (statusModel && statusModel !== 'unknown') return statusModel
+
+  return AUTO_MODEL_VALUE
+}
+
 export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const { mode, setMode } = useDataMode()
   const liveMode = mode === 'live'
@@ -490,12 +502,13 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const [composerDrafts, setComposerDrafts] = useState<Record<string, ConversationComposerDraft>>({})
   const [model, setModel] = useState('')
   const modelExists = selectableModels.some((item) => item.name === model)
+  const automaticBackendModel = resolveAutomaticBackendModel(selectableModels, liveStatus)
   // selectedModelValue is what the dropdown shows (always a value
   // present in `options`, so Radix Select can highlight it).
-  // activeModelName is what we send on the wire — the "Auto" pick
-  // routes through the MoA gateway via the virtual `mesh` model.
+  // activeModelName is what we send on the wire. For Auto, prefer the
+  // model the runtime actually reports as warm or mesh-routable.
   const selectedModelValue = modelExists ? model : AUTO_MODEL_VALUE
-  const activeModelName = selectedModelValue === AUTO_MODEL_VALUE ? AUTO_BACKEND_MODEL : selectedModelValue
+  const activeModelName = selectedModelValue === AUTO_MODEL_VALUE ? automaticBackendModel : selectedModelValue
   const [queuedSubmissions, setQueuedSubmissions] = useState<QueuedSubmission[]>([])
   const [attachmentProcessingStatus, setAttachmentProcessingStatus] = useState<AttachmentProcessingStatus | null>(null)
   const [submittedAttachmentsByMessageId, setSubmittedAttachmentsByMessageId] = useState<
@@ -1261,16 +1274,19 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
           <EmptyState
             tone="accent"
             icon={<MessageSquareMore aria-hidden={true} className="size-10" strokeWidth={1.4} />}
-            title="Start Chatting"
+            title="Welcome to Flushnet AI Runner, your AI Desktop, and Browser Automation :)"
             description={
-              conversations.conversations.length === 0 ? (
-                'Type a message below to begin. Your chats stay in this browser, and the mesh routes requests automatically.'
-              ) : (
-                <>
-                  No messages yet. Send a message to begin a fresh conversation; replies use{' '}
-                  <span className="font-mono text-fg">{activeModelName}</span> unless you choose another model.
-                </>
-              )
+              <>
+                What task should this chat be for? Example: list nodes, use Chrome extension, run sandbox task, or control local runtime.
+                {' '}Log in at{' '}
+                <a className="underline" href="https://www.flushnet.net/api/login.php" target="_blank" rel="noreferrer">
+                  Flushnet login
+                </a>
+                {' '}, then paste your ChatGPT access code in the same message as your task. Choose Chrome extension, local runtime, or sandbox. Free users use sandbox; native/local access requires Pro or Power when allowed by the Gateway.{' '}
+                <a className="underline" href="https://www.flushnet.net/api/docs.php" target="_blank" rel="noreferrer">
+                  Docs
+                </a>
+              </>
             }
           />
         ) : null}

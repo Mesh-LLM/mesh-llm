@@ -165,6 +165,105 @@ fn detect_hostname() -> Option<String> {
     parse_hostname(&String::from_utf8(out.stdout).ok()?)
 }
 
+fn parse_forced_vram_bytes() -> Option<u64> {
+    if let Ok(value) = std::env::var("MESH_LLM_FORCE_VRAM_BYTES") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return value.parse::<u64>().ok().filter(|bytes| *bytes > 0);
+        }
+    }
+
+    if let Ok(value) = std::env::var("MESH_LLM_FORCE_VRAM_GB") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return value
+                .parse::<f64>()
+                .ok()
+                .map(|gb| (gb * 1024.0 * 1024.0 * 1024.0).round().max(0.0) as u64)
+                .filter(|bytes| *bytes > 0);
+        }
+    }
+
+    None
+}
+
+fn parse_forced_gpu_count() -> Option<u8> {
+    let value = std::env::var("MESH_LLM_FORCE_GPU_COUNT").ok()?;
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    value.parse::<u8>().ok().filter(|count| *count > 0)
+}
+
+fn parse_forced_gpu_name() -> Option<String> {
+    let value = std::env::var("MESH_LLM_FORCE_GPU_NAME").ok()?;
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn parse_forced_hostname() -> Option<String> {
+    let value = std::env::var("MESH_LLM_FORCE_HOSTNAME").ok()?;
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn parse_forced_is_soc() -> Option<bool> {
+    let value = std::env::var("MESH_LLM_FORCE_IS_SOC").ok()?;
+    let value = value.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn apply_forced_vram_override(survey: &mut HardwareSurvey, metrics: &[Metric]) {
+    if !metrics.contains(&Metric::VramBytes) {
+        return;
+    }
+    let Some(bytes) = parse_forced_vram_bytes() else {
+        return;
+    };
+
+    survey.vram_bytes = bytes;
+    if survey.gpu_vram.is_empty() {
+        survey.gpu_vram = vec![bytes];
+    }
+    if survey.gpu_count == 0 {
+        survey.gpu_count = 1;
+    }
+}
+
+fn apply_forced_gpu_overrides(survey: &mut HardwareSurvey, metrics: &[Metric]) {
+    if metrics.contains(&Metric::Hostname) {
+        if let Some(hostname) = parse_forced_hostname() {
+            survey.hostname = Some(hostname);
+        }
+    }
+    if metrics.contains(&Metric::IsSoc) {
+        if let Some(is_soc) = parse_forced_is_soc() {
+            survey.is_soc = is_soc;
+        }
+    }
+    if metrics.contains(&Metric::GpuCount) {
+        if let Some(count) = parse_forced_gpu_count() {
+            survey.gpu_count = count;
+        }
+    }
+    if metrics.contains(&Metric::GpuName) {
+        if let Some(name) = parse_forced_gpu_name() {
+            survey.gpu_name = Some(name);
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn read_system_ram_bytes() -> u64 {
     (|| -> Option<u64> {
@@ -322,7 +421,6 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
 impl Collector for DefaultCollector {
     fn collect(&self, metrics: &[Metric]) -> HardwareSurvey {
         let mut survey = HardwareSurvey::default();
-
         #[cfg(feature = "skippy-devices")]
         if apply_skippy_backend_devices_to_survey(&mut survey, metrics) {
             return survey;
@@ -1070,6 +1168,8 @@ pub fn query(metrics: &[Metric]) -> HardwareSurvey {
     if metrics.contains(&Metric::Hostname) {
         survey.hostname = detect_hostname();
     }
+    apply_forced_vram_override(&mut survey, metrics);
+    apply_forced_gpu_overrides(&mut survey, metrics);
     #[cfg(not(feature = "skippy-devices"))]
     if metrics.contains(&Metric::GpuFacts) && survey.gpus.is_empty() {
         hydrate_gpu_facts(&mut survey, metrics);

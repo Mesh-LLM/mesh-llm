@@ -110,9 +110,11 @@ pub fn router_for_with_config(
     config: OpenAiFrontendConfig,
 ) -> Router {
     Router::new()
+        .route("/", get(api_index))
         .route("/health", get(health))
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
+        .route("/v1", get(api_index))
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
@@ -131,6 +133,25 @@ struct HealthResponse {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+struct ApiIndexResponse {
+    object: &'static str,
+    version: &'static str,
+    models: &'static str,
+    chat_completions: &'static str,
+    responses: &'static str,
+}
+
+async fn api_index() -> Json<ApiIndexResponse> {
+    Json(ApiIndexResponse {
+        object: "api",
+        version: "v1",
+        models: "/v1/models",
+        chat_completions: "/v1/chat/completions",
+        responses: "/v1/responses",
+    })
 }
 
 async fn ready(State(state): State<FrontendState>) -> Result<Json<HealthResponse>, OpenAiError> {

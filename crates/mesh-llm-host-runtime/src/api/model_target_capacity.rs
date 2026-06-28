@@ -9,6 +9,7 @@ use crate::mesh::{NodeRole, PeerInfo};
 use crate::models;
 use crate::runtime;
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ModelTargetCapacityInput<'a> {
@@ -147,6 +148,18 @@ pub(crate) fn evaluate_model_target_capacity(
     input: ModelTargetCapacityInput<'_>,
 ) -> ModelTargetCapacityAdvicePayload {
     let capacity = collect_capacity(input.local_role, input.local_vram_bytes, input.peers);
+    if let Some(forced) = forced_model_target_capacity_override() {
+        return advice(
+            forced.state,
+            "forced_model_target_capacity",
+            capacity,
+            AdviceDetails {
+                required_bytes: forced.required_bytes,
+                shortfall_bytes: forced.shortfall_bytes,
+                split_capable: forced.split_capable,
+            },
+        );
+    }
     let size_hint = input.size_lookup.find(input.model_ref).or_else(|| {
         input
             .model_name
@@ -260,6 +273,57 @@ pub(crate) fn evaluate_model_target_capacity(
     )
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ForcedModelTargetCapacityOverride {
+    state: ModelTargetCapacityAdviceState,
+    required_bytes: Option<u64>,
+    shortfall_bytes: Option<u64>,
+    split_capable: bool,
+}
+
+fn forced_model_target_capacity_override() -> Option<ForcedModelTargetCapacityOverride> {
+    let state = std::env::var("MESH_LLM_FORCE_MODEL_TARGET_CAPACITY_STATE")
+        .ok()
+        .and_then(|value| parse_forced_capacity_state(&value))?;
+    let required_bytes = std::env::var("MESH_LLM_FORCE_MODEL_TARGET_REQUIRED_BYTES")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let split_capable = std::env::var("MESH_LLM_FORCE_MODEL_TARGET_SPLIT_CAPABLE")
+        .ok()
+        .and_then(|value| parse_env_bool(&value))
+        .unwrap_or(true);
+    let shortfall_bytes = std::env::var("MESH_LLM_FORCE_MODEL_TARGET_SHORTFALL_BYTES")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    Some(ForcedModelTargetCapacityOverride {
+        state,
+        required_bytes,
+        shortfall_bytes,
+        split_capable,
+    })
+}
+
+fn parse_forced_capacity_state(value: &str) -> Option<ModelTargetCapacityAdviceState> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "already_serving" => Some(ModelTargetCapacityAdviceState::AlreadyServing),
+        "single_node_fit" => Some(ModelTargetCapacityAdviceState::SingleNodeFit),
+        "split_candidate" => Some(ModelTargetCapacityAdviceState::SplitCandidate),
+        "insufficient_capacity" => Some(ModelTargetCapacityAdviceState::InsufficientCapacity),
+        "unknown_model_size" => Some(ModelTargetCapacityAdviceState::UnknownModelSize),
+        "unknown_capacity" => Some(ModelTargetCapacityAdviceState::UnknownCapacity),
+        "no_eligible_hosts" => Some(ModelTargetCapacityAdviceState::NoEligibleHosts),
+        _ => None,
+    }
+}
+
+fn parse_env_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct CapacitySummary {
     best_single_node_capacity_bytes: Option<u64>,
@@ -275,30 +339,54 @@ fn collect_capacity(
     peers: &[PeerInfo],
 ) -> CapacitySummary {
     let mut summary = CapacitySummary::default();
-    record_node_capacity(&mut summary, local_role, local_vram_bytes);
+    record_node_capacity(&mut summary, local_role, Some(local_vram_bytes));
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default();
     for peer in peers {
-        record_node_capacity(&mut summary, &peer.role, peer.vram_bytes);
+        record_node_capacity(
+            &mut summary,
+            &peer.role,
+            peer_effective_stage_capacity_bytes(peer, now_ms),
+        );
     }
     summary
 }
 
-fn record_node_capacity(summary: &mut CapacitySummary, role: &NodeRole, vram_bytes: u64) {
+fn peer_effective_stage_capacity_bytes(peer: &PeerInfo, now_ms: u64) -> Option<u64> {
+    if peer.vram_bytes > 0 {
+        return Some(peer.vram_bytes);
+    }
+    let bytes = peer.cpu_stage_capacity_bytes.filter(|bytes| *bytes > 0)?;
+    let observed = peer.cpu_stage_capacity_observed_unix_ms?;
+    let max_age_ms = crate::mesh::CPU_STAGE_CAPACITY_MAX_AGE.as_millis() as u64;
+    (now_ms.saturating_sub(observed) <= max_age_ms).then_some(bytes)
+}
+
+fn record_node_capacity(
+    summary: &mut CapacitySummary,
+    role: &NodeRole,
+    capacity_bytes: Option<u64>,
+) {
     if matches!(role, NodeRole::Client) {
         summary.excluded_client_node_count += 1;
         return;
     }
-    if vram_bytes == 0 {
+    let Some(capacity_bytes) = capacity_bytes.filter(|bytes| *bytes > 0) else {
         summary.missing_capacity_node_count += 1;
         return;
-    }
+    };
 
     summary.eligible_node_count += 1;
-    summary.aggregate_capacity_bytes = summary.aggregate_capacity_bytes.saturating_add(vram_bytes);
+    summary.aggregate_capacity_bytes = summary
+        .aggregate_capacity_bytes
+        .saturating_add(capacity_bytes);
     summary.best_single_node_capacity_bytes = Some(
         summary
             .best_single_node_capacity_bytes
-            .map(|best| best.max(vram_bytes))
-            .unwrap_or(vram_bytes),
+            .map(|best| best.max(capacity_bytes))
+            .unwrap_or(capacity_bytes),
     );
 }
 

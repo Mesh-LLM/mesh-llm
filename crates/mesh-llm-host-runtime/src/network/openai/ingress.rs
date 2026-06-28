@@ -618,6 +618,18 @@ async fn maybe_handle_control_request(
     request: &proxy::BufferedHttpRequest,
     ctx: &ProxyConnectionContext<'_>,
 ) -> Result<(), tokio::net::TcpStream> {
+    if proxy::is_api_index_request(&request.method, &request.path) {
+        let data = serde_json::json!({
+            "object": "api",
+            "version": "v1",
+            "models": "/v1/models",
+            "chat_completions": "/v1/chat/completions",
+            "responses": "/v1/responses"
+        });
+        let _ = proxy::send_json_ok(tcp_stream, &data).await;
+        return Ok(());
+    }
+
     if proxy::is_models_list_request(&request.method, &request.path) {
         handle_models_list_request(
             tcp_stream,

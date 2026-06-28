@@ -22,6 +22,8 @@ pub(crate) struct SplitReadinessNodeInput {
     pub(crate) source: SplitReadinessNodeSource,
     pub(crate) role: SplitReadinessNodeRole,
     pub(crate) vram_bytes: u64,
+    pub(crate) cpu_stage_capacity_bytes: Option<u64>,
+    pub(crate) cpu_stage_capacity_observed_unix_ms: Option<u64>,
     pub(crate) requested_models: Vec<String>,
     pub(crate) explicit_model_interests: Vec<String>,
     pub(crate) serving_models: Vec<String>,
@@ -114,6 +116,8 @@ impl MeshApi {
             source: SplitReadinessNodeSource::Local,
             role: split_node_role(&role),
             vram_bytes: node.vram_bytes(),
+            cpu_stage_capacity_bytes: None,
+            cpu_stage_capacity_observed_unix_ms: None,
             requested_models: node.requested_models().await,
             explicit_model_interests: node.explicit_model_interests().await,
             serving_models: node.serving_models().await,
@@ -189,6 +193,8 @@ fn peer_readiness_input(
         source: SplitReadinessNodeSource::Peer,
         role: split_node_role(&peer.role),
         vram_bytes: peer.vram_bytes,
+        cpu_stage_capacity_bytes: peer.cpu_stage_capacity_bytes,
+        cpu_stage_capacity_observed_unix_ms: peer.cpu_stage_capacity_observed_unix_ms,
         requested_models: peer.requested_models,
         explicit_model_interests: peer.explicit_model_interests,
         serving_models: peer.serving_models,
@@ -216,10 +222,11 @@ fn split_node_exclusion_reason(
     if node.role == SplitReadinessNodeRole::Client {
         return Some(SplitReadinessExclusionReason::Client);
     }
-    if node.vram_bytes == 0 {
+    let force_split_eligible = force_split_override_applies(node);
+    if !force_split_eligible && node.vram_bytes == 0 && !node_has_fresh_cpu_stage_capacity(node) {
         return Some(SplitReadinessExclusionReason::MissingVram);
     }
-    if !node_wants_model(model_ref, node) {
+    if !force_split_eligible && !node_wants_model(model_ref, node) {
         return Some(SplitReadinessExclusionReason::MissingModelInterest);
     }
     if !node.stage_protocol_generation_supported {
@@ -234,6 +241,42 @@ fn split_node_exclusion_reason(
         return Some(SplitReadinessExclusionReason::MissingModelSource);
     }
     None
+}
+
+fn force_split_override_applies(node: &SplitReadinessNodeInput) -> bool {
+    if std::env::var("MESH_LLM_FORCE_SPLIT_ELIGIBLE")
+        .ok()
+        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+    {
+        return true;
+    }
+
+    let ids = std::env::var("MESH_LLM_FORCE_SPLIT_NODE_IDS").ok();
+    ids.as_deref().is_some_and(|raw| {
+        raw.split(',')
+            .map(|item| item.trim())
+            .filter(|item| !item.is_empty())
+            .any(|item| {
+                item.eq_ignore_ascii_case(node.node_id.as_str())
+                    || item.eq_ignore_ascii_case(node.short_node_id.as_str())
+            })
+    })
+}
+
+fn node_has_fresh_cpu_stage_capacity(node: &SplitReadinessNodeInput) -> bool {
+    let Some(bytes) = node.cpu_stage_capacity_bytes.filter(|bytes| *bytes > 0) else {
+        return false;
+    };
+    let Some(observed) = node.cpu_stage_capacity_observed_unix_ms else {
+        return false;
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default();
+    bytes > 0
+        && now_ms.saturating_sub(observed)
+            <= crate::mesh::CPU_STAGE_CAPACITY_MAX_AGE.as_millis() as u64
 }
 
 fn split_participant(model_ref: &str, node: SplitReadinessNodeInput) -> SplitReadinessParticipant {
@@ -534,7 +577,7 @@ fn model_source_state(model_ref: &str, node: &SplitReadinessNodeInput) -> &'stat
 fn node_has_stage_source(model_ref: &str, node: &SplitReadinessNodeInput) -> bool {
     matches!(
         model_source_state(model_ref, node),
-        "declared" | "serving" | "available"
+        "declared" | "serving" | "available" | "transfer_supported"
     )
 }
 
@@ -544,6 +587,26 @@ fn model_matches(candidate: &str, model_ref: &str) -> bool {
     if candidate.eq_ignore_ascii_case(model_ref) {
         return true;
     }
+
+    // A local layer package advertises its manifest `model_id` (for example
+    // `unsloth/Qwen3-8B-GGUF`), while a split request may carry the canonical
+    // manifest source ref (`unsloth/Qwen3-8B-GGUF@main/Qwen3-8B-Q4_K_M.gguf`).
+    // Treat the repository portion as the same model identity before falling
+    // back to filename comparison.
+    let candidate_repo = candidate
+        .split('@')
+        .next()
+        .unwrap_or(candidate)
+        .trim_end_matches('/');
+    let model_repo = model_ref
+        .split('@')
+        .next()
+        .unwrap_or(model_ref)
+        .trim_end_matches('/');
+    if candidate_repo.eq_ignore_ascii_case(model_repo) {
+        return true;
+    }
+
     let candidate_base = candidate.rsplit('/').next().unwrap_or(candidate);
     let model_base = model_ref.rsplit('/').next().unwrap_or(model_ref);
     candidate_base.eq_ignore_ascii_case(model_base)
@@ -800,6 +863,32 @@ mod tests {
                 .iter()
                 .any(|item| item.contains("resolvable package source"))
         );
+    }
+
+    #[test]
+    fn split_readiness_counts_transfer_capable_peer_as_participant() {
+        let peer = node(
+            "peer000000000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+
+        let report = build_split_readiness_report(SplitReadinessInput {
+            model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
+            local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
+            peers: vec![peer],
+            capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
+            active_topology_count: 0,
+            active_stage_count: 0,
+        });
+
+        assert_eq!(report.verdict, SplitReadinessVerdict::Ready);
+        assert_eq!(report.participant_count, 2);
+        assert_eq!(
+            report.participants[1].model_source_state,
+            "transfer_supported"
+        );
+        assert!(report.exclusions.is_empty());
     }
 
     #[test]

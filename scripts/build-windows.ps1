@@ -962,12 +962,19 @@ switch ($backendName) {
 }
 
 Invoke-InRepo {
-    Prepare-Llama
+    if ($env:MESH_LLM_SKIP_LLAMA -eq "1") {
+        $cachedLibraries = @(Get-ChildItem -Path $buildDir -Recurse -File -Include *.lib -ErrorAction SilentlyContinue)
+        if ($cachedLibraries.Count -eq 0) {
+            throw "MESH_LLM_SKIP_LLAMA=1, but no cached native libraries were found in $buildDir"
+        }
+        Write-Host "Reusing validated patched llama.cpp ABI: $buildDir"
+    } else {
+        Prepare-Llama
 
-    $pathMaxDefine = if ($backendName -eq "rocm") { "-DPATH_MAX=4096" } else { "/DPATH_MAX=4096" }
-    Reset-SccacheStats
+        $pathMaxDefine = if ($backendName -eq "rocm") { "-DPATH_MAX=4096" } else { "/DPATH_MAX=4096" }
+        Reset-SccacheStats
 
-    $cmakeArgs = @(
+        $cmakeArgs = @(
         "-B", $buildDir,
         "-S", $llamaDir,
         "-DCMAKE_BUILD_TYPE=Release",
@@ -1035,21 +1042,22 @@ Invoke-InRepo {
         }
     }
 
-    $cmakeArgs += $compilerLauncherArgs
+        $cmakeArgs += $compilerLauncherArgs
 
-    $parallelJobs = if ($env:MESH_LLM_WINDOWS_BUILD_JOBS) {
-        [int]$env:MESH_LLM_WINDOWS_BUILD_JOBS
-    } elseif ($backendName -eq "cuda" -and (Test-Sccache)) {
-        [Math]::Min([Environment]::ProcessorCount, 2)
-    } else {
-        [Environment]::ProcessorCount
+        $parallelJobs = if ($env:MESH_LLM_WINDOWS_BUILD_JOBS) {
+            [int]$env:MESH_LLM_WINDOWS_BUILD_JOBS
+        } elseif ($backendName -eq "cuda" -and (Test-Sccache)) {
+            [Math]::Min([Environment]::ProcessorCount, 2)
+        } else {
+            [Environment]::ProcessorCount
+        }
+        Invoke-NativeCommand "cmake" $cmakeArgs
+        Invoke-CmakeBuild -BuildDir $buildDir -ParallelJobs $parallelJobs
+        Write-Host "Patched llama.cpp ABI build complete: $buildDir"
+        $sccacheStats = Get-SccacheStats
+        Show-SccacheStats
+        Assert-RequiredSccacheUsage $backendName $sccacheStats
     }
-    Invoke-NativeCommand "cmake" $cmakeArgs
-    Invoke-CmakeBuild -BuildDir $buildDir -ParallelJobs $parallelJobs
-    Write-Host "Patched llama.cpp ABI build complete: $buildDir"
-    $sccacheStats = Get-SccacheStats
-    Show-SccacheStats
-    Assert-RequiredSccacheUsage $backendName $sccacheStats
 
     if ($env:MESH_LLM_SKIP_UI -eq "1") {
         Write-Host "Skipping mesh-llm UI build because MESH_LLM_SKIP_UI=1."

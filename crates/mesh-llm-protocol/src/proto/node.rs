@@ -126,6 +126,13 @@ pub struct PeerAnnouncement {
     pub release_attestation: ::core::option::Option<ReleaseBuildAttestation>,
     #[prost(message, optional, tag = "48")]
     pub direct_admission_proof: ::core::option::Option<DirectNodeAdmissionProof>,
+    /// CPU-only split-stage capacity; separate from GPU VRAM.
+    #[prost(uint64, optional, tag = "49")]
+    pub cpu_stage_capacity_bytes: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "50")]
+    pub cpu_stage_capacity_observed_unix_ms: ::core::option::Option<u64>,
+    #[prost(string, optional, tag = "51")]
+    pub cpu_stage_capacity_source: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AdvertisedModelThroughput {
