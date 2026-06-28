@@ -267,8 +267,22 @@ fn vulkaninfo_device_names(output: &str) -> Vec<String> {
         .filter_map(|line| line.strip_prefix("deviceName"))
         .filter_map(|line| line.split_once('=').map(|(_, value)| value.trim()))
         .filter(|value| !value.is_empty())
+        .filter(|value| !looks_like_software_vulkan_adapter(value))
         .map(str::to_string)
         .collect()
+}
+
+fn looks_like_software_vulkan_adapter(value: &str) -> bool {
+    let label = value.to_ascii_lowercase();
+    [
+        "llvmpipe",
+        "swiftshader",
+        "lavapipe",
+        "softpipe",
+        "software rasterizer",
+    ]
+    .iter()
+    .any(|marker| label.contains(marker))
 }
 
 fn looks_like_display_controller(line: &str) -> bool {
@@ -407,6 +421,23 @@ driverName         = NVIDIA
         assert_eq!(
             gpu_labels_from_command_output("vulkaninfo", &["--summary"], output),
             vec!["NVIDIA Tegra Orin (nvgpu)".to_string()]
+        );
+    }
+
+    #[test]
+    fn vulkaninfo_labels_ignore_software_adapters() {
+        let output = "\
+GPU0:
+deviceName         = llvmpipe (LLVM 18.1.8, 256 bits)
+GPU1:
+deviceName         = SwiftShader Device (Subzero)
+GPU2:
+deviceName         = AMD Radeon PRO W7900
+";
+
+        assert_eq!(
+            gpu_labels_from_command_output("vulkaninfo", &["--summary"], output),
+            vec!["AMD Radeon PRO W7900".to_string()]
         );
     }
 

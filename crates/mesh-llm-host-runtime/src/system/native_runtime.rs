@@ -211,7 +211,7 @@ mod dynamic {
         let abi = options
             .skippy_abi_version
             .as_deref()
-            .unwrap_or("the configured Skippy ABI");
+            .unwrap_or("not configured");
         format!(
             "no compatible MeshLLM native runtime is installed or installable for MeshLLM {} / Skippy ABI {abi}; run `mesh-llm runtime install` or inspect available runtimes with `mesh-llm runtime list --available`",
             options.mesh_version

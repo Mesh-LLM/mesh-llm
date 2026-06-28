@@ -100,6 +100,13 @@ impl std::fmt::Display for EmbeddedReleaseFooterError {
 
 impl std::error::Error for EmbeddedReleaseFooterError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EmbeddedReleaseFooterFields {
+    version: u32,
+    payload_len: u64,
+    reserved: u32,
+}
+
 pub fn stamp_embedded_release_payload(
     binary_bytes: &[u8],
     payload_bytes: &[u8],
@@ -138,7 +145,7 @@ pub fn read_embedded_release_footer(
     let footer_bytes = &binary_bytes[footer_start..];
 
     if &footer_bytes[..8] != EMBEDDED_RELEASE_FOOTER_MAGIC {
-        if looks_like_corrupted_footer(binary_bytes, footer_bytes) {
+        if looks_like_corrupted_footer(binary_bytes) {
             return Err(EmbeddedReleaseFooterError::BadMagic);
         }
         return detect_truncated_footer_tail(binary_bytes)
@@ -146,19 +153,19 @@ pub fn read_embedded_release_footer(
             .map_err(|()| EmbeddedReleaseFooterError::Truncated);
     }
 
-    let version = u32::from_le_bytes(footer_bytes[8..12].try_into().expect("slice length"));
-    if version != EMBEDDED_RELEASE_FOOTER_VERSION {
-        return Err(EmbeddedReleaseFooterError::UnsupportedVersion(version));
+    let fields = parse_embedded_release_footer_fields(footer_bytes);
+    if fields.version != EMBEDDED_RELEASE_FOOTER_VERSION {
+        return Err(EmbeddedReleaseFooterError::UnsupportedVersion(
+            fields.version,
+        ));
     }
 
-    let payload_len = u64::from_le_bytes(footer_bytes[12..20].try_into().expect("slice length"));
-    let reserved = u32::from_le_bytes(footer_bytes[20..24].try_into().expect("slice length"));
-    if reserved != 0 {
-        return Err(EmbeddedReleaseFooterError::NonZeroReserved(reserved));
+    if fields.reserved != 0 {
+        return Err(EmbeddedReleaseFooterError::NonZeroReserved(fields.reserved));
     }
 
-    let payload_len = usize::try_from(payload_len)
-        .map_err(|_| EmbeddedReleaseFooterError::PayloadLengthOverflow(payload_len))?;
+    let payload_len = usize::try_from(fields.payload_len)
+        .map_err(|_| EmbeddedReleaseFooterError::PayloadLengthOverflow(fields.payload_len))?;
     if footer_start < payload_len {
         return Err(EmbeddedReleaseFooterError::PayloadLengthOverflow(
             payload_len as u64,
@@ -262,42 +269,37 @@ fn footer_prefix_bytes() -> [u8; EMBEDDED_RELEASE_FOOTER_PREFIX_LEN] {
     prefix
 }
 
-fn looks_like_corrupted_footer(binary_bytes: &[u8], footer_bytes: &[u8]) -> bool {
-    let version = u32::from_le_bytes(footer_bytes[8..12].try_into().expect("slice length"));
-    let reserved = u32::from_le_bytes(footer_bytes[20..24].try_into().expect("slice length"));
-    let payload_len = u64::from_le_bytes(footer_bytes[12..20].try_into().expect("slice length"));
-    let Ok(payload_len) = usize::try_from(payload_len) else {
+fn parse_embedded_release_footer_fields(footer_bytes: &[u8]) -> EmbeddedReleaseFooterFields {
+    EmbeddedReleaseFooterFields {
+        version: u32::from_le_bytes(footer_bytes[8..12].try_into().expect("slice length")),
+        payload_len: u64::from_le_bytes(footer_bytes[12..20].try_into().expect("slice length")),
+        reserved: u32::from_le_bytes(footer_bytes[20..24].try_into().expect("slice length")),
+    }
+}
+
+fn looks_like_corrupted_footer(binary_bytes: &[u8]) -> bool {
+    let footer_start = binary_bytes.len() - EMBEDDED_RELEASE_FOOTER_LEN;
+    let footer_bytes = &binary_bytes[footer_start..];
+    let fields = parse_embedded_release_footer_fields(footer_bytes);
+    let Ok(payload_len) = usize::try_from(fields.payload_len) else {
         return false;
     };
-    let footer_start = binary_bytes.len() - EMBEDDED_RELEASE_FOOTER_LEN;
 
     let plausible_payload = payload_len > 0
         && footer_start >= payload_len
         && looks_like_release_payload(&binary_bytes[footer_start - payload_len..footer_start]);
-    let canonical_version = version == EMBEDDED_RELEASE_FOOTER_VERSION;
-    let canonical_reserved = reserved == 0;
+    let canonical_version = fields.version == EMBEDDED_RELEASE_FOOTER_VERSION;
+    let canonical_reserved = fields.reserved == 0;
 
     plausible_payload && (canonical_version || canonical_reserved)
 }
 
 fn looks_like_release_payload(payload_bytes: &[u8]) -> bool {
-    let payload_bytes = trim_ascii_whitespace(payload_bytes);
+    let payload_bytes = payload_bytes.trim_ascii();
     payload_bytes.first() == Some(&b'{')
         && payload_bytes
             .windows(b"artifact_digest".len())
             .any(|window| window == b"artifact_digest")
-}
-
-fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
-    let start = bytes
-        .iter()
-        .position(|byte| !byte.is_ascii_whitespace())
-        .unwrap_or(bytes.len());
-    let end = bytes
-        .iter()
-        .rposition(|byte| !byte.is_ascii_whitespace())
-        .map_or(start, |index| index + 1);
-    &bytes[start..end]
 }
 
 #[cfg(test)]

@@ -41,7 +41,7 @@ pub async fn run_plugin_command(
         PluginCommand::Enable { name } => set_enabled(name, true)?,
         PluginCommand::Disable { name } => set_enabled(name, false)?,
         PluginCommand::Delete { name } => delete(name)?,
-        PluginCommand::Info { name } => info(name, runtime_rows)?,
+        PluginCommand::Info { name } => return info(name, runtime_rows),
         PluginCommand::Search { query } => search(query.as_deref()).await?,
         PluginCommand::List => {
             let Some(runtime_rows) = runtime_rows else {
@@ -99,7 +99,7 @@ fn delete(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn info(name: &str, runtime_rows: Option<&PluginListRows>) -> Result<()> {
+fn info(name: &str, runtime_rows: Option<&PluginListRows>) -> Result<bool> {
     let store = PluginStore::new(default_store_root()?);
     if let Some(metadata) = store.load_optional(name)? {
         println!("name\t{}", metadata.name);
@@ -118,15 +118,22 @@ fn info(name: &str, runtime_rows: Option<&PluginListRows>) -> Result<()> {
         if let Some(error) = metadata.last_error {
             println!("error\t{error}");
         }
-        return Ok(());
+        return Ok(true);
     }
-    if let Some(row) =
-        runtime_rows.and_then(|rows| rows.externals.iter().find(|row| row.name == name))
-    {
+    let Some(runtime_rows) = runtime_rows else {
+        return Ok(false);
+    };
+    if let Some(row) = runtime_rows.externals.iter().find(|row| row.name == name) {
         for line in runtime_plugin_info_lines(row) {
             println!("{line}");
         }
-        return Ok(());
+        return Ok(true);
+    }
+    if let Some(row) = runtime_rows.inactive.iter().find(|row| row.name == name) {
+        for line in inactive_plugin_info_lines(row) {
+            println!("{line}");
+        }
+        return Ok(true);
     }
     bail!("plugin '{name}' is not installed")
 }
@@ -138,6 +145,15 @@ fn runtime_plugin_info_lines(row: &RuntimePluginRow) -> Vec<String> {
         format!("command\t{}", row.command),
         format!("args\t{}", row.args.join(" ")),
         "source\tbuilt-in/runtime".to_string(),
+    ]
+}
+
+fn inactive_plugin_info_lines(row: &InactivePluginRow) -> Vec<String> {
+    vec![
+        format!("name\t{}", row.name),
+        format!("kind\t{}", row.kind),
+        format!("status\t{}", row.status),
+        format!("error\t{}", row.error.clone().unwrap_or_default()),
     ]
 }
 
@@ -334,6 +350,26 @@ mod tests {
                 "command\t/tmp/mesh-llm".to_string(),
                 "args\t--log-format json --plugin blobstore".to_string(),
                 "source\tbuilt-in/runtime".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn inactive_plugin_info_lines_describe_startup_failure() {
+        let row = InactivePluginRow {
+            name: "image-tools".to_string(),
+            kind: "external".to_string(),
+            status: "inactive".to_string(),
+            error: Some("command not found".to_string()),
+        };
+
+        assert_eq!(
+            inactive_plugin_info_lines(&row),
+            vec![
+                "name\timage-tools".to_string(),
+                "kind\texternal".to_string(),
+                "status\tinactive".to_string(),
+                "error\tcommand not found".to_string(),
             ]
         );
     }

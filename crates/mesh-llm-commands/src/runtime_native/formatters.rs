@@ -281,7 +281,7 @@ fn print_doctor_human(report: &NativeRuntimeDoctorReport) {
         report.selected_mesh_version
     );
     if report.selected_mesh_version != report.running_mesh_version {
-        println!("  status: native runtime version is pinned by config");
+        println!("  version pin: native runtime version is pinned by config");
     }
     if let Some(skippy_abi) = &report.configured_skippy_abi {
         println!("  configured Skippy ABI: {skippy_abi}");

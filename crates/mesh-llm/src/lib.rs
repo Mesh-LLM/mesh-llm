@@ -56,7 +56,7 @@ fn maybe_print_binary_help_and_exit() {
         std::process::exit(0);
     }
     if let Some(surface) = runtime_surface_help_request(args.iter().cloned()) {
-        print!("{}", mesh_llm_cli::runtime_surface_help(surface));
+        print!("{}", mesh_llm_cli::parser::runtime_surface_help(surface));
         std::process::exit(0);
     }
     if args.iter().any(|arg| arg == "--help-advanced") {
@@ -83,17 +83,11 @@ where
     I: IntoIterator<Item = std::ffi::OsString>,
 {
     let args: Vec<_> = args.into_iter().collect();
-    let [_program, surface, help] = args.as_slice() else {
-        return None;
-    };
+    let help = args.last()?;
     if help != "--help" && help != "-h" {
         return None;
     }
-    match surface.to_str() {
-        Some("serve") => Some(mesh_llm_cli::RuntimeSurface::Serve),
-        Some("client") => Some(mesh_llm_cli::RuntimeSurface::Client),
-        _ => None,
-    }
+    mesh_llm_cli::normalize_runtime_surface_args(args).explicit_surface
 }
 
 fn print_advanced_help() {
@@ -288,6 +282,29 @@ mod cli_entrypoint_tests {
         assert_eq!(
             super::runtime_surface_help_request([
                 OsString::from("mesh-llm"),
+                OsString::from("client"),
+                OsString::from("-h"),
+            ]),
+            Some(mesh_llm_cli::RuntimeSurface::Client)
+        );
+    }
+
+    #[test]
+    fn runtime_surface_help_request_skips_leading_global_flags() {
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("--log-format"),
+                OsString::from("json"),
+                OsString::from("serve"),
+                OsString::from("--help"),
+            ]),
+            Some(mesh_llm_cli::RuntimeSurface::Serve)
+        );
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("--relay-auth=https://relay.example=token"),
                 OsString::from("client"),
                 OsString::from("-h"),
             ]),

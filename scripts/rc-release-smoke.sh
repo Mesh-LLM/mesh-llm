@@ -193,7 +193,7 @@ CHAT_RESPONSE="$(
 )"
 printf '%s' "$CHAT_RESPONSE" >"$AUDIT/chat-completions.json"
 printf '%s' "$CHAT_RESPONSE" |
-    python3 -c 'import json,sys; content=json.load(sys.stdin)["choices"][0]["message"]["content"]; raise SystemExit(0 if content.strip() else 1)'
+    python3 -c 'import json,sys; content=json.load(sys.stdin)["choices"][0]["message"]["content"]; raise SystemExit(0 if content.strip() == "rc-ok" else 1)'
 
 cleanup
 MESH_PID=""

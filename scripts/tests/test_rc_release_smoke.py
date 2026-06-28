@@ -31,6 +31,7 @@ class RcReleaseSmokeScriptTests(unittest.TestCase):
             "download",
             "/v1/models",
             "/v1/chat/completions",
+            'content.strip() == "rc-ok"',
             "verify no mesh-llm process remains",
         ):
             self.assertIn(marker, contents)

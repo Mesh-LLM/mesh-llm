@@ -268,6 +268,11 @@ jobs:
             backend: cpu
             target: x86_64-unknown-linux-gnu
             artifact_suffix: linux-x86_64-cpu
+          - name: Linux aarch64 CPU
+            os: ubuntu-24.04-arm
+            backend: cpu
+            target: aarch64-unknown-linux-gnu
+            artifact_suffix: linux-aarch64-cpu
     env:
       LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
       MESH_NATIVE_RUNTIME_TARGET: ${{ matrix.target }}
