@@ -4,6 +4,7 @@ on:
   pull_request_target:
     types:
       - opened
+      - converted_to_draft
       - ready_for_review
 
 jobs:
@@ -15,5 +16,37 @@ jobs:
       pull-requests: write
     steps:
       # This privileged workflow must not check out or run pull request code.
+      - name: Comment on draft pull requests
+        if: github.event.pull_request.draft == true
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const marker = "<!-- mesh-llm-draft-review-notice -->";
+            const body = `${marker}\nThis pull request is currently a draft. Reviews will not take place until the PR is marked as ready for review.`;
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            const existingNotice = comments.find((comment) =>
+              comment.user?.type === "Bot" && comment.body?.includes(marker),
+            );
+
+            if (!existingNotice) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
+
       - name: Auto assign reviewers and assignees
+        if: github.event.pull_request.draft == false
         uses: kentaro-m/auto-assign-action@0a2c53d3721e4c5cfcce6afd4014aecc337979f6 # v2.0.2
