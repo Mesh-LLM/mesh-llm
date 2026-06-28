@@ -138,7 +138,7 @@ pub fn read_embedded_release_footer(
     let footer_bytes = &binary_bytes[footer_start..];
 
     if &footer_bytes[..8] != EMBEDDED_RELEASE_FOOTER_MAGIC {
-        if looks_like_corrupted_footer(binary_bytes.len(), footer_bytes) {
+        if looks_like_corrupted_footer(binary_bytes, footer_bytes) {
             return Err(EmbeddedReleaseFooterError::BadMagic);
         }
         return detect_truncated_footer_tail(binary_bytes)
@@ -262,20 +262,42 @@ fn footer_prefix_bytes() -> [u8; EMBEDDED_RELEASE_FOOTER_PREFIX_LEN] {
     prefix
 }
 
-fn looks_like_corrupted_footer(binary_len: usize, footer_bytes: &[u8]) -> bool {
+fn looks_like_corrupted_footer(binary_bytes: &[u8], footer_bytes: &[u8]) -> bool {
     let version = u32::from_le_bytes(footer_bytes[8..12].try_into().expect("slice length"));
     let reserved = u32::from_le_bytes(footer_bytes[20..24].try_into().expect("slice length"));
     let payload_len = u64::from_le_bytes(footer_bytes[12..20].try_into().expect("slice length"));
     let Ok(payload_len) = usize::try_from(payload_len) else {
         return false;
     };
-    let footer_start = binary_len - EMBEDDED_RELEASE_FOOTER_LEN;
+    let footer_start = binary_bytes.len() - EMBEDDED_RELEASE_FOOTER_LEN;
 
-    let plausible_payload = footer_start >= payload_len;
+    let plausible_payload = payload_len > 0
+        && footer_start >= payload_len
+        && looks_like_release_payload(&binary_bytes[footer_start - payload_len..footer_start]);
     let canonical_version = version == EMBEDDED_RELEASE_FOOTER_VERSION;
     let canonical_reserved = reserved == 0;
 
     plausible_payload && (canonical_version || canonical_reserved)
+}
+
+fn looks_like_release_payload(payload_bytes: &[u8]) -> bool {
+    let payload_bytes = trim_ascii_whitespace(payload_bytes);
+    payload_bytes.first() == Some(&b'{')
+        && payload_bytes
+            .windows(b"artifact_digest".len())
+            .any(|window| window == b"artifact_digest")
+}
+
+fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .map_or(start, |index| index + 1);
+    &bytes[start..end]
 }
 
 #[cfg(test)]
@@ -431,6 +453,25 @@ mod tests {
             },
         );
         assert_eq!(verification.status, EmbeddedReleaseFooterStatus::Missing);
+    }
+
+    #[test]
+    fn embedded_release_footer_shaped_plain_binary_tail_is_missing() {
+        let mut binary = b"plain unsigned release binary".to_vec();
+        binary.extend_from_slice(b"NOTSURE!");
+        binary.extend_from_slice(&EMBEDDED_RELEASE_FOOTER_VERSION.to_le_bytes());
+        binary.extend_from_slice(&0u64.to_le_bytes());
+        binary.extend_from_slice(&0u32.to_le_bytes());
+
+        let verification = verify_embedded_release_footer(
+            &binary,
+            &TestPayloadVerifier {
+                expected_payload_bytes: Vec::new(),
+            },
+        );
+
+        assert_eq!(verification.status, EmbeddedReleaseFooterStatus::Missing);
+        assert!(verification.error.is_none());
     }
 
     #[test]
