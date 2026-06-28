@@ -1,3 +1,6 @@
+packages:
+  - "."
+
 allowBuilds:
   fsevents: true
   onnxruntime-common: true

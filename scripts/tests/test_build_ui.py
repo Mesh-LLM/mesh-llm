@@ -12,6 +12,14 @@ SCRIPT = ROOT / "scripts" / "build-ui.sh"
 
 
 class BuildUiScriptTests(unittest.TestCase):
+    def test_ui_pnpm_workspace_names_root_package(self) -> None:
+        workspace = ROOT / "crates" / "mesh-llm-ui" / "pnpm-workspace.yaml"
+
+        contents = workspace.read_text(encoding="utf-8")
+
+        self.assertIn("packages:", contents)
+        self.assertRegex(contents, r"(?m)^\s*-\s*['\"]?\.[\"']?\s*$")
+
     def test_mixed_case_release_profile_uses_release_ui_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ui_dir = Path(tmp) / "ui"
