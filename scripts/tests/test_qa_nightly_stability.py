@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,8 +14,8 @@ SCRIPT = ROOT / "scripts" / "qa-nightly-stability.py"
 
 def load_module():
     spec = importlib.util.spec_from_file_location("qa_nightly_stability", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
@@ -40,6 +41,8 @@ class NightlyStabilityHarnessTests(unittest.TestCase):
             agent_smokes=["opencode", "pi", "goose"],
             skip_streaming=False,
             timeout=120.0,
+            mesh_binary=None,
+            release_attestation_expected_status=None,
         )
 
         self.assertEqual(plan["name"], "nightly-stability")
@@ -64,6 +67,8 @@ class NightlyStabilityHarnessTests(unittest.TestCase):
             agent_smokes=[],
             skip_streaming=True,
             timeout=30.0,
+            mesh_binary=None,
+            release_attestation_expected_status=None,
         )
         command = plan["steps"][1]["command"]
         self.assertIn("--skip-streaming", command)
@@ -159,6 +164,38 @@ class NightlyStabilityHarnessTests(unittest.TestCase):
         self.assertEqual(summary["failed"], 1)
         self.assertEqual(summary["total"], 2)
 
+    def test_chat_probe_reports_http_failure_without_crashing(self) -> None:
+        with mock.patch.object(
+            self.harness,
+            "post_json",
+            side_effect=RuntimeError("HTTP 403: error code: 1010"),
+        ):
+            result = self.harness.run_chat_probe("https://meshllm.cloud/v1", "auto", 1, 1.0)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.model, "auto")
+        self.assertEqual(result.attempt, 1)
+        self.assertEqual(result.phase, "chat")
+        self.assertIn("HTTP 403", result.detail)
+        self.assertIsNone(result.actual_model)
+        self.assertIsNone(result.tok_per_sec)
+
+    def test_stream_chat_probe_reports_http_failure_without_crashing(self) -> None:
+        with mock.patch.object(
+            self.harness,
+            "post_json_stream",
+            side_effect=RuntimeError("HTTP 403: error code: 1010"),
+        ):
+            result = self.harness.run_stream_chat_probe("https://meshllm.cloud/v1", "mesh", 1, 1.0)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.model, "mesh")
+        self.assertEqual(result.attempt, 1)
+        self.assertEqual(result.phase, "stream_chat")
+        self.assertIn("HTTP 403", result.detail)
+        self.assertIsNone(result.actual_model)
+        self.assertIsNone(result.tok_per_sec)
+
     def test_write_evidence_outputs_machine_readable_files(self) -> None:
         rows = [
             self.harness.CommandResult(
@@ -177,6 +214,8 @@ class NightlyStabilityHarnessTests(unittest.TestCase):
             agent_smokes=[],
             skip_streaming=False,
             timeout=30.0,
+            mesh_binary=None,
+            release_attestation_expected_status=None,
         )
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
@@ -230,7 +269,7 @@ class NightlyStabilityHarnessTests(unittest.TestCase):
                 "elapsed_ms": 10,
             },
         }
-        rendered = self.harness.render_summary_markdown(summary, [], [])
+        rendered = self.harness.render_summary_markdown(summary, [], [], None)
 
         self.assertIn("## Timing Snapshot", rendered)
         self.assertIn("| OpenAI surface probes | 1 | 0 | 0 | 10 |", rendered)
