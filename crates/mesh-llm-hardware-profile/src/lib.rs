@@ -135,13 +135,24 @@ fn apply_gpu_arch_overrides(gpus: &mut [HostGpuProfile]) {
 }
 
 fn cuda_majors_from_nvidia_smi() -> BTreeSet<u32> {
-    let mut majors = BTreeSet::new();
     let Some(output) = command_output("nvidia-smi", &[]) else {
-        return majors;
+        return BTreeSet::new();
     };
+    cuda_majors_from_nvidia_smi_output(&output)
+}
+
+fn cuda_majors_from_nvidia_smi_output(output: &str) -> BTreeSet<u32> {
+    let mut majors = BTreeSet::new();
     for token in output.split_whitespace() {
         if let Some(major) = cuda_major_from_token(token) {
             majors.insert(major);
+        }
+    }
+    for line in output.lines() {
+        if let Some((_, version)) = line.split_once("CUDA Version:") {
+            if let Some(major) = leading_major_version(version) {
+                majors.insert(major);
+            }
         }
     }
     majors
@@ -152,6 +163,15 @@ fn cuda_major_from_token(token: &str) -> Option<u32> {
         .strip_prefix("CUDA")?
         .trim_start_matches("Version:")
         .trim_matches(|ch: char| !ch.is_ascii_digit())
+        .split('.')
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+}
+
+fn leading_major_version(value: &str) -> Option<u32> {
+    value
+        .trim()
+        .trim_start_matches(|ch: char| !ch.is_ascii_digit())
         .split('.')
         .next()
         .and_then(|value| value.parse::<u32>().ok())
@@ -213,13 +233,50 @@ fn append_command_lines(labels: &mut Vec<String>, program: &str, args: &[&str]) 
     let Some(output) = command_output(program, args) else {
         return;
     };
-    labels.extend(
-        output
+    labels.extend(gpu_labels_from_command_output(program, args, &output));
+}
+
+fn gpu_labels_from_command_output(program: &str, args: &[&str], output: &str) -> Vec<String> {
+    match (program, args) {
+        ("nvidia-smi", ["-L"]) => output
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("GPU ") && line.contains(':'))
+            .map(str::to_string)
+            .collect(),
+        ("vulkaninfo", ["--summary"]) => vulkaninfo_device_names(output),
+        ("lspci", []) => output
+            .lines()
+            .map(str::trim)
+            .filter(|line| looks_like_display_controller(line))
+            .map(str::to_string)
+            .collect(),
+        _ => output
             .lines()
             .map(str::trim)
             .filter(|line| looks_like_gpu_label(line))
-            .map(str::to_string),
-    );
+            .map(str::to_string)
+            .collect(),
+    }
+}
+
+fn vulkaninfo_device_names(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix("deviceName"))
+        .filter_map(|line| line.split_once('=').map(|(_, value)| value.trim()))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn looks_like_display_controller(line: &str) -> bool {
+    let label = line.to_ascii_lowercase();
+    (label.contains("vga compatible controller")
+        || label.contains("3d controller")
+        || label.contains("display controller"))
+        && looks_like_gpu_label(line)
 }
 
 fn command_output(program: &str, args: &[&str]) -> Option<String> {
@@ -324,5 +381,48 @@ mod tests {
             detected_native_runtime_flavors(&[profile("AMD Radeon PRO W7900")], None, None, None);
 
         assert!(flavors.contains(&NativeRuntimeBackendKind::Rocm));
+    }
+
+    #[test]
+    fn parses_cuda_version_label_from_nvidia_smi_banner() {
+        let output = "| NVIDIA-SMI 595.78 Driver Version: 595.78 CUDA Version: 13.2 |\n";
+
+        assert_eq!(
+            cuda_majors_from_nvidia_smi_output(output),
+            BTreeSet::from([13])
+        );
+    }
+
+    #[test]
+    fn vulkaninfo_labels_keep_only_device_names() {
+        let output = "\
+VULKANINFO
+Vulkan Instance Version: 1.4.321
+GPU0:
+deviceName         = NVIDIA Tegra Orin (nvgpu)
+deviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
+driverName         = NVIDIA
+";
+
+        assert_eq!(
+            gpu_labels_from_command_output("vulkaninfo", &["--summary"], output),
+            vec!["NVIDIA Tegra Orin (nvgpu)".to_string()]
+        );
+    }
+
+    #[test]
+    fn lspci_labels_ignore_nvidia_pci_bridges() {
+        let output = "\
+0004:00:00.0 PCI bridge: NVIDIA Corporation Device 229c (rev a1)
+0008:01:00.0 3D controller: NVIDIA Corporation GA102GL [RTX A6000] (rev a1)
+";
+
+        assert_eq!(
+            gpu_labels_from_command_output("lspci", &[], output),
+            vec![
+                "0008:01:00.0 3D controller: NVIDIA Corporation GA102GL [RTX A6000] (rev a1)"
+                    .to_string()
+            ]
+        );
     }
 }
