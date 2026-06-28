@@ -8,6 +8,40 @@ mod commands;
 
 pub use mesh_llm_host_runtime::*;
 
+#[cfg(test)]
+mod cli_entrypoint_tests {
+    use std::ffi::OsString;
+
+    #[test]
+    fn runtime_surface_help_request_handles_serve_and_client_help() {
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("serve"),
+                OsString::from("--help"),
+            ]),
+            Some(mesh_llm_cli::RuntimeSurface::Serve)
+        );
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("client"),
+                OsString::from("-h"),
+            ]),
+            Some(mesh_llm_cli::RuntimeSurface::Client)
+        );
+    }
+
+    #[test]
+    fn binary_help_request_handles_help_help() {
+        assert!(super::binary_help_request([
+            OsString::from("mesh-llm"),
+            OsString::from("help"),
+            OsString::from("--help"),
+        ]));
+    }
+}
+
 pub async fn run_main() -> i32 {
     match run_cli_entrypoint().await {
         Ok(()) => 0,
@@ -51,13 +85,48 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
 
 fn maybe_print_binary_help_and_exit() {
     let args: Vec<_> = std::env::args_os().collect();
-    if args.len() == 1 {
+    if binary_help_request(args.iter().cloned()) {
         mesh_llm_cli::Cli::command().print_help().ok();
+        std::process::exit(0);
+    }
+    if let Some(surface) = runtime_surface_help_request(args.iter().cloned()) {
+        print!("{}", mesh_llm_cli::runtime_surface_help(surface));
         std::process::exit(0);
     }
     if args.iter().any(|arg| arg == "--help-advanced") {
         print_advanced_help();
         std::process::exit(0);
+    }
+}
+
+fn binary_help_request<I>(args: I) -> bool
+where
+    I: IntoIterator<Item = std::ffi::OsString>,
+{
+    let args: Vec<_> = args.into_iter().collect();
+    match args.as_slice() {
+        [_program] => true,
+        [_program, arg] => arg == "--help" || arg == "-h",
+        [_program, help, arg] => help == "help" && (arg == "--help" || arg == "-h"),
+        _ => false,
+    }
+}
+
+fn runtime_surface_help_request<I>(args: I) -> Option<mesh_llm_cli::RuntimeSurface>
+where
+    I: IntoIterator<Item = std::ffi::OsString>,
+{
+    let args: Vec<_> = args.into_iter().collect();
+    let [_program, surface, help] = args.as_slice() else {
+        return None;
+    };
+    if help != "--help" && help != "-h" {
+        return None;
+    }
+    match surface.to_str() {
+        Some("serve") => Some(mesh_llm_cli::RuntimeSurface::Serve),
+        Some("client") => Some(mesh_llm_cli::RuntimeSurface::Client),
+        _ => None,
     }
 }
 

@@ -2699,10 +2699,6 @@ fn bridge_skippy_native_logs(
     });
 }
 
-fn write_stderr_newline() {
-    let _ = std::io::stderr().write_all(b"\n");
-}
-
 async fn emit_shutdown(reason: Option<String>) {
     crate::system::backend::mark_runtime_shutting_down();
     let _ = emit_event(OutputEvent::Shutdown { reason });
@@ -3506,10 +3502,6 @@ async fn prepare_runtime_startup(
             message: "`mesh-llm serve` needs at least one startup model. Add `[[models]]` or pass `--model` / `--gguf` explicitly.".to_string(),
             context: Some(config_path.display().to_string()),
         });
-        if let Some(help_text) = &options.help_text {
-            eprint!("{help_text}");
-            write_stderr_newline();
-        }
         return Ok(None);
     }
 
