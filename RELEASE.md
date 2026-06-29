@@ -23,6 +23,57 @@ locally.
 - Node/npm installed for the UI build
 - `gh` CLI authenticated if publishing manually
 
+## Release Attestation Signing Keys
+
+The GitHub Actions release workflow stamps packaged `mesh-llm` executables when
+these repository Actions secrets are present:
+
+- `MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE`
+- `MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE`
+
+The secret values are the full JSON contents of the release-attestation private
+and public key files, not paths to files. Generate a production keypair with:
+
+```bash
+umask 077
+mkdir -p /tmp/mesh-release-attestation
+cargo run -q -p xtask -- release-attestation generate-keypair \
+  --private-key-out /tmp/mesh-release-attestation/mesh-release-attestation-private-key.json \
+  --public-key-out /tmp/mesh-release-attestation/mesh-release-attestation-public-key.json
+```
+
+Store the keypair in 1Password before adding or rotating GitHub secrets. The
+production release-attestation keypair lives in the `mesh-llm` vault as
+`GitHub Actions Release Attestation Signing Keys`, with fields named exactly
+after the GitHub Actions secrets above.
+
+Set or rotate the repository secrets from the generated files with:
+
+```bash
+gh secret set MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE \
+  --repo Mesh-LLM/mesh-llm \
+  --app actions \
+  < /tmp/mesh-release-attestation/mesh-release-attestation-private-key.json
+
+gh secret set MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE \
+  --repo Mesh-LLM/mesh-llm \
+  --app actions \
+  < /tmp/mesh-release-attestation/mesh-release-attestation-public-key.json
+```
+
+After publishing, verify at least one packaged release archive by extracting it
+and running:
+
+```bash
+cargo run -p xtask -- release-attestation inspect \
+  --binary /tmp/test-bundle/mesh-llm \
+  --public-key-file /tmp/mesh-release-attestation/mesh-release-attestation-public-key.json \
+  --json
+```
+
+The reported status must be `valid`. A `missing` status means the bundle was
+published without an embedded release-attestation footer.
+
 ## Build
 
 ```bash

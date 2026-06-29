@@ -1,6 +1,17 @@
 use crate::NativeRuntimeBackendKind;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HostGpuProbe {
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_lines: Vec<String>,
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HostGpuProfile {
@@ -9,6 +20,8 @@ pub struct HostGpuProfile {
     pub stable_id: Option<String>,
     pub vram_bytes: Option<u64>,
     pub unified_memory: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<HostGpuProbe>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cuda_sm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -161,8 +161,19 @@ sha256_file() {
     fi
 }
 
+python_bin() {
+    if command -v python3 >/dev/null 2>&1; then
+        printf 'python3\n'
+    elif command -v python >/dev/null 2>&1; then
+        printf 'python\n'
+    else
+        echo "python3 or python is required to package native runtimes" >&2
+        exit 1
+    fi
+}
+
 workspace_version() {
-    python3 - "$REPO_ROOT/Cargo.toml" <<'PY'
+    "$(python_bin)" - "$REPO_ROOT/Cargo.toml" <<'PY'
 import re
 import sys
 
@@ -184,7 +195,7 @@ PY
 }
 
 skippy_abi_version() {
-    python3 - "$REPO_ROOT/crates/skippy-ffi/src/lib.rs" <<'PY'
+    "$(python_bin)" - "$REPO_ROOT/crates/skippy-ffi/src/lib.rs" <<'PY'
 import re
 import sys
 
@@ -371,7 +382,7 @@ if [[ -f "$LLAMA_WORKDIR/.mesh-llm-patch-digest" ]]; then
     patch_digest="$(tr -d '[:space:]' < "$LLAMA_WORKDIR/.mesh-llm-patch-digest")"
 fi
 
-python3 - "$stage_dir/manifest.json" "$primary_library" "${library_paths[@]}" <<PY
+"$(python_bin)" - "$stage_dir/manifest.json" "$primary_library" "${library_paths[@]}" <<PY
 import json
 import os
 import sys
@@ -381,24 +392,23 @@ primary_library = sys.argv[2]
 library_paths = sys.argv[3:]
 backend = "$BACKEND"
 kind = {"hip": "rocm", "cuda-blackwell": "cuda"}.get(backend, backend)
-cuda_arches = [
-    value.strip()
-    for value in (
-        os.environ.get("LLAMA_STAGE_CUDA_ARCHITECTURES")
-        or os.environ.get("SKIPPY_CUDA_ARCHITECTURES")
-        or ("sm_120" if backend == "cuda-blackwell" else "")
-    ).split(",")
-    if value.strip()
-]
-rocm_arches = [
-    value.strip()
-    for value in (
-        os.environ.get("LLAMA_STAGE_AMDGPU_TARGETS")
-        or os.environ.get("SKIPPY_AMDGPU_TARGETS")
-        or ""
-    ).split(",")
-    if value.strip()
-]
+
+def split_arches(raw):
+    values = []
+    for comma_part in raw.split(","):
+        values.extend(part.strip() for part in comma_part.split(";"))
+    return [value for value in values if value]
+
+cuda_arches = split_arches(
+    os.environ.get("LLAMA_STAGE_CUDA_ARCHITECTURES")
+    or os.environ.get("SKIPPY_CUDA_ARCHITECTURES")
+    or ("sm_120" if backend == "cuda-blackwell" else "")
+)
+rocm_arches = split_arches(
+    os.environ.get("LLAMA_STAGE_AMDGPU_TARGETS")
+    or os.environ.get("SKIPPY_AMDGPU_TARGETS")
+    or ""
+)
 backend_manifest = {"kind": kind}
 if kind == "cuda":
     backend_manifest["cuda"] = {

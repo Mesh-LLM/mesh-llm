@@ -89,12 +89,96 @@ mesh_env() {
     HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE" XDG_DATA_HOME="$XDG_DATA" "$@"
 }
 
+descendant_pids() {
+    local pid="$1"
+    local children
+    children="$(pgrep -P "$pid" 2>/dev/null || true)"
+    for child in $children; do
+        descendant_pids "$child"
+        printf '%s\n' "$child"
+    done
+}
+
+kill_pids() {
+    local signal="$1"
+    shift
+    local pid
+    for pid in "$@"; do
+        [[ -n "$pid" ]] || continue
+        [[ "$pid" != "$$" ]] || continue
+        kill "-$signal" "$pid" 2>/dev/null || true
+    done
+}
+
+mesh_bundle_pids() {
+    [[ -n "${BINARY:-}" ]] || return 0
+    while IFS= read -r pid; do
+        [[ "$pid" != "$$" ]] || continue
+        printf '%s\n' "$pid"
+    done < <(pgrep -f "$BINARY" 2>/dev/null || true)
+}
+
+wait_for_no_mesh_bundle_processes() {
+    local max_wait="$1"
+    local second
+    for second in $(seq 1 "$max_wait"); do
+        if [[ -z "$(mesh_bundle_pids)" ]]; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+kill_mesh_bundle_processes() {
+    local pids
+    pids="$(mesh_bundle_pids | sort -u || true)"
+    if [[ -z "$pids" ]]; then
+        return 0
+    fi
+    # The blobstore plugin is another invocation of the same extracted binary.
+    # Sweep by this audit-local path so a reparented plugin cannot survive.
+    kill_pids TERM $pids
+    if ! wait_for_no_mesh_bundle_processes 5; then
+        pids="$(mesh_bundle_pids | sort -u || true)"
+        if [[ -n "$pids" ]]; then
+            kill_pids KILL $pids
+        fi
+    fi
+}
+
+kill_tree() {
+    local pid="${1:-}"
+    [[ -n "$pid" ]] || return 0
+
+    local children
+    children="$(descendant_pids "$pid" | sort -u || true)"
+    if [[ -n "$children" ]]; then
+        kill_pids TERM $children
+    fi
+    kill_pids TERM "$pid"
+
+    local second
+    for second in $(seq 1 10); do
+        if ! kill -0 "$pid" 2>/dev/null && [[ -z "$(mesh_bundle_pids)" ]]; then
+            break
+        fi
+        sleep 1
+    done
+
+    children="$(descendant_pids "$pid" | sort -u || true)"
+    if [[ -n "$children" ]]; then
+        kill_pids KILL $children
+    fi
+    kill_pids KILL "$pid"
+    wait "$pid" 2>/dev/null || true
+}
+
 cleanup() {
     if [[ -n "$MESH_PID" ]]; then
-        kill "$MESH_PID" 2>/dev/null || true
-        pkill -P "$MESH_PID" 2>/dev/null || true
-        wait "$MESH_PID" 2>/dev/null || true
+        kill_tree "$MESH_PID"
     fi
+    kill_mesh_bundle_processes
 }
 trap cleanup EXIT
 
@@ -199,8 +283,11 @@ cleanup
 MESH_PID=""
 
 echo "verify no mesh-llm process remains"
-if pgrep -f "$BINARY" >/dev/null 2>&1; then
+if ! wait_for_no_mesh_bundle_processes 10; then
     echo "mesh-llm process still running for $BINARY" >&2
+    pgrep -af "$BINARY" >&2 || true
+    lsof -nP -iTCP:"$API_PORT" -sTCP:LISTEN >&2 || true
+    lsof -nP -iTCP:"$CONSOLE_PORT" -sTCP:LISTEN >&2 || true
     exit 1
 fi
 

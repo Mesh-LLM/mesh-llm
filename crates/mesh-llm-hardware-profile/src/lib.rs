@@ -1,8 +1,8 @@
 use mesh_llm_native_runtime::{
-    HostCudaProfile, HostGpuProfile, HostRocmProfile, HostRuntimeProfile, HostVulkanProfile,
-    NativeRuntimeBackendKind,
+    HostCudaProfile, HostGpuProbe, HostGpuProfile, HostRocmProfile, HostRuntimeProfile,
+    HostVulkanProfile, NativeRuntimeBackendKind,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
 
 pub fn host_runtime_profile() -> HostRuntimeProfile {
@@ -57,20 +57,202 @@ pub fn detected_native_runtime_flavors(
 }
 
 fn detect_gpus() -> Vec<HostGpuProfile> {
-    let labels = gpu_labels();
-    labels
+    let nvidia_gpus = detect_nvidia_gpu_profiles();
+    if !nvidia_gpus.is_empty() {
+        return nvidia_gpus;
+    }
+
+    gpu_labels()
         .into_iter()
         .enumerate()
-        .map(|(index, label)| HostGpuProfile {
-            display_name: label,
-            backend_device: None,
-            stable_id: Some(format!("detected-{index}")),
-            vram_bytes: None,
-            unified_memory: cfg!(target_os = "macos"),
-            cuda_sm: None,
-            rocm_gfx: None,
+        .map(|(index, label)| {
+            let backend_device = backend_device_from_label(&label, index);
+            HostGpuProfile {
+                display_name: label,
+                backend_device,
+                stable_id: Some(format!("detected-{index}")),
+                vram_bytes: None,
+                unified_memory: cfg!(target_os = "macos"),
+                probe: None,
+                cuda_sm: None,
+                rocm_gfx: None,
+            }
         })
         .collect()
+}
+
+fn backend_device_from_label(label: &str, index: usize) -> Option<String> {
+    let label = label.to_ascii_lowercase();
+    if label.contains("nvidia") || label.contains("cuda") {
+        Some(format!("CUDA{index}"))
+    } else if label.contains("amd") || label.contains("radeon") || label.contains("rocm") {
+        Some(format!("ROCm{index}"))
+    } else if cfg!(target_os = "macos") && label.contains("apple") {
+        Some(format!("MTL{index}"))
+    } else {
+        None
+    }
+}
+
+fn detect_nvidia_gpu_profiles() -> Vec<HostGpuProfile> {
+    let Some(nvidia_smi) = command_output("nvidia-smi", &["-L"]) else {
+        return Vec::new();
+    };
+    let lspci = command_output("lspci", &[]).unwrap_or_default();
+    let proc_entries = linux_nvidia_proc_information_entries();
+    let borrowed_entries: Vec<(&str, &str)> = proc_entries
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry.info.as_str()))
+        .collect();
+    nvidia_gpu_profiles_from_probe_outputs(&nvidia_smi, &lspci, &borrowed_entries)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NvidiaSmiGpu {
+    index: usize,
+    name: String,
+    vendor_uuid: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NvidiaProcInformationEntry {
+    path: String,
+    info: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NvidiaProcProbe {
+    pci_bdf: Option<String>,
+    vendor_uuid: Option<String>,
+    probe: HostGpuProbe,
+}
+
+fn nvidia_gpu_profiles_from_probe_outputs(
+    nvidia_smi_output: &str,
+    lspci_output: &str,
+    proc_entries: &[(&str, &str)],
+) -> Vec<HostGpuProfile> {
+    let mut proc_probes = proc_entries
+        .iter()
+        .map(|(path, info)| nvidia_proc_probe(path, info))
+        .collect::<Vec<_>>();
+
+    parse_nvidia_smi_list(nvidia_smi_output)
+        .into_iter()
+        .map(|gpu| {
+            let pci_bdf = nvidia_lspci_bdf_for_name(lspci_output, &gpu.name);
+            let probe = take_matching_nvidia_probe(
+                &mut proc_probes,
+                gpu.vendor_uuid.as_deref(),
+                pci_bdf.as_deref(),
+            );
+            HostGpuProfile {
+                display_name: gpu.name,
+                backend_device: Some(format!("CUDA{}", gpu.index)),
+                stable_id: gpu
+                    .vendor_uuid
+                    .as_ref()
+                    .map(|uuid| format!("uuid:{uuid}"))
+                    .or_else(|| pci_bdf.as_ref().map(|bdf| format!("pci:{bdf}"))),
+                vram_bytes: None,
+                unified_memory: false,
+                probe,
+                cuda_sm: None,
+                rocm_gfx: None,
+            }
+        })
+        .collect()
+}
+
+fn parse_nvidia_smi_list(output: &str) -> Vec<NvidiaSmiGpu> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let body = line.strip_prefix("GPU ")?;
+            let (index, rest) = body.split_once(':')?;
+            let index = index.trim().parse::<usize>().ok()?;
+            let rest = rest.trim();
+            let (name, vendor_uuid) = match rest.rsplit_once(" (UUID: ") {
+                Some((name, uuid)) => (name.trim(), uuid.strip_suffix(')').map(str::trim)),
+                None => (rest, None),
+            };
+            (!name.is_empty()).then(|| NvidiaSmiGpu {
+                index,
+                name: name.to_string(),
+                vendor_uuid: vendor_uuid.map(ToOwned::to_owned),
+            })
+        })
+        .collect()
+}
+
+fn nvidia_lspci_bdf_for_name(output: &str, name: &str) -> Option<String> {
+    let name = name.to_ascii_lowercase();
+    output.lines().find_map(|line| {
+        let line = line.trim();
+        if !looks_like_display_controller(line) {
+            return None;
+        }
+        let lower = line.to_ascii_lowercase();
+        if !name
+            .split_whitespace()
+            .filter(|token| *token != "nvidia" && *token != "geforce")
+            .all(|token| lower.contains(token))
+        {
+            return None;
+        }
+        line.split_whitespace().next().map(normalize_pci_bdf)
+    })
+}
+
+fn normalize_pci_bdf(bdf: &str) -> String {
+    if bdf.matches(':').count() == 1 {
+        format!("0000:{bdf}")
+    } else {
+        bdf.to_ascii_lowercase()
+    }
+}
+
+fn nvidia_proc_probe(path: &str, info: &str) -> NvidiaProcProbe {
+    let fields = nvidia_proc_fields(info);
+    NvidiaProcProbe {
+        pci_bdf: fields
+            .get("Bus Location")
+            .map(String::as_str)
+            .map(normalize_pci_bdf),
+        vendor_uuid: fields.get("GPU UUID").cloned(),
+        probe: HostGpuProbe {
+            source: "linux_nvidia_proc".to_string(),
+            path: Some(path.to_string()),
+            fields,
+            raw_lines: info.lines().map(str::to_string).collect(),
+        },
+    }
+}
+
+fn nvidia_proc_fields(info: &str) -> BTreeMap<String, String> {
+    info.lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            let key = key.trim();
+            if key.is_empty() {
+                return None;
+            }
+            Some((key.to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+fn take_matching_nvidia_probe(
+    probes: &mut Vec<NvidiaProcProbe>,
+    vendor_uuid: Option<&str>,
+    pci_bdf: Option<&str>,
+) -> Option<HostGpuProbe> {
+    let index = probes.iter().position(|probe| {
+        vendor_uuid.is_some_and(|uuid| probe.vendor_uuid.as_deref() == Some(uuid))
+            || pci_bdf.is_some_and(|bdf| probe.pci_bdf.as_deref() == Some(bdf))
+    })?;
+    Some(probes.remove(index).probe)
 }
 
 fn detect_cuda_profile(gpus: &[HostGpuProfile]) -> Option<HostCudaProfile> {
@@ -179,7 +361,6 @@ fn leading_major_version(value: &str) -> Option<u32> {
 
 fn gpu_labels() -> Vec<String> {
     let mut labels = Vec::new();
-    append_command_lines(&mut labels, "nvidia-smi", &["-L"]);
     append_command_lines(&mut labels, "rocminfo", &[]);
     append_command_lines(&mut labels, "vulkaninfo", &["--summary"]);
     append_platform_gpu_labels(&mut labels);
@@ -191,21 +372,29 @@ fn gpu_labels() -> Vec<String> {
 #[cfg(target_os = "linux")]
 fn append_platform_gpu_labels(labels: &mut Vec<String>) {
     append_command_lines(labels, "lspci", &[]);
-    append_linux_nvidia_proc_labels(labels);
 }
 
 #[cfg(target_os = "linux")]
-fn append_linux_nvidia_proc_labels(labels: &mut Vec<String>) {
+fn linux_nvidia_proc_information_entries() -> Vec<NvidiaProcInformationEntry> {
     let Ok(entries) = std::fs::read_dir("/proc/driver/nvidia/gpus") else {
-        return;
+        return Vec::new();
     };
-    for entry in entries.flatten() {
-        let path = entry.path().join("information");
-        let Ok(info) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        labels.extend(info.lines().map(str::to_string));
-    }
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path().join("information");
+            let info = std::fs::read_to_string(&path).ok()?;
+            Some(NvidiaProcInformationEntry {
+                path: path.display().to_string(),
+                info,
+            })
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linux_nvidia_proc_information_entries() -> Vec<NvidiaProcInformationEntry> {
+    Vec::new()
 }
 
 #[cfg(target_os = "windows")]
@@ -371,6 +560,7 @@ mod tests {
             stable_id: None,
             vram_bytes: None,
             unified_memory: false,
+            probe: None,
             cuda_sm: None,
             rocm_gfx: None,
         }
@@ -455,5 +645,77 @@ deviceName         = AMD Radeon PRO W7900
                     .to_string()
             ]
         );
+    }
+
+    #[test]
+    fn nvidia_proc_details_are_nested_under_matching_gpus() {
+        let nvidia_smi = "\
+GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-80ded6bd-1a89-2628-3d94-902187dbab1d)
+GPU 1: NVIDIA GeForce RTX 3080 (UUID: GPU-6b7fe24c-5f15-4ac5-88d6-c8934135a4ea)
+";
+        let lspci = "\
+01:00.0 VGA compatible controller: NVIDIA Corporation GB202 [GeForce RTX 5090] (rev a1)
+06:00.0 VGA compatible controller: NVIDIA Corporation GA102 [GeForce RTX 3080] (rev a1)
+";
+        let proc_entries = vec![
+            (
+                "/proc/driver/nvidia/gpus/0000:01:00.0/information",
+                "\
+Model: \t\t NVIDIA GeForce RTX 5090
+IRQ:   \t\t 16
+GPU UUID: \t GPU-80ded6bd-1a89-2628-3d94-902187dbab1d
+Video BIOS: \t 98.02.2e.40.7f
+Bus Type: \t PCIe
+DMA Size: \t 52 bits
+DMA Mask: \t 0xfffffffffffff
+Bus Location: \t 0000:01:00.0
+Device Minor: \t 0
+GPU Firmware: \t 610.43.02
+GPU Excluded:\t No
+",
+            ),
+            (
+                "/proc/driver/nvidia/gpus/0000:06:00.0/information",
+                "\
+Model: \t\t NVIDIA GeForce RTX 3080
+IRQ:   \t\t 184
+GPU UUID: \t GPU-6b7fe24c-5f15-4ac5-88d6-c8934135a4ea
+Video BIOS: \t 94.02.42.80.31
+Bus Type: \t PCIe
+DMA Size: \t 47 bits
+DMA Mask: \t 0x7fffffffffff
+Bus Location: \t 0000:06:00.0
+Device Minor: \t 1
+GPU Firmware: \t 610.43.02
+GPU Excluded:\t No
+",
+            ),
+        ];
+
+        let gpus = nvidia_gpu_profiles_from_probe_outputs(nvidia_smi, lspci, &proc_entries);
+
+        assert_eq!(gpus.len(), 2);
+        assert_eq!(gpus[0].display_name, "NVIDIA GeForce RTX 5090");
+        assert_eq!(gpus[0].backend_device.as_deref(), Some("CUDA0"));
+        assert_eq!(
+            gpus[0].stable_id.as_deref(),
+            Some("uuid:GPU-80ded6bd-1a89-2628-3d94-902187dbab1d")
+        );
+        let probe = gpus[0].probe.as_ref().expect("RTX 5090 probe details");
+        assert_eq!(probe.source, "linux_nvidia_proc");
+        assert_eq!(
+            probe.path.as_deref(),
+            Some("/proc/driver/nvidia/gpus/0000:01:00.0/information")
+        );
+        assert_eq!(probe.fields.get("IRQ").map(String::as_str), Some("16"));
+        assert_eq!(
+            probe.fields.get("DMA Mask").map(String::as_str),
+            Some("0xfffffffffffff")
+        );
+
+        let names: Vec<&str> = gpus.iter().map(|gpu| gpu.display_name.as_str()).collect();
+        assert!(!names.iter().any(|name| name.contains("DMA Mask")));
+        assert!(!names.iter().any(|name| name.contains("IRQ")));
+        assert!(!names.iter().any(|name| name.contains("Bus Location")));
     }
 }

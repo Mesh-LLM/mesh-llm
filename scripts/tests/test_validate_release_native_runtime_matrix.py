@@ -74,7 +74,7 @@ class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
 
         self.assertEqual(validator.find_matrix_violations(assets, manifest), [])
 
-    def test_explicit_release_native_targets_ignore_static_gpu_bundles(self):
+    def test_explicit_release_native_targets_cover_all_release_bundles(self):
         validator = load_validator()
         assets = [
             "mesh-llm-v0.72.0-rc5-x86_64-unknown-linux-gnu.tar.gz",
@@ -123,6 +123,55 @@ class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
                         "cuda": {"toolkit_major": 13, "gpu_arches": []},
                     },
                 },
+                {
+                    "id": "meshllm-native-runtime-linux-x86_64-cuda12",
+                    "platform": {"os": "linux", "arch": "x86_64"},
+                    "backend": {
+                        "kind": "cuda",
+                        "cuda": {"toolkit_major": 12, "gpu_arches": []},
+                    },
+                },
+                {
+                    "id": "meshllm-native-runtime-linux-x86_64-cuda13",
+                    "platform": {"os": "linux", "arch": "x86_64"},
+                    "backend": {
+                        "kind": "cuda",
+                        "cuda": {"toolkit_major": 13, "gpu_arches": []},
+                    },
+                },
+                {
+                    "id": "meshllm-native-runtime-linux-x86_64-rocm",
+                    "platform": {"os": "linux", "arch": "x86_64"},
+                    "backend": {"kind": "rocm"},
+                },
+                {
+                    "id": "meshllm-native-runtime-linux-x86_64-vulkan",
+                    "platform": {"os": "linux", "arch": "x86_64"},
+                    "backend": {"kind": "vulkan"},
+                },
+                {
+                    "id": "meshllm-native-runtime-windows-x86_64-cpu",
+                    "platform": {"os": "windows", "arch": "x86_64"},
+                    "backend": {"kind": "cpu"},
+                },
+                {
+                    "id": "meshllm-native-runtime-windows-x86_64-cuda12",
+                    "platform": {"os": "windows", "arch": "x86_64"},
+                    "backend": {
+                        "kind": "cuda",
+                        "cuda": {"toolkit_major": 12, "gpu_arches": []},
+                    },
+                },
+                {
+                    "id": "meshllm-native-runtime-windows-x86_64-rocm",
+                    "platform": {"os": "windows", "arch": "x86_64"},
+                    "backend": {"kind": "rocm"},
+                },
+                {
+                    "id": "meshllm-native-runtime-windows-x86_64-vulkan",
+                    "platform": {"os": "windows", "arch": "x86_64"},
+                    "backend": {"kind": "vulkan"},
+                },
             ]
         }
         required_targets = {
@@ -131,6 +180,14 @@ class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
             validator.target_from_label("linux/aarch64/cpu"),
             validator.target_from_label("linux/aarch64/cuda12"),
             validator.target_from_label("linux/aarch64/cuda13"),
+            validator.target_from_label("linux/x86_64/cuda12"),
+            validator.target_from_label("linux/x86_64/cuda13"),
+            validator.target_from_label("linux/x86_64/rocm"),
+            validator.target_from_label("linux/x86_64/vulkan"),
+            validator.target_from_label("windows/x86_64/cpu"),
+            validator.target_from_label("windows/x86_64/cuda"),
+            validator.target_from_label("windows/x86_64/rocm"),
+            validator.target_from_label("windows/x86_64/vulkan"),
         }
 
         violations = validator.find_matrix_violations(

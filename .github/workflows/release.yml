@@ -376,6 +376,155 @@ jobs:
             dist/native-runtimes/*.sha256
           if-no-files-found: error
 
+  build_native_runtime_linux_x86_64_cuda:
+    name: Build native runtime Linux x86_64 CUDA (${{ matrix.cuda_major }})
+    needs: metadata
+    if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cuda_version: '12.9.2'
+            cuda_major: '12'
+            cuda_architectures: '75;80;86;87;89;90'
+          - cuda_version: '13.1.2'
+            cuda_major: '13'
+            cuda_architectures: '75;80;86;87;89;90;100;103;120;121'
+    container:
+      image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
+    env:
+      LLAMA_STAGE_BACKEND: cuda
+      LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
+      MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
+      MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
+    steps:
+      - name: Install base packages
+        run: |
+          for attempt in 1 2 3; do
+            apt-get -o Acquire::Retries=5 update &&
+              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld patchelf &&
+              break
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
+          rm -rf /var/lib/apt/lists/*
+      - uses: actions/checkout@v5
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Package native runtime
+        run: |
+          scripts/package-native-runtime.sh \
+            --build \
+            --backend cuda \
+            --target x86_64-unknown-linux-gnu \
+            --out dist/native-runtimes
+      - name: Verify native runtime artifact
+        run: scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
+      - name: Upload native runtime
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-native-runtime-linux-x86_64-cuda-${{ matrix.cuda_major }}
+          path: |
+            dist/native-runtimes/*.tar.gz
+            dist/native-runtimes/*.sha256
+          if-no-files-found: error
+
+  build_native_runtime_linux_x86_64_rocm:
+    name: Build native runtime Linux x86_64 ROCm
+    needs: metadata
+    if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+    runs-on: ubuntu-24.04
+    container:
+      image: rocm/dev-ubuntu-24.04:7.0-complete
+    env:
+      LLAMA_STAGE_BACKEND: rocm
+      LLAMA_STAGE_AMDGPU_TARGETS: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201
+      MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - name: Install base packages
+        run: |
+          for attempt in 1 2 3; do
+            apt-get -o Acquire::Retries=5 update &&
+              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld patchelf &&
+              break
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
+          rm -rf /var/lib/apt/lists/*
+      - uses: actions/checkout@v5
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Package native runtime
+        run: |
+          scripts/package-native-runtime.sh \
+            --build \
+            --backend rocm \
+            --target x86_64-unknown-linux-gnu \
+            --out dist/native-runtimes
+      - name: Verify native runtime artifact
+        run: scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
+      - name: Upload native runtime
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-native-runtime-linux-x86_64-rocm
+          path: |
+            dist/native-runtimes/*.tar.gz
+            dist/native-runtimes/*.sha256
+          if-no-files-found: error
+
+  build_native_runtime_linux_x86_64_vulkan:
+    name: Build native runtime Linux x86_64 Vulkan
+    needs: metadata
+    if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+    runs-on: ubuntu-24.04
+    env:
+      LLAMA_STAGE_BACKEND: vulkan
+      MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl python3 glslc libvulkan-dev spirv-headers lld patchelf
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Package native runtime
+        run: |
+          scripts/package-native-runtime.sh \
+            --build \
+            --backend vulkan \
+            --target x86_64-unknown-linux-gnu \
+            --out dist/native-runtimes
+      - name: Verify native runtime artifact
+        run: scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
+      - name: Upload native runtime
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-native-runtime-linux-x86_64-vulkan
+          path: |
+            dist/native-runtimes/*.tar.gz
+            dist/native-runtimes/*.sha256
+          if-no-files-found: error
+
   build_swift_sdk_artifact:
     name: Build Swift SDK XCFramework
     needs: metadata
@@ -889,6 +1038,140 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  build_native_runtime_windows_cpu:
+    name: Build native runtime Windows x86_64 CPU
+    needs: metadata
+    runs-on: windows-2022
+    env:
+      LLAMA_STAGE_BACKEND: cpu
+      MESH_NATIVE_RUNTIME_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Package native runtime
+        shell: bash
+        run: |
+          scripts/package-native-runtime.sh \
+            --build \
+            --backend cpu \
+            --target x86_64-pc-windows-msvc \
+            --out dist/native-runtimes
+      - name: Verify native runtime artifact
+        shell: bash
+        run: scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
+      - name: Upload native runtime
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-native-runtime-windows-x86_64-cpu
+          path: |
+            dist/native-runtimes/*.tar.gz
+            dist/native-runtimes/*.sha256
+          if-no-files-found: error
+
+  build_native_runtime_windows_gpu:
+    name: Build native runtime Windows x86_64 ${{ matrix.name }}
+    needs: metadata
+    if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+    runs-on: windows-2022
+    env:
+      ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
+      WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.9.2' }}
+      MESH_NATIVE_RUNTIME_TARGET: x86_64-pc-windows-msvc
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: CUDA
+            backend: cuda
+            cuda_architectures: '75;80;86;87;89;90'
+            artifact_name: release-native-runtime-windows-x86_64-cuda
+          - name: ROCm
+            backend: rocm
+            rocm_architectures: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201
+            artifact_name: release-native-runtime-windows-x86_64-rocm
+          - name: Vulkan
+            backend: vulkan
+            artifact_name: release-native-runtime-windows-x86_64-vulkan
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Cache Windows SDK installers
+        if: ${{ matrix.backend != 'cuda' }}
+        uses: actions/cache@v5
+        with:
+          path: ~/sdk-installer-cache/${{ matrix.backend }}
+          key: windows-sdk-installers-${{ matrix.backend }}-${{ env.ROCM_HIP_SDK_FILENAME }}-${{ hashFiles('scripts/install-windows-sdk.ps1') }}
+      - name: Install CUDA toolkit
+        if: ${{ matrix.backend == 'cuda' }}
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: ${{ env.WINDOWS_CUDA_VERSION }}
+          method: network
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
+          use-github-cache: true
+          use-local-cache: true
+          log-file-suffix: windows-cuda-native-runtime
+      - name: Verify CUDA toolkit
+        if: ${{ matrix.backend == 'cuda' }}
+        shell: pwsh
+        run: |
+          if (-not $env:CUDA_PATH -or -not (Test-Path $env:CUDA_PATH)) {
+            throw "CUDA_PATH was not configured by Jimver/cuda-toolkit."
+          }
+          & nvcc --version
+      - name: Install backend SDK
+        if: ${{ matrix.backend != 'cuda' }}
+        shell: pwsh
+        run: |
+          .\scripts\install-windows-sdk.ps1 `
+            -Backend "${{ matrix.backend }}" `
+            -RocmHipSdkFilename "$env:ROCM_HIP_SDK_FILENAME" `
+            -InstallerCacheDir "$HOME\sdk-installer-cache"
+      - name: Package native runtime
+        shell: bash
+        env:
+          LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
+          LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
+          LLAMA_STAGE_AMDGPU_TARGETS: ${{ matrix.rocm_architectures }}
+          MESH_LLM_CUDA_TOOLKIT_MAJOR: '12'
+        run: |
+          scripts/package-native-runtime.sh \
+            --build \
+            --backend "${{ matrix.backend }}" \
+            --target x86_64-pc-windows-msvc \
+            --out dist/native-runtimes
+      - name: Verify native runtime artifact
+        shell: bash
+        run: scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
+      - name: Upload native runtime
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            dist/native-runtimes/*.tar.gz
+            dist/native-runtimes/*.sha256
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
     needs:
@@ -898,6 +1181,9 @@ jobs:
       - build_native_sdk_runtime
       - build_native_runtime
       - build_native_runtime_linux_aarch64_cuda
+      - build_native_runtime_linux_x86_64_cuda
+      - build_native_runtime_linux_x86_64_rocm
+      - build_native_runtime_linux_x86_64_vulkan
       - build_swift_sdk_artifact
       - build_linux_arm64
       - build_linux_aarch64_cuda
@@ -906,7 +1192,9 @@ jobs:
       - build_linux_vulkan
       - build_windows_cpu
       - build_windows_gpu
-    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
+      - build_native_runtime_windows_cpu
+      - build_native_runtime_windows_gpu
+    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -954,11 +1242,19 @@ jobs:
             "macos/aarch64/metal"
             "linux/x86_64/cpu"
             "linux/aarch64/cpu"
+            "windows/x86_64/cpu"
           )
           if [[ "$SKIP_GPU_BUNDLES" != "true" ]]; then
             required_native_targets+=(
               "linux/aarch64/cuda12"
               "linux/aarch64/cuda13"
+              "linux/x86_64/cuda12"
+              "linux/x86_64/cuda13"
+              "linux/x86_64/rocm"
+              "linux/x86_64/vulkan"
+              "windows/x86_64/cuda"
+              "windows/x86_64/rocm"
+              "windows/x86_64/vulkan"
             )
           fi
           validator_args=(--manifest release-artifacts/native-runtimes.json)
