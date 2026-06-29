@@ -110,12 +110,18 @@ kill_pids() {
     done
 }
 
+escape_ere() {
+    printf '%s' "$1" | sed 's/[][(){}.^$*+?|\\]/\\&/g'
+}
+
 mesh_bundle_pids() {
     [[ -n "${BINARY:-}" ]] || return 0
+    local pattern
+    pattern="$(escape_ere "$BINARY")"
     while IFS= read -r pid; do
         [[ "$pid" != "$$" ]] || continue
         printf '%s\n' "$pid"
-    done < <(pgrep -f "$BINARY" 2>/dev/null || true)
+    done < <(pgrep -f "$pattern" 2>/dev/null || true)
 }
 
 wait_for_no_mesh_bundle_processes() {
@@ -285,7 +291,7 @@ MESH_PID=""
 echo "verify no mesh-llm process remains"
 if ! wait_for_no_mesh_bundle_processes 10; then
     echo "mesh-llm process still running for $BINARY" >&2
-    pgrep -af "$BINARY" >&2 || true
+    pgrep -af "$(escape_ere "$BINARY")" >&2 || true
     lsof -nP -iTCP:"$API_PORT" -sTCP:LISTEN >&2 || true
     lsof -nP -iTCP:"$CONSOLE_PORT" -sTCP:LISTEN >&2 || true
     exit 1

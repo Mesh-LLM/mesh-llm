@@ -97,6 +97,8 @@ jobs:
       LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
         with:
@@ -207,6 +209,8 @@ jobs:
       MESH_NATIVE_SDK_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -278,6 +282,8 @@ jobs:
       MESH_NATIVE_RUNTIME_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -350,6 +356,8 @@ jobs:
           done
           rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: dtolnay/rust-toolchain@stable
@@ -412,6 +420,8 @@ jobs:
           done
           rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: dtolnay/rust-toolchain@stable
@@ -463,6 +473,8 @@ jobs:
           done
           rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: dtolnay/rust-toolchain@stable
@@ -499,6 +511,8 @@ jobs:
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl python3 glslc libvulkan-dev spirv-headers lld patchelf
@@ -533,6 +547,8 @@ jobs:
       LLAMA_STAGE_BACKEND: metal
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
         with:
@@ -615,6 +631,8 @@ jobs:
       MESH_RELEASE_ARCH: aarch64
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -681,6 +699,8 @@ jobs:
           done
           rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: pnpm/action-setup@v4
@@ -746,6 +766,8 @@ jobs:
           done
           rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: pnpm/action-setup@v4
@@ -808,6 +830,8 @@ jobs:
           done
           rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: pnpm/action-setup@v4
@@ -854,6 +878,8 @@ jobs:
       LLAMA_STAGE_BACKEND: vulkan
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -899,6 +925,8 @@ jobs:
       LLAMA_STAGE_BACKEND: cpu
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -972,6 +1000,8 @@ jobs:
             artifact_name: release-windows-vulkan
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -991,12 +1021,6 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
-      - name: Cache Windows SDK installers
-        if: ${{ matrix.backend != 'cuda' }}
-        uses: actions/cache@v5
-        with:
-          path: ~/sdk-installer-cache/${{ matrix.backend }}
-          key: windows-sdk-installers-${{ matrix.backend }}-${{ env.ROCM_HIP_SDK_FILENAME }}-${{ hashFiles('scripts/install-windows-sdk.ps1') }}
       - name: Install CUDA toolkit
         if: ${{ matrix.backend == 'cuda' }}
         uses: Jimver/cuda-toolkit@v0.2.35
@@ -1053,6 +1077,8 @@ jobs:
       MESH_NATIVE_RUNTIME_TARGET: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
@@ -1100,7 +1126,7 @@ jobs:
           - name: CUDA
             backend: cuda
             cuda_architectures: '75;80;86;87;89;90'
-            artifact_name: release-native-runtime-windows-x86_64-cuda
+            artifact_name: release-native-runtime-windows-x86_64-cuda12
           - name: ROCm
             backend: rocm
             rocm_architectures: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201
@@ -1110,6 +1136,8 @@ jobs:
             artifact_name: release-native-runtime-windows-x86_64-vulkan
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
@@ -1121,12 +1149,6 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
-      - name: Cache Windows SDK installers
-        if: ${{ matrix.backend != 'cuda' }}
-        uses: actions/cache@v5
-        with:
-          path: ~/sdk-installer-cache/${{ matrix.backend }}
-          key: windows-sdk-installers-${{ matrix.backend }}-${{ env.ROCM_HIP_SDK_FILENAME }}-${{ hashFiles('scripts/install-windows-sdk.ps1') }}
       - name: Install CUDA toolkit
         if: ${{ matrix.backend == 'cuda' }}
         uses: Jimver/cuda-toolkit@v0.2.35
@@ -1205,6 +1227,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
@@ -1258,7 +1281,7 @@ jobs:
               "linux/x86_64/cuda13"
               "linux/x86_64/rocm"
               "linux/x86_64/vulkan"
-              "windows/x86_64/cuda"
+              "windows/x86_64/cuda12"
               "windows/x86_64/rocm"
               "windows/x86_64/vulkan"
             )
@@ -1320,6 +1343,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
@@ -1338,6 +1363,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'

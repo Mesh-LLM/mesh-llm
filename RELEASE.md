@@ -51,12 +51,10 @@ Set or rotate the repository secrets from the generated files with:
 
 ```bash
 gh secret set MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE \
-  --repo Mesh-LLM/mesh-llm \
   --app actions \
   < /tmp/mesh-release-attestation/mesh-release-attestation-private-key.json
 
 gh secret set MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE \
-  --repo Mesh-LLM/mesh-llm \
   --app actions \
   < /tmp/mesh-release-attestation/mesh-release-attestation-public-key.json
 ```
@@ -72,7 +70,8 @@ cargo run -p xtask -- release-attestation inspect \
 ```
 
 The reported status must be `valid`. A `missing` status means the bundle was
-published without an embedded release-attestation footer.
+published without an embedded release-attestation footer. An `invalid` status
+means a footer was present, but signature verification failed.
 
 ## Build
 

@@ -2,7 +2,7 @@
 
 mod cache;
 mod flavor;
-mod host;
+pub mod host;
 mod load_plan;
 mod manifest;
 mod resolver;
@@ -16,8 +16,7 @@ pub use flavor::{
     NativeRuntimeFlavorParseError, RocmRuntimeRequirements, VulkanRuntimeRequirements,
 };
 pub use host::{
-    HostCudaProfile, HostGpuProbe, HostGpuProfile, HostRocmProfile, HostRuntimeProfile,
-    HostVulkanProfile,
+    HostCudaProfile, HostGpuProfile, HostRocmProfile, HostRuntimeProfile, HostVulkanProfile,
 };
 pub use load_plan::NativeRuntimeLoadPlan;
 pub use manifest::{

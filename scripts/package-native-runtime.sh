@@ -162,14 +162,16 @@ sha256_file() {
 }
 
 python_bin() {
-    if command -v python3 >/dev/null 2>&1; then
-        printf 'python3\n'
-    elif command -v python >/dev/null 2>&1; then
-        printf 'python\n'
-    else
-        echo "python3 or python is required to package native runtimes" >&2
-        exit 1
-    fi
+    local candidate
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1 &&
+            "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    echo "Python 3.9 or newer is required to package native runtimes" >&2
+    exit 1
 }
 
 workspace_version() {

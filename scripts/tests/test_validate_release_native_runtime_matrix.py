@@ -185,7 +185,7 @@ class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
             validator.target_from_label("linux/x86_64/rocm"),
             validator.target_from_label("linux/x86_64/vulkan"),
             validator.target_from_label("windows/x86_64/cpu"),
-            validator.target_from_label("windows/x86_64/cuda"),
+            validator.target_from_label("windows/x86_64/cuda12"),
             validator.target_from_label("windows/x86_64/rocm"),
             validator.target_from_label("windows/x86_64/vulkan"),
         }

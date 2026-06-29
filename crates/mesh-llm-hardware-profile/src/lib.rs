@@ -1,6 +1,7 @@
+use mesh_llm_native_runtime::host::HostGpuProbe;
 use mesh_llm_native_runtime::{
-    HostCudaProfile, HostGpuProbe, HostGpuProfile, HostRocmProfile, HostRuntimeProfile,
-    HostVulkanProfile, NativeRuntimeBackendKind,
+    HostCudaProfile, HostGpuProfile, HostRocmProfile, HostRuntimeProfile, HostVulkanProfile,
+    NativeRuntimeBackendKind,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
@@ -57,11 +58,23 @@ pub fn detected_native_runtime_flavors(
 }
 
 fn detect_gpus() -> Vec<HostGpuProfile> {
-    let nvidia_gpus = detect_nvidia_gpu_profiles();
-    if !nvidia_gpus.is_empty() {
-        return nvidia_gpus;
+    merge_nvidia_and_fallback_gpus(detect_nvidia_gpu_profiles(), fallback_gpu_profiles())
+}
+
+fn merge_nvidia_and_fallback_gpus(
+    mut nvidia_gpus: Vec<HostGpuProfile>,
+    mut fallback_gpus: Vec<HostGpuProfile>,
+) -> Vec<HostGpuProfile> {
+    if nvidia_gpus.is_empty() {
+        return fallback_gpus;
     }
 
+    fallback_gpus.retain(|gpu| !looks_like_nvidia_gpu_label(&gpu.display_name));
+    nvidia_gpus.extend(fallback_gpus);
+    nvidia_gpus
+}
+
+fn fallback_gpu_profiles() -> Vec<HostGpuProfile> {
     gpu_labels()
         .into_iter()
         .enumerate()
@@ -81,9 +94,14 @@ fn detect_gpus() -> Vec<HostGpuProfile> {
         .collect()
 }
 
+fn looks_like_nvidia_gpu_label(label: &str) -> bool {
+    let label = label.to_ascii_lowercase();
+    label.contains("nvidia") || label.contains("cuda")
+}
+
 fn backend_device_from_label(label: &str, index: usize) -> Option<String> {
     let label = label.to_ascii_lowercase();
-    if label.contains("nvidia") || label.contains("cuda") {
+    if looks_like_nvidia_gpu_label(&label) {
         Some(format!("CUDA{index}"))
     } else if label.contains("amd") || label.contains("radeon") || label.contains("rocm") {
         Some(format!("ROCm{index}"))
@@ -645,6 +663,28 @@ deviceName         = AMD Radeon PRO W7900
                     .to_string()
             ]
         );
+    }
+
+    #[test]
+    fn nvidia_probe_results_merge_with_fallback_labels() {
+        let nvidia_smi = "\
+GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-80ded6bd-1a89-2628-3d94-902187dbab1d)
+";
+        let lspci = "\
+01:00.0 VGA compatible controller: NVIDIA Corporation GB202 [GeForce RTX 5090] (rev a1)
+";
+        let nvidia_gpus = nvidia_gpu_profiles_from_probe_outputs(nvidia_smi, lspci, &[]);
+        let fallback_gpus = vec![
+            profile("NVIDIA Corporation GB202 [GeForce RTX 5090]"),
+            profile("AMD Radeon PRO W7900"),
+        ];
+        let merged = merge_nvidia_and_fallback_gpus(nvidia_gpus, fallback_gpus);
+
+        let names = merged
+            .iter()
+            .map(|gpu| gpu.display_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["NVIDIA GeForce RTX 5090", "AMD Radeon PRO W7900"]);
     }
 
     #[test]

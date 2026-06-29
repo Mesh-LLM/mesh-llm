@@ -2314,6 +2314,8 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
           runs-on: ubuntu-24.04
           steps:
             - uses: actions/checkout@v5
+              with:
+                persist-credentials: false
             - uses: dtolnay/rust-toolchain@stable
             - name: Prepare dispatched release version
               if: github.event_name == 'workflow_dispatch'
