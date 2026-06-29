@@ -801,7 +801,7 @@ async fn candidate_status(
         let has_failure_marker = siblings
             .iter()
             .any(|sibling| sibling.rfilename == "automation/failure.json");
-        if has_failure_marker {
+        if has_failure_marker && repo == &candidate.target_repo {
             return Ok(QueueStatus::Failed { repo: repo.clone() });
         }
         if has_queue_marker {
