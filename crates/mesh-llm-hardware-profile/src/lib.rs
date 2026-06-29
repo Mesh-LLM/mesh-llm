@@ -103,13 +103,22 @@ fn detect_nvidia_gpu_profiles() -> Vec<HostGpuProfile> {
     let Some(nvidia_smi) = command_output("nvidia-smi", &["-L"]) else {
         return Vec::new();
     };
+    let compute_caps = command_output(
+        "nvidia-smi",
+        &[
+            "--query-gpu=index,compute_cap",
+            "--format=csv,noheader,nounits",
+        ],
+    )
+    .map(|output| nvidia_compute_caps_by_index(&output))
+    .unwrap_or_default();
     let lspci = command_output("lspci", &[]).unwrap_or_default();
     let proc_entries = linux_nvidia_proc_information_entries();
     let borrowed_entries: Vec<(&str, &str)> = proc_entries
         .iter()
         .map(|entry| (entry.path.as_str(), entry.info.as_str()))
         .collect();
-    nvidia_gpu_profiles_from_probe_outputs(&nvidia_smi, &lspci, &borrowed_entries)
+    nvidia_gpu_profiles_from_probe_outputs(&nvidia_smi, &compute_caps, &lspci, &borrowed_entries)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -134,6 +143,7 @@ struct NvidiaProcProbe {
 
 fn nvidia_gpu_profiles_from_probe_outputs(
     nvidia_smi_output: &str,
+    compute_caps: &BTreeMap<usize, String>,
     lspci_output: &str,
     proc_entries: &[(&str, &str)],
 ) -> Vec<HostGpuProfile> {
@@ -162,11 +172,37 @@ fn nvidia_gpu_profiles_from_probe_outputs(
                 vram_bytes: None,
                 unified_memory: false,
                 probe,
-                cuda_sm: None,
+                cuda_sm: compute_caps.get(&gpu.index).cloned(),
                 rocm_gfx: None,
             }
         })
         .collect()
+}
+
+fn nvidia_compute_caps_by_index(output: &str) -> BTreeMap<usize, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (index, compute_cap) = line.split_once(',')?;
+            let index = index.trim().parse::<usize>().ok()?;
+            let cuda_sm = cuda_sm_from_compute_cap(compute_cap.trim())?;
+            Some((index, cuda_sm))
+        })
+        .collect()
+}
+
+fn cuda_sm_from_compute_cap(value: &str) -> Option<String> {
+    let (major, minor) = value.split_once('.')?;
+    let major = major.trim();
+    let minor = minor.trim();
+    if major.is_empty()
+        || minor.is_empty()
+        || !major.chars().all(|ch| ch.is_ascii_digit())
+        || !minor.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!("{major}{minor}"))
 }
 
 fn parse_nvidia_smi_list(output: &str) -> Vec<NvidiaSmiGpu> {
@@ -316,8 +352,12 @@ fn apply_gpu_arch_overrides(gpus: &mut [HostGpuProfile]) {
     let cuda_arches = env_string_vec("MESH_LLM_CUDA_GPU_ARCHES");
     let rocm_arches = env_string_vec("MESH_LLM_ROCM_GPU_ARCHES");
     for (index, gpu) in gpus.iter_mut().enumerate() {
-        gpu.cuda_sm = cuda_arches.get(index).cloned();
-        gpu.rocm_gfx = rocm_arches.get(index).cloned();
+        if let Some(cuda_sm) = cuda_arches.get(index) {
+            gpu.cuda_sm = Some(cuda_sm.clone());
+        }
+        if let Some(rocm_gfx) = rocm_arches.get(index) {
+            gpu.rocm_gfx = Some(rocm_gfx.clone());
+        }
     }
 }
 
@@ -336,10 +376,12 @@ fn cuda_majors_from_nvidia_smi_output(output: &str) -> BTreeSet<u32> {
         }
     }
     for line in output.lines() {
-        if let Some((_, version)) = line.split_once("CUDA Version:")
-            && let Some(major) = leading_major_version(version)
-        {
-            majors.insert(major);
+        for marker in ["CUDA Version:", "CUDA UMD Version:"] {
+            if let Some((_, version)) = line.split_once(marker)
+                && let Some(major) = leading_major_version(version)
+            {
+                majors.insert(major);
+            }
         }
     }
     majors
@@ -558,6 +600,31 @@ fn env_string_vec(name: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn clear(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: this test module only mutates these override vars inside scoped guards.
+            unsafe { std::env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                // SAFETY: restore the scoped test mutation before the guard leaves scope.
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                // SAFETY: restore the scoped test mutation before the guard leaves scope.
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
     fn profile(label: &str) -> HostGpuProfile {
         HostGpuProfile {
             display_name: label.to_string(),
@@ -613,6 +680,45 @@ mod tests {
             cuda_majors_from_nvidia_smi_output(output),
             BTreeSet::from([13])
         );
+    }
+
+    #[test]
+    fn parses_cuda_umd_version_label_from_nvidia_smi_banner() {
+        let output = "| NVIDIA-SMI 610.43.02 KMD Version: 610.43.02 CUDA UMD Version: 13.3 |\n";
+
+        assert_eq!(
+            cuda_majors_from_nvidia_smi_output(output),
+            BTreeSet::from([13])
+        );
+    }
+
+    #[test]
+    fn parses_nvidia_compute_caps_as_cuda_arches() {
+        let output = "\
+0, 12.0
+1, 8.6
+";
+
+        assert_eq!(
+            nvidia_compute_caps_by_index(output),
+            BTreeMap::from([(0, "120".to_string()), (1, "86".to_string())])
+        );
+    }
+
+    #[test]
+    fn empty_gpu_arch_overrides_preserve_detected_arches() {
+        let _cuda_arches = EnvVarGuard::clear("MESH_LLM_CUDA_GPU_ARCHES");
+        let _rocm_arches = EnvVarGuard::clear("MESH_LLM_ROCM_GPU_ARCHES");
+        let mut gpus = vec![HostGpuProfile {
+            cuda_sm: Some("120".to_string()),
+            rocm_gfx: Some("gfx1200".to_string()),
+            ..profile("NVIDIA GeForce RTX 5090")
+        }];
+
+        apply_gpu_arch_overrides(&mut gpus);
+
+        assert_eq!(gpus[0].cuda_sm.as_deref(), Some("120"));
+        assert_eq!(gpus[0].rocm_gfx.as_deref(), Some("gfx1200"));
     }
 
     #[test]
@@ -673,7 +779,9 @@ GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-80ded6bd-1a89-2628-3d94-902187dbab1d)
         let lspci = "\
 01:00.0 VGA compatible controller: NVIDIA Corporation GB202 [GeForce RTX 5090] (rev a1)
 ";
-        let nvidia_gpus = nvidia_gpu_profiles_from_probe_outputs(nvidia_smi, lspci, &[]);
+        let compute_caps = BTreeMap::from([(0, "120".to_string())]);
+        let nvidia_gpus =
+            nvidia_gpu_profiles_from_probe_outputs(nvidia_smi, &compute_caps, lspci, &[]);
         let fallback_gpus = vec![
             profile("NVIDIA Corporation GB202 [GeForce RTX 5090]"),
             profile("AMD Radeon PRO W7900"),
@@ -732,11 +840,14 @@ GPU Excluded:\t No
             ),
         ];
 
-        let gpus = nvidia_gpu_profiles_from_probe_outputs(nvidia_smi, lspci, &proc_entries);
+        let compute_caps = BTreeMap::from([(0, "120".to_string()), (1, "86".to_string())]);
+        let gpus =
+            nvidia_gpu_profiles_from_probe_outputs(nvidia_smi, &compute_caps, lspci, &proc_entries);
 
         assert_eq!(gpus.len(), 2);
         assert_eq!(gpus[0].display_name, "NVIDIA GeForce RTX 5090");
         assert_eq!(gpus[0].backend_device.as_deref(), Some("CUDA0"));
+        assert_eq!(gpus[0].cuda_sm.as_deref(), Some("120"));
         assert_eq!(
             gpus[0].stable_id.as_deref(),
             Some("uuid:GPU-80ded6bd-1a89-2628-3d94-902187dbab1d")
