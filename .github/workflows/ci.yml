@@ -40,6 +40,7 @@ jobs:
       all_rust: ${{ steps.compute.outputs.all_rust }}
       docs_only: ${{ steps.compute.outputs.docs_only }}
       rust_changed: ${{ steps.compute.outputs.rust_changed }}
+      backend_changed: ${{ steps.compute.outputs.backend_changed }}
       ui_dist_cache_key: ${{ steps.ui_key.outputs.ui_dist_cache_key }}
     steps:
       - uses: actions/checkout@v5
@@ -626,7 +627,7 @@ jobs:
 
   linux_cuda:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux CUDA slim
     runs-on: ubuntu-24.04
     container:
@@ -684,7 +685,7 @@ jobs:
 
   linux_rocm:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux ROCm slim
     runs-on: ubuntu-24.04
     container:
@@ -737,7 +738,7 @@ jobs:
 
   linux_vulkan:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux Vulkan
     runs-on: ubuntu-24.04
     env:
