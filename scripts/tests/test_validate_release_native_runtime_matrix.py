@@ -183,14 +183,13 @@ class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
                 }
             ]
         }
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as handle:
-            json.dump(manifest, handle)
-            handle.flush()
-
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = pathlib.Path(directory) / "native-runtimes.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             result = validator.main(
                 [
                     "--manifest",
-                    handle.name,
+                    str(manifest_path),
                     "--required-target",
                     "linux/x86_64/cpu",
                 ]
