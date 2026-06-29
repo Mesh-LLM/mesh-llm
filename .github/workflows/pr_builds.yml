@@ -280,7 +280,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux ${{ matrix.name }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJson(matrix.runs_on) }}
     container:
       image: ${{ matrix.container }}
     defaults:
@@ -294,17 +294,20 @@ jobs:
             backend: cuda
             container: nvidia/cuda:${{ vars.CUDA_VERSION || '12.6.3' }}-devel-ubuntu22.04
             cache_key: linux-cuda-slim
+            runs_on: '["self-hosted","Linux","X64","carrack"]'
           - name: ROCm slim
             backend: rocm
             container: rocm/dev-ubuntu-24.04:7.2.3
             cache_key: linux-rocm-slim
             build_dir: .deps/llama-build/build-stage-abi-rocm-gfx1100
             amdgpu_targets: gfx1100
+            runs_on: '"ubuntu-24.04"'
           - name: Vulkan
             backend: vulkan
             container: ubuntu:24.04
             cache_key: linux-vulkan
             build_dir: .deps/llama-build/build-stage-abi-vulkan
+            runs_on: '"ubuntu-24.04"'
     env:
       RUN_LINUX_BACKEND: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true' }}
       LLAMA_STAGE_BACKEND: ${{ matrix.backend }}

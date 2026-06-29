@@ -760,7 +760,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux CUDA slim
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, carrack]
     container:
       image: nvidia/cuda:${{ vars.CUDA_VERSION || '12.6.3' }}-devel-ubuntu22.04
     env:

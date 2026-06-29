@@ -1,5 +1,10 @@
 self-hosted-runner:
   labels:
+    - self-hosted
+    - Linux
+    - X64
+    - ARM64
+    - carrack
     - blacksmith-4vcpu-ubuntu-2404
     - blacksmith-6vcpu-macos-15
     - blacksmith-4vcpu-ubuntu-2404-arm

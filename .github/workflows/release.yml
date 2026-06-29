@@ -388,7 +388,10 @@ jobs:
     name: Build native runtime Linux x86_64 CUDA (${{ matrix.cuda_major }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: ubuntu-24.04
+    # Carrack is the dedicated Linux x64 NVIDIA host. Keep ARM64 artifact
+    # compilation on GitHub-hosted ARM runners; CM-class ARM64 runners are
+    # smoke/test-only below.
+    runs-on: [self-hosted, Linux, X64, carrack]
     strategy:
       fail-fast: false
       matrix:
@@ -396,14 +399,17 @@ jobs:
           - cuda_version: '12.9.2'
             cuda_major: '12'
             cuda_architectures: '75;80;86;87;89;90'
+            cuda_architectures_cache: '75_80_86_87_89_90'
           - cuda_version: '13.1.2'
             cuda_major: '13'
             cuda_architectures: '75;80;86;87;89;90;100;103;120;121'
+            cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'
     container:
       image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
     env:
       LLAMA_STAGE_BACKEND: cuda
       LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-cuda-sm${{ matrix.cuda_architectures_cache }}
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
       MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
     steps:
@@ -425,6 +431,11 @@ jobs:
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache native runtime CUDA backend build
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-cuda${{ matrix.cuda_major }}-${{ matrix.cuda_version }}-dynamic-${{ matrix.cuda_architectures_cache }}-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -458,6 +469,7 @@ jobs:
     env:
       LLAMA_STAGE_BACKEND: rocm
       LLAMA_STAGE_AMDGPU_TARGETS: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-rocm-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1200_gfx1201
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
     steps:
       - name: Install base packages
@@ -478,6 +490,11 @@ jobs:
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache native runtime ROCm backend build
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-rocm7.0-dynamic-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1200_gfx1201-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -508,6 +525,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       LLAMA_STAGE_BACKEND: vulkan
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-vulkan
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v5
@@ -516,6 +534,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl python3 glslc libvulkan-dev spirv-headers lld patchelf
+      - name: Cache native runtime Vulkan backend build
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-vulkan-dynamic-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -670,6 +693,47 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  smoke_linux_arm64_artifact:
+    name: Smoke Linux ARM64 artifact (self-hosted ARM64 test only)
+    needs: [metadata, build_linux_arm64]
+    if: ${{ needs.build_linux_arm64.result == 'success' }}
+    # CM-class self-hosted ARM64 machines are validation hosts only. They
+    # download and run already-built artifacts, and must not compile release
+    # bundles or native runtimes.
+    runs-on: [self-hosted, Linux, ARM64]
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-linux-arm64
+          path: release-linux-arm64
+      - name: Verify and smoke ARM64 release artifact
+        env:
+          EXPECTED_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd release-linux-arm64
+          tarball="mesh-llm-aarch64-unknown-linux-gnu.tar.gz"
+          if [[ ! -f "$tarball" ]]; then
+            echo "missing expected ARM64 release archive: $tarball" >&2
+            find . -maxdepth 1 -type f -print | sort >&2
+            exit 1
+          fi
+          if command -v sha256sum >/dev/null 2>&1 && [[ -f "$tarball.sha256" ]]; then
+            sha256sum -c "$tarball.sha256"
+          fi
+          mkdir -p smoke
+          tar -xzf "$tarball" -C smoke
+          binary="smoke/mesh-bundle/mesh-llm"
+          version_output="$("$binary" --version)"
+          actual_version="$(awk '{print $NF}' <<<"$version_output")"
+          if [[ "$actual_version" != "$EXPECTED_VERSION" ]]; then
+            echo "ARM64 artifact version mismatch: expected $EXPECTED_VERSION, got ${actual_version:-<empty>}" >&2
+            echo "Output: $version_output" >&2
+            exit 1
+          fi
+          "$binary" --help | head -5
+          "$binary" runtime --help | head -20
+
   build_linux_aarch64_cuda:
     name: Build Linux aarch64 CUDA (${{ matrix.cuda_version }})
     needs: metadata
@@ -742,15 +806,24 @@ jobs:
     name: Build Linux CUDA (${{ matrix.cuda_version }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: ubuntu-24.04
+    # CUDA release bundles are the release long pole and benefit most from the
+    # dedicated Linux x64 NVIDIA carrack runner.
+    runs-on: [self-hosted, Linux, X64, carrack]
     strategy:
       fail-fast: false
       matrix:
-        cuda_version: ['12.9.2', '13.1.2']
+        include:
+          - cuda_version: '12.9.2'
+            cuda_major: '12'
+            cuda_architectures_cache: '75_80_86_87_89_90'
+          - cuda_version: '13.1.2'
+            cuda_major: '13'
+            cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'
     container:
       image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
     env:
       LLAMA_STAGE_BACKEND: cuda
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-cuda-sm${{ matrix.cuda_architectures_cache }}
       MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
     steps:
       - name: Install base packages
@@ -782,6 +855,11 @@ jobs:
             crates/mesh-llm-ui/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
+      - name: Cache release CUDA backend build
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-cuda${{ matrix.cuda_major }}-${{ matrix.cuda_version }}-static-${{ matrix.cuda_architectures_cache }}-${{ hashFiles('scripts/build-linux.sh', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'Justfile', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -816,6 +894,8 @@ jobs:
       image: rocm/dev-ubuntu-24.04:7.0-complete
     env:
       LLAMA_STAGE_BACKEND: rocm
+      LLAMA_STAGE_AMDGPU_TARGETS: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-rocm-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1200_gfx1201
     steps:
       - name: Install base packages
         run: |
@@ -846,6 +926,11 @@ jobs:
             crates/mesh-llm-ui/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
+      - name: Cache release ROCm backend build
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-rocm7.0-static-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1200_gfx1201-${{ hashFiles('scripts/build-linux.sh', 'scripts/build-linux-rocm.sh', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'Justfile', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -876,6 +961,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       LLAMA_STAGE_BACKEND: vulkan
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-vulkan
     steps:
       - uses: actions/checkout@v5
         with:
@@ -894,6 +980,11 @@ jobs:
       - uses: taiki-e/install-action@just
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl glslc libvulkan-dev spirv-headers lld
+      - name: Cache release Vulkan backend build
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-vulkan-static-${{ hashFiles('scripts/build-linux.sh', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'Justfile', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -1219,6 +1310,7 @@ jobs:
       - build_native_runtime_linux_x86_64_vulkan
       - build_swift_sdk_artifact
       - build_linux_arm64
+      - smoke_linux_arm64_artifact
       - build_linux_aarch64_cuda
       - build_linux_cuda
       - build_linux_rocm
@@ -1227,7 +1319,7 @@ jobs:
       - build_windows_gpu
       - build_native_runtime_windows_cpu
       - build_native_runtime_windows_gpu
-    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') }}
+    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && needs.smoke_linux_arm64_artifact.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
