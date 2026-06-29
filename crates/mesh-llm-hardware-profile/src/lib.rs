@@ -638,6 +638,37 @@ mod tests {
         }
     }
 
+    struct ExpectedNvidiaProcGpu<'a> {
+        display_name: &'a str,
+        backend_device: &'a str,
+        cuda_sm: &'a str,
+        stable_id: &'a str,
+        probe_path: &'a str,
+        irq: &'a str,
+        dma_mask: &'a str,
+    }
+
+    fn assert_nvidia_proc_gpu(gpu: &HostGpuProfile, expected: ExpectedNvidiaProcGpu<'_>) {
+        assert_eq!(gpu.display_name, expected.display_name);
+        assert_eq!(gpu.backend_device.as_deref(), Some(expected.backend_device));
+        assert_eq!(gpu.cuda_sm.as_deref(), Some(expected.cuda_sm));
+        assert_eq!(gpu.stable_id.as_deref(), Some(expected.stable_id));
+        let probe = gpu
+            .probe
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} probe details", expected.display_name));
+        assert_eq!(probe.source, "linux_nvidia_proc");
+        assert_eq!(probe.path.as_deref(), Some(expected.probe_path));
+        assert_eq!(
+            probe.fields.get("IRQ").map(String::as_str),
+            Some(expected.irq)
+        );
+        assert_eq!(
+            probe.fields.get("DMA Mask").map(String::as_str),
+            Some(expected.dma_mask)
+        );
+    }
+
     #[test]
     fn nvidia_labels_enable_cuda() {
         let flavors = detected_native_runtime_flavors(
@@ -793,6 +824,7 @@ GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-80ded6bd-1a89-2628-3d94-902187dbab1d)
             .map(|gpu| gpu.display_name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(names, ["NVIDIA GeForce RTX 5090", "AMD Radeon PRO W7900"]);
+        assert_eq!(merged[0].cuda_sm.as_deref(), Some("120"));
     }
 
     #[test]
@@ -845,23 +877,29 @@ GPU Excluded:\t No
             nvidia_gpu_profiles_from_probe_outputs(nvidia_smi, &compute_caps, lspci, &proc_entries);
 
         assert_eq!(gpus.len(), 2);
-        assert_eq!(gpus[0].display_name, "NVIDIA GeForce RTX 5090");
-        assert_eq!(gpus[0].backend_device.as_deref(), Some("CUDA0"));
-        assert_eq!(gpus[0].cuda_sm.as_deref(), Some("120"));
-        assert_eq!(
-            gpus[0].stable_id.as_deref(),
-            Some("uuid:GPU-80ded6bd-1a89-2628-3d94-902187dbab1d")
+        assert_nvidia_proc_gpu(
+            &gpus[0],
+            ExpectedNvidiaProcGpu {
+                display_name: "NVIDIA GeForce RTX 5090",
+                backend_device: "CUDA0",
+                cuda_sm: "120",
+                stable_id: "uuid:GPU-80ded6bd-1a89-2628-3d94-902187dbab1d",
+                probe_path: "/proc/driver/nvidia/gpus/0000:01:00.0/information",
+                irq: "16",
+                dma_mask: "0xfffffffffffff",
+            },
         );
-        let probe = gpus[0].probe.as_ref().expect("RTX 5090 probe details");
-        assert_eq!(probe.source, "linux_nvidia_proc");
-        assert_eq!(
-            probe.path.as_deref(),
-            Some("/proc/driver/nvidia/gpus/0000:01:00.0/information")
-        );
-        assert_eq!(probe.fields.get("IRQ").map(String::as_str), Some("16"));
-        assert_eq!(
-            probe.fields.get("DMA Mask").map(String::as_str),
-            Some("0xfffffffffffff")
+        assert_nvidia_proc_gpu(
+            &gpus[1],
+            ExpectedNvidiaProcGpu {
+                display_name: "NVIDIA GeForce RTX 3080",
+                backend_device: "CUDA1",
+                cuda_sm: "86",
+                stable_id: "uuid:GPU-6b7fe24c-5f15-4ac5-88d6-c8934135a4ea",
+                probe_path: "/proc/driver/nvidia/gpus/0000:06:00.0/information",
+                irq: "184",
+                dma_mask: "0x7fffffffffff",
+            },
         );
 
         let names: Vec<&str> = gpus.iter().map(|gpu| gpu.display_name.as_str()).collect();
