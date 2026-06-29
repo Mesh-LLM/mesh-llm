@@ -19,7 +19,7 @@ def load_validator():
 
 
 class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
-    def test_linux_aarch64_bundles_require_matching_runtime_entries(self):
+    def test_binary_asset_inference_requires_matching_runtime_entries(self):
         validator = load_validator()
         assets = [
             "mesh-llm-v0.72.0-rc5-aarch64-unknown-linux-gnu.tar.gz",
@@ -71,6 +71,96 @@ class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
         }
 
         self.assertEqual(validator.find_matrix_violations(assets, manifest), [])
+
+    def test_explicit_release_native_targets_ignore_static_gpu_bundles(self):
+        validator = load_validator()
+        assets = [
+            "mesh-llm-v0.72.0-rc5-x86_64-unknown-linux-gnu.tar.gz",
+            "mesh-llm-v0.72.0-rc5-x86_64-unknown-linux-gnu-cuda-12.tar.gz",
+            "mesh-llm-v0.72.0-rc5-x86_64-unknown-linux-gnu-cuda-13.tar.gz",
+            "mesh-llm-v0.72.0-rc5-x86_64-unknown-linux-gnu-rocm.tar.gz",
+            "mesh-llm-v0.72.0-rc5-x86_64-unknown-linux-gnu-vulkan.tar.gz",
+            "mesh-llm-v0.72.0-rc5-aarch64-unknown-linux-gnu.tar.gz",
+            "mesh-llm-v0.72.0-rc5-aarch64-unknown-linux-gnu-cuda-12.tar.gz",
+            "mesh-llm-v0.72.0-rc5-aarch64-unknown-linux-gnu-cuda-13.tar.gz",
+            "mesh-llm-v0.72.0-rc5-x86_64-pc-windows-msvc.zip",
+            "mesh-llm-v0.72.0-rc5-x86_64-pc-windows-msvc-cuda.zip",
+            "mesh-llm-v0.72.0-rc5-x86_64-pc-windows-msvc-rocm.zip",
+            "mesh-llm-v0.72.0-rc5-x86_64-pc-windows-msvc-vulkan.zip",
+        ]
+        manifest = {
+            "artifacts": [
+                {
+                    "id": "meshllm-native-runtime-darwin-aarch64-metal",
+                    "platform": {"os": "macos", "arch": "aarch64"},
+                    "backend": {"kind": "metal"},
+                },
+                {
+                    "id": "meshllm-native-runtime-linux-x86_64-cpu",
+                    "platform": {"os": "linux", "arch": "x86_64"},
+                    "backend": {"kind": "cpu"},
+                },
+                {
+                    "id": "meshllm-native-runtime-linux-aarch64-cpu",
+                    "platform": {"os": "linux", "arch": "aarch64"},
+                    "backend": {"kind": "cpu"},
+                },
+                {
+                    "id": "meshllm-native-runtime-linux-aarch64-cuda12",
+                    "platform": {"os": "linux", "arch": "aarch64"},
+                    "backend": {
+                        "kind": "cuda",
+                        "cuda": {"toolkit_major": 12, "gpu_arches": []},
+                    },
+                },
+                {
+                    "id": "meshllm-native-runtime-linux-aarch64-cuda13",
+                    "platform": {"os": "linux", "arch": "aarch64"},
+                    "backend": {
+                        "kind": "cuda",
+                        "cuda": {"toolkit_major": 13, "gpu_arches": []},
+                    },
+                },
+            ]
+        }
+        required_targets = {
+            validator.target_from_label("macos/aarch64/metal"),
+            validator.target_from_label("linux/x86_64/cpu"),
+            validator.target_from_label("linux/aarch64/cpu"),
+            validator.target_from_label("linux/aarch64/cuda12"),
+            validator.target_from_label("linux/aarch64/cuda13"),
+        }
+
+        violations = validator.find_matrix_violations(
+            assets,
+            manifest,
+            required_targets,
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_explicit_release_native_targets_still_require_configured_entries(self):
+        validator = load_validator()
+        manifest = {
+            "artifacts": [
+                {
+                    "id": "meshllm-native-runtime-linux-x86_64-cpu",
+                    "platform": {"os": "linux", "arch": "x86_64"},
+                    "backend": {"kind": "cpu"},
+                }
+            ]
+        }
+        required_targets = {
+            validator.target_from_label("linux/x86_64/cpu"),
+            validator.target_from_label("linux/aarch64/cpu"),
+        }
+
+        violations = validator.find_matrix_violations([], manifest, required_targets)
+
+        self.assertEqual(
+            violations,
+            ["missing native runtime for binary target linux/aarch64/cpu"],
+        )
 
 
 if __name__ == "__main__":

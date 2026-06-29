@@ -101,14 +101,31 @@ def native_target_matches(required: RuntimeTarget, candidate: RuntimeTarget) -> 
     return True
 
 
-def find_matrix_violations(
-    asset_names: list[str], manifest: dict[str, Any]
-) -> list[str]:
-    required_targets = {
+def target_from_label(label: str) -> RuntimeTarget:
+    parts = label.split("/")
+    if len(parts) != 3:
+        raise ValueError(f"expected target label as os/arch/backend, got {label!r}")
+    os_name, arch, backend = parts
+    match = re.fullmatch(r"cuda(\d+)", backend)
+    if match:
+        return RuntimeTarget(os_name, arch, "cuda", int(match.group(1)))
+    return RuntimeTarget(os_name, arch, backend)
+
+
+def required_targets_from_assets(asset_names: list[str]) -> set[RuntimeTarget]:
+    return {
         target
         for asset_name in asset_names
         if (target := binary_target_from_asset(asset_name)) is not None
     }
+
+
+def find_matrix_violations(
+    asset_names: list[str],
+    manifest: dict[str, Any],
+    required_targets: set[RuntimeTarget] | None = None,
+) -> list[str]:
+    required_targets = required_targets or required_targets_from_assets(asset_names)
     native_targets = [
         target
         for artifact in manifest.get("artifacts", [])
@@ -129,6 +146,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Validate release binary bundle targets against native-runtimes.json."
     )
     parser.add_argument("--manifest", required=True, help="Path to native-runtimes.json")
+    parser.add_argument(
+        "--required-target",
+        action="append",
+        default=[],
+        help=(
+            "Native runtime target that must be present in the manifest, "
+            "formatted as os/arch/backend, for example linux/aarch64/cuda13. "
+            "When omitted, targets are inferred from release binary asset names."
+        ),
+    )
     parser.add_argument("assets", nargs="+", help="Release asset paths or names")
     return parser.parse_args(argv)
 
@@ -137,7 +164,14 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     with open(args.manifest, encoding="utf-8") as handle:
         manifest = json.load(handle)
-    violations = find_matrix_violations(args.assets, manifest)
+    try:
+        required_targets = {
+            target_from_label(label) for label in args.required_target
+        } or None
+    except ValueError as error:
+        print(f"release matrix error: {error}", file=sys.stderr)
+        return 2
+    violations = find_matrix_violations(args.assets, manifest, required_targets)
     if violations:
         for violation in violations:
             print(f"release matrix error: {violation}", file=sys.stderr)

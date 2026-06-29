@@ -943,14 +943,30 @@ jobs:
       - name: Generate native runtime release manifest
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          SKIP_GPU_BUNDLES: ${{ needs.metadata.outputs.skip_gpu_bundles }}
         run: |
           scripts/generate-native-runtime-release-manifest.sh \
             --tag "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --out release-artifacts/native-runtimes.json \
             release-artifacts/meshllm-native-runtime-*.tar.gz
+          required_native_targets=(
+            "macos/aarch64/metal"
+            "linux/x86_64/cpu"
+            "linux/aarch64/cpu"
+          )
+          if [[ "$SKIP_GPU_BUNDLES" != "true" ]]; then
+            required_native_targets+=(
+              "linux/aarch64/cuda12"
+              "linux/aarch64/cuda13"
+            )
+          fi
+          validator_args=(--manifest release-artifacts/native-runtimes.json)
+          for target in "${required_native_targets[@]}"; do
+            validator_args+=(--required-target "$target")
+          done
           scripts/validate-release-native-runtime-matrix.py \
-            --manifest release-artifacts/native-runtimes.json \
+            "${validator_args[@]}" \
             release-artifacts/*
           shasum -a 256 release-artifacts/native-runtimes.json | awk '{print $1 "  native-runtimes.json"}' > release-artifacts/native-runtimes.json.sha256
 
