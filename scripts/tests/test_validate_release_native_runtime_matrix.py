@@ -1,6 +1,8 @@
 import importlib.util
+import json
 import pathlib
 import sys
+import tempfile
 import unittest
 
 
@@ -161,6 +163,40 @@ class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
             violations,
             ["missing native runtime for binary target linux/aarch64/cpu"],
         )
+
+    def test_explicit_empty_required_targets_disable_asset_inference(self):
+        validator = load_validator()
+        assets = ["mesh-llm-v0.72.0-rc5-aarch64-unknown-linux-gnu.tar.gz"]
+
+        violations = validator.find_matrix_violations(assets, {}, set())
+
+        self.assertEqual(violations, [])
+
+    def test_cli_accepts_explicit_targets_without_asset_arguments(self):
+        validator = load_validator()
+        manifest = {
+            "artifacts": [
+                {
+                    "id": "meshllm-native-runtime-linux-x86_64-cpu",
+                    "platform": {"os": "linux", "arch": "x86_64"},
+                    "backend": {"kind": "cpu"},
+                }
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as handle:
+            json.dump(manifest, handle)
+            handle.flush()
+
+            result = validator.main(
+                [
+                    "--manifest",
+                    handle.name,
+                    "--required-target",
+                    "linux/x86_64/cpu",
+                ]
+            )
+
+        self.assertEqual(result, 0)
 
 
 if __name__ == "__main__":

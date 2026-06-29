@@ -125,7 +125,8 @@ def find_matrix_violations(
     manifest: dict[str, Any],
     required_targets: set[RuntimeTarget] | None = None,
 ) -> list[str]:
-    required_targets = required_targets or required_targets_from_assets(asset_names)
+    if required_targets is None:
+        required_targets = required_targets_from_assets(asset_names)
     native_targets = [
         target
         for artifact in manifest.get("artifacts", [])
@@ -156,12 +157,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "When omitted, targets are inferred from release binary asset names."
         ),
     )
-    parser.add_argument("assets", nargs="+", help="Release asset paths or names")
+    parser.add_argument("assets", nargs="*", help="Release asset paths or names")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    if not args.required_target and not args.assets:
+        print(
+            "release matrix error: assets are required unless --required-target is provided",
+            file=sys.stderr,
+        )
+        return 2
     with open(args.manifest, encoding="utf-8") as handle:
         manifest = json.load(handle)
     try:
