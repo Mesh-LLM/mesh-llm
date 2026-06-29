@@ -77,39 +77,26 @@ fn merge_nvidia_and_fallback_gpus(
 fn fallback_gpu_profiles() -> Vec<HostGpuProfile> {
     gpu_labels()
         .into_iter()
-        .enumerate()
-        .map(|(index, label)| {
-            let backend_device = backend_device_from_label(&label, index);
-            HostGpuProfile {
-                display_name: label,
-                backend_device,
-                stable_id: Some(format!("detected-{index}")),
-                vram_bytes: None,
-                unified_memory: cfg!(target_os = "macos"),
-                probe: None,
-                cuda_sm: None,
-                rocm_gfx: None,
-            }
-        })
+        .map(fallback_gpu_profile_from_label)
         .collect()
+}
+
+fn fallback_gpu_profile_from_label(label: String) -> HostGpuProfile {
+    HostGpuProfile {
+        display_name: label,
+        backend_device: None,
+        stable_id: None,
+        vram_bytes: None,
+        unified_memory: cfg!(target_os = "macos"),
+        probe: None,
+        cuda_sm: None,
+        rocm_gfx: None,
+    }
 }
 
 fn looks_like_nvidia_gpu_label(label: &str) -> bool {
     let label = label.to_ascii_lowercase();
     label.contains("nvidia") || label.contains("cuda")
-}
-
-fn backend_device_from_label(label: &str, index: usize) -> Option<String> {
-    let label = label.to_ascii_lowercase();
-    if looks_like_nvidia_gpu_label(&label) {
-        Some(format!("CUDA{index}"))
-    } else if label.contains("amd") || label.contains("radeon") || label.contains("rocm") {
-        Some(format!("ROCm{index}"))
-    } else if cfg!(target_os = "macos") && label.contains("apple") {
-        Some(format!("MTL{index}"))
-    } else {
-        None
-    }
 }
 
 fn detect_nvidia_gpu_profiles() -> Vec<HostGpuProfile> {
@@ -603,6 +590,19 @@ mod tests {
             detected_native_runtime_flavors(&[profile("AMD Radeon PRO W7900")], None, None, None);
 
         assert!(flavors.contains(&NativeRuntimeBackendKind::Rocm));
+    }
+
+    #[test]
+    fn fallback_profiles_do_not_synthesize_backend_ordinals() {
+        let gpu = fallback_gpu_profile_from_label("AMD Radeon PRO W7900".to_string());
+
+        assert_eq!(gpu.display_name, "AMD Radeon PRO W7900");
+        assert_eq!(gpu.backend_device, None);
+        assert_eq!(gpu.stable_id, None);
+        assert!(
+            detected_native_runtime_flavors(&[gpu], None, None, None)
+                .contains(&NativeRuntimeBackendKind::Rocm)
+        );
     }
 
     #[test]
