@@ -321,8 +321,8 @@ jobs:
           fi
 
   linux_test_groups:
-    needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.linux_test_groups_json != '[]' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.linux_test_groups_json != '[]' }}
     name: Linux tests (${{ matrix.group }})
     runs-on: ubuntu-24.04
     permissions:
