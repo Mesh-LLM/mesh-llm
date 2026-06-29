@@ -702,8 +702,14 @@ jobs:
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build aarch64 CUDA release bundle
         env:
+          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
         run: |
+          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
+          printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           just --shell bash --shell-arg -c release-build-aarch64-cuda
           just --shell bash --shell-arg -c release-bundle-aarch64-cuda "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
