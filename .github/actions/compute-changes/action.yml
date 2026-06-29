@@ -69,6 +69,9 @@ outputs:
   sdk_smoke_required:
     description: 'Boolean: true if SDK smoke tests should run as soon as a binary is ready'
     value: ${{ steps.derive.outputs.sdk_smoke_required }}
+  linux_test_groups_json:
+    description: 'JSON array of Linux test groups to run'
+    value: ${{ steps.derive.outputs.linux_test_groups_json }}
 
 runs:
   using: composite
@@ -319,6 +322,37 @@ runs:
           INFERENCE_ARTIFACT_REQUIRED="true"
         fi
 
+        LINUX_TEST_GROUPS_JSON='[]'
+        add_linux_test_group() {
+          local group="$1"
+          local cache_key="$2"
+          LINUX_TEST_GROUPS_JSON=$(jq -c --arg group "$group" --arg cache_key "$cache_key" '. + [{group: $group, cache_key: $cache_key}]' <<<"$LINUX_TEST_GROUPS_JSON")
+        }
+
+        if [[ "${{ inputs.event_name }}" == "workflow_dispatch" ]] || [[ "$ALL_RUST" == "true" ]]; then
+          add_linux_test_group sdk-api linux-tests-sdk-api
+          add_linux_test_group skippy linux-tests-skippy
+          add_linux_test_group unit linux-tests-unit
+          add_linux_test_group protocol linux-tests-protocol
+          add_linux_test_group skippy-smoke linux-tests-skippy-smoke
+        else
+          if echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm-client") or index("mesh-llm-api-client") or index("mesh-llm-api-server") or index("mesh-llm-config") or index("mesh-llm-commands") or index("mesh-llm-events") or index("mesh-llm-hardware-profile") or index("mesh-llm-runtime-install") or index("mesh-llm-native-runtime") or index("mesh-llm-routing") or index("mesh-llm-types") or index("mesh-llm-sdk") or index("mesh-llm-cli") or index("mesh-llm-tui") or index("mesh-llm-embedded-runtime") or index("mesh-llm-console-server") or index("mesh-llm-ffi") or index("mesh-llm-nodejs")' >/dev/null; then
+            add_linux_test_group sdk-api linux-tests-sdk-api
+          fi
+          if echo "$AFFECTED_CRATES" | jq -e 'index("skippy-protocol") or index("skippy-server") or index("openai-frontend") or index("skippy-runtime") or index("skippy-topology") or index("skippy-model-package") or index("skippy-prompt") or index("metrics-server")' >/dev/null; then
+            add_linux_test_group skippy linux-tests-skippy
+          fi
+          if echo "$AFFECTED_CRATES" | jq -e 'index("model-artifact") or index("mesh-llm-host-runtime") or index("mesh-llm")' >/dev/null; then
+            add_linux_test_group unit linux-tests-unit
+          fi
+          if echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm") or index("mesh-llm-protocol")' >/dev/null; then
+            add_linux_test_group protocol linux-tests-protocol
+          fi
+          if [[ "$INFERENCE_ARTIFACT_REQUIRED" == "true" ]]; then
+            add_linux_test_group skippy-smoke linux-tests-skippy-smoke
+          fi
+        fi
+
         # Set outputs using GITHUB_OUTPUT
         {
           echo "changed_files<<EOF"
@@ -341,4 +375,5 @@ runs:
           echo "windows_cpu_build_required=$WINDOWS_CPU_BUILD_REQUIRED"
           echo "windows_gpu_build_required=$WINDOWS_GPU_BUILD_REQUIRED"
           echo "sdk_smoke_required=$SDK_SMOKE_REQUIRED"
+          echo "linux_test_groups_json=$LINUX_TEST_GROUPS_JSON"
         } >> "$GITHUB_OUTPUT"

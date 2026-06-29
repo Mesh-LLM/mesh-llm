@@ -1861,6 +1861,12 @@ fn check_ci_crate_test_coverage(ci_workflow: &str) -> DynResult<()> {
             "mesh-llm-runtime-install",
             "mesh LLM runtime install crate tests",
         ),
+        (
+            "mesh-llm-native-runtime",
+            "mesh LLM native runtime crate tests",
+        ),
+        ("mesh-llm-routing", "mesh LLM routing crate tests"),
+        ("mesh-llm-types", "mesh LLM shared types crate tests"),
         ("mesh-llm-cli", "mesh LLM CLI crate tests"),
         ("mesh-llm-tui", "mesh LLM TUI crate tests"),
         (
@@ -1892,7 +1898,7 @@ fn check_ci_crate_test_coverage(ci_workflow: &str) -> DynResult<()> {
     )?;
     ensure_contains(
         ci_workflow,
-        "for c in mesh-llm-client mesh-llm-api-client mesh-llm-api-server mesh-llm-config mesh-llm-commands mesh-llm-events mesh-llm-hardware-profile mesh-llm-runtime-install mesh-llm-cli mesh-llm-tui mesh-llm-embedded-runtime mesh-llm-sdk mesh-llm-console-server mesh-llm-ffi mesh-llm-nodejs; do",
+        "for c in mesh-llm-client mesh-llm-api-client mesh-llm-api-server mesh-llm-config mesh-llm-commands mesh-llm-events mesh-llm-hardware-profile mesh-llm-runtime-install mesh-llm-native-runtime mesh-llm-routing mesh-llm-types mesh-llm-cli mesh-llm-tui mesh-llm-embedded-runtime mesh-llm-sdk mesh-llm-console-server mesh-llm-ffi mesh-llm-nodejs; do",
         "CI SDK/API crate test loop",
     )?;
     ensure_contains(
