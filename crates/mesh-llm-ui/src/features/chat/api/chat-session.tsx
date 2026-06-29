@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { CHAT_HARNESS } from '@/features/app-tabs/data'
 import type { ChatHarnessData, ThreadMessage } from '@/features/app-tabs/types'
 import { useDataMode } from '@/lib/data-mode'
-import { useBooleanFeatureFlag } from '@/lib/feature-flags'
 import { useMeshChat } from '@/features/chat/api/use-chat'
 import { usePersistentChatSystemPrompt } from '@/features/chat/api/system-prompt'
 import { useChatMessages } from '@/features/chat/api/use-chat-messages'
@@ -265,9 +264,7 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
   const visibleLaneId = selectedLaneId ?? activeLaneId
   const [sessionModel, setSessionModel] = useState('auto')
   const [messageModels, setMessageModels] = useState<Record<string, string>>({})
-  const systemPromptButtonEnabled = useBooleanFeatureFlag('chat/systemPromptButton')
   const { systemPrompt, setSystemPrompt } = usePersistentChatSystemPrompt()
-  const effectiveSystemPrompt = systemPromptButtonEnabled ? systemPrompt : ''
   const [responseMetadataByConversation, setResponseMetadataByConversation] = useState<
     Record<string, Record<string, ThreadMessageMetadata>>
   >({})
@@ -288,7 +285,7 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
     responseMetadataByConversation,
     setResponseMetadataByConversation,
     sessionModel,
-    systemPrompt: effectiveSystemPrompt,
+    systemPrompt,
     updateThread
   })
   const secondaryLane = useChatLane({
@@ -299,7 +296,7 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
     responseMetadataByConversation,
     setResponseMetadataByConversation,
     sessionModel,
-    systemPrompt: effectiveSystemPrompt,
+    systemPrompt,
     updateThread
   })
   const activeLane = visibleLaneId === 'primary' ? primaryLane : secondaryLane

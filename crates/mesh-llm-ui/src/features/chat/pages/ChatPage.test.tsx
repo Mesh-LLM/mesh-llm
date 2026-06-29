@@ -4,6 +4,7 @@ import type { MultimodalContent } from '@tanstack/ai-client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CHAT_HARNESS } from '@/features/app-tabs/data'
 import { APP_STORAGE_KEYS } from '@/features/app-tabs/data'
+import { DEFAULT_SYSTEM_PROMPT } from '@/constants/system-prompt'
 import { ChatSessionProvider } from '@/features/chat/api/chat-session'
 import { loadChatState, saveChatState, trimThreadMessages } from '@/features/chat/api/chat-storage'
 import { ChatLayout } from '@/features/chat/layouts/ChatLayout'
@@ -588,6 +589,25 @@ describe('ChatPage', () => {
     expect(screen.queryByRole('button', { name: 'System prompt' })).not.toBeInTheDocument()
   })
 
+  it('sends the default system prompt while the editor feature flag is disabled', async () => {
+    const user = userEvent.setup()
+
+    renderChatPage()
+
+    expect(screen.queryByRole('button', { name: 'System prompt' })).not.toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Prompt'), 'Tell me about mesh-llm')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(chatMock.sendCalls[0]).toMatchObject({
+        content: 'Tell me about mesh-llm',
+        model: 'mesh',
+        systemPrompt: DEFAULT_SYSTEM_PROMPT
+      })
+    })
+  })
+
   it('opens, saves, prefills, and sends the chat-wide system prompt for new chats', async () => {
     const user = userEvent.setup()
 
@@ -628,7 +648,7 @@ describe('ChatPage', () => {
     })
   })
 
-  it('does not send a persisted system prompt while the feature flag is disabled', async () => {
+  it('sends a persisted system prompt while the editor feature flag is disabled', async () => {
     const user = userEvent.setup()
     window.localStorage.setItem(APP_STORAGE_KEYS.chatSystemPrompt, 'Hidden saved instruction')
 
@@ -643,7 +663,7 @@ describe('ChatPage', () => {
       expect(chatMock.sendCalls[0]).toMatchObject({
         content: 'Route without hidden instructions',
         model: 'mesh',
-        systemPrompt: ''
+        systemPrompt: 'Hidden saved instruction'
       })
     })
   })
