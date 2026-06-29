@@ -388,10 +388,11 @@ jobs:
     name: Build native runtime Linux x86_64 CUDA (${{ matrix.cuda_major }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    # Carrack is the dedicated Linux x64 NVIDIA host. Keep ARM64 artifact
+    # Carrack is the dedicated Linux x64 NVIDIA host. Match it by labels, not
+    # runner name. Keep ARM64 artifact
     # compilation on GitHub-hosted ARM runners; CM-class ARM64 runners are
     # smoke/test-only below.
-    runs-on: [self-hosted, Linux, X64, carrack]
+    runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia]
     strategy:
       fail-fast: false
       matrix:
@@ -807,8 +808,8 @@ jobs:
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     # CUDA release bundles are the release long pole and benefit most from the
-    # dedicated Linux x64 NVIDIA carrack runner.
-    runs-on: [self-hosted, Linux, X64, carrack]
+    # dedicated Linux x64 NVIDIA host.
+    runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia]
     strategy:
       fail-fast: false
       matrix:

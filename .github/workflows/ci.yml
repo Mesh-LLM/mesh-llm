@@ -807,7 +807,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux CUDA slim
-    runs-on: [self-hosted, Linux, X64, carrack]
+    runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia]
     permissions:
       contents: read
     container:

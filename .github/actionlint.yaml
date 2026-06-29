@@ -4,7 +4,8 @@ self-hosted-runner:
     - Linux
     - X64
     - ARM64
-    - carrack
+    - amd64
+    - gpu-nvidia
     - blacksmith-4vcpu-ubuntu-2404
     - blacksmith-6vcpu-macos-15
     - blacksmith-4vcpu-ubuntu-2404-arm
