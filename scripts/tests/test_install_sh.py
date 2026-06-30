@@ -65,6 +65,74 @@ class InstallScriptTests(unittest.TestCase):
                 "https://example.invalid/assets/mesh-llm-aarch64-unknown-linux-gnu.tar.gz",
             )
 
+    def test_release_target_helpers_keep_linux_aarch64_flavor_surface(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                """
+                export MESH_LLM_TEST_UNAME_S=Linux
+                export MESH_LLM_TEST_UNAME_M=aarch64
+                printf 'support=%s\\n' "$(platform_support_status)"
+                printf 'flavors=%s\\n' "$(supported_flavors)"
+                printf 'recommended=%s\\n' "$(recommended_flavor)"
+                printf 'cpu=%s\\n' "$(asset_name cpu)"
+                printf 'cuda=%s\\n' "$(asset_name cuda)"
+                """,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("support=supported", result.stdout)
+            self.assertIn("flavors=cuda cpu", result.stdout)
+            self.assertIn("recommended=cpu", result.stdout)
+            self.assertIn("cpu=mesh-llm-aarch64-unknown-linux-gnu.tar.gz", result.stdout)
+            self.assertIn("cuda=mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz", result.stdout)
+
+    def test_release_target_helpers_recommend_cuda_on_jetson_orin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                """
+                export MESH_LLM_TEST_UNAME_S=Linux
+                export MESH_LLM_TEST_UNAME_M=aarch64
+                export MESH_LLM_TEST_TEGRA_MODEL='NVIDIA Jetson AGX Orin'
+                recommended_flavor
+                """,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "cuda")
+
+    def test_release_target_helpers_report_unsupported_armv7(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                """
+                export MESH_LLM_TEST_UNAME_S=Linux
+                export MESH_LLM_TEST_UNAME_M=armv7l
+                printf 'support=%s\\n' "$(platform_support_status)"
+                platform_error_message
+                """,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("support=recognized-unsupported", result.stdout)
+            self.assertIn("Linux/arm", result.stdout)
+
     def test_download_release_archive_falls_back_to_mesh_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

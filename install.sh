@@ -165,12 +165,32 @@ platform_arch() {
     case "$os/$arch" in
         Linux/amd64) printf 'x86_64\n' ;;
         Linux/arm64|Linux/aarch64) printf 'aarch64\n' ;;
+        Linux/arm|Linux/armv6l|Linux/armv6hf|Linux/armv7l|Linux/armv7hf) printf 'arm\n' ;;
         *) printf '%s\n' "$arch" ;;
     esac
 }
 
 platform_id() {
     printf '%s/%s\n' "$(platform_os)" "$(platform_arch)"
+}
+
+platform_support_status() {
+    case "$(platform_id)" in
+        Darwin/arm64|Linux/aarch64|Linux/x86_64) printf 'supported\n' ;;
+        Linux/arm) printf 'recognized-unsupported\n' ;;
+        *) printf 'unsupported\n' ;;
+    esac
+}
+
+platform_error_message() {
+    case "$(platform_support_status)" in
+        recognized-unsupported)
+            printf 'error: recognized but unsupported platform: %s (32-bit ARM release bundles are not published)\n' "$(platform_id)"
+            ;;
+        *)
+            printf 'error: unsupported platform: %s\n' "$(platform_id)"
+            ;;
+    esac
 }
 
 platform_asset_name() {
@@ -182,6 +202,188 @@ platform_asset_name() {
         *)
             echo "error: unsupported platform: $(platform_id)" >&2
             exit 1
+            ;;
+    esac
+}
+
+tegra_model_text() {
+    if [[ -n "${MESH_LLM_TEST_TEGRA_MODEL:-}" ]]; then
+        printf '%s\n' "$MESH_LLM_TEST_TEGRA_MODEL"
+        return 0
+    fi
+
+    local path
+    for path in \
+        /proc/device-tree/model \
+        /proc/device-tree/compatible \
+        /sys/firmware/devicetree/base/model \
+        /sys/firmware/devicetree/base/compatible; do
+        [[ -r "$path" ]] || continue
+        tr '\0' '\n' <"$path" 2>/dev/null || true
+        printf '\n'
+    done
+}
+
+probe_tegra_nvidia() {
+    local model
+    model="$(tegra_model_text | tr '[:lower:]' '[:upper:]')"
+    case "$model" in
+        *JETSON*|*TEGRA*|*ORIN*|*NVGPU*|*THOR*) return 0 ;;
+    esac
+
+    [[ -e /dev/nvhost-gpu ]] || [[ -e /dev/nvhost-ctrl-gpu ]]
+}
+
+probe_nvidia() {
+    command -v nvidia-smi >/dev/null 2>&1 ||
+        command -v nvcc >/dev/null 2>&1 ||
+        [[ -e /dev/nvidiactl ]] ||
+        [[ -d /proc/driver/nvidia/gpus ]] ||
+        probe_tegra_nvidia
+}
+
+probe_rocm() {
+    command -v rocm-smi >/dev/null 2>&1 ||
+        command -v rocminfo >/dev/null 2>&1 ||
+        command -v hipcc >/dev/null 2>&1 ||
+        [[ -x /opt/rocm/bin/hipcc ]]
+}
+
+probe_vulkan() {
+    if command -v vulkaninfo >/dev/null 2>&1 && vulkaninfo --summary >/dev/null 2>&1; then
+        return 0
+    fi
+    if command -v glslc >/dev/null 2>&1; then
+        if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists vulkan 2>/dev/null; then
+            return 0
+        fi
+        if [[ -f /usr/include/vulkan/vulkan.h || -f /usr/local/include/vulkan/vulkan.h ]]; then
+            return 0
+        fi
+        if [[ -n "${VULKAN_SDK:-}" ]]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+supported_flavors() {
+    case "$(platform_support_status)" in
+        supported)
+            case "$(platform_id)" in
+                Darwin/arm64) printf 'metal\n' ;;
+                Linux/aarch64) printf 'cuda cpu\n' ;;
+                Linux/x86_64) printf 'cuda rocm vulkan cpu\n' ;;
+                *) platform_error_message >&2; return 1 ;;
+            esac
+            ;;
+        *)
+            platform_error_message >&2
+            return 1
+            ;;
+    esac
+}
+
+recommended_flavor() {
+    case "$(platform_support_status)" in
+        supported)
+            case "$(platform_id)" in
+                Darwin/arm64) printf 'metal\n' ;;
+                Linux/aarch64)
+                    if probe_nvidia; then
+                        printf 'cuda\n'
+                    else
+                        printf 'cpu\n'
+                    fi
+                    ;;
+                Linux/x86_64)
+                    if probe_nvidia; then
+                        printf 'cuda\n'
+                    elif probe_rocm; then
+                        printf 'rocm\n'
+                    elif probe_vulkan; then
+                        printf 'vulkan\n'
+                    else
+                        printf 'cpu\n'
+                    fi
+                    ;;
+                *) platform_error_message >&2; return 1 ;;
+            esac
+            ;;
+        *)
+            platform_error_message >&2
+            return 1
+            ;;
+    esac
+}
+
+detect_cuda_major() {
+    local ver=""
+    if command -v nvcc >/dev/null 2>&1; then
+        ver="$(nvcc --version 2>/dev/null | grep -oE 'release [0-9]+' | awk '{print $2}' | head -n 1)"
+    fi
+    if [[ -z "$ver" ]]; then
+        local lib
+        for lib in /usr/local/cuda*/targets/*/lib/libcudart.so.* /usr/local/cuda*/targets/*/lib/stubs/libcudart.so.*; do
+            if [[ -f "$lib" ]]; then
+                ver="$(basename "$lib" | grep -oE 'libcudart\\.so\\.[0-9]+' | awk -F. '{print $3}' | head -n 1)"
+                break
+            fi
+        done
+    fi
+    if [[ -z "$ver" ]]; then
+        ver="$(ldconfig -p 2>/dev/null | grep -oE 'libcudart\\.so\\.[0-9]+' | awk -F. '{print $3}' | sort -rn | head -n 1)"
+    fi
+    case "$ver" in
+        12|13) printf '%s\n' "$ver" ;;
+        *) printf '\n' ;;
+    esac
+}
+
+asset_name() {
+    local flavor="$1"
+    case "$(platform_support_status)" in
+        supported)
+            case "$(platform_id)" in
+                Darwin/arm64) printf 'mesh-llm-aarch64-apple-darwin.tar.gz\n' ;;
+                Linux/aarch64)
+                    case "$flavor" in
+                        cpu) printf 'mesh-llm-aarch64-unknown-linux-gnu.tar.gz\n' ;;
+                        cuda)
+                            local cuda_major
+                            cuda_major="$(detect_cuda_major)"
+                            if [[ -n "$cuda_major" ]]; then
+                                printf 'mesh-llm-aarch64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
+                            else
+                                printf 'mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz\n'
+                            fi
+                            ;;
+                        *) echo "error: unsupported aarch64 flavor '$flavor'" >&2; return 1 ;;
+                    esac
+                    ;;
+                Linux/x86_64)
+                    case "$flavor" in
+                        cpu) printf 'mesh-llm-x86_64-unknown-linux-gnu.tar.gz\n' ;;
+                        cuda)
+                            local cuda_major
+                            cuda_major="$(detect_cuda_major)"
+                            if [[ -n "$cuda_major" ]]; then
+                                printf 'mesh-llm-x86_64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
+                            else
+                                printf 'mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz\n'
+                            fi
+                            ;;
+                        rocm) printf 'mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz\n' ;;
+                        vulkan) printf 'mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz\n' ;;
+                        *) echo "error: unsupported Linux flavor '$flavor'" >&2; return 1 ;;
+                    esac
+                    ;;
+                *) platform_error_message >&2; return 1 ;;
+            esac
+            ;;
+        *)
+            platform_error_message >&2
+            return 1
             ;;
     esac
 }
