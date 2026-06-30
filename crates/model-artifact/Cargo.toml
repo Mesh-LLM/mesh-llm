@@ -11,7 +11,7 @@ readme = "README.md"
 [dependencies]
 anyhow.workspace = true
 async-trait = "0.1"
-model-ref = { path = "../model-ref", version = "0.68.0" }
+model-ref = { path = "../model-ref", version = "0.72.1" }
 serde.workspace = true
 
 [dev-dependencies]

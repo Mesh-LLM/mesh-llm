@@ -16,8 +16,8 @@ anyhow.workspace = true
 bytes = "1"
 chrono = "0.4"
 hf_hub = { package = "hf-hub", version = "1.0.0-rc.1", default-features = false, features = ["blocking"] }
-model-hf = { path = "../model-hf", version = "0.68.0"  }
-model-ref = { path = "../model-ref", version = "0.68.0"  }
+model-hf = { path = "../model-hf", version = "0.72.1"  }
+model-ref = { path = "../model-ref", version = "0.72.1"  }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde.workspace = true
 serde_json.workspace = true

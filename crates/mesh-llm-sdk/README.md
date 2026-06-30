@@ -23,7 +23,7 @@ checked against the exact Skippy ABI version.
 
 ```toml
 [dependencies]
-mesh-llm-sdk = "0.68.0"
+mesh-llm-sdk = "0.72.1"
 ```
 
 ```rust,no_run
@@ -45,7 +45,7 @@ client.disconnect().await;
 
 ```toml
 [dependencies]
-mesh-llm-sdk = { version = "0.68.0", features = ["serving"] }
+mesh-llm-sdk = { version = "0.72.1", features = ["serving"] }
 ```
 
 ```rust,no_run
@@ -71,7 +71,7 @@ Enable `serving` to use native-runtime install/update APIs:
 
 ```toml
 [dependencies]
-mesh-llm-sdk = { version = "0.68.0", features = ["serving"] }
+mesh-llm-sdk = { version = "0.72.1", features = ["serving"] }
 ```
 
 ```rust,no_run

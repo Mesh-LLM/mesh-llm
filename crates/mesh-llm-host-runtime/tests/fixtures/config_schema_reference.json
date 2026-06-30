@@ -947,7 +947,7 @@
       "name": "blobstore",
       "enabled": true,
       "source_repository": "built-in",
-      "installed_version": "0.68.0",
+      "installed_version": "0.72.1",
       "last_status": "built-in",
       "has_config_schema": false,
       "allow_unvalidated_config": false

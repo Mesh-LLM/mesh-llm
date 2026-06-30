@@ -64,6 +64,53 @@ update_workspace_version() {
     printf '%s\n' "$after" >"$file"
 }
 
+read_workspace_version() {
+    local file="$1"
+    perl -0ne 'print "$1\n" if /\[workspace\.package\][^[]*?\nversion\s*=\s*"([^"]+)"/s' "$file"
+}
+
+update_literal_version_references() {
+    local file="$1"
+    local previous="$2"
+    local next="$3"
+    local before
+    local after
+    before="$(cat "$file")"
+    after="$(
+        perl -0777 -pe '
+            BEGIN {
+                $previous = quotemeta($ARGV[0]);
+                $next = $ARGV[1];
+                shift @ARGV;
+                shift @ARGV;
+            }
+            s/v$previous/v$next/g;
+            s/$previous/$next/g;
+        ' "$previous" "$next" "$file"
+    )"
+    if [[ "$before" == "$after" ]]; then
+        return
+    fi
+    printf '%s\n' "$after" >"$file"
+}
+
+update_known_mesh_versions() {
+    local file="$1"
+    local next="$2"
+    local before
+    local after
+    before="$(cat "$file")"
+    if perl -0777 -ne 'exit((/"'"$next"'"/) ? 0 : 1)' "$file"; then
+        return
+    fi
+    after="$(perl -0777 -pe 's/(fn known_mesh_llm_versions\(\).*?\&\[\n\s*)/${1}"'"$next"'", /s' "$file")"
+    if [[ "$before" == "$after" ]]; then
+        echo "failed to add $next to known mesh-llm versions in $file" >&2
+        exit 1
+    fi
+    printf '%s\n' "$after" >"$file"
+}
+
 update_versioned_path_dependency_versions() {
     local file="$1"
     local next="$2"
@@ -132,6 +179,11 @@ versioned_files=()
 
 workspace_manifest="$REPO_ROOT/Cargo.toml"
 require_file "$workspace_manifest"
+previous_version="$(read_workspace_version "$workspace_manifest")"
+if [[ -z "$previous_version" ]]; then
+    echo "failed to read [workspace.package].version from $workspace_manifest" >&2
+    exit 1
+fi
 update_workspace_version "$workspace_manifest" "$version"
 update_versioned_path_dependency_versions "$workspace_manifest" "$version"
 versioned_files+=("$workspace_manifest")
@@ -148,6 +200,37 @@ kotlin_build_file="$REPO_ROOT/sdk/kotlin/build.gradle.kts"
 require_file "$kotlin_build_file"
 update_gradle_project_version "$kotlin_build_file" "$version"
 versioned_files+=("$kotlin_build_file")
+
+literal_version_files=(
+    "crates/mesh-llm-native-runtime/README.md"
+    "crates/mesh-llm-sdk/README.md"
+    "crates/mesh-llm-ui/package.json"
+    "crates/mesh-llm-ui/package-lock.json"
+    "sdk/node/package.json"
+    "docs/sdk/node.md"
+    "docs/sdk/rust.md"
+    "docs/sdk/swift.md"
+    "docs/SDK.md"
+    "sdk/swift/README.md"
+    "sdk/swift/scripts/generate-swift-bindings.sh"
+    "website/src/docs/pages/CLI.md"
+    "docs/design/NATIVE_RUNTIMES.md"
+    "sdk/kotlin/README.md"
+    "sdk/kotlin/example/example-jvm/build.gradle.kts"
+    "crates/mesh-llm-config/src/model/built_in_schema/presentation.rs"
+)
+
+for relative_file in "${literal_version_files[@]}"; do
+    file="$REPO_ROOT/$relative_file"
+    require_file "$file"
+    update_literal_version_references "$file" "$previous_version" "$version"
+    versioned_files+=("$file")
+done
+
+known_versions_file="$REPO_ROOT/crates/mesh-llm-config/src/model/built_in_schema.rs"
+require_file "$known_versions_file"
+update_known_mesh_versions "$known_versions_file" "$version"
+versioned_files+=("$known_versions_file")
 
 echo "Refreshing Cargo.lock workspace package versions..."
 refresh_cargo_lock_versions

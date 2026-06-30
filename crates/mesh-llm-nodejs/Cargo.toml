@@ -16,7 +16,7 @@ default = ["embedded-runtime"]
 embedded-runtime = []
 
 [dependencies]
-mesh-llm-sdk = { path = "../mesh-llm-sdk", version = "0.68.0", default-features = false, features = ["client", "node", "console", "serving"] }
+mesh-llm-sdk = { path = "../mesh-llm-sdk", version = "0.72.1", default-features = false, features = ["client", "node", "console", "serving"] }
 napi = { version = "2.16.17", features = ["napi4", "tokio_rt"] }
 napi-derive = "2.16.13"
 serde_json.workspace = true

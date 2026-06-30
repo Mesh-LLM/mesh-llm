@@ -139,6 +139,10 @@ build-runtime backend="" cuda_arch="" rocm_arch="":
 
 # Build release artifacts for the current platform.
 
+# Prepare, publish, and watch a GitHub release from main.
+release version *ARGS:
+    @scripts/release.sh "{{ version }}" {{ ARGS }}
+
 # Release builds default to dynamic native runtimes. Set
 # MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 when validating a release binary with
 # branch-local llama.cpp ABI changes embedded.

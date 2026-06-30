@@ -21,13 +21,13 @@ workspace = true
 anyhow.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 clap.workspace = true
-mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.68.0" }
-mesh-llm-commands = { path = "../mesh-llm-commands", version = "0.68.0" }
+mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.72.1" }
+mesh-llm-commands = { path = "../mesh-llm-commands", version = "0.72.1" }
 mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", default-features = false }
-mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.68.0" }
-mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.68.0" }
-mesh-llm-system = { path = "../mesh-llm-system", version = "0.68.0", features = ["skippy-devices"] }
-mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.68.0" }
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.72.1" }
+mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.72.1" }
+mesh-llm-system = { path = "../mesh-llm-system", version = "0.72.1", features = ["skippy-devices"] }
+mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.72.1" }
 reqwest = { version = "0.12", features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true

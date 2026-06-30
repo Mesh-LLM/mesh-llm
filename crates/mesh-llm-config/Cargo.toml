@@ -12,10 +12,10 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-mesh-llm-types = { path = "../mesh-llm-types", version = "0.68.0"  }
+mesh-llm-types = { path = "../mesh-llm-types", version = "0.72.1"  }
 semver = "1"
 serde = { workspace = true }
-skippy-protocol = { path = "../skippy-protocol", version = "0.68.0"  }
+skippy-protocol = { path = "../skippy-protocol", version = "0.72.1"  }
 toml = "0.9"
 toml_edit = "0.25"
 dirs = "6.0.0"

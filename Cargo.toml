@@ -66,14 +66,14 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-version = "0.68.0"
+version = "0.72.1"
 
 [workspace.dependencies]
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
-mesh-llm-build-info = { path = "crates/mesh-llm-build-info", version = "0.68.0" }
-mesh-llm-skills = { path = "crates/mesh-llm-skills", version = "0.68.0" }
+mesh-llm-build-info = { path = "crates/mesh-llm-build-info", version = "0.72.1" }
+mesh-llm-skills = { path = "crates/mesh-llm-skills", version = "0.72.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

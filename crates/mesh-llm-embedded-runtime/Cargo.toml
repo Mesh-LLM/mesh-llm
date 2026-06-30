@@ -20,6 +20,5 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", version = "0.68.0", default-features = false }
+mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", version = "0.72.1", default-features = false }
 serde_json.workspace = true
-

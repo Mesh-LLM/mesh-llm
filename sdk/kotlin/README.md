@@ -32,7 +32,7 @@ Then depend on the SDK:
 
 ```kotlin
 dependencies {
-    implementation("ai.meshllm:meshllm-android:0.68.0")
+    implementation("ai.meshllm:meshllm-android:0.72.1")
 }
 ```
 

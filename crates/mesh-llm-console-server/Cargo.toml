@@ -13,5 +13,5 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-mesh-llm-ui = { path = "../mesh-llm-ui", version = "0.68.0", default-features = false }
+mesh-llm-ui = { path = "../mesh-llm-ui", version = "0.72.1", default-features = false }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }

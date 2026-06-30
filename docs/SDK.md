@@ -56,7 +56,7 @@ Add the Rust SDK facade crate:
 
 ```toml
 [dependencies]
-mesh-llm-sdk = "0.68.0"
+mesh-llm-sdk = "0.72.1"
 ```
 
 The default Rust SDK feature exposes client-side mesh APIs without depending on
@@ -80,7 +80,7 @@ Add the repo Swift package from a tagged GitHub release:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.68.0"),
+    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.72.1"),
 ],
 targets: [
     .target(
@@ -137,7 +137,7 @@ Install the Node package in a Node.js or Electron app:
 ```json
 {
   "dependencies": {
-    "@meshllm/sdk": "0.68.0"
+    "@meshllm/sdk": "0.72.1"
   }
 }
 ```

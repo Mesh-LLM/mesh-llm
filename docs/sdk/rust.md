@@ -10,7 +10,7 @@ Client-only applications can use the default features:
 [dependencies]
 anyhow = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
-mesh-llm-sdk = "0.68.0"
+mesh-llm-sdk = "0.72.1"
 ```
 
 Serving applications need the `serving` feature:
@@ -20,7 +20,7 @@ Serving applications need the `serving` feature:
 anyhow = "1"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-mesh-llm-sdk = { version = "0.68.0", features = ["serving"] }
+mesh-llm-sdk = { version = "0.72.1", features = ["serving"] }
 ```
 
 Add `console` with `serving` when the embedded node should serve packaged web

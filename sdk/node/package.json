@@ -1,6 +1,6 @@
 {
   "name": "@meshllm/sdk",
-  "version": "0.68.0",
+  "version": "0.72.1",
   "description": "Node.js SDK for MeshLLM client and local serving applications",
   "main": "index.js",
   "types": "index.d.ts",
