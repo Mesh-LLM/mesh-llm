@@ -22,7 +22,33 @@ Exposes `:3131` (dashboard, chat, topology) and proxies inference to mesh GPU no
 
 ## Deploy
 
-From the **repo root**:
+### Preferred: GitHub Action (manual)
+
+Deploy via the **Deploy Fly Console** workflow
+(`.github/workflows/fly-deploy-console.yml`). It builds the image on Fly's
+remote builders and deploys `mesh-llm-console` — no local Fly login needed.
+
+From the Actions tab, run the workflow, or from the CLI:
+
+```bash
+# Deploys the default branch
+gh workflow run "Deploy Fly Console"
+
+# Deploy a specific branch/tag/SHA
+gh workflow run "Deploy Fly Console" -f ref=v0.72.0
+```
+
+The workflow authenticates with the `FLY_API_TOKEN` repo secret, which holds an
+app-scoped Fly deploy token:
+
+```bash
+fly tokens create deploy -a mesh-llm-console
+gh secret set FLY_API_TOKEN   # paste the token when prompted
+```
+
+### Fallback: local deploy
+
+From the **repo root** (requires `fly auth login`):
 
 ```bash
 fly deploy --config fly/console/fly.toml --dockerfile fly/Dockerfile
