@@ -44,6 +44,27 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn(f"asset={platform_asset}", result.stdout)
             self.assertIn(f"archive={tmp_path / platform_asset}", result.stdout)
 
+    def test_release_url_honors_test_asset_base_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                """
+                RELEASE_URL_BASE=https://example.invalid/assets/
+                release_url mesh-llm-aarch64-unknown-linux-gnu.tar.gz
+                """,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.strip(),
+                "https://example.invalid/assets/mesh-llm-aarch64-unknown-linux-gnu.tar.gz",
+            )
+
     def test_download_release_archive_falls_back_to_mesh_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

@@ -9,6 +9,7 @@ INSTALL_PRERELEASE="${MESH_LLM_INSTALL_PRERELEASE:-0}"
 INSTALL_SERVICE="${MESH_LLM_INSTALL_SERVICE:-0}"
 INSTALL_SERVICE_ARGS="${MESH_LLM_INSTALL_SERVICE_ARGS:-}"
 INSTALL_SERVICE_START="${MESH_LLM_INSTALL_SERVICE_START:-1}"
+RELEASE_URL_BASE="${MESH_LLM_INSTALL_URL_BASE:-}"
 REQUIRE_CHECKSUM="${MESH_LLM_REQUIRE_CHECKSUM:-0}"
 AUTO_SETUP=1
 DOWNLOADED_ARCHIVE=""
@@ -61,6 +62,7 @@ mesh-llm setup instead of installing services in shell.
 
 Environment overrides:
   MESH_LLM_INSTALL_DIR
+  MESH_LLM_INSTALL_URL_BASE  Override release asset base URL for testing.
   MESH_LLM_INSTALL_PRERELEASE=1
   MESH_LLM_INSTALL_FLAVOR    Legacy compatibility variable. Ignored with a warning.
   MESH_LLM_INSTALL_SERVICE=1 Legacy compatibility variable. Passed through as --service.
@@ -219,6 +221,10 @@ latest_prerelease_tag() {
 
 release_url() {
     local asset="$1"
+    if [[ -n "$RELEASE_URL_BASE" ]]; then
+        printf '%s/%s\n' "${RELEASE_URL_BASE%/}" "$asset"
+        return 0
+    fi
     if bool_is_true "$INSTALL_PRERELEASE"; then
         local tag
         tag="$(latest_prerelease_tag)"
