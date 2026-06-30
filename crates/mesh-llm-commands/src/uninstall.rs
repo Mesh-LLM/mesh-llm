@@ -1,8 +1,8 @@
+use crate::terminal::{self, ConfirmDefault, style_muted, style_ok, style_warn};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::{
-    fs,
-    io::{self, IsTerminal, Write},
+    fs, io,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -592,58 +592,8 @@ fn purpose_label(purpose: RemovePurpose) -> &'static str {
 }
 
 fn confirm_uninstall() -> Result<bool> {
-    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
-        return Ok(false);
-    }
-
-    loop {
-        eprint!(
-            "{} Remove mesh-llm from this machine? [y/N] ",
-            prompt_marker()
-        );
-        io::stderr()
-            .flush()
-            .context("failed to flush uninstall confirmation prompt")?;
-
-        let mut reply = String::new();
-        io::stdin()
-            .read_line(&mut reply)
-            .context("failed to read uninstall confirmation")?;
-
-        match reply.trim().to_ascii_lowercase().as_str() {
-            "" | "n" | "no" => return Ok(false),
-            "y" | "yes" => return Ok(true),
-            _ => eprintln!("Please answer y or n."),
-        }
-    }
-}
-
-fn prompt_marker() -> String {
-    if io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
-        "\x1b[36m?\x1b[0m".to_string()
-    } else {
-        "?".to_string()
-    }
-}
-
-fn style_ok(text: &str) -> String {
-    style(text, "32")
-}
-
-fn style_warn(text: &str) -> String {
-    style(text, "33")
-}
-
-fn style_muted(text: &str) -> String {
-    style(text, "2")
-}
-
-fn style(text: &str, ansi_code: &str) -> String {
-    if io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
-        format!("\x1b[{ansi_code}m{text}\x1b[0m")
-    } else {
-        text.to_string()
-    }
+    terminal::confirm_yes_no("Remove mesh-llm from this machine?", ConfirmDefault::No)
+        .map(|reply| reply.unwrap_or(false))
 }
 
 fn current_platform() -> UninstallPlatform {

@@ -3,20 +3,24 @@ use super::command::{CliSetupActions, SetupServiceOutcome};
 use crate::runtime_native::{
     SetupNativeRuntimeOutcome, SetupNativeRuntimePruneResult, SetupNativeRuntimeStatus,
 };
+use crate::terminal::{style_muted, style_ok, style_warn};
 use mesh_llm_runtime_install::NativeRuntimeInstallStatus;
-use std::io::IsTerminal;
 
 pub(crate) fn print_runtime_install_result(outcome: &SetupNativeRuntimeOutcome) {
     match &outcome.status {
         SetupNativeRuntimeStatus::Skipped => {}
         SetupNativeRuntimeStatus::Installed(installed) => match installed.status {
             NativeRuntimeInstallStatus::Installed => eprintln!(
-                "✅ Installed native runtime {} for mesh version {}",
-                installed.runtime.native_runtime_id, installed.runtime.mesh_version
+                "{} Installed native runtime {} for mesh version {}",
+                style_ok("✓"),
+                installed.runtime.native_runtime_id,
+                installed.runtime.mesh_version
             ),
             NativeRuntimeInstallStatus::AlreadyInstalled => eprintln!(
-                "✅ Native runtime {} is already installed for mesh version {}",
-                installed.runtime.native_runtime_id, installed.runtime.mesh_version
+                "{} Native runtime {} is already installed for mesh version {}",
+                style_ok("✓"),
+                installed.runtime.native_runtime_id,
+                installed.runtime.mesh_version
             ),
         },
     }
@@ -168,26 +172,6 @@ fn github_brief(actions: &CliSetupActions<'_>) -> Option<String> {
             Some(style_warn("not starred"))
         }
         _ => None,
-    }
-}
-
-fn style_ok(text: &str) -> String {
-    style(text, "32")
-}
-
-fn style_warn(text: &str) -> String {
-    style(text, "33")
-}
-
-fn style_muted(text: &str) -> String {
-    style(text, "2")
-}
-
-fn style(text: &str, ansi_code: &str) -> String {
-    if std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
-        format!("\x1b[{ansi_code}m{text}\x1b[0m")
-    } else {
-        text.to_string()
     }
 }
 
