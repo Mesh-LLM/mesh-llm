@@ -1,4 +1,4 @@
-From 459e05b46cc375894b3386f6f732f6028a9a6699 Mon Sep 17 00:00:00 2001
+From 5625209c975d14399629caa50adf3cbb810dbcf5 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
 Subject: [PATCH 02/10] Add early staged model-family and chat support
@@ -32,11 +32,11 @@ Squashes the first Qwen MoE staged-runtime support, native KV page basics, sessi
  create mode 100644 common/stage-chat.cpp
 
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index fc16b21c..4e5a28c0 100644
+index 4cf580a0..b06bfeda 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
-@@ -100,6 +100,7 @@ add_library(${TARGET}
-     regex-partial.h
+@@ -98,6 +98,7 @@ add_library(${TARGET}
+     reasoning-budget.h
      sampling.cpp
      sampling.h
 +    stage-chat.cpp
@@ -319,10 +319,10 @@ index 7ab93d35..23a46e0f 100644
          const char * path,
          struct skippy_model_info ** out_info,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index c39487b8..126261f2 100644
+index 118987b3..dfde71c8 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -20,6 +20,7 @@
+@@ -22,6 +22,7 @@
  #include <unordered_set>
  
  static thread_local skippy_graph_filter g_skippy_graph_filter;
@@ -330,7 +330,7 @@ index c39487b8..126261f2 100644
  
  void skippy_graph_set_filter(const skippy_graph_filter & filter) {
      g_skippy_graph_filter = filter;
-@@ -33,6 +34,18 @@ const skippy_graph_filter & skippy_graph_get_filter() {
+@@ -35,6 +36,18 @@ const skippy_graph_filter & skippy_graph_get_filter() {
      return g_skippy_graph_filter;
  }
  
@@ -349,7 +349,7 @@ index c39487b8..126261f2 100644
  // dedup helpers
  
  static ggml_tensor * build_attn_inp_kq_mask(
-@@ -153,6 +166,18 @@ bool llm_graph_input_embd_h::can_reuse(const llm_graph_params & params) {
+@@ -155,6 +168,18 @@ bool llm_graph_input_embd_h::can_reuse(const llm_graph_params & params) {
      return res;
  }
  
@@ -368,7 +368,7 @@ index c39487b8..126261f2 100644
  void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
      if (ubatch->pos && pos) {
          const int64_t n_tokens = ubatch->n_tokens;
-@@ -680,17 +705,22 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
+@@ -967,17 +992,22 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
  }
  
  void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
@@ -396,7 +396,7 @@ index c39487b8..126261f2 100644
      }
  
      const int64_t n_rs = mctx->get_recr()->get_n_rs();
-@@ -733,9 +763,14 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
+@@ -1020,9 +1050,14 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
  // Instead of creating a hybrid input, the graph can simply create 2 separate inputs.
  // Refactoring is required in the future.
  void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
@@ -414,10 +414,10 @@ index c39487b8..126261f2 100644
      const int64_t n_rs = mctx->get_recr()->get_n_rs();
  
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 00170956..bc1e10e2 100644
+index b943320e..31083518 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
-@@ -36,9 +36,17 @@ struct skippy_graph_filter {
+@@ -38,9 +38,17 @@ struct skippy_graph_filter {
      bool include_output = false;
  };
  
@@ -435,7 +435,7 @@ index 00170956..bc1e10e2 100644
  
  // certain models (typically multi-modal) can produce different types of graphs
  enum llm_graph_type {
-@@ -152,6 +160,18 @@ public:
+@@ -154,6 +162,18 @@ public:
      const int64_t n_embd = 0;
  };
  
@@ -455,7 +455,7 @@ index 00170956..bc1e10e2 100644
  public:
      llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 2802103b..400a9d29 100644
+index 12bf5c37..906e9eac 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -4,6 +4,7 @@
@@ -466,8 +466,8 @@ index 2802103b..400a9d29 100644
  
  #include <algorithm>
  #include <cassert>
-@@ -1220,6 +1221,352 @@ ggml_type llama_kv_cache::type_v() const {
-     return layers[0].v->type;
+@@ -1240,6 +1241,352 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
+     return layers[ikv].k;
  }
  
 +bool llama_kv_cache::stage_export_kv_page(
@@ -820,7 +820,7 @@ index 2802103b..400a9d29 100644
      uint32_t result = 0;
  
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 3d68f98c..83cee5f9 100644
+index 531d99db..d9301c19 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -6,12 +6,14 @@
@@ -838,9 +838,9 @@ index 3d68f98c..83cee5f9 100644
  
  //
  // llama_kv_cache
-@@ -161,6 +163,23 @@ public:
-     ggml_type type_k() const;
-     ggml_type type_v() const;
+@@ -164,6 +166,23 @@ public:
+     std::vector<uint32_t> get_layer_ids() const;
+     ggml_tensor * get_k_storage(int32_t il) const;
  
 +    bool stage_export_kv_page(
 +            int32_t layer_start,
@@ -863,10 +863,10 @@ index 3d68f98c..83cee5f9 100644
      // graph_build API
      //
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 86909230..622b228e 100644
+index 9b0e00ae..561e9850 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1088,13 +1088,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1091,13 +1091,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
      };
  
      auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
@@ -880,7 +880,7 @@ index 86909230..622b228e 100644
          // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
          // the tensor is duplicated
          // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
-@@ -1128,22 +1121,38 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1131,22 +1124,38 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                      break;
              }
  
@@ -929,10 +929,10 @@ index 86909230..622b228e 100644
          if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
              const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index d041a9ce..fc13d414 100644
+index d58ebac2..3196973f 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -1360,13 +1360,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1367,13 +1367,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
              }
  
              // MoE expert weight scales (per-expert, shape {n_expert})

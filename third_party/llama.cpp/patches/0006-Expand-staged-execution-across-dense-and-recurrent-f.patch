@@ -1,4 +1,4 @@
-From d0277a060caf50075309793f8766d659c0738945 Mon Sep 17 00:00:00 2001
+From e460fa7f64063a38265e145a9e27c81bdcedd044 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
 Subject: [PATCH 06/10] Expand staged execution across dense and recurrent
@@ -51,10 +51,10 @@ index deb5151e..84169398 100644
          const struct skippy_session * session);
  
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 126261f2..f975b84f 100644
+index dfde71c8..4945ab1e 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -1951,10 +1951,15 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+@@ -2260,10 +2260,15 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
  
      res->t_inp_embd = cur;
  
@@ -719,10 +719,10 @@ index dba160b0..2b69aaba 100644
      cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);
  
 diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
-index 07b7346e..c497c3af 100644
+index 70e837d6..3534c956 100644
 --- a/src/models/lfm2.cpp
 +++ b/src/models/lfm2.cpp
-@@ -225,7 +225,20 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -226,7 +226,20 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
      };
  
      // actual graph construction starts here
@@ -744,7 +744,7 @@ index 07b7346e..c497c3af 100644
      cb(cur, "model.embed_tokens", -1);
  
      ggml_build_forward_expand(gf, cur);
-@@ -237,10 +250,10 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -238,10 +251,10 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
          inp_hybrid = build_inp_mem_hybrid();
      }
  
@@ -758,7 +758,7 @@ index 07b7346e..c497c3af 100644
          const bool is_moe_layer = il >= static_cast<int>(hparams.n_layer_dense_lead);
  
          auto * prev_cur = cur;
-@@ -250,7 +263,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -251,7 +264,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
          cur = hparams.is_recr(il) ? build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
                                      build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
  
@@ -767,7 +767,7 @@ index 07b7346e..c497c3af 100644
              cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
              prev_cur = ggml_get_rows(ctx0, prev_cur, inp_out_ids);
          }
-@@ -270,6 +283,13 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -271,6 +284,13 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
          cb(cur, "l_out", il);
      }
  

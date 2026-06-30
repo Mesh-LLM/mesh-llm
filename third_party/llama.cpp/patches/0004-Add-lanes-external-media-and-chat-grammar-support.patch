@@ -1,4 +1,4 @@
-From 0e34ce3acca749ba8e949d9b3b9e24dfc1537933 Mon Sep 17 00:00:00 2001
+From 29baeca7b5f406c2df3966e98c1e5e4b4ef10258 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
 Subject: [PATCH 04/10] Add lanes, external media, and chat grammar support
@@ -8,11 +8,11 @@ Squashes Qwen3 MoE staged execution, KV cache type and generation signal ABI, ba
  common/stage-chat.cpp    |  230 ++++++++
  include/skippy-signals.h |   44 ++
  include/skippy.h         |  165 +++---
- src/llama-kv-cache.cpp   |  346 ------------
+ src/llama-kv-cache.cpp   |  361 +------------
  src/llama-kv-cache.h     |   19 -
  src/models/qwen3moe.cpp  |   18 +-
  src/skippy.cpp           | 1079 +++++++++++++++++++++++---------------
- 7 files changed, 1013 insertions(+), 888 deletions(-)
+ 7 files changed, 1019 insertions(+), 897 deletions(-)
  create mode 100644 include/skippy-signals.h
 
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
@@ -573,11 +573,40 @@ index 4dd985da..3ffdb879 100644
          const char * path,
          struct skippy_model_info ** out_info,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 400a9d29..024bac7a 100644
+index 906e9eac..4bdefc22 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1221,352 +1221,6 @@ ggml_type llama_kv_cache::type_v() const {
-     return layers[0].v->type;
+@@ -212,12 +212,10 @@ llama_kv_cache::llama_kv_cache(
+             n_embd_head_k_all = -1;
+         }
+ 
+-        if (!is_mla) {
+-            if (n_embd_head_v_all == 0) {
+-                n_embd_head_v_all = (int32_t) hparams.n_embd_head_v(il);
+-            } else if (n_embd_head_v_all > 0 && n_embd_head_v_all != (int32_t) hparams.n_embd_head_v(il)) {
+-                n_embd_head_v_all = -1;
+-            }
++        if (n_embd_head_v_all == 0) {
++            n_embd_head_v_all = (int32_t) hparams.n_embd_head_v(il);
++        } else if (n_embd_head_v_all > 0 && n_embd_head_v_all != (int32_t) hparams.n_embd_head_v(il)) {
++            n_embd_head_v_all = -1;
+         }
+ 
+         // [TAG_V_CACHE_VARIABLE]
+@@ -339,9 +337,8 @@ llama_kv_cache::llama_kv_cache(
+             ggml_is_quantized(type_k) &&
+             hparams.n_embd_head_k() % 64 == 0;
+ 
+-        // always create Hadamard rotation tensors for DeepSeek lightning indexers
+-        if ((model.arch == LLM_ARCH_DEEPSEEK32 || model.arch == LLM_ARCH_DEEPSEEK4) &&
+-                hparams.n_embd_head_k_full == hparams.indexer_head_size) {
++        // always create Hadamard rotation tensors for DeepSeek V3.2 DSA lightning indexer
++        if (model.arch == LLM_ARCH_DEEPSEEK32 && hparams.n_embd_head_k_full == hparams.indexer_head_size) {
+             attn_rot_k = true;
+         }
+ 
+@@ -1241,352 +1238,6 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
+     return layers[ikv].k;
  }
  
 -bool llama_kv_cache::stage_export_kv_page(
@@ -930,7 +959,7 @@ index 400a9d29..024bac7a 100644
      uint32_t result = 0;
  
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 83cee5f9..a3a1ec96 100644
+index d9301c19..92394d4c 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -13,8 +13,6 @@ struct llama_cparams;
@@ -942,9 +971,9 @@ index 83cee5f9..a3a1ec96 100644
  //
  // llama_kv_cache
  //
-@@ -163,23 +161,6 @@ public:
-     ggml_type type_k() const;
-     ggml_type type_v() const;
+@@ -166,23 +164,6 @@ public:
+     std::vector<uint32_t> get_layer_ids() const;
+     ggml_tensor * get_k_storage(int32_t il) const;
  
 -    bool stage_export_kv_page(
 -            int32_t layer_start,

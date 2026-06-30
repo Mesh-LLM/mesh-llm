@@ -1,4 +1,4 @@
-From 3bb375d5797de655cdee37f0a8eb272cfb609812 Mon Sep 17 00:00:00 2001
+From a4f23f17019419c4e1f7acd2bea9bd9ee18159f9 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
 Subject: [PATCH 03/10] Add staged sampling, checkpoints, and part loading
@@ -245,10 +245,10 @@ index 23a46e0f..4dd985da 100644
          size_t output_text_capacity,
          size_t * out_text_bytes,
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 622b228e..16cc0b06 100644
+index 561e9850..97372c4c 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -525,6 +525,7 @@ llama_model_loader::llama_model_loader(
+@@ -528,6 +528,7 @@ llama_model_loader::llama_model_loader(
          void * set_tensor_data_ud,
          const std::string & fname,
          std::vector<std::string> & splits,
@@ -256,7 +256,7 @@ index 622b228e..16cc0b06 100644
          FILE * file,
          bool use_mmap,
          bool use_direct_io,
-@@ -593,11 +594,50 @@ llama_model_loader::llama_model_loader(
+@@ -596,11 +597,50 @@ llama_model_loader::llama_model_loader(
              n_bytes    += ggml_nbytes(cur);
              weights_map.emplace(tensor_name, llama_tensor_weight(files.back().get(), 0, metadata, cur));
          }

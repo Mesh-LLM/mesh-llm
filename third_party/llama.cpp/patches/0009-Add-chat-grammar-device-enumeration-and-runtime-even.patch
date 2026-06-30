@@ -1,4 +1,4 @@
-From cb0d039fd5f045ee4ca9fce853bbcadb00c98fd4 Mon Sep 17 00:00:00 2001
+From be13ce7e46bea3e444fcf0aee3e611a7d9fbaabc Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
 Subject: [PATCH 09/10] Add chat grammar, device enumeration, and runtime
@@ -446,7 +446,7 @@ index 00000000..382f1e69
 +
 +#endif
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 8a3fb548..0957c6c8 100644
+index c29fe289..3e2e8abb 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -751,11 +751,28 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
@@ -575,7 +575,7 @@ index 8a3fb548..0957c6c8 100644
  bool llama_kv_cache::get_can_shift() const {
      // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
      if (model.arch == LLM_ARCH_STEP35) {
-@@ -2877,8 +2981,9 @@ llama_kv_cache_context::llama_kv_cache_context(
+@@ -2894,8 +2998,9 @@ llama_kv_cache_context::llama_kv_cache_context(
          llama_kv_cache * kv,
          llama_context * lctx,
          bool do_shift,
@@ -588,7 +588,7 @@ index 8a3fb548..0957c6c8 100644
      }
  }
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 52a013fc..c1fdfbd5 100644
+index be51c3c7..f8569057 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -95,6 +95,12 @@ public:
@@ -604,7 +604,7 @@ index 52a013fc..c1fdfbd5 100644
      // TODO: refactor the memory instances to not depend on `llama_model`
      //       instead pass all necessary info (e.g. hparams, dev layers, arch, etc.) directly
      //       likely through `struct llama_memory_params`
-@@ -214,6 +220,10 @@ public:
+@@ -217,6 +223,10 @@ public:
      // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
      void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
  
@@ -615,7 +615,7 @@ index 52a013fc..c1fdfbd5 100644
      //
      // input API
      //
-@@ -356,7 +366,8 @@ public:
+@@ -359,7 +369,8 @@ public:
              llama_kv_cache * kv,
              llama_context * lctx,
              bool do_shift,

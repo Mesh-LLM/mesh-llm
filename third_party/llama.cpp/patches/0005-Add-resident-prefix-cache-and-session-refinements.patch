@@ -1,4 +1,4 @@
-From 54d9cc574e4e79f12cdb467fda805c0e1c50a89c Mon Sep 17 00:00:00 2001
+From a1a99269e1e3205bb9ba54fe5dcecb11bb5b0edb Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
 Subject: [PATCH 05/10] Add resident prefix cache and session refinements
@@ -196,11 +196,11 @@ index 3ffdb879..deb5151e 100644
          struct skippy_model * model,
          const char * text,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 024bac7a..6fe17286 100644
+index 4bdefc22..53b3b035 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1221,6 +1221,363 @@ ggml_type llama_kv_cache::type_v() const {
-     return layers[0].v->type;
+@@ -1238,6 +1238,363 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
+     return layers[ikv].k;
  }
  
 +bool llama_kv_cache::stage_export_kv_page(
@@ -564,7 +564,7 @@ index 024bac7a..6fe17286 100644
      uint32_t result = 0;
  
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index a3a1ec96..52a013fc 100644
+index 92394d4c..be51c3c7 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -13,6 +13,8 @@ struct llama_cparams;
@@ -576,9 +576,9 @@ index a3a1ec96..52a013fc 100644
  //
  // llama_kv_cache
  //
-@@ -161,6 +163,25 @@ public:
-     ggml_type type_k() const;
-     ggml_type type_v() const;
+@@ -164,6 +166,25 @@ public:
+     std::vector<uint32_t> get_layer_ids() const;
+     ggml_tensor * get_k_storage(int32_t il) const;
  
 +    bool stage_export_kv_page(
 +            llama_seq_id seq_id,
