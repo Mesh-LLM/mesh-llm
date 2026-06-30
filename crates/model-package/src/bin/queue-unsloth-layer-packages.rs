@@ -68,11 +68,18 @@ struct SubmittedJob {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum SplitCompatibility {
+    Compatible,
+    Incompatible(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum QueueStatus {
     Missing,
     Published { repo: String },
     Cataloged { repo: String },
     Queued { repo: String },
+    Failed { repo: String },
     StaleQueued,
 }
 
@@ -89,6 +96,22 @@ struct QueueMarker<'a> {
     github_run_url: Option<String>,
     recent_rank: Option<usize>,
     popular_rank: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct QueueFailureMarker<'a> {
+    schema_version: u32,
+    failed_at: String,
+    source_repo: &'a str,
+    source_file: &'a str,
+    quant: &'a str,
+    target_repo: &'a str,
+    model_id: &'a str,
+    mesh_llm_ref: &'a str,
+    github_run_url: Option<String>,
+    hf_job_id: &'a str,
+    stage: String,
+    message: Option<&'a str>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -216,6 +239,13 @@ async fn main() -> Result<()> {
                 );
                 continue;
             }
+            QueueStatus::Failed { repo } => {
+                println!(
+                    "skip {}: layer package job previously failed for {}",
+                    candidate.model.repo_id, repo
+                );
+                continue;
+            }
             QueueStatus::Missing | QueueStatus::StaleQueued => {}
         }
 
@@ -298,7 +328,7 @@ async fn main() -> Result<()> {
 
     if args.wait_for_jobs && !submitted_jobs.is_empty() {
         let jobs_client = jobs_client.as_ref().expect("jobs client initialized");
-        wait_for_submitted_jobs(jobs_client, &args, submitted_jobs).await?;
+        wait_for_submitted_jobs(&hf_client, jobs_client, &args, submitted_jobs).await?;
     }
     Ok(())
 }
@@ -469,6 +499,7 @@ async fn ensure_bucket_script_current(client: &HFClient) -> Result<()> {
 }
 
 async fn wait_for_submitted_jobs(
+    hf_client: &HFClient,
     jobs_client: &HfJobsClient,
     args: &Args,
     submitted_jobs: Vec<SubmittedJob>,
@@ -477,6 +508,7 @@ async fn wait_for_submitted_jobs(
         .into_iter()
         .map(|job| (job.info.id.clone(), job))
         .collect::<HashMap<_, _>>();
+    let mut failures = Vec::new();
 
     println!(
         "Monitoring {} HF job(s) every {}s.",
@@ -506,13 +538,24 @@ async fn wait_for_submitted_jobs(
                 continue;
             }
             if stage.is_terminal() {
-                bail!(
+                let failure = format!(
                     "HF job {} for {} finished unsuccessfully: {}{}",
                     job_id,
                     submitted.candidate.model_id,
                     stage,
                     status_message_suffix(info.status.message.as_deref())
                 );
+                eprintln!("{failure}");
+                if let Err(err) =
+                    write_queue_failure_marker(hf_client, submitted, args, &info).await
+                {
+                    eprintln!(
+                        "failed to write queue failure marker for {}: {err:#}",
+                        submitted.candidate.target_repo
+                    );
+                }
+                failures.push(failure);
+                finished.push(job_id.clone());
             }
             if stage == JobStage::Unknown {
                 println!(
@@ -530,6 +573,14 @@ async fn wait_for_submitted_jobs(
         }
 
         tokio::time::sleep(args.job_poll_interval).await;
+    }
+
+    if !failures.is_empty() {
+        bail!(
+            "{} HF job(s) finished unsuccessfully:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     println!("All submitted HF jobs completed successfully.");
@@ -625,6 +676,15 @@ async fn build_candidate(
     model: RankedModel,
     args: &Args,
 ) -> Result<Option<Candidate>> {
+    let Some(source_info) = model_repo_info(client, &model.repo_id).await? else {
+        eprintln!("skip {}: source repo no longer exists", model.repo_id);
+        return Ok(None);
+    };
+    if let SplitCompatibility::Incompatible(reason) = model_split_compatibility(&source_info) {
+        eprintln!("skip {}: {reason}", model.repo_id);
+        return Ok(None);
+    }
+
     let quants = match prepare::list_quants(client, &model.repo_id).await {
         Ok(quants) => quants,
         Err(err) => {
@@ -738,6 +798,12 @@ async fn candidate_status(
         let has_queue_marker = siblings
             .iter()
             .any(|sibling| sibling.rfilename == "automation/queue.json");
+        let has_failure_marker = siblings
+            .iter()
+            .any(|sibling| sibling.rfilename == "automation/failure.json");
+        if has_failure_marker && repo == &candidate.target_repo {
+            return Ok(QueueStatus::Failed { repo: repo.clone() });
+        }
         if has_queue_marker {
             let queued_recently = repo_info
                 .last_modified
@@ -761,6 +827,87 @@ async fn candidate_status(
     }
 
     Ok(exact_status)
+}
+
+fn model_split_compatibility(info: &ModelInfo) -> SplitCompatibility {
+    if let Some(tag) = first_incompatible_media_tag(info) {
+        return SplitCompatibility::Incompatible(format!(
+            "unsupported media-generation tag '{tag}'; layer packages currently target text-generation GGUFs"
+        ));
+    }
+
+    let Some(pipeline_tag) = model_pipeline_tag(info) else {
+        return SplitCompatibility::Incompatible(
+            "missing text-generation pipeline_tag".to_string(),
+        );
+    };
+    if pipeline_tag.eq_ignore_ascii_case("text-generation") {
+        return SplitCompatibility::Compatible;
+    }
+
+    SplitCompatibility::Incompatible(format!(
+        "unsupported pipeline_tag '{pipeline_tag}'; layer packages currently require text-generation"
+    ))
+}
+
+fn model_pipeline_tag(info: &ModelInfo) -> Option<String> {
+    info.pipeline_tag
+        .as_deref()
+        .or_else(|| {
+            info.transformers_info
+                .as_ref()
+                .and_then(|transformers| transformers.pipeline_tag.as_deref())
+        })
+        .map(str::to_string)
+        .or_else(|| card_string_value(info.card_data.as_ref(), "pipeline_tag"))
+}
+
+fn first_incompatible_media_tag(info: &ModelInfo) -> Option<String> {
+    collect_model_tags(info)
+        .into_iter()
+        .find(|tag| is_incompatible_media_tag(tag))
+}
+
+fn collect_model_tags(info: &ModelInfo) -> Vec<String> {
+    let mut tags = info.tags.clone().unwrap_or_default();
+    if let Some(card_tags) = info.card_data.as_ref().and_then(|card| card.get("tags")) {
+        match card_tags {
+            Value::Array(values) => {
+                tags.extend(values.iter().filter_map(Value::as_str).map(str::to_string));
+            }
+            Value::String(tag) => tags.push(tag.clone()),
+            _ => {}
+        }
+    }
+    tags
+}
+
+fn card_string_value(card_data: Option<&Value>, key: &str) -> Option<String> {
+    card_data?
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn is_incompatible_media_tag(tag: &str) -> bool {
+    let tag = tag.to_ascii_lowercase();
+    matches!(
+        tag.as_str(),
+        "image-to-video"
+            | "text-to-video"
+            | "video-to-video"
+            | "image-text-to-video"
+            | "audio-to-video"
+            | "text-to-audio"
+            | "video-to-audio"
+            | "audio-to-audio"
+            | "text-to-audio-video"
+            | "image-to-audio-video"
+            | "image-text-to-audio-video"
+            | "image-to-image"
+            | "text-to-image"
+            | "image-generation"
+    ) || tag.contains("diffusion")
 }
 
 async fn model_repo_info(client: &HFClient, repo_id: &str) -> Result<Option<ModelInfo>> {
@@ -859,6 +1006,46 @@ async fn write_queue_marker(client: &HFClient, candidate: &Candidate, args: &Arg
         .send()
         .await
         .with_context(|| format!("upload queue marker to {}", candidate.target_repo))?;
+    Ok(())
+}
+
+async fn write_queue_failure_marker(
+    client: &HFClient,
+    submitted: &SubmittedJob,
+    args: &Args,
+    info: &JobInfo,
+) -> Result<()> {
+    let marker = QueueFailureMarker {
+        schema_version: 1,
+        failed_at: Utc::now().to_rfc3339(),
+        source_repo: &submitted.candidate.model.repo_id,
+        source_file: &submitted.candidate.quant.first_file,
+        quant: &submitted.candidate.quant.name,
+        target_repo: &submitted.candidate.target_repo,
+        model_id: &submitted.candidate.model_id,
+        mesh_llm_ref: &args.mesh_llm_ref,
+        github_run_url: std::env::var("GITHUB_RUN_URL").ok(),
+        hf_job_id: &info.id,
+        stage: info.status.stage.to_string(),
+        message: info.status.message.as_deref(),
+    };
+    let bytes = serde_json::to_vec_pretty(&marker)?;
+    let repo = model_repo(client, &submitted.candidate.target_repo)?;
+    repo.upload_file()
+        .source(AddSource::bytes(bytes))
+        .path_in_repo("automation/failure.json")
+        .commit_message(format!(
+            "Record failed layer package job for {}",
+            submitted.candidate.model_id
+        ))
+        .send()
+        .await
+        .with_context(|| {
+            format!(
+                "upload queue failure marker to {}",
+                submitted.candidate.target_repo
+            )
+        })?;
     Ok(())
 }
 
@@ -1072,6 +1259,7 @@ fn status_label(status: QueueStatus) -> &'static str {
         QueueStatus::Published { .. } => "published",
         QueueStatus::Cataloged { .. } => "cataloged",
         QueueStatus::Queued { .. } => "queued",
+        QueueStatus::Failed { .. } => "failed",
         QueueStatus::StaleQueued => "stale-queued",
     }
 }
@@ -1125,10 +1313,17 @@ mod tests {
 
     use model_package::jobs::CpuJobPlan;
 
+    use hf_hub::repository::ModelInfo;
+
     use super::{
-        Args, Candidate, DiscoveredQuant, RankedModel, estimated_bucket_workspace_bytes,
-        job_spec_with_token, json_layer_package_repo, model_family_key, model_layer_repos,
+        Args, Candidate, DiscoveredQuant, RankedModel, SplitCompatibility,
+        estimated_bucket_workspace_bytes, job_spec_with_token, json_layer_package_repo,
+        model_family_key, model_layer_repos, model_split_compatibility,
     };
+
+    fn model_info(value: serde_json::Value) -> ModelInfo {
+        serde_json::from_value(value).unwrap()
+    }
 
     #[test]
     fn model_family_key_collapses_common_unsloth_families() {
@@ -1153,6 +1348,66 @@ mod tests {
         assert_eq!(
             model_family_key("unsloth/NVIDIA-Nemotron-3-Super-120B-GGUF"),
             "nemotron"
+        );
+    }
+
+    #[test]
+    fn split_compatibility_accepts_text_generation_models() {
+        let info = model_info(serde_json::json!({
+            "id": "unsloth/Qwen-AgentWorld-35B-A3B-GGUF",
+            "pipeline_tag": "text-generation",
+            "tags": ["gguf", "qwen", "text-generation"]
+        }));
+
+        assert_eq!(
+            model_split_compatibility(&info),
+            SplitCompatibility::Compatible
+        );
+    }
+
+    #[test]
+    fn split_compatibility_rejects_media_generation_pipeline() {
+        let info = model_info(serde_json::json!({
+            "id": "unsloth/LTX-2-GGUF",
+            "pipeline_tag": "image-to-video",
+            "tags": ["gguf", "image-to-video", "text-to-video"]
+        }));
+
+        let SplitCompatibility::Incompatible(reason) = model_split_compatibility(&info) else {
+            panic!("LTX media model should not be split queued");
+        };
+        assert!(reason.contains("image-to-video"));
+    }
+
+    #[test]
+    fn split_compatibility_rejects_media_generation_card_tags() {
+        let info = model_info(serde_json::json!({
+            "id": "unsloth/Qwen-Image-Edit-2511-GGUF",
+            "pipeline_tag": "text-generation",
+            "cardData": {
+                "tags": ["gguf", "image-to-image"]
+            }
+        }));
+
+        let SplitCompatibility::Incompatible(reason) = model_split_compatibility(&info) else {
+            panic!("image generation model should not be split queued");
+        };
+        assert!(reason.contains("image-to-image"));
+    }
+
+    #[test]
+    fn split_compatibility_uses_model_card_pipeline_tag() {
+        let info = model_info(serde_json::json!({
+            "id": "unsloth/Text-Only-GGUF",
+            "tags": ["gguf"],
+            "cardData": {
+                "pipeline_tag": "text-generation"
+            }
+        }));
+
+        assert_eq!(
+            model_split_compatibility(&info),
+            SplitCompatibility::Compatible
         );
     }
 
