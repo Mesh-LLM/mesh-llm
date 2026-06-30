@@ -24,6 +24,7 @@ fn setup_command_args<'a>(
         service,
         no_service,
         skip_runtime,
+        verbose,
     } = cmd
     else {
         bail!("dispatch_setup_command called for non-setup command");
@@ -36,6 +37,7 @@ fn setup_command_args<'a>(
             service: *service,
             no_service: *no_service,
             skip_runtime: *skip_runtime,
+            verbose: *verbose,
         },
         environment: SetupEnvironment {
             platform: current_setup_platform(),
@@ -67,6 +69,7 @@ mod tests {
                 service: true,
                 no_service: false,
                 skip_runtime: true,
+                verbose: true,
             },
             mesh_llm_commands::runtime_native::NativeRuntimeConfigSelection::default(),
         )
@@ -80,6 +83,7 @@ mod tests {
                 service: true,
                 no_service: false,
                 skip_runtime: true,
+                verbose: true,
             }
         );
     }

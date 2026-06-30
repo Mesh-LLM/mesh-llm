@@ -4,8 +4,7 @@ use super::{
     SetupPromptDefault, SetupPromptKind, SetupPrompter,
 };
 
-const GITHUB_STAR_PROMPT: &str =
-    "Star Mesh-LLM/mesh-llm on GitHub using your authenticated GitHub CLI account?";
+const GITHUB_STAR_PROMPT: &str = "Star Mesh-LLM/mesh-llm on GitHub?";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SetupGitHubOutcome {

@@ -36,6 +36,17 @@ The installer downloads the `mesh-llm` executable and adds `~/.local/bin` to you
 
 Run `mesh-llm setup` to finish machine setup. See the [CLI guide](/docs/pages/CLI/) for the setup flags.
 
+## Uninstall
+
+```sh
+mesh-llm uninstall --dry-run
+mesh-llm uninstall --yes
+```
+
+On macOS, uninstall boots out the per-user launchd agent when present, removes
+setup-owned service files, removes the native-runtime cache, and removes the
+executable last. It preserves `~/.mesh-llm` unless you pass `--purge-config`.
+
 ## Advanced install
 
 Install the latest prerelease:

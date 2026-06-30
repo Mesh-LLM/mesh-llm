@@ -193,7 +193,7 @@ fn eligible_default_yes_stars_with_api_fallback_and_exact_prompt() {
     assert_eq!(prompter.prompts[0].default, SetupPromptDefault::Yes);
     assert_eq!(
         prompter.prompts[0].message,
-        "Star Mesh-LLM/mesh-llm on GitHub using your authenticated GitHub CLI account?"
+        "Star Mesh-LLM/mesh-llm on GitHub?"
     );
     assert_eq!(
         runner.commands,

@@ -1,5 +1,4 @@
-use dialoguer::Confirm;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SetupPromptKind {
@@ -37,14 +36,29 @@ pub(crate) fn confirm_yes_no(message: &str) -> Option<bool> {
         return None;
     }
 
-    Confirm::new()
-        .with_prompt(message)
-        .default(true)
-        .wait_for_newline(true)
-        .interact_opt()
-        .ok()
-        .flatten()
-        .or(Some(false))
+    loop {
+        eprint!("{} {} [Y/n] ", prompt_marker(), message);
+        let _ = io::stderr().flush();
+
+        let mut reply = String::new();
+        if io::stdin().read_line(&mut reply).is_err() {
+            return Some(false);
+        }
+
+        match reply.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => return Some(true),
+            "n" | "no" => return Some(false),
+            _ => eprintln!("Please answer y or n."),
+        }
+    }
+}
+
+fn prompt_marker() -> String {
+    if io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+        "\x1b[36m?\x1b[0m".to_string()
+    } else {
+        "?".to_string()
+    }
 }
 
 #[cfg(test)]

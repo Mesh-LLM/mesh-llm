@@ -6,12 +6,12 @@ Mesh can run on one machine or across several machines. The release flavor contr
 
 | Machine | Recommended flavor | Install behavior |
 |---|---|---|
-| Apple Silicon Mac | `metal` | macOS installer selects it automatically. |
-| Linux NVIDIA (all architectures) | `cuda` | Linux installer selects CUDA when NVIDIA tooling or devices are detected. |
+| Apple Silicon Mac | `metal` | Setup selects Metal automatically. |
+| Linux NVIDIA (all architectures) | `cuda` | Setup selects CUDA when a compatible published runtime matches the host CUDA toolkit and GPU architecture. |
 | Linux AMD | `rocm` | Use when ROCm/HIP is installed and supported by the GPU. |
 | Linux Vulkan-capable GPU | `vulkan` | Useful when CUDA/ROCm are not available. |
-| Linux ARM64 | `cpu` | Published ARM64 Linux bundle is CPU-only. |
-| Windows NVIDIA | `cuda` | Windows installer detects NVIDIA when possible. |
+| Linux ARM64 | `cuda` or `cpu` | NVIDIA Jetson/Orin-class hosts should use CUDA when the release publishes a compatible ARM64 CUDA runtime; otherwise setup falls back to CPU. |
+| Windows NVIDIA | `cuda` | Setup selects CUDA when a compatible published runtime matches the host. |
 | Windows AMD | `rocm` | Use when the Windows HIP runtime is available. |
 | Any supported OS | `cpu` | Slowest, but useful for testing and API-only workflows. |
 

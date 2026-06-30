@@ -30,6 +30,16 @@ The installer downloads the `mesh-llm` executable and adds `%LOCALAPPDATA%\mesh-
 
 Run `mesh-llm.exe setup` to finish machine setup. See the [CLI guide](/docs/pages/CLI/) for the setup flags.
 
+## Uninstall
+
+```powershell
+mesh-llm.exe uninstall --dry-run
+mesh-llm.exe uninstall --yes
+```
+
+On Windows, uninstall removes the executable and native-runtime cache. It
+preserves `%USERPROFILE%\.mesh-llm` unless you pass `--purge-config`.
+
 ## Advanced install
 
 Install the latest prerelease:

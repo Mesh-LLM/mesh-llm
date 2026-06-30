@@ -11,6 +11,7 @@ INSTALL_SERVICE_ARGS="${MESH_LLM_INSTALL_SERVICE_ARGS:-}"
 INSTALL_SERVICE_START="${MESH_LLM_INSTALL_SERVICE_START:-1}"
 RELEASE_URL_BASE="${MESH_LLM_INSTALL_URL_BASE:-}"
 REQUIRE_CHECKSUM="${MESH_LLM_REQUIRE_CHECKSUM:-0}"
+INSTALL_VERBOSE="${MESH_LLM_INSTALL_VERBOSE:-0}"
 AUTO_SETUP=1
 DOWNLOADED_ARCHIVE=""
 DOWNLOADED_ASSET=""
@@ -25,6 +26,21 @@ need_cmd() {
 
 warn() {
     echo "warning: $*" >&2
+}
+
+info() {
+    if bool_is_true "$INSTALL_VERBOSE"; then
+        echo "$@"
+    fi
+}
+
+style_ok() {
+    local text="$1"
+    if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+        printf '\033[32m%s\033[0m' "$text"
+    else
+        printf '%s' "$text"
+    fi
 }
 
 bool_is_true() {
@@ -45,7 +61,7 @@ path_contains_install_dir() {
 
 usage() {
     cat <<EOF
-Usage: install.sh [--pre-release] [--install-dir DIR] [--no-setup]
+Usage: install.sh [--pre-release] [--install-dir DIR] [--no-setup] [--verbose]
 
 Options:
   --pre-release              Install the latest published GitHub prerelease instead of the latest stable release.
@@ -58,6 +74,7 @@ mesh-llm setup automatically after install.
 mesh-llm setup instead of installing services in shell.
   --no-start-service         Legacy compatibility flag. Ignored with a warning.
   --service-args VALUE       Legacy compatibility flag. Ignored with a warning.
+  --verbose                  Print detailed download, checksum, and setup command output.
   -h, --help                 Show this help text.
 
 Environment overrides:
@@ -68,6 +85,7 @@ Environment overrides:
   MESH_LLM_INSTALL_SERVICE=1 Legacy compatibility variable. Passed through as --service.
   MESH_LLM_INSTALL_SERVICE_START=0 Legacy compatibility variable. Ignored with a warning.
   MESH_LLM_REQUIRE_CHECKSUM=1
+  MESH_LLM_INSTALL_VERBOSE=1
 EOF
 }
 
@@ -98,6 +116,10 @@ parse_args() {
                 ;;
             --no-setup)
                 AUTO_SETUP=0
+                ;;
+            --verbose)
+                INSTALL_VERBOSE=1
+                add_setup_arg "--verbose"
                 ;;
             --service)
                 warn "--service is deprecated in install.sh; forwarding it to \`mesh-llm setup --service\`."
@@ -130,6 +152,9 @@ parse_args() {
 }
 
 apply_legacy_env_compat() {
+    if bool_is_true "$INSTALL_VERBOSE"; then
+        add_setup_arg "--verbose"
+    fi
     if [[ -n "$INSTALL_FLAVOR" ]]; then
         warn "MESH_LLM_INSTALL_FLAVOR is deprecated in install.sh and is ignored; \`mesh-llm setup\` now owns runtime selection."
     fi
@@ -530,7 +555,7 @@ verify_downloaded_file() {
         echo "actual:   $actual" >&2
         return 1
     fi
-    echo "Verified checksum: $(basename "$file")"
+    info "Verified checksum: $(basename "$file")"
 }
 
 download_release_archive() {
@@ -552,7 +577,7 @@ download_release_archive() {
         DOWNLOADED_ASSET="$asset"
         DOWNLOADED_ARCHIVE="$archive"
         if [[ "$asset" == "$fallback_asset" ]]; then
-            echo "Using runtime-enabled mesh bundle fallback: $fallback_asset"
+            info "Using runtime-enabled mesh bundle fallback: $fallback_asset"
         fi
         return 0
     done
@@ -622,9 +647,13 @@ run_or_print_setup() {
     local command
     command="$(setup_command_string)"
 
-    echo
     if (( AUTO_SETUP == 1 )) && shell_is_interactive; then
-        echo "Running post-install setup: $command"
+        if bool_is_true "$INSTALL_VERBOSE"; then
+            echo
+            echo "Running post-install setup: $command"
+        else
+            echo
+        fi
         "$binary" setup "${SETUP_ARGS[@]}"
         return 0
     fi
@@ -640,7 +669,7 @@ main() {
     need_cmd mktemp
 
     local asset
-    asset="$(platform_asset_name)"
+    asset="$(asset_name "$(recommended_flavor)")"
 
     local tmp_dir
     tmp_dir="$(mktemp -d)"
@@ -648,7 +677,10 @@ main() {
     printf -v tmp_dir_escaped '%q' "$tmp_dir"
     trap "rm -rf -- $tmp_dir_escaped" EXIT
 
-    echo "Release channel: $(bool_is_true "$INSTALL_PRERELEASE" && echo prerelease || echo stable)"
+    info "Release channel: $(bool_is_true "$INSTALL_PRERELEASE" && echo prerelease || echo stable)"
+    if ! bool_is_true "$INSTALL_VERBOSE"; then
+        echo "↓ Fetching mesh-llm release..."
+    fi
     download_release_archive "$tmp_dir" "$asset"
 
     tar -xzf "$DOWNLOADED_ARCHIVE" -C "$tmp_dir"
@@ -658,7 +690,11 @@ main() {
     fi
 
     install_bundle "$tmp_dir/mesh-bundle"
-    echo "Installed $DOWNLOADED_ASSET to $INSTALL_DIR"
+    if bool_is_true "$INSTALL_VERBOSE"; then
+        echo "Installed $DOWNLOADED_ASSET to $INSTALL_DIR"
+    else
+        printf '%s Installed mesh-llm to %s\n' "$(style_ok "✓")" "$INSTALL_DIR"
+    fi
 
     if ! path_contains_install_dir; then
         echo

@@ -4,6 +4,7 @@ use crate::runtime_native::{
     SetupNativeRuntimeOutcome, SetupNativeRuntimePruneResult, SetupNativeRuntimeStatus,
 };
 use mesh_llm_runtime_install::NativeRuntimeInstallStatus;
+use std::io::IsTerminal;
 
 pub(crate) fn print_runtime_install_result(outcome: &SetupNativeRuntimeOutcome) {
     match &outcome.status {
@@ -21,21 +22,36 @@ pub(crate) fn print_runtime_install_result(outcome: &SetupNativeRuntimeOutcome) 
     }
 }
 
-pub(crate) fn print_service_install_result(report: &crate::setup::service::ServiceInstallReport) {
-    for line in &report.messages {
-        eprintln!("{line}");
+pub(crate) fn print_service_install_result(
+    report: &crate::setup::service::ServiceInstallReport,
+    verbose: bool,
+) {
+    if verbose {
+        for line in &report.messages {
+            eprintln!("{line}");
+        }
     }
 }
 
-pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>) {
+pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>, verbose: bool) {
     eprintln!();
-    eprintln!("Setup summary");
-    eprintln!("- Runtime: {}", runtime_summary(plan, actions));
-    eprintln!("- Service: {}", service_summary(plan, actions));
-    eprintln!(
-        "- GitHub: {}",
-        super::github::github_summary(plan, &actions.github_outcome)
-    );
+    if verbose {
+        eprintln!("Setup summary");
+        eprintln!("- Runtime: {}", runtime_summary(plan, actions));
+        eprintln!("- Service: {}", service_summary(plan, actions));
+        eprintln!(
+            "- GitHub: {}",
+            super::github::github_summary(plan, &actions.github_outcome)
+        );
+        return;
+    }
+
+    eprintln!("{} Mesh setup complete", style_ok("✓"));
+    eprintln!("  Runtime  {}", runtime_brief(plan, actions));
+    eprintln!("  Service  {}", service_brief(plan, actions));
+    if let Some(github) = github_brief(actions) {
+        eprintln!("  GitHub   {github}");
+    }
 }
 
 fn runtime_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
@@ -88,6 +104,90 @@ fn runtime_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
             }) => "skipped".to_string(),
             None => "not recorded".to_string(),
         },
+    }
+}
+
+fn runtime_brief(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
+    match plan.runtime {
+        super::SetupRuntimePlan::Skip => style_muted("skipped (--skip-runtime)"),
+        super::SetupRuntimePlan::InstallAndPrune => match actions.runtime_outcome.as_ref() {
+            Some(SetupNativeRuntimeOutcome {
+                status: SetupNativeRuntimeStatus::Installed(installed),
+                prune: SetupNativeRuntimePruneResult::Warning(_),
+            }) => match installed.status {
+                NativeRuntimeInstallStatus::Installed => style_warn("installed; prune warning"),
+                NativeRuntimeInstallStatus::AlreadyInstalled => {
+                    style_warn("already installed; prune warning")
+                }
+            },
+            Some(SetupNativeRuntimeOutcome {
+                status: SetupNativeRuntimeStatus::Installed(installed),
+                ..
+            }) => match installed.status {
+                NativeRuntimeInstallStatus::Installed => style_ok("ready"),
+                NativeRuntimeInstallStatus::AlreadyInstalled => style_ok("already ready"),
+            },
+            Some(SetupNativeRuntimeOutcome {
+                status: SetupNativeRuntimeStatus::Skipped,
+                ..
+            }) => style_muted("skipped"),
+            None => style_muted("not recorded"),
+        },
+    }
+}
+
+fn service_brief(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
+    match plan.service {
+        super::SetupServicePlan::Skip => style_muted("not installed"),
+        super::SetupServicePlan::Install => match actions.service_outcome {
+            SetupServiceOutcome::Installed(ref report)
+                if report.summary == "installed and started" =>
+            {
+                style_ok("running")
+            }
+            SetupServiceOutcome::Installed(_) => style_warn("installed; start manually"),
+            SetupServiceOutcome::NotRequested | SetupServiceOutcome::PrintedGuidance => {
+                style_muted("not recorded")
+            }
+        },
+        super::SetupServicePlan::PrintGuidance => match actions.service_outcome {
+            SetupServiceOutcome::PrintedGuidance => style_muted("not installed"),
+            SetupServiceOutcome::NotRequested | SetupServiceOutcome::Installed(_) => {
+                style_muted("not recorded")
+            }
+        },
+    }
+}
+
+fn github_brief(actions: &CliSetupActions<'_>) -> Option<String> {
+    match actions.github_outcome {
+        super::github::SetupGitHubOutcome::Starred => Some(style_ok("starred")),
+        super::github::SetupGitHubOutcome::AlreadyStarred => Some(style_ok("already starred")),
+        super::github::SetupGitHubOutcome::StarRequestFailed(_)
+        | super::github::SetupGitHubOutcome::EligibilityCheckFailed(_) => {
+            Some(style_warn("not starred"))
+        }
+        _ => None,
+    }
+}
+
+fn style_ok(text: &str) -> String {
+    style(text, "32")
+}
+
+fn style_warn(text: &str) -> String {
+    style(text, "33")
+}
+
+fn style_muted(text: &str) -> String {
+    style(text, "2")
+}
+
+fn style(text: &str, ansi_code: &str) -> String {
+    if std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+        format!("\x1b[{ansi_code}m{text}\x1b[0m")
+    } else {
+        text.to_string()
     }
 }
 

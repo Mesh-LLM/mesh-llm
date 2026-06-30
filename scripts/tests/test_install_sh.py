@@ -35,6 +35,7 @@ class InstallScriptTests(unittest.TestCase):
                 release_url() {{
                     printf 'file://{assets_dir}/%s\\n' "$1"
                 }}
+                INSTALL_VERBOSE=1
                 download_release_archive "{tmp_path}" "{platform_asset}"
                 printf 'asset=%s\\narchive=%s\\n' "$DOWNLOADED_ASSET" "$DOWNLOADED_ARCHIVE"
                 """,
@@ -177,6 +178,7 @@ class InstallScriptTests(unittest.TestCase):
                 release_url() {{
                     printf 'file://{assets_dir}/%s\\n' "$1"
                 }}
+                INSTALL_VERBOSE=1
                 download_release_archive "{tmp_path}" "{platform_asset}"
                 printf 'asset=%s\\narchive=%s\\n' "$DOWNLOADED_ASSET" "$DOWNLOADED_ARCHIVE"
                 """,
@@ -216,6 +218,41 @@ class InstallScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(calls.read_text(encoding="utf-8"), "setup\n")
             self.assertFalse(tools.exists())
+            self.assertIn("↓ Fetching mesh-llm release...", result.stdout)
+            self.assertIn("Installed mesh-llm to", result.stdout)
+            self.assertNotIn("Release channel:", result.stdout)
+            self.assertNotIn("Verified checksum:", result.stdout)
+            self.assertNotIn("Running post-install setup:", result.stdout)
+
+    def test_main_verbose_output_keeps_download_details(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls, tools = self._run_main(
+                tmp,
+                interactive=True,
+                args=["--verbose"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(calls.read_text(encoding="utf-8"), "setup --verbose\n")
+            self.assertFalse(tools.exists())
+            self.assertIn("Release channel: stable", result.stdout)
+            self.assertIn("Verified checksum:", result.stdout)
+            self.assertIn("Installed mesh-llm-aarch64-apple-darwin.tar.gz", result.stdout)
+            self.assertIn("Running post-install setup:", result.stdout)
+            self.assertNotIn("↓ Fetching mesh-llm release...", result.stdout)
+
+    def test_main_env_verbose_forwards_to_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls, tools = self._run_main(
+                tmp,
+                interactive=True,
+                extra_exports="INSTALL_VERBOSE=1",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(calls.read_text(encoding="utf-8"), "setup --verbose\n")
+            self.assertFalse(tools.exists())
+            self.assertIn("Release channel: stable", result.stdout)
 
     def test_main_prints_setup_command_when_noninteractive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -224,8 +261,10 @@ class InstallScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(calls.exists())
             self.assertFalse(tools.exists())
+            self.assertIn("↓ Fetching mesh-llm release...", result.stdout)
             self.assertIn("Run this next:", result.stdout)
             self.assertIn("/mesh-llm setup", result.stdout)
+            self.assertNotIn("Release channel:", result.stdout)
 
     def test_main_prints_setup_command_when_no_setup_is_requested(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -236,6 +275,23 @@ class InstallScriptTests(unittest.TestCase):
             self.assertFalse(tools.exists())
             self.assertIn("Run this next:", result.stdout)
             self.assertIn("/mesh-llm setup", result.stdout)
+
+    def test_main_downloads_recommended_cuda_asset_on_jetson_orin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result, _calls, _tools = self._run_main(
+                tmp,
+                interactive=False,
+                args=["--no-setup"],
+                os_name="Linux",
+                arch="aarch64",
+                tegra_model="NVIDIA Jetson AGX Orin",
+                archive_name="mesh-llm-aarch64-unknown-linux-gnu-cuda-13.tar.gz",
+                extra_exports="detect_cuda_major() { printf '13\\n'; }",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Installed mesh-llm to", result.stdout)
+            self.assertNotIn("mesh-llm-aarch64-unknown-linux-gnu-cuda-13.tar.gz", result.stdout)
 
     def test_legacy_service_flags_pass_through_to_setup_without_shell_service_calls(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -258,6 +314,11 @@ class InstallScriptTests(unittest.TestCase):
         *,
         interactive: bool,
         args: list[str] | None = None,
+        os_name: str = "Darwin",
+        arch: str = "arm64",
+        tegra_model: str = "",
+        archive_name: str = "mesh-llm-aarch64-apple-darwin.tar.gz",
+        extra_exports: str = "",
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
         tmp_path = Path(tmp_dir)
         install_dir = tmp_path / "bin"
@@ -266,7 +327,7 @@ class InstallScriptTests(unittest.TestCase):
         assets_dir.mkdir()
         calls = tmp_path / "mesh-llm-calls.log"
         tools = tmp_path / "service-tools.log"
-        archive_path = assets_dir / "mesh-llm-aarch64-apple-darwin.tar.gz"
+        archive_path = assets_dir / archive_name
         self._write_release_archive(archive_path, calls)
         wrappers = self._write_service_wrappers(tmp_path / "wrappers", tools)
         joined_args = " ".join(shlex_quote(arg) for arg in (args or []))
@@ -278,9 +339,11 @@ class InstallScriptTests(unittest.TestCase):
             release_url() {{
                 printf 'file://{assets_dir}/%s\\n' "$1"
             }}
+            {extra_exports}
             export MESH_LLM_TEST_INTERACTIVE={'1' if interactive else '0'}
-            export MESH_LLM_TEST_UNAME_S=Darwin
-            export MESH_LLM_TEST_UNAME_M=arm64
+            export MESH_LLM_TEST_UNAME_S={shlex_quote(os_name)}
+            export MESH_LLM_TEST_UNAME_M={shlex_quote(arch)}
+            export MESH_LLM_TEST_TEGRA_MODEL={shlex_quote(tegra_model)}
             main --install-dir {shlex_quote(str(install_dir))} {joined_args}
             """,
         )

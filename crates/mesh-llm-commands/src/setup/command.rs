@@ -51,9 +51,9 @@ where
 
 pub async fn run_setup_command(args: SetupCommandArgs<'_>) -> Result<()> {
     let mut prompter = CliSetupPrompter;
-    let mut actions = CliSetupActions::new(args.environment, args.configured);
+    let mut actions = CliSetupActions::new(args.environment, args.configured, args.options.verbose);
     let plan = run_setup(args.options, args.environment, &mut prompter, &mut actions).await?;
-    print_setup_summary(&plan, &actions);
+    print_setup_summary(&plan, &actions, args.options.verbose);
     Ok(())
 }
 
@@ -74,12 +74,14 @@ pub(crate) struct CliSetupActions<'a> {
     github_runner: Box<dyn GhCommandRunner>,
     pub(crate) service_outcome: SetupServiceOutcome,
     pub(crate) github_outcome: SetupGitHubOutcome,
+    verbose: bool,
 }
 
 impl<'a> CliSetupActions<'a> {
     pub(crate) fn new(
         environment: SetupEnvironment,
         configured: NativeRuntimeConfigSelection<'a>,
+        verbose: bool,
     ) -> Self {
         Self::with_support(
             environment,
@@ -87,6 +89,7 @@ impl<'a> CliSetupActions<'a> {
             None,
             Box::new(CliServiceCommandRunner),
             Box::new(ProcessGhCommandRunner::default()),
+            verbose,
         )
     }
 
@@ -96,6 +99,7 @@ impl<'a> CliSetupActions<'a> {
         service_context: Option<ServiceInstallContext>,
         service_runner: Box<dyn ServiceCommandRunner>,
         github_runner: Box<dyn GhCommandRunner>,
+        verbose: bool,
     ) -> Self {
         Self {
             environment,
@@ -106,6 +110,7 @@ impl<'a> CliSetupActions<'a> {
             github_runner,
             service_outcome: SetupServiceOutcome::NotRequested,
             github_outcome: SetupGitHubOutcome::NotEvaluated,
+            verbose,
         }
     }
 
@@ -123,6 +128,7 @@ impl<'a> CliSetupActions<'a> {
             Some(service_context),
             service_runner,
             github_runner,
+            false,
         )
     }
 
@@ -137,7 +143,9 @@ impl<'a> CliSetupActions<'a> {
             progress: None,
         })
         .await?;
-        print_runtime_install_result(&outcome);
+        if self.verbose {
+            print_runtime_install_result(&outcome);
+        }
         self.runtime_outcome = Some(outcome);
         Ok(())
     }
@@ -150,24 +158,24 @@ impl<'a> CliSetupActions<'a> {
         match &outcome.prune {
             SetupNativeRuntimePruneResult::Skipped => {}
             SetupNativeRuntimePruneResult::Pruned(plan) => {
-                if plan.remove_dirs.is_empty() {
-                    eprintln!("🧹 Native runtime cache is already clean");
-                } else {
-                    eprintln!(
-                        "🧹 Pruned {} inactive native runtime cache entr{}",
-                        plan.remove_dirs.len(),
-                        if plan.remove_dirs.len() == 1 {
-                            "y"
-                        } else {
-                            "ies"
-                        }
-                    );
+                if self.verbose {
+                    if plan.remove_dirs.is_empty() {
+                        eprintln!("Native runtime cache is already clean");
+                    } else {
+                        eprintln!(
+                            "Pruned {} inactive native runtime cache entr{}",
+                            plan.remove_dirs.len(),
+                            if plan.remove_dirs.len() == 1 {
+                                "y"
+                            } else {
+                                "ies"
+                            }
+                        );
+                    }
                 }
             }
             SetupNativeRuntimePruneResult::Warning(warning) => {
-                eprintln!(
-                    "⚠️  Native runtime installed, but inactive runtime cache pruning failed: {warning}"
-                );
+                eprintln!("warning: native runtime installed, but cache pruning failed: {warning}");
             }
         }
         Ok(())
@@ -179,15 +187,13 @@ impl<'a> CliSetupActions<'a> {
             None => ServiceInstallContext::detect(self.environment.platform, true)?,
         };
         let report = install_service(&context, self.service_runner.as_mut())?;
-        print_service_install_result(&report);
+        print_service_install_result(&report, self.verbose);
         self.service_outcome = SetupServiceOutcome::Installed(report);
         Ok(())
     }
 
     fn print_service_guidance(&self) {
-        eprintln!(
-            "ℹ️  Setup skipped background service installation. Re-run `mesh-llm setup --service` to opt in later."
-        );
+        eprintln!("Service not installed. Run `mesh-llm setup --service` to enable it later.");
     }
 }
 

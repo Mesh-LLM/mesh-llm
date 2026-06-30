@@ -220,19 +220,16 @@ pub(crate) fn run_stop() -> Result<()> {
             match outcome {
                 backend::TerminationOutcome::Graceful => {
                     eprintln!(
-                        "🧹 Terminated owner pid={} gracefully ({})",
+                        "  Terminated owner pid={} gracefully ({})",
                         target.pid, target.label
                     );
                 }
                 backend::TerminationOutcome::Killed => {
-                    eprintln!(
-                        "🧹 Force-killed owner pid={} ({})",
-                        target.pid, target.label
-                    );
+                    eprintln!("  Force-killed owner pid={} ({})", target.pid, target.label);
                 }
                 backend::TerminationOutcome::NotRunning => {
                     eprintln!(
-                        "🧹 Owner pid={} was already stopped ({})",
+                        "  Owner pid={} was already stopped ({})",
                         target.pid, target.label
                     );
                 }

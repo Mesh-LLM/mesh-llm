@@ -11,6 +11,7 @@ Catalog id definition: a catalog id is the model id shown in `mesh-llm models re
 mesh-llm --help
 mesh-llm <command> --help
 mesh-llm setup --help
+mesh-llm uninstall --help
 mesh-llm doctor --help
 mesh-llm models --help
 mesh-llm models <subcommand> --help
@@ -63,6 +64,13 @@ mesh-llm models download unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL
 mesh-llm models installed
 ```
 
+8. Remove the executable and setup-owned files:
+
+```bash
+mesh-llm uninstall --dry-run
+mesh-llm uninstall --yes
+```
+
 ## Runtime entrypoints (`serve` / `client`)
 
 If you want to start serving, join a mesh, or run as an API-only client, start here.
@@ -84,7 +92,8 @@ Use this to finish a fresh install after the executable is on your `PATH`.
 enable the background service on supported macOS and Linux machines, and only
 shows the GitHub star prompt when it is interactive and eligible. The star
 prompt defaults to Yes, and `--yes` or `--no-interactive` skip it without
-starring anything.
+starring anything. Default output is concise; use `--verbose` when you want
+service paths, commands, log locations, and detailed setup status.
 
 Usage:
 
@@ -93,6 +102,7 @@ mesh-llm setup
 mesh-llm setup --service
 mesh-llm setup --no-service --skip-runtime
 mesh-llm setup --yes
+mesh-llm setup --verbose
 ```
 
 Switches:
@@ -102,8 +112,46 @@ Switches:
 - `--service`: install and enable the background service.
 - `--no-service`: skip installing and enabling the background service.
 - `--skip-runtime`: skip downloading or configuring the native runtime.
+- `--verbose`: print detailed service paths, commands, log locations, and setup status.
 
 On Windows, `--service` is unsupported.
+
+### `uninstall`
+
+Use this to remove a Mesh executable install and setup-owned service/runtime files from a machine.
+
+By default, uninstall stops tracked `mesh-llm` processes, disables and removes
+the per-user service when present, removes setup-owned service helper files,
+removes the native-runtime cache, and removes the executable last. It preserves
+`~/.mesh-llm` configuration and identity data unless you explicitly pass
+`--purge-config`.
+
+Usage:
+
+```bash
+mesh-llm uninstall --dry-run
+mesh-llm uninstall --yes
+mesh-llm uninstall --yes --keep-cache
+mesh-llm uninstall --yes --purge-config
+mesh-llm uninstall --verbose --dry-run
+```
+
+Switches:
+
+- `--dry-run`: print the cleanup plan without changing the machine.
+- `--yes`: run without a confirmation prompt.
+- `--json`: print dry-run plans and outcomes as JSON.
+- `--verbose`: print detailed cleanup steps and removed paths.
+- `--keep-cache`: preserve downloaded native runtimes.
+- `--keep-service-files`: preserve setup-owned service helper files.
+- `--purge-config`: remove `~/.mesh-llm` configuration and identity data.
+- `--keep-config`: explicitly preserve configuration and identity data.
+- `--binary-path <PATH>`: remove a specific executable path.
+
+If the setup service configuration directory contains unrelated files,
+uninstall leaves that directory in place and reports a warning instead of
+recursively deleting it. Default text output is concise; use `--verbose` when
+you want the full cleanup plan or exact removed paths.
 
 ### `doctor`
 

@@ -77,7 +77,7 @@ fn plan_service<P: SetupPrompter>(
 
     let prompt = SetupConfirmPrompt {
         kind: SetupPromptKind::InstallService,
-        message: "Install and enable the mesh-llm background service?",
+        message: "Install the background service?",
         default: SetupPromptDefault::Yes,
     };
     let accepted = prompt.default.resolve(prompter.confirm(prompt));

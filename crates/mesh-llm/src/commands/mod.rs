@@ -53,6 +53,30 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             dispatch_runtime_command(command.as_ref(), cli.config.as_deref()).await
         }
         Command::Setup { .. } => dispatch_setup_command(cmd, cli.config.as_deref()).await,
+        Command::Uninstall {
+            dry_run,
+            yes,
+            keep_cache,
+            keep_service_files,
+            purge_config,
+            keep_config,
+            binary_path,
+            json,
+            verbose,
+        } => mesh_llm_commands::uninstall::run_uninstall_command(
+            mesh_llm_commands::uninstall::UninstallOptions {
+                dry_run: *dry_run,
+                yes: *yes,
+                keep_cache: *keep_cache,
+                keep_service_files: *keep_service_files,
+                purge_config: *purge_config,
+                keep_config: *keep_config,
+                binary_path: binary_path.clone(),
+                json: *json,
+                verbose: *verbose,
+            },
+            run_stop,
+        ),
         Command::Config { command } => dispatch_config_command(cli, command),
         Command::Doctor { command, json } => {
             dispatch_doctor_command(command.as_ref(), cli.config.as_deref(), *json).await

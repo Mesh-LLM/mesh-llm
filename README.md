@@ -31,6 +31,16 @@ mesh-llm setup
 
 On Windows PowerShell, use `mesh-llm.exe setup`.
 
+To remove an executable install later, preview the cleanup first:
+
+```bash
+mesh-llm uninstall --dry-run
+mesh-llm uninstall --yes
+```
+
+Uninstall preserves `~/.mesh-llm` configuration and identity data unless you
+explicitly pass `--purge-config`.
+
 Join the public mesh and start serving:
 
 ```bash

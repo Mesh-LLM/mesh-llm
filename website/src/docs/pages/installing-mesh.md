@@ -33,6 +33,23 @@ mesh-llm --version
 
 Run `mesh-llm setup` to finish machine setup, then follow the [Quickstart](/docs/pages/quickstart/) to start a private node and open the console.
 
+## Uninstall
+
+Preview what Mesh would remove:
+
+```sh
+mesh-llm uninstall --dry-run
+```
+
+Remove the executable, setup-owned service files, and native-runtime cache:
+
+```sh
+mesh-llm uninstall --yes
+```
+
+Uninstall preserves `~/.mesh-llm` configuration and identity data by default.
+Use `--purge-config` only when you intentionally want to remove that data too.
+
 ## See also
 
 - [Hardware support](/docs/pages/hardware-support/)
