@@ -70,6 +70,8 @@ COPY crates/skippy-cache/ crates/skippy-cache/
 COPY crates/skippy-metrics/ crates/skippy-metrics/
 COPY crates/openai-frontend/ crates/openai-frontend/
 COPY crates/skippy-ffi/ crates/skippy-ffi/
+COPY crates/skippy-quantize/ crates/skippy-quantize/
+COPY crates/llama-quant-ffi/ crates/llama-quant-ffi/
 COPY crates/skippy-runtime/ crates/skippy-runtime/
 COPY crates/skippy-server/ crates/skippy-server/
 COPY crates/metrics-server/ crates/metrics-server/
@@ -84,6 +86,7 @@ COPY crates/mesh-llm-cli/ crates/mesh-llm-cli/
 COPY crates/mesh-llm-commands/ crates/mesh-llm-commands/
 COPY crates/mesh-llm-embedded-runtime/ crates/mesh-llm-embedded-runtime/
 COPY crates/mesh-llm-events/ crates/mesh-llm-events/
+COPY crates/mesh-llm-build-info/ crates/mesh-llm-build-info/
 COPY crates/mesh-llm-hardware-profile/ crates/mesh-llm-hardware-profile/
 COPY crates/mesh-llm-native-runtime/ crates/mesh-llm-native-runtime/
 COPY crates/mesh-llm-runtime-install/ crates/mesh-llm-runtime-install/
