@@ -106,10 +106,13 @@ class PublishCratesScriptTests(unittest.TestCase):
             self.assertIn("CARGO_REGISTRY_TOKEN is required", result.stderr)
             self.assertFalse((fixture.tmp_path / "cargo.log").exists())
 
-    def test_real_publish_skips_crate_version_that_is_already_published(self) -> None:
+    def test_real_publish_uses_cargo_to_detect_already_uploaded_versions(self) -> None:
         with PublishCratesFixture() as fixture:
-            fixture.write_curl_statuses({"model-ref": 200})
-            fixture.write_fake_cargo()
+            fixture.write_curl_statuses({"model-ref": 500})
+            fixture.write_fake_cargo(
+                fail_crates={"model-ref": 1},
+                failure_output="error: crate version is already uploaded\n",
+            )
             fixture.write_fake_sleep()
             fixture.write_fake_date()
 
@@ -121,50 +124,16 @@ class PublishCratesScriptTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-            self.assertIn("model-ref@0.68.0 already published; skipping", result.stdout)
-            self.assertNotIn("-p model-ref", fixture.read_log("cargo.log"))
-
-    def test_real_publish_fails_closed_when_registry_status_is_unknown(self) -> None:
-        with PublishCratesFixture() as fixture:
-            fixture.write_curl_statuses({"model-ref": 500})
-            fixture.write_fake_cargo()
-            fixture.write_fake_sleep()
-            fixture.write_fake_date()
-
-            result = fixture.run(env={"CARGO_REGISTRY_TOKEN": "test-token"})
-
-            self.assertNotEqual(result.returncode, 0)
             self.assertIn(
-                "could not verify model-ref@0.68.0 on crates.io; aborting before publish",
-                result.stderr,
-            )
-            self.assertFalse((fixture.tmp_path / "cargo.log").exists())
-
-    def test_real_publish_can_opt_into_unknown_registry_status(self) -> None:
-        with PublishCratesFixture() as fixture:
-            fixture.write_curl_statuses({"model-ref": 500})
-            fixture.write_fake_cargo()
-            fixture.write_fake_sleep()
-            fixture.write_fake_date()
-
-            result = fixture.run(
-                env={
-                    "CARGO_REGISTRY_TOKEN": "test-token",
-                    "CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS": "1",
-                    "CRATES_IO_PUBLISH_SETTLE_SECONDS": "0",
-                }
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-            self.assertIn(
-                "trying cargo publish because CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS=1",
-                result.stderr,
+                "model-ref@0.68.0 already published according to cargo; continuing",
+                result.stdout,
             )
             self.assertIn("-p model-ref", fixture.read_log("cargo.log"))
+            self.assertEqual(fixture.read_log("curl.log"), "")
 
-    def test_real_publish_rejects_invalid_unknown_status_opt_in(self) -> None:
+    def test_real_publish_does_not_probe_registry_before_cargo_publish(self) -> None:
         with PublishCratesFixture() as fixture:
-            fixture.write_curl_statuses({})
+            fixture.write_curl_statuses({"model-ref": 500})
             fixture.write_fake_cargo()
             fixture.write_fake_sleep()
             fixture.write_fake_date()
@@ -172,16 +141,13 @@ class PublishCratesScriptTests(unittest.TestCase):
             result = fixture.run(
                 env={
                     "CARGO_REGISTRY_TOKEN": "test-token",
-                    "CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS": "yes",
+                    "CRATES_IO_PUBLISH_SETTLE_SECONDS": "0",
                 }
             )
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(
-                "CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS must be 0 or 1",
-                result.stderr,
-            )
-            self.assertFalse((fixture.tmp_path / "cargo.log").exists())
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            self.assertIn("-p model-ref", fixture.read_log("cargo.log"))
+            self.assertEqual(fixture.read_log("curl.log"), "")
 
     def test_cargo_failure_output_redacts_registry_token(self) -> None:
         with PublishCratesFixture() as fixture:

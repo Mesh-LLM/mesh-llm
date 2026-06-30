@@ -15,7 +15,6 @@ Environment:
   CRATES_IO_PUBLISH_MAX_ATTEMPTS        Real-publish retry attempts for crates.io 429s (default: 6)
   CRATES_IO_PUBLISH_RETRY_BASE_SECONDS Fallback retry base when crates.io gives no timestamp (default: 60)
   CRATES_IO_PUBLISH_RETRY_MAX_SECONDS  Fallback retry cap when crates.io gives no timestamp (default: 900)
-  CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS Set to 1 to allow publish when crates.io status cannot be verified (default: 0)
 USAGE
 }
 
@@ -41,15 +40,6 @@ require_nonnegative_int() {
     local value="$2"
     if [[ ! "$value" =~ ^[0-9]+$ ]]; then
         echo "${name} must be a non-negative integer" >&2
-        exit 1
-    fi
-}
-
-require_binary_flag() {
-    local name="$1"
-    local value="$2"
-    if [[ "$value" != "0" && "$value" != "1" ]]; then
-        echo "${name} must be 0 or 1" >&2
         exit 1
     fi
 }
@@ -103,13 +93,11 @@ fi
 max_attempts="${CRATES_IO_PUBLISH_MAX_ATTEMPTS:-6}"
 retry_base_seconds="${CRATES_IO_PUBLISH_RETRY_BASE_SECONDS:-60}"
 retry_max_seconds="${CRATES_IO_PUBLISH_RETRY_MAX_SECONDS:-900}"
-allow_unknown_status="${CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS:-0}"
 
 require_nonnegative_int CRATES_IO_PUBLISH_SETTLE_SECONDS "$sleep_seconds"
 require_positive_int CRATES_IO_PUBLISH_MAX_ATTEMPTS "$max_attempts"
 require_positive_int CRATES_IO_PUBLISH_RETRY_BASE_SECONDS "$retry_base_seconds"
 require_positive_int CRATES_IO_PUBLISH_RETRY_MAX_SECONDS "$retry_max_seconds"
-require_binary_flag CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS "$allow_unknown_status"
 
 if [[ "$dry_run" -eq 0 && -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
     echo "CARGO_REGISTRY_TOKEN is required for real crates.io publishing" >&2
@@ -262,23 +250,7 @@ publish_crate_with_retry() {
     local crate="$1"
     local index="$2"
     local total="$3"
-    local attempt status delay
-
-    if [[ "$dry_run" -eq 0 ]]; then
-        status="$(registry_version_status "$crate")"
-        if [[ "$status" == "published" ]]; then
-            log "[${index}/${total}] ${crate}@${workspace_version} already published; skipping"
-            return 0
-        fi
-        if [[ "$status" == "unknown" ]]; then
-            if [[ "$allow_unknown_status" -ne 1 ]]; then
-                warn "[${index}/${total}] could not verify ${crate}@${workspace_version} on crates.io; aborting before publish"
-                warn "set CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS=1 to continue when registry status cannot be verified"
-                return 101
-            fi
-            warn "[${index}/${total}] could not verify ${crate}@${workspace_version} on crates.io; trying cargo publish because CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS=1"
-        fi
-    fi
+    local attempt delay
 
     attempt=1
     while [[ "$attempt" -le "$max_attempts" ]]; do
@@ -296,11 +268,6 @@ publish_crate_with_retry() {
 
         if [[ "$dry_run" -eq 0 ]] && publish_error_is_already_uploaded "$last_publish_output"; then
             log "[${index}/${total}] ${crate}@${workspace_version} already published according to cargo; continuing"
-            return 0
-        fi
-
-        if [[ "$dry_run" -eq 0 && "$(registry_version_status "$crate")" == "published" ]]; then
-            log "[${index}/${total}] ${crate}@${workspace_version} is now visible on crates.io; continuing"
             return 0
         fi
 

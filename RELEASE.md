@@ -227,6 +227,7 @@ publish after their upstream crates land.
 If crates.io rate-limits the non-prerelease publish chain after some crates
 have already uploaded, rerun `scripts/publish-crates.sh` for the same checked
 out release tag instead of recutting the GitHub release or moving the tag. The
-script checks crates.io before each real publish, skips crate versions that are
-already visible, and retries HTTP 429 new-crate rate-limit responses using the
-retry time from crates.io when one is provided.
+script relies on `cargo publish` to report crate versions that were already
+uploaded, continues past those already-uploaded crates, and retries HTTP 429
+new-crate rate-limit responses using the retry time from crates.io when one is
+provided.
