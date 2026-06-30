@@ -115,7 +115,7 @@ function hasLastUserTurn(messages: Array<{ role: string }>): boolean {
   return false
 }
 
-function getMessageTextContent(message: { parts?: Array<{ type: string; content?: string }> }): string {
+function getMessageTextContent(message: { parts?: Array<{ type: string; content?: unknown }> }): string {
   const textPart = message.parts?.find((part) => part.type === 'text' && typeof part.content === 'string')
   return typeof textPart?.content === 'string' ? textPart.content.trim() : ''
 }

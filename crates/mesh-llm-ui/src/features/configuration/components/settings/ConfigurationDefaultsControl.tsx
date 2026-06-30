@@ -23,16 +23,7 @@ type ConfigurationDefaultsControlProps = SchemaSettingControlProps & {
 }
 
 type SchemaControlKind =
-  | 'array'
-  | 'boolean'
-  | 'choice'
-  | 'metric'
-  | 'number'
-  | 'object'
-  | 'path'
-  | 'runtime-choice'
-  | 'text'
-  | 'url'
+  'array' | 'boolean' | 'choice' | 'metric' | 'number' | 'object' | 'path' | 'runtime-choice' | 'text' | 'url'
 
 type ControlDetailBuckets = {
   readonly disabledDetails: readonly string[]

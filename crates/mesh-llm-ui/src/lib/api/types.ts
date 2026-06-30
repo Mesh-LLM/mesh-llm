@@ -256,10 +256,7 @@ export interface ResponsesInputFileBlock {
 }
 
 export type ResponsesInputContentBlock =
-  | ResponsesInputTextBlock
-  | ResponsesInputImageBlock
-  | ResponsesInputAudioBlock
-  | ResponsesInputFileBlock
+  ResponsesInputTextBlock | ResponsesInputImageBlock | ResponsesInputAudioBlock | ResponsesInputFileBlock
 
 export interface ResponsesInputMessage {
   role: 'system' | 'user' | 'assistant'

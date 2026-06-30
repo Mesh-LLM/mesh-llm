@@ -22,12 +22,7 @@ import { buildLineMesh } from '@/features/dashboard/components/topology/render/l
 import { useTopologyCanvas } from '@/features/dashboard/components/topology/render/useTopologyCanvas'
 
 type ScenarioName =
-  | 'join'
-  | 'join-route-change'
-  | 'join-spillover'
-  | 'join-spillover-incoming-only'
-  | 'leave'
-  | 'leave-spillover'
+  'join' | 'join-route-change' | 'join-spillover' | 'join-spillover-incoming-only' | 'leave' | 'leave-spillover'
 
 const mocks = vi.hoisted(() => {
   const state = { scenario: 'join' as ScenarioName }

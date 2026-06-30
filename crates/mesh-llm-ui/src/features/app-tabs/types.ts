@@ -62,14 +62,7 @@ export type PeerDTO = Omit<Peer, 'hostedModels'> & {
   hostedModels: PeerHostedModel[]
 }
 export type ModelFamilyColorKey =
-  | 'family-0'
-  | 'family-1'
-  | 'family-2'
-  | 'family-3'
-  | 'family-4'
-  | 'family-5'
-  | 'family-6'
-  | 'family-7'
+  'family-0' | 'family-1' | 'family-2' | 'family-3' | 'family-4' | 'family-5' | 'family-6' | 'family-7'
 export type ModelCapabilities = Partial<Record<string, boolean>>
 export type ModelSummary = {
   name: string
@@ -318,13 +311,7 @@ export type ConfigurationDefaultsCategory = {
 }
 export type ConfigurationDefaultsChoice = { value: string; label: string; description?: string }
 export type ConfigurationControlTextFormat =
-  | 'plain'
-  | 'path'
-  | 'url'
-  | 'socket_addr'
-  | 'semver'
-  | 'ed25519_key'
-  | 'csv_positive_ints'
+  'plain' | 'path' | 'url' | 'socket_addr' | 'semver' | 'ed25519_key' | 'csv_positive_ints'
 export type ConfigurationControlOptionsSource =
   | 'static'
   | 'runtime_gpus'
@@ -335,15 +322,7 @@ export type ConfigurationControlOptionsSource =
 export type ConfigurationControlAvailabilitySource = 'static' | 'runtime' | 'dependency' | 'conflict'
 export type ConfigurationDisabledWritePolicy = 'preserve_existing' | 'omit_when_disabled' | 'reject_when_disabled'
 export type ConfigurationControlConditionOperator =
-  | 'equals'
-  | 'not_equals'
-  | 'in'
-  | 'not_in'
-  | 'present'
-  | 'absent'
-  | 'truthy'
-  | 'falsy'
-  | 'range'
+  'equals' | 'not_equals' | 'in' | 'not_in' | 'present' | 'absent' | 'truthy' | 'falsy' | 'range'
 export type ConfigurationControlConditionValue =
   | { kind: 'bool'; value: boolean }
   | { kind: 'integer'; value: number }

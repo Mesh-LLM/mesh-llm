@@ -31,6 +31,8 @@ export type PdfExtractionResult = {
   wordCount: number
 }
 
+type DestroyablePdfDocument = PDFDocumentProxy & { destroy?: () => Promise<void> }
+
 export async function extractPdfText(buffer: ArrayBuffer): Promise<PdfExtractionResult> {
   const lib = await loadPdfJs()
   let doc: PDFDocumentProxy | null = null
@@ -70,7 +72,7 @@ export async function extractPdfText(buffer: ArrayBuffer): Promise<PdfExtraction
     return { text, pageCount, pagesWithText, wordCount }
   } finally {
     if (doc) {
-      await doc.destroy()
+      await destroyPdfDocument(doc)
     }
   }
 }
@@ -100,7 +102,7 @@ export async function renderPdfPagesToImages(
         const ctx = canvas.getContext('2d')
         if (!ctx) continue
 
-        await page.render({ canvasContext: ctx, viewport }).promise
+        await page.render({ canvas, canvasContext: ctx, viewport }).promise
         images.push(canvas.toDataURL('image/jpeg', quality))
       } finally {
         if (canvas) {
@@ -113,8 +115,12 @@ export async function renderPdfPagesToImages(
 
     return images
   } finally {
-    await doc.destroy()
+    await destroyPdfDocument(doc)
   }
+}
+
+async function destroyPdfDocument(doc: PDFDocumentProxy): Promise<void> {
+  await (doc as DestroyablePdfDocument).destroy?.()
 }
 
 function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {

@@ -379,6 +379,7 @@ impl ActiveBridge {
 }
 
 impl PluginRpcBridge for ActiveBridge {
+    #[allow(deprecated)]
     fn handle_request(
         &self,
         _plugin_name: String,
@@ -450,6 +451,7 @@ impl PluginRpcBridge for ActiveBridge {
         })
     }
 
+    #[allow(deprecated)]
     fn handle_notification(
         &self,
         _plugin_name: String,
@@ -1330,6 +1332,7 @@ impl ServerHandler for PluginMcpServer {
         .await
     }
 
+    #[allow(deprecated)]
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
             ServerCapabilities::builder()

@@ -55,18 +55,16 @@ const controlledResizeObserver: ResizeObserver = {
 }
 
 function createMatchMedia(matches: boolean) {
-  return vi.fn(
-    (query: string): MediaQueryList => ({
-      matches,
-      media: query,
-      onchange: null,
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      dispatchEvent: () => false
-    })
-  )
+  return vi.fn((query: string): MediaQueryList => ({
+    matches,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: () => false
+  }))
 }
 
 function setMeshCanvasSize(width: number, height: number) {

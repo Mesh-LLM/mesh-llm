@@ -185,6 +185,7 @@ pub fn cancel_task_result(task: Task) -> CancelTaskResult {
     CancelTaskResult { meta: None, task }
 }
 
+#[allow(deprecated)]
 pub fn plugin_server_info_full(
     implementation_name: impl Into<String>,
     implementation_version: impl Into<String>,
