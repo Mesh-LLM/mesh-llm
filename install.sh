@@ -3,7 +3,6 @@
 set -euo pipefail
 
 REPO="${MESH_LLM_INSTALL_REPO:-Mesh-LLM/mesh-llm}"
-REPO_REF="${MESH_LLM_INSTALL_REF:-main}"
 INSTALL_DIR="${MESH_LLM_INSTALL_DIR:-$HOME/.local/bin}"
 INSTALL_FLAVOR="${MESH_LLM_INSTALL_FLAVOR:-}"
 INSTALL_PRERELEASE="${MESH_LLM_INSTALL_PRERELEASE:-0}"
@@ -11,23 +10,10 @@ INSTALL_SERVICE="${MESH_LLM_INSTALL_SERVICE:-0}"
 INSTALL_SERVICE_ARGS="${MESH_LLM_INSTALL_SERVICE_ARGS:-}"
 INSTALL_SERVICE_START="${MESH_LLM_INSTALL_SERVICE_START:-1}"
 REQUIRE_CHECKSUM="${MESH_LLM_REQUIRE_CHECKSUM:-0}"
-
-SERVICE_NAME="mesh-llm"
-SERVICE_LABEL="com.mesh-llm.mesh-llm"
-MESH_CONFIG_FILE="$HOME/.mesh-llm/config.toml"
-SERVICE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/mesh-llm"
-SERVICE_ENV_FILE="$SERVICE_CONFIG_DIR/service.env"
-SERVICE_RUNNER="$SERVICE_CONFIG_DIR/run-service.sh"
-SYSTEMD_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-SYSTEMD_UNIT_PATH="$SYSTEMD_UNIT_DIR/$SERVICE_NAME.service"
-LAUNCHD_AGENT_DIR="$HOME/Library/LaunchAgents"
-LAUNCHD_PLIST_PATH="$LAUNCHD_AGENT_DIR/$SERVICE_LABEL.plist"
-LAUNCHD_LOG_DIR="$HOME/Library/Logs/mesh-llm"
-LAUNCHD_STDOUT_LOG="$LAUNCHD_LOG_DIR/stdout.log"
-LAUNCHD_STDERR_LOG="$LAUNCHD_LOG_DIR/stderr.log"
-DIST_DIR="dist"
-SYSTEMD_TEMPLATE_PATH="$DIST_DIR/$SERVICE_NAME.service"
-LAUNCHD_TEMPLATE_PATH="$DIST_DIR/$SERVICE_LABEL.plist"
+AUTO_SETUP=1
+DOWNLOADED_ARCHIVE=""
+DOWNLOADED_ASSET=""
+SETUP_ARGS=()
 
 need_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -36,11 +22,8 @@ need_cmd() {
     fi
 }
 
-path_contains_install_dir() {
-    case ":$PATH:" in
-        *":$INSTALL_DIR:"*) return 0 ;;
-        *) return 1 ;;
-    esac
+warn() {
+    echo "warning: $*" >&2
 }
 
 bool_is_true() {
@@ -52,25 +35,49 @@ bool_is_true() {
     esac
 }
 
+path_contains_install_dir() {
+    case ":$PATH:" in
+        *":$INSTALL_DIR:"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 usage() {
     cat <<EOF
-Usage: install.sh [--pre-release] [--service] [--no-start-service]
+Usage: install.sh [--pre-release] [--install-dir DIR] [--no-setup]
 
 Options:
   --pre-release              Install the latest published GitHub prerelease instead of the latest stable release.
-  --service                  Install a per-user background service for this platform.
-  --no-start-service         Install the service files but do not start them yet.
+  --install-dir DIR          Install the binary into DIR.
+  --no-setup                 Do not run \
+                             \
+mesh-llm setup automatically after install.
+  --service                  Legacy compatibility flag. Passes --service through to \
+                             \
+mesh-llm setup instead of installing services in shell.
+  --no-start-service         Legacy compatibility flag. Ignored with a warning.
+  --service-args VALUE       Legacy compatibility flag. Ignored with a warning.
   -h, --help                 Show this help text.
 
 Environment overrides:
   MESH_LLM_INSTALL_DIR
-  MESH_LLM_INSTALL_FLAVOR
   MESH_LLM_INSTALL_PRERELEASE=1
-  MESH_LLM_INSTALL_REF=main
-  MESH_LLM_INSTALL_SERVICE=1
-  MESH_LLM_INSTALL_SERVICE_START=0
+  MESH_LLM_INSTALL_FLAVOR    Legacy compatibility variable. Ignored with a warning.
+  MESH_LLM_INSTALL_SERVICE=1 Legacy compatibility variable. Passed through as --service.
+  MESH_LLM_INSTALL_SERVICE_START=0 Legacy compatibility variable. Ignored with a warning.
   MESH_LLM_REQUIRE_CHECKSUM=1
 EOF
+}
+
+add_setup_arg() {
+    local arg="$1"
+    local existing
+    for existing in "${SETUP_ARGS[@]:-}"; do
+        if [[ "$existing" == "$arg" ]]; then
+            return 0
+        fi
+    done
+    SETUP_ARGS+=("$arg")
 }
 
 parse_args() {
@@ -79,16 +86,31 @@ parse_args() {
             --pre-release)
                 INSTALL_PRERELEASE=1
                 ;;
-            --service)
-                INSTALL_SERVICE=1
+            --install-dir)
+                shift
+                if (($# == 0)); then
+                    echo "error: --install-dir requires a directory" >&2
+                    exit 1
+                fi
+                INSTALL_DIR="$1"
                 ;;
-            --service-args)
-                echo "error: background services now run \`mesh-llm serve\` and load startup models from $MESH_CONFIG_FILE" >&2
-                echo "Add startup models under [[models]] instead of passing custom service args." >&2
-                exit 1
+            --no-setup)
+                AUTO_SETUP=0
+                ;;
+            --service)
+                warn "--service is deprecated in install.sh; forwarding it to \`mesh-llm setup --service\`."
+                add_setup_arg "--service"
                 ;;
             --no-start-service)
-                INSTALL_SERVICE_START=0
+                warn "--no-start-service is deprecated in install.sh; service start policy now belongs to \`mesh-llm setup\`."
+                ;;
+            --service-args)
+                shift
+                if (($# == 0)); then
+                    echo "error: --service-args requires a value" >&2
+                    exit 1
+                fi
+                warn "--service-args is deprecated in install.sh and is ignored; configure startup behavior after \`mesh-llm setup\`."
                 ;;
             -h|--help)
                 usage
@@ -105,406 +127,58 @@ parse_args() {
     done
 }
 
+apply_legacy_env_compat() {
+    if [[ -n "$INSTALL_FLAVOR" ]]; then
+        warn "MESH_LLM_INSTALL_FLAVOR is deprecated in install.sh and is ignored; \`mesh-llm setup\` now owns runtime selection."
+    fi
+    if bool_is_true "$INSTALL_SERVICE"; then
+        warn "MESH_LLM_INSTALL_SERVICE is deprecated in install.sh; forwarding it to \`mesh-llm setup --service\`."
+        add_setup_arg "--service"
+    fi
+    if [[ -n "$INSTALL_SERVICE_ARGS" ]]; then
+        warn "MESH_LLM_INSTALL_SERVICE_ARGS is deprecated in install.sh and is ignored; configure startup behavior after \`mesh-llm setup\`."
+    fi
+    if ! bool_is_true "$INSTALL_SERVICE_START"; then
+        warn "MESH_LLM_INSTALL_SERVICE_START is deprecated in install.sh and is ignored; service start policy now belongs to \`mesh-llm setup\`."
+    fi
+}
+
 platform_os() {
     if [[ -n "${MESH_LLM_TEST_UNAME_S:-}" ]]; then
         printf '%s\n' "$MESH_LLM_TEST_UNAME_S"
         return 0
     fi
-
     uname -s
 }
 
 platform_arch() {
     local os
     local arch
-
     os="$(platform_os)"
     if [[ -n "${MESH_LLM_TEST_UNAME_M:-}" ]]; then
         arch="$MESH_LLM_TEST_UNAME_M"
     else
         arch="$(uname -m)"
     fi
-
     case "$os/$arch" in
-        Linux/amd64)
-            printf 'x86_64\n'
-            ;;
-        Linux/arm64|Linux/aarch64)
-            printf 'aarch64\n'
-            ;;
-        Linux/arm|Linux/armv6l|Linux/armv6hf|Linux/armv7l|Linux/armv7hf)
-            printf 'arm\n'
-            ;;
-        *)
-            printf '%s\n' "$arch"
-            ;;
+        Linux/amd64) printf 'x86_64\n' ;;
+        Linux/arm64|Linux/aarch64) printf 'aarch64\n' ;;
+        *) printf '%s\n' "$arch" ;;
     esac
 }
 
 platform_id() {
-    printf "%s/%s\n" "$(platform_os)" "$(platform_arch)"
+    printf '%s/%s\n' "$(platform_os)" "$(platform_arch)"
 }
 
-platform_support_status() {
+platform_asset_name() {
     case "$(platform_id)" in
-        Darwin/arm64|Linux/aarch64|Linux/x86_64)
-            printf 'supported\n'
-            ;;
-        Linux/arm)
-            printf 'recognized-unsupported\n'
-            ;;
+        Darwin/arm64) printf 'mesh-llm-aarch64-apple-darwin.tar.gz\n' ;;
+        Darwin/x86_64) printf 'mesh-llm-x86_64-apple-darwin.tar.gz\n' ;;
+        Linux/aarch64) printf 'mesh-llm-aarch64-unknown-linux-gnu.tar.gz\n' ;;
+        Linux/x86_64) printf 'mesh-llm-x86_64-unknown-linux-gnu.tar.gz\n' ;;
         *)
-            printf 'unsupported\n'
-            ;;
-    esac
-}
-
-platform_error_message() {
-    case "$(platform_support_status)" in
-        recognized-unsupported)
-            printf 'error: recognized but unsupported platform: %s (32-bit ARM release bundles are not published)\n' "$(platform_id)"
-            ;;
-        *)
-            printf 'error: unsupported platform: %s\n' "$(platform_id)"
-            ;;
-    esac
-}
-
-probe_nvidia() {
-    command -v nvidia-smi >/dev/null 2>&1 ||
-        command -v nvcc >/dev/null 2>&1 ||
-        [[ -e /dev/nvidiactl ]] ||
-        [[ -d /proc/driver/nvidia/gpus ]] ||
-        probe_tegra_nvidia
-}
-
-tegra_model_text() {
-    if [[ -n "${MESH_LLM_TEST_TEGRA_MODEL:-}" ]]; then
-        printf '%s\n' "$MESH_LLM_TEST_TEGRA_MODEL"
-        return 0
-    fi
-
-    local path
-    for path in \
-        /proc/device-tree/model \
-        /proc/device-tree/compatible \
-        /sys/firmware/devicetree/base/model \
-        /sys/firmware/devicetree/base/compatible; do
-        [[ -r "$path" ]] || continue
-        tr '\0' '\n' <"$path" 2>/dev/null || true
-        printf '\n'
-    done
-}
-
-probe_tegra_nvidia() {
-    local model
-    model="$(tegra_model_text | tr '[:lower:]' '[:upper:]')"
-    case "$model" in
-        *JETSON*|*TEGRA*|*ORIN*|*NVGPU*|*THOR*)
-            return 0
-            ;;
-    esac
-
-    [[ -e /dev/nvhost-gpu ]] || [[ -e /dev/nvhost-ctrl-gpu ]]
-}
-
-normalize_cuda_sm() {
-    local raw="$1"
-    printf '%s\n' "${raw//[^0-9]/}"
-}
-
-is_blackwell_cuda_sm() {
-    local sm
-    sm="$(normalize_cuda_sm "$1")"
-    [[ "$sm" =~ ^[0-9]+$ ]] && (( sm >= 100 && sm < 200 ))
-}
-
-nvidia_model_is_blackwell() {
-    local model
-    model="$(printf '%s\n' "$1" | tr '[:lower:]' '[:upper:]')"
-    case "$model" in
-        *BLACKWELL*|*GB300*|*B300*|*GB200*|*B200*|*B100*|*GB10*|*THOR*|\
-        *RTX\ 5090*|*RTX\ 5080*|*RTX\ 5070*|*RTX\ 5060*|*RTX\ 5050*|\
-        *RTX\ PRO\ 6000*)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-probe_rocm() {
-    command -v rocm-smi >/dev/null 2>&1 ||
-        command -v rocminfo >/dev/null 2>&1 ||
-        command -v hipcc >/dev/null 2>&1 ||
-        [[ -x /opt/rocm/bin/hipcc ]]
-}
-
-probe_vulkan() {
-    if command -v vulkaninfo >/dev/null 2>&1 && vulkaninfo --summary >/dev/null 2>&1; then
-        return 0
-    fi
-    if command -v glslc >/dev/null 2>&1; then
-        if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists vulkan 2>/dev/null; then
-            return 0
-        fi
-        if [[ -f /usr/include/vulkan/vulkan.h || -f /usr/local/include/vulkan/vulkan.h ]]; then
-            return 0
-        fi
-        if [[ -n "${VULKAN_SDK:-}" ]]; then
-            return 0
-        fi
-    fi
-    return 1
-}
-
-probe_tegra() {
-    # Detect NVIDIA Tegra / Jetson SoC accelerators (Orin AGX, Orin NX, Xavier, etc.)
-    # These are typically Linux aarch64 devices with an integrated NVIDIA GPU.
-    [[ -f /proc/device-tree/model ]] && grep -qi "tegra\|jetson" /proc/device-tree/model
-}
-
-supported_flavors() {
-    case "$(platform_support_status)" in
-        supported)
-            case "$(platform_id)" in
-        Darwin/arm64)
-            echo "metal"
-            ;;
-        Linux/aarch64)
-            echo "cuda cpu"
-            ;;
-        Linux/x86_64)
-            echo "cuda rocm vulkan cpu"
-            ;;
-        *)
-                platform_error_message >&2
-                exit 1
-                ;;
-            esac
-            ;;
-        *)
-            platform_error_message >&2
-            exit 1
-            ;;
-    esac
-}
-
-# Keep this detection order and the probes above (probe_nvidia, probe_rocm, probe_vulkan, probe_tegra) in sync with the Rust updater flavor selection in crates/mesh-llm-system/src/autoupdate.rs.
-recommended_flavor() {
-    case "$(platform_support_status)" in
-        supported)
-            case "$(platform_id)" in
-        Darwin/arm64)
-            echo "metal"
-            ;;
-        Linux/aarch64)
-            if probe_nvidia; then
-                echo "cuda"
-            else
-                echo "cpu"
-            fi
-            ;;
-        Linux/x86_64)
-            if probe_nvidia; then
-                echo "cuda"
-            elif probe_rocm; then
-                echo "rocm"
-            elif probe_vulkan; then
-                echo "vulkan"
-            else
-                echo "cpu"
-            fi
-            ;;
-        *)
-                platform_error_message >&2
-                exit 1
-                ;;
-            esac
-            ;;
-        *)
-            platform_error_message >&2
-            exit 1
-            ;;
-    esac
-}
-
-recommendation_reason() {
-    case "$(recommended_flavor)" in
-        metal)
-            echo "Apple Silicon host detected."
-            ;;
-        cuda)
-            if probe_tegra; then
-                echo "NVIDIA Tegra/Jetson SoC detected (Orin AGX, Orin NX, Xavier, etc.)."
-            else
-                echo "NVIDIA tooling or devices were detected."
-            fi
-            ;;
-
-        rocm)
-            echo "ROCm/HIP tooling was detected."
-            ;;
-        vulkan)
-            echo "Vulkan tooling was detected."
-            ;;
-        cpu)
-            echo "No supported GPU runtime was detected."
-            ;;
-    esac
-}
-
-validate_flavor() {
-    local flavor="$1"
-    local supported
-    for supported in $(supported_flavors); do
-        if [[ "$supported" == "$flavor" ]]; then
-            return 0
-        fi
-    done
-    echo "error: unsupported flavor '$flavor' for $(platform_id)" >&2
-    exit 1
-}
-
-choose_flavor() {
-    local recommended
-    recommended="$(recommended_flavor)"
-
-    if [[ -n "$INSTALL_FLAVOR" ]]; then
-        validate_flavor "$INSTALL_FLAVOR"
-        echo "$INSTALL_FLAVOR"
-        return 0
-    fi
-
-    if [[ ! -t 0 || ! -t 1 ]]; then
-        echo "$recommended"
-        return 0
-    fi
-
-    local flavors
-    flavors=($(supported_flavors))
-
-    if [[ ${#flavors[@]} -eq 1 ]]; then
-        echo "$recommended"
-        return 0
-    fi
-
-    echo "Mesh LLM installer"
-    echo "Platform: $(platform_id)"
-    echo "Recommended flavor: $recommended"
-    echo "Reason: $(recommendation_reason)"
-    echo
-    echo "Available flavors:"
-
-    local index=1
-    local flavor
-    for flavor in "${flavors[@]}"; do
-        if [[ "$flavor" == "$recommended" ]]; then
-            echo "  $index. $flavor (recommended)"
-        else
-            echo "  $index. $flavor"
-        fi
-        index=$((index + 1))
-    done
-
-    echo
-    local reply
-    read -r -p "Install which flavor? [$recommended] " reply
-    reply="${reply:-$recommended}"
-
-    if [[ "$reply" =~ ^[0-9]+$ ]]; then
-        local selection=$((reply - 1))
-        if (( selection >= 0 && selection < ${#flavors[@]} )); then
-            reply="${flavors[$selection]}"
-        fi
-    fi
-
-    validate_flavor "$reply"
-    echo "$reply"
-}
-
-detect_cuda_major() {
-    # Detect host CUDA major version from nvcc or libcudart.
-    # Only return versions we publish artifacts for (12, 13).
-    local ver=""
-    if command -v nvcc >/dev/null 2>&1; then
-        ver="$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+')"
-    fi
-    if [[ -z "$ver" ]]; then
-        # Try to find libcudart.so and extract version from filename.
-        local lib
-        for lib in /usr/local/cuda*/targets/*/lib/libcudart.so.* /usr/local/cuda*/targets/*/lib/stubs/libcudart.so.*; do
-            if [[ -f "$lib" ]]; then
-                ver="$(basename "$lib" | grep -oP 'libcudart\.so\.\K[0-9]+' | head -n 1)"
-                break
-            fi
-        done
-    fi
-    if [[ -z "$ver" ]]; then
-        # Fallback: check ldconfig for libcudart.
-        ver="$(ldconfig -p 2>/dev/null | grep -oP 'libcudart\.so\.\K[0-9]+' | sort -rn | head -n 1)"
-    fi
-    # Only return versions we publish artifacts for (12, 13).
-    case "$ver" in
-        12|13) echo "$ver" ;;
-        *)     echo "" ;;
-    esac
-}
-
-asset_name() {
-    local flavor="$1"
-    case "$(platform_support_status)" in
-        supported)
-            case "$(platform_id)" in
-        Darwin/arm64)
-            echo "mesh-llm-aarch64-apple-darwin.tar.gz"
-            ;;
-        Linux/aarch64)
-            case "$flavor" in
-                cpu) echo "mesh-llm-aarch64-unknown-linux-gnu.tar.gz" ;;
-                cuda)
-                    local cuda_major="$(detect_cuda_major)"
-                    if [[ -n "$cuda_major" ]]; then
-                        echo "mesh-llm-aarch64-unknown-linux-gnu-cuda-${cuda_major}.tar.gz"
-                    else
-                        # Fallback: try to match any cuda artifact.
-                        echo "mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz"
-                    fi
-                    ;;
-                *)
-                    echo "error: unsupported aarch64 flavor '$flavor'" >&2
-                    exit 1
-                    ;;
-            esac
-            ;;
-        Linux/x86_64)
-            case "$flavor" in
-                cpu) echo "mesh-llm-x86_64-unknown-linux-gnu.tar.gz" ;;
-                cuda)
-                    local cuda_major="$(detect_cuda_major)"
-                    if [[ -n "$cuda_major" ]]; then
-                        echo "mesh-llm-x86_64-unknown-linux-gnu-cuda-${cuda_major}.tar.gz"
-                    else
-                        echo "mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz"
-                    fi
-                    ;;
-                rocm) echo "mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz" ;;
-                vulkan) echo "mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz" ;;
-                *)
-                    echo "error: unsupported Linux flavor '$flavor'" >&2
-                    exit 1
-                    ;;
-            esac
-            ;;
-        *)
-                platform_error_message >&2
-                exit 1
-                ;;
-            esac
-            ;;
-        *)
-            platform_error_message >&2
+            echo "error: unsupported platform: $(platform_id)" >&2
             exit 1
             ;;
     esac
@@ -512,7 +186,6 @@ asset_name() {
 
 latest_prerelease_tag() {
     local api_url="https://api.github.com/repos/${REPO}/releases?per_page=20"
-    local releases_page_url="https://github.com/${REPO}/releases"
     local response
     local -a curl_args=(
         -fsSL
@@ -526,74 +199,32 @@ latest_prerelease_tag() {
         curl_args+=(-H "Authorization: Bearer ${GH_TOKEN}")
     fi
 
-    local tag
-    if response="$(curl "${curl_args[@]}" "$api_url" 2>/dev/null)"; then
-        local compact
-        compact="$(printf '%s' "$response" | tr -d '\n\r\t ')"
-
-        tag="$(
-            printf '%s' "$compact" |
-                sed 's/},{/}\
+    response="$(curl "${curl_args[@]}" "$api_url")"
+    printf '%s' "$response" |
+        tr -d '\n\r\t ' |
+        sed 's/},{/}\
 {/g' |
-                awk '
-                    /"prerelease":true/ && !/"draft":true/ {
-                        if (match($0, /"tag_name":"[^"]+"/)) {
-                            value = substr($0, RSTART, RLENGTH)
-                            sub(/^"tag_name":"/, "", value)
-                            sub(/"$/, "", value)
-                            print value
-                            exit
-                        }
-                    }
-                '
-        )"
-    fi
-
-    if [[ -z "${tag:-}" ]]; then
-        if ! response="$(curl -fsSL "$releases_page_url" 2>/dev/null)"; then
-            echo "error: could not query GitHub releases for ${REPO}" >&2
-            return 1
-        fi
-
-        tag="$(
-            printf '%s' "$response" |
-                tr '\n' ' ' |
-                sed "s#<a href=\"/${REPO}/releases/tag/#\\
-TAG:#g; s#Pre-release#\\
-PRE-RELEASE#g" |
-                awk '
-                    /TAG:/ {
-                        tag = $0
-                        sub(/^.*TAG:/, "", tag)
-                        sub(/".*$/, "", tag)
-                    }
-                    /PRE-RELEASE/ && tag != "" {
-                        print tag
-                        exit
-                    }
-                '
-        )"
-    fi
-
-    if [[ -z "$tag" ]]; then
-        echo "error: could not find a published prerelease for ${REPO}" >&2
-        return 1
-    fi
-
-    printf '%s\n' "$tag"
+        awk '
+            /"prerelease":true/ && !/"draft":true/ {
+                if (match($0, /"tag_name":"[^"]+"/)) {
+                    value = substr($0, RSTART, RLENGTH)
+                    sub(/^"tag_name":"/, "", value)
+                    sub(/"$/, "", value)
+                    print value
+                    exit
+                }
+            }
+        '
 }
 
 release_url() {
     local asset="$1"
     if bool_is_true "$INSTALL_PRERELEASE"; then
         local tag
-        if ! tag="$(latest_prerelease_tag)"; then
-            return 1
-        fi
+        tag="$(latest_prerelease_tag)"
         printf 'https://github.com/%s/releases/download/%s/%s\n' "$REPO" "$tag" "$asset"
         return 0
     fi
-
     printf 'https://github.com/%s/releases/latest/download/%s\n' "$REPO" "$asset"
 }
 
@@ -630,7 +261,6 @@ download_checksum_sidecar() {
     local url="$1"
     local sidecar="$2"
     local status
-
     status="$(curl -sSL -w '%{http_code}' -o "$sidecar" "$url")" || {
         rm -f -- "$sidecar"
         echo "error: could not download checksum sidecar: $url" >&2
@@ -638,8 +268,13 @@ download_checksum_sidecar() {
     }
 
     case "$status" in
-        2*)
-            return 0
+        2*) return 0 ;;
+        000)
+            if [[ -f "$sidecar" ]]; then
+                return 0
+            fi
+            rm -f -- "$sidecar"
+            return 1
             ;;
         404|410)
             rm -f -- "$sidecar"
@@ -659,12 +294,11 @@ verify_downloaded_file() {
     local require_checksum="${3:-$REQUIRE_CHECKSUM}"
     local sidecar="$file.sha256"
     local sidecar_url
-    local sidecar_status
+    local sidecar_status=0
     local expected
     local actual
 
     sidecar_url="$(checksum_url "$url")"
-    sidecar_status=0
     download_checksum_sidecar "$sidecar_url" "$sidecar" || sidecar_status=$?
     if [[ "$sidecar_status" -ne 0 ]]; then
         case "$sidecar_status" in
@@ -676,17 +310,12 @@ verify_downloaded_file() {
                 echo "warning: checksum sidecar not found; continuing without archive verification: $sidecar_url" >&2
                 return 0
                 ;;
-            *)
-                return 1
-                ;;
+            *) return 1 ;;
         esac
     fi
-    if ! expected="$(checksum_from_sidecar "$sidecar")"; then
-        return 1
-    fi
-    if ! actual="$(sha256_file "$file")"; then
-        return 1
-    fi
+
+    expected="$(checksum_from_sidecar "$sidecar")"
+    actual="$(sha256_file "$file")"
     if [[ "$actual" != "$expected" ]]; then
         echo "error: checksum mismatch for $(basename "$file")" >&2
         echo "expected: $expected" >&2
@@ -694,6 +323,34 @@ verify_downloaded_file() {
         return 1
     fi
     echo "Verified checksum: $(basename "$file")"
+}
+
+download_release_archive() {
+    local tmp_dir="$1"
+    local preferred_asset="$2"
+    local fallback_asset="mesh-bundle.tar.gz"
+    local asset
+    local url
+    local archive
+
+    for asset in "$preferred_asset" "$fallback_asset"; do
+        url="$(release_url "$asset")"
+        archive="$tmp_dir/$asset"
+        if ! curl -fsSL "$url" -o "$archive"; then
+            rm -f -- "$archive"
+            continue
+        fi
+        verify_downloaded_file "$archive" "$url"
+        DOWNLOADED_ASSET="$asset"
+        DOWNLOADED_ARCHIVE="$archive"
+        if [[ "$asset" == "$fallback_asset" ]]; then
+            echo "Using runtime-enabled mesh bundle fallback: $fallback_asset"
+        fi
+        return 0
+    done
+
+    echo "error: could not download release archive for $preferred_asset or $fallback_asset" >&2
+    return 1
 }
 
 stale_binary_names() {
@@ -727,286 +384,55 @@ remove_stale_binaries() {
 install_bundle() {
     local bundle_dir="$1"
     remove_stale_binaries
-
     local file
     for file in "$bundle_dir"/*; do
         mv -f "$file" "$INSTALL_DIR/"
     done
 }
 
-install_recommended_native_runtime() {
-    local tmp_dir="$1"
-    local manifest_url
-    local manifest_path="$tmp_dir/native-runtimes.json"
-    local binary="$INSTALL_DIR/mesh-llm"
-
-    if [[ ! -x "$binary" ]]; then
-        return 0
-    fi
-    if ! manifest_url="$(release_url "native-runtimes.json")"; then
-        return 0
-    fi
-    if ! curl -fsSL "$manifest_url" -o "$manifest_path"; then
-        echo "Native runtime manifest was not available for this release; skipping runtime install."
-        return 0
-    fi
-    if ! verify_downloaded_file "$manifest_path" "$manifest_url" 1; then
-        echo "warning: native runtime manifest could not be verified; skipping runtime install." >&2
-        return 0
-    fi
-
-    "$binary" runtime install --manifest "$manifest_path" || {
-        echo "warning: native runtime install did not complete successfully." >&2
-        return 0
-    }
-    "$binary" runtime prune --active-only || true
-}
-
-systemd_escape_assignment_value() {
-    local value="$1"
-    value="${value//\\/\\\\}"
-    value="${value//\"/\\\"}"
-    value="${value//%/%%}"
-    printf '%s' "$value"
-}
-
-systemd_quote_token() {
-    local value="$1"
-    value="${value//\\/\\\\}"
-    value="${value//\"/\\\"}"
-    value="${value//$/$$}"
-    value="${value//%/%%}"
-    printf '"%s"' "$value"
-}
-
-local_template_path() {
-    local rel_path="$1"
-    local source_path="${BASH_SOURCE[0]-}"
-    local script_dir
-
-    if [[ -z "$source_path" || "$source_path" != */* ]]; then
-        return 1
-    fi
-
-    script_dir="$(cd "$(dirname "$source_path")" && pwd)"
-    [[ -f "$script_dir/$rel_path" ]] || return 1
-    printf '%s\n' "$script_dir/$rel_path"
-}
-
-template_stream() {
-    local rel_path="$1"
-    local local_path
-
-    if local_path="$(local_template_path "$rel_path")"; then
-        cat "$local_path"
-        return 0
-    fi
-
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REPO_REF}/${rel_path}"
-}
-
-render_template_to_file() {
-    local template_path="$1"
-    local output_path="$2"
-    shift 2
-
-    local -a replacements=("$@")
-    local -a env_vars=()
-    local pair
-    local key
-    local value
-    for pair in "${replacements[@]}"; do
-        key="${pair%%=*}"
-        value="${pair#*=}"
-        env_vars+=("TPL_${key}=${value}")
-    done
-
-    env "${env_vars[@]}" awk '
-        BEGIN {
-            split("ARGS_METADATA ENV_LINES", multiline_keys, " ");
-            for (i in multiline_keys) {
-                multiline[multiline_keys[i]] = 1;
-            }
-        }
-        {
-            line = $0;
-            for (name in multiline) {
-                marker = "@" name "@";
-                if (line == marker) {
-                    print ENVIRON["TPL_" name];
-                    next;
-                }
-            }
-            for (var in ENVIRON) {
-                if (index(var, "TPL_") != 1) {
-                    continue;
-                }
-                name = substr(var, 5);
-                if (name in multiline) {
-                    continue;
-                }
-                marker = "@" name "@";
-                gsub(marker, ENVIRON[var], line);
-            }
-            print line;
-        }
-    ' < <(template_stream "$template_path") > "$output_path"
-}
-
-ensure_service_env_file() {
-    if [[ -f "$SERVICE_ENV_FILE" ]]; then
+shell_is_interactive() {
+    if [[ -n "${MESH_LLM_TEST_INTERACTIVE:-}" ]]; then
+        bool_is_true "$MESH_LLM_TEST_INTERACTIVE"
         return
     fi
-
-    mkdir -p "$(dirname "$SERVICE_ENV_FILE")"
-    {
-        echo "# Optional environment variables for mesh-llm."
-        echo "# Use plain KEY=value lines."
-        echo "# Example:"
-        echo "# RUST_LOG=mesh_inference=debug"
-    } > "$SERVICE_ENV_FILE"
+    [[ -t 0 && -t 1 ]]
 }
 
-write_service_runner() {
-    mkdir -p "$(dirname "$SERVICE_RUNNER")"
-
-    cat > "$SERVICE_RUNNER" <<EOF
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-BIN="$INSTALL_DIR/mesh-llm"
-ENV_FILE="$SERVICE_ENV_FILE"
-
-if [[ ! -x "\$BIN" ]]; then
-    echo "mesh-llm binary not found or not executable: \$BIN" >&2
-    exit 1
-fi
-
-if [[ -f "\$ENV_FILE" ]]; then
-    set -a
-    # shellcheck source=/dev/null
-    . "\$ENV_FILE"
-    set +a
-fi
-
-exec "\$BIN" serve
-EOF
-
-    chmod +x "$SERVICE_RUNNER"
+setup_command_string() {
+    local -a command=("$INSTALL_DIR/mesh-llm" setup)
+    local token
+    local rendered=""
+    command+=("${SETUP_ARGS[@]}")
+    for token in "${command[@]}"; do
+        printf -v rendered '%s%q ' "$rendered" "$token"
+    done
+    printf '%s\n' "${rendered% }"
 }
 
-ensure_launchd_service_files() {
-    mkdir -p "$SERVICE_CONFIG_DIR"
-    ensure_service_env_file
-    write_service_runner
-}
+run_or_print_setup() {
+    local binary="$INSTALL_DIR/mesh-llm"
+    local command
+    command="$(setup_command_string)"
 
-install_systemd_service() {
-    need_cmd systemctl
-    mkdir -p "$SERVICE_CONFIG_DIR" "$SYSTEMD_UNIT_DIR"
-    ensure_service_env_file
-    local exec_line
-    exec_line="ExecStart=$(systemd_quote_token "$INSTALL_DIR/mesh-llm") serve"
-
-    render_template_to_file "$SYSTEMD_TEMPLATE_PATH" "$SYSTEMD_UNIT_PATH" \
-        "ARGS_METADATA=# mesh-llm serve (startup models come from $MESH_CONFIG_FILE)" \
-        "SERVICE_ENV_FILE=$SERVICE_ENV_FILE" \
-        "ENV_LINES=" \
-        "EXEC_LINE=$exec_line"
-
-    systemctl --user daemon-reload || true
-
-    if bool_is_true "$INSTALL_SERVICE_START"; then
-        if systemctl --user enable "$SERVICE_NAME.service" &&
-            (systemctl --user restart "$SERVICE_NAME.service" ||
-                systemctl --user start "$SERVICE_NAME.service"); then
-            echo "Installed and started systemd user service: $SERVICE_NAME.service"
-        else
-            echo "Installed $SYSTEMD_UNIT_PATH" >&2
-            echo "warning: could not start the systemd user service automatically." >&2
-            echo "Start it with: systemctl --user enable --now $SERVICE_NAME.service" >&2
-        fi
-    else
-        echo "Installed $SYSTEMD_UNIT_PATH"
-        echo "Start it with: systemctl --user enable --now $SERVICE_NAME.service"
+    echo
+    if (( AUTO_SETUP == 1 )) && shell_is_interactive; then
+        echo "Running post-install setup: $command"
+        "$binary" setup "${SETUP_ARGS[@]}"
+        return 0
     fi
 
-    echo "Command: $exec_line"
-    echo "Optional env: $SERVICE_ENV_FILE"
-    echo "Edit startup models: $MESH_CONFIG_FILE"
-    echo "Logs: journalctl --user -u $SERVICE_NAME.service -f"
-    echo "Boot without login (optional): sudo loginctl enable-linger \$USER"
-}
-
-install_launchd_service() {
-    need_cmd launchctl
-    ensure_launchd_service_files
-    mkdir -p "$LAUNCHD_AGENT_DIR" "$LAUNCHD_LOG_DIR"
-
-    render_template_to_file "$LAUNCHD_TEMPLATE_PATH" "$LAUNCHD_PLIST_PATH" \
-        "SERVICE_LABEL=$SERVICE_LABEL" \
-        "SERVICE_RUNNER=$SERVICE_RUNNER" \
-        "HOME_DIR=$HOME" \
-        "STDOUT_LOG=$LAUNCHD_STDOUT_LOG" \
-        "STDERR_LOG=$LAUNCHD_STDERR_LOG"
-
-    local launch_domain="gui/$(id -u)"
-    if bool_is_true "$INSTALL_SERVICE_START"; then
-        launchctl bootout "$launch_domain" "$LAUNCHD_PLIST_PATH" >/dev/null 2>&1 || true
-        if launchctl bootstrap "$launch_domain" "$LAUNCHD_PLIST_PATH"; then
-            launchctl enable "$launch_domain/$SERVICE_LABEL" >/dev/null 2>&1 || true
-            launchctl kickstart -k "$launch_domain/$SERVICE_LABEL" >/dev/null 2>&1 || true
-            echo "Installed and started launchd agent: $SERVICE_LABEL"
-        else
-            echo "Installed $LAUNCHD_PLIST_PATH" >&2
-            echo "warning: could not start the launchd agent automatically." >&2
-            echo "Start it with: launchctl bootstrap $launch_domain $LAUNCHD_PLIST_PATH" >&2
-        fi
-    else
-        echo "Installed $LAUNCHD_PLIST_PATH"
-        echo "Start it with: launchctl bootstrap $launch_domain $LAUNCHD_PLIST_PATH"
-    fi
-
-    echo "Startup models: $MESH_CONFIG_FILE"
-    echo "Optional env: $SERVICE_ENV_FILE"
-    echo "Logs: $LAUNCHD_STDOUT_LOG and $LAUNCHD_STDERR_LOG"
-}
-
-install_service() {
-    case "$(uname -s)" in
-        Darwin)
-            install_launchd_service
-            ;;
-        Linux)
-            install_systemd_service
-            ;;
-        *)
-            echo "error: service install is not supported on $(uname -s)" >&2
-            exit 1
-            ;;
-    esac
+    echo "Run this next: $command"
 }
 
 main() {
     parse_args "$@"
-    if [[ -n "$INSTALL_SERVICE_ARGS" ]]; then
-        echo "error: background services now run \`mesh-llm serve\` and load startup models from $MESH_CONFIG_FILE" >&2
-        echo "Add startup models under [[models]] instead of using MESH_LLM_INSTALL_SERVICE_ARGS." >&2
-        exit 1
-    fi
+    apply_legacy_env_compat
     need_cmd curl
     need_cmd tar
     need_cmd mktemp
 
-    local flavor
-    flavor="$(choose_flavor)"
     local asset
-    asset="$(asset_name "$flavor")"
-    local url
-    if ! url="$(release_url "$asset")"; then
-        exit 1
-    fi
+    asset="$(platform_asset_name)"
 
     local tmp_dir
     tmp_dir="$(mktemp -d)"
@@ -1014,33 +440,17 @@ main() {
     printf -v tmp_dir_escaped '%q' "$tmp_dir"
     trap "rm -rf -- $tmp_dir_escaped" EXIT
 
-    local archive="$tmp_dir/$asset"
-    echo "Installing flavor: $flavor"
-    if bool_is_true "$INSTALL_PRERELEASE"; then
-        echo "Release channel: prerelease"
-    else
-        echo "Release channel: stable"
-    fi
-    echo "Downloading $url"
-    curl -fsSL "$url" -o "$archive"
-    verify_downloaded_file "$archive" "$url"
+    echo "Release channel: $(bool_is_true "$INSTALL_PRERELEASE" && echo prerelease || echo stable)"
+    download_release_archive "$tmp_dir" "$asset"
 
-    tar -xzf "$archive" -C "$tmp_dir"
-
+    tar -xzf "$DOWNLOADED_ARCHIVE" -C "$tmp_dir"
     if [[ ! -d "$tmp_dir/mesh-bundle" ]]; then
         echo "error: release archive did not contain mesh-bundle/" >&2
         exit 1
     fi
 
     install_bundle "$tmp_dir/mesh-bundle"
-    install_recommended_native_runtime "$tmp_dir"
-
-    echo "Installed $asset to $INSTALL_DIR"
-
-    if bool_is_true "$INSTALL_SERVICE"; then
-        echo
-        install_service
-    fi
+    echo "Installed $DOWNLOADED_ASSET to $INSTALL_DIR"
 
     if ! path_contains_install_dir; then
         echo
@@ -1055,6 +465,8 @@ main() {
         echo "  echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> ~/.zshrc"
         echo "  source ~/.zshrc"
     fi
+
+    run_or_print_setup
 }
 
 if [[ "${BASH_SOURCE[0]-}" == "$0" || ( -z "${BASH_SOURCE[0]-}" && "$0" == "bash" ) ]]; then

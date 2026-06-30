@@ -730,6 +730,24 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<DoctorCommand>,
     },
+    /// Bootstrap a new installation.
+    Setup {
+        /// Automatically answer yes to prompts.
+        #[arg(long)]
+        yes: bool,
+        /// Run without prompting for interactive input.
+        #[arg(long = "no-interactive")]
+        no_interactive: bool,
+        /// Install and enable the mesh-llm service.
+        #[arg(long, conflicts_with = "no_service")]
+        service: bool,
+        /// Skip installing and enabling the mesh-llm service.
+        #[arg(long = "no-service", conflicts_with = "service")]
+        no_service: bool,
+        /// Skip downloading or configuring the native runtime.
+        #[arg(long = "skip-runtime")]
+        skip_runtime: bool,
+    },
     /// Load a local model into a running mesh-llm instance.
     Load {
         /// Model name/path/url to load
@@ -1503,6 +1521,53 @@ mod tests {
 
         let rendered = err.to_string();
         assert!(rendered.contains("--owner-required"));
+    }
+
+    #[test]
+    fn setup_command_parses_without_plugin_fallback() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "setup",
+            "--yes",
+            "--no-interactive",
+            "--skip-runtime",
+        ]);
+
+        match cli.command.expect("setup command expected") {
+            Command::Setup {
+                yes,
+                no_interactive,
+                service,
+                no_service,
+                skip_runtime,
+            } => {
+                assert!(yes);
+                assert!(no_interactive);
+                assert!(!service);
+                assert!(!no_service);
+                assert!(skip_runtime);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn setup_command_rejects_conflicting_service_flags() {
+        let err = Cli::try_parse_from(["mesh-llm", "setup", "--service", "--no-service"])
+            .expect_err("setup should reject conflicting service flags");
+
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+        assert!(err.to_string().contains("--service"));
+        assert!(err.to_string().contains("--no-service"));
+    }
+
+    #[test]
+    fn setup_command_rejects_skip_doctor_flag() {
+        let err = Cli::try_parse_from(["mesh-llm", "setup", "--skip-doctor"])
+            .expect_err("setup should reject unknown skip-doctor flag");
+
+        assert_eq!(err.kind(), ErrorKind::UnknownArgument);
+        assert!(err.to_string().contains("--skip-doctor"));
     }
 
     #[test]

@@ -1,11 +1,11 @@
 mod formatters;
+mod setup_helpers;
 
 use anyhow::Result;
 use mesh_llm_native_runtime::{NativeRuntimePruneMode, NativeRuntimeResolver, RuntimeSelection};
 use mesh_llm_runtime_install::{
-    CURRENT_MESH_VERSION, NativeRuntimeDownloadProgressCallback, NativeRuntimeInstallOptions,
-    NativeRuntimeManifestOptions, host_runtime_profile, install_native_runtime,
-    load_release_manifest, native_runtime_cache,
+    CURRENT_MESH_VERSION, NativeRuntimeDownloadProgressCallback, NativeRuntimeManifestOptions,
+    host_runtime_profile, install_native_runtime, load_release_manifest, native_runtime_cache,
 };
 use mesh_llm_tui::terminal_progress::{
     ratio_complete_u64, render_inline_gauge_with_reserved_width,
@@ -15,6 +15,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use formatters::{AvailableRuntimeRow, NativeRuntimeDoctorReport, runtime_native_formatter};
+pub use setup_helpers::{
+    SetupNativeRuntimeOptions, SetupNativeRuntimeOutcome, SetupNativeRuntimePruneResult,
+    SetupNativeRuntimeStatus, install_and_prune_native_runtime_for_setup,
+};
+use setup_helpers::{
+    native_runtime_install_options, prune_native_runtime_cache, resolve_runtime_selection,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NativeRuntimeDoctorReadiness {
@@ -108,11 +115,7 @@ pub async fn run_native_runtime_install(
     configured: NativeRuntimeConfigSelection<'_>,
     json_output: bool,
 ) -> Result<()> {
-    let configured_selection = requested_runtime
-        .is_none()
-        .then_some(configured.selection)
-        .flatten();
-    let selection = RuntimeSelection::parse(requested_runtime.or(configured_selection))?;
+    let resolved_selection = resolve_runtime_selection(requested_runtime, configured)?;
     if !json_output && manifest_path.is_none() && bundle_dirs.is_empty() {
         eprintln!("🔎 Loading native runtime release manifest");
     }
@@ -121,24 +124,21 @@ pub async fn run_native_runtime_install(
     }
     print_configured_selector(
         NativeRuntimeConfigSelection {
-            selection: configured_selection,
+            selection: resolved_selection.configured_selection,
             ..configured
         },
         json_output,
     );
     let formatter = runtime_native_formatter(json_output);
-    let outcome = match install_native_runtime(NativeRuntimeInstallOptions {
-        mesh_version: configured.mesh_version_or_current().to_string(),
-        skippy_abi_version: configured.skippy_abi_version.map(ToString::to_string),
-        selection,
-        manifest_path: manifest_path.map(Path::to_path_buf),
-        bundle_dirs: bundle_dirs.to_vec(),
-        cache_dir: cache_dir.map(Path::to_path_buf),
-        progress: cli_download_progress(json_output),
-        ..Default::default()
-    })
-    .await
-    {
+    let install_options = native_runtime_install_options(
+        resolved_selection.selection,
+        manifest_path,
+        bundle_dirs,
+        cache_dir,
+        configured,
+        cli_download_progress(json_output),
+    );
+    let outcome = match install_native_runtime(install_options).await {
         Ok(outcome) => outcome,
         Err(error) => {
             formatter.render_install_error(&error)?;
@@ -299,8 +299,7 @@ pub fn run_native_runtime_prune(
     } else {
         NativeRuntimePruneMode::KeepActiveAndPrevious
     };
-    let cache = native_runtime_cache(cache_dir)?;
-    let plan = cache.prune(version, mode)?;
+    let plan = prune_native_runtime_cache(version, mode, cache_dir)?;
     runtime_native_formatter(json_output).render_prune(&plan)
 }
 

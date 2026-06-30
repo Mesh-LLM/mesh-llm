@@ -1,13 +1,13 @@
 # Usage Guide
 
-Use this operational reference for installation details, service mode, model
-storage, and runtime control.
+Use this operational reference for installation details, setup, service mode,
+model storage, and runtime control.
 
 For command-by-command CLI usage, model resolution rules, and JSON automation examples, see [CLI.md](./CLI.md).
 
 ## Installation details
 
-Install the latest release bundle:
+Install the latest release executable:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
@@ -25,34 +25,9 @@ To opt into the latest published prerelease bundle instead:
 curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash -s -- --pre-release
 ```
 
-The installer probes your machine, recommends a flavor, and asks what to install.
-
-For a non-interactive install, set the flavor explicitly:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | MESH_LLM_INSTALL_FLAVOR=vulkan bash
-```
-
-On Windows:
-
-```powershell
-$env:MESH_LLM_INSTALL_FLAVOR = "vulkan"
-irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
-```
-
-Release bundles install the `mesh-llm` host binary plus the flavor-specific
-native runtime libraries it embeds. Normal serving runs inside the `mesh-llm`
-host process, which loads the Skippy/llama.cpp stage runtime directly.
-
-Published bundle flavors include macOS, Linux CPU, Linux ARM64 CPU, Linux ARM64
-CUDA, Linux CUDA, Linux CUDA Blackwell, Linux ROCm, Linux Vulkan, Windows CPU,
-Windows CUDA, Windows ROCm, and Windows Vulkan. Metal remains macOS-only.
-
-If you keep more than one flavor in the same `bin` directory, choose one explicitly:
-
-```bash
-mesh-llm serve --llama-flavor vulkan --model Qwen2.5-32B
-```
+The installer puts `mesh-llm` on your `PATH`. After install, run `mesh-llm setup`
+to finish runtime configuration and, on supported macOS and Linux machines,
+optionally install the background service.
 
 Source builds must use `just`:
 
@@ -81,6 +56,7 @@ For full build details, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 ## Common commands
 
 ```bash
+mesh-llm setup
 mesh-llm serve --auto
 mesh-llm serve --model Qwen2.5-32B
 mesh-llm serve --join <token>
@@ -126,46 +102,11 @@ Use `--debug-telemetry` when proving speculative decoding behavior: each trial l
 
 Use `mesh-llm gpus detect` when you want to refresh the raw hardware fingerprint, bandwidth, and compute hints rather than benchmark model-serving throughput.
 
-## Background service
+## Setup
 
-To install Mesh LLM as a per-user background service:
+Use `mesh-llm setup` after the executable is installed. It configures the native runtime and can install the background service on supported macOS and Linux machines.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash -s -- --service
-```
-
-Service installs are user-scoped:
-
-- macOS installs a `launchd` agent at `~/Library/LaunchAgents/com.mesh-llm.mesh-llm.plist`
-- Linux installs a `systemd --user` unit at `~/.config/systemd/user/mesh-llm.service`
-- Shared environment config lives in `~/.config/mesh-llm/service.env`
-- Startup models live in `~/.mesh-llm/config.toml`
-
-Platform behavior:
-
-- macOS loads `service.env` and then executes `mesh-llm serve`
-- Linux writes `mesh-llm serve` directly into `ExecStart=`
-
-The background service reads startup models from `~/.mesh-llm/config.toml`.
-
-Optional shared environment file example:
-
-```text
-MESH_LLM_NO_SELF_UPDATE=1
-```
-
-If you edit the Linux unit manually:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user restart mesh-llm.service
-```
-
-If you want the service to survive reboot before login:
-
-```bash
-sudo loginctl enable-linger "$USER"
-```
+See [CLI.md](./CLI.md) for the setup flags and the service options.
 
 ## Model catalog
 

@@ -11,7 +11,7 @@ peer, or uses Skippy stage splits for models that are too large for one box.
 
 ## Quick start
 
-Install the latest release:
+Install the latest release executable:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
@@ -22,6 +22,14 @@ On Windows, use PowerShell:
 ```powershell
 irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
 ```
+
+Finish setup:
+
+```bash
+mesh-llm setup
+```
+
+On Windows PowerShell, use `mesh-llm.exe setup`.
 
 Join the public mesh and start serving:
 
@@ -182,6 +190,7 @@ binary to `invalid`, but default startup still allows it.
 | [docs/plugins/flash-moe.md](docs/plugins/flash-moe.md) | Optional Flash-MoE SSD expert streaming backend setup |
 | [docs/skippy/FAMILY_STATUS.md](docs/skippy/FAMILY_STATUS.md) | Certified Skippy model-family status |
 | [docs/specs/layer-package-repos.md](docs/specs/layer-package-repos.md) | Manifest and artifact format spec |
+| [docs/specs/mesh-setup-installer.md](docs/specs/mesh-setup-installer.md) | Installer/bootstrap and setup command behavior spec |
 
 ## Community
 

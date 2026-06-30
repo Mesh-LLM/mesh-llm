@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
+import shlex
 import subprocess
+import tarfile
 import tempfile
 import textwrap
 import unittest
+from typing import Final
 
 
-ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "install.sh"
+ROOT: Final = Path(__file__).resolve().parents[2]
+SCRIPT: Final = ROOT / "install.sh"
 
 
 class InstallScriptTests(unittest.TestCase):
@@ -21,9 +25,8 @@ class InstallScriptTests(unittest.TestCase):
             assets_dir = tmp_path / "assets"
             assets_dir.mkdir()
             platform_asset = "mesh-llm-aarch64-apple-darwin.tar.gz"
-            (assets_dir / platform_asset).write_text("platform\n", encoding="utf-8")
-            (assets_dir / "native-runtimes.json").write_text("{}\n", encoding="utf-8")
-            (assets_dir / "mesh-bundle.tar.gz").write_text("fallback\n", encoding="utf-8")
+            self._write_file_with_checksum(assets_dir / platform_asset, "platform\n")
+            self._write_file_with_checksum(assets_dir / "mesh-bundle.tar.gz", "fallback\n")
 
             result = self._run_helper(
                 tmp_path,
@@ -41,7 +44,7 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn(f"asset={platform_asset}", result.stdout)
             self.assertIn(f"archive={tmp_path / platform_asset}", result.stdout)
 
-    def test_download_release_archive_falls_back_to_runtime_mesh_bundle(self) -> None:
+    def test_download_release_archive_falls_back_to_mesh_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             install_dir = tmp_path / "bin"
@@ -49,8 +52,7 @@ class InstallScriptTests(unittest.TestCase):
             assets_dir = tmp_path / "assets"
             assets_dir.mkdir()
             platform_asset = "mesh-llm-aarch64-apple-darwin.tar.gz"
-            (assets_dir / "native-runtimes.json").write_text("{}\n", encoding="utf-8")
-            (assets_dir / "mesh-bundle.tar.gz").write_text("fallback\n", encoding="utf-8")
+            self._write_file_with_checksum(assets_dir / "mesh-bundle.tar.gz", "fallback\n")
 
             result = self._run_helper(
                 tmp_path,
@@ -67,7 +69,7 @@ class InstallScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("asset=mesh-bundle.tar.gz", result.stdout)
             self.assertIn(f"archive={tmp_path / 'mesh-bundle.tar.gz'}", result.stdout)
-            self.assertIn("Using runtime-enabled mesh bundle", result.stdout)
+            self.assertIn("Using runtime-enabled mesh bundle fallback", result.stdout)
 
     def test_download_release_archive_fails_without_old_or_new_release_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -91,106 +93,82 @@ class InstallScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("could not download release archive", result.stderr)
 
-    def test_missing_native_runtime_manifest_is_silent_and_optional(self) -> None:
+    def test_main_runs_setup_interactively(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            install_dir = tmp_path / "bin"
-            install_dir.mkdir()
-            calls = tmp_path / "calls.log"
-            self._write_fake_mesh_llm(
-                install_dir / "mesh-llm",
-                f"""
-                if [[ "$*" == "runtime install --help" ]]; then
-                    exit 0
-                fi
-                echo "$*" >> {calls}
-                exit 0
-                """,
-            )
-
-            result = self._run_helper(
-                tmp_path,
-                install_dir,
-                f"""
-                release_url() {{
-                    printf 'file://{tmp_path}/missing-native-runtimes.json\\n'
-                }}
-                install_recommended_native_runtime "{tmp_path}"
-                """,
-            )
+            result, calls, tools = self._run_main(tmp, interactive=True)
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout, "")
-            self.assertEqual(result.stderr, "")
+            self.assertEqual(calls.read_text(encoding="utf-8"), "setup\n")
+            self.assertFalse(tools.exists())
+
+    def test_main_prints_setup_command_when_noninteractive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls, tools = self._run_main(tmp, interactive=False)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(calls.exists())
+            self.assertFalse(tools.exists())
+            self.assertIn("Run this next:", result.stdout)
+            self.assertIn("/mesh-llm setup", result.stdout)
 
-    def test_old_binary_without_runtime_command_skips_manifest_lookup(self) -> None:
+    def test_main_prints_setup_command_when_no_setup_is_requested(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            install_dir = tmp_path / "bin"
-            install_dir.mkdir()
-            release_url_calls = tmp_path / "release-url-calls.log"
-            self._write_fake_mesh_llm(
-                install_dir / "mesh-llm",
-                """
-                exit 2
-                """,
-            )
+            result, calls, tools = self._run_main(tmp, interactive=True, args=["--no-setup"])
 
-            result = self._run_helper(
-                tmp_path,
-                install_dir,
-                f"""
-                release_url() {{
-                    echo called >> {release_url_calls}
-                    return 1
-                }}
-                install_recommended_native_runtime "{tmp_path}"
-                """,
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(calls.exists())
+            self.assertFalse(tools.exists())
+            self.assertIn("Run this next:", result.stdout)
+            self.assertIn("/mesh-llm setup", result.stdout)
+
+    def test_legacy_service_flags_pass_through_to_setup_without_shell_service_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls, tools = self._run_main(
+                tmp,
+                interactive=True,
+                args=["--service", "--no-start-service"],
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(release_url_calls.exists())
+            self.assertEqual(calls.read_text(encoding="utf-8"), "setup --service\n")
+            self.assertFalse(tools.exists())
+            self.assertNotIn("runtime install", calls.read_text(encoding="utf-8"))
+            self.assertNotIn("runtime prune", calls.read_text(encoding="utf-8"))
+            self.assertIn("forwarding it to `mesh-llm setup --service`", result.stderr)
 
-    def test_runtime_capable_binary_installs_available_manifest(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            install_dir = tmp_path / "bin"
-            install_dir.mkdir()
-            manifest = tmp_path / "native-runtimes-source.json"
-            manifest.write_text('{"runtimes":[]}\n', encoding="utf-8")
-            calls = tmp_path / "calls.log"
-            self._write_fake_mesh_llm(
-                install_dir / "mesh-llm",
-                f"""
-                if [[ "$*" == "runtime install --help" ]]; then
-                    exit 0
-                fi
-                echo "$*" >> {calls}
-                exit 0
-                """,
-            )
-
-            result = self._run_helper(
-                tmp_path,
-                install_dir,
-                f"""
-                release_url() {{
-                    printf 'file://{manifest}\\n'
-                }}
-                install_recommended_native_runtime "{tmp_path}"
-                """,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn(
-                f"runtime install --manifest {tmp_path / 'native-runtimes.json'}",
-                calls.read_text(encoding="utf-8"),
-            )
-            self.assertIn(
-                "runtime prune --active-only",
-                calls.read_text(encoding="utf-8"),
-            )
+    def _run_main(
+        self,
+        tmp_dir: str,
+        *,
+        interactive: bool,
+        args: list[str] | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+        tmp_path = Path(tmp_dir)
+        install_dir = tmp_path / "bin"
+        install_dir.mkdir()
+        assets_dir = tmp_path / "assets"
+        assets_dir.mkdir()
+        calls = tmp_path / "mesh-llm-calls.log"
+        tools = tmp_path / "service-tools.log"
+        archive_path = assets_dir / "mesh-llm-aarch64-apple-darwin.tar.gz"
+        self._write_release_archive(archive_path, calls)
+        wrappers = self._write_service_wrappers(tmp_path / "wrappers", tools)
+        joined_args = " ".join(shlex_quote(arg) for arg in (args or []))
+        result = self._run_helper(
+            tmp_path,
+            install_dir,
+            f"""
+            export PATH={wrappers}:$PATH
+            release_url() {{
+                printf 'file://{assets_dir}/%s\\n' "$1"
+            }}
+            export MESH_LLM_TEST_INTERACTIVE={'1' if interactive else '0'}
+            export MESH_LLM_TEST_UNAME_S=Darwin
+            export MESH_LLM_TEST_UNAME_M=arm64
+            main --install-dir {shlex_quote(str(install_dir))} {joined_args}
+            """,
+        )
+        return result, calls, tools
 
     def _run_helper(
         self,
@@ -204,9 +182,9 @@ class InstallScriptTests(unittest.TestCase):
             f"""
             set -euo pipefail
             source {SCRIPT}
-            INSTALL_DIR={install_dir}
+            INSTALL_DIR={shlex_quote(str(install_dir))}
             {body}
-            """
+            """,
         )
         return subprocess.run(
             ["bash", "-c", script],
@@ -217,12 +195,48 @@ class InstallScriptTests(unittest.TestCase):
             check=False,
         )
 
-    def _write_fake_mesh_llm(self, path: Path, body: str) -> None:
-        path.write_text(
-            "#!/usr/bin/env bash\nset -euo pipefail\n" + textwrap.dedent(body),
+    def _write_file_with_checksum(self, path: Path, contents: str) -> None:
+        path.write_text(contents, encoding="utf-8")
+        digest = hashlib.sha256(contents.encode("utf-8")).hexdigest()
+        path.with_name(f"{path.name}.sha256").write_text(f"{digest}  {path.name}\n", encoding="utf-8")
+
+    def _write_release_archive(self, archive_path: Path, calls: Path) -> None:
+        with tempfile.TemporaryDirectory() as bundle_tmp:
+            bundle_root = Path(bundle_tmp) / "mesh-bundle"
+            bundle_root.mkdir()
+            mesh_llm = bundle_root / "mesh-llm"
+            mesh_llm.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                f"printf '%s\\n' \"$*\" >> {calls}\n",
+                encoding="utf-8",
+            )
+            mesh_llm.chmod(0o755)
+            with tarfile.open(archive_path, "w:gz") as archive:
+                archive.add(bundle_root, arcname="mesh-bundle")
+        digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+        archive_path.with_name(f"{archive_path.name}.sha256").write_text(
+            f"{digest}  {archive_path.name}\n",
             encoding="utf-8",
         )
-        path.chmod(0o755)
+
+    def _write_service_wrappers(self, directory: Path, log_path: Path) -> str:
+        directory.mkdir()
+        for name in ("systemctl", "launchctl"):
+            script_path = directory / name
+            script_path.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                f"echo {name} >> {log_path}\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            script_path.chmod(0o755)
+        return str(directory)
+
+
+def shlex_quote(value: str) -> str:
+    return subprocess.list2cmdline([value]) if os.name == "nt" else shlex.quote(value)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ Catalog id definition: a catalog id is the model id shown in `mesh-llm models re
 ```bash
 mesh-llm --help
 mesh-llm <command> --help
+mesh-llm setup --help
+mesh-llm doctor --help
 mesh-llm models --help
 mesh-llm models <subcommand> --help
 ```
@@ -18,32 +20,44 @@ mesh-llm models <subcommand> --help
 
 If you want to:
 
-1. Start serving right away:
+1. Finish a fresh install:
+
+```bash
+mesh-llm setup
+```
+
+2. Start serving on this machine:
+
+```bash
+mesh-llm serve --model Qwen3-0.6B-Q4_K_M
+```
+
+3. Join the public mesh:
 
 ```bash
 mesh-llm serve --auto
 ```
 
-2. Find a model you can run:
+4. Find a model you can run:
 
 ```bash
 mesh-llm models search gemma --gguf
 mesh-llm models search smoll --mlx
 ```
 
-3. Inspect a model before downloading:
+5. Inspect a model before downloading:
 
 ```bash
 mesh-llm models show unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL
 ```
 
-4. Download a model:
+6. Download a model:
 
 ```bash
 mesh-llm models download unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL
 ```
 
-5. Check what is already installed:
+7. Check what is already installed:
 
 ```bash
 mesh-llm models installed
@@ -56,10 +70,54 @@ If you want to start serving, join a mesh, or run as an API-only client, start h
 Examples:
 
 ```bash
+mesh-llm setup
 mesh-llm serve
 mesh-llm serve --model Qwen3-0.6B-Q4_K_M
 mesh-llm client --auto
 ```
+
+### `setup`
+
+Use this to finish a fresh install after the executable is on your `PATH`.
+
+`mesh-llm setup` downloads and configures the native runtime, can install and
+enable the background service on supported macOS and Linux machines, and only
+shows the GitHub star prompt when it is interactive and eligible. The star
+prompt defaults to Yes, and `--yes` or `--no-interactive` skip it without
+starring anything.
+
+Usage:
+
+```bash
+mesh-llm setup
+mesh-llm setup --service
+mesh-llm setup --no-service --skip-runtime
+mesh-llm setup --yes
+```
+
+Switches:
+
+- `--yes`: automatically answer yes to setup prompts. This accepts the service prompt and skips the GitHub star prompt.
+- `--no-interactive`: run without prompting. When service is not requested, setup prints guidance to rerun with `--service`.
+- `--service`: install and enable the background service.
+- `--no-service`: skip installing and enabling the background service.
+- `--skip-runtime`: skip downloading or configuring the native runtime.
+
+On Windows, `--service` is unsupported.
+
+### `doctor`
+
+Use this only when troubleshooting a failed install or runtime problem. It gathers local status, runtime diagnostics, and logs.
+
+Usage:
+
+```bash
+mesh-llm doctor
+```
+
+Switches:
+
+- `--json`: machine-readable output.
 
 Runtime switches:
 

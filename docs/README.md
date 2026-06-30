@@ -30,6 +30,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | [skippy/DATA_FLOW.md](skippy/DATA_FLOW.md) | Stage data flow and transport details |
 | [skippy/LLAMA_PARITY.md](skippy/LLAMA_PARITY.md) | Remaining llama.cpp parity queue |
 | [specs/layer-package-repos.md](specs/layer-package-repos.md) | Manifest schema and package artifact rules |
+| [specs/mesh-setup-installer.md](specs/mesh-setup-installer.md) | Bootstrap installer and `mesh-llm setup` ownership boundary |
 | [SKIPPY.md](SKIPPY.md) | Skippy integration readiness and parity notes |
 
 Use [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md) for Skippy split-serving workflows.

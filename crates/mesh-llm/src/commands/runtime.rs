@@ -114,13 +114,13 @@ pub(crate) async fn dispatch_runtime_command(
     }
 }
 
-struct NativeRuntimeConfigSelector {
+pub(crate) struct NativeRuntimeConfigSelector {
     mesh_version: String,
     skippy_abi: Option<String>,
     selection: Option<String>,
 }
 
-fn native_runtime_config_selector(
+pub(crate) fn native_runtime_config_selector(
     config_path: Option<&Path>,
 ) -> Result<Option<NativeRuntimeConfigSelector>> {
     let config = load_config(config_path)?;
@@ -134,7 +134,7 @@ fn native_runtime_config_selector(
     })
 }
 
-fn native_runtime_command_selection<'a>(
+pub(crate) fn native_runtime_command_selection<'a>(
     selector: Option<&'a NativeRuntimeConfigSelector>,
 ) -> NativeRuntimeConfigSelection<'a> {
     NativeRuntimeConfigSelection {

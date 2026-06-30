@@ -5,6 +5,7 @@ mod download;
 mod models;
 mod plugin_cli;
 mod runtime;
+mod setup;
 
 use anyhow::Result;
 use mesh_llm_cli::{Cli, Command};
@@ -16,6 +17,7 @@ use self::download::dispatch_download_command;
 use self::models::dispatch_models_command;
 use self::plugin_cli::run_external_plugin_command;
 use self::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
+use self::setup::dispatch_setup_command;
 
 pub async fn dispatch(cli: &Cli) -> Result<bool> {
     let Some(cmd) = cli.command.as_ref() else {
@@ -50,6 +52,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Runtime { command } => {
             dispatch_runtime_command(command.as_ref(), cli.config.as_deref()).await
         }
+        Command::Setup { .. } => dispatch_setup_command(cmd, cli.config.as_deref()).await,
         Command::Config { command } => dispatch_config_command(cli, command),
         Command::Doctor { command, json } => {
             dispatch_doctor_command(command.as_ref(), cli.config.as_deref(), *json).await

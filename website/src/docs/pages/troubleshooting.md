@@ -4,7 +4,7 @@ Start with these checks before changing configuration.
 
 ## Report a problem
 
-Run `mesh-llm doctor` before opening a bug report. The doctor output gives the Mesh LLM team the local status, runtime diagnostics, and logs needed to debug the issue.
+Use `mesh-llm doctor` when you need local status, runtime diagnostics, or logs for a bug report. It is for troubleshooting, not the normal install flow.
 
 Capture a doctor archive:
 

@@ -22,26 +22,13 @@ Check the install:
 mesh-llm --version
 ```
 
-## Flavor selection
-
-The installer auto-detects your GPU and selects the best bundle. Supported Windows flavors:
-
-| Flavor | Hardware | Notes |
-|---|---|---|
-| `cuda` | NVIDIA (all architectures) | Selected when NVIDIA detected |
-| `rocm` | AMD GPUs with HIP runtime | Use when HIP runtime is available |
-| `vulkan` | Vulkan-capable GPUs | Useful when CUDA/ROCm not available |
-| `cpu` | Any Windows x86_64 | Slowest, useful for API-only nodes |
-
-Force a specific flavor:
-
-```powershell
-& ([scriptblock]::Create((irm https://meshllm.cloud/install.ps1))) -Flavor cuda
-```
-
 ## What the installer does
 
-The installer detects your Windows hardware, selects the matching release bundle, downloads the Mesh release, installs the `mesh-llm` binary, and adds `%LOCALAPPDATA%\mesh-llm\bin` to your user `PATH` when needed.
+The installer downloads the `mesh-llm` executable and adds `%LOCALAPPDATA%\mesh-llm\bin` to your user `PATH` when needed. After install, run `mesh-llm.exe setup` to finish runtime configuration.
+
+## Next step
+
+Run `mesh-llm.exe setup` to finish machine setup. See the [CLI guide](/docs/pages/CLI/) for the setup flags.
 
 ## Advanced install
 
@@ -56,10 +43,6 @@ Install to a custom location:
 ```powershell
 & ([scriptblock]::Create((irm https://meshllm.cloud/install.ps1))) -InstallDir "$HOME\bin"
 ```
-
-## Next step
-
-Run the [Quickstart](/docs/pages/quickstart/) to start a private node and open the console.
 
 ## See also
 

@@ -16,11 +16,16 @@
 
   <div class="cta-terminal-body">
     <div class="cta-terminal-block">
-      <p class="comment"># Install Mesh (macOS, Linux, Windows &middot; ~18 MB)</p>
+      <p class="comment"># Install the executable (macOS, Linux, Windows)</p>
       <p class="cta-install-command" data-install-command-display aria-live="polite"><span class="prompt">$</span> <span class="cmd">curl</span> <span class="flag">-fsSL</span> <span class="value">https://meshllm.cloud/install.sh</span> <span class="pipe">|</span> <span class="cmd">bash</span></p>
       <template data-install-template="curl"><span class="prompt">$</span> <span class="cmd">curl</span> <span class="flag">-fsSL</span> <span class="value">https://meshllm.cloud/install.sh</span> <span class="pipe">|</span> <span class="cmd">bash</span></template>
       <template data-install-template="brew"><span class="prompt">$</span> <span class="cmd">brew</span> <span class="cmd">install</span> <span class="value">mesh-llm/tap/mesh-llm</span></template>
       <template data-install-template="cargo"><span class="prompt">$</span> <span class="cmd">cargo</span> <span class="cmd">install</span> <span class="value">mesh-llm</span></template>
+    </div>
+
+    <div class="cta-terminal-block">
+      <p class="comment"># Finish setup</p>
+      <p><span class="prompt">$</span> <span class="cmd">mesh-llm</span> <span class="cmd">setup</span></p>
     </div>
 
     <div class="cta-terminal-block">
