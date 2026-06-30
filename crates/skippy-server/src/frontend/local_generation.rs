@@ -11,7 +11,25 @@ impl StageOpenAiBackend {
         let result = (|| {
             let mut prompt_prefill_sample = None;
             let mut chat_sampling_configured = false;
-            if request.max_tokens > 0 && request.prompt_token_ids.len() > 1 && self.kv.is_none() {
+            let can_sample_whole_prompt_in_prefill = if request.max_tokens > 0
+                && request.prompt_token_ids.len() > 1
+                && self.kv.is_none()
+            {
+                let mut runtime = self
+                    .runtime
+                    .lock()
+                    .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+                runtime
+                    .ensure_session_active(&session_id)
+                    .map_err(openai_backend_error)?;
+                let batch_size = runtime
+                    .session_batch_size(&session_id)
+                    .map_err(openai_backend_error)?;
+                prompt_fits_single_prefill_sample(request.prompt_token_ids.len(), batch_size)
+            } else {
+                false
+            };
+            if can_sample_whole_prompt_in_prefill {
                 if let Some(metadata) = request.chat_sampling_metadata {
                     let mut runtime = self
                         .runtime
@@ -682,5 +700,22 @@ impl StageOpenAiBackend {
         }
         result?;
         Ok(cache_stats)
+    }
+}
+
+fn prompt_fits_single_prefill_sample(prompt_token_count: usize, session_batch_size: usize) -> bool {
+    prompt_token_count > 1 && prompt_token_count <= session_batch_size
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prompt_fits_single_prefill_sample;
+
+    #[test]
+    fn single_prefill_sample_requires_prompt_to_fit_session_batch() {
+        assert!(!prompt_fits_single_prefill_sample(0, 2048));
+        assert!(!prompt_fits_single_prefill_sample(1, 2048));
+        assert!(prompt_fits_single_prefill_sample(2048, 2048));
+        assert!(!prompt_fits_single_prefill_sample(2049, 2048));
     }
 }
