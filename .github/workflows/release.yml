@@ -1,5 +1,8 @@
 name: Release
 
+# Set USE_SELF_HOSTED=true to route x86_64 CUDA release jobs and ARM64 smoke
+# validation to self-hosted runners; unset or false uses GitHub-hosted runners.
+
 on:
   push:
     tags: ['v*']
@@ -388,11 +391,7 @@ jobs:
     name: Build native runtime Linux x86_64 CUDA (${{ matrix.cuda_major }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    # Carrack is the dedicated Linux x64 NVIDIA host. Match it by labels, not
-    # runner name. Keep ARM64 artifact
-    # compilation on GitHub-hosted ARM runners; CM-class ARM64 runners are
-    # smoke/test-only below.
-    runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia]
+    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -695,13 +694,10 @@ jobs:
           if-no-files-found: error
 
   smoke_linux_arm64_artifact:
-    name: Smoke Linux ARM64 artifact (self-hosted ARM64 test only)
+    name: Smoke Linux ARM64 artifact
     needs: [metadata, build_linux_arm64]
     if: ${{ needs.build_linux_arm64.result == 'success' }}
-    # CM-class self-hosted ARM64 machines are validation hosts only. They
-    # download and run already-built artifacts, and must not compile release
-    # bundles or native runtimes.
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && '["self-hosted","Linux","ARM64"]' || '["ubuntu-24.04-arm"]') }}
     steps:
       - uses: actions/download-artifact@v7
         with:
@@ -807,9 +803,7 @@ jobs:
     name: Build Linux CUDA (${{ matrix.cuda_version }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    # CUDA release bundles are the release long pole and benefit most from the
-    # dedicated Linux x64 NVIDIA host.
-    runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia]
+    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
     strategy:
       fail-fast: false
       matrix:

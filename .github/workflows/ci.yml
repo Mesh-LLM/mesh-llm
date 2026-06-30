@@ -1,5 +1,8 @@
 name: CI
 
+# Set USE_SELF_HOSTED=true to route CUDA CI to the dedicated NVIDIA runner;
+# unset or false uses GitHub-hosted runners.
+
 on:
   workflow_dispatch:
   push:
@@ -807,7 +810,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux CUDA slim
-    runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia]
+    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
     permissions:
       contents: read
     container:
