@@ -4,11 +4,12 @@ use rmcp::{
     model::{
         CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskResult, ClientResult,
         CompleteRequestParams, CompleteResult, CreateElicitationRequest,
-        CreateElicitationRequestParams, CreateMessageRequestParams, CustomNotification,
-        CustomRequest, ErrorCode, GetPromptRequestParams, GetPromptResult, GetTaskInfoParams,
-        GetTaskPayloadResult, GetTaskResult, GetTaskResultParams, Implementation,
-        ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListTasksResult,
-        ListToolsResult, LoggingMessageNotificationParam, PaginatedRequestParams, PingRequest,
+        CreateElicitationRequestParams, CreateMessageRequest, CreateMessageRequestParams,
+        CustomNotification, CustomRequest, ErrorCode, GetPromptRequestParams, GetPromptResult,
+        GetTaskInfoParams, GetTaskPayloadResult, GetTaskResult, GetTaskResultParams,
+        Implementation, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+        ListRootsRequest, ListTasksResult, ListToolsResult, LoggingMessageNotification,
+        LoggingMessageNotificationParam, PaginatedRequestParams, PingRequest,
         ReadResourceRequestParams, ReadResourceResult, ResourceUpdatedNotificationParam,
         ServerCapabilities, ServerInfo, ServerNotification, ServerRequest, SetLevelRequestParams,
         SubscribeRequestParams, UnsubscribeRequestParams,
@@ -379,7 +380,6 @@ impl ActiveBridge {
 }
 
 impl PluginRpcBridge for ActiveBridge {
-    #[allow(deprecated)]
     fn handle_request(
         &self,
         _plugin_name: String,
@@ -402,17 +402,36 @@ impl PluginRpcBridge for ActiveBridge {
                     }
                 }
                 "roots/list" => {
-                    to_json_string(&peer.list_roots().await.map_err(proto_error::from_service)?)
+                    let result: ClientResult = peer
+                        .send_request(ServerRequest::ListRootsRequest(ListRootsRequest::default()))
+                        .await
+                        .map_err(proto_error::from_service)?;
+                    match result {
+                        ClientResult::ListRootsResult(result) => to_json_string(&result),
+                        _ => Err(proto_error::internal("unexpected roots/list response")),
+                    }
                 }
                 "sampling/createMessage" => {
                     let params =
                         deserialize_required::<CreateMessageRequestParams>(params, &method)?;
-                    to_json_string(
-                        &peer
-                            .create_message(params)
-                            .await
-                            .map_err(proto_error::from_service)?,
-                    )
+                    if (params.tools.is_some() || params.tool_choice.is_some())
+                        && !peer.supports_sampling_tools()
+                    {
+                        return Err(proto_error::invalid_params(
+                            "tools or toolChoice provided but client does not support sampling tools capability",
+                        ));
+                    }
+                    params.validate().map_err(proto_error::invalid_params)?;
+                    let result: ClientResult = peer
+                        .send_request(ServerRequest::CreateMessageRequest(
+                            CreateMessageRequest::new(params),
+                        ))
+                        .await
+                        .map_err(proto_error::from_service)?;
+                    match result {
+                        ClientResult::CreateMessageResult(result) => to_json_string(&result),
+                        _ => Err(proto_error::internal("unexpected sampling response")),
+                    }
                 }
                 "elicitation/create" => {
                     let params =
@@ -451,7 +470,6 @@ impl PluginRpcBridge for ActiveBridge {
         })
     }
 
-    #[allow(deprecated)]
     fn handle_notification(
         &self,
         _plugin_name: String,
@@ -489,7 +507,11 @@ impl PluginRpcBridge for ActiveBridge {
                     if let Ok(params) =
                         deserialize_required::<LoggingMessageNotificationParam>(params, &method)
                     {
-                        let _ = peer.notify_logging_message(params).await;
+                        let _ = peer
+                            .send_notification(ServerNotification::LoggingMessageNotification(
+                                LoggingMessageNotification::new(params),
+                            ))
+                            .await;
                     }
                 }
                 _ => {
@@ -1332,11 +1354,9 @@ impl ServerHandler for PluginMcpServer {
         .await
     }
 
-    #[allow(deprecated)]
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
             ServerCapabilities::builder()
-                .enable_logging()
                 .enable_completions()
                 .enable_prompts()
                 .enable_prompts_list_changed()
@@ -1487,6 +1507,14 @@ mod proto_error {
     pub fn internal(message: impl Into<String>) -> crate::plugin::proto::ErrorResponse {
         crate::plugin::proto::ErrorResponse {
             code: ErrorCode::INTERNAL_ERROR.0,
+            message: message.into(),
+            data_json: String::new(),
+        }
+    }
+
+    pub fn invalid_params(message: impl Into<String>) -> crate::plugin::proto::ErrorResponse {
+        crate::plugin::proto::ErrorResponse {
+            code: ErrorCode::INVALID_PARAMS.0,
             message: message.into(),
             data_json: String::new(),
         }
