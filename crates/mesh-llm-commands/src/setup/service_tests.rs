@@ -84,6 +84,34 @@ fn rendered_templates_match_existing_unix_service_behavior() {
 }
 
 #[test]
+fn launchd_runner_escapes_shell_specials_in_paths() {
+    let rendered = render_service_runner(
+        &PathBuf::from("/Users/example/mesh \"bin\"/$HOME/`mesh`/mesh-llm"),
+        &PathBuf::from("/Users/example/config\\dir/service.env"),
+    );
+
+    assert!(
+        rendered.contains("BIN=\"/Users/example/mesh \\\"bin\\\"/\\$HOME/\\`mesh\\`/mesh-llm\"")
+    );
+    assert!(rendered.contains("ENV_FILE=\"/Users/example/config\\\\dir/service.env\""));
+}
+
+#[test]
+fn launchd_plist_escapes_xml_specials_in_paths() {
+    let rendered = render_launchd_plist(
+        &PathBuf::from("/Users/example/A&B/run-service.sh"),
+        &PathBuf::from("/Users/example/<home>"),
+        &PathBuf::from("/Users/example/logs/stdout>log"),
+        &PathBuf::from("/Users/example/logs/stderr<log"),
+    );
+
+    assert!(rendered.contains("<string>/Users/example/A&amp;B/run-service.sh</string>"));
+    assert!(rendered.contains("<string>/Users/example/&lt;home&gt;</string>"));
+    assert!(rendered.contains("<string>/Users/example/logs/stdout&gt;log</string>"));
+    assert!(rendered.contains("<string>/Users/example/logs/stderr&lt;log</string>"));
+}
+
+#[test]
 fn linux_service_install_writes_systemd_files_and_runs_expected_commands() {
     let temp = tempfile::tempdir().expect("tempdir should exist");
     let home_dir = temp.path().join("home");

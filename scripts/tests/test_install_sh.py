@@ -112,6 +112,33 @@ class InstallScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "cuda")
 
+    def test_detect_cuda_major_reads_ldconfig_libcudart_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+            wrappers = tmp_path / "wrappers"
+            wrappers.mkdir()
+            ldconfig = wrappers / "ldconfig"
+            ldconfig.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' 'libcudart.so.12 (libc6,AArch64) => /usr/local/cuda/lib64/libcudart.so.12'\n",
+                encoding="utf-8",
+            )
+            ldconfig.chmod(0o755)
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                f"""
+                export PATH={shlex_quote(str(wrappers))}:$PATH
+                detect_cuda_major
+                """,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "12")
+
     def test_release_target_helpers_report_unsupported_armv7(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

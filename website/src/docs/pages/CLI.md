@@ -34,12 +34,6 @@ Local source builds may include build metadata, such as `mesh-llm 0.72.1+gABCDEF
 
 ## Start here (common tasks)
 
-Finish a fresh install:
-
-```bash
-mesh-llm setup
-```
-
 If you want to:
 
 1. Finish a fresh install:

@@ -5,7 +5,7 @@ use super::{
 };
 
 const GITHUB_STAR_PROMPT: &str =
-    "Star Mesh-LLM/mesh-llm on GitHub using your authenticated GitHub CLI account? [Y/n]";
+    "Star Mesh-LLM/mesh-llm on GitHub using your authenticated GitHub CLI account?";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SetupGitHubOutcome {

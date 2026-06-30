@@ -44,4 +44,20 @@ pub(crate) fn confirm_yes_no(message: &str) -> Option<bool> {
         .interact_opt()
         .ok()
         .flatten()
+        .or(Some(false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SetupPromptDefault;
+
+    #[test]
+    fn default_yes_still_applies_to_hidden_prompts() {
+        assert!(SetupPromptDefault::Yes.resolve(None));
+    }
+
+    #[test]
+    fn explicit_false_overrides_default_yes() {
+        assert!(!SetupPromptDefault::Yes.resolve(Some(false)));
+    }
 }

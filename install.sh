@@ -326,13 +326,13 @@ detect_cuda_major() {
         local lib
         for lib in /usr/local/cuda*/targets/*/lib/libcudart.so.* /usr/local/cuda*/targets/*/lib/stubs/libcudart.so.*; do
             if [[ -f "$lib" ]]; then
-                ver="$(basename "$lib" | grep -oE 'libcudart\\.so\\.[0-9]+' | awk -F. '{print $3}' | head -n 1)"
+                ver="$(basename "$lib" | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | head -n 1)"
                 break
             fi
         done
     fi
     if [[ -z "$ver" ]]; then
-        ver="$(ldconfig -p 2>/dev/null | grep -oE 'libcudart\\.so\\.[0-9]+' | awk -F. '{print $3}' | sort -rn | head -n 1)"
+        ver="$(ldconfig -p 2>/dev/null | grep -oE 'libcudart\.so\.[0-9]+' | awk -F. '{print $3}' | sort -rn | head -n 1)"
     fi
     case "$ver" in
         12|13) printf '%s\n' "$ver" ;;
