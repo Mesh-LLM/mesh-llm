@@ -1333,7 +1333,7 @@ describe('ChatPage', () => {
 
     const userHeader = screen.getByText('You').parentElement
 
-    expect(userHeader).toHaveTextContent(chatMock.sendCalls[0]?.model ?? '')
+    await waitFor(() => expect(userHeader).toHaveTextContent(chatMock.sendCalls[0]?.model ?? ''))
     expect(userHeader).not.toHaveTextContent('2026-05-06')
     expect(await screen.findByText('Response with measured metadata')).toBeInTheDocument()
     expect(screen.getByText('unsloth/MiniMax-M2.5-GGUF:Q4_K_M')).toBeInTheDocument()
