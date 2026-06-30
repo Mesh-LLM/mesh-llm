@@ -31,10 +31,10 @@ impl ServiceCommandRunner for FakeRunner {
         let rendered = command.display();
         self.commands.push(command.clone());
         for (prefix, failures) in &mut self.failures {
-            if rendered.starts_with(prefix) {
-                if let Some(message) = failures.pop_front() {
-                    return Err(anyhow!(message));
-                }
+            if rendered.starts_with(prefix)
+                && let Some(message) = failures.pop_front()
+            {
+                return Err(anyhow!(message));
             }
         }
         Ok(())
