@@ -118,7 +118,7 @@ mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
 4. `--apply` writes only supported nested `[[models]].model_fit` and `[[models]].hardware` fields, and preserves comments and unrelated TOML. `--replace-existing` lets those writes overwrite existing explicit values when you want the recommendation to replace what is already there.
 5. `mmap` and `mlock` are reported, not written. If `mlock` is unavailable, tune explains whether the current `RLIMIT_MEMLOCK` or `IPC_LOCK` access is too low.
 6. `cpu_moe`, `n_cpu_moe`, `tensor_split`, and `placement` are reported as unsupported in v1.
-7. `--benchmark` is read-only and conflicts with `--apply` / `--launch-args`. It creates temporary per-trial configs, starts isolated local `mesh-llm serve` children, sends OpenAI-compatible chat-completion requests, reports decode tok/s for each context/batch/ubatch candidate, and keeps trial logs under `target/gpu-tune/`.
+7. `--benchmark` is read-only and conflicts with `--apply` / `--launch-args`. It creates temporary per-trial configs, starts isolated local `mesh-llm serve` children, sends OpenAI-compatible chat-completion requests, reports decode tok/s plus setup/readiness/request/shutdown/total timing stats for each context/batch/ubatch candidate, and keeps trial logs under `target/gpu-tune/`.
 
 ## Background service
 

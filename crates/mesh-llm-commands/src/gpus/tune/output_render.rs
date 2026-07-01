@@ -164,13 +164,14 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
             Some(best) => {
                 let _ = writeln!(
                     rendered,
-                    "    Best: ctx={} batch={} ubatch={} decode_tok_s={}",
+                    "    Best: ctx={} batch={} ubatch={} decode_tok_s={}{}",
                     best.candidate.ctx_size,
                     best.candidate.batch,
                     best.candidate.ubatch,
                     best.decode_tok_s
                         .map(|value| format!("{value:.2}"))
                         .unwrap_or_else(|| "n/a".to_string()),
+                    render_timing_summary(best.timings.as_ref()),
                 );
             }
             None => {
@@ -190,6 +191,9 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
             if let Some(rate) = trial.decode_tok_s {
                 let _ = write!(rendered, " decode_tok_s={rate:.2}");
             }
+            if let Some(timings) = &trial.timings {
+                write_timing_fields(rendered, timings);
+            }
             if let Some(error) = &trial.error {
                 let _ = write!(rendered, " error={error}");
             }
@@ -199,6 +203,37 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
             let _ = writeln!(rendered);
         }
     }
+}
+
+fn render_timing_summary(timings: Option<&TuneBenchmarkTimingStats>) -> String {
+    timings
+        .map(|timings| {
+            let request_ms = timings
+                .request_ms
+                .map(|value| format!("{value:.0}"))
+                .unwrap_or_else(|| "n/a".to_string());
+            format!(" request_ms={request_ms} total_ms={:.0}", timings.total_ms)
+        })
+        .unwrap_or_default()
+}
+
+fn write_timing_fields(rendered: &mut String, timings: &TuneBenchmarkTimingStats) {
+    let _ = write!(
+        rendered,
+        " setup_ms={:.0} readiness_ms={:.0}",
+        timings.setup_ms, timings.readiness_ms,
+    );
+    if let Some(request_ms) = timings.request_ms {
+        let _ = write!(rendered, " request_ms={request_ms:.0}");
+    }
+    if let Some(shutdown_ms) = timings.shutdown_ms {
+        let _ = write!(rendered, " shutdown_ms={shutdown_ms:.0}");
+    }
+    let _ = write!(
+        rendered,
+        " total_ms={:.0} readiness_attempts={}",
+        timings.total_ms, timings.readiness_attempts,
+    );
 }
 
 fn render_setting_line(setting: &TuneRenderedSetting) -> String {

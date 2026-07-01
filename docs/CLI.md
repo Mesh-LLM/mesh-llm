@@ -409,7 +409,8 @@ Behavior:
 4. `cpu_moe`, `n_cpu_moe`, `tensor_split`, and `placement` are reported as unsupported in v1 and are not written.
 5. `--apply` writes only supported nested fields under `[[models]].model_fit` and `[[models]].hardware`.
 6. `--replace-existing` can replace existing explicit values, including values inherited from `defaults.*`, when you want those recommendations written.
-7. The command is for review and startup help, not benchmarking, and it does not promise maximum throughput.
+7. Benchmark trials keep lifecycle timing stats in JSON under `benchmarks[].trials[].timings`: `setup_ms`, `readiness_ms`, `request_ms`, `shutdown_ms`, `total_ms`, and `readiness_attempts`. The legacy `elapsed_ms` field remains the measured chat-completion request duration used for decode tok/s.
+8. Review and apply modes are for startup help, not benchmarking, and they do not promise maximum throughput.
 
 
 ### `load`

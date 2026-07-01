@@ -108,6 +108,7 @@ fn run_trial(
             completion_tokens: None,
             elapsed_ms: None,
             decode_tok_s: None,
+            timings: None,
             log_path: None,
             error: Some(error.to_string()),
         },
@@ -121,6 +122,8 @@ fn run_trial_inner(
     candidate: &TuneBenchmarkCandidate,
 ) -> anyhow::Result<TuneBenchmarkTrial> {
     anyhow::ensure!(request.max_tokens > 0, "--max-tokens must be greater than zero");
+    let mut timings = TrialTimingRecorder::new();
+    let setup_started = std::time::Instant::now();
     let trial_dir = create_trial_dir(prepared, index)?;
     let config_path = trial_dir.join("config.toml");
     let log_path = trial_dir.join("serve.log");
@@ -133,30 +136,75 @@ fn run_trial_inner(
     let client = reqwest::blocking::Client::builder()
         .timeout(request_timeout)
         .build()?;
-    wait_for_trial_ready(
+    timings.setup_ms = elapsed_ms_since(setup_started);
+
+    let readiness_started = std::time::Instant::now();
+    let readiness_result = wait_for_trial_ready(
         &client,
         &mut child,
         port,
         request.prompt,
         request.startup_timeout_secs,
         request_timeout,
-    )?;
+        &mut timings.readiness_attempts,
+    );
+    timings.readiness_ms = elapsed_ms_since(readiness_started);
+    if let Err(error) = readiness_result {
+        return Ok(finish_failed_trial(
+            candidate,
+            &log_path,
+            &mut timings,
+            &mut child,
+            error,
+        ));
+    }
 
     let started = std::time::Instant::now();
-    let response = send_chat_request_with_watchdog(
+    let response_result = send_chat_request_with_watchdog(
         &client,
         &mut child,
         port,
         request.prompt,
         request.max_tokens,
         request_timeout,
-    )?;
+    );
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let completion_tokens = response_completion_tokens(&response)
-        .ok_or_else(|| anyhow::anyhow!("chat completion response did not include completion_tokens"))?;
-    anyhow::ensure!(completion_tokens > 0, "chat completion returned zero completion tokens");
+    timings.request_ms = Some(elapsed_ms);
+    let response = match response_result {
+        Ok(response) => response,
+        Err(error) => {
+            return Ok(finish_failed_trial(
+                candidate,
+                &log_path,
+                &mut timings,
+                &mut child,
+                error,
+            ));
+        }
+    };
+    let completion_tokens = match response_completion_tokens(&response) {
+        Some(tokens) => tokens,
+        None => {
+            return Ok(finish_failed_trial(
+                candidate,
+                &log_path,
+                &mut timings,
+                &mut child,
+                anyhow::anyhow!("chat completion response did not include completion_tokens"),
+            ));
+        }
+    };
+    if completion_tokens == 0 {
+        return Ok(finish_failed_trial(
+            candidate,
+            &log_path,
+            &mut timings,
+            &mut child,
+            anyhow::anyhow!("chat completion returned zero completion tokens"),
+        ));
+    }
     let decode_tok_s = completion_tokens as f64 / (elapsed_ms / 1000.0);
-    child.shutdown();
+    record_shutdown(&mut child, &mut timings);
 
     Ok(TuneBenchmarkTrial {
         candidate: candidate.clone(),
@@ -164,9 +212,82 @@ fn run_trial_inner(
         completion_tokens: Some(completion_tokens),
         elapsed_ms: Some(elapsed_ms),
         decode_tok_s: Some(decode_tok_s),
+        timings: Some(timings.snapshot()),
         log_path: Some(log_path.display().to_string()),
         error: None,
     })
+}
+
+struct TrialTimingRecorder {
+    trial_started: std::time::Instant,
+    setup_ms: f64,
+    readiness_ms: f64,
+    request_ms: Option<f64>,
+    shutdown_ms: Option<f64>,
+    readiness_attempts: u32,
+}
+
+impl TrialTimingRecorder {
+    fn new() -> Self {
+        Self {
+            trial_started: std::time::Instant::now(),
+            setup_ms: 0.0,
+            readiness_ms: 0.0,
+            request_ms: None,
+            shutdown_ms: None,
+            readiness_attempts: 0,
+        }
+    }
+
+    fn snapshot(&self) -> TuneBenchmarkTimingStats {
+        TuneBenchmarkTimingStats {
+            total_ms: elapsed_ms_since(self.trial_started),
+            setup_ms: self.setup_ms,
+            readiness_ms: self.readiness_ms,
+            request_ms: self.request_ms,
+            shutdown_ms: self.shutdown_ms,
+            readiness_attempts: self.readiness_attempts,
+        }
+    }
+}
+
+fn elapsed_ms_since(started: std::time::Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
+}
+
+fn record_shutdown(child: &mut TrialChild, timings: &mut TrialTimingRecorder) {
+    let shutdown_started = std::time::Instant::now();
+    child.shutdown();
+    timings.shutdown_ms = Some(elapsed_ms_since(shutdown_started));
+}
+
+fn finish_failed_trial(
+    candidate: &TuneBenchmarkCandidate,
+    log_path: &std::path::Path,
+    timings: &mut TrialTimingRecorder,
+    child: &mut TrialChild,
+    error: impl std::fmt::Display,
+) -> TuneBenchmarkTrial {
+    record_shutdown(child, timings);
+    failed_trial_with_evidence(candidate, log_path, timings.snapshot(), error)
+}
+
+fn failed_trial_with_evidence(
+    candidate: &TuneBenchmarkCandidate,
+    log_path: &std::path::Path,
+    timings: TuneBenchmarkTimingStats,
+    error: impl std::fmt::Display,
+) -> TuneBenchmarkTrial {
+    TuneBenchmarkTrial {
+        candidate: candidate.clone(),
+        status: TuneBenchmarkTrialStatus::Failed,
+        completion_tokens: None,
+        elapsed_ms: timings.request_ms,
+        decode_tok_s: None,
+        timings: Some(timings),
+        log_path: Some(log_path.display().to_string()),
+        error: Some(error.to_string()),
+    }
 }
 
 struct TrialChild {
@@ -244,6 +365,7 @@ fn wait_for_trial_ready(
     prompt: &str,
     startup_timeout_secs: u64,
     request_timeout: std::time::Duration,
+    readiness_attempts: &mut u32,
 ) -> anyhow::Result<()> {
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(startup_timeout_secs.max(1));
@@ -254,6 +376,7 @@ fn wait_for_trial_ready(
         }
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         let attempt_timeout = std::cmp::min(request_timeout, remaining);
+        *readiness_attempts += 1;
         match send_chat_request_with_watchdog(client, child, port, prompt, 1, attempt_timeout) {
             Ok(_) => return Ok(()),
             Err(error) => last_error = error.to_string(),

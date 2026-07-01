@@ -102,9 +102,23 @@ pub(crate) struct TuneBenchmarkTrial {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decode_tok_s: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings: Option<TuneBenchmarkTimingStats>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub(crate) struct TuneBenchmarkTimingStats {
+    pub total_ms: f64,
+    pub setup_ms: f64,
+    pub readiness_ms: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shutdown_ms: Option<f64>,
+    pub readiness_attempts: u32,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
