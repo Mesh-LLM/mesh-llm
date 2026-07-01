@@ -82,7 +82,48 @@ pub(crate) struct TuneTargetReport {
     pub launch: Option<TuneLaunchPreview>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub(crate) struct TuneBenchmarkCandidate {
+    pub ctx_size: u32,
+    pub batch: u32,
+    pub ubatch: u32,
+    pub cache_type_k: TuneKvCacheType,
+    pub cache_type_v: TuneKvCacheType,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub(crate) struct TuneBenchmarkTrial {
+    pub candidate: TuneBenchmarkCandidate,
+    pub status: TuneBenchmarkTrialStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decode_tok_s: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TuneBenchmarkTrialStatus {
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub(crate) struct TuneBenchmarkTargetReport {
+    pub requested: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best: Option<TuneBenchmarkTrial>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trials: Vec<TuneBenchmarkTrial>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub(crate) struct TuneRunReport {
     pub command: &'static str,
     pub apply_mode: TuneApplyMode,
@@ -91,4 +132,6 @@ pub(crate) struct TuneRunReport {
     pub global_blockers: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<TuneTargetReport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub benchmarks: Vec<TuneBenchmarkTargetReport>,
 }

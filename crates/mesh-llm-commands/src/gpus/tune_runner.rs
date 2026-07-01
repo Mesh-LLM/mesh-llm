@@ -24,34 +24,23 @@ fn run_tune_command_with_writer(
     command: &GpuCommand,
     writer: &mut impl Write,
 ) -> Result<()> {
-    let GpuCommand::Tune {
-        model,
-        models,
-        json,
-        launch_args,
-        apply,
-        replace_existing,
-    } = command
-    else {
-        unreachable!("run_tune_command called for non-tune GPU command");
-    };
-
-    let render_json = json_output || *json;
-    let apply_mode = tune_apply_mode(*launch_args, *apply, *replace_existing);
+    let args = tune_runner_args(command);
+    let render_json = json_output || args.json;
+    let apply_mode = tune_apply_mode(args.launch_args, args.apply, args.replace_existing);
     let config = load_config(config_path)?;
     super::tune::recommendation_symbol_anchor();
     tune_resolver::resolver_symbol_anchor();
     tune_hardware::dispatch_symbol_anchor();
 
-    let resolution = if let Some(explicit_model) = model.as_deref() {
+    let resolution = if let Some(explicit_model) = args.model {
         tune_resolver::resolve_explicit_tune_targets(&config, &[explicit_model.to_string()])
-    } else if !models.is_empty() {
-        tune_resolver::resolve_explicit_tune_targets(&config, models)
+    } else if !args.models.is_empty() {
+        tune_resolver::resolve_explicit_tune_targets(&config, args.models)
     } else {
         tune_resolver::resolve_configured_tune_targets(&config)
     };
 
-    let explicit_inputs = model.is_some() || !models.is_empty();
+    let explicit_inputs = args.model.is_some() || !args.models.is_empty();
     let mut global_safety_errors = Vec::new();
     let mut target_failures = Vec::new();
     for duplicate in &resolution.duplicates {
@@ -119,18 +108,32 @@ fn run_tune_command_with_writer(
         });
         prepared.push(tune_apply::PreparedTunePlan::new(target.clone(), plan));
     }
+    let benchmark_reports = maybe_run_benchmark_reports(
+        tune::TuneBenchmarkRunRequest {
+            prepared: &prepared,
+            ctx_sizes: args.ctx_sizes,
+            batch_sizes: args.batch_sizes,
+            ubatch_sizes: args.ubatch_sizes,
+            max_tokens: args.max_tokens,
+            startup_timeout_secs: args.startup_timeout_secs,
+            request_timeout_secs: args.request_timeout_secs,
+            prompt: args.prompt,
+        },
+        args.benchmark,
+    );
 
     if !global_safety_errors.is_empty() {
-        tune::emit_tune_output(
+        emit_runner_output(
             writer,
-            tune::TuneOutputRequest {
-                json_output: render_json,
-                launch_args: *launch_args,
+            RunnerOutputContext {
+                render_json,
+                launch_args: args.launch_args,
                 config: &config,
                 apply_mode,
                 prepared: &prepared,
                 target_failures: &target_failures,
                 global_blockers: &global_safety_errors,
+                benchmark_reports: &benchmark_reports,
             },
         )?;
         let detail = global_safety_errors
@@ -155,16 +158,17 @@ fn run_tune_command_with_writer(
         };
         let written = tune_apply::apply_prepared_tune_plans(&store, &prepared)?;
         if written == 0 {
-            tune::emit_tune_output(
+            emit_runner_output(
                 writer,
-                tune::TuneOutputRequest {
-                    json_output: render_json,
-                    launch_args: *launch_args,
+                RunnerOutputContext {
+                    render_json,
+                    launch_args: args.launch_args,
                     config: &config,
                     apply_mode,
                     prepared: &prepared,
                     target_failures: &target_failures,
                     global_blockers: &[],
+                    benchmark_reports: &benchmark_reports,
                 },
             )?;
             let mut apply_failures = target_failures
@@ -185,16 +189,17 @@ fn run_tune_command_with_writer(
             bail!("gpu tune could not produce any safe config edits:\n{detail}");
         }
     } else if prepared.is_empty() && !target_failures.is_empty() {
-        tune::emit_tune_output(
+        emit_runner_output(
             writer,
-            tune::TuneOutputRequest {
-                json_output: render_json,
-                launch_args: *launch_args,
+            RunnerOutputContext {
+                render_json,
+                launch_args: args.launch_args,
                 config: &config,
                 apply_mode,
                 prepared: &prepared,
                 target_failures: &target_failures,
                 global_blockers: &[],
+                benchmark_reports: &benchmark_reports,
             },
         )?;
         let detail = target_failures
@@ -205,16 +210,17 @@ fn run_tune_command_with_writer(
         bail!("gpu tune could not prepare any local targets:\n{detail}");
     }
 
-    tune::emit_tune_output(
+    emit_runner_output(
         writer,
-        tune::TuneOutputRequest {
-            json_output: render_json,
-            launch_args: *launch_args,
+        RunnerOutputContext {
+            render_json,
+            launch_args: args.launch_args,
             config: &config,
             apply_mode,
             prepared: &prepared,
             target_failures: &target_failures,
             global_blockers: &[],
+            benchmark_reports: &benchmark_reports,
         },
     )?;
     Ok(())
@@ -245,6 +251,99 @@ fn apply_failure_reason(prepared: &tune_apply::PreparedTunePlan) -> Option<Strin
             prepared.target.requested_input,
         )
     })
+}
+
+struct TuneRunnerArgs<'a> {
+    model: Option<&'a str>,
+    models: &'a [String],
+    json: bool,
+    benchmark: bool,
+    ctx_sizes: &'a [u32],
+    batch_sizes: &'a [u32],
+    ubatch_sizes: &'a [u32],
+    max_tokens: u32,
+    startup_timeout_secs: u64,
+    request_timeout_secs: u64,
+    prompt: &'a str,
+    launch_args: bool,
+    apply: bool,
+    replace_existing: bool,
+}
+
+fn tune_runner_args(command: &GpuCommand) -> TuneRunnerArgs<'_> {
+    let GpuCommand::Tune {
+        model,
+        models,
+        json,
+        benchmark,
+        ctx_sizes,
+        batch_sizes,
+        ubatch_sizes,
+        max_tokens,
+        startup_timeout_secs,
+        request_timeout_secs,
+        prompt,
+        launch_args,
+        apply,
+        replace_existing,
+    } = command
+    else {
+        unreachable!("run_tune_command called for non-tune GPU command");
+    };
+    TuneRunnerArgs {
+        model: model.as_deref(),
+        models,
+        json: *json,
+        benchmark: *benchmark,
+        ctx_sizes,
+        batch_sizes,
+        ubatch_sizes,
+        max_tokens: *max_tokens,
+        startup_timeout_secs: *startup_timeout_secs,
+        request_timeout_secs: *request_timeout_secs,
+        prompt,
+        launch_args: *launch_args,
+        apply: *apply,
+        replace_existing: *replace_existing,
+    }
+}
+
+struct RunnerOutputContext<'a> {
+    render_json: bool,
+    launch_args: bool,
+    config: &'a mesh_llm_config::MeshConfig,
+    apply_mode: TuneApplyMode,
+    prepared: &'a [tune_apply::PreparedTunePlan],
+    target_failures: &'a [tune::TuneTargetFailure],
+    global_blockers: &'a [String],
+    benchmark_reports: &'a [tune::TuneBenchmarkTargetReport],
+}
+
+fn emit_runner_output(writer: &mut impl Write, context: RunnerOutputContext<'_>) -> Result<()> {
+    tune::emit_tune_output(
+        writer,
+        tune::TuneOutputRequest {
+            json_output: context.render_json,
+            launch_args: context.launch_args,
+            config: context.config,
+            apply_mode: context.apply_mode,
+            prepared: context.prepared,
+            target_failures: context.target_failures,
+            global_blockers: context.global_blockers,
+            benchmark_reports: context.benchmark_reports,
+        },
+    )
+}
+
+fn maybe_run_benchmark_reports(
+    request: tune::TuneBenchmarkRunRequest<'_>,
+    benchmark: bool,
+) -> Vec<tune::TuneBenchmarkTargetReport> {
+    if benchmark {
+        tune::run_benchmark_plans(request)
+    } else {
+        Vec::new()
+    }
 }
 
 const fn tune_apply_mode(launch_args: bool, apply: bool, replace_existing: bool) -> TuneApplyMode {

@@ -384,6 +384,38 @@ pub enum GpuCommand {
         /// Print machine-readable JSON output.
         #[arg(long)]
         json: bool,
+        /// Launch isolated trial servers and measure decode throughput.
+        #[arg(
+            long,
+            conflicts_with = "apply",
+            conflicts_with = "replace_existing",
+            conflicts_with = "launch_args"
+        )]
+        benchmark: bool,
+        /// Context sizes to benchmark, as a comma-separated token list.
+        #[arg(long, value_delimiter = ',')]
+        ctx_sizes: Vec<u32>,
+        /// Batch sizes to benchmark, as a comma-separated list.
+        #[arg(long, value_delimiter = ',')]
+        batch_sizes: Vec<u32>,
+        /// Micro-batch sizes to benchmark, as a comma-separated list.
+        #[arg(long, value_delimiter = ',')]
+        ubatch_sizes: Vec<u32>,
+        /// Maximum generated tokens per benchmark request.
+        #[arg(long, default_value_t = 128)]
+        max_tokens: u32,
+        /// Startup wait limit for each benchmark trial.
+        #[arg(long, default_value_t = 600)]
+        startup_timeout_secs: u64,
+        /// HTTP request timeout for each benchmark request.
+        #[arg(long, default_value_t = 600)]
+        request_timeout_secs: u64,
+        /// Prompt sent during benchmark trials.
+        #[arg(
+            long,
+            default_value = "Write a concise paragraph about distributed GPU inference."
+        )]
+        prompt: String,
         /// Print equivalent launch arguments without writing config.
         #[arg(long, conflicts_with = "apply", conflicts_with = "replace_existing")]
         launch_args: bool,
@@ -1712,6 +1744,14 @@ mod tests {
                         model,
                         models,
                         json,
+                        benchmark,
+                        ctx_sizes,
+                        batch_sizes,
+                        ubatch_sizes,
+                        max_tokens,
+                        startup_timeout_secs,
+                        request_timeout_secs,
+                        prompt,
                         launch_args,
                         apply,
                         replace_existing,
@@ -1724,6 +1764,23 @@ mod tests {
                 assert_eq!(model.as_deref(), expected_model, "model for {args:?}");
                 assert_eq!(models, expected_models, "models for {args:?}");
                 assert_eq!(json, expected_json, "tune json for {args:?}");
+                assert!(!benchmark, "benchmark default for {args:?}");
+                assert!(ctx_sizes.is_empty(), "ctx_sizes default for {args:?}");
+                assert!(batch_sizes.is_empty(), "batch_sizes default for {args:?}");
+                assert!(ubatch_sizes.is_empty(), "ubatch_sizes default for {args:?}");
+                assert_eq!(max_tokens, 128, "max_tokens default for {args:?}");
+                assert_eq!(
+                    startup_timeout_secs, 600,
+                    "startup_timeout_secs default for {args:?}"
+                );
+                assert_eq!(
+                    request_timeout_secs, 600,
+                    "request_timeout_secs default for {args:?}"
+                );
+                assert!(
+                    prompt.contains("distributed GPU inference"),
+                    "prompt default for {args:?}"
+                );
                 assert_eq!(
                     launch_args, expected_launch_args,
                     "launch_args for {args:?}"

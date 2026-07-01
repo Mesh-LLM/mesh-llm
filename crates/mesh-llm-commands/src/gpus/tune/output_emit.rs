@@ -6,6 +6,7 @@ pub(crate) struct TuneOutputRequest<'a> {
     pub(crate) prepared: &'a [crate::gpus::tune_apply::PreparedTunePlan],
     pub(crate) target_failures: &'a [TuneTargetFailure],
     pub(crate) global_blockers: &'a [String],
+    pub(crate) benchmark_reports: &'a [TuneBenchmarkTargetReport],
 }
 
 pub(crate) fn emit_tune_output(
@@ -18,6 +19,7 @@ pub(crate) fn emit_tune_output(
         request.prepared,
         request.target_failures,
         request.global_blockers,
+        request.benchmark_reports,
     );
     if request.json_output {
         serde_json::to_writer_pretty(&mut *writer, &report)?;

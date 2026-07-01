@@ -66,6 +66,7 @@ fn gpu_tune_human_output_names_targets_and_reasons() {
             },
         },
         global_blockers: Vec::new(),
+        benchmarks: Vec::new(),
         targets: vec![
             TuneTargetReport {
                 target: sample_target(),
@@ -154,6 +155,7 @@ fn gpu_tune_output_never_marks_unsupported_fields_as_applied() {
         )],
         &[],
         &[],
+        &[],
     );
 
     let target = &report.targets[0];
@@ -180,6 +182,7 @@ fn gpu_tune_human_output_explains_mlock_unavailable() {
         )],
         &[],
         &[],
+        &[],
     );
 
     let rendered = render_tune_human_output(&report);
@@ -202,6 +205,7 @@ fn gpu_tune_json_reports_per_model_errors_without_silent_failures_output_builder
             reason: "requested target `missing.gguf`: target is not an existing local path or installed cache ref"
                 .to_string(),
         }],
+        &[],
         &[],
     );
 

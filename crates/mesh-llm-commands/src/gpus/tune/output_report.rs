@@ -6,6 +6,7 @@ pub(crate) fn build_tune_run_report(
     prepared: &[PreparedTunePlan],
     target_failures: &[TuneTargetFailure],
     global_blockers: &[String],
+    benchmark_reports: &[TuneBenchmarkTargetReport],
 ) -> TuneRunReport {
     let mut targets = prepared
         .iter()
@@ -18,6 +19,7 @@ pub(crate) fn build_tune_run_report(
         summary: summarize_target_reports(&targets),
         global_blockers: global_blockers.to_vec(),
         targets,
+        benchmarks: benchmark_reports.to_vec(),
     }
 }
 

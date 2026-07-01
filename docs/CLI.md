@@ -373,7 +373,7 @@ For review and apply tuning of already-downloaded local models, use `mesh-llm gp
 
 ### `gpu tune`
 
-Use this to review or apply startup tuning for already-downloaded local models. The command is local-only. It rejects remote-only refs and any target that is not already on disk instead of fetching it.
+Use this to review or apply startup tuning for already-downloaded local models, or to run measured local trial launches with `--benchmark`. The command is local-only. It rejects remote-only refs and any target that is not already on disk instead of fetching it.
 
 Examples:
 
@@ -382,6 +382,7 @@ mesh-llm gpu tune
 mesh-llm gpu tune --model /models/qwen3-8b.gguf
 mesh-llm gpu tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --launch-args
+mesh-llm gpu tune --model /models/qwen3-8b.gguf --benchmark --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
 ```
@@ -392,6 +393,11 @@ Switches:
 - `--models <MODELS>`: tune multiple exact local models, separated by commas.
 - `--json`: machine-readable tune report.
 - `--launch-args`: read-only output. Prints one shell-safe `mesh-llm serve --model ...` command per successful target, plus comments for writable, report-only, and unsupported fields. It conflicts with `--apply` and `--replace-existing`.
+- `--benchmark`: read-only measured mode. Starts isolated trial `mesh-llm serve` children from temporary configs and reports per-candidate decode tok/s in the `benchmarks` section. It conflicts with `--apply`, `--replace-existing`, and `--launch-args`.
+- `--ctx-sizes <TOKENS>`: comma-separated context sizes to benchmark. If omitted, tune derives a small context ladder up to the planned context.
+- `--batch-sizes <VALUES>` / `--ubatch-sizes <VALUES>`: comma-separated batch and micro-batch values to benchmark. Candidates where `ubatch > batch` are skipped.
+- `--max-tokens <TOKENS>`: generated tokens per measured request, default `128`.
+- `--startup-timeout-secs <SECONDS>` / `--request-timeout-secs <SECONDS>`: per-trial startup and HTTP request limits, both default `600`.
 - `--apply`: write the supported nested tune fields to `~/.mesh-llm/config.toml`. Existing comments and unrelated TOML stay in place.
 - `--replace-existing`: when used with `--apply`, overwrite existing explicit tune values instead of only filling gaps.
 

@@ -90,6 +90,7 @@ pub(crate) fn render_tune_human_output(report: &TuneRunReport) -> String {
             }
         }
     }
+    write_benchmark_section(&mut rendered, &report.benchmarks);
 
     rendered
 }
@@ -149,6 +150,55 @@ pub(crate) fn render_tune_launch_args_output(report: &TuneRunReport) -> String {
         }
     }
     rendered
+}
+
+fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTargetReport]) {
+    if benchmarks.is_empty() {
+        return;
+    }
+    let _ = writeln!(rendered);
+    let _ = writeln!(rendered, "Benchmark results:");
+    for benchmark in benchmarks {
+        let _ = writeln!(rendered, "  Target: {}", benchmark.requested);
+        match &benchmark.best {
+            Some(best) => {
+                let _ = writeln!(
+                    rendered,
+                    "    Best: ctx={} batch={} ubatch={} decode_tok_s={}",
+                    best.candidate.ctx_size,
+                    best.candidate.batch,
+                    best.candidate.ubatch,
+                    best.decode_tok_s
+                        .map(|value| format!("{value:.2}"))
+                        .unwrap_or_else(|| "n/a".to_string()),
+                );
+            }
+            None => {
+                let _ = writeln!(rendered, "    Best: none");
+            }
+        }
+        for trial in &benchmark.trials {
+            let status = match trial.status {
+                TuneBenchmarkTrialStatus::Succeeded => "ok",
+                TuneBenchmarkTrialStatus::Failed => "failed",
+            };
+            let _ = write!(
+                rendered,
+                "    - {status}: ctx={} batch={} ubatch={}",
+                trial.candidate.ctx_size, trial.candidate.batch, trial.candidate.ubatch
+            );
+            if let Some(rate) = trial.decode_tok_s {
+                let _ = write!(rendered, " decode_tok_s={rate:.2}");
+            }
+            if let Some(error) = &trial.error {
+                let _ = write!(rendered, " error={error}");
+            }
+            if let Some(log_path) = &trial.log_path {
+                let _ = write!(rendered, " log={log_path}");
+            }
+            let _ = writeln!(rendered);
+        }
+    }
 }
 
 fn render_setting_line(setting: &TuneRenderedSetting) -> String {

@@ -100,13 +100,14 @@ Bare `mesh-llm serve` loads startup models from `[[models]]` in `~/.mesh-llm/con
 
 ## GPU tuning
 
-`mesh-llm gpu tune` reviews startup tuning for already-downloaded local models. It is a local-only helper, not a downloader and not a benchmark. Use it when you want the recommended startup shape before editing config or when you want launch arguments for a one-off run.
+`mesh-llm gpu tune` reviews startup tuning for already-downloaded local models. It is a local-only helper, not a downloader. Use it when you want the recommended startup shape before editing config, launch arguments for a one-off run, or measured decode throughput from isolated trial launches.
 
 ```bash
 mesh-llm gpu tune
 mesh-llm gpu tune --model /models/qwen3-8b.gguf
 mesh-llm gpu tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --launch-args
+mesh-llm gpu tune --model /models/qwen3-8b.gguf --benchmark --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
 ```
@@ -117,7 +118,7 @@ mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
 4. `--apply` writes only supported nested `[[models]].model_fit` and `[[models]].hardware` fields, and preserves comments and unrelated TOML. `--replace-existing` lets those writes overwrite existing explicit values when you want the recommendation to replace what is already there.
 5. `mmap` and `mlock` are reported, not written. If `mlock` is unavailable, tune explains whether the current `RLIMIT_MEMLOCK` or `IPC_LOCK` access is too low.
 6. `cpu_moe`, `n_cpu_moe`, `tensor_split`, and `placement` are reported as unsupported in v1.
-7. The command is meant to help you choose safe startup settings. It does not promise the fastest possible run.
+7. `--benchmark` is read-only and conflicts with `--apply` / `--launch-args`. It creates temporary per-trial configs, starts isolated local `mesh-llm serve` children, sends OpenAI-compatible chat-completion requests, reports decode tok/s for each context/batch/ubatch candidate, and keeps trial logs under `target/gpu-tune/`.
 
 ## Background service
 
