@@ -110,7 +110,7 @@ fn run_benchmark_subprocess(binary: &Path, timeout: Duration) -> Result<Vec<Benc
     let child_path = benchmark_child_path(binary.parent().unwrap_or_else(|| Path::new(".")));
 
     let mut child = Command::new(&child_path)
-        .args(["benchmark", "run-gpu", "--backend", backend_name])
+        .args(["gpus", "run-benchmark", "--backend", backend_name])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

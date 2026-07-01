@@ -100,14 +100,13 @@ Bare `mesh-llm serve` loads startup models from `[[models]]` in `~/.mesh-llm/con
 
 ## GPU tuning
 
-`mesh-llm gpu tune` reviews startup tuning for already-downloaded local models. It is a local-only helper, not a downloader. Use it when you want the recommended startup shape before editing config, launch arguments for a one-off run, or measured decode throughput from isolated trial launches.
+`mesh-llm gpu tune` reviews startup tuning for already-downloaded local models. It is a local-only helper, not a downloader. Use it when you want the recommended startup shape before editing config or launch arguments for a one-off run.
 
 ```bash
 mesh-llm gpu tune
 mesh-llm gpu tune --model /models/qwen3-8b.gguf
 mesh-llm gpu tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --launch-args
-mesh-llm gpu tune --model /models/qwen3-8b.gguf --benchmark --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
 ```
@@ -118,7 +117,16 @@ mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
 4. `--apply` writes only supported nested `[[models]].model_fit` and `[[models]].hardware` fields, and preserves comments and unrelated TOML. `--replace-existing` lets those writes overwrite existing explicit values when you want the recommendation to replace what is already there.
 5. `mmap` and `mlock` are reported, not written. If `mlock` is unavailable, tune explains whether the current `RLIMIT_MEMLOCK` or `IPC_LOCK` access is too low.
 6. `cpu_moe`, `n_cpu_moe`, `tensor_split`, and `placement` are reported as unsupported in v1.
-7. `--benchmark` is read-only and conflicts with `--apply` / `--launch-args`. It creates temporary per-trial configs, starts isolated local `mesh-llm serve` children, sends OpenAI-compatible chat-completion requests, reports decode tok/s plus setup/readiness/request/shutdown/total timing stats for each context/batch/ubatch candidate, and keeps trial logs under `target/gpu-tune/`.
+
+For measured local model-serving throughput, use `mesh-llm benchmark tune`. It shares `gpu tune` target resolution and startup planning, then creates temporary per-trial configs, starts isolated local `mesh-llm serve` children, sends OpenAI-compatible chat-completion requests, reports decode tok/s plus setup/readiness/request/shutdown/total timing stats for each context/batch/ubatch candidate, and keeps trial logs under `target/gpu-tune/`.
+
+```bash
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf
+mesh-llm benchmark tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf --json
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
+```
+
+Use `mesh-llm gpus detect` when you want to refresh the raw hardware fingerprint, bandwidth, and compute hints rather than benchmark model-serving throughput.
 
 ## Background service
 

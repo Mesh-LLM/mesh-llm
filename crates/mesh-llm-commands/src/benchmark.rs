@@ -1,10 +1,16 @@
 use anyhow::Result;
-use mesh_llm_cli::benchmark::{BenchmarkCommand, GpuBenchmarkBackend, PromptImportSource};
-use mesh_llm_system::benchmark;
+use mesh_llm_cli::benchmark::{BenchmarkCommand, PromptImportSource};
 use mesh_llm_system::benchmark_prompts::{self, ImportPromptsArgs};
+use std::path::Path;
 
-pub async fn dispatch_benchmark_command(command: &BenchmarkCommand) -> Result<()> {
+pub async fn dispatch_benchmark_command(
+    config_path: Option<&Path>,
+    command: &BenchmarkCommand,
+) -> Result<()> {
     match command {
+        BenchmarkCommand::Tune { .. } => {
+            crate::gpus::tune_runner::run_benchmark_tune_command(config_path, command)
+        }
         BenchmarkCommand::ImportPrompts {
             source,
             limit,
@@ -20,20 +26,6 @@ pub async fn dispatch_benchmark_command(command: &BenchmarkCommand) -> Result<()
             };
             benchmark_prompts::import_prompt_corpus(args).await
         }
-        BenchmarkCommand::RunGpu { backend } => {
-            let outputs = benchmark::run_backend_by_name(map_gpu_backend(*backend))?;
-            println!("{}", serde_json::to_string(&outputs)?);
-            Ok(())
-        }
-    }
-}
-
-fn map_gpu_backend(backend: GpuBenchmarkBackend) -> &'static str {
-    match backend {
-        GpuBenchmarkBackend::Metal => "metal",
-        GpuBenchmarkBackend::Cuda => "cuda",
-        GpuBenchmarkBackend::Hip => "hip",
-        GpuBenchmarkBackend::Intel => "intel",
     }
 }
 

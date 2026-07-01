@@ -24,7 +24,7 @@ fn early_command_errors_are_visible_on_stderr() {
 #[test]
 fn hidden_gpu_benchmark_backend_errors_are_visible_on_stderr() {
     let output = Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
-        .args(["benchmark", "run-gpu", "--backend", "cuda"])
+        .args(["gpus", "run-benchmark", "--backend", "cuda"])
         .output()
         .expect("mesh-llm command should run");
 

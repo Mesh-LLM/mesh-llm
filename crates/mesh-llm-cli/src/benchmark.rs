@@ -3,6 +3,42 @@ use std::path::PathBuf;
 
 #[derive(Subcommand, Debug)]
 pub enum BenchmarkCommand {
+    /// Tune model-serving settings by running isolated throughput trials.
+    Tune {
+        /// Tune exactly one local/configured model target.
+        #[arg(long, conflicts_with = "models")]
+        model: Option<String>,
+        /// Tune multiple local/configured model targets from a comma-separated list.
+        #[arg(long, value_delimiter = ',')]
+        models: Vec<String>,
+        /// Print machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+        /// Context sizes to benchmark, as a comma-separated token list.
+        #[arg(long, value_delimiter = ',')]
+        ctx_sizes: Vec<u32>,
+        /// Batch sizes to benchmark, as a comma-separated list.
+        #[arg(long, value_delimiter = ',')]
+        batch_sizes: Vec<u32>,
+        /// Micro-batch sizes to benchmark, as a comma-separated list.
+        #[arg(long, value_delimiter = ',')]
+        ubatch_sizes: Vec<u32>,
+        /// Maximum generated tokens per benchmark request.
+        #[arg(long, default_value_t = 128)]
+        max_tokens: u32,
+        /// Startup wait limit for each benchmark trial.
+        #[arg(long, default_value_t = 600)]
+        startup_timeout_secs: u64,
+        /// HTTP request timeout for each benchmark request.
+        #[arg(long, default_value_t = 600)]
+        request_timeout_secs: u64,
+        /// Prompt sent during benchmark trials.
+        #[arg(
+            long,
+            default_value = "Write a concise paragraph about distributed GPU inference."
+        )]
+        prompt: String,
+    },
     /// Import a prompt corpus from a supported online source into local JSONL.
     #[command(name = "import-prompts")]
     ImportPrompts {
@@ -18,11 +54,6 @@ pub enum BenchmarkCommand {
         /// Output JSONL path.
         #[arg(long)]
         output: PathBuf,
-    },
-    #[command(name = "run-gpu", hide = true)]
-    RunGpu {
-        #[arg(long, value_enum)]
-        backend: GpuBenchmarkBackend,
     },
 }
 

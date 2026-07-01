@@ -368,12 +368,12 @@ is present, the command requires `--public-key-file` and otherwise reports
 
 ### `gpus`
 
-Use this to inspect local GPU identity and capacity, including per-device VRAM, unified-memory state, and cached benchmark-derived bandwidth when present.
+Use this to inspect local GPU identity and capacity, including per-device VRAM, unified-memory state, and cached benchmark-derived bandwidth when present. `mesh-llm gpus detect` refreshes the raw hardware fingerprint, bandwidth, and compute hints used by local planning.
 For review and apply tuning of already-downloaded local models, use `mesh-llm gpu tune` or `mesh-llm gpus tune`.
 
 ### `gpu tune`
 
-Use this to review or apply startup tuning for already-downloaded local models, or to run measured local trial launches with `--benchmark`. The command is local-only. It rejects remote-only refs and any target that is not already on disk instead of fetching it.
+Use this to review or apply startup tuning for already-downloaded local models. The command is local-only. It rejects remote-only refs and any target that is not already on disk instead of fetching it.
 
 Examples:
 
@@ -382,7 +382,6 @@ mesh-llm gpu tune
 mesh-llm gpu tune --model /models/qwen3-8b.gguf
 mesh-llm gpu tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --launch-args
-mesh-llm gpu tune --model /models/qwen3-8b.gguf --benchmark --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply
 mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
 ```
@@ -393,11 +392,6 @@ Switches:
 - `--models <MODELS>`: tune multiple exact local models, separated by commas.
 - `--json`: machine-readable tune report.
 - `--launch-args`: read-only output. Prints one shell-safe `mesh-llm serve --model ...` command per successful target, plus comments for writable, report-only, and unsupported fields. It conflicts with `--apply` and `--replace-existing`.
-- `--benchmark`: read-only measured mode. Starts isolated trial `mesh-llm serve` children from temporary configs and reports per-candidate decode tok/s in the `benchmarks` section. It conflicts with `--apply`, `--replace-existing`, and `--launch-args`.
-- `--ctx-sizes <TOKENS>`: comma-separated context sizes to benchmark. If omitted, tune derives a small context ladder up to the planned context.
-- `--batch-sizes <VALUES>` / `--ubatch-sizes <VALUES>`: comma-separated batch and micro-batch values to benchmark. Candidates where `ubatch > batch` are skipped.
-- `--max-tokens <TOKENS>`: generated tokens per measured request, default `128`.
-- `--startup-timeout-secs <SECONDS>` / `--request-timeout-secs <SECONDS>`: per-trial startup and HTTP request limits, both default `600`.
 - `--apply`: write the supported nested tune fields to `~/.mesh-llm/config.toml`. Existing comments and unrelated TOML stay in place.
 - `--replace-existing`: when used with `--apply`, overwrite existing explicit tune values instead of only filling gaps.
 
@@ -409,9 +403,32 @@ Behavior:
 4. `cpu_moe`, `n_cpu_moe`, `tensor_split`, and `placement` are reported as unsupported in v1 and are not written.
 5. `--apply` writes only supported nested fields under `[[models]].model_fit` and `[[models]].hardware`.
 6. `--replace-existing` can replace existing explicit values, including values inherited from `defaults.*`, when you want those recommendations written.
-7. Benchmark trials keep lifecycle timing stats in JSON under `benchmarks[].trials[].timings`: `setup_ms`, `readiness_ms`, `request_ms`, `shutdown_ms`, `total_ms`, and `readiness_attempts`. The legacy `elapsed_ms` field remains the measured chat-completion request duration used for decode tok/s.
-8. Review and apply modes are for startup help, not benchmarking, and they do not promise maximum throughput.
+7. Review and apply modes are for startup help, not benchmarking, and they do not promise maximum throughput.
 
+### `benchmark tune`
+
+Use this to benchmark model-serving throughput for already-downloaded local models. It shares the same local target resolution and startup planning as `gpu tune`, then starts isolated trial `mesh-llm serve` children from temporary configs and reports per-candidate decode tok/s.
+
+Examples:
+
+```bash
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf
+mesh-llm benchmark tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf --json
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
+```
+
+Switches:
+
+- `--model <MODEL>`: benchmark one exact local model that is already downloaded.
+- `--models <MODELS>`: benchmark multiple exact local models, separated by commas.
+- `--json`: machine-readable benchmark tune report.
+- `--ctx-sizes <TOKENS>`: comma-separated context sizes to benchmark. If omitted, tune derives a small context ladder up to the planned context.
+- `--batch-sizes <VALUES>` / `--ubatch-sizes <VALUES>`: comma-separated batch and micro-batch values to benchmark. Candidates where `ubatch > batch` are skipped.
+- `--max-tokens <TOKENS>`: generated tokens per measured request, default `128`.
+- `--startup-timeout-secs <SECONDS>` / `--request-timeout-secs <SECONDS>`: per-trial startup and HTTP request limits, both default `600`.
+- `--prompt <TEXT>`: prompt sent during measured chat-completion requests.
+
+Benchmark trials keep lifecycle timing stats in JSON under `benchmarks[].trials[].timings`: `setup_ms`, `readiness_ms`, `request_ms`, `shutdown_ms`, `total_ms`, and `readiness_attempts`. The legacy `elapsed_ms` field remains the measured chat-completion request duration used for decode tok/s.
 
 ### `load`
 

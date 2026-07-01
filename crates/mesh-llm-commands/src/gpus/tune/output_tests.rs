@@ -147,6 +147,7 @@ fn gpu_tune_human_output_names_targets_and_reasons() {
 #[test]
 fn gpu_tune_output_never_marks_unsupported_fields_as_applied() {
     let report = build_tune_run_report(
+        "gpu_tune",
         &MeshConfig::default(),
         TuneApplyMode::Review,
         &[PreparedTunePlan::new(
@@ -174,6 +175,7 @@ fn gpu_tune_output_never_marks_unsupported_fields_as_applied() {
 #[test]
 fn gpu_tune_human_output_explains_mlock_unavailable() {
     let report = build_tune_run_report(
+        "gpu_tune",
         &MeshConfig::default(),
         TuneApplyMode::Review,
         &[PreparedTunePlan::new(
@@ -194,6 +196,7 @@ fn gpu_tune_human_output_explains_mlock_unavailable() {
 #[test]
 fn gpu_tune_json_reports_per_model_errors_without_silent_failures_output_builder() {
     let report = build_tune_run_report(
+        "gpu_tune",
         &MeshConfig::default(),
         TuneApplyMode::Review,
         &[PreparedTunePlan::new(

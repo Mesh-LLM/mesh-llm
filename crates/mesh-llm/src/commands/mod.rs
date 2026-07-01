@@ -100,7 +100,8 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Skills { command } => mesh_llm_commands::skills::run_skills_command(command),
         Command::Plugin { command } => run_plugin_command(command, cli).await,
         Command::Benchmark { command } => {
-            mesh_llm_commands::benchmark::dispatch_benchmark_command(command).await
+            mesh_llm_commands::benchmark::dispatch_benchmark_command(cli.config.as_deref(), command)
+                .await
         }
         Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
         Command::Auth { command } => mesh_llm_commands::auth::run_auth_command(command),

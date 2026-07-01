@@ -2,7 +2,12 @@ use std::fmt::Write as _;
 
 pub(crate) fn render_tune_human_output(report: &TuneRunReport) -> String {
     let mut rendered = String::new();
-    let _ = writeln!(&mut rendered, "GPU tune {} summary", render_apply_mode(report.apply_mode));
+    let _ = writeln!(
+        &mut rendered,
+        "{} {} summary",
+        render_command_label(report.command),
+        render_apply_mode(report.apply_mode)
+    );
     let _ = writeln!(
         &mut rendered,
         "  Targets: total={} ready={} written={} skipped={} failed={}",
@@ -93,6 +98,13 @@ pub(crate) fn render_tune_human_output(report: &TuneRunReport) -> String {
     write_benchmark_section(&mut rendered, &report.benchmarks);
 
     rendered
+}
+
+fn render_command_label(command: &str) -> &'static str {
+    match command {
+        "benchmark_tune" => "Benchmark tune",
+        _ => "GPU tune",
+    }
 }
 
 pub(crate) fn render_tune_launch_args_output(report: &TuneRunReport) -> String {

@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::net::IpAddr;
 use std::path::PathBuf;
 
-use crate::benchmark::BenchmarkCommand;
+use crate::benchmark::{BenchmarkCommand, GpuBenchmarkBackend};
 use crate::models;
 use crate::runtime::RuntimeCommand;
 use mesh_llm_events::LogFormat;
@@ -373,6 +373,12 @@ pub enum GpuCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Run one backend benchmark probe and print raw JSON output.
+    #[command(name = "run-benchmark", hide = true)]
+    RunBenchmark {
+        #[arg(long, value_enum)]
+        backend: GpuBenchmarkBackend,
+    },
     /// Recommend safe startup tuning for one or more local models.
     Tune {
         /// Tune exactly one local/configured model target.
@@ -384,38 +390,6 @@ pub enum GpuCommand {
         /// Print machine-readable JSON output.
         #[arg(long)]
         json: bool,
-        /// Launch isolated trial servers and measure decode throughput.
-        #[arg(
-            long,
-            conflicts_with = "apply",
-            conflicts_with = "replace_existing",
-            conflicts_with = "launch_args"
-        )]
-        benchmark: bool,
-        /// Context sizes to benchmark, as a comma-separated token list.
-        #[arg(long, value_delimiter = ',')]
-        ctx_sizes: Vec<u32>,
-        /// Batch sizes to benchmark, as a comma-separated list.
-        #[arg(long, value_delimiter = ',')]
-        batch_sizes: Vec<u32>,
-        /// Micro-batch sizes to benchmark, as a comma-separated list.
-        #[arg(long, value_delimiter = ',')]
-        ubatch_sizes: Vec<u32>,
-        /// Maximum generated tokens per benchmark request.
-        #[arg(long, default_value_t = 128)]
-        max_tokens: u32,
-        /// Startup wait limit for each benchmark trial.
-        #[arg(long, default_value_t = 600)]
-        startup_timeout_secs: u64,
-        /// HTTP request timeout for each benchmark request.
-        #[arg(long, default_value_t = 600)]
-        request_timeout_secs: u64,
-        /// Prompt sent during benchmark trials.
-        #[arg(
-            long,
-            default_value = "Write a concise paragraph about distributed GPU inference."
-        )]
-        prompt: String,
         /// Print equivalent launch arguments without writing config.
         #[arg(long, conflicts_with = "apply", conflicts_with = "replace_existing")]
         launch_args: bool,
@@ -893,7 +867,6 @@ pub enum Command {
         command: SkillCommand,
     },
     /// Benchmark and compare model/runtime strategies.
-    #[command(hide = true)]
     Benchmark {
         #[command(subcommand)]
         command: BenchmarkCommand,
@@ -1662,6 +1635,103 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_tune_parses_model_trial_options() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "benchmark",
+            "tune",
+            "--model",
+            "qwen.gguf",
+            "--ctx-sizes",
+            "4096,8192",
+            "--batch-sizes",
+            "1024,2048",
+            "--ubatch-sizes",
+            "256,512",
+            "--max-tokens",
+            "64",
+            "--startup-timeout-secs",
+            "30",
+            "--request-timeout-secs",
+            "45",
+            "--prompt",
+            "hello",
+            "--json",
+        ]);
+
+        let Some(Command::Benchmark {
+            command:
+                BenchmarkCommand::Tune {
+                    model,
+                    models,
+                    json,
+                    ctx_sizes,
+                    batch_sizes,
+                    ubatch_sizes,
+                    max_tokens,
+                    startup_timeout_secs,
+                    request_timeout_secs,
+                    prompt,
+                },
+        }) = cli.command
+        else {
+            panic!("expected benchmark tune command");
+        };
+
+        assert_eq!(model.as_deref(), Some("qwen.gguf"));
+        assert!(models.is_empty());
+        assert!(json);
+        assert_eq!(ctx_sizes, vec![4096, 8192]);
+        assert_eq!(batch_sizes, vec![1024, 2048]);
+        assert_eq!(ubatch_sizes, vec![256, 512]);
+        assert_eq!(max_tokens, 64);
+        assert_eq!(startup_timeout_secs, 30);
+        assert_eq!(request_timeout_secs, 45);
+        assert_eq!(prompt, "hello");
+    }
+
+    #[test]
+    fn benchmark_tune_rejects_conflicting_model_selectors() {
+        let err = Cli::try_parse_from([
+            "mesh-llm",
+            "benchmark",
+            "tune",
+            "--model",
+            "one.gguf",
+            "--models",
+            "two.gguf,three.gguf",
+        ])
+        .expect_err("conflicting benchmark tune model selectors should be rejected");
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("--model"));
+        assert!(rendered.contains("--models"));
+    }
+
+    #[test]
+    fn gpu_tune_rejects_removed_benchmark_flag() {
+        let err = Cli::try_parse_from(["mesh-llm", "gpu", "tune", "--benchmark"])
+            .expect_err("gpu tune should no longer accept benchmark-only flags");
+
+        assert!(err.to_string().contains("--benchmark"));
+    }
+
+    #[test]
+    fn hidden_gpu_run_benchmark_parses_backend() {
+        let cli = Cli::parse_from(["mesh-llm", "gpus", "run-benchmark", "--backend", "cuda"]);
+
+        let Some(Command::Gpus {
+            command: Some(GpuCommand::RunBenchmark { backend }),
+            ..
+        }) = cli.command
+        else {
+            panic!("expected hidden gpu run-benchmark command");
+        };
+
+        assert_eq!(backend, GpuBenchmarkBackend::Cuda);
+    }
+
+    #[test]
     fn gpu_tune_rejects_conflicting_model_selectors() {
         let err = Cli::try_parse_from([
             "mesh-llm",
@@ -1744,14 +1814,6 @@ mod tests {
                         model,
                         models,
                         json,
-                        benchmark,
-                        ctx_sizes,
-                        batch_sizes,
-                        ubatch_sizes,
-                        max_tokens,
-                        startup_timeout_secs,
-                        request_timeout_secs,
-                        prompt,
                         launch_args,
                         apply,
                         replace_existing,
@@ -1764,23 +1826,6 @@ mod tests {
                 assert_eq!(model.as_deref(), expected_model, "model for {args:?}");
                 assert_eq!(models, expected_models, "models for {args:?}");
                 assert_eq!(json, expected_json, "tune json for {args:?}");
-                assert!(!benchmark, "benchmark default for {args:?}");
-                assert!(ctx_sizes.is_empty(), "ctx_sizes default for {args:?}");
-                assert!(batch_sizes.is_empty(), "batch_sizes default for {args:?}");
-                assert!(ubatch_sizes.is_empty(), "ubatch_sizes default for {args:?}");
-                assert_eq!(max_tokens, 128, "max_tokens default for {args:?}");
-                assert_eq!(
-                    startup_timeout_secs, 600,
-                    "startup_timeout_secs default for {args:?}"
-                );
-                assert_eq!(
-                    request_timeout_secs, 600,
-                    "request_timeout_secs default for {args:?}"
-                );
-                assert!(
-                    prompt.contains("distributed GPU inference"),
-                    "prompt default for {args:?}"
-                );
                 assert_eq!(
                     launch_args, expected_launch_args,
                     "launch_args for {args:?}"

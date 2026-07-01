@@ -1,6 +1,6 @@
 use super::super::dispatch_gpu_command;
 use super::*;
-use mesh_llm_cli::GpuCommand;
+use mesh_llm_cli::{GpuCommand, benchmark::BenchmarkCommand};
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
@@ -66,14 +66,6 @@ fn gpu_tune_dispatches_to_runner() {
         model: Some(path.display().to_string()),
         models: Vec::new(),
         json: false,
-        benchmark: false,
-        ctx_sizes: Vec::new(),
-        batch_sizes: Vec::new(),
-        ubatch_sizes: Vec::new(),
-        max_tokens: 128,
-        startup_timeout_secs: 600,
-        request_timeout_secs: 600,
-        prompt: "Write a concise paragraph about distributed GPU inference.".to_string(),
         launch_args: false,
         apply: false,
         replace_existing: false,
@@ -106,14 +98,6 @@ fn gpu_tune_apply_fails_when_no_target_has_writable_edits() {
         model: Some(path.display().to_string()),
         models: Vec::new(),
         json: false,
-        benchmark: false,
-        ctx_sizes: Vec::new(),
-        batch_sizes: Vec::new(),
-        ubatch_sizes: Vec::new(),
-        max_tokens: 128,
-        startup_timeout_secs: 600,
-        request_timeout_secs: 600,
-        prompt: "Write a concise paragraph about distributed GPU inference.".to_string(),
         launch_args: false,
         apply: true,
         replace_existing: false,
@@ -148,14 +132,6 @@ fn gpu_tune_launch_args_is_read_only() {
         model: Some(path.display().to_string()),
         models: Vec::new(),
         json: false,
-        benchmark: false,
-        ctx_sizes: Vec::new(),
-        batch_sizes: Vec::new(),
-        ubatch_sizes: Vec::new(),
-        max_tokens: 128,
-        startup_timeout_secs: 600,
-        request_timeout_secs: 600,
-        prompt: "Write a concise paragraph about distributed GPU inference.".to_string(),
         launch_args: true,
         apply: false,
         replace_existing: false,
@@ -182,14 +158,6 @@ fn gpu_tune_json_reports_per_model_errors_without_silent_failures() {
         model: None,
         models: vec![valid.display().to_string(), missing.display().to_string()],
         json: true,
-        benchmark: false,
-        ctx_sizes: Vec::new(),
-        batch_sizes: Vec::new(),
-        ubatch_sizes: Vec::new(),
-        max_tokens: 128,
-        startup_timeout_secs: 600,
-        request_timeout_secs: 600,
-        prompt: "Write a concise paragraph about distributed GPU inference.".to_string(),
         launch_args: false,
         apply: false,
         replace_existing: false,
@@ -214,6 +182,44 @@ fn gpu_tune_json_reports_per_model_errors_without_silent_failures() {
 }
 
 #[test]
+fn benchmark_tune_json_uses_benchmark_command_context() {
+    let temp = tempdir().expect("tempdir should be created");
+    let missing = temp.path().join("missing.gguf");
+    let command = BenchmarkCommand::Tune {
+        model: Some(missing.display().to_string()),
+        models: Vec::new(),
+        json: true,
+        ctx_sizes: vec![4096],
+        batch_sizes: vec![1024],
+        ubatch_sizes: vec![256],
+        max_tokens: 32,
+        startup_timeout_secs: 5,
+        request_timeout_secs: 5,
+        prompt: "hello".to_string(),
+    };
+    let mut output = Vec::new();
+
+    let result = run_benchmark_tune_command_with_writer(None, &command, &mut output);
+
+    let error = result.expect_err("missing target should fail after emitting json");
+    assert!(
+        error
+            .to_string()
+            .contains("gpu tune could not prepare any local targets"),
+        "expected tune preparation failure, got: {error:#}"
+    );
+    let value: Value = serde_json::from_slice(&output).expect("json output should deserialize");
+    assert_eq!(value["command"], Value::from("benchmark_tune"));
+    assert_eq!(value["summary"]["failed_targets"], Value::from(1));
+    assert!(
+        value["benchmarks"]
+            .as_array()
+            .is_none_or(std::vec::Vec::is_empty),
+        "missing target should not launch benchmark trials"
+    );
+}
+
+#[test]
 fn gpu_tune_uses_configured_models_when_no_explicit_targets_and_leaves_config_unchanged() {
     let temp = tempdir().expect("tempdir should be created");
     let first = write_valid_tune_fixture(temp.path(), "configured-a.gguf")
@@ -229,14 +235,6 @@ fn gpu_tune_uses_configured_models_when_no_explicit_targets_and_leaves_config_un
         model: None,
         models: Vec::new(),
         json: true,
-        benchmark: false,
-        ctx_sizes: Vec::new(),
-        batch_sizes: Vec::new(),
-        ubatch_sizes: Vec::new(),
-        max_tokens: 128,
-        startup_timeout_secs: 600,
-        request_timeout_secs: 600,
-        prompt: "Write a concise paragraph about distributed GPU inference.".to_string(),
         launch_args: false,
         apply: false,
         replace_existing: false,
@@ -274,14 +272,6 @@ fn gpu_tune_explicit_model_limits_run_to_requested_target() {
         model: Some(second.display().to_string()),
         models: Vec::new(),
         json: true,
-        benchmark: false,
-        ctx_sizes: Vec::new(),
-        batch_sizes: Vec::new(),
-        ubatch_sizes: Vec::new(),
-        max_tokens: 128,
-        startup_timeout_secs: 600,
-        request_timeout_secs: 600,
-        prompt: "Write a concise paragraph about distributed GPU inference.".to_string(),
         launch_args: false,
         apply: false,
         replace_existing: false,
@@ -316,14 +306,6 @@ fn gpu_tune_apply_reports_mixed_success_and_failure_and_writes_ready_target() {
         model: None,
         models: vec![valid.display().to_string(), missing.display().to_string()],
         json: true,
-        benchmark: false,
-        ctx_sizes: Vec::new(),
-        batch_sizes: Vec::new(),
-        ubatch_sizes: Vec::new(),
-        max_tokens: 128,
-        startup_timeout_secs: 600,
-        request_timeout_secs: 600,
-        prompt: "Write a concise paragraph about distributed GPU inference.".to_string(),
         launch_args: false,
         apply: true,
         replace_existing: false,

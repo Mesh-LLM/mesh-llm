@@ -1,6 +1,7 @@
 use crate::gpus::tune_apply::PreparedTunePlan;
 
 pub(crate) fn build_tune_run_report(
+    command: &'static str,
     config: &mesh_llm_config::MeshConfig,
     apply_mode: TuneApplyMode,
     prepared: &[PreparedTunePlan],
@@ -14,7 +15,7 @@ pub(crate) fn build_tune_run_report(
         .collect::<Vec<_>>();
     targets.extend(target_failures.iter().map(build_failed_target_report));
     TuneRunReport {
-        command: "gpu_tune",
+        command,
         apply_mode,
         summary: summarize_target_reports(&targets),
         global_blockers: global_blockers.to_vec(),

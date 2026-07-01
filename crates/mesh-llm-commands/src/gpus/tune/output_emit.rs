@@ -1,4 +1,5 @@
 pub(crate) struct TuneOutputRequest<'a> {
+    pub(crate) command: &'static str,
     pub(crate) json_output: bool,
     pub(crate) launch_args: bool,
     pub(crate) config: &'a mesh_llm_config::MeshConfig,
@@ -14,6 +15,7 @@ pub(crate) fn emit_tune_output(
     request: TuneOutputRequest<'_>,
 ) -> anyhow::Result<()> {
     let report = build_tune_run_report(
+        request.command,
         request.config,
         request.apply_mode,
         request.prepared,

@@ -1,7 +1,7 @@
 use super::tune::TuneApplyMode;
 use super::{tune, tune_apply, tune_hardware, tune_resolver};
 use anyhow::{Result, bail};
-use mesh_llm_cli::GpuCommand;
+use mesh_llm_cli::{GpuCommand, benchmark::BenchmarkCommand};
 use mesh_llm_config::{ConfigStore, load_config};
 use mesh_llm_system::hardware;
 use std::collections::BTreeSet;
@@ -24,7 +24,34 @@ fn run_tune_command_with_writer(
     command: &GpuCommand,
     writer: &mut impl Write,
 ) -> Result<()> {
-    let args = tune_runner_args(command);
+    let args = gpu_tune_runner_args(command);
+    run_tune_request_with_writer(config_path, json_output, args, writer)
+}
+
+pub(crate) fn run_benchmark_tune_command(
+    config_path: Option<&Path>,
+    command: &BenchmarkCommand,
+) -> Result<()> {
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    run_benchmark_tune_command_with_writer(config_path, command, &mut handle)
+}
+
+pub(crate) fn run_benchmark_tune_command_with_writer(
+    config_path: Option<&Path>,
+    command: &BenchmarkCommand,
+    writer: &mut impl Write,
+) -> Result<()> {
+    let args = benchmark_tune_runner_args(command);
+    run_tune_request_with_writer(config_path, false, args, writer)
+}
+
+fn run_tune_request_with_writer(
+    config_path: Option<&Path>,
+    json_output: bool,
+    args: TuneRunnerArgs<'_>,
+    writer: &mut impl Write,
+) -> Result<()> {
     let render_json = json_output || args.json;
     let apply_mode = tune_apply_mode(args.launch_args, args.apply, args.replace_existing);
     let config = load_config(config_path)?;
@@ -126,6 +153,7 @@ fn run_tune_command_with_writer(
         emit_runner_output(
             writer,
             RunnerOutputContext {
+                command: args.command,
                 render_json,
                 launch_args: args.launch_args,
                 config: &config,
@@ -161,6 +189,7 @@ fn run_tune_command_with_writer(
             emit_runner_output(
                 writer,
                 RunnerOutputContext {
+                    command: args.command,
                     render_json,
                     launch_args: args.launch_args,
                     config: &config,
@@ -192,6 +221,7 @@ fn run_tune_command_with_writer(
         emit_runner_output(
             writer,
             RunnerOutputContext {
+                command: args.command,
                 render_json,
                 launch_args: args.launch_args,
                 config: &config,
@@ -213,6 +243,7 @@ fn run_tune_command_with_writer(
     emit_runner_output(
         writer,
         RunnerOutputContext {
+            command: args.command,
             render_json,
             launch_args: args.launch_args,
             config: &config,
@@ -254,6 +285,7 @@ fn apply_failure_reason(prepared: &tune_apply::PreparedTunePlan) -> Option<Strin
 }
 
 struct TuneRunnerArgs<'a> {
+    command: &'static str,
     model: Option<&'a str>,
     models: &'a [String],
     json: bool,
@@ -270,19 +302,11 @@ struct TuneRunnerArgs<'a> {
     replace_existing: bool,
 }
 
-fn tune_runner_args(command: &GpuCommand) -> TuneRunnerArgs<'_> {
+fn gpu_tune_runner_args(command: &GpuCommand) -> TuneRunnerArgs<'_> {
     let GpuCommand::Tune {
         model,
         models,
         json,
-        benchmark,
-        ctx_sizes,
-        batch_sizes,
-        ubatch_sizes,
-        max_tokens,
-        startup_timeout_secs,
-        request_timeout_secs,
-        prompt,
         launch_args,
         apply,
         replace_existing,
@@ -291,10 +315,46 @@ fn tune_runner_args(command: &GpuCommand) -> TuneRunnerArgs<'_> {
         unreachable!("run_tune_command called for non-tune GPU command");
     };
     TuneRunnerArgs {
+        command: "gpu_tune",
         model: model.as_deref(),
         models,
         json: *json,
-        benchmark: *benchmark,
+        benchmark: false,
+        ctx_sizes: &[],
+        batch_sizes: &[],
+        ubatch_sizes: &[],
+        max_tokens: 128,
+        startup_timeout_secs: 600,
+        request_timeout_secs: 600,
+        prompt: "",
+        launch_args: *launch_args,
+        apply: *apply,
+        replace_existing: *replace_existing,
+    }
+}
+
+fn benchmark_tune_runner_args(command: &BenchmarkCommand) -> TuneRunnerArgs<'_> {
+    let BenchmarkCommand::Tune {
+        model,
+        models,
+        json,
+        ctx_sizes,
+        batch_sizes,
+        ubatch_sizes,
+        max_tokens,
+        startup_timeout_secs,
+        request_timeout_secs,
+        prompt,
+    } = command
+    else {
+        unreachable!("run_benchmark_tune_command called for non-tune benchmark command");
+    };
+    TuneRunnerArgs {
+        command: "benchmark_tune",
+        model: model.as_deref(),
+        models,
+        json: *json,
+        benchmark: true,
         ctx_sizes,
         batch_sizes,
         ubatch_sizes,
@@ -302,13 +362,14 @@ fn tune_runner_args(command: &GpuCommand) -> TuneRunnerArgs<'_> {
         startup_timeout_secs: *startup_timeout_secs,
         request_timeout_secs: *request_timeout_secs,
         prompt,
-        launch_args: *launch_args,
-        apply: *apply,
-        replace_existing: *replace_existing,
+        launch_args: false,
+        apply: false,
+        replace_existing: false,
     }
 }
 
 struct RunnerOutputContext<'a> {
+    command: &'static str,
     render_json: bool,
     launch_args: bool,
     config: &'a mesh_llm_config::MeshConfig,
@@ -323,6 +384,7 @@ fn emit_runner_output(writer: &mut impl Write, context: RunnerOutputContext<'_>)
     tune::emit_tune_output(
         writer,
         tune::TuneOutputRequest {
+            command: context.command,
             json_output: context.render_json,
             launch_args: context.launch_args,
             config: context.config,

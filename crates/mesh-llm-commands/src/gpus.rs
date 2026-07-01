@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use mesh_llm_cli::GpuCommand;
+use mesh_llm_cli::{GpuCommand, benchmark::GpuBenchmarkBackend};
 use mesh_llm_system::{
     benchmark::{self, SavedBenchmark},
     hardware::{self, GpuFacts, HardwareSurvey},
@@ -54,11 +54,27 @@ pub fn dispatch_gpu_command(
     match command {
         Some(command) => match command {
             GpuCommand::Detect { json } => run_gpu_benchmark(json_output || *json),
+            GpuCommand::RunBenchmark { backend } => run_gpu_backend_benchmark(*backend),
             GpuCommand::Tune { .. } => {
                 tune_runner::run_tune_command(config_path, json_output, command)
             }
         },
         None => run_gpus(json_output),
+    }
+}
+
+fn run_gpu_backend_benchmark(backend: GpuBenchmarkBackend) -> Result<()> {
+    let outputs = benchmark::run_backend_by_name(map_gpu_backend(backend))?;
+    println!("{}", serde_json::to_string(&outputs)?);
+    Ok(())
+}
+
+fn map_gpu_backend(backend: GpuBenchmarkBackend) -> &'static str {
+    match backend {
+        GpuBenchmarkBackend::Metal => "metal",
+        GpuBenchmarkBackend::Cuda => "cuda",
+        GpuBenchmarkBackend::Hip => "hip",
+        GpuBenchmarkBackend::Intel => "intel",
     }
 }
 
