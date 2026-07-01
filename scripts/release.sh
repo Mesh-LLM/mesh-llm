@@ -47,7 +47,7 @@ ensure_version_format() {
 }
 
 read_workspace_version() {
-    perl -ne 'if (/^\s*version\s*=\s*"([^"]+)"/) { print "$1\n"; exit }' Cargo.toml
+    perl -0ne 'print "$1\n" if /\[workspace\.package\][^[]*?\nversion\s*=\s*"([^"]+)"/s' Cargo.toml
 }
 
 ensure_target_version_advances() {
@@ -55,8 +55,7 @@ ensure_target_version_advances() {
     local target="$2"
     local compare_status
 
-    set +e
-    python3 - "$current" "$target" <<'PY'
+    if python3 - "$current" "$target" <<'PY'
 import re
 import sys
 
@@ -111,8 +110,11 @@ for left, right in zip(current_version[:3], target_version[:3]):
 
 raise SystemExit(0 if compare_prerelease(target_version[3], current_version[3]) > 0 else 1)
 PY
-    compare_status="$?"
-    set -e
+    then
+        compare_status=0
+    else
+        compare_status="$?"
+    fi
 
     case "$compare_status" in
         0)

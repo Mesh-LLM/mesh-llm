@@ -94,13 +94,69 @@ update_literal_version_references() {
     printf '%s\n' "$after" >"$file"
 }
 
+update_json_package_version_references() {
+    local file="$1"
+    local previous="$2"
+    local next="$3"
+    local before
+    local after
+
+    command -v node >/dev/null 2>&1 || {
+        echo "node is required on PATH to update JSON package versions" >&2
+        exit 1
+    }
+
+    before="$(cat "$file")"
+    after="$(
+        node - "$previous" "$next" "$file" <<'JS'
+const fs = require("fs");
+
+const [previous, next, file] = process.argv.slice(2);
+const input = fs.readFileSync(file, "utf8");
+const data = JSON.parse(input);
+let changed = false;
+
+function updateVersion(owner, label) {
+  if (!owner || !Object.prototype.hasOwnProperty.call(owner, "version")) {
+    return;
+  }
+  if (owner.version === next) {
+    return;
+  }
+  if (owner.version !== previous) {
+    throw new Error(`${file}: ${label}.version is ${owner.version}, expected ${previous}`);
+  }
+  owner.version = next;
+  changed = true;
+}
+
+updateVersion(data, "root");
+if (data.packages && data.packages[""]) {
+  updateVersion(data.packages[""], "packages[\"\"]");
+}
+
+process.stdout.write(changed ? `${JSON.stringify(data, null, 2)}\n` : input);
+JS
+    )"
+    if [[ "$before" == "$after" ]]; then
+        return
+    fi
+    printf '%s' "$after" >"$file"
+}
+
 update_known_mesh_versions() {
     local file="$1"
     local next="$2"
     local before
     local after
     before="$(cat "$file")"
-    if perl -0777 -ne 'exit((/"'"$next"'"/) ? 0 : 1)' "$file"; then
+    if perl -0777 -ne '
+        BEGIN {
+            $next = quotemeta($ARGV[0]);
+            shift @ARGV;
+        }
+        exit((/"$next"/) ? 0 : 1)
+    ' "$next" "$file"; then
         return
     fi
     after="$(perl -0777 -pe 's/(fn known_mesh_llm_versions\(\).*?\&\[\n\s*)/${1}"'"$next"'", /s' "$file")"
@@ -223,7 +279,14 @@ literal_version_files=(
 for relative_file in "${literal_version_files[@]}"; do
     file="$REPO_ROOT/$relative_file"
     require_file "$file"
-    update_literal_version_references "$file" "$previous_version" "$version"
+    case "$relative_file" in
+        crates/mesh-llm-ui/package.json | crates/mesh-llm-ui/package-lock.json | sdk/node/package.json)
+            update_json_package_version_references "$file" "$previous_version" "$version"
+            ;;
+        *)
+            update_literal_version_references "$file" "$previous_version" "$version"
+            ;;
+    esac
     versioned_files+=("$file")
 done
 

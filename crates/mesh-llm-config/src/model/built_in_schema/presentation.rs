@@ -249,7 +249,7 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             ATTESTATION_CATEGORY,
             10,
         )
-        .placeholder("0.72.1")
+        .placeholder("0.69.0")
         .hint("text")),
         "mesh_requirements.max_node_version" => Some(sp(
             "Maximum node version",
@@ -257,7 +257,7 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             ATTESTATION_CATEGORY,
             20,
         )
-        .placeholder("0.69.0")
+        .placeholder("0.72.1")
         .hint("text")),
         "mesh_requirements.min_protocol_version" => Some(sp(
             "Minimum protocol generation",
