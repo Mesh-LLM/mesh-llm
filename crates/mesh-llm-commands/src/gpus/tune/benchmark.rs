@@ -129,8 +129,9 @@ fn run_trial_inner(
     let port = reserve_local_port()?;
     let console = reserve_local_port()?;
     let mut child = TrialChild::spawn(&config_path, &log_path, port, console)?;
+    let request_timeout = std::time::Duration::from_secs(request.request_timeout_secs.max(1));
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(request.request_timeout_secs))
+        .timeout(request_timeout)
         .build()?;
     wait_for_trial_ready(
         &client,
@@ -138,10 +139,18 @@ fn run_trial_inner(
         port,
         request.prompt,
         request.startup_timeout_secs,
+        request_timeout,
     )?;
 
     let started = std::time::Instant::now();
-    let response = send_chat_request(&client, port, request.prompt, request.max_tokens)?;
+    let response = send_chat_request_with_watchdog(
+        &client,
+        &mut child,
+        port,
+        request.prompt,
+        request.max_tokens,
+        request_timeout,
+    )?;
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
     let completion_tokens = response_completion_tokens(&response)
         .ok_or_else(|| anyhow::anyhow!("chat completion response did not include completion_tokens"))?;
@@ -234,6 +243,7 @@ fn wait_for_trial_ready(
     port: u16,
     prompt: &str,
     startup_timeout_secs: u64,
+    request_timeout: std::time::Duration,
 ) -> anyhow::Result<()> {
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(startup_timeout_secs.max(1));
@@ -242,13 +252,45 @@ fn wait_for_trial_ready(
         if let Some(status) = child.child.try_wait()? {
             anyhow::bail!("trial server exited before readiness: {status}");
         }
-        match send_chat_request(client, port, prompt, 1) {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let attempt_timeout = std::cmp::min(request_timeout, remaining);
+        match send_chat_request_with_watchdog(client, child, port, prompt, 1, attempt_timeout) {
             Ok(_) => return Ok(()),
             Err(error) => last_error = error.to_string(),
         }
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
     anyhow::bail!("trial server did not become ready: {last_error}");
+}
+
+fn send_chat_request_with_watchdog(
+    client: &reqwest::blocking::Client,
+    child: &mut TrialChild,
+    port: u16,
+    prompt: &str,
+    max_tokens: u32,
+    timeout: std::time::Duration,
+) -> anyhow::Result<serde_json::Value> {
+    let client = client.clone();
+    let prompt = prompt.to_string();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(send_chat_request(&client, port, &prompt, max_tokens));
+    });
+
+    match receiver.recv_timeout(timeout.max(std::time::Duration::from_secs(1))) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            child.shutdown();
+            anyhow::bail!(
+                "chat completion exceeded request timeout of {}s",
+                timeout.as_secs().max(1)
+            );
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            anyhow::bail!("chat completion worker exited without a response")
+        }
+    }
 }
 
 fn send_chat_request(
