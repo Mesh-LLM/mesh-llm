@@ -1569,6 +1569,8 @@ fn validate_telemetry_config(config: &TelemetryConfig) -> DiagnosticResult {
 mod schema_tests {
     use super::*;
 
+    include!("validate_gpu_tune_tests.rs");
+
     #[test]
     fn schema_diagnostic_constructors_preserve_paths_and_legacy_message() {
         let used_path = ConfigPath::from_fields(["models", "gpu_id"]);

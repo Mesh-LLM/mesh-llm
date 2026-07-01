@@ -1,0 +1,200 @@
+use std::fmt::Write as _;
+
+pub(crate) fn render_tune_human_output(report: &TuneRunReport) -> String {
+    let mut rendered = String::new();
+    let _ = writeln!(&mut rendered, "GPU tune {} summary", render_apply_mode(report.apply_mode));
+    let _ = writeln!(
+        &mut rendered,
+        "  Targets: total={} ready={} written={} skipped={} failed={}",
+        report.summary.total_targets,
+        report.summary.ready_targets,
+        report.summary.written_targets,
+        report.summary.skipped_targets,
+        report.summary.failed_targets,
+    );
+    let _ = writeln!(
+        &mut rendered,
+        "  Field counts: applied={} preserved={} report_only={} unsupported={} error={}",
+        report.summary.fields.applied,
+        report.summary.fields.preserved,
+        report.summary.fields.report_only,
+        report.summary.fields.unsupported,
+        report.summary.fields.error,
+    );
+    if !report.global_blockers.is_empty() {
+        let _ = writeln!(&mut rendered, "Global blockers:");
+        for blocker in &report.global_blockers {
+            let _ = writeln!(&mut rendered, "  - {blocker}");
+        }
+    }
+
+    for target in &report.targets {
+        let _ = writeln!(&mut rendered);
+        let _ = writeln!(&mut rendered, "Target: {}", target.target.requested);
+        let _ = writeln!(&mut rendered, "  Status: {}", render_target_status(target.status));
+        let _ = writeln!(&mut rendered, "  Selection: {}", target.selection);
+        if let Some(resolved) = &target.target.resolved {
+            let _ = writeln!(&mut rendered, "  Resolved: {resolved}");
+        }
+        if let Some(model_ref) = &target.target.config_model_ref {
+            let _ = writeln!(&mut rendered, "  Config model: {model_ref}");
+        }
+        if let Some(reason) = &target.reason {
+            let _ = writeln!(&mut rendered, "  Reason: {reason}");
+        }
+        if let Some(summary) = &target.field_summary {
+            let _ = writeln!(
+                &mut rendered,
+                "  Review summary: applied={} preserved={} report_only={} unsupported={} error={}",
+                summary.applied,
+                summary.preserved,
+                summary.report_only,
+                summary.unsupported,
+                summary.error,
+            );
+        }
+        write_section(&mut rendered, "Config edits", &target.config_edits, render_config_edit_line);
+        write_section(
+            &mut rendered,
+            "Preserved",
+            &collect_settings(target, TuneRenderedSettingStatus::Preserved),
+            render_setting_line,
+        );
+        write_section(
+            &mut rendered,
+            "Report-only",
+            &collect_settings(target, TuneRenderedSettingStatus::ReportOnly),
+            render_setting_line,
+        );
+        write_section(
+            &mut rendered,
+            "Unsupported",
+            &collect_settings(target, TuneRenderedSettingStatus::Unsupported),
+            render_setting_line,
+        );
+        write_section(
+            &mut rendered,
+            "Errors",
+            &collect_settings(target, TuneRenderedSettingStatus::Error),
+            render_setting_line,
+        );
+        let warnings = target
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| matches!(diagnostic.severity, TuneDiagnosticSeverity::Warning))
+            .collect::<Vec<_>>();
+        if !warnings.is_empty() {
+            let _ = writeln!(&mut rendered, "  Warnings:");
+            for warning in warnings {
+                let _ = writeln!(&mut rendered, "    - {}", warning.message);
+            }
+        }
+    }
+
+    rendered
+}
+
+pub(crate) fn render_tune_launch_args_output(report: &TuneRunReport) -> String {
+    let mut rendered = String::new();
+    let _ = writeln!(&mut rendered, "# mesh-llm gpu tune --launch-args");
+    let _ = writeln!(
+        &mut rendered,
+        "# total={} ready={} written={} skipped={} failed={}",
+        report.summary.total_targets,
+        report.summary.ready_targets,
+        report.summary.written_targets,
+        report.summary.skipped_targets,
+        report.summary.failed_targets,
+    );
+    for blocker in &report.global_blockers {
+        let _ = writeln!(&mut rendered, "# blocker: {blocker}");
+    }
+    for target in &report.targets {
+        let _ = writeln!(&mut rendered);
+        let _ = writeln!(&mut rendered, "# target: {}", target.target.requested);
+        let _ = writeln!(&mut rendered, "# status: {}", render_target_status(target.status));
+        if let Some(reason) = &target.reason {
+            let _ = writeln!(&mut rendered, "# reason: {reason}");
+        }
+        match &target.launch {
+            Some(launch) => {
+                let _ = writeln!(&mut rendered, "{}", launch.shell);
+                if !launch.config_settings.is_empty() {
+                    let _ = writeln!(&mut rendered, "# effective config settings:");
+                    for setting in &launch.config_settings {
+                        let _ = writeln!(
+                            &mut rendered,
+                            "#   {} = {}",
+                            setting.config_path,
+                            render_recommended_value(&setting.value),
+                        );
+                    }
+                }
+                if !launch.report_only.is_empty() {
+                    let _ = writeln!(&mut rendered, "# report-only:");
+                    for setting in &launch.report_only {
+                        let _ = writeln!(&mut rendered, "#   {}", render_setting_line(setting));
+                    }
+                }
+                if !launch.unsupported.is_empty() {
+                    let _ = writeln!(&mut rendered, "# unsupported:");
+                    for setting in &launch.unsupported {
+                        let _ = writeln!(&mut rendered, "#   {}", render_setting_line(setting));
+                    }
+                }
+            }
+            None => {
+                let _ = writeln!(&mut rendered, "# no launch args emitted for this target");
+            }
+        }
+    }
+    rendered
+}
+
+fn render_setting_line(setting: &TuneRenderedSetting) -> String {
+    let mut rendered = format!("{} ({})", setting.config_path, render_field_name(setting.field));
+    if let Some(value) = &setting.value {
+        let _ = write!(&mut rendered, " = {}", render_recommended_value(value));
+    }
+    if let Some(reason) = &setting.reason {
+        let _ = write!(&mut rendered, ": {reason}");
+    }
+    if let Some(rationale) = &setting.rationale {
+        let _ = write!(&mut rendered, ": {rationale}");
+    }
+    if let Some(diagnostic) = &setting.diagnostic {
+        let _ = write!(&mut rendered, ": {}", diagnostic.message);
+    }
+    rendered
+}
+
+fn render_config_edit_line(setting: &TuneRenderedSetting) -> String {
+    let mut rendered = format!(
+        "{} = {}",
+        setting.config_path,
+        setting
+            .value
+            .as_ref()
+            .map(render_recommended_value)
+            .unwrap_or_else(|| "<unknown>".to_string()),
+    );
+    if let Some(rationale) = &setting.rationale {
+        let _ = write!(&mut rendered, " ({rationale})");
+    }
+    rendered
+}
+
+fn write_section(
+    rendered: &mut String,
+    title: &str,
+    settings: &[TuneRenderedSetting],
+    line_renderer: fn(&TuneRenderedSetting) -> String,
+) {
+    if settings.is_empty() {
+        return;
+    }
+    let _ = writeln!(rendered, "  {title}:");
+    for setting in settings {
+        let _ = writeln!(rendered, "    - {}", line_renderer(setting));
+    }
+}

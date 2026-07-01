@@ -98,6 +98,27 @@ lives in [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md).
 If you run `mesh-llm` with no arguments, it prints `--help` and exits. It does not start the console or bind ports until you choose a mode.
 Bare `mesh-llm serve` loads startup models from `[[models]]` in `~/.mesh-llm/config.toml`.
 
+## GPU tuning
+
+`mesh-llm gpu tune` reviews startup tuning for already-downloaded local models. It is a local-only helper, not a downloader and not a benchmark. Use it when you want the recommended startup shape before editing config or when you want launch arguments for a one-off run.
+
+```bash
+mesh-llm gpu tune
+mesh-llm gpu tune --model /models/qwen3-8b.gguf
+mesh-llm gpu tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf
+mesh-llm gpu tune --model /models/qwen3-8b.gguf --launch-args
+mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply
+mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
+```
+
+1. No args reads configured models from `~/.mesh-llm/config.toml`.
+2. If a target is not already on disk, tune rejects it instead of fetching it.
+3. `--json` gives machine-readable review output. `--launch-args` is read-only and prints shell-safe `mesh-llm serve --model ...` output. It does not prompt or write config.
+4. `--apply` writes only supported nested `[[models]].model_fit` and `[[models]].hardware` fields, and preserves comments and unrelated TOML. `--replace-existing` lets those writes overwrite existing explicit values when you want the recommendation to replace what is already there.
+5. `mmap` and `mlock` are reported, not written. If `mlock` is unavailable, tune explains whether the current `RLIMIT_MEMLOCK` or `IPC_LOCK` access is too low.
+6. `cpu_moe`, `n_cpu_moe`, `tensor_split`, and `placement` are reported as unsupported in v1.
+7. The command is meant to help you choose safe startup settings. It does not promise the fastest possible run.
+
 ## Background service
 
 To install Mesh LLM as a per-user background service:

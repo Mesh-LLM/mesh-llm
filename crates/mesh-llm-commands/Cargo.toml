@@ -31,6 +31,8 @@ mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.72.1", feature
 mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.72.1" }
 mesh-llm-system = { path = "../mesh-llm-system", version = "0.72.1", features = ["skippy-devices"] }
 mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.72.1" }
+model-artifact = { path = "../model-artifact", version = "0.72.1" }
+model-hf = { path = "../model-hf", version = "0.72.1" }
 model-package = { path = "../model-package", version = "0.72.1" }
 model-ref = { path = "../model-ref", version = "0.72.1" }
 rpassword = "5"
@@ -41,6 +43,7 @@ serde_yaml = "0.9"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 toml = "0.9"
+toml_edit = "0.25"
 url = "2"
 zeroize = { version = "1", features = ["derive"] }
 

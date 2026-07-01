@@ -43,6 +43,7 @@ mesh-llm serve
 - If `[[models]]` is empty, `mesh-llm serve` should print a `⚠️` warning, show help, and exit cleanly
 - Explicit `--model` or `--gguf` should ignore configured `[[models]]`
 - Explicit `--ctx-size` should override configured `ctx_size`
+- `mesh-llm gpu tune` is the review/apply companion for these local startup configs. It only accepts already-downloaded targets, rejects remote-only or not-downloaded refs without fetching them, and can print launch args instead of writing.
 
 ### 0b. Pinned startup smoke
 

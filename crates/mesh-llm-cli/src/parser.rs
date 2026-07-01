@@ -373,6 +373,27 @@ pub enum GpuCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Recommend safe startup tuning for one or more local models.
+    Tune {
+        /// Tune exactly one local/configured model target.
+        #[arg(long, conflicts_with = "models")]
+        model: Option<String>,
+        /// Tune multiple local/configured model targets from a comma-separated list.
+        #[arg(long, value_delimiter = ',')]
+        models: Vec<String>,
+        /// Print machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+        /// Print equivalent launch arguments without writing config.
+        #[arg(long, conflicts_with = "apply", conflicts_with = "replace_existing")]
+        launch_args: bool,
+        /// Apply the recommended tuning changes non-interactively.
+        #[arg(long)]
+        apply: bool,
+        /// Replace existing explicit/effective tuning values during apply.
+        #[arg(long, requires = "apply")]
+        replace_existing: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -1518,6 +1539,134 @@ mod tests {
         }
     }
 
+    #[test]
+    fn gpu_tune_parses_for_gpu_and_gpus_aliases() {
+        let cases = [
+            (
+                &["gpus", "tune"][..],
+                None,
+                Vec::<&str>::new(),
+                false,
+                false,
+                false,
+                false,
+            ),
+            (
+                &["gpu", "tune"][..],
+                None,
+                Vec::<&str>::new(),
+                false,
+                false,
+                false,
+                false,
+            ),
+            (
+                &["gpus", "tune", "--model", "Qwen3-8B-Q4_K_M.gguf"][..],
+                Some("Qwen3-8B-Q4_K_M.gguf"),
+                Vec::<&str>::new(),
+                false,
+                false,
+                false,
+                false,
+            ),
+            (
+                &["gpu", "tune", "--models", "a.gguf,b.gguf"][..],
+                None,
+                vec!["a.gguf", "b.gguf"],
+                false,
+                false,
+                false,
+                false,
+            ),
+            (
+                &["gpus", "tune", "--launch-args"][..],
+                None,
+                Vec::<&str>::new(),
+                false,
+                true,
+                false,
+                false,
+            ),
+            (
+                &["gpu", "tune", "--apply", "--replace-existing"][..],
+                None,
+                Vec::<&str>::new(),
+                false,
+                false,
+                true,
+                true,
+            ),
+            (
+                &["gpus", "tune", "--json"][..],
+                None,
+                Vec::<&str>::new(),
+                true,
+                false,
+                false,
+                false,
+            ),
+        ];
+
+        for (
+            args,
+            expected_model,
+            expected_models,
+            expected_json,
+            expected_launch_args,
+            expected_apply,
+            expected_replace_existing,
+        ) in cases
+        {
+            assert_gpu_tune_parse(
+                args,
+                expected_model,
+                &expected_models,
+                expected_json,
+                expected_launch_args,
+                expected_apply,
+                expected_replace_existing,
+            );
+        }
+    }
+
+    #[test]
+    fn gpu_tune_rejects_conflicting_model_selectors() {
+        let err = Cli::try_parse_from([
+            "mesh-llm",
+            "gpus",
+            "tune",
+            "--model",
+            "one.gguf",
+            "--models",
+            "two.gguf,three.gguf",
+        ])
+        .expect_err("conflicting model selectors should be rejected");
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("--model"));
+        assert!(rendered.contains("--models"));
+    }
+
+    #[test]
+    fn gpu_tune_rejects_launch_args_with_apply() {
+        let err = Cli::try_parse_from(["mesh-llm", "gpu", "tune", "--launch-args", "--apply"])
+            .expect_err("launch-args and apply should be incompatible");
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("--launch-args"));
+        assert!(rendered.contains("--apply"));
+    }
+
+    #[test]
+    fn gpu_tune_rejects_replace_existing_without_apply() {
+        let err = Cli::try_parse_from(["mesh-llm", "gpus", "tune", "--replace-existing"])
+            .expect_err("replace-existing should require apply");
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("--replace-existing"));
+        assert!(rendered.contains("--apply"));
+    }
+
     fn assert_gpu_command_parse(
         args: &[&str],
         expected_command_json: bool,
@@ -1539,6 +1688,51 @@ mod tests {
                         );
                     }
                 }
+            }
+            other => panic!("unexpected command for {args:?}: {other:?}"),
+        }
+    }
+
+    fn assert_gpu_tune_parse(
+        args: &[&str],
+        expected_model: Option<&str>,
+        expected_models: &[&str],
+        expected_json: bool,
+        expected_launch_args: bool,
+        expected_apply: bool,
+        expected_replace_existing: bool,
+    ) {
+        let cli = Cli::parse_from(std::iter::once("mesh-llm").chain(args.iter().copied()));
+
+        match cli.command.expect("gpu tune command expected") {
+            Command::Gpus {
+                json: command_json,
+                command:
+                    Some(GpuCommand::Tune {
+                        model,
+                        models,
+                        json,
+                        launch_args,
+                        apply,
+                        replace_existing,
+                    }),
+            } => {
+                assert!(
+                    !command_json,
+                    "top-level gpus json should stay false for {args:?}"
+                );
+                assert_eq!(model.as_deref(), expected_model, "model for {args:?}");
+                assert_eq!(models, expected_models, "models for {args:?}");
+                assert_eq!(json, expected_json, "tune json for {args:?}");
+                assert_eq!(
+                    launch_args, expected_launch_args,
+                    "launch_args for {args:?}"
+                );
+                assert_eq!(apply, expected_apply, "apply for {args:?}");
+                assert_eq!(
+                    replace_existing, expected_replace_existing,
+                    "replace_existing for {args:?}"
+                );
             }
             other => panic!("unexpected command for {args:?}: {other:?}"),
         }

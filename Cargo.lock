@@ -3867,6 +3867,8 @@ dependencies = [
  "mesh-llm-runtime-install",
  "mesh-llm-system",
  "mesh-llm-tui",
+ "model-artifact",
+ "model-hf",
  "model-package",
  "model-ref",
  "rand 0.10.1",
@@ -3880,6 +3882,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toml 0.9.12+spec-1.1.0",
+ "toml_edit",
  "url",
  "zeroize",
 ]

@@ -369,6 +369,41 @@ is present, the command requires `--public-key-file` and otherwise reports
 ### `gpus`
 
 Use this to inspect local GPU identity and capacity, including per-device VRAM, unified-memory state, and cached benchmark-derived bandwidth when present.
+For review and apply tuning of already-downloaded local models, use `mesh-llm gpu tune` or `mesh-llm gpus tune`.
+
+### `gpu tune`
+
+Use this to review or apply startup tuning for already-downloaded local models. The command is local-only. It rejects remote-only refs and any target that is not already on disk instead of fetching it.
+
+Examples:
+
+```bash
+mesh-llm gpu tune
+mesh-llm gpu tune --model /models/qwen3-8b.gguf
+mesh-llm gpu tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf
+mesh-llm gpu tune --model /models/qwen3-8b.gguf --launch-args
+mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply
+mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
+```
+
+Switches:
+
+- `--model <MODEL>`: tune one exact local model that is already downloaded.
+- `--models <MODELS>`: tune multiple exact local models, separated by commas.
+- `--json`: machine-readable tune report.
+- `--launch-args`: read-only output. Prints one shell-safe `mesh-llm serve --model ...` command per successful target, plus comments for writable, report-only, and unsupported fields. It conflicts with `--apply` and `--replace-existing`.
+- `--apply`: write the supported nested tune fields to `~/.mesh-llm/config.toml`. Existing comments and unrelated TOML stay in place.
+- `--replace-existing`: when used with `--apply`, overwrite existing explicit tune values instead of only filling gaps.
+
+Behavior:
+
+1. No target flags means tune the configured local models from `~/.mesh-llm/config.toml`. If that file has no models, the command fails and asks for `--model` or `--models`.
+2. `--model` and `--models` never trigger a download. If a target is not already installed, tune rejects it and leaves the machine untouched.
+3. `mmap` and `mlock` are report-only. `mlock` can warn that the current memlock limit or `IPC_LOCK` access is too low, but tune never changes privileges.
+4. `cpu_moe`, `n_cpu_moe`, `tensor_split`, and `placement` are reported as unsupported in v1 and are not written.
+5. `--apply` writes only supported nested fields under `[[models]].model_fit` and `[[models]].hardware`.
+6. `--replace-existing` can replace existing explicit values, including values inherited from `defaults.*`, when you want those recommendations written.
+7. The command is for review and startup help, not benchmarking, and it does not promise maximum throughput.
 
 
 ### `load`
