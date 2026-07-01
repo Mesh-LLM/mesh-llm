@@ -665,7 +665,7 @@ tags:
 
 <div align="center">
   <a href="https://www.meshllm.cloud">
-    <img src="https://github.com/Mesh-LLM/mesh-llm/raw/main/docs/mesh-llm-logo.svg" alt="Mesh LLM" width="220">
+    <img src="https://meshllm.cloud/assets/images/jelly-logo-wordmark.png" alt="Mesh LLM" width="220">
   </a>
 
   <h1>{display_name}</h1>

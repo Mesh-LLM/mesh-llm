@@ -138,7 +138,9 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains("## Package Variant"));
         assert!(EMBEDDED_SCRIPT.contains("## What Is Included"));
         assert!(EMBEDDED_SCRIPT.contains("## Validation"));
-        assert!(EMBEDDED_SCRIPT.contains("docs/mesh-llm-logo.svg"));
+        assert!(
+            EMBEDDED_SCRIPT.contains("https://meshllm.cloud/assets/images/jelly-logo-wordmark.png")
+        );
         assert!(EMBEDDED_SCRIPT.contains("style=for-the-badge"));
         assert!(EMBEDDED_SCRIPT.contains("https://www.meshllm.cloud"));
         assert!(EMBEDDED_SCRIPT.contains("https://discord.gg/rs6fmc63eN"));
