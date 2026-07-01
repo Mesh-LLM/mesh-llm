@@ -286,21 +286,43 @@ fn trial_config(
     prepared: &crate::gpus::tune_apply::PreparedTunePlan,
     candidate: &TuneBenchmarkCandidate,
 ) -> anyhow::Result<String> {
-    let model = toml_string(&prepared.target.resolved_path.display().to_string())?;
-    Ok(format!(
-        "version = 1\n\n[[models]]\nmodel = {model}\n\n[models.model_fit]\nctx_size = {}\nbatch = {}\nubatch = {}\ncache_type_k = \"{}\"\ncache_type_v = \"{}\"\n\n",
-        candidate.ctx_size,
-        candidate.batch,
-        candidate.ubatch,
-        render_cache_type(candidate.cache_type_k),
-        render_cache_type(candidate.cache_type_v),
-    ))
+    let mut doc = toml_edit::DocumentMut::new();
+    doc["version"] = toml_edit::value(1);
+
+    let mut table = toml_edit::Table::new();
+    table["model"] = toml_edit::value(prepared.target.resolved_path.display().to_string());
+    crate::gpus::tune_apply::apply_config_edits(&mut table, &prepared.plan.config_edits())?;
+    apply_candidate_overrides(&mut table, candidate)?;
+
+    let mut models = toml_edit::ArrayOfTables::new();
+    models.push(table);
+    doc["models"] = toml_edit::Item::ArrayOfTables(models);
+    Ok(doc.to_string())
 }
 
-fn toml_string(value: &str) -> anyhow::Result<String> {
-    toml::to_string(value)
-        .map(|rendered| rendered.trim().to_string())
-        .map_err(Into::into)
+fn apply_candidate_overrides(
+    table: &mut toml_edit::Table,
+    candidate: &TuneBenchmarkCandidate,
+) -> anyhow::Result<()> {
+    let model_fit = ensure_trial_subtable(table, "model_fit")?;
+    model_fit["ctx_size"] = toml_edit::value(i64::from(candidate.ctx_size));
+    model_fit["batch"] = toml_edit::value(i64::from(candidate.batch));
+    model_fit["ubatch"] = toml_edit::value(i64::from(candidate.ubatch));
+    model_fit["cache_type_k"] = toml_edit::value(render_cache_type(candidate.cache_type_k));
+    model_fit["cache_type_v"] = toml_edit::value(render_cache_type(candidate.cache_type_v));
+    Ok(())
+}
+
+fn ensure_trial_subtable<'a>(
+    table: &'a mut toml_edit::Table,
+    key: &str,
+) -> anyhow::Result<&'a mut toml_edit::Table> {
+    if !table.contains_key(key) {
+        table[key] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    table[key]
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("config key `models[].{key}` is not a TOML table"))
 }
 
 fn create_trial_dir(
@@ -408,4 +430,87 @@ fn plan_has_errors(plan: &TunePlan) -> bool {
             .diagnostics
             .iter()
             .any(|diagnostic| matches!(diagnostic.severity, TuneDiagnosticSeverity::Error))
+}
+
+#[cfg(test)]
+mod benchmark_tests {
+    use super::*;
+    use crate::gpus::tune_apply::PreparedTunePlan;
+    use crate::gpus::tune_resolver::{
+        LocalTargetSource, ResolvedTuneTarget, TuneTargetSelection,
+    };
+
+    #[test]
+    fn trial_config_renders_string_paths_and_hardware_edits() {
+        let prepared = PreparedTunePlan::new(
+            ResolvedTuneTarget {
+                requested_input: "model".to_string(),
+                canonical_model_ref: "model".to_string(),
+                resolved_path: std::path::PathBuf::from("/tmp/model with spaces.gguf"),
+                local_source: LocalTargetSource::FilesystemPath {
+                    synthetic_model_ref: "model".to_string(),
+                },
+                config_matches: Vec::new(),
+                selection: TuneTargetSelection::Explicit { configured: false },
+            },
+            TunePlan {
+                target: TuneTarget {
+                    requested: "model".to_string(),
+                    resolved: Some("/tmp/model with spaces.gguf".to_string()),
+                    config_model_ref: None,
+                    derived_profile: None,
+                },
+                apply_mode: TuneApplyMode::Review,
+                field_statuses: vec![
+                    TuneFieldStatus::Applied {
+                        recommendation: TuneRecommendation {
+                            field: TuneField::GpuLayers,
+                            value: TuneRecommendedValue::GpuLayers(TuneGpuLayersValue::All),
+                            rationale: "test".to_string(),
+                        },
+                        edit: TuneConfigEdit::SetHardwareGpuLayers(TuneGpuLayersValue::All),
+                    },
+                    TuneFieldStatus::Applied {
+                        recommendation: TuneRecommendation {
+                            field: TuneField::FitTargetMib,
+                            value: TuneRecommendedValue::FitTargetMib(60_000),
+                            rationale: "test".to_string(),
+                        },
+                        edit: TuneConfigEdit::SetHardwareFitTargetMib(60_000),
+                    },
+                ],
+                diagnostics: Vec::new(),
+            },
+        );
+        let candidate = TuneBenchmarkCandidate {
+            ctx_size: 4096,
+            batch: 2048,
+            ubatch: 1024,
+            cache_type_k: TuneKvCacheType::Q8_0,
+            cache_type_v: TuneKvCacheType::Q8_0,
+        };
+
+        let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
+        let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
+        let model = parsed.models.first().expect("model row exists");
+
+        assert_eq!(model.model, "/tmp/model with spaces.gguf");
+        assert_eq!(
+            model.model_fit
+                .as_ref()
+                .and_then(|model_fit| model_fit.ctx_size),
+            Some(4096)
+        );
+        assert!(matches!(
+            model.hardware.as_ref().and_then(|hardware| hardware.gpu_layers.as_ref()),
+            Some(mesh_llm_config::IntegerOrString::Integer(-1))
+        ));
+        assert_eq!(
+            model
+                .hardware
+                .as_ref()
+                .and_then(|hardware| hardware.fit_target_mib),
+            Some(60_000)
+        );
+    }
 }

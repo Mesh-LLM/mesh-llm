@@ -137,7 +137,7 @@ fn appended_model_ref(target: &ResolvedTuneTarget) -> String {
     }
 }
 
-fn apply_config_edits(table: &mut Table, edits: &[TuneConfigEdit]) -> Result<()> {
+pub(crate) fn apply_config_edits(table: &mut Table, edits: &[TuneConfigEdit]) -> Result<()> {
     for edit in edits {
         match edit {
             TuneConfigEdit::SetModelFitCacheTypeK(value_kind) => {
