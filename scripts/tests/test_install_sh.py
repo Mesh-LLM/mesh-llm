@@ -113,6 +113,37 @@ class InstallScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "cuda")
 
+    def test_checksum_from_sidecar_does_not_depend_on_awk_intervals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+            wrappers = tmp_path / "wrappers"
+            wrappers.mkdir()
+            fake_awk = wrappers / "awk"
+            fake_awk.write_text(
+                "#!/usr/bin/env bash\n"
+                "echo 'mawk interval expressions are unavailable' >&2\n"
+                "exit 2\n",
+                encoding="utf-8",
+            )
+            fake_awk.chmod(0o755)
+            digest = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
+            sidecar = tmp_path / "archive.tar.gz.sha256"
+            sidecar.write_text(f"{digest}  archive.tar.gz\n", encoding="utf-8")
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                f"""
+                export PATH={shlex_quote(str(wrappers))}:$PATH
+                checksum_from_sidecar {shlex_quote(str(sidecar))}
+                """,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), digest.lower())
+
     def test_detect_cuda_major_reads_ldconfig_libcudart_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

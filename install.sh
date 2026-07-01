@@ -482,7 +482,7 @@ sha256_file() {
 checksum_from_sidecar() {
     local sidecar="$1"
     local expected
-    expected="$(awk 'match($0, /[A-Fa-f0-9]{64}/) { print substr($0, RSTART, RLENGTH); exit }' "$sidecar" | tr '[:upper:]' '[:lower:]')"
+    expected="$(LC_ALL=C grep -Eio '[[:xdigit:]]{64}' "$sidecar" | head -n 1 | tr '[:upper:]' '[:lower:]' || true)"
     if [[ -z "$expected" ]]; then
         echo "error: checksum sidecar did not contain a SHA-256 digest: $sidecar" >&2
         return 1
