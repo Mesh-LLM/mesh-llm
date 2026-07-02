@@ -115,16 +115,19 @@ mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
 2. If a target is not already on disk, tune rejects it instead of fetching it.
 3. `--json` gives machine-readable review output. `--launch-args` is read-only and prints shell-safe `mesh-llm serve --model ...` output. It does not prompt or write config.
 4. `--apply` writes only supported nested `[[models]].model_fit` and `[[models]].hardware` fields, and preserves comments and unrelated TOML. `--replace-existing` lets those writes overwrite existing explicit values when you want the recommendation to replace what is already there.
-5. `mmap` and `mlock` are reported, not written. If `mlock` is unavailable, tune explains whether the current `RLIMIT_MEMLOCK` or `IPC_LOCK` access is too low.
+5. `mmap` and `mlock` are writable model-load controls. If `mlock` is unavailable, tune explains whether the current `RLIMIT_MEMLOCK` or `IPC_LOCK` access is too low and recommends `mlock=false`.
 6. `cpu_moe`, `n_cpu_moe`, `tensor_split`, and `placement` are reported as unsupported in v1.
 
-For measured local model-serving throughput, use `mesh-llm benchmark tune`. It shares `gpu tune` target resolution and startup planning, then creates temporary per-trial configs, starts isolated local `mesh-llm serve` children, sends OpenAI-compatible chat-completion requests, reports decode tok/s plus setup/readiness/request/shutdown/total timing stats for each context/batch/ubatch candidate, and keeps trial logs under `target/gpu-tune/`.
+For measured local model-serving throughput, use `mesh-llm benchmark tune`. It shares `gpu tune` target resolution and startup planning, then creates temporary per-trial configs, starts isolated local `mesh-llm serve` children, sends OpenAI-compatible chat-completion requests, reports decode tok/s plus setup/readiness/request/shutdown/total timing stats for each context/batch/ubatch/mmap/mlock candidate, and keeps trial logs under `target/gpu-tune/`.
 
 ```bash
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf
 mesh-llm benchmark tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --mmap-values auto,true,false --mlock-values true,false
 ```
+
+If `--mmap-values` is omitted, benchmark tune tries `auto`, `true`, and `false`. If `--mlock-values` is omitted, it tries `false` and only tries `true` when the current mlock limit can cover the evaluated budget.
 
 Use `mesh-llm gpus detect` when you want to refresh the raw hardware fingerprint, bandwidth, and compute hints rather than benchmark model-serving throughput.
 

@@ -79,6 +79,8 @@ impl ResolvedSkippyConfig {
 
         options.default_max_tokens = self.request_defaults.max_tokens;
         options.n_gpu_layers = self.hardware.gpu_layers;
+        options.mmap = self.hardware.mmap;
+        options.mlock = self.hardware.mlock;
         if let Some(projector_path) = self.hardware.projector_path.clone() {
             options = options.with_projector_path(projector_path);
         }

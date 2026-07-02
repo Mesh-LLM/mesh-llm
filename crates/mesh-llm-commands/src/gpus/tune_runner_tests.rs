@@ -192,6 +192,8 @@ fn benchmark_tune_json_uses_benchmark_command_context() {
         ctx_sizes: vec![4096],
         batch_sizes: vec![1024],
         ubatch_sizes: vec![256],
+        mmap_values: Vec::new(),
+        mlock_values: Vec::new(),
         max_tokens: 32,
         startup_timeout_secs: 5,
         request_timeout_secs: 5,

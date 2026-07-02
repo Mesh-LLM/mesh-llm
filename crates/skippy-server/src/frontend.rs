@@ -1285,6 +1285,8 @@ impl DraftRunner {
                 n_threads: None,
                 n_threads_batch: None,
                 n_gpu_layers: n_gpu_layers.unwrap_or(config.n_gpu_layers),
+                mmap: config.mmap,
+                mlock: config.mlock,
                 selected_backend_device: config
                     .selected_device
                     .as_ref()

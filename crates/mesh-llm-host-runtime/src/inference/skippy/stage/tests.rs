@@ -38,6 +38,8 @@ fn load_request() -> StageLoadRequest {
         n_batch: Some(2048),
         n_ubatch: Some(512),
         n_gpu_layers: -1,
+        mmap: Some(false),
+        mlock: true,
         cache_type_k: "f16".to_string(),
         cache_type_v: "q8_0".to_string(),
         flash_attn_type: FlashAttentionType::Enabled,

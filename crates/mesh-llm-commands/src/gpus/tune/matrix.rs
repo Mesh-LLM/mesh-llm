@@ -69,9 +69,10 @@ impl TuneField {
             | Self::Batch
             | Self::Ubatch
             | Self::GpuLayers
-            | Self::FitTargetMib => TuneFieldSupport::Writable,
+            | Self::FitTargetMib
+            | Self::Mmap
+            | Self::Mlock => TuneFieldSupport::Writable,
             Self::Device | Self::Defaults => TuneFieldSupport::PreserveOnly,
-            Self::Mmap | Self::Mlock => TuneFieldSupport::ReportOnly,
             Self::CpuMoe | Self::NCpuMoe | Self::TensorSplit | Self::Placement => {
                 TuneFieldSupport::Unsupported
             }

@@ -1,4 +1,5 @@
 use mesh_llm_config::{
+    BoolOrAuto as OutputBoolOrAuto,
     FlashAttentionType as OutputFlashAttentionType,
     IntegerOrString as OutputIntegerOrString,
     ModelConfigDefaults as OutputModelConfigDefaults,
@@ -101,9 +102,10 @@ fn preserved_value(
         TuneField::FitTargetMib => preserved_fit_target_mib(model_entry, defaults)
             .map(TuneRecommendedValue::FitTargetMib),
         TuneField::Device => preserved_device(model_entry, defaults).map(TuneRecommendedValue::Device),
-        TuneField::Mmap
-        | TuneField::Mlock
-        | TuneField::CpuMoe
+        TuneField::Mmap => preserved_mmap(model_entry, defaults)
+            .map(TuneRecommendedValue::BoolOrAuto),
+        TuneField::Mlock => preserved_mlock(model_entry, defaults).map(TuneRecommendedValue::Bool),
+        TuneField::CpuMoe
         | TuneField::NCpuMoe
         | TuneField::TensorSplit
         | TuneField::Placement
@@ -205,6 +207,38 @@ fn preserved_device(
         .and_then(|hardware| hardware.device.clone())
         .or_else(|| model_entry.and_then(|entry| entry.gpu_id.clone()))
         .or_else(|| defaults?.hardware.as_ref()?.device.clone())
+}
+
+fn preserved_mmap(
+    model_entry: Option<&OutputModelConfigEntry>,
+    defaults: Option<&OutputModelConfigDefaults>,
+) -> Option<TuneBoolOrAutoValue> {
+    model_entry
+        .and_then(|entry| entry.hardware.as_ref())
+        .and_then(|hardware| hardware.mmap.as_ref())
+        .or_else(|| defaults?.hardware.as_ref()?.mmap.as_ref())
+        .and_then(render_bool_or_auto_value)
+}
+
+fn preserved_mlock(
+    model_entry: Option<&OutputModelConfigEntry>,
+    defaults: Option<&OutputModelConfigDefaults>,
+) -> Option<bool> {
+    model_entry
+        .and_then(|entry| entry.hardware.as_ref())
+        .and_then(|hardware| hardware.mlock)
+        .or_else(|| defaults?.hardware.as_ref()?.mlock)
+}
+
+fn render_bool_or_auto_value(value: &OutputBoolOrAuto) -> Option<TuneBoolOrAutoValue> {
+    match value {
+        OutputBoolOrAuto::Bool(true) => Some(TuneBoolOrAutoValue::Enabled),
+        OutputBoolOrAuto::Bool(false) => Some(TuneBoolOrAutoValue::Disabled),
+        OutputBoolOrAuto::String(value) if value.eq_ignore_ascii_case("auto") => {
+            Some(TuneBoolOrAutoValue::Auto)
+        }
+        OutputBoolOrAuto::String(_) => None,
+    }
 }
 
 fn parse_gpu_layers_value_for_output(value: Option<&OutputIntegerOrString>) -> Option<i32> {

@@ -1,6 +1,5 @@
 use super::super::mlock::{TuneMlockLimit, TuneMlockProbe};
 use super::helpers::{evaluate_with_probe, sample_gpu, sample_target, survey_with_gpus};
-use crate::gpus::tune::{TuneField, TuneFieldStatus, TuneRecommendedValue};
 use mesh_llm_config::MeshConfig;
 
 #[test]
@@ -32,15 +31,4 @@ fn gpu_tune_reports_mlock_unavailable_reason() {
         diagnostics[0].code,
         crate::gpus::tune::TuneDiagnosticCode::MlockUnavailable
     );
-    match evaluation.mlock_field_status() {
-        TuneFieldStatus::ReportOnly {
-            recommendation,
-            reason,
-        } => {
-            assert_eq!(recommendation.field, TuneField::Mlock);
-            assert_eq!(recommendation.value, TuneRecommendedValue::Bool(false));
-            assert!(reason.contains("report-only"));
-        }
-        other => panic!("expected report-only mlock status, got {other:?}"),
-    }
 }

@@ -23,6 +23,8 @@ fn preserve_reason(source: ExistingValueSource, field: TuneField) -> String {
         (ExistingValueSource::ModelNested, TuneField::FitTargetMib) => {
             "models[].hardware.fit_target_mib"
         }
+        (ExistingValueSource::ModelNested, TuneField::Mmap) => "models[].hardware.mmap",
+        (ExistingValueSource::ModelNested, TuneField::Mlock) => "models[].hardware.mlock",
         (ExistingValueSource::ModelLegacy, TuneField::CacheTypeK) => "models[].cache_type_k",
         (ExistingValueSource::ModelLegacy, TuneField::CacheTypeV) => "models[].cache_type_v",
         (ExistingValueSource::ModelLegacy, TuneField::FlashAttention) => "models[].flash_attention",
@@ -41,6 +43,8 @@ fn preserve_reason(source: ExistingValueSource, field: TuneField) -> String {
         (ExistingValueSource::Defaults, TuneField::FitTargetMib) => {
             "defaults.hardware.fit_target_mib"
         }
+        (ExistingValueSource::Defaults, TuneField::Mmap) => "defaults.hardware.mmap",
+        (ExistingValueSource::Defaults, TuneField::Mlock) => "defaults.hardware.mlock",
         (_, _) => "existing tune setting",
     };
     format!("existing {rendered} remains authoritative")
@@ -210,6 +214,41 @@ fn existing_fit_target_source(
                 .hardware
                 .as_ref()?
                 .fit_target_mib
+                .map(|_| ExistingValueSource::Defaults)
+        })
+}
+
+fn existing_mmap_source(
+    model_entry: Option<&ModelConfigEntry>,
+    defaults: Option<&ModelConfigDefaults>,
+) -> Option<ExistingValueSource> {
+    model_entry
+        .and_then(|entry| entry.hardware.as_ref())
+        .and_then(|hardware| hardware.mmap.as_ref())
+        .map(|_| ExistingValueSource::ModelNested)
+        .or_else(|| {
+            defaults?
+                .hardware
+                .as_ref()?
+                .mmap
+                .as_ref()
+                .map(|_| ExistingValueSource::Defaults)
+        })
+}
+
+fn existing_mlock_source(
+    model_entry: Option<&ModelConfigEntry>,
+    defaults: Option<&ModelConfigDefaults>,
+) -> Option<ExistingValueSource> {
+    model_entry
+        .and_then(|entry| entry.hardware.as_ref())
+        .and_then(|hardware| hardware.mlock)
+        .map(|_| ExistingValueSource::ModelNested)
+        .or_else(|| {
+            defaults?
+                .hardware
+                .as_ref()?
+                .mlock
                 .map(|_| ExistingValueSource::Defaults)
         })
 }

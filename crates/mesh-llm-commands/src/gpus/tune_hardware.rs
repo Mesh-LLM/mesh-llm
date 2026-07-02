@@ -18,8 +18,6 @@ pub(crate) fn dispatch_symbol_anchor() {
     let _ = evaluate::hardware_symbol_anchor as fn();
     let _ = types::TuneHardwareEvaluation::device_field_status
         as fn(&types::TuneHardwareEvaluation) -> crate::gpus::tune::TuneFieldStatus;
-    let _ = types::TuneHardwareEvaluation::mlock_field_status
-        as fn(&types::TuneHardwareEvaluation) -> crate::gpus::tune::TuneFieldStatus;
     let _ = types::TuneHardwareEvaluation::diagnostics
         as fn(&types::TuneHardwareEvaluation) -> Vec<crate::gpus::tune::TuneDiagnostic>;
     let _ = types::TuneHardwareEvaluation::recommended_device_value

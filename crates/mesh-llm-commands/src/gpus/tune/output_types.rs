@@ -89,6 +89,8 @@ pub(crate) struct TuneBenchmarkCandidate {
     pub ubatch: u32,
     pub cache_type_k: TuneKvCacheType,
     pub cache_type_v: TuneKvCacheType,
+    pub mmap: TuneBoolOrAutoValue,
+    pub mlock: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]

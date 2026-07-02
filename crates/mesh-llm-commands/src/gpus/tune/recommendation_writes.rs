@@ -215,3 +215,55 @@ fn push_fit_target_status(
         edit: TuneConfigEdit::SetHardwareFitTargetMib(fit_target_mib),
     });
 }
+
+fn push_mmap_status(
+    plan: &mut TunePlan,
+    apply_mode: TuneApplyMode,
+    model_entry: Option<&ModelConfigEntry>,
+    defaults: Option<&ModelConfigDefaults>,
+) {
+    if let Some(source) = existing_mmap_source(model_entry, defaults)
+        && apply_mode != TuneApplyMode::ReplaceExisting
+    {
+        plan.field_statuses.push(TuneFieldStatus::Preserved {
+            field: TuneField::Mmap,
+            reason: preserve_reason(source, TuneField::Mmap),
+        });
+        return;
+    }
+    plan.field_statuses.push(TuneFieldStatus::Applied {
+        recommendation: TuneRecommendation {
+            field: TuneField::Mmap,
+            value: TuneRecommendedValue::BoolOrAuto(TuneBoolOrAutoValue::Auto),
+            rationale: "keep runtime mmap default unless benchmark tune selects an explicit value"
+                .to_string(),
+        },
+        edit: TuneConfigEdit::SetHardwareMmap(TuneBoolOrAutoValue::Auto),
+    });
+}
+
+fn push_mlock_status(
+    plan: &mut TunePlan,
+    apply_mode: TuneApplyMode,
+    model_entry: Option<&ModelConfigEntry>,
+    defaults: Option<&ModelConfigDefaults>,
+    hardware: &TuneHardwareEvaluation,
+) {
+    if let Some(source) = existing_mlock_source(model_entry, defaults)
+        && apply_mode != TuneApplyMode::ReplaceExisting
+    {
+        plan.field_statuses.push(TuneFieldStatus::Preserved {
+            field: TuneField::Mlock,
+            reason: preserve_reason(source, TuneField::Mlock),
+        });
+        return;
+    }
+    plan.field_statuses.push(TuneFieldStatus::Applied {
+        recommendation: TuneRecommendation {
+            field: TuneField::Mlock,
+            value: TuneRecommendedValue::Bool(hardware.mlock.available),
+            rationale: hardware.mlock.reason.clone(),
+        },
+        edit: TuneConfigEdit::SetHardwareMlock(hardware.mlock.available),
+    });
+}

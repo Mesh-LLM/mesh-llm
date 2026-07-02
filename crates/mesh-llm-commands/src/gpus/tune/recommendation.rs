@@ -57,12 +57,17 @@ pub(crate) fn build_tune_plan(input: TuneRecommendationInput<'_>) -> TunePlan {
             defaults,
             input.hardware,
         );
+        push_mmap_status(&mut plan, input.apply_mode, model_entry, defaults);
+        push_mlock_status(
+            &mut plan,
+            input.apply_mode,
+            model_entry,
+            defaults,
+            input.hardware,
+        );
     }
     plan.field_statuses
         .push(input.hardware.device_field_status());
-    plan.field_statuses.push(report_only_mmap_status());
-    plan.field_statuses
-        .push(input.hardware.mlock_field_status());
     push_cpu_moe_statuses(&mut plan, input.metadata);
     plan.field_statuses.push(unsupported_status(
         TuneField::TensorSplit,

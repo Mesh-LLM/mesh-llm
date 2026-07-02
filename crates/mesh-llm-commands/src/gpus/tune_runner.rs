@@ -1,7 +1,10 @@
 use super::tune::TuneApplyMode;
 use super::{tune, tune_apply, tune_hardware, tune_resolver};
 use anyhow::{Result, bail};
-use mesh_llm_cli::{GpuCommand, benchmark::BenchmarkCommand};
+use mesh_llm_cli::{
+    GpuCommand,
+    benchmark::{BenchmarkBool, BenchmarkBoolOrAuto, BenchmarkCommand},
+};
 use mesh_llm_config::{ConfigStore, load_config};
 use mesh_llm_system::hardware;
 use std::collections::BTreeSet;
@@ -141,6 +144,8 @@ fn run_tune_request_with_writer(
             ctx_sizes: args.ctx_sizes,
             batch_sizes: args.batch_sizes,
             ubatch_sizes: args.ubatch_sizes,
+            mmap_values: args.mmap_values,
+            mlock_values: args.mlock_values,
             max_tokens: args.max_tokens,
             startup_timeout_secs: args.startup_timeout_secs,
             request_timeout_secs: args.request_timeout_secs,
@@ -293,6 +298,8 @@ struct TuneRunnerArgs<'a> {
     ctx_sizes: &'a [u32],
     batch_sizes: &'a [u32],
     ubatch_sizes: &'a [u32],
+    mmap_values: &'a [BenchmarkBoolOrAuto],
+    mlock_values: &'a [BenchmarkBool],
     max_tokens: u32,
     startup_timeout_secs: u64,
     request_timeout_secs: u64,
@@ -323,6 +330,8 @@ fn gpu_tune_runner_args(command: &GpuCommand) -> TuneRunnerArgs<'_> {
         ctx_sizes: &[],
         batch_sizes: &[],
         ubatch_sizes: &[],
+        mmap_values: &[],
+        mlock_values: &[],
         max_tokens: 128,
         startup_timeout_secs: 600,
         request_timeout_secs: 600,
@@ -341,6 +350,8 @@ fn benchmark_tune_runner_args(command: &BenchmarkCommand) -> TuneRunnerArgs<'_> 
         ctx_sizes,
         batch_sizes,
         ubatch_sizes,
+        mmap_values,
+        mlock_values,
         max_tokens,
         startup_timeout_secs,
         request_timeout_secs,
@@ -358,6 +369,8 @@ fn benchmark_tune_runner_args(command: &BenchmarkCommand) -> TuneRunnerArgs<'_> 
         ctx_sizes,
         batch_sizes,
         ubatch_sizes,
+        mmap_values,
+        mlock_values,
         max_tokens: *max_tokens,
         startup_timeout_secs: *startup_timeout_secs,
         request_timeout_secs: *request_timeout_secs,

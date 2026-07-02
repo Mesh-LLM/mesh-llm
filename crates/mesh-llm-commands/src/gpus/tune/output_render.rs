@@ -176,10 +176,12 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
             Some(best) => {
                 let _ = writeln!(
                     rendered,
-                    "    Best: ctx={} batch={} ubatch={} decode_tok_s={}{}",
+                    "    Best: ctx={} batch={} ubatch={} mmap={} mlock={} decode_tok_s={}{}",
                     best.candidate.ctx_size,
                     best.candidate.batch,
                     best.candidate.ubatch,
+                    render_bool_or_auto_candidate(best.candidate.mmap),
+                    best.candidate.mlock,
                     best.decode_tok_s
                         .map(|value| format!("{value:.2}"))
                         .unwrap_or_else(|| "n/a".to_string()),
@@ -197,8 +199,12 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
             };
             let _ = write!(
                 rendered,
-                "    - {status}: ctx={} batch={} ubatch={}",
-                trial.candidate.ctx_size, trial.candidate.batch, trial.candidate.ubatch
+                "    - {status}: ctx={} batch={} ubatch={} mmap={} mlock={}",
+                trial.candidate.ctx_size,
+                trial.candidate.batch,
+                trial.candidate.ubatch,
+                render_bool_or_auto_candidate(trial.candidate.mmap),
+                trial.candidate.mlock,
             );
             if let Some(rate) = trial.decode_tok_s {
                 let _ = write!(rendered, " decode_tok_s={rate:.2}");
@@ -214,6 +220,14 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
             }
             let _ = writeln!(rendered);
         }
+    }
+}
+
+fn render_bool_or_auto_candidate(value: TuneBoolOrAutoValue) -> &'static str {
+    match value {
+        TuneBoolOrAutoValue::Enabled => "enabled",
+        TuneBoolOrAutoValue::Disabled => "disabled",
+        TuneBoolOrAutoValue::Auto => "auto",
     }
 }
 

@@ -153,6 +153,8 @@ mod tests {
             n_batch: None,
             n_ubatch: None,
             n_gpu_layers: -1,
+            mmap: None,
+            mlock: false,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,

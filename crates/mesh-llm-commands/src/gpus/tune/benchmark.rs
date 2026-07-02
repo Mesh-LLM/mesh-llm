@@ -3,6 +3,8 @@ pub(crate) struct TuneBenchmarkRunRequest<'a> {
     pub(crate) ctx_sizes: &'a [u32],
     pub(crate) batch_sizes: &'a [u32],
     pub(crate) ubatch_sizes: &'a [u32],
+    pub(crate) mmap_values: &'a [mesh_llm_cli::benchmark::BenchmarkBoolOrAuto],
+    pub(crate) mlock_values: &'a [mesh_llm_cli::benchmark::BenchmarkBool],
     pub(crate) max_tokens: u32,
     pub(crate) startup_timeout_secs: u64,
     pub(crate) request_timeout_secs: u64,
@@ -73,6 +75,8 @@ fn benchmark_candidates(
         recommended_cache_type(&prepared.plan, TuneField::CacheTypeK).unwrap_or(TuneKvCacheType::Q8_0);
     let cache_type_v =
         recommended_cache_type(&prepared.plan, TuneField::CacheTypeV).unwrap_or(cache_type_k);
+    let mmap_values = benchmark_mmap_values(request.mmap_values, &prepared.plan);
+    let mlock_values = benchmark_mlock_values(request.mlock_values, &prepared.plan);
 
     let mut candidates = Vec::new();
     for ctx_size in contexts {
@@ -81,13 +85,19 @@ fn benchmark_candidates(
                 if *ubatch > *batch {
                     continue;
                 }
-                candidates.push(TuneBenchmarkCandidate {
-                    ctx_size,
-                    batch: *batch,
-                    ubatch: *ubatch,
-                    cache_type_k,
-                    cache_type_v,
-                });
+                for mmap in &mmap_values {
+                    for mlock in &mlock_values {
+                        candidates.push(TuneBenchmarkCandidate {
+                            ctx_size,
+                            batch: *batch,
+                            ubatch: *ubatch,
+                            cache_type_k,
+                            cache_type_v,
+                            mmap: *mmap,
+                            mlock: *mlock,
+                        });
+                    }
+                }
             }
         }
     }
@@ -475,6 +485,9 @@ fn apply_candidate_overrides(
     model_fit["ubatch"] = toml_edit::value(i64::from(candidate.ubatch));
     model_fit["cache_type_k"] = toml_edit::value(render_cache_type(candidate.cache_type_k));
     model_fit["cache_type_v"] = toml_edit::value(render_cache_type(candidate.cache_type_v));
+    let hardware = ensure_trial_subtable(table, "hardware")?;
+    hardware["mmap"] = toml_edit::value(render_bool_or_auto(candidate.mmap));
+    hardware["mlock"] = toml_edit::value(candidate.mlock);
     Ok(())
 }
 
@@ -547,6 +560,63 @@ fn unique_positive(values: &[u32]) -> Vec<u32> {
     values
 }
 
+fn benchmark_mmap_values(
+    requested: &[mesh_llm_cli::benchmark::BenchmarkBoolOrAuto],
+    _plan: &TunePlan,
+) -> Vec<TuneBoolOrAutoValue> {
+    if requested.is_empty() {
+        return vec![
+            TuneBoolOrAutoValue::Auto,
+            TuneBoolOrAutoValue::Enabled,
+            TuneBoolOrAutoValue::Disabled,
+        ];
+    }
+    let mut values = requested
+        .iter()
+        .copied()
+        .map(|value| match value {
+            mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Auto => TuneBoolOrAutoValue::Auto,
+            mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Enabled => {
+                TuneBoolOrAutoValue::Enabled
+            }
+            mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Disabled => {
+                TuneBoolOrAutoValue::Disabled
+            }
+        })
+        .collect::<Vec<_>>();
+    values.sort_by_key(|value| match value {
+        TuneBoolOrAutoValue::Auto => 0,
+        TuneBoolOrAutoValue::Enabled => 1,
+        TuneBoolOrAutoValue::Disabled => 2,
+    });
+    values.dedup();
+    values
+}
+
+fn benchmark_mlock_values(
+    requested: &[mesh_llm_cli::benchmark::BenchmarkBool],
+    plan: &TunePlan,
+) -> Vec<bool> {
+    if requested.is_empty() {
+        return if recommended_bool(plan, TuneField::Mlock).unwrap_or(false) {
+            vec![false, true]
+        } else {
+            vec![false]
+        };
+    }
+    let mut values = requested
+        .iter()
+        .copied()
+        .map(|value| match value {
+            mesh_llm_cli::benchmark::BenchmarkBool::Enabled => true,
+            mesh_llm_cli::benchmark::BenchmarkBool::Disabled => false,
+        })
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    values.dedup();
+    values
+}
+
 fn recommended_u32(plan: &TunePlan, field: TuneField) -> Option<u32> {
     plan.field_statuses.iter().find_map(|status| match status {
         TuneFieldStatus::Applied { recommendation, .. }
@@ -557,6 +627,21 @@ fn recommended_u32(plan: &TunePlan, field: TuneField) -> Option<u32> {
                 TuneRecommendedValue::ContextSize(value)
                 | TuneRecommendedValue::Batch(value)
                 | TuneRecommendedValue::Ubatch(value) => Some(value),
+                _ => None,
+            }
+        }
+        _ => None,
+    })
+}
+
+fn recommended_bool(plan: &TunePlan, field: TuneField) -> Option<bool> {
+    plan.field_statuses.iter().find_map(|status| match status {
+        TuneFieldStatus::Applied { recommendation, .. }
+        | TuneFieldStatus::ReportOnly { recommendation, .. }
+            if recommendation.field == field =>
+        {
+            match recommendation.value {
+                TuneRecommendedValue::Bool(value) => Some(value),
                 _ => None,
             }
         }
@@ -577,6 +662,14 @@ fn recommended_cache_type(plan: &TunePlan, field: TuneField) -> Option<TuneKvCac
         }
         _ => None,
     })
+}
+
+fn render_bool_or_auto(value: TuneBoolOrAutoValue) -> toml_edit::Value {
+    match value {
+        TuneBoolOrAutoValue::Enabled => toml_edit::Value::from(true),
+        TuneBoolOrAutoValue::Disabled => toml_edit::Value::from(false),
+        TuneBoolOrAutoValue::Auto => toml_edit::Value::from("auto"),
+    }
 }
 
 fn render_cache_type(value: TuneKvCacheType) -> &'static str {
@@ -653,6 +746,8 @@ mod benchmark_tests {
             ubatch: 1024,
             cache_type_k: TuneKvCacheType::Q8_0,
             cache_type_v: TuneKvCacheType::Q8_0,
+            mmap: TuneBoolOrAutoValue::Disabled,
+            mlock: true,
         };
 
         let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
@@ -677,5 +772,73 @@ mod benchmark_tests {
                 .and_then(|hardware| hardware.fit_target_mib),
             Some(60_000)
         );
+        assert_eq!(
+            model.hardware.as_ref().and_then(|hardware| hardware.mmap.as_ref()),
+            Some(&mesh_llm_config::BoolOrAuto::Bool(false))
+        );
+        assert_eq!(
+            model.hardware.as_ref().and_then(|hardware| hardware.mlock),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn benchmark_candidates_sweep_mmap_and_available_mlock_independently() {
+        let prepared = PreparedTunePlan::new(
+            ResolvedTuneTarget {
+                requested_input: "model".to_string(),
+                canonical_model_ref: "model".to_string(),
+                resolved_path: std::path::PathBuf::from("/tmp/model.gguf"),
+                local_source: LocalTargetSource::FilesystemPath {
+                    synthetic_model_ref: "model".to_string(),
+                },
+                config_matches: Vec::new(),
+                selection: TuneTargetSelection::Explicit { configured: false },
+            },
+            TunePlan {
+                target: TuneTarget {
+                    requested: "model".to_string(),
+                    resolved: Some("/tmp/model.gguf".to_string()),
+                    config_model_ref: None,
+                    derived_profile: None,
+                },
+                apply_mode: TuneApplyMode::Review,
+                field_statuses: vec![TuneFieldStatus::Applied {
+                    recommendation: TuneRecommendation {
+                        field: TuneField::Mlock,
+                        value: TuneRecommendedValue::Bool(true),
+                        rationale: "test".to_string(),
+                    },
+                    edit: TuneConfigEdit::SetHardwareMlock(true),
+                }],
+                diagnostics: Vec::new(),
+            },
+        );
+        let prepared = [prepared];
+        let request = TuneBenchmarkRunRequest {
+            prepared: &prepared,
+            ctx_sizes: &[4096],
+            batch_sizes: &[1024],
+            ubatch_sizes: &[256],
+            mmap_values: &[],
+            mlock_values: &[],
+            max_tokens: 32,
+            startup_timeout_secs: 5,
+            request_timeout_secs: 5,
+            prompt: "hello",
+        };
+
+        let candidates = benchmark_candidates(&request, &prepared[0]);
+
+        assert_eq!(candidates.len(), 6);
+        assert!(candidates.iter().any(|candidate| {
+            candidate.mmap == TuneBoolOrAutoValue::Auto && !candidate.mlock
+        }));
+        assert!(candidates.iter().any(|candidate| {
+            candidate.mmap == TuneBoolOrAutoValue::Enabled && candidate.mlock
+        }));
+        assert!(candidates.iter().any(|candidate| {
+            candidate.mmap == TuneBoolOrAutoValue::Disabled && candidate.mlock
+        }));
     }
 }

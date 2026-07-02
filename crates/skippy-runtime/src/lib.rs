@@ -827,6 +827,8 @@ pub struct RuntimeConfig {
     pub n_threads: Option<u32>,
     pub n_threads_batch: Option<u32>,
     pub n_gpu_layers: i32,
+    pub mmap: Option<bool>,
+    pub mlock: bool,
     pub selected_backend_device: Option<String>,
     pub cache_type_k: u32,
     pub cache_type_v: u32,
@@ -909,6 +911,9 @@ impl RuntimeConfig {
                     .context("n_threads_batch exceeds i32")?
                     .unwrap_or(0),
                 n_gpu_layers: self.n_gpu_layers,
+                has_mmap_override: self.mmap.is_some(),
+                use_mmap: self.mmap.unwrap_or(false),
+                use_mlock: self.mlock,
                 cache_type_k: i32::try_from(self.cache_type_k)
                     .context("cache_type_k exceeds i32")?,
                 cache_type_v: i32::try_from(self.cache_type_v)
@@ -931,7 +936,7 @@ impl RuntimeConfig {
             .unwrap_or_else(|| default_n_batch_for_lane_count(self.lane_count));
         let n_ubatch = self.n_ubatch.unwrap_or(LLAMA_SERVER_DEFAULT_N_UBATCH);
         format!(
-            "stage_index={} layers={}..{} ctx={} lanes={} n_batch={} n_ubatch={} n_gpu_layers={} backend={} cache_k={} cache_v={} flash_attn={:?} load_mode={:?} include_embeddings={} include_output={} filter_tensors_on_load={}",
+            "stage_index={} layers={}..{} ctx={} lanes={} n_batch={} n_ubatch={} n_gpu_layers={} mmap={} mlock={} backend={} cache_k={} cache_v={} flash_attn={:?} load_mode={:?} include_embeddings={} include_output={} filter_tensors_on_load={}",
             self.stage_index,
             self.layer_start,
             self.layer_end,
@@ -940,6 +945,10 @@ impl RuntimeConfig {
             n_batch,
             n_ubatch,
             self.n_gpu_layers,
+            self.mmap
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "auto".to_string()),
+            self.mlock,
             self.selected_backend_device.as_deref().unwrap_or("auto"),
             self.cache_type_k,
             self.cache_type_v,
@@ -978,6 +987,8 @@ impl Default for RuntimeConfig {
             n_threads: None,
             n_threads_batch: None,
             n_gpu_layers: 0,
+            mmap: None,
+            mlock: false,
             selected_backend_device: None,
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,
@@ -4254,6 +4265,33 @@ mod tests {
     }
 
     #[test]
+    fn runtime_config_raw_mmap_override_and_mlock_are_distinct() -> anyhow::Result<()> {
+        let forced_config = RuntimeConfig {
+            mmap: Some(false),
+            mlock: true,
+            ..RuntimeConfig::default()
+        };
+        let forced_raw = forced_config.as_raw()?;
+
+        assert!(forced_raw.raw.has_mmap_override);
+        assert!(!forced_raw.raw.use_mmap);
+        assert!(forced_raw.raw.use_mlock);
+
+        let auto_config = RuntimeConfig {
+            mmap: None,
+            mlock: false,
+            ..RuntimeConfig::default()
+        };
+        let auto_raw = auto_config.as_raw()?;
+
+        assert!(!auto_raw.raw.has_mmap_override);
+        assert!(!auto_raw.raw.use_mmap);
+        assert!(!auto_raw.raw.use_mlock);
+
+        Ok(())
+    }
+
+    #[test]
     fn parse_cache_type_accepts_legacy_mesh_kv_defaults() -> anyhow::Result<()> {
         assert_eq!(parse_cache_type("f16")?, GGML_TYPE_F16);
         assert_eq!(parse_cache_type("q8_0")?, GGML_TYPE_Q8_0);
@@ -4495,6 +4533,8 @@ mod tests {
             n_threads: None,
             n_threads_batch: None,
             n_gpu_layers: 0,
+            mmap: None,
+            mlock: false,
             selected_backend_device: None,
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,

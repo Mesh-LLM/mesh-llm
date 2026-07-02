@@ -215,6 +215,8 @@ fn prefix_cache_test_config() -> StageConfig {
         n_batch: None,
         n_ubatch: None,
         n_gpu_layers: 0,
+        mmap: None,
+        mlock: false,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),

@@ -1,6 +1,6 @@
 use super::tune::{
-    TuneApplyMode, TuneConfigEdit, TuneFieldStatus, TuneFlashAttentionValue, TuneGpuLayersValue,
-    TuneKvCacheType, TunePlan,
+    TuneApplyMode, TuneBoolOrAutoValue, TuneConfigEdit, TuneFieldStatus, TuneFlashAttentionValue,
+    TuneGpuLayersValue, TuneKvCacheType, TunePlan,
 };
 use super::tune_resolver::{LocalTargetSource, ResolvedTuneTarget, TuneTargetSelection};
 use anyhow::{Context, Result, anyhow, bail};
@@ -171,6 +171,12 @@ pub(crate) fn apply_config_edits(table: &mut Table, edits: &[TuneConfigEdit]) ->
                         .context("fit_target_mib exceeded TOML integer range")?,
                 );
             }
+            TuneConfigEdit::SetHardwareMmap(mmap) => {
+                ensure_subtable(table, "hardware")?["mmap"] = value(render_bool_or_auto(*mmap));
+            }
+            TuneConfigEdit::SetHardwareMlock(mlock) => {
+                ensure_subtable(table, "hardware")?["mlock"] = value(*mlock);
+            }
         }
     }
     Ok(())
@@ -195,6 +201,14 @@ fn render_gpu_layers(value_kind: TuneGpuLayersValue) -> i64 {
     match value_kind {
         TuneGpuLayersValue::All => -1,
         TuneGpuLayersValue::Count(value) => i64::from(value),
+    }
+}
+
+fn render_bool_or_auto(value_kind: TuneBoolOrAutoValue) -> toml_edit::Value {
+    match value_kind {
+        TuneBoolOrAutoValue::Enabled => toml_edit::Value::from(true),
+        TuneBoolOrAutoValue::Disabled => toml_edit::Value::from(false),
+        TuneBoolOrAutoValue::Auto => toml_edit::Value::from("auto"),
     }
 }
 

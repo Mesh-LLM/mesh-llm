@@ -28,13 +28,13 @@ fn tune_plan_field_statuses_are_serializable_and_stable() {
                 field: TuneField::CtxSize,
                 reason: "existing defaults.ctx_size remains authoritative".to_string(),
             },
-            TuneFieldStatus::ReportOnly {
+            TuneFieldStatus::Applied {
                 recommendation: TuneRecommendation {
                     field: TuneField::Mlock,
                     value: TuneRecommendedValue::Bool(true),
                     rationale: "would reduce paging on supported hosts".to_string(),
                 },
-                reason: "permission-dependent runtime wiring is not guaranteed in v1".to_string(),
+                edit: TuneConfigEdit::SetHardwareMlock(true),
             },
             TuneFieldStatus::Unsupported {
                 field: TuneField::CpuMoe,
@@ -84,13 +84,13 @@ fn tune_plan_field_statuses_are_serializable_and_stable() {
                     "reason": "existing defaults.ctx_size remains authoritative"
                 },
                 {
-                    "kind": "report_only",
+                    "kind": "applied",
                     "recommendation": {
                         "field": "mlock",
                         "value": { "kind": "bool", "value": true },
                         "rationale": "would reduce paging on supported hosts"
                     },
-                    "reason": "permission-dependent runtime wiring is not guaranteed in v1"
+                    "edit": { "kind": "set_hardware_mlock", "value": true }
                 },
                 {
                     "kind": "unsupported",
@@ -122,9 +122,9 @@ fn tune_plan_field_statuses_are_serializable_and_stable() {
     assert_eq!(
         plan.summary(),
         TunePlanSummary {
-            applied: 1,
+            applied: 2,
             preserved: 1,
-            report_only: 1,
+            report_only: 0,
             unsupported: 1,
             error: 1,
         }
@@ -132,7 +132,7 @@ fn tune_plan_field_statuses_are_serializable_and_stable() {
 }
 
 #[test]
-fn tune_plan_unsupported_fields_do_not_emit_config_edits() {
+fn tune_plan_unsupported_fields_do_not_emit_config_edits_but_mmap_is_writable() {
     let plan = TunePlan {
         target: sample_target(),
         apply_mode: TuneApplyMode::Review,
@@ -145,13 +145,13 @@ fn tune_plan_unsupported_fields_do_not_emit_config_edits() {
                 },
                 edit: TuneConfigEdit::SetHardwareFitTargetMib(28_672),
             },
-            TuneFieldStatus::ReportOnly {
+            TuneFieldStatus::Applied {
                 recommendation: TuneRecommendation {
                     field: TuneField::Mmap,
                     value: TuneRecommendedValue::BoolOrAuto(TuneBoolOrAutoValue::Auto),
                     rationale: "visible in schema but not proven end-to-end".to_string(),
                 },
-                reason: "report-only until runtime support is wired".to_string(),
+                edit: TuneConfigEdit::SetHardwareMmap(TuneBoolOrAutoValue::Auto),
             },
             TuneFieldStatus::Unsupported {
                 field: TuneField::TensorSplit,
@@ -176,7 +176,10 @@ fn tune_plan_unsupported_fields_do_not_emit_config_edits() {
 
     assert_eq!(
         plan.config_edits(),
-        vec![TuneConfigEdit::SetHardwareFitTargetMib(28_672)]
+        vec![
+            TuneConfigEdit::SetHardwareFitTargetMib(28_672),
+            TuneConfigEdit::SetHardwareMmap(TuneBoolOrAutoValue::Auto),
+        ]
     );
     assert_eq!(
         TuneField::TensorSplit.spec().support,
@@ -186,7 +189,7 @@ fn tune_plan_unsupported_fields_do_not_emit_config_edits() {
         TuneField::Placement.spec().support,
         TuneFieldSupport::Unsupported
     );
-    assert_eq!(TuneField::Mmap.spec().support, TuneFieldSupport::ReportOnly);
+    assert_eq!(TuneField::Mmap.spec().support, TuneFieldSupport::Writable);
     assert_eq!(
         TuneField::Defaults.spec().support,
         TuneFieldSupport::PreserveOnly

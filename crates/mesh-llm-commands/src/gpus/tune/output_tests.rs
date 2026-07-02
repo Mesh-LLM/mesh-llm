@@ -11,15 +11,14 @@ fn sample_output_plan() -> TunePlan {
                 },
                 edit: TuneConfigEdit::SetModelFitCacheTypeK(TuneKvCacheType::Q8_0),
             },
-            TuneFieldStatus::ReportOnly {
+            TuneFieldStatus::Applied {
                 recommendation: TuneRecommendation {
                     field: TuneField::Mlock,
                     value: TuneRecommendedValue::Bool(false),
                     rationale: "current lock limit is 64.0 KiB; enable IPC_LOCK or raise RLIMIT_MEMLOCK to lock the evaluated working set"
                         .to_string(),
                 },
-                reason: "mlock remains report-only in v1 until end-to-end runtime support is proven"
-                    .to_string(),
+                edit: TuneConfigEdit::SetHardwareMlock(false),
             },
             TuneFieldStatus::Unsupported {
                 field: TuneField::TensorSplit,
@@ -190,7 +189,7 @@ fn gpu_tune_human_output_explains_mlock_unavailable() {
     let rendered = render_tune_human_output(&report);
 
     assert!(rendered.contains("RLIMIT_MEMLOCK"));
-    assert!(rendered.contains("mlock remains report-only in v1"));
+    assert!(rendered.contains("mlock"));
 }
 
 #[test]

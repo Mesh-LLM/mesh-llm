@@ -57,6 +57,8 @@ pub(crate) struct ResolvedModelFitConfig {
 pub(crate) struct ResolvedHardwareConfig {
     pub(crate) device: Option<String>,
     pub(crate) gpu_layers: i32,
+    pub(crate) mmap: Option<bool>,
+    pub(crate) mlock: bool,
     pub(crate) fit_target_mib: Option<u64>,
     pub(crate) resolved_model_path: PathBuf,
     pub(crate) projector_path: Option<PathBuf>,

@@ -121,6 +121,8 @@ pub enum TuneConfigEdit {
     SetModelFitUbatch(u32),
     SetHardwareGpuLayers(TuneGpuLayersValue),
     SetHardwareFitTargetMib(u64),
+    SetHardwareMmap(TuneBoolOrAutoValue),
+    SetHardwareMlock(bool),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]

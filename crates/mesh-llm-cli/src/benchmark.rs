@@ -23,6 +23,12 @@ pub enum BenchmarkCommand {
         /// Micro-batch sizes to benchmark, as a comma-separated list.
         #[arg(long, value_delimiter = ',')]
         ubatch_sizes: Vec<u32>,
+        /// mmap values to benchmark independently: auto, enabled, disabled.
+        #[arg(long = "mmap-values", value_delimiter = ',')]
+        mmap_values: Vec<BenchmarkBoolOrAuto>,
+        /// mlock values to benchmark independently: enabled, disabled.
+        #[arg(long = "mlock-values", value_delimiter = ',')]
+        mlock_values: Vec<BenchmarkBool>,
         /// Maximum generated tokens per benchmark request.
         #[arg(long, default_value_t = 128)]
         max_tokens: u32,
@@ -55,6 +61,23 @@ pub enum BenchmarkCommand {
         #[arg(long)]
         output: PathBuf,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum BenchmarkBoolOrAuto {
+    Auto,
+    #[value(alias = "true")]
+    Enabled,
+    #[value(alias = "false")]
+    Disabled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum BenchmarkBool {
+    #[value(alias = "true")]
+    Enabled,
+    #[value(alias = "false")]
+    Disabled,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

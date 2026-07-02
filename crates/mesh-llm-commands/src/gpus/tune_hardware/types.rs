@@ -88,18 +88,6 @@ impl TuneHardwareEvaluation {
         }
     }
 
-    pub(crate) fn mlock_field_status(&self) -> TuneFieldStatus {
-        TuneFieldStatus::ReportOnly {
-            recommendation: TuneRecommendation {
-                field: TuneField::Mlock,
-                value: TuneRecommendedValue::Bool(self.mlock.available),
-                rationale: self.mlock.reason.clone(),
-            },
-            reason: "mlock remains report-only in v1 until end-to-end runtime support is proven"
-                .to_string(),
-        }
-    }
-
     pub(crate) fn diagnostics(&self) -> Vec<TuneDiagnostic> {
         if self.mlock.available {
             return Vec::new();

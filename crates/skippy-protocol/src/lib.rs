@@ -261,6 +261,10 @@ pub struct StageConfig {
     pub n_ubatch: Option<u32>,
     #[serde(default)]
     pub n_gpu_layers: i32,
+    #[serde(default)]
+    pub mmap: Option<bool>,
+    #[serde(default)]
+    pub mlock: bool,
     #[serde(default = "default_cache_type")]
     pub cache_type_k: String,
     #[serde(default = "default_cache_type")]

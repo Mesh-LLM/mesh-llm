@@ -1264,6 +1264,8 @@ fn runtime_config_from_stage_config(
         n_threads,
         n_threads_batch,
         n_gpu_layers: config.n_gpu_layers,
+        mmap: config.mmap,
+        mlock: config.mlock,
         selected_backend_device: config
             .selected_device
             .as_ref()
@@ -1475,6 +1477,8 @@ mod tests {
             n_batch: Some(1024),
             n_ubatch: Some(256),
             n_gpu_layers: -1,
+            mmap: Some(false),
+            mlock: true,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Enabled,
@@ -1509,6 +1513,8 @@ mod tests {
         assert_eq!(runtime_config.n_ubatch, Some(256));
         assert_eq!(runtime_config.n_threads, Some(8));
         assert_eq!(runtime_config.n_threads_batch, Some(4));
+        assert_eq!(runtime_config.mmap, Some(false));
+        assert!(runtime_config.mlock);
         assert_eq!(
             runtime_config.flash_attn_type,
             RuntimeFlashAttentionType::Enabled
@@ -1539,6 +1545,8 @@ mod tests {
             n_batch: None,
             n_ubatch: None,
             n_gpu_layers: -1,
+            mmap: None,
+            mlock: false,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -1587,6 +1595,8 @@ mod tests {
             n_batch: None,
             n_ubatch: None,
             n_gpu_layers: -1,
+            mmap: None,
+            mlock: false,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -1633,6 +1643,8 @@ mod tests {
             n_batch: None,
             n_ubatch: None,
             n_gpu_layers: -1,
+            mmap: None,
+            mlock: false,
             cache_type_k: "auto".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -1679,6 +1691,8 @@ mod tests {
             n_batch: None,
             n_ubatch: None,
             n_gpu_layers: -1,
+            mmap: None,
+            mlock: false,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,

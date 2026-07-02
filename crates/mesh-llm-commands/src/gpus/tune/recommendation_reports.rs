@@ -27,18 +27,6 @@ fn push_cpu_moe_statuses(plan: &mut TunePlan, metadata: &TuneGgufMetadata) {
     ));
 }
 
-fn report_only_mmap_status() -> TuneFieldStatus {
-    TuneFieldStatus::ReportOnly {
-        recommendation: TuneRecommendation {
-            field: TuneField::Mmap,
-            value: TuneRecommendedValue::BoolOrAuto(TuneBoolOrAutoValue::Auto),
-            rationale: "mmap remains report-only in v1 until end-to-end runtime support is proven"
-                .to_string(),
-        },
-        reason: "mmap is schema-visible but intentionally non-writable in v1".to_string(),
-    }
-}
-
 fn unsupported_status(field: TuneField, reason: &str) -> TuneFieldStatus {
     TuneFieldStatus::Unsupported {
         field,

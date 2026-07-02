@@ -399,7 +399,7 @@ Behavior:
 
 1. No target flags means tune the configured local models from `~/.mesh-llm/config.toml`. If that file has no models, the command fails and asks for `--model` or `--models`.
 2. `--model` and `--models` never trigger a download. If a target is not already installed, tune rejects it and leaves the machine untouched.
-3. `mmap` and `mlock` are report-only. `mlock` can warn that the current memlock limit or `IPC_LOCK` access is too low, but tune never changes privileges.
+3. `mmap` and `mlock` are writable model-load controls. `mlock` can warn that the current memlock limit or `IPC_LOCK` access is too low; tune never changes privileges and recommends `mlock=false` when locking is unavailable.
 4. `cpu_moe`, `n_cpu_moe`, `tensor_split`, and `placement` are reported as unsupported in v1 and are not written.
 5. `--apply` writes only supported nested fields under `[[models]].model_fit` and `[[models]].hardware`.
 6. `--replace-existing` can replace existing explicit values, including values inherited from `defaults.*`, when you want those recommendations written.
@@ -415,6 +415,7 @@ Examples:
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf
 mesh-llm benchmark tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --mmap-values auto,true,false --mlock-values true,false
 ```
 
 Switches:
@@ -424,6 +425,8 @@ Switches:
 - `--json`: machine-readable benchmark tune report.
 - `--ctx-sizes <TOKENS>`: comma-separated context sizes to benchmark. If omitted, tune derives a small context ladder up to the planned context.
 - `--batch-sizes <VALUES>` / `--ubatch-sizes <VALUES>`: comma-separated batch and micro-batch values to benchmark. Candidates where `ubatch > batch` are skipped.
+- `--mmap-values <VALUES>`: comma-separated mmap values to benchmark independently: `auto`, `enabled`/`true`, or `disabled`/`false`. If omitted, benchmark tune tries all three.
+- `--mlock-values <VALUES>`: comma-separated mlock values to benchmark independently: `enabled`/`true` or `disabled`/`false`. If omitted, benchmark tune tries `false` and also tries `true` only when the mlock probe says the evaluated budget can be locked.
 - `--max-tokens <TOKENS>`: generated tokens per measured request, default `128`.
 - `--startup-timeout-secs <SECONDS>` / `--request-timeout-secs <SECONDS>`: per-trial startup and HTTP request limits, both default `600`.
 - `--prompt <TEXT>`: prompt sent during measured chat-completion requests.

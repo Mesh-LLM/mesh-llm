@@ -306,6 +306,8 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         n_batch: Some(1024),
         n_ubatch: Some(512),
         n_gpu_layers: -1,
+        mmap: Some(false),
+        mlock: true,
         cache_type_k: "f16".to_string(),
         cache_type_v: "q8_0".to_string(),
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
@@ -647,10 +649,14 @@ fn stage_load_proto_roundtrip_preserves_source_model_bytes() {
     let load = stage_load_request();
     let proto = stage_load_to_proto(load.clone());
     assert_eq!(proto.source_model_bytes, Some(123_456_789));
+    assert_eq!(proto.mmap, Some(false));
+    assert_eq!(proto.mlock, Some(true));
 
     let decoded = stage_load_from_proto(proto).unwrap();
     assert_eq!(decoded.source_model_bytes, Some(123_456_789));
     assert_eq!(decoded.model_path.as_deref(), Some("/models/demo.gguf"));
+    assert_eq!(decoded.mmap, Some(false));
+    assert!(decoded.mlock);
 }
 
 #[test]
@@ -7558,6 +7564,8 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         n_batch: Some(128),
         n_ubatch: Some(64),
         n_gpu_layers: -1,
+        mmap: None,
+        mlock: false,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,

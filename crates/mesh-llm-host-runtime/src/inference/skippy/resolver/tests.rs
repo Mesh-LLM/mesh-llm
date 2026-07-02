@@ -242,6 +242,8 @@ cache_type_v = "q8_0"
 
 [defaults.hardware]
 device = "CUDA0"
+mmap = true
+mlock = false
 
 [defaults.throughput]
 parallel = 2
@@ -263,6 +265,8 @@ cache_type_k = "f16"
 
 [models.hardware]
 device = "CUDA1"
+mmap = false
+mlock = true
 
 [models.throughput]
 parallel = 3
@@ -297,6 +301,8 @@ temperature = 0.4
     assert_eq!(resolved.model_fit.batch, 1024);
     assert_eq!(resolved.model_fit.ubatch, 128);
     assert_eq!(resolved.hardware.device.as_deref(), Some("CUDA1"));
+    assert_eq!(resolved.hardware.mmap, Some(false));
+    assert!(resolved.hardware.mlock);
     assert_eq!(resolved.throughput.parallel, 3);
     assert_eq!(resolved.skippy.activation_wire_dtype, StageWireDType::F32);
     assert_eq!(resolved.request_defaults.max_tokens, 256);
@@ -309,11 +315,45 @@ temperature = 0.4
     let stage_config = resolved
         .to_stage_config(Some(fake_package_identity(28)), LoadMode::RuntimeSlice)
         .expect("stage config should build");
+    assert_eq!(stage_config.mmap, Some(false));
+    assert!(stage_config.mlock);
     let serialized: Value = serde_json::to_value(&stage_config).expect("stage config json");
     let object = serialized.as_object().expect("stage config object");
     assert!(!object.contains_key("request_defaults"));
     assert!(!object.contains_key("temperature"));
     assert_eq!(object.get("ctx_size").and_then(Value::as_u64), Some(16384));
+}
+
+#[test]
+fn resolver_carries_memory_load_controls_into_single_stage_options() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.hardware]
+mmap = false
+mlock = true
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 2 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("config should resolve");
+
+    let load_options = resolved
+        .to_model_load_options(SkippyTelemetryOptions::off())
+        .expect("model load options should build");
+
+    assert_eq!(resolved.hardware.mmap, Some(false));
+    assert!(resolved.hardware.mlock);
+    assert_eq!(load_options.mmap, Some(false));
+    assert!(load_options.mlock);
 }
 
 #[test]

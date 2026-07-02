@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use super::super::{KvCachePolicy, StageWireDType, family_policy_for_model_path};
 use super::request_defaults::resolve_request_defaults;
@@ -18,7 +18,9 @@ use super::types::{
     ResolvedSkippyConfig, ResolvedSkippyExecutionConfig, ResolvedThroughputConfig,
     SkippyConfigResolveRequest,
 };
-use crate::plugin::{ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig};
+use crate::plugin::{
+    BoolOrAuto, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig,
+};
 
 pub(crate) fn resolve_skippy_config(
     request: SkippyConfigResolveRequest<'_>,
@@ -288,6 +290,15 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
         global_hardware.and_then(|hardware| hardware.gpu_layers.as_ref()),
     )?
     .unwrap_or(-1);
+    let mmap = resolve_mmap_override(
+        model_hardware.and_then(|hardware| hardware.mmap.as_ref()),
+        global_hardware.and_then(|hardware| hardware.mmap.as_ref()),
+    )?;
+    let mlock = pick_owned(
+        model_hardware.and_then(|hardware| hardware.mlock),
+        global_hardware.and_then(|hardware| hardware.mlock),
+    )
+    .unwrap_or(false);
     let safety_margin_gb = pick_owned(
         model_hardware.and_then(|hardware| hardware.safety_margin_gb),
         global_hardware.and_then(|hardware| hardware.safety_margin_gb),
@@ -317,11 +328,25 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
     Ok(ResolvedHardwareConfig {
         device,
         gpu_layers,
+        mmap,
+        mlock,
         fit_target_mib,
         resolved_model_path,
         projector_path,
         stage_layer_start,
         stage_layer_end,
+    })
+}
+
+fn resolve_mmap_override(
+    model_mmap: Option<&BoolOrAuto>,
+    global_mmap: Option<&BoolOrAuto>,
+) -> Result<Option<bool>> {
+    Ok(match model_mmap.or(global_mmap) {
+        None => None,
+        Some(BoolOrAuto::Bool(value)) => Some(*value),
+        Some(BoolOrAuto::String(value)) if value.eq_ignore_ascii_case("auto") => None,
+        Some(BoolOrAuto::String(_)) => bail!("hardware.mmap must be a boolean or \"auto\""),
     })
 }
 

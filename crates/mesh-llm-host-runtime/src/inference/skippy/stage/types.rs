@@ -66,6 +66,8 @@ pub(crate) struct StageLoadRequest {
     pub(crate) n_batch: Option<u32>,
     pub(crate) n_ubatch: Option<u32>,
     pub(crate) n_gpu_layers: i32,
+    pub(crate) mmap: Option<bool>,
+    pub(crate) mlock: bool,
     pub(crate) cache_type_k: String,
     pub(crate) cache_type_v: String,
     pub(crate) flash_attn_type: FlashAttentionType,

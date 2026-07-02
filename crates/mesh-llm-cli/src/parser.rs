@@ -1648,6 +1648,10 @@ mod tests {
             "1024,2048",
             "--ubatch-sizes",
             "256,512",
+            "--mmap-values",
+            "auto,true,false",
+            "--mlock-values",
+            "true,false",
             "--max-tokens",
             "64",
             "--startup-timeout-secs",
@@ -1668,6 +1672,8 @@ mod tests {
                     ctx_sizes,
                     batch_sizes,
                     ubatch_sizes,
+                    mmap_values,
+                    mlock_values,
                     max_tokens,
                     startup_timeout_secs,
                     request_timeout_secs,
@@ -1684,6 +1690,21 @@ mod tests {
         assert_eq!(ctx_sizes, vec![4096, 8192]);
         assert_eq!(batch_sizes, vec![1024, 2048]);
         assert_eq!(ubatch_sizes, vec![256, 512]);
+        assert_eq!(
+            mmap_values,
+            vec![
+                crate::benchmark::BenchmarkBoolOrAuto::Auto,
+                crate::benchmark::BenchmarkBoolOrAuto::Enabled,
+                crate::benchmark::BenchmarkBoolOrAuto::Disabled,
+            ]
+        );
+        assert_eq!(
+            mlock_values,
+            vec![
+                crate::benchmark::BenchmarkBool::Enabled,
+                crate::benchmark::BenchmarkBool::Disabled,
+            ]
+        );
         assert_eq!(max_tokens, 64);
         assert_eq!(startup_timeout_secs, 30);
         assert_eq!(request_timeout_secs, 45);

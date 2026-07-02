@@ -92,6 +92,8 @@ message LoadStage {
   optional string coordinator_id = 31;
   uint64 lease_until_unix_ms = 32;
   optional bool native_mtp_enabled = 33;
+  optional bool mmap = 34;
+  optional bool mlock = 35;
 }
 
 message StopStage {
