@@ -1,6 +1,6 @@
 use super::{
     InvalidKvType, TuneGgufMetadataError, TuneTensorProfile, inspect_local_gguf_metadata,
-    validate_kv_cache_quant,
+    inspect_tune_target_metadata, validate_kv_cache_quant,
 };
 use std::fs;
 use std::io::Write;
@@ -109,6 +109,45 @@ fn gpu_tune_reads_compact_meta() {
     }
 
     let _ = fs::remove_file(path);
+}
+
+#[test]
+fn gpu_tune_reads_layer_package_metadata_from_shared_metadata_artifact() {
+    let metadata_fixture = write_valid_tune_fixture(true);
+    let package_dir = tempfile::tempdir().expect("package tempdir should be created");
+    let package_metadata_path = package_dir.path().join("metadata.gguf");
+    fs::copy(&metadata_fixture, &package_metadata_path)
+        .expect("metadata fixture should be copied into package");
+    fs::write(
+        package_dir.path().join("model-package.json"),
+        serde_json::json!({
+            "source_model": {
+                "files": [
+                    {"path": "model-00001-of-00002.gguf", "size_bytes": 111},
+                    {"path": "model-00002-of-00002.gguf", "size_bytes": 222}
+                ]
+            },
+            "shared": {
+                "metadata": {"path": "metadata.gguf", "artifact_bytes": 11},
+                "embeddings": {"path": "embeddings.gguf", "artifact_bytes": 22},
+                "output": {"path": "output.gguf", "artifact_bytes": 33}
+            },
+            "layers": [
+                {"path": "layers/0.gguf", "artifact_bytes": 44}
+            ]
+        })
+        .to_string(),
+    )
+    .expect("manifest should be written");
+
+    let metadata = inspect_tune_target_metadata("package-model", package_dir.path())
+        .expect("layer package metadata should parse through shared metadata GGUF");
+
+    assert_eq!(metadata.compact_meta.architecture, "llama");
+    assert_eq!(metadata.compact_meta.layer_count, 24);
+    assert_eq!(metadata.model_bytes, 333);
+
+    let _ = fs::remove_file(metadata_fixture);
 }
 
 #[test]

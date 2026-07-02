@@ -211,18 +211,19 @@ fn prepare_tune_plans(
     let survey = hardware::survey();
     let mut prepared = Vec::new();
     for target in &resolution.resolved {
-        let metadata =
-            match tune::inspect_local_gguf_metadata(&target.requested_input, &target.resolved_path)
-            {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    target_failures.push(tune::TuneTargetFailure {
-                        requested_input: target.requested_input.clone(),
-                        reason: error.to_string(),
-                    });
-                    continue;
-                }
-            };
+        let metadata = match tune::inspect_tune_target_metadata(
+            &target.requested_input,
+            &target.resolved_path,
+        ) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                target_failures.push(tune::TuneTargetFailure {
+                    requested_input: target.requested_input.clone(),
+                    reason: error.to_string(),
+                });
+                continue;
+            }
+        };
         let hardware = match tune_hardware::evaluate::evaluate_tune_hardware(
             tune_hardware::types::TuneHardwareEvaluationInput {
                 config,
