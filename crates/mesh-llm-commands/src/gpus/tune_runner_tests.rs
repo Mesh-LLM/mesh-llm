@@ -136,6 +136,31 @@ fn benchmark_tune_rejects_zero_only_candidate_values_before_running_trials() {
 }
 
 #[test]
+fn benchmark_tune_allows_zero_speculative_draft_min_tokens() {
+    let args = BenchmarkTuneArgs {
+        ctx_sizes: &[4096],
+        batch_sizes: &[1024],
+        ubatch_sizes: &[256],
+        mmap_values: &[],
+        mlock_values: &[],
+        speculative_types: &[],
+        no_speculative_tune: false,
+        spec_draft_models: &[],
+        spec_draft_max_tokens: &[3],
+        spec_draft_min_tokens: &[0],
+        spec_ngram_min: &[],
+        spec_ngram_max: &[],
+        throughput_tolerance_pct: 10.0,
+        max_tokens: 32,
+        startup_timeout_secs: 5,
+        request_timeout_secs: 5,
+        prompt: "hello",
+    };
+
+    validate_benchmark_args(Some(&args)).expect("MTP min draft tokens may be zero");
+}
+
+#[test]
 fn benchmark_tune_rejects_candidate_matrix_without_valid_batch_ubatch_pair() {
     let temp = tempdir().expect("tempdir should be created");
     let model = write_valid_tune_fixture(temp.path(), "invalid-batch-pair.gguf");

@@ -301,7 +301,6 @@ fn validate_benchmark_args(args: Option<&BenchmarkTuneArgs<'_>>) -> Result<()> {
     validate_positive_values("--batch-sizes", args.batch_sizes)?;
     validate_positive_values("--ubatch-sizes", args.ubatch_sizes)?;
     validate_positive_values("--spec-draft-max-tokens", args.spec_draft_max_tokens)?;
-    validate_positive_values("--spec-draft-min-tokens", args.spec_draft_min_tokens)?;
     validate_positive_values("--spec-ngram-min", args.spec_ngram_min)?;
     validate_positive_values("--spec-ngram-max", args.spec_ngram_max)?;
     validate_batch_ubatch_pairs(args.batch_sizes, args.ubatch_sizes)?;
@@ -357,7 +356,7 @@ fn validate_min_max_candidates(
     if mins.is_empty() || maxes.is_empty() {
         return Ok(());
     }
-    let has_valid_pair = mins.iter().copied().filter(|value| *value > 0).any(|min| {
+    let has_valid_pair = mins.iter().copied().any(|min| {
         maxes
             .iter()
             .copied()
