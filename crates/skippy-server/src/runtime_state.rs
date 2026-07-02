@@ -326,17 +326,23 @@ impl RuntimeState {
         Ok(output)
     }
 
-    pub fn decode_frame_sampled_mtp_n1(
+    pub fn decode_frame_sampled_mtp(
         &mut self,
         session_id: &str,
         token_id: i32,
         sampling: Option<&SamplingConfig>,
         input: Option<&ActivationFrame>,
         output_capacity: usize,
+        max_draft_tokens: usize,
     ) -> Result<(i32, Option<NativeMtpDraft>, ActivationFrame)> {
         let session = self.session(session_id)?;
-        let output =
-            session.decode_step_frame_sampled_mtp_n1(token_id, sampling, input, output_capacity)?;
+        let output = session.decode_step_frame_sampled_mtp(
+            token_id,
+            sampling,
+            input,
+            output_capacity,
+            max_draft_tokens,
+        )?;
         self.add_session_tokens(session_id, 1);
         Ok(output)
     }
@@ -431,12 +437,13 @@ impl RuntimeState {
         let mut last_draft = None;
         for (index, token_id) in token_ids.iter().copied().enumerate() {
             let input_frame = input_frames.as_ref().map(|frames| &frames[index]);
-            let (predicted, native_mtp, output) = self.decode_frame_sampled_mtp_n1(
+            let (predicted, native_mtp, output) = self.decode_frame_sampled_mtp(
                 session_id,
                 token_id,
                 sampling,
                 input_frame,
                 output_capacity,
+                1,
             )?;
             if predicted >= 0 {
                 predicted_tokens.push(predicted);
@@ -445,7 +452,8 @@ impl RuntimeState {
             output_frames.push(output);
         }
         if let Some(draft) = last_draft {
-            predicted_tokens.push(draft.token_id);
+            predicted_tokens.push(i32::try_from(draft.token_ids.len()).unwrap_or(i32::MAX));
+            predicted_tokens.extend(draft.token_ids);
             predicted_tokens
                 .push(i32::try_from(draft.proposal_compute_us.max(0)).unwrap_or(i32::MAX));
         }

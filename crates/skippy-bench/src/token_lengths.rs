@@ -380,8 +380,6 @@ mod tests {
             generation_limit: 4,
             layer_end: 40,
             n_gpu_layers: 0,
-            mmap: None,
-            mlock: false,
             enable_thinking: false,
             output_tsv: PathBuf::from("prompt-lengths.tsv"),
             summary_json: None,

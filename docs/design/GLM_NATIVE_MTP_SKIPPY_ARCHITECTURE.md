@@ -140,7 +140,7 @@ The smallest useful stage ABI is a target decode that can optionally return a
 native MTP draft:
 
 ```text
-skippy_decode_step_frame_sampled_mtp_n1(
+skippy_decode_step_frame_sampled_mtp(
     session,
     token_id,
     sampling,
@@ -215,7 +215,7 @@ VerificationBatch {
     tokens: [target_token, mtp_draft_token],
     draft_start: 1,
     draft_count: 1,
-    mode: native_mtp_n1,
+    mode: mtp,
 }
 
 VerificationBatchReply {

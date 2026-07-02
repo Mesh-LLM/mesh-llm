@@ -444,7 +444,7 @@ fn validate_speculative_strategy(
             "empty_speculative_strategy_name",
             "generation.speculative_decoding strategy names must not be empty",
             Some("model-package.json".to_string()),
-            "use a stable non-empty strategy id such as native-mtp-n1",
+            "use a stable non-empty strategy id such as mtp",
         );
     }
     if strategy.strategy_type.trim().is_empty() {
@@ -474,7 +474,7 @@ fn validate_native_mtp_strategy(
             "unsupported_native_mtp_prediction_depth",
             format!("native MTP strategy {name} must use prediction_depth 1"),
             Some("model-package.json".to_string()),
-            "rebuild the package with the native-mtp-n1 policy supported by this runtime",
+            "rebuild the package with the mtp policy supported by this runtime",
         );
     }
     if strategy.layer_indices.is_empty() {
@@ -1214,9 +1214,9 @@ mod tests {
             &package,
             serde_json::json!({
                 "speculative_decoding": {
-                    "default": "native-mtp-n1",
+                    "default": "mtp",
                     "strategies": {
-                        "native-mtp-n1": {
+                        "mtp": {
                             "type": "native-mtp",
                             "prediction_depth": 1,
                             "layer_indices": [1],
@@ -1245,9 +1245,9 @@ mod tests {
         let speculative = generation
             .speculative_decoding
             .expect("speculative decoding should be reported");
-        assert_eq!(speculative.default, "native-mtp-n1");
+        assert_eq!(speculative.default, "mtp");
         assert_eq!(speculative.strategies.len(), 1);
-        assert_eq!(speculative.strategies[0].name, "native-mtp-n1");
+        assert_eq!(speculative.strategies[0].name, "mtp");
         assert_eq!(speculative.strategies[0].strategy_type, "native-mtp");
         assert_eq!(speculative.strategies[0].prediction_depth, Some(1));
         assert_eq!(speculative.strategies[0].layer_indices, [1]);
@@ -1270,9 +1270,9 @@ mod tests {
             &package,
             serde_json::json!({
                 "speculative_decoding": {
-                    "default": "native-mtp-n1",
+                    "default": "mtp",
                     "strategies": {
-                        "native-mtp-n1": {
+                        "mtp": {
                             "type": "native-mtp",
                             "prediction_depth": 1,
                             "layer_indices": [2],

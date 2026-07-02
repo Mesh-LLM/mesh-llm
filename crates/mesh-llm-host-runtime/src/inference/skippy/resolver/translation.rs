@@ -251,6 +251,16 @@ impl ResolvedSkippyConfig {
                 0
             },
             native_mtp_enabled: self.speculative.native_mtp_enabled,
+            native_mtp_max_tokens: if self.speculative.native_mtp_enabled {
+                self.speculative.draft_max_tokens as usize
+            } else {
+                0
+            },
+            native_mtp_min_tokens: if self.speculative.native_mtp_enabled {
+                self.speculative.draft_min_tokens as usize
+            } else {
+                0
+            },
             activation_width,
             wire_dtype: self.skippy.activation_wire_dtype.into(),
             reply_credit_limit: None,
@@ -275,7 +285,6 @@ impl ResolvedSkippyConfig {
             }
             if self.speculative.mode == "draft"
                 || self.speculative.draft_model_path.is_some()
-                || self.speculative.draft_max_tokens > 0
                 || self.speculative.draft_n_gpu_layers.is_some()
             {
                 bail!("speculative draft controls require staged serving");
@@ -373,6 +382,8 @@ impl ResolvedEmbeddedOpenAiArgs {
             ngram_min: 0,
             ngram_max: 0,
             native_mtp_enabled: true,
+            native_mtp_max_tokens: 3,
+            native_mtp_min_tokens: 0,
             activation_width: 0,
             wire_dtype,
             reply_credit_limit: None,
@@ -405,6 +416,8 @@ impl ResolvedEmbeddedOpenAiArgs {
             ngram_min: 0,
             ngram_max: 0,
             native_mtp_enabled: true,
+            native_mtp_max_tokens: 3,
+            native_mtp_min_tokens: 0,
             activation_width,
             wire_dtype,
             reply_credit_limit: None,
@@ -441,6 +454,8 @@ impl ResolvedEmbeddedOpenAiArgs {
             ngram_min: self.ngram_min,
             ngram_max: self.ngram_max,
             native_mtp_enabled: self.native_mtp_enabled,
+            native_mtp_max_tokens: self.native_mtp_max_tokens,
+            native_mtp_min_tokens: self.native_mtp_min_tokens,
             activation_width: self.activation_width,
             wire_dtype: self.wire_dtype,
             reply_credit_limit: self.reply_credit_limit,

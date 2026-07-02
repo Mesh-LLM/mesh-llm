@@ -243,6 +243,8 @@ pub struct EmbeddedOpenAiArgs {
     pub ngram_min: usize,
     pub ngram_max: usize,
     pub native_mtp_enabled: bool,
+    pub native_mtp_max_tokens: usize,
+    pub native_mtp_min_tokens: usize,
     pub activation_width: i32,
     pub wire_dtype: WireActivationDType,
     pub reply_credit_limit: Option<usize>,
@@ -529,6 +531,8 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         lane_pool,
         prediction_returns: args.prediction_returns.clone(),
         native_mtp_enabled: args.native_mtp_enabled,
+        native_mtp_max_tokens: args.native_mtp_max_tokens,
+        native_mtp_min_tokens: args.native_mtp_min_tokens,
     };
     args.telemetry
         .emit("stage.openai_server_start", lifecycle_attrs(&args.config));
@@ -848,6 +852,8 @@ enum OpenAiBackendMode {
         lane_pool: Option<Arc<PersistentStageLanePool>>,
         prediction_returns: Option<Arc<PredictionReturnHub>>,
         native_mtp_enabled: bool,
+        native_mtp_max_tokens: usize,
+        native_mtp_min_tokens: usize,
     },
 }
 
@@ -1791,6 +1797,8 @@ struct EmbeddedStageZeroGeneration<'a> {
     ngram_min: usize,
     ngram_max: usize,
     native_mtp_enabled: bool,
+    native_mtp_max_tokens: usize,
+    native_mtp_min_tokens: usize,
     prompt_token_ids: &'a [i32],
     max_tokens: u32,
     sampling: &'a SamplingConfig,

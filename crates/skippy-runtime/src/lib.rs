@@ -1260,9 +1260,9 @@ pub struct DecodeFrameBatchOutput {
     pub output: ActivationFrame,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeMtpDraft {
-    pub token_id: i32,
+    pub token_ids: Vec<i32>,
     pub proposal_compute_us: i64,
 }
 
@@ -1270,8 +1270,17 @@ const NATIVE_MTP_DRAFT_VERSION: u32 = 1;
 
 impl NativeMtpDraft {
     fn from_raw(raw: RawNativeMtpDraft) -> Option<Self> {
-        (raw.available && raw.version == NATIVE_MTP_DRAFT_VERSION).then_some(Self {
-            token_id: raw.token_id,
+        if !raw.available || raw.version != NATIVE_MTP_DRAFT_VERSION {
+            return None;
+        }
+        let token_count = usize::try_from(raw.token_count)
+            .ok()?
+            .min(skippy_ffi::NATIVE_MTP_MAX_DRAFT_TOKENS);
+        if token_count == 0 {
+            return None;
+        }
+        Some(Self {
+            token_ids: raw.token_ids[..token_count].to_vec(),
             proposal_compute_us: raw.proposal_compute_us,
         })
     }
@@ -3201,15 +3210,22 @@ impl StageSession {
         ))
     }
 
-    pub fn decode_step_frame_sampled_mtp_n1(
+    pub fn decode_step_frame_sampled_mtp(
         &mut self,
         token_id: i32,
         sampling: Option<&SamplingConfig>,
         input: Option<&ActivationFrame>,
         output_capacity: usize,
+        max_draft_tokens: usize,
     ) -> Result<(i32, Option<NativeMtpDraft>, ActivationFrame)> {
-        let (predicted_token, mtp_draft, output_desc, output_payload) =
-            self.decode_step_frame_mtp_n1_raw(token_id, sampling, input, output_capacity)?;
+        let (predicted_token, mtp_draft, output_desc, output_payload) = self
+            .decode_step_frame_mtp_raw(
+                token_id,
+                sampling,
+                input,
+                output_capacity,
+                max_draft_tokens,
+            )?;
         Ok((
             predicted_token,
             mtp_draft,
@@ -3280,12 +3296,13 @@ impl StageSession {
         Ok((predicted_token, output_desc, output_payload))
     }
 
-    fn decode_step_frame_mtp_n1_raw(
+    fn decode_step_frame_mtp_raw(
         &mut self,
         token_id: i32,
         sampling: Option<&SamplingConfig>,
         input: Option<&ActivationFrame>,
         output_capacity: usize,
+        max_draft_tokens: usize,
     ) -> Result<(i32, Option<NativeMtpDraft>, RawActivationDesc, Vec<u8>)> {
         let input_desc = input.map(|frame| frame.desc.as_raw());
         let input_desc_ptr = input_desc
@@ -3314,7 +3331,7 @@ impl StageSession {
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
         let status = unsafe {
-            skippy_ffi::skippy_decode_step_frame_sampled_mtp_n1(
+            skippy_ffi::skippy_decode_step_frame_sampled_mtp(
                 self.raw,
                 token_id,
                 sampling_ptr,
@@ -3325,13 +3342,20 @@ impl StageSession {
                 output_payload.len(),
                 &mut output_bytes,
                 &mut predicted_token,
+                max_draft_tokens.min(skippy_ffi::NATIVE_MTP_MAX_DRAFT_TOKENS),
                 &mut mtp_draft,
                 &mut error,
             )
         };
         if status == Status::BufferTooSmall && output_bytes > output_payload.len() {
             free_error(error);
-            return self.decode_step_frame_mtp_n1_raw(token_id, sampling, input, output_bytes);
+            return self.decode_step_frame_mtp_raw(
+                token_id,
+                sampling,
+                input,
+                output_bytes,
+                max_draft_tokens,
+            );
         }
         ensure_ok(status, error)?;
         output_payload.truncate(output_bytes);

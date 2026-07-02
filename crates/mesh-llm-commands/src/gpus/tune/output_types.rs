@@ -98,7 +98,10 @@ pub(crate) struct TuneBenchmarkCandidate {
 #[serde(rename_all = "snake_case", tag = "type")]
 pub(crate) enum TuneBenchmarkSpeculativeCandidate {
     Disabled,
-    NativeMtpN1,
+    Mtp {
+        draft_max_tokens: u32,
+        draft_min_tokens: u32,
+    },
     Draft {
         draft_model_path: String,
         draft_max_tokens: u32,

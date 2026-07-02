@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 fn native_mtp_generation() -> PackageGenerationInfo {
     let mut strategies = BTreeMap::new();
     strategies.insert(
-        "native-mtp-n1".to_string(),
+        "mtp".to_string(),
         PackageSpeculativeStrategyInfo {
             strategy_type: "native-mtp".to_string(),
             prediction_depth: Some(1),
@@ -27,7 +27,7 @@ fn native_mtp_generation() -> PackageGenerationInfo {
 
     PackageGenerationInfo {
         speculative_decoding: Some(PackageSpeculativeDecodingInfo {
-            default: "native-mtp-n1".to_string(),
+            default: "mtp".to_string(),
             strategies,
         }),
     }
@@ -181,6 +181,8 @@ fn speculative_strategy_auto_uses_package_native_mtp_default() {
         .to_embedded_openai_args(4096, true)
         .expect("openai args should build");
     assert!(openai.native_mtp_enabled);
+    assert_eq!(openai.native_mtp_max_tokens, 3);
+    assert_eq!(openai.native_mtp_min_tokens, 0);
 }
 
 #[test]
@@ -188,7 +190,7 @@ fn speculative_strategy_native_mtp_rejects_direct_gguf_without_proven_support() 
     let mesh_config = parse_config(
         r#"
 [defaults.speculative]
-strategy = "native-mtp-n1"
+strategy = "mtp"
 "#,
     );
     let model_file = temp_model_file();
@@ -205,7 +207,7 @@ strategy = "native-mtp-n1"
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("requires proven native-mtp-n1 support"));
+    assert!(error.contains("requires proven native MTP support"));
 }
 
 #[test]
@@ -238,7 +240,7 @@ fn speculative_strategy_native_mtp_rejects_package_without_native_mtp_metadata()
     let mesh_config = parse_config(
         r#"
 [defaults.speculative]
-strategy = "native-mtp-n1"
+strategy = "mtp"
 "#,
     );
     let model_file = temp_model_file();
@@ -258,7 +260,7 @@ strategy = "native-mtp-n1"
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("requires proven native-mtp-n1 support"));
+    assert!(error.contains("requires proven native MTP support"));
 }
 
 #[test]

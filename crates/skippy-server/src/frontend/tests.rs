@@ -1618,6 +1618,8 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             lane_pool: Some(lane_pool),
             prediction_returns: None,
             native_mtp_enabled: true,
+            native_mtp_max_tokens: 3,
+            native_mtp_min_tokens: 0,
         },
         draft: None,
         speculative_window: 0,

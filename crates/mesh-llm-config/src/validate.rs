@@ -812,7 +812,7 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> DiagnosticResult {
 fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> DiagnosticResult {
     validate_optional_enum(
         config.strategy.as_deref(),
-        &["auto", "disabled", "native-mtp-n1"],
+        &["auto", "disabled", "mtp"],
         &format!("{base_path}.strategy"),
     )?;
     validate_optional_enum(
@@ -849,7 +849,7 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Diagnost
     validate_optional_u32_range(
         config.draft_min_tokens,
         &format!("{base_path}.draft_min_tokens"),
-        1,
+        0,
         10_000_000,
     )?;
     validate_optional_u32_range(

@@ -49,7 +49,7 @@ pub struct BenchmarkTuneCommand {
     /// mlock values to benchmark independently: enabled, disabled.
     #[arg(long = "mlock-values", value_delimiter = ',')]
     pub mlock_values: Vec<BenchmarkBool>,
-    /// Speculative decoding types to benchmark: auto, disabled, native-mtp-n1, draft, ngram.
+    /// Speculative decoding types to benchmark: auto, disabled, mtp, draft, ngram.
     #[arg(
         long = "speculative-types",
         value_delimiter = ',',
@@ -125,8 +125,7 @@ pub enum BenchmarkBool {
 pub enum BenchmarkSpeculativeType {
     Auto,
     Disabled,
-    #[value(name = "native-mtp-n1", alias = "mtp", alias = "native-mtp")]
-    NativeMtpN1,
+    Mtp,
     Draft,
     #[value(alias = "ngram-mod")]
     Ngram,

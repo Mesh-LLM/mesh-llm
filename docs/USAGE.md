@@ -115,7 +115,7 @@ mesh-llm benchmark tune --model /models/qwen3-8b.gguf --throughput-tolerance-pct
 ```
 
 If `--mmap-values` is omitted, benchmark tune tries `auto`, `true`, and `false`. If `--mlock-values` is omitted, it tries `false` and only tries `true` when the current mlock limit can cover the evaluated budget.
-If `--speculative-types` is omitted, benchmark tune uses `auto`: native MTP is tried first for MTP-looking targets, locally discoverable draft models are tried when available, and a disabled baseline is included for comparison. Use `--speculative-types native-mtp-n1,draft,ngram,disabled` to force an explicit speculative sweep, or `--no-speculative-tune` to reproduce the old disabled-baseline-only sweep.
+If `--speculative-types` is omitted, benchmark tune uses `auto`: native MTP is tried first for MTP-looking targets, locally discoverable draft models are tried when available, and a disabled baseline is included for comparison. Use `--speculative-types mtp,draft,ngram,disabled` to force an explicit speculative sweep, or `--no-speculative-tune` to reproduce the old disabled-baseline-only sweep.
 
 Use `mesh-llm gpus detect` when you want to refresh the raw hardware fingerprint, bandwidth, and compute hints rather than benchmark model-serving throughput.
 
@@ -372,7 +372,7 @@ lifecycle_health_interval_ms    = 5000      # health-check interval (ms)
 
 # --- Speculative decoding ------------------------------------------------
 [defaults.speculative]
-strategy                   = "auto"          # auto disabled native-mtp-n1
+strategy                   = "auto"          # auto disabled mtp
 mode                       = "auto"          # auto off draft ngram lookahead
 draft_selection_policy     = "auto"          # auto manual heuristic
 pairing_fault              = "warn_disable"  # warn_disable fail_open fail_closed
@@ -387,7 +387,7 @@ spec_default               = "auto"          # bool or "auto"
 # draft_hf_file    = "draft-q4_k_m.gguf"
 
 # Native MTP strategy override
-# strategy = "native-mtp-n1"  # force native model MTP when available
+# strategy = "mtp"  # force native model MTP when available
 # strategy = "disabled"       # disable package/model native MTP
 
 # Draft hardware (leave unset to share host model's device)

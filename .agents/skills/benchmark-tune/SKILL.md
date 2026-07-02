@@ -71,12 +71,12 @@ Rules:
 - If `--mlock-values` is omitted, tune tries `false` and only tries `true` when
   the current mlock probe says the evaluated budget can be locked.
 - If `--speculative-types` is omitted, tune uses `auto`: it tries
-  `native-mtp-n1` first when the model target looks like an MTP model, tries
+  `mtp` first when the model target looks like an MTP model, tries
   discovered local draft-model candidates when available, then includes a
   disabled baseline.
 - Use `--no-speculative-tune` when you need to reproduce the older
   fit-only/disabled-speculation behavior or isolate non-speculative regressions.
-- Use `--speculative-types native-mtp-n1,draft,ngram,disabled` to force an
+- Use `--speculative-types mtp,draft,ngram,disabled` to force an
   explicit speculative sweep. `draft` requires either `--spec-draft-models`, a
   configured `draft_model_path`, or a local sibling GGUF whose filename looks
   like a draft/EAGLE model for the target.

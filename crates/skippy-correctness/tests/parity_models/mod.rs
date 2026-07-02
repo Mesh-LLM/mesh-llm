@@ -1095,6 +1095,8 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             n_threads: None,
             n_threads_batch: None,
             n_gpu_layers,
+            mmap: None,
+            mlock: false,
             selected_backend_device: None,
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,

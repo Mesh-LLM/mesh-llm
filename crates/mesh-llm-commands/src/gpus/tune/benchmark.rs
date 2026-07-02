@@ -603,9 +603,14 @@ fn apply_speculative_overrides(
             spec_table["strategy"] = toml_edit::value("disabled");
             spec_table["mode"] = toml_edit::value("disabled");
         }
-        TuneBenchmarkSpeculativeCandidate::NativeMtpN1 => {
-            spec_table["strategy"] = toml_edit::value("native-mtp-n1");
+        TuneBenchmarkSpeculativeCandidate::Mtp {
+            draft_max_tokens,
+            draft_min_tokens,
+        } => {
+            spec_table["strategy"] = toml_edit::value("mtp");
             spec_table["mode"] = toml_edit::value("auto");
+            spec_table["draft_max_tokens"] = toml_edit::value(i64::from(*draft_max_tokens));
+            spec_table["draft_min_tokens"] = toml_edit::value(i64::from(*draft_min_tokens));
         }
         TuneBenchmarkSpeculativeCandidate::Draft {
             draft_model_path,
@@ -775,8 +780,8 @@ fn benchmark_speculative_values(
             mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Disabled => {
                 candidates.push(TuneBenchmarkSpeculativeCandidate::Disabled);
             }
-            mesh_llm_cli::benchmark::BenchmarkSpeculativeType::NativeMtpN1 => {
-                candidates.push(TuneBenchmarkSpeculativeCandidate::NativeMtpN1);
+            mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Mtp => {
+                push_mtp_speculative_candidates(&mut candidates, request);
             }
             mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Draft => {
                 push_draft_speculative_candidates(&mut candidates, request, prepared);
@@ -804,7 +809,7 @@ fn requested_speculative_types(
 fn speculative_type_priority(value: mesh_llm_cli::benchmark::BenchmarkSpeculativeType) -> u8 {
     match value {
         mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Auto => 0,
-        mesh_llm_cli::benchmark::BenchmarkSpeculativeType::NativeMtpN1 => 1,
+        mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Mtp => 1,
         mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Draft => 2,
         mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Ngram => 3,
         mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Disabled => 4,
@@ -817,10 +822,28 @@ fn push_auto_speculative_candidates(
     prepared: &crate::gpus::tune_apply::PreparedTunePlan,
 ) {
     if looks_like_mtp_target(prepared) {
-        candidates.push(TuneBenchmarkSpeculativeCandidate::NativeMtpN1);
+        push_mtp_speculative_candidates(candidates, request);
     }
     push_draft_speculative_candidates(candidates, request, prepared);
     candidates.push(TuneBenchmarkSpeculativeCandidate::Disabled);
+}
+
+fn push_mtp_speculative_candidates(
+    candidates: &mut Vec<TuneBenchmarkSpeculativeCandidate>,
+    request: &TuneBenchmarkRunRequest<'_>,
+) {
+    let max_tokens = positive_or_default(request.spec_draft_max_tokens, &[2, 3, 4]);
+    let min_tokens = values_or_default_allow_zero(request.spec_draft_min_tokens, &[0]);
+    for draft_max_tokens in max_tokens {
+        for draft_min_tokens in &min_tokens {
+            if *draft_min_tokens <= draft_max_tokens {
+                candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
+                    draft_max_tokens,
+                    draft_min_tokens: *draft_min_tokens,
+                });
+            }
+        }
+    }
 }
 
 fn push_draft_speculative_candidates(
@@ -887,6 +910,16 @@ fn optional_positive_values(requested: &[u32]) -> Vec<u32> {
         return Vec::new();
     }
     unique_positive(requested)
+}
+
+fn values_or_default_allow_zero(requested: &[u32], defaults: &[u32]) -> Vec<u32> {
+    if requested.is_empty() {
+        return defaults.to_vec();
+    }
+    let mut values = requested.to_vec();
+    values.sort_unstable();
+    values.dedup();
+    values
 }
 
 fn discover_draft_model_candidates(
@@ -1000,7 +1033,10 @@ fn dedup_speculative_candidates(
 
 fn speculative_candidate_sort_key(candidate: &TuneBenchmarkSpeculativeCandidate) -> String {
     match candidate {
-        TuneBenchmarkSpeculativeCandidate::NativeMtpN1 => "0:native-mtp-n1".to_string(),
+        TuneBenchmarkSpeculativeCandidate::Mtp {
+            draft_max_tokens,
+            draft_min_tokens,
+        } => format!("0:mtp:{draft_max_tokens}:{draft_min_tokens}"),
         TuneBenchmarkSpeculativeCandidate::Draft {
             draft_model_path,
             draft_max_tokens,
@@ -1130,7 +1166,10 @@ mod benchmark_tests {
             cache_type_v: TuneKvCacheType::Q8_0,
             mmap: TuneBoolOrAutoValue::Disabled,
             mlock: true,
-            speculative: TuneBenchmarkSpeculativeCandidate::NativeMtpN1,
+            speculative: TuneBenchmarkSpeculativeCandidate::Mtp {
+                draft_max_tokens: 3,
+                draft_min_tokens: 0,
+            },
         };
 
         let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
@@ -1182,8 +1221,11 @@ mod benchmark_tests {
                 .speculative
                 .as_ref()
                 .and_then(|speculative| speculative.strategy.as_deref()),
-            Some("native-mtp-n1")
+            Some("mtp")
         );
+        let speculative = model.speculative.as_ref().expect("speculative config");
+        assert_eq!(speculative.draft_max_tokens, Some(3));
+        assert_eq!(speculative.draft_min_tokens, Some(0));
         assert_eq!(
             model
                 .speculative
@@ -1373,7 +1415,18 @@ mod benchmark_tests {
         assert_eq!(
             speculation,
             vec![
-                TuneBenchmarkSpeculativeCandidate::NativeMtpN1,
+                TuneBenchmarkSpeculativeCandidate::Mtp {
+                    draft_max_tokens: 2,
+                    draft_min_tokens: 0,
+                },
+                TuneBenchmarkSpeculativeCandidate::Mtp {
+                    draft_max_tokens: 3,
+                    draft_min_tokens: 0,
+                },
+                TuneBenchmarkSpeculativeCandidate::Mtp {
+                    draft_max_tokens: 4,
+                    draft_min_tokens: 0,
+                },
                 TuneBenchmarkSpeculativeCandidate::Disabled,
             ]
         );
@@ -1647,13 +1700,13 @@ mod benchmark_tests {
         std::fs::write(
             log.path(),
             r#"{"level":"INFO","message":"API ready"}
-{"level":"ERROR","message":"Failed to start model unsloth/Qwen3.6-MTP-GGUF: skippy speculative.strategy = \"native-mtp-n1\" requires proven native-mtp-n1 support"}
+{"level":"ERROR","message":"Failed to start model unsloth/Qwen3.6-MTP-GGUF: skippy speculative.strategy = \"mtp\" requires proven native MTP support"}
 "#,
         )
         .expect("write log");
 
         let error = trial_startup_failure_from_log(log.path()).expect("startup error");
-        assert!(error.contains("requires proven native-mtp-n1 support"));
+        assert!(error.contains("requires proven native MTP support"));
     }
 
     #[test]

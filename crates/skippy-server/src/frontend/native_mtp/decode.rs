@@ -11,6 +11,8 @@ use super::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::frontend) struct NativeMtpDecodeOptions {
     pub(in crate::frontend) batched_verify: bool,
+    pub(in crate::frontend) max_draft_tokens: usize,
+    pub(in crate::frontend) min_draft_tokens: usize,
     pub(in crate::frontend) reject_cooldown_tokens: usize,
     pub(in crate::frontend) defer_reject_trim: bool,
     pub(in crate::frontend) suppress_cooldown_drafts: bool,
@@ -21,11 +23,23 @@ impl NativeMtpDecodeOptions {
     pub(in crate::frontend) fn from_env() -> Self {
         Self {
             batched_verify: native_mtp_batched_verify_enabled(),
+            max_draft_tokens: 1,
+            min_draft_tokens: 0,
             reject_cooldown_tokens: native_mtp_reject_cooldown_tokens(),
             defer_reject_trim: native_mtp_defer_reject_trim_enabled(),
             suppress_cooldown_drafts: native_mtp_suppress_cooldown_drafts_enabled(),
             suppress_cooldown_draft_limit: native_mtp_suppress_cooldown_draft_limit(),
         }
+    }
+
+    pub(in crate::frontend) fn with_window(
+        mut self,
+        max_draft_tokens: usize,
+        min_draft_tokens: usize,
+    ) -> Self {
+        self.max_draft_tokens = max_draft_tokens.max(1);
+        self.min_draft_tokens = min_draft_tokens.min(self.max_draft_tokens);
+        self
     }
 }
 
@@ -110,6 +124,14 @@ impl NativeMtpDecodeCounters {
             json!(options.reject_cooldown_tokens),
         );
         attrs.insert(
+            "llama_stage.native_mtp.max_draft_tokens".to_string(),
+            json!(options.max_draft_tokens),
+        );
+        attrs.insert(
+            "llama_stage.native_mtp.min_draft_tokens".to_string(),
+            json!(options.min_draft_tokens),
+        );
+        attrs.insert(
             "llama_stage.native_mtp.defer_reject_trim".to_string(),
             json!(options.defer_reject_trim),
         );
@@ -192,6 +214,8 @@ mod tests {
             &mut attrs,
             NativeMtpDecodeOptions {
                 batched_verify: true,
+                max_draft_tokens: 3,
+                min_draft_tokens: 0,
                 reject_cooldown_tokens: 6,
                 defer_reject_trim: true,
                 suppress_cooldown_drafts: false,

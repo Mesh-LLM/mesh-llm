@@ -33,7 +33,7 @@ use crate::{
     },
     report::{
         BaselineReport, BoundaryReport, ChainReport, ChainStageReport, DtypeMatrixReport,
-        NativeMtpN1VerificationReport, NativeMtpSidebandReport, PackagePartReport,
+        NativeMtpSidebandReport, NativeMtpVerificationReport, PackagePartReport,
         PackageStageReport, SingleStepReport, SplitReport, SplitScanReport, StageModelReport,
         StateHandoffReport, StatePayloadBlockDigestReport, StatePayloadDigestReport,
     },
@@ -386,7 +386,7 @@ pub fn chain(args: ChainArgs) -> Result<()> {
         native_mtp_verification: native_mtp_requirement.require_draft,
     })?;
     let native_mtp = chain.native_mtp.clone();
-    let native_mtp_n1 = native_mtp_n1_verification_report(
+    let native_mtp_verification = native_mtp_verification_report(
         native_mtp_requirement.require_draft,
         &native_mtp,
         chain.second_predicted_token,
@@ -395,7 +395,10 @@ pub fn chain(args: ChainArgs) -> Result<()> {
     );
     let matches = baseline.predicted_token == chain.predicted_token
         && native_mtp_satisfies_requirement(&native_mtp, native_mtp_requirement)
-        && native_mtp_n1_satisfies_requirement(&native_mtp_n1, native_mtp_requirement);
+        && native_mtp_verification_satisfies_requirement(
+            &native_mtp_verification,
+            native_mtp_requirement,
+        );
     let report = ChainReport {
         mode: "chain",
         status: status(matches),
@@ -407,7 +410,7 @@ pub fn chain(args: ChainArgs) -> Result<()> {
         predicted_token: chain.predicted_token,
         second_predicted_token: chain.second_predicted_token,
         native_mtp,
-        native_mtp_n1,
+        native_mtp_verification,
         activation_width: chain.activation_width,
         wire_dtype: chain.wire_dtype,
         stages: vec![
@@ -675,7 +678,7 @@ fn run_single_step_with_baseline(
         model_identity: model_identity.clone(),
         native_mtp_verification: case.native_mtp.require_draft,
     })?;
-    let native_mtp_n1 = native_mtp_n1_verification_report(
+    let native_mtp_verification = native_mtp_verification_report(
         case.native_mtp.require_draft,
         &split.native_mtp,
         split.second_predicted_token,
@@ -684,7 +687,7 @@ fn run_single_step_with_baseline(
     );
     let matches = baseline.predicted_token == split.predicted_token
         && native_mtp_satisfies_requirement(&split.native_mtp, case.native_mtp)
-        && native_mtp_n1_satisfies_requirement(&native_mtp_n1, case.native_mtp);
+        && native_mtp_verification_satisfies_requirement(&native_mtp_verification, case.native_mtp);
     let stage_models = split.stage_models.clone();
     Ok(SingleStepReport {
         mode: "single-step",
@@ -693,7 +696,7 @@ fn run_single_step_with_baseline(
         matches,
         native_mtp_draft_required: case.native_mtp.require_draft,
         baseline: baseline_report(baseline),
-        split: split_report(split, native_mtp_n1),
+        split: split_report(split, native_mtp_verification),
         stage_models,
     })
 }
@@ -710,6 +713,8 @@ fn run_full_model_decode(args: &RuntimeArgs) -> Result<FullModelResult> {
         n_threads: None,
         n_threads_batch: None,
         n_gpu_layers: args.n_gpu_layers,
+        mmap: None,
+        mlock: false,
         selected_backend_device: None,
         load_mode: RuntimeLoadMode::RuntimeSlice,
         projector_path: None,
@@ -840,6 +845,8 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         n_threads: None,
         n_threads_batch: None,
         n_gpu_layers: args.n_gpu_layers,
+        mmap: None,
+        mlock: false,
         selected_backend_device: None,
         load_mode: runtime_load_mode(args.stage_load_mode),
         projector_path: None,
@@ -1084,6 +1091,8 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         n_threads: None,
         n_threads_batch: None,
         n_gpu_layers: args.n_gpu_layers,
+        mmap: None,
+        mlock: false,
         selected_backend_device: None,
         load_mode: runtime_load_mode(args.stage_load_mode),
         projector_path: None,
@@ -1831,6 +1840,8 @@ fn run_local_state_handoff(
         n_threads: None,
         n_threads_batch: None,
         n_gpu_layers: args.n_gpu_layers,
+        mmap: None,
+        mlock: false,
         selected_backend_device: None,
         load_mode: runtime_load_mode(args.stage_load_mode),
         projector_path: None,
@@ -2572,6 +2583,8 @@ fn build_state_handoff_inputs(
         n_threads: None,
         n_threads_batch: None,
         n_gpu_layers: args.n_gpu_layers,
+        mmap: None,
+        mlock: false,
         selected_backend_device: None,
         load_mode: runtime_load_mode(args.stage_load_mode),
         projector_path: None,
@@ -2825,14 +2838,14 @@ fn baseline_report(result: FullModelResult) -> BaselineReport {
 
 fn split_report(
     result: BinarySplitResult,
-    native_mtp_n1: Option<NativeMtpN1VerificationReport>,
+    native_mtp_verification: Option<NativeMtpVerificationReport>,
 ) -> SplitReport {
     SplitReport {
         token_id: result.token_id,
         predicted_token: result.predicted_token,
         second_predicted_token: result.second_predicted_token,
         native_mtp: result.native_mtp,
-        native_mtp_n1,
+        native_mtp_verification,
         activation_width: result.activation_width,
         wire_dtype: result.wire_dtype,
         boundary: BoundaryReport {
@@ -2846,23 +2859,24 @@ fn split_report(
     }
 }
 
-fn native_mtp_n1_verification_report(
+fn native_mtp_verification_report(
     requested: bool,
     first: &NativeMtpSidebandReport,
     second_target_token: Option<i32>,
     second_baseline_token: Option<i32>,
     verification_compute_us: Option<i64>,
-) -> Option<NativeMtpN1VerificationReport> {
-    if !requested && first.draft_token.is_none() {
+) -> Option<NativeMtpVerificationReport> {
+    if !requested && first.draft_tokens.is_empty() {
         return None;
     }
 
-    let drafted_tokens = u64::from(first.draft_token.is_some());
+    let drafted_tokens = first.draft_tokens.len() as u64;
     let verification_count =
-        u64::from(first.draft_token.is_some() && second_target_token.is_some());
-    let accepted_tokens = u64::from(
-        matches!((first.draft_token, second_target_token), (Some(draft), Some(target)) if draft == target),
-    );
+        u64::from(!first.draft_tokens.is_empty() && second_target_token.is_some());
+    let accepted_tokens = u64::from(matches!(
+        (first.draft_tokens.first(), second_target_token),
+        (Some(draft), Some(target)) if *draft == target
+    ));
     let rejected_tokens = verification_count.saturating_sub(accepted_tokens);
     let pending_tokens = drafted_tokens.saturating_sub(verification_count);
     let byte_identical = matches!((second_target_token, second_baseline_token), (Some(target), Some(baseline)) if target == baseline);
@@ -2872,7 +2886,7 @@ fn native_mtp_n1_verification_report(
         accepted_tokens as f64 / verification_count as f64
     };
 
-    Some(NativeMtpN1VerificationReport {
+    Some(NativeMtpVerificationReport {
         drafted_tokens,
         accepted_tokens,
         rejected_tokens,
@@ -2880,7 +2894,7 @@ fn native_mtp_n1_verification_report(
         verification_count,
         accept_rate,
         byte_identical,
-        draft_token: first.draft_token,
+        draft_tokens: first.draft_tokens.clone(),
         second_target_token,
         second_baseline_token,
         proposal_compute_us: first.proposal_compute_us,
@@ -2888,36 +2902,48 @@ fn native_mtp_n1_verification_report(
     })
 }
 
-fn native_mtp_n1_satisfies_requirement(
-    report: &Option<NativeMtpN1VerificationReport>,
+fn native_mtp_verification_satisfies_requirement(
+    report: &Option<NativeMtpVerificationReport>,
     requirement: NativeMtpRequirement,
 ) -> bool {
     if !requirement.require_draft {
         return true;
     }
     report.as_ref().is_some_and(|report| {
-        report.drafted_tokens == 1
-            && report.verification_count == 1
-            && report.pending_tokens == 0
-            && report.byte_identical
+        report.drafted_tokens > 0 && report.verification_count == 1 && report.byte_identical
     })
 }
 
 fn native_mtp_sideband_report(reply: &StageReply) -> NativeMtpSidebandReport {
     let authoritative_token = reply.predicted_tokens.first().copied();
-    let draft_token = reply.predicted_tokens.get(1).copied();
+    let advertised_count = reply
+        .predicted_tokens
+        .get(1)
+        .copied()
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0);
+    let available_draft_count = reply.predicted_tokens.len().saturating_sub(3);
+    let draft_token_count = advertised_count.min(available_draft_count);
+    let draft_start = 2;
+    let draft_end = draft_start + draft_token_count;
+    let draft_tokens = reply
+        .predicted_tokens
+        .get(draft_start..draft_end)
+        .unwrap_or(&[])
+        .to_vec();
     let proposal_compute_us = reply
         .predicted_tokens
-        .get(2)
+        .get(draft_end)
         .copied()
         .map(|value| i64::from(value.max(0)));
     NativeMtpSidebandReport {
-        sideband_present: draft_token.is_some(),
+        sideband_present: !draft_tokens.is_empty(),
         predicted_token_count: reply.predicted_tokens.len(),
         authoritative_matches_reply: authoritative_token
             .is_none_or(|token| token == reply.predicted),
         authoritative_token,
-        draft_token,
+        draft_token_count,
+        draft_tokens,
         proposal_compute_us,
     }
 }
@@ -3043,35 +3069,37 @@ mod tests {
         assert_eq!(report.predicted_token_count, 1);
         assert!(report.authoritative_matches_reply);
         assert_eq!(report.authoritative_token, Some(11));
-        assert_eq!(report.draft_token, None);
+        assert_eq!(report.draft_token_count, 0);
+        assert!(report.draft_tokens.is_empty());
         assert_eq!(report.proposal_compute_us, None);
     }
 
     #[test]
     fn native_mtp_report_extracts_draft_sideband() {
-        let report = native_mtp_sideband_report(&predicted_reply(11, vec![11, 12, 34]));
+        let report = native_mtp_sideband_report(&predicted_reply(11, vec![11, 2, 12, 13, 34]));
 
         assert!(report.sideband_present);
-        assert_eq!(report.predicted_token_count, 3);
+        assert_eq!(report.predicted_token_count, 5);
         assert!(report.authoritative_matches_reply);
         assert_eq!(report.authoritative_token, Some(11));
-        assert_eq!(report.draft_token, Some(12));
+        assert_eq!(report.draft_token_count, 2);
+        assert_eq!(report.draft_tokens, vec![12, 13]);
         assert_eq!(report.proposal_compute_us, Some(34));
     }
 
     #[test]
     fn native_mtp_report_flags_authoritative_sideband_mismatch() {
-        let report = native_mtp_sideband_report(&predicted_reply(11, vec![10, 12, 34]));
+        let report = native_mtp_sideband_report(&predicted_reply(11, vec![10, 1, 12, 34]));
 
         assert!(report.sideband_present);
         assert!(!report.authoritative_matches_reply);
         assert_eq!(report.authoritative_token, Some(10));
-        assert_eq!(report.draft_token, Some(12));
+        assert_eq!(report.draft_tokens, vec![12]);
     }
 
     #[test]
     fn native_mtp_report_clamps_negative_proposal_time() {
-        let report = native_mtp_sideband_report(&predicted_reply(11, vec![11, 12, -34]));
+        let report = native_mtp_sideband_report(&predicted_reply(11, vec![11, 1, 12, -34]));
 
         assert_eq!(report.proposal_compute_us, Some(0));
     }
@@ -3079,7 +3107,7 @@ mod tests {
     #[test]
     fn native_mtp_requirement_can_require_draft_presence() {
         let no_draft = native_mtp_sideband_report(&predicted_reply(11, vec![11]));
-        let draft = native_mtp_sideband_report(&predicted_reply(11, vec![11, 12, 34]));
+        let draft = native_mtp_sideband_report(&predicted_reply(11, vec![11, 1, 12, 34]));
         let optional = NativeMtpRequirement {
             require_draft: false,
         };
@@ -3093,21 +3121,22 @@ mod tests {
     }
 
     #[test]
-    fn native_mtp_n1_report_accepts_matching_second_target() {
-        let first = native_mtp_sideband_report(&predicted_reply(11, vec![11, 12, 34]));
-        let report = native_mtp_n1_verification_report(true, &first, Some(12), Some(12), Some(9))
+    fn native_mtp_verification_report_accepts_matching_second_target() {
+        let first = native_mtp_sideband_report(&predicted_reply(11, vec![11, 2, 12, 13, 34]));
+        let report = native_mtp_verification_report(true, &first, Some(12), Some(12), Some(9))
             .expect("verification report");
 
-        assert_eq!(report.drafted_tokens, 1);
+        assert_eq!(report.drafted_tokens, 2);
         assert_eq!(report.accepted_tokens, 1);
         assert_eq!(report.rejected_tokens, 0);
-        assert_eq!(report.pending_tokens, 0);
+        assert_eq!(report.pending_tokens, 1);
         assert_eq!(report.verification_count, 1);
         assert_eq!(report.accept_rate, 1.0);
         assert!(report.byte_identical);
+        assert_eq!(report.draft_tokens, vec![12, 13]);
         assert_eq!(report.proposal_compute_us, Some(34));
         assert_eq!(report.verification_compute_us, Some(9));
-        assert!(native_mtp_n1_satisfies_requirement(
+        assert!(native_mtp_verification_satisfies_requirement(
             &Some(report),
             NativeMtpRequirement {
                 require_draft: true
@@ -3116,9 +3145,9 @@ mod tests {
     }
 
     #[test]
-    fn native_mtp_n1_report_rejects_mismatched_draft_without_failing_byte_identity() {
-        let first = native_mtp_sideband_report(&predicted_reply(11, vec![11, 12, 34]));
-        let report = native_mtp_n1_verification_report(true, &first, Some(13), Some(13), Some(9))
+    fn native_mtp_verification_report_rejects_mismatched_draft_without_failing_byte_identity() {
+        let first = native_mtp_sideband_report(&predicted_reply(11, vec![11, 1, 12, 34]));
+        let report = native_mtp_verification_report(true, &first, Some(13), Some(13), Some(9))
             .expect("verification report");
 
         assert_eq!(report.drafted_tokens, 1);
@@ -3128,7 +3157,7 @@ mod tests {
         assert_eq!(report.verification_count, 1);
         assert_eq!(report.accept_rate, 0.0);
         assert!(report.byte_identical);
-        assert!(native_mtp_n1_satisfies_requirement(
+        assert!(native_mtp_verification_satisfies_requirement(
             &Some(report),
             NativeMtpRequirement {
                 require_draft: true
@@ -3137,15 +3166,15 @@ mod tests {
     }
 
     #[test]
-    fn native_mtp_n1_requirement_fails_when_required_draft_is_missing() {
+    fn native_mtp_verification_requirement_fails_when_required_draft_is_missing() {
         let first = native_mtp_sideband_report(&predicted_reply(11, vec![11]));
-        let report = native_mtp_n1_verification_report(true, &first, Some(13), Some(13), Some(9))
+        let report = native_mtp_verification_report(true, &first, Some(13), Some(13), Some(9))
             .expect("required verification report");
 
         assert_eq!(report.drafted_tokens, 0);
         assert_eq!(report.verification_count, 0);
         assert!(report.byte_identical);
-        assert!(!native_mtp_n1_satisfies_requirement(
+        assert!(!native_mtp_verification_satisfies_requirement(
             &Some(report),
             NativeMtpRequirement {
                 require_draft: true
@@ -3356,6 +3385,8 @@ fn tokenizer_model_for_state_handoff(
             n_threads: None,
             n_threads_batch: None,
             n_gpu_layers: args.n_gpu_layers,
+            mmap: None,
+            mlock: false,
             selected_backend_device: None,
             load_mode,
             projector_path: None,

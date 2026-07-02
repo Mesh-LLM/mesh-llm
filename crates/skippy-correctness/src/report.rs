@@ -28,7 +28,7 @@ pub struct SplitReport {
     pub second_predicted_token: Option<i32>,
     pub native_mtp: NativeMtpSidebandReport,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub native_mtp_n1: Option<NativeMtpN1VerificationReport>,
+    pub native_mtp_verification: Option<NativeMtpVerificationReport>,
     pub activation_width: i32,
     pub wire_dtype: String,
     pub boundary: BoundaryReport,
@@ -41,14 +41,14 @@ pub struct NativeMtpSidebandReport {
     pub authoritative_matches_reply: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authoritative_token: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub draft_token: Option<i32>,
+    pub draft_token_count: usize,
+    pub draft_tokens: Vec<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proposal_compute_us: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct NativeMtpN1VerificationReport {
+pub struct NativeMtpVerificationReport {
     pub drafted_tokens: u64,
     pub accepted_tokens: u64,
     pub rejected_tokens: u64,
@@ -56,8 +56,7 @@ pub struct NativeMtpN1VerificationReport {
     pub verification_count: u64,
     pub accept_rate: f64,
     pub byte_identical: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub draft_token: Option<i32>,
+    pub draft_tokens: Vec<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub second_target_token: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,7 +104,7 @@ pub struct ChainReport {
     pub second_predicted_token: Option<i32>,
     pub native_mtp: NativeMtpSidebandReport,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub native_mtp_n1: Option<NativeMtpN1VerificationReport>,
+    pub native_mtp_verification: Option<NativeMtpVerificationReport>,
     pub activation_width: i32,
     pub wire_dtype: String,
     pub stages: Vec<ChainStageReport>,

@@ -1740,7 +1740,7 @@ fn package_generation(tensors: &[TensorInfo]) -> Option<PackageGeneration> {
         return None;
     }
 
-    let strategy_id = "native-mtp-n1".to_string();
+    let strategy_id = "mtp".to_string();
     let mut strategies = BTreeMap::new();
     strategies.insert(
         strategy_id.clone(),
@@ -2067,7 +2067,7 @@ mod tests {
     }
 
     #[test]
-    fn package_generation_advertises_native_mtp_n1_strategy() {
+    fn package_generation_advertises_mtp_strategy() {
         let tensors = vec![
             tensor("blk.0.attn_norm.weight", Some(0)),
             tensor("blk.47.nextn.eh_proj.weight", Some(47)),
@@ -2081,10 +2081,10 @@ mod tests {
         let speculative = generation
             .speculative_decoding
             .expect("MTP generation should configure speculative decoding");
-        assert_eq!(speculative.default, "native-mtp-n1");
+        assert_eq!(speculative.default, "mtp");
         let strategy = speculative
             .strategies
-            .get("native-mtp-n1")
+            .get("mtp")
             .expect("default strategy should be present");
         assert_eq!(strategy.strategy_type, "native-mtp");
         assert_eq!(strategy.prediction_depth, Some(1));

@@ -53,7 +53,8 @@ impl StageOpenAiBackend {
                     )
                     .map_err(openai_backend_error)?,
                     request.native_mtp_enabled,
-                ),
+                )
+                .with_native_mtp_max_tokens(request.native_mtp_max_tokens),
             )
             .map_err(openai_backend_error)?
             .2;

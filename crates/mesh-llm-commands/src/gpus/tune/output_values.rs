@@ -89,7 +89,10 @@ pub(crate) fn render_benchmark_speculative(
 ) -> String {
     match speculative {
         TuneBenchmarkSpeculativeCandidate::Disabled => "disabled".to_string(),
-        TuneBenchmarkSpeculativeCandidate::NativeMtpN1 => "native-mtp-n1".to_string(),
+        TuneBenchmarkSpeculativeCandidate::Mtp {
+            draft_max_tokens,
+            draft_min_tokens,
+        } => format!("mtp:min={draft_min_tokens}:max={draft_max_tokens}"),
         TuneBenchmarkSpeculativeCandidate::Draft {
             draft_model_path,
             draft_max_tokens,

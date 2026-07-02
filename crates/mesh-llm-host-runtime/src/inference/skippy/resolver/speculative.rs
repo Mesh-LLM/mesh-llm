@@ -31,8 +31,8 @@ pub(super) fn resolve_speculative_config(
             .is_some();
     let auto_defaults_enabled =
         !matches!(spec_default, Some(BoolOrAuto::Bool(false))) || has_explicit_strategy;
-    let supports_native_mtp_n1 = package_generation_supports_native_mtp_n1(package_generation)
-        || direct_gguf_supports_native_mtp_n1(model_path);
+    let supports_native_mtp = package_generation_supports_native_mtp(package_generation)
+        || direct_gguf_supports_native_mtp(model_path);
     let strategy = pick_string_owned(
         model_config.and_then(|config| config.strategy.as_deref()),
         global_config.and_then(|config| config.strategy.as_deref()),
@@ -41,21 +41,19 @@ pub(super) fn resolve_speculative_config(
     let native_mtp_enabled = match strategy.as_str() {
         "auto" => {
             auto_defaults_enabled
-                && package_generation_or_direct_default_supports_native_mtp_n1(
+                && package_generation_or_direct_default_supports_native_mtp(
                     package_generation,
                     model_path,
                 )
         }
-        "native-mtp-n1" => {
-            if !supports_native_mtp_n1 {
-                bail!(
-                    "skippy speculative.strategy = \"native-mtp-n1\" requires proven native-mtp-n1 support"
-                );
+        "mtp" => {
+            if !supports_native_mtp {
+                bail!("skippy speculative.strategy = \"mtp\" requires proven native MTP support");
             }
             true
         }
         "disabled" => false,
-        _ => bail!("skippy speculative.strategy must be auto, disabled, or native-mtp-n1"),
+        _ => bail!("skippy speculative.strategy must be auto, disabled, or mtp"),
     };
     let mode = pick_string_owned(
         model_config.and_then(|config| config.mode.as_deref()),
@@ -72,6 +70,11 @@ pub(super) fn resolve_speculative_config(
     let draft_max_tokens = super::support::pick_value(
         model_config.and_then(|config| config.draft_max_tokens),
         global_config.and_then(|config| config.draft_max_tokens),
+        0,
+    );
+    let draft_min_tokens = super::support::pick_value(
+        model_config.and_then(|config| config.draft_min_tokens),
+        global_config.and_then(|config| config.draft_min_tokens),
         0,
     );
     let draft_n_gpu_layers = pick_owned(
@@ -96,11 +99,15 @@ pub(super) fn resolve_speculative_config(
     let explicit = mode != "auto"
         || draft_model_path.is_some()
         || draft_max_tokens > 0
+        || draft_min_tokens > 0
         || draft_n_gpu_layers.is_some()
         || ngram_min > 0
         || ngram_max > 0;
     if mode == "disabled" && draft_model_path.is_some() {
         bail!("skippy speculative draft source cannot be set when speculative.mode = \"disabled\"");
+    }
+    if draft_max_tokens > 0 && draft_min_tokens > draft_max_tokens {
+        bail!("skippy speculative draft_min_tokens must be less than or equal to draft_max_tokens");
     }
     if mode == "draft" || (mode == "auto" && draft_model_path.is_some()) {
         resolve_draft_speculative_mode(
@@ -123,7 +130,8 @@ pub(super) fn resolve_speculative_config(
         mode,
         draft_model_path,
         pairing_fault,
-        draft_max_tokens,
+        draft_max_tokens: resolved_draft_max_tokens(native_mtp_enabled, draft_max_tokens),
+        draft_min_tokens,
         explicit,
         draft_n_gpu_layers,
         ngram_min,
@@ -176,14 +184,6 @@ fn reject_unsupported_speculative_runtime_fields(
         unsupported_speculative_field("speculative.draft_threads")?;
     }
     if pick_owned(
-        model_config.and_then(|config| config.draft_min_tokens),
-        global_config.and_then(|config| config.draft_min_tokens),
-    )
-    .is_some()
-    {
-        unsupported_speculative_field("speculative.draft_min_tokens")?;
-    }
-    if pick_owned(
         model_config.and_then(|config| config.draft_acceptance_threshold),
         global_config.and_then(|config| config.draft_acceptance_threshold),
     )
@@ -200,6 +200,13 @@ fn reject_unsupported_speculative_runtime_fields(
         unsupported_speculative_field("speculative.draft_split_probability")?;
     }
     Ok(())
+}
+
+fn resolved_draft_max_tokens(native_mtp_enabled: bool, draft_max_tokens: u32) -> u32 {
+    if native_mtp_enabled && draft_max_tokens == 0 {
+        return 3;
+    }
+    draft_max_tokens
 }
 
 fn resolve_draft_speculative_mode(
@@ -246,12 +253,12 @@ fn resolve_ngram_speculative_mode(mode: &mut String, ngram_min: u32, ngram_max: 
     Ok(())
 }
 
-fn package_generation_or_direct_default_supports_native_mtp_n1(
+fn package_generation_or_direct_default_supports_native_mtp(
     generation: Option<&PackageGenerationInfo>,
     model_path: &Path,
 ) -> bool {
     package_generation_supports_default_native_mtp(generation)
-        || direct_gguf_supports_native_mtp_n1(model_path)
+        || direct_gguf_supports_native_mtp(model_path)
 }
 
 fn package_generation_supports_default_native_mtp(
@@ -271,24 +278,21 @@ fn package_generation_supports_default_native_mtp(
         })
 }
 
-fn package_generation_supports_native_mtp_n1(generation: Option<&PackageGenerationInfo>) -> bool {
+fn package_generation_supports_native_mtp(generation: Option<&PackageGenerationInfo>) -> bool {
     generation
         .and_then(|generation| generation.speculative_decoding.as_ref())
-        .is_some_and(speculative_supports_native_mtp_n1)
+        .is_some_and(speculative_supports_native_mtp)
 }
 
-fn speculative_supports_native_mtp_n1(speculative: &PackageSpeculativeDecodingInfo) -> bool {
-    speculative
-        .strategies
-        .get("native-mtp-n1")
-        .is_some_and(|strategy| {
-            strategy.strategy_type == "native-mtp"
-                && strategy.prediction_depth == Some(1)
-                && !strategy.layer_indices.is_empty()
-        })
+fn speculative_supports_native_mtp(speculative: &PackageSpeculativeDecodingInfo) -> bool {
+    speculative.strategies.get("mtp").is_some_and(|strategy| {
+        strategy.strategy_type == "native-mtp"
+            && strategy.prediction_depth == Some(1)
+            && !strategy.layer_indices.is_empty()
+    })
 }
 
-fn direct_gguf_supports_native_mtp_n1(model_path: &Path) -> bool {
+fn direct_gguf_supports_native_mtp(model_path: &Path) -> bool {
     scan_gguf_compact_meta(model_path).is_some_and(|meta| meta.nextn_predict_layers > 0)
         || scan_gguf_tensor_names_any(model_path, |name| name.contains(".nextn.")).unwrap_or(false)
 }

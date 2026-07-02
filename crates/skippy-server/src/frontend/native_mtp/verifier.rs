@@ -1,32 +1,36 @@
 use super::{
-    NativeMtpDraft, NativeMtpDraftOrigin, NativeMtpN1Stats, NativeMtpVerification,
+    NativeMtpDraft, NativeMtpDraftOrigin, NativeMtpStats, NativeMtpVerification,
     PendingNativeMtpDraft,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PendingDraft {
-    token: i32,
     origin: NativeMtpDraftOrigin,
 }
 
 #[derive(Default)]
-pub(in crate::frontend) struct NativeMtpN1Verifier {
+pub(in crate::frontend) struct NativeMtpVerifier {
+    pending_tokens: Vec<i32>,
     pending: Option<PendingDraft>,
-    stats: NativeMtpN1Stats,
+    stats: NativeMtpStats,
 }
 
-impl NativeMtpN1Verifier {
+impl NativeMtpVerifier {
     pub(in crate::frontend) fn take_pending_draft(&mut self) -> Option<PendingNativeMtpDraft> {
-        self.pending.take().map(|pending| PendingNativeMtpDraft {
-            token: pending.token,
+        let pending = self.pending.take()?;
+        let tokens = std::mem::take(&mut self.pending_tokens);
+        Some(PendingNativeMtpDraft {
+            tokens,
             origin: pending.origin,
         })
     }
 
     pub(in crate::frontend) fn clear_pending_draft(&mut self) {
         self.pending = None;
+        self.pending_tokens.clear();
     }
 
+    #[cfg(test)]
     pub(in crate::frontend) fn observe_taken_draft_verification(
         &mut self,
         draft_token: i32,
@@ -34,6 +38,44 @@ impl NativeMtpN1Verifier {
         verification_compute_us: i64,
     ) -> NativeMtpVerification {
         self.record_verification(draft_token, target_token, verification_compute_us)
+    }
+
+    pub(in crate::frontend) fn observe_taken_draft_span(
+        &mut self,
+        draft_tokens: &[i32],
+        target_tokens: &[i32],
+        verification_compute_us: i64,
+    ) -> NativeMtpSpanVerification {
+        let mut accepted_count = 0usize;
+        let mut rejected = false;
+        let mut first_decision = NativeMtpVerification::NoPending;
+        for (index, draft_token) in draft_tokens.iter().copied().enumerate() {
+            let Some(target_token) = target_tokens.get(index).copied() else {
+                break;
+            };
+            let compute_us = if index == 0 {
+                verification_compute_us
+            } else {
+                0
+            };
+            let decision = self.record_verification(draft_token, target_token, compute_us);
+            if index == 0 {
+                first_decision = decision;
+            }
+            match decision {
+                NativeMtpVerification::Accepted { .. } => accepted_count += 1,
+                NativeMtpVerification::Rejected { .. } => {
+                    rejected = true;
+                    break;
+                }
+                NativeMtpVerification::NoPending => {}
+            }
+        }
+        NativeMtpSpanVerification {
+            accepted_count,
+            rejected,
+            first_decision,
+        }
     }
 
     pub(in crate::frontend) fn observe_target_token(
@@ -48,9 +90,9 @@ impl NativeMtpN1Verifier {
         verification
     }
 
-    pub(in crate::frontend) fn stats(&self) -> NativeMtpN1Stats {
+    pub(in crate::frontend) fn stats(&self) -> NativeMtpStats {
         let mut stats = self.stats;
-        stats.pending_tokens = u64::from(self.pending.is_some());
+        stats.pending_tokens = self.pending_tokens.len() as u64;
         stats
     }
 
@@ -59,11 +101,15 @@ impl NativeMtpN1Verifier {
         target_token: i32,
         verification_compute_us: i64,
     ) -> NativeMtpVerification {
-        let Some(pending) = self.pending.take() else {
+        let Some(_pending) = self.pending.take() else {
             return NativeMtpVerification::NoPending;
         };
 
-        self.record_verification(pending.token, target_token, verification_compute_us)
+        let Some(pending_token) = self.pending_tokens.first().copied() else {
+            return NativeMtpVerification::NoPending;
+        };
+        self.pending_tokens.clear();
+        self.record_verification(pending_token, target_token, verification_compute_us)
     }
 
     fn record_verification(
@@ -100,16 +146,24 @@ impl NativeMtpN1Verifier {
         let Some(next_draft) = next_draft else {
             return;
         };
-        self.stats.drafted_tokens += 1;
+        self.stats.drafted_tokens = self
+            .stats
+            .drafted_tokens
+            .saturating_add(next_draft.tokens.len() as u64);
         self.stats.proposal_compute_us = self
             .stats
             .proposal_compute_us
             .saturating_add(next_draft.proposal_compute_us);
-        self.pending = Some(PendingDraft {
-            token: next_draft.token,
-            origin,
-        });
+        self.pending_tokens = next_draft.tokens;
+        self.pending = Some(PendingDraft { origin });
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::frontend) struct NativeMtpSpanVerification {
+    pub(in crate::frontend) accepted_count: usize,
+    pub(in crate::frontend) rejected: bool,
+    pub(in crate::frontend) first_decision: NativeMtpVerification,
 }
 
 #[cfg(test)]
@@ -118,13 +172,13 @@ mod tests {
 
     fn draft(token: i32) -> NativeMtpDraft {
         NativeMtpDraft {
-            token,
+            tokens: vec![token],
             proposal_compute_us: 7,
         }
     }
 
     fn observe(
-        verifier: &mut NativeMtpN1Verifier,
+        verifier: &mut NativeMtpVerifier,
         target_token: i32,
         verification_compute_us: i64,
         next_draft: Option<NativeMtpDraft>,
@@ -139,35 +193,35 @@ mod tests {
 
     #[test]
     fn no_draft_behaves_like_baseline() {
-        let mut verifier = NativeMtpN1Verifier::default();
+        let mut verifier = NativeMtpVerifier::default();
 
         let decision = observe(&mut verifier, 11, 5, None);
 
         assert_eq!(decision, NativeMtpVerification::NoPending);
-        assert_eq!(verifier.stats(), NativeMtpN1Stats::default());
+        assert_eq!(verifier.stats(), NativeMtpStats::default());
     }
 
     #[test]
     fn first_draft_is_pending_until_next_target_decode() {
-        let mut verifier = NativeMtpN1Verifier::default();
+        let mut verifier = NativeMtpVerifier::default();
 
         let decision = observe(&mut verifier, 11, 5, Some(draft(12)));
 
         assert_eq!(decision, NativeMtpVerification::NoPending);
         assert_eq!(
             verifier.stats(),
-            NativeMtpN1Stats {
+            NativeMtpStats {
                 drafted_tokens: 1,
                 pending_tokens: 1,
                 proposal_compute_us: 7,
-                ..NativeMtpN1Stats::default()
+                ..NativeMtpStats::default()
             }
         );
     }
 
     #[test]
     fn matching_next_target_accepts_pending_draft() {
-        let mut verifier = NativeMtpN1Verifier::default();
+        let mut verifier = NativeMtpVerifier::default();
         observe(&mut verifier, 11, 5, Some(draft(12)));
 
         let decision = observe(&mut verifier, 12, 9, None);
@@ -181,20 +235,20 @@ mod tests {
         );
         assert_eq!(
             verifier.stats(),
-            NativeMtpN1Stats {
+            NativeMtpStats {
                 drafted_tokens: 1,
                 accepted_tokens: 1,
                 verification_count: 1,
                 proposal_compute_us: 7,
                 verification_compute_us: 9,
-                ..NativeMtpN1Stats::default()
+                ..NativeMtpStats::default()
             }
         );
     }
 
     #[test]
     fn different_next_target_rejects_pending_draft() {
-        let mut verifier = NativeMtpN1Verifier::default();
+        let mut verifier = NativeMtpVerifier::default();
         observe(&mut verifier, 11, 5, Some(draft(12)));
 
         let decision = observe(&mut verifier, 13, 9, None);
@@ -208,20 +262,20 @@ mod tests {
         );
         assert_eq!(
             verifier.stats(),
-            NativeMtpN1Stats {
+            NativeMtpStats {
                 drafted_tokens: 1,
                 rejected_tokens: 1,
                 verification_count: 1,
                 proposal_compute_us: 7,
                 verification_compute_us: 9,
-                ..NativeMtpN1Stats::default()
+                ..NativeMtpStats::default()
             }
         );
     }
 
     #[test]
     fn verifies_previous_draft_before_storing_next_draft() {
-        let mut verifier = NativeMtpN1Verifier::default();
+        let mut verifier = NativeMtpVerifier::default();
         observe(&mut verifier, 11, 5, Some(draft(12)));
 
         let decision = observe(&mut verifier, 12, 9, Some(draft(14)));
@@ -235,27 +289,27 @@ mod tests {
         );
         assert_eq!(
             verifier.stats(),
-            NativeMtpN1Stats {
+            NativeMtpStats {
                 drafted_tokens: 2,
                 accepted_tokens: 1,
                 pending_tokens: 1,
                 verification_count: 1,
                 proposal_compute_us: 14,
                 verification_compute_us: 9,
-                ..NativeMtpN1Stats::default()
+                ..NativeMtpStats::default()
             }
         );
     }
 
     #[test]
     fn taken_pending_draft_can_be_recorded_as_batched_accept() {
-        let mut verifier = NativeMtpN1Verifier::default();
+        let mut verifier = NativeMtpVerifier::default();
         observe(&mut verifier, 11, 5, Some(draft(12)));
 
         let pending = verifier.take_pending_draft().unwrap();
         assert_eq!(pending.origin, NativeMtpDraftOrigin::InitialSerial);
         assert!(verifier.take_pending_draft().is_none());
-        let decision = verifier.observe_taken_draft_verification(pending.token, 12, 9);
+        let decision = verifier.observe_taken_draft_verification(pending.tokens[0], 12, 9);
 
         assert_eq!(
             decision,
@@ -266,25 +320,25 @@ mod tests {
         );
         assert_eq!(
             verifier.stats(),
-            NativeMtpN1Stats {
+            NativeMtpStats {
                 drafted_tokens: 1,
                 accepted_tokens: 1,
                 verification_count: 1,
                 proposal_compute_us: 7,
                 verification_compute_us: 9,
-                ..NativeMtpN1Stats::default()
+                ..NativeMtpStats::default()
             }
         );
     }
 
     #[test]
     fn taken_pending_draft_can_be_recorded_as_batched_reject() {
-        let mut verifier = NativeMtpN1Verifier::default();
+        let mut verifier = NativeMtpVerifier::default();
         observe(&mut verifier, 11, 5, Some(draft(12)));
 
         let pending = verifier.take_pending_draft().unwrap();
         assert_eq!(pending.origin, NativeMtpDraftOrigin::InitialSerial);
-        let decision = verifier.observe_taken_draft_verification(pending.token, 13, 9);
+        let decision = verifier.observe_taken_draft_verification(pending.tokens[0], 13, 9);
 
         assert_eq!(
             decision,
@@ -295,30 +349,30 @@ mod tests {
         );
         assert_eq!(
             verifier.stats(),
-            NativeMtpN1Stats {
+            NativeMtpStats {
                 drafted_tokens: 1,
                 rejected_tokens: 1,
                 verification_count: 1,
                 proposal_compute_us: 7,
                 verification_compute_us: 9,
-                ..NativeMtpN1Stats::default()
+                ..NativeMtpStats::default()
             }
         );
     }
 
     #[test]
     fn clear_pending_draft_drops_unverified_draft_without_changing_stats() {
-        let mut verifier = NativeMtpN1Verifier::default();
+        let mut verifier = NativeMtpVerifier::default();
         observe(&mut verifier, 11, 5, Some(draft(12)));
 
         verifier.clear_pending_draft();
 
         assert_eq!(
             verifier.stats(),
-            NativeMtpN1Stats {
+            NativeMtpStats {
                 drafted_tokens: 1,
                 proposal_compute_us: 7,
-                ..NativeMtpN1Stats::default()
+                ..NativeMtpStats::default()
             }
         );
         assert_eq!(
@@ -329,7 +383,7 @@ mod tests {
 
     #[test]
     fn verification_compute_time_saturates_instead_of_overflowing() {
-        let mut verifier = NativeMtpN1Verifier::default();
+        let mut verifier = NativeMtpVerifier::default();
 
         observe(&mut verifier, 11, i64::MAX, Some(draft(12)));
         observe(&mut verifier, 13, i64::MAX, Some(draft(14)));

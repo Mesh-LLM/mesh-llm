@@ -1553,7 +1553,7 @@ mod tests {
             "--mlock-values",
             "true,false",
             "--speculative-types",
-            "native-mtp-n1,draft,ngram,disabled",
+            "mtp,draft,ngram,disabled",
             "--spec-draft-models",
             "/models/qwen-draft.gguf",
             "--spec-draft-max-tokens",
@@ -1620,7 +1620,7 @@ mod tests {
         assert_eq!(
             tune.speculative_types,
             vec![
-                crate::benchmark::BenchmarkSpeculativeType::NativeMtpN1,
+                crate::benchmark::BenchmarkSpeculativeType::Mtp,
                 crate::benchmark::BenchmarkSpeculativeType::Draft,
                 crate::benchmark::BenchmarkSpeculativeType::Ngram,
                 crate::benchmark::BenchmarkSpeculativeType::Disabled,

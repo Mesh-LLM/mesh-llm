@@ -142,6 +142,8 @@ fn full_runtime_config(args: &VerifySpanLocalArgs) -> Result<RuntimeConfig> {
         n_threads: None,
         n_threads_batch: None,
         n_gpu_layers: args.n_gpu_layers,
+        mmap: None,
+        mlock: false,
         selected_backend_device: None,
         cache_type_k: parse_cache_type(&args.cache_type_k)?,
         cache_type_v: parse_cache_type(&args.cache_type_v)?,
@@ -211,7 +213,7 @@ fn choose_verify_tokens(
         .first()
         .context("prompt produced no token for verify-token seed")?;
     let (_after_current, native_mtp, _frame) = session
-        .decode_step_frame_sampled_mtp_n1(current, Some(&SamplingConfig::default()), None, 0)
+        .decode_step_frame_sampled_mtp(current, Some(&SamplingConfig::default()), None, 0, 1)
         .with_context(|| {
             format!(
                 "failed to get native MTP draft from {} after prompt {:?}",
@@ -225,7 +227,12 @@ fn choose_verify_tokens(
     session
         .trim_session(base_token_count)
         .context("failed to trim session after choosing verify tokens")?;
-    Ok(vec![current, draft.token_id])
+    let draft_token = draft
+        .token_ids
+        .first()
+        .copied()
+        .context("native MTP draft did not include a token")?;
+    Ok(vec![current, draft_token])
 }
 
 fn run_samples(
@@ -425,6 +432,8 @@ fn split_runtime_configs(
         n_threads: None,
         n_threads_batch: None,
         n_gpu_layers: args.n_gpu_layers,
+        mmap: None,
+        mlock: false,
         selected_backend_device: None,
         cache_type_k,
         cache_type_v,
@@ -446,6 +455,8 @@ fn split_runtime_configs(
         n_threads: None,
         n_threads_batch: None,
         n_gpu_layers: args.n_gpu_layers,
+        mmap: None,
+        mlock: false,
         selected_backend_device: None,
         cache_type_k,
         cache_type_v,
@@ -607,7 +618,7 @@ fn measure_split_serial(
     for token_id in verify_tokens {
         let stage0_start = Instant::now();
         let (_stage0_prediction, _stage0_draft, boundary) = session0
-            .decode_step_frame_sampled_mtp_n1(*token_id, Some(&SamplingConfig::default()), None, 0)
+            .decode_step_frame_sampled_mtp(*token_id, Some(&SamplingConfig::default()), None, 0, 1)
             .context("in-process split stage 0 serial decode failed")?;
         stage0_total += stage0_start.elapsed();
         if boundary.payload.is_empty() {
@@ -617,11 +628,12 @@ fn measure_split_serial(
 
         let stage1_start = Instant::now();
         let (predicted, native_mtp, _output) = session1
-            .decode_step_frame_sampled_mtp_n1(
+            .decode_step_frame_sampled_mtp(
                 *token_id,
                 Some(&SamplingConfig::default()),
                 Some(&boundary),
                 0,
+                1,
             )
             .context("in-process split stage 1 serial decode failed")?;
         stage1_total += stage1_start.elapsed();
@@ -632,7 +644,9 @@ fn measure_split_serial(
     }
 
     if let Some(draft) = last_draft {
-        prediction.push(draft.token_id);
+        if let Some(token) = draft.token_ids.first().copied() {
+            prediction.push(token);
+        }
         prediction.push(i32::try_from(draft.proposal_compute_us.max(0)).unwrap_or(i32::MAX));
     }
 
@@ -650,7 +664,7 @@ fn serial_decode_mtp_n1(session: &mut StageSession, verify_tokens: &[i32]) -> Re
     let mut last_draft = None;
     for token_id in verify_tokens {
         let (predicted, native_mtp, _frame) = session
-            .decode_step_frame_sampled_mtp_n1(*token_id, Some(&SamplingConfig::default()), None, 0)
+            .decode_step_frame_sampled_mtp(*token_id, Some(&SamplingConfig::default()), None, 0, 1)
             .context("serial native MTP n=1 decode failed")?;
         if predicted >= 0 {
             predicted_tokens.push(predicted);
@@ -658,7 +672,9 @@ fn serial_decode_mtp_n1(session: &mut StageSession, verify_tokens: &[i32]) -> Re
         last_draft = native_mtp;
     }
     if let Some(draft) = last_draft {
-        predicted_tokens.push(draft.token_id);
+        if let Some(token) = draft.token_ids.first().copied() {
+            predicted_tokens.push(token);
+        }
         predicted_tokens.push(i32::try_from(draft.proposal_compute_us.max(0)).unwrap_or(i32::MAX));
     }
     Ok(predicted_tokens)

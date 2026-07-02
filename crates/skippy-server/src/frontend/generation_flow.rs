@@ -118,6 +118,8 @@ impl StageOpenAiBackend {
                 lane_pool,
                 prediction_returns,
                 native_mtp_enabled,
+                native_mtp_max_tokens,
+                native_mtp_min_tokens,
             } => self.generate_embedded_stage_zero_tokens(
                 EmbeddedStageZeroGeneration {
                     config: &config,
@@ -138,6 +140,8 @@ impl StageOpenAiBackend {
                     ngram_min: self.ngram_min,
                     ngram_max: self.ngram_max,
                     native_mtp_enabled,
+                    native_mtp_max_tokens,
+                    native_mtp_min_tokens,
                     prompt_token_ids: &prompt_token_ids,
                     max_tokens,
                     sampling: &sampling,

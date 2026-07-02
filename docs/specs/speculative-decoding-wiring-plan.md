@@ -100,7 +100,7 @@ Make `strategy = "auto"` enable native MTP for direct GGUF MTP models:
 - For direct GGUFs, detect `.nextn.` tensors or model metadata through an
   isolated GGUF inspection helper.
 - Keep `strategy = "disabled"` authoritative.
-- Keep `strategy = "native-mtp-n1"` fail-closed when MTP support cannot be
+- Keep `strategy = "mtp"` fail-closed when MTP support cannot be
   proven.
 - Add telemetry/log output that reports why native MTP is enabled or disabled.
 
@@ -208,7 +208,7 @@ structured unsupported diagnostics.
 
 Candidate detection order:
 
-1. Native MTP (`strategy = "native-mtp-n1"`) when the target GGUF/package proves
+1. Native MTP (`strategy = "mtp"`) when the target GGUF/package proves
    native MTP tensors are present. This must be tried before draft-model and
    ngram modes because it avoids a second draft model and should be the most
    hands-off path for MTP checkpoints.
@@ -223,7 +223,7 @@ Candidate detection order:
 
 Candidate settings:
 
-- Native MTP: start with `auto`, `disabled`, and forced `native-mtp-n1` where
+- Native MTP: start with `auto`, `disabled`, and forced `mtp` where
   support can be proven. If native MTP runtime knobs become config fields, tune
   should sweep only small safe sets first: batched verification on/off, reject
   cooldown `0/1/2`, deferred reject trim on/off, and cooldown draft suppression
