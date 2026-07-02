@@ -29,6 +29,9 @@ pub enum BenchmarkCommand {
         /// mlock values to benchmark independently: enabled, disabled.
         #[arg(long = "mlock-values", value_delimiter = ',')]
         mlock_values: Vec<BenchmarkBool>,
+        /// Treat candidates within this percent of the raw best tok/s as throughput-equivalent.
+        #[arg(long, default_value_t = 10.0)]
+        throughput_tolerance_pct: f64,
         /// Maximum generated tokens per benchmark request.
         #[arg(long, default_value_t = 128)]
         max_tokens: u32,

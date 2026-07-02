@@ -176,7 +176,7 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
             Some(best) => {
                 let _ = writeln!(
                     rendered,
-                    "    Best: ctx={} batch={} ubatch={} mmap={} mlock={} decode_tok_s={}{}",
+                    "    Recommended: ctx={} batch={} ubatch={} mmap={} mlock={} decode_tok_s={}{}",
                     best.candidate.ctx_size,
                     best.candidate.batch,
                     best.candidate.ubatch,
@@ -187,11 +187,57 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
                         .unwrap_or_else(|| "n/a".to_string()),
                     render_timing_summary(best.timings.as_ref()),
                 );
+                if let Some(reason) = &benchmark.selection_reason {
+                    let _ = writeln!(rendered, "      reason: {reason}");
+                }
             }
             None => {
-                let _ = writeln!(rendered, "    Best: none");
+                let _ = writeln!(rendered, "    Recommended: none");
             }
         }
+        if let Some(raw_best) = &benchmark.raw_best {
+            let _ = writeln!(
+                rendered,
+                "    Raw best: ctx={} batch={} ubatch={} mmap={} mlock={} decode_tok_s={}{}",
+                raw_best.candidate.ctx_size,
+                raw_best.candidate.batch,
+                raw_best.candidate.ubatch,
+                render_bool_or_auto_candidate(raw_best.candidate.mmap),
+                raw_best.candidate.mlock,
+                raw_best
+                    .decode_tok_s
+                    .map(|value| format!("{value:.2}"))
+                    .unwrap_or_else(|| "n/a".to_string()),
+                render_timing_summary(raw_best.timings.as_ref()),
+            );
+        }
+        if !benchmark.pareto_frontier.is_empty() {
+            let _ = writeln!(
+                rendered,
+                "    Pareto frontier (decode tok/s vs ctx_size):"
+            );
+            for trial in &benchmark.pareto_frontier {
+                let _ = writeln!(
+                    rendered,
+                    "      - ctx={} batch={} ubatch={} mmap={} mlock={} decode_tok_s={}{}",
+                    trial.candidate.ctx_size,
+                    trial.candidate.batch,
+                    trial.candidate.ubatch,
+                    render_bool_or_auto_candidate(trial.candidate.mmap),
+                    trial.candidate.mlock,
+                    trial
+                        .decode_tok_s
+                        .map(|value| format!("{value:.2}"))
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    render_timing_summary(trial.timings.as_ref()),
+                );
+            }
+        }
+        let _ = writeln!(
+            rendered,
+            "    Throughput tolerance: {:.2}%",
+            benchmark.throughput_tolerance_pct,
+        );
         for trial in &benchmark.trials {
             let status = match trial.status {
                 TuneBenchmarkTrialStatus::Succeeded => "ok",

@@ -5,6 +5,7 @@ pub(crate) struct TuneBenchmarkRunRequest<'a> {
     pub(crate) ubatch_sizes: &'a [u32],
     pub(crate) mmap_values: &'a [mesh_llm_cli::benchmark::BenchmarkBoolOrAuto],
     pub(crate) mlock_values: &'a [mesh_llm_cli::benchmark::BenchmarkBool],
+    pub(crate) throughput_tolerance_pct: f64,
     pub(crate) max_tokens: u32,
     pub(crate) startup_timeout_secs: u64,
     pub(crate) request_timeout_secs: u64,
@@ -14,6 +15,9 @@ pub(crate) struct TuneBenchmarkRunRequest<'a> {
 pub(crate) fn run_benchmark_plans(
     request: TuneBenchmarkRunRequest<'_>,
 ) -> Vec<TuneBenchmarkTargetReport> {
+    debug_assert!(
+        request.throughput_tolerance_pct.is_finite() && request.throughput_tolerance_pct >= 0.0
+    );
     request
         .prepared
         .iter()
@@ -27,26 +31,28 @@ fn run_target_benchmarks(
     prepared: &crate::gpus::tune_apply::PreparedTunePlan,
 ) -> TuneBenchmarkTargetReport {
     let candidates = benchmark_candidates(request, prepared);
+    eprintln!(
+        "benchmark tune: target `{}` running {} trials (throughput tolerance {:.2}%)",
+        prepared.target.requested_input,
+        candidates.len(),
+        request.throughput_tolerance_pct,
+    );
+    let total = candidates.len();
     let trials = candidates
         .into_iter()
         .enumerate()
-        .map(|(index, candidate)| run_trial(request, prepared, index, candidate))
+        .map(|(index, candidate)| run_trial_with_progress(request, prepared, index, total, candidate))
         .collect::<Vec<_>>();
-    let best = trials
-        .iter()
-        .filter(|trial| matches!(trial.status, TuneBenchmarkTrialStatus::Succeeded))
-        .filter_map(|trial| trial.decode_tok_s.map(|rate| (trial, rate)))
-        .max_by(|(left_trial, left_rate), (right_trial, right_rate)| {
-            left_rate
-                .partial_cmp(right_rate)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| left_trial.candidate.ctx_size.cmp(&right_trial.candidate.ctx_size))
-        })
-        .map(|(trial, _)| trial.clone());
+    let selection = select_benchmark_trials(&trials, request.throughput_tolerance_pct);
+    log_target_selection(&prepared.target.requested_input, &selection);
 
     TuneBenchmarkTargetReport {
         requested: prepared.target.requested_input.clone(),
-        best,
+        throughput_tolerance_pct: request.throughput_tolerance_pct,
+        best: selection.recommended,
+        raw_best: selection.raw_best,
+        pareto_frontier: selection.pareto_frontier,
+        selection_reason: selection.reason,
         trials,
     }
 }
@@ -822,6 +828,7 @@ mod benchmark_tests {
             ubatch_sizes: &[256],
             mmap_values: &[],
             mlock_values: &[],
+            throughput_tolerance_pct: 3.0,
             max_tokens: 32,
             startup_timeout_secs: 5,
             request_timeout_secs: 5,
@@ -840,5 +847,96 @@ mod benchmark_tests {
         assert!(candidates.iter().any(|candidate| {
             candidate.mmap == TuneBoolOrAutoValue::Disabled && candidate.mlock
         }));
+    }
+
+    #[test]
+    fn selection_prefers_larger_context_within_throughput_tolerance() {
+        let trials = vec![
+            succeeded_trial(8192, 18.65, 2000.0),
+            succeeded_trial(262_144, 18.23, 2100.0),
+            succeeded_trial(65_536, 16.0, 2200.0),
+        ];
+
+        let selection = select_benchmark_trials(&trials, 3.0);
+
+        assert_eq!(
+            selection
+                .raw_best
+                .as_ref()
+                .expect("raw best")
+                .candidate
+                .ctx_size,
+            8192
+        );
+        assert_eq!(
+            selection
+                .recommended
+                .as_ref()
+                .expect("recommended")
+                .candidate
+                .ctx_size,
+            262_144
+        );
+        assert!(
+            selection
+                .reason
+                .as_deref()
+                .expect("selection reason")
+                .contains("within 3.00%")
+        );
+    }
+
+    #[test]
+    fn selection_keeps_pareto_frontier_tradeoffs() {
+        let trials = vec![
+            succeeded_trial(4096, 20.0, 2000.0),
+            succeeded_trial(8192, 19.0, 2000.0),
+            succeeded_trial(4096, 18.0, 1900.0),
+            succeeded_trial(16_384, 16.0, 2000.0),
+        ];
+
+        let selection = select_benchmark_trials(&trials, 1.0);
+        let frontier_contexts = selection
+            .pareto_frontier
+            .iter()
+            .map(|trial| trial.candidate.ctx_size)
+            .collect::<Vec<_>>();
+
+        assert_eq!(frontier_contexts, vec![16_384, 8192, 4096]);
+        assert!(
+            !selection
+                .pareto_frontier
+                .iter()
+                .any(|trial| trial.decode_tok_s == Some(18.0)),
+            "dominated lower-throughput 4096 ctx trial should be excluded"
+        );
+    }
+
+    fn succeeded_trial(ctx_size: u32, decode_tok_s: f64, request_ms: f64) -> TuneBenchmarkTrial {
+        TuneBenchmarkTrial {
+            candidate: TuneBenchmarkCandidate {
+                ctx_size,
+                batch: 2048,
+                ubatch: 1024,
+                cache_type_k: TuneKvCacheType::Q8_0,
+                cache_type_v: TuneKvCacheType::Q8_0,
+                mmap: TuneBoolOrAutoValue::Disabled,
+                mlock: false,
+            },
+            status: TuneBenchmarkTrialStatus::Succeeded,
+            completion_tokens: Some(128),
+            elapsed_ms: Some(request_ms),
+            decode_tok_s: Some(decode_tok_s),
+            timings: Some(TuneBenchmarkTimingStats {
+                total_ms: request_ms + 1000.0,
+                setup_ms: 10.0,
+                readiness_ms: 900.0,
+                request_ms: Some(request_ms),
+                shutdown_ms: Some(90.0),
+                readiness_attempts: 3,
+            }),
+            log_path: None,
+            error: None,
+        }
     }
 }

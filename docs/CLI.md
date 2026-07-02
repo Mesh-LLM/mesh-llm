@@ -409,6 +409,8 @@ Behavior:
 
 Use this to benchmark model-serving throughput for already-downloaded local models. It shares the same local target resolution and startup planning as `gpu tune`, then starts isolated trial `mesh-llm serve` children from temporary configs and reports per-candidate decode tok/s.
 
+The recommendation is tolerance-aware: benchmark tune reports the raw highest-throughput trial, computes the Pareto frontier for decode tok/s versus `ctx_size`, then recommends the largest context window whose decode throughput is within the configured tolerance of the raw best.
+
 Examples:
 
 ```bash
@@ -416,6 +418,7 @@ mesh-llm benchmark tune --model /models/qwen3-8b.gguf
 mesh-llm benchmark tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --mmap-values auto,true,false --mlock-values true,false
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --throughput-tolerance-pct 2.5
 ```
 
 Switches:
@@ -427,6 +430,7 @@ Switches:
 - `--batch-sizes <VALUES>` / `--ubatch-sizes <VALUES>`: comma-separated batch and micro-batch values to benchmark. Candidates where `ubatch > batch` are skipped.
 - `--mmap-values <VALUES>`: comma-separated mmap values to benchmark independently: `auto`, `enabled`/`true`, or `disabled`/`false`. If omitted, benchmark tune tries all three.
 - `--mlock-values <VALUES>`: comma-separated mlock values to benchmark independently: `enabled`/`true` or `disabled`/`false`. If omitted, benchmark tune tries `false` and also tries `true` only when the mlock probe says the evaluated budget can be locked.
+- `--throughput-tolerance-pct <PCT>`: treat candidates within this percent of the raw best decode tok/s as throughput-equivalent, then prefer the largest `ctx_size` among them, default `10.0`.
 - `--max-tokens <TOKENS>`: generated tokens per measured request, default `128`.
 - `--startup-timeout-secs <SECONDS>` / `--request-timeout-secs <SECONDS>`: per-trial startup and HTTP request limits, both default `600`.
 - `--prompt <TEXT>`: prompt sent during measured chat-completion requests.

@@ -1652,6 +1652,8 @@ mod tests {
             "auto,true,false",
             "--mlock-values",
             "true,false",
+            "--throughput-tolerance-pct",
+            "2.5",
             "--max-tokens",
             "64",
             "--startup-timeout-secs",
@@ -1674,6 +1676,7 @@ mod tests {
                     ubatch_sizes,
                     mmap_values,
                     mlock_values,
+                    throughput_tolerance_pct,
                     max_tokens,
                     startup_timeout_secs,
                     request_timeout_secs,
@@ -1705,6 +1708,7 @@ mod tests {
                 crate::benchmark::BenchmarkBool::Disabled,
             ]
         );
+        assert_eq!(throughput_tolerance_pct, 2.5);
         assert_eq!(max_tokens, 64);
         assert_eq!(startup_timeout_secs, 30);
         assert_eq!(request_timeout_secs, 45);
@@ -1727,6 +1731,24 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("--model"));
         assert!(rendered.contains("--models"));
+    }
+
+    #[test]
+    fn benchmark_tune_defaults_to_broad_throughput_tolerance() {
+        let cli = Cli::parse_from(["mesh-llm", "benchmark", "tune", "--model", "qwen.gguf"]);
+
+        let Some(Command::Benchmark {
+            command:
+                BenchmarkCommand::Tune {
+                    throughput_tolerance_pct,
+                    ..
+                },
+        }) = cli.command
+        else {
+            panic!("expected benchmark tune command");
+        };
+
+        assert_eq!(throughput_tolerance_pct, 10.0);
     }
 
     #[test]

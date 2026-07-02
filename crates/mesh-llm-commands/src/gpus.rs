@@ -15,6 +15,8 @@ pub mod tune {
     include!("gpus/tune/output_types.rs");
     include!("gpus/tune/output_report.rs");
     include!("gpus/tune/output_values.rs");
+    include!("gpus/tune/benchmark_selection.rs");
+    include!("gpus/tune/benchmark_progress.rs");
     include!("gpus/tune/benchmark.rs");
     include!("gpus/tune/output_launch.rs");
     include!("gpus/tune/output_emit.rs");

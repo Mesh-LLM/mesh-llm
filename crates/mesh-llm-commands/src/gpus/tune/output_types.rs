@@ -133,8 +133,15 @@ pub(crate) enum TuneBenchmarkTrialStatus {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub(crate) struct TuneBenchmarkTargetReport {
     pub requested: String,
+    pub throughput_tolerance_pct: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub best: Option<TuneBenchmarkTrial>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_best: Option<TuneBenchmarkTrial>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pareto_frontier: Vec<TuneBenchmarkTrial>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trials: Vec<TuneBenchmarkTrial>,
 }

@@ -57,6 +57,7 @@ fn run_tune_request_with_writer(
 ) -> Result<()> {
     let render_json = json_output || args.json;
     let apply_mode = tune_apply_mode(args.launch_args, args.apply, args.replace_existing);
+    validate_benchmark_args(&args)?;
     let config = load_config(config_path)?;
     super::tune::recommendation_symbol_anchor();
     tune_resolver::resolver_symbol_anchor();
@@ -138,21 +139,8 @@ fn run_tune_request_with_writer(
         });
         prepared.push(tune_apply::PreparedTunePlan::new(target.clone(), plan));
     }
-    let benchmark_reports = maybe_run_benchmark_reports(
-        tune::TuneBenchmarkRunRequest {
-            prepared: &prepared,
-            ctx_sizes: args.ctx_sizes,
-            batch_sizes: args.batch_sizes,
-            ubatch_sizes: args.ubatch_sizes,
-            mmap_values: args.mmap_values,
-            mlock_values: args.mlock_values,
-            max_tokens: args.max_tokens,
-            startup_timeout_secs: args.startup_timeout_secs,
-            request_timeout_secs: args.request_timeout_secs,
-            prompt: args.prompt,
-        },
-        args.benchmark,
-    );
+    let benchmark_reports =
+        maybe_run_benchmark_reports(benchmark_run_request(&prepared, &args), args.benchmark);
 
     if !global_safety_errors.is_empty() {
         emit_runner_output(
@@ -289,6 +277,34 @@ fn apply_failure_reason(prepared: &tune_apply::PreparedTunePlan) -> Option<Strin
     })
 }
 
+fn validate_benchmark_args(args: &TuneRunnerArgs<'_>) -> Result<()> {
+    if args.benchmark
+        && (!args.throughput_tolerance_pct.is_finite() || args.throughput_tolerance_pct < 0.0)
+    {
+        bail!("--throughput-tolerance-pct must be finite and non-negative");
+    }
+    Ok(())
+}
+
+fn benchmark_run_request<'a>(
+    prepared: &'a [tune_apply::PreparedTunePlan],
+    args: &'a TuneRunnerArgs<'a>,
+) -> tune::TuneBenchmarkRunRequest<'a> {
+    tune::TuneBenchmarkRunRequest {
+        prepared,
+        ctx_sizes: args.ctx_sizes,
+        batch_sizes: args.batch_sizes,
+        ubatch_sizes: args.ubatch_sizes,
+        mmap_values: args.mmap_values,
+        mlock_values: args.mlock_values,
+        throughput_tolerance_pct: args.throughput_tolerance_pct,
+        max_tokens: args.max_tokens,
+        startup_timeout_secs: args.startup_timeout_secs,
+        request_timeout_secs: args.request_timeout_secs,
+        prompt: args.prompt,
+    }
+}
+
 struct TuneRunnerArgs<'a> {
     command: &'static str,
     model: Option<&'a str>,
@@ -300,6 +316,7 @@ struct TuneRunnerArgs<'a> {
     ubatch_sizes: &'a [u32],
     mmap_values: &'a [BenchmarkBoolOrAuto],
     mlock_values: &'a [BenchmarkBool],
+    throughput_tolerance_pct: f64,
     max_tokens: u32,
     startup_timeout_secs: u64,
     request_timeout_secs: u64,
@@ -332,6 +349,7 @@ fn gpu_tune_runner_args(command: &GpuCommand) -> TuneRunnerArgs<'_> {
         ubatch_sizes: &[],
         mmap_values: &[],
         mlock_values: &[],
+        throughput_tolerance_pct: 0.0,
         max_tokens: 128,
         startup_timeout_secs: 600,
         request_timeout_secs: 600,
@@ -352,6 +370,7 @@ fn benchmark_tune_runner_args(command: &BenchmarkCommand) -> TuneRunnerArgs<'_> 
         ubatch_sizes,
         mmap_values,
         mlock_values,
+        throughput_tolerance_pct,
         max_tokens,
         startup_timeout_secs,
         request_timeout_secs,
@@ -371,6 +390,7 @@ fn benchmark_tune_runner_args(command: &BenchmarkCommand) -> TuneRunnerArgs<'_> 
         ubatch_sizes,
         mmap_values,
         mlock_values,
+        throughput_tolerance_pct: *throughput_tolerance_pct,
         max_tokens: *max_tokens,
         startup_timeout_secs: *startup_timeout_secs,
         request_timeout_secs: *request_timeout_secs,
