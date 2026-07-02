@@ -99,12 +99,35 @@ fn parse_linux_mlock_limit(line: &str) -> Option<TuneMlockLimit> {
     let mut columns = line.split_whitespace();
     let first = columns.next()?;
     let second = columns.next()?;
+    let third = columns.next()?;
     let soft = columns.next()?;
-    if first != "Max" || second != "locked" {
+    if first != "Max" || second != "locked" || third != "memory" {
         return None;
     }
     match soft {
         "unlimited" => Some(TuneMlockLimit::Unlimited),
         value => value.parse::<u64>().ok().map(TuneMlockLimit::Bytes),
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::{TuneMlockLimit, parse_linux_mlock_limit};
+
+    #[test]
+    fn parses_linux_max_locked_memory_soft_limit() {
+        let line = "Max locked memory         8241545216           8241545216           bytes";
+
+        assert_eq!(
+            parse_linux_mlock_limit(line),
+            Some(TuneMlockLimit::Bytes(8_241_545_216))
+        );
+    }
+
+    #[test]
+    fn parses_linux_unlimited_mlock_limit() {
+        let line = "Max locked memory         unlimited            unlimited            bytes";
+
+        assert_eq!(parse_linux_mlock_limit(line), Some(TuneMlockLimit::Unlimited));
     }
 }
