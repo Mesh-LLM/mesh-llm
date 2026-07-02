@@ -1,4 +1,5 @@
 pub(crate) struct TuneBenchmarkRunRequest<'a> {
+    pub(crate) config: &'a mesh_llm_config::MeshConfig,
     pub(crate) prepared: &'a [crate::gpus::tune_apply::PreparedTunePlan],
     pub(crate) ctx_sizes: &'a [u32],
     pub(crate) batch_sizes: &'a [u32],
@@ -61,19 +62,20 @@ fn benchmark_candidates(
     request: &TuneBenchmarkRunRequest<'_>,
     prepared: &crate::gpus::tune_apply::PreparedTunePlan,
 ) -> Vec<TuneBenchmarkCandidate> {
-    let default_ctx = recommended_u32(&prepared.plan, TuneField::CtxSize).unwrap_or(8192);
+    let default_ctx =
+        default_model_fit_u32(request, prepared, TuneField::CtxSize).unwrap_or(8192);
     let contexts = if request.ctx_sizes.is_empty() {
         default_context_sizes(default_ctx)
     } else {
         unique_positive(request.ctx_sizes)
     };
     let batches = if request.batch_sizes.is_empty() {
-        vec![recommended_u32(&prepared.plan, TuneField::Batch).unwrap_or(512)]
+        vec![default_model_fit_u32(request, prepared, TuneField::Batch).unwrap_or(512)]
     } else {
         unique_positive(request.batch_sizes)
     };
     let ubatches = if request.ubatch_sizes.is_empty() {
-        vec![recommended_u32(&prepared.plan, TuneField::Ubatch).unwrap_or(128)]
+        vec![default_model_fit_u32(request, prepared, TuneField::Ubatch).unwrap_or(128)]
     } else {
         unique_positive(request.ubatch_sizes)
     };
@@ -108,6 +110,29 @@ fn benchmark_candidates(
         }
     }
     candidates
+}
+
+fn default_model_fit_u32(
+    request: &TuneBenchmarkRunRequest<'_>,
+    prepared: &crate::gpus::tune_apply::PreparedTunePlan,
+    field: TuneField,
+) -> Option<u32> {
+    recommended_u32(&prepared.plan, field).or_else(|| {
+        preserved_model_fit_u32(
+            benchmark_model_entry(request.config, prepared),
+            request.config.defaults.as_ref(),
+            field,
+        )
+    })
+}
+
+fn benchmark_model_entry<'a>(
+    config: &'a mesh_llm_config::MeshConfig,
+    prepared: &crate::gpus::tune_apply::PreparedTunePlan,
+) -> Option<&'a mesh_llm_config::ModelConfigEntry> {
+    config
+        .models
+        .get(prepared.target.config_matches.first()?.row_index)
 }
 
 fn run_trial(
@@ -701,7 +726,7 @@ mod benchmark_tests {
     use super::*;
     use crate::gpus::tune_apply::PreparedTunePlan;
     use crate::gpus::tune_resolver::{
-        LocalTargetSource, ResolvedTuneTarget, TuneTargetSelection,
+        ConfigModelMatch, LocalTargetSource, ResolvedTuneTarget, TuneTargetSelection,
     };
 
     #[test]
@@ -821,7 +846,9 @@ mod benchmark_tests {
             },
         );
         let prepared = [prepared];
+        let config = mesh_llm_config::MeshConfig::default();
         let request = TuneBenchmarkRunRequest {
+            config: &config,
             prepared: &prepared,
             ctx_sizes: &[4096],
             batch_sizes: &[1024],
@@ -847,6 +874,82 @@ mod benchmark_tests {
         assert!(candidates.iter().any(|candidate| {
             candidate.mmap == TuneBoolOrAutoValue::Disabled && candidate.mlock
         }));
+    }
+
+    #[test]
+    fn benchmark_candidates_default_to_preserved_config_model_fit() {
+        let config = mesh_llm_config::MeshConfig {
+            models: vec![mesh_llm_config::ModelConfigEntry {
+                model: "model".to_string(),
+                model_fit: Some(mesh_llm_config::ModelFitConfig {
+                    ctx_size: Some(131_072),
+                    batch: Some(2048),
+                    ubatch: Some(1024),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let prepared = PreparedTunePlan::new(
+            ResolvedTuneTarget {
+                requested_input: "model".to_string(),
+                canonical_model_ref: "model".to_string(),
+                resolved_path: std::path::PathBuf::from("/tmp/model.gguf"),
+                local_source: LocalTargetSource::FilesystemPath {
+                    synthetic_model_ref: "model".to_string(),
+                },
+                config_matches: vec![ConfigModelMatch {
+                    row_index: 0,
+                    configured_model: "model".to_string(),
+                }],
+                selection: TuneTargetSelection::Configured,
+            },
+            TunePlan {
+                target: TuneTarget {
+                    requested: "model".to_string(),
+                    resolved: Some("/tmp/model.gguf".to_string()),
+                    config_model_ref: Some("model".to_string()),
+                    derived_profile: None,
+                },
+                apply_mode: TuneApplyMode::Review,
+                field_statuses: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+        );
+        let prepared = [prepared];
+        let request = TuneBenchmarkRunRequest {
+            config: &config,
+            prepared: &prepared,
+            ctx_sizes: &[],
+            batch_sizes: &[],
+            ubatch_sizes: &[],
+            mmap_values: &[mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Disabled],
+            mlock_values: &[mesh_llm_cli::benchmark::BenchmarkBool::Disabled],
+            throughput_tolerance_pct: 10.0,
+            max_tokens: 32,
+            startup_timeout_secs: 5,
+            request_timeout_secs: 5,
+            prompt: "hello",
+        };
+
+        let candidates = benchmark_candidates(&request, &prepared[0]);
+
+        assert_eq!(candidates.len(), 6);
+        assert!(
+            candidates.iter().all(|candidate| candidate.batch == 2048),
+            "configured batch should be used when --batch-sizes is omitted"
+        );
+        assert!(
+            candidates.iter().all(|candidate| candidate.ubatch == 1024),
+            "configured ubatch should be used when --ubatch-sizes is omitted"
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.ctx_size == 131_072),
+            "configured context should anchor the default context ladder"
+        );
     }
 
     #[test]

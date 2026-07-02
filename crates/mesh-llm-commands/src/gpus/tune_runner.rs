@@ -139,8 +139,10 @@ fn run_tune_request_with_writer(
         });
         prepared.push(tune_apply::PreparedTunePlan::new(target.clone(), plan));
     }
-    let benchmark_reports =
-        maybe_run_benchmark_reports(benchmark_run_request(&prepared, &args), args.benchmark);
+    let benchmark_reports = maybe_run_benchmark_reports(
+        benchmark_run_request(&config, &prepared, &args),
+        args.benchmark,
+    );
 
     if !global_safety_errors.is_empty() {
         emit_runner_output(
@@ -287,10 +289,12 @@ fn validate_benchmark_args(args: &TuneRunnerArgs<'_>) -> Result<()> {
 }
 
 fn benchmark_run_request<'a>(
+    config: &'a mesh_llm_config::MeshConfig,
     prepared: &'a [tune_apply::PreparedTunePlan],
     args: &'a TuneRunnerArgs<'a>,
 ) -> tune::TuneBenchmarkRunRequest<'a> {
     tune::TuneBenchmarkRunRequest {
+        config,
         prepared,
         ctx_sizes: args.ctx_sizes,
         batch_sizes: args.batch_sizes,
