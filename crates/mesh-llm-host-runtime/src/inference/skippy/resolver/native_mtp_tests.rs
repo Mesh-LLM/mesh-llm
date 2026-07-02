@@ -117,6 +117,40 @@ fn speculative_strategy_auto_detects_direct_gguf_native_mtp_metadata() {
 }
 
 #[test]
+fn speculative_strategy_auto_uses_hardware_model_path_for_direct_gguf_detection() {
+    let requested_model_file = temp_model_file();
+    let resolved_model_file =
+        temp_model_file_with_tensor_names(&["blk.40.nextn.eh_proj.weight"], None);
+    let mesh_config = parse_config(&format!(
+        r#"
+[[models]]
+model = "unsloth/Qwen3.6-MTP-GGUF"
+
+[models.hardware]
+model_path = "{}"
+"#,
+        resolved_model_file.path().display()
+    ));
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "unsloth/Qwen3.6-MTP-GGUF",
+        model_path: requested_model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("hardware model_path native MTP tensors should enable auto native MTP");
+
+    assert_eq!(
+        resolved.hardware.resolved_model_path,
+        resolved_model_file.path()
+    );
+    assert!(resolved.speculative.native_mtp_enabled);
+}
+
+#[test]
 fn speculative_strategy_auto_uses_package_native_mtp_default() {
     let mesh_config = parse_config("");
     let model_file = temp_model_file();

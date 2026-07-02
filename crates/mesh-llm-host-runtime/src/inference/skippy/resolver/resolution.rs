@@ -29,12 +29,14 @@ pub(crate) fn resolve_skippy_config(
     validate_supported_model_fit_controls(&context)?;
     validate_supported_hardware_controls(&context)?;
 
-    let family_policy =
-        family_policy_for_model_path(context.request.model_path, Some(context.request.model_id));
     let kv_policy = KvCachePolicy::for_model_size(context.request.model_bytes);
 
     let model_fit = resolve_model_fit_config(&context, kv_policy)?;
     let hardware = resolve_hardware_config(&context)?;
+    let family_policy = family_policy_for_model_path(
+        &hardware.resolved_model_path,
+        Some(context.request.model_id),
+    );
     let throughput = resolve_throughput_config(&context);
     let skippy = resolve_execution_config(&context, family_policy.activation_wire_dtype);
     let speculative = resolve_speculative_config(
@@ -45,7 +47,7 @@ pub(crate) fn resolve_skippy_config(
             .defaults
             .and_then(|value| value.speculative.as_ref()),
         context.request.model_id,
-        context.request.model_path,
+        &hardware.resolved_model_path,
         context.request.package_generation,
     )?;
     let resolved_request = resolve_request_defaults(

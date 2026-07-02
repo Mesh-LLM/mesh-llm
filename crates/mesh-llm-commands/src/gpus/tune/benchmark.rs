@@ -195,15 +195,16 @@ fn run_trial_inner(
     timings.setup_ms = elapsed_ms_since(setup_started);
 
     let readiness_started = std::time::Instant::now();
-    let readiness_result = wait_for_trial_ready(
-        &client,
-        &mut child,
+    let readiness_result = wait_for_trial_ready(TrialReadinessWait {
+        client: &client,
+        child: &mut child,
+        log_path: &log_path,
         port,
-        request.prompt,
-        request.startup_timeout_secs,
+        prompt: request.prompt,
+        startup_timeout_secs: request.startup_timeout_secs,
         request_timeout,
-        &mut timings.readiness_attempts,
-    );
+        readiness_attempts: &mut timings.readiness_attempts,
+    });
     timings.readiness_ms = elapsed_ms_since(readiness_started);
     if let Err(error) = readiness_result {
         return Ok(finish_failed_trial(
@@ -414,32 +415,68 @@ fn terminate_child(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-fn wait_for_trial_ready(
-    client: &reqwest::blocking::Client,
-    child: &mut TrialChild,
+struct TrialReadinessWait<'a> {
+    client: &'a reqwest::blocking::Client,
+    child: &'a mut TrialChild,
+    log_path: &'a std::path::Path,
     port: u16,
-    prompt: &str,
+    prompt: &'a str,
     startup_timeout_secs: u64,
     request_timeout: std::time::Duration,
-    readiness_attempts: &mut u32,
-) -> anyhow::Result<()> {
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(startup_timeout_secs.max(1));
+    readiness_attempts: &'a mut u32,
+}
+
+fn wait_for_trial_ready(wait: TrialReadinessWait<'_>) -> anyhow::Result<()> {
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(wait.startup_timeout_secs.max(1));
     let mut last_error = String::new();
     while std::time::Instant::now() < deadline {
-        if let Some(status) = child.child.try_wait()? {
+        if let Some(status) = wait.child.child.try_wait()? {
             anyhow::bail!("trial server exited before readiness: {status}");
         }
+        if let Some(error) = trial_startup_failure_from_log(wait.log_path) {
+            anyhow::bail!("trial startup failed: {error}");
+        }
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        let attempt_timeout = std::cmp::min(request_timeout, remaining);
-        *readiness_attempts += 1;
-        match send_chat_request_with_watchdog(client, child, port, prompt, 1, attempt_timeout) {
+        let attempt_timeout = std::cmp::min(wait.request_timeout, remaining);
+        *wait.readiness_attempts += 1;
+        match send_chat_request_with_watchdog(
+            wait.client,
+            wait.child,
+            wait.port,
+            wait.prompt,
+            1,
+            attempt_timeout,
+        ) {
             Ok(_) => return Ok(()),
             Err(error) => last_error = error.to_string(),
+        }
+        if let Some(error) = trial_startup_failure_from_log(wait.log_path) {
+            anyhow::bail!("trial startup failed: {error}");
         }
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
     anyhow::bail!("trial server did not become ready: {last_error}");
+}
+
+fn trial_startup_failure_from_log(log_path: &std::path::Path) -> Option<String> {
+    let contents = std::fs::read_to_string(log_path).ok()?;
+    contents
+        .lines()
+        .rev()
+        .take(200)
+        .find_map(trial_startup_failure_from_log_line)
+}
+
+fn trial_startup_failure_from_log_line(line: &str) -> Option<String> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(line)
+        && let Some(message) = value.get("message").and_then(|value| value.as_str())
+        && message.contains("Failed to start model")
+    {
+        return Some(message.to_string());
+    }
+    line.contains("Failed to start model")
+        .then(|| line.trim().to_string())
 }
 
 fn send_chat_request_with_watchdog(
@@ -1591,5 +1628,28 @@ mod benchmark_tests {
             log_path: None,
             error: None,
         }
+    }
+
+    #[test]
+    fn trial_startup_failure_scans_json_serve_logs() {
+        let log = tempfile::NamedTempFile::new().expect("temp log");
+        std::fs::write(
+            log.path(),
+            r#"{"level":"INFO","message":"API ready"}
+{"level":"ERROR","message":"Failed to start model unsloth/Qwen3.6-MTP-GGUF: skippy speculative.strategy = \"native-mtp-n1\" requires proven native-mtp-n1 support"}
+"#,
+        )
+        .expect("write log");
+
+        let error = trial_startup_failure_from_log(log.path()).expect("startup error");
+        assert!(error.contains("requires proven native-mtp-n1 support"));
+    }
+
+    #[test]
+    fn trial_startup_failure_scans_plain_serve_logs() {
+        let line = "2026-07-02 Failed to start model qwen: bad draft pair";
+
+        let error = trial_startup_failure_from_log_line(line).expect("startup error");
+        assert_eq!(error, line);
     }
 }
