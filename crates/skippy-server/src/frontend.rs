@@ -198,6 +198,8 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         draft: None,
         speculative_window: 0,
         adaptive_speculative_window: false,
+        ngram_min: 0,
+        ngram_max: 0,
         generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: args.generation_concurrency,
@@ -238,6 +240,8 @@ pub struct EmbeddedOpenAiArgs {
     pub speculative_window: usize,
     pub adaptive_speculative_window: bool,
     pub draft_n_gpu_layers: Option<i32>,
+    pub ngram_min: usize,
+    pub ngram_max: usize,
     pub native_mtp_enabled: bool,
     pub activation_width: i32,
     pub wire_dtype: WireActivationDType,
@@ -480,6 +484,9 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
     if args.draft_model_path.is_some() && args.speculative_window == 0 {
         bail!("--openai-speculative-window must be greater than zero when a draft model is set");
     }
+    if args.ngram_min > args.ngram_max && args.ngram_max > 0 {
+        bail!("--openai-ngram-min must be less than or equal to --openai-ngram-max");
+    }
     if args.config.stage_index != 0 || args.config.layer_start != 0 {
         bail!("embedded OpenAI serving is only supported on stage 0");
     }
@@ -550,6 +557,8 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         draft,
         speculative_window: args.speculative_window,
         adaptive_speculative_window: args.adaptive_speculative_window,
+        ngram_min: args.ngram_min,
+        ngram_max: args.ngram_max,
         generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: args.generation_concurrency,
@@ -591,6 +600,8 @@ struct StageOpenAiBackend {
     draft: Option<Arc<Mutex<DraftRunner>>>,
     speculative_window: usize,
     adaptive_speculative_window: bool,
+    ngram_min: usize,
+    ngram_max: usize,
     generation_limit: Arc<Semaphore>,
     generation_queue_depth: Arc<AtomicUsize>,
     generation_queue_limit: usize,
@@ -1777,6 +1788,8 @@ struct EmbeddedStageZeroGeneration<'a> {
     draft: Option<Arc<Mutex<DraftRunner>>>,
     speculative_window: usize,
     adaptive_speculative_window: bool,
+    ngram_min: usize,
+    ngram_max: usize,
     native_mtp_enabled: bool,
     prompt_token_ids: &'a [i32],
     max_tokens: u32,

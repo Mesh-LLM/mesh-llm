@@ -272,6 +272,8 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                 speculative_window: openai_options.speculative_window,
                 adaptive_speculative_window: openai_options.adaptive_speculative_window,
                 draft_n_gpu_layers: openai_options.draft_n_gpu_layers,
+                ngram_min: openai_options.ngram_min,
+                ngram_max: openai_options.ngram_max,
                 native_mtp_enabled,
                 activation_width,
                 wire_dtype,

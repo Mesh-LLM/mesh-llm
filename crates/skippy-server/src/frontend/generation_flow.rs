@@ -135,6 +135,8 @@ impl StageOpenAiBackend {
                     draft: self.draft.clone(),
                     speculative_window: self.speculative_window,
                     adaptive_speculative_window: self.adaptive_speculative_window,
+                    ngram_min: self.ngram_min,
+                    ngram_max: self.ngram_max,
                     native_mtp_enabled,
                     prompt_token_ids: &prompt_token_ids,
                     max_tokens,

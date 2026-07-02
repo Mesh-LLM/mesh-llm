@@ -49,6 +49,34 @@ pub(super) struct OpenAiSpeculativeStats {
     pub(super) adaptive_window_enabled: bool,
 }
 
+pub(super) fn propose_ngram_tokens(
+    history: &[i32],
+    min_match_tokens: usize,
+    max_proposed_tokens: usize,
+) -> Vec<i32> {
+    if min_match_tokens == 0 || max_proposed_tokens == 0 || history.len() < min_match_tokens * 2 {
+        return Vec::new();
+    }
+    let longest_match = history.len() / 2;
+    for match_len in (min_match_tokens..=longest_match).rev() {
+        let suffix_start = history.len() - match_len;
+        let suffix = &history[suffix_start..];
+        let latest_candidate_start = suffix_start.saturating_sub(match_len);
+        for candidate_start in (0..=latest_candidate_start).rev() {
+            let candidate_end = candidate_start + match_len;
+            if &history[candidate_start..candidate_end] != suffix {
+                continue;
+            }
+            let proposal_start = candidate_end;
+            let proposal_end = history.len().min(proposal_start + max_proposed_tokens);
+            if proposal_start < proposal_end {
+                return history[proposal_start..proposal_end].to_vec();
+            }
+        }
+    }
+    Vec::new()
+}
+
 impl OpenAiSpeculativeStats {
     pub(super) fn observe_verify_decision(
         &mut self,
@@ -291,6 +319,25 @@ impl OpenAiSpeculativeStats {
             "llama_stage.spec.window_shrinks".to_string(),
             json!(self.adaptive_window_shrinks),
         );
+    }
+}
+
+#[cfg(test)]
+mod ngram_tests {
+    use super::*;
+
+    #[test]
+    fn proposes_tokens_after_latest_matching_suffix() {
+        let history = [1, 2, 3, 4, 9, 2, 3, 4];
+
+        assert_eq!(propose_ngram_tokens(&history, 2, 2), vec![9, 2]);
+    }
+
+    #[test]
+    fn returns_empty_without_enough_history() {
+        assert!(propose_ngram_tokens(&[1, 2, 3], 2, 4).is_empty());
+        assert!(propose_ngram_tokens(&[1, 2, 1, 2], 0, 4).is_empty());
+        assert!(propose_ngram_tokens(&[1, 2, 1, 2], 1, 0).is_empty());
     }
 }
 

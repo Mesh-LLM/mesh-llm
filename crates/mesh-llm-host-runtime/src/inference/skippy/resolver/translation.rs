@@ -233,16 +233,22 @@ impl ResolvedSkippyConfig {
             } else {
                 None
             },
-            speculative_window: if mode == "draft" {
-                self.speculative.draft_max_tokens as usize
-            } else {
-                0
-            },
+            speculative_window: self.speculative_window_for_embedded(mode),
             adaptive_speculative_window: false,
             draft_n_gpu_layers: if mode == "draft" {
                 self.speculative.draft_n_gpu_layers
             } else {
                 None
+            },
+            ngram_min: if mode == "ngram" {
+                self.speculative.ngram_min as usize
+            } else {
+                0
+            },
+            ngram_max: if mode == "ngram" {
+                self.speculative.ngram_max as usize
+            } else {
+                0
             },
             native_mtp_enabled: self.speculative.native_mtp_enabled,
             activation_width,
@@ -267,8 +273,15 @@ impl ResolvedSkippyConfig {
             if self.skippy.prefill_controls_explicit {
                 bail!("skippy prefill chunk controls require staged serving");
             }
-            if self.speculative.explicit {
+            if self.speculative.mode == "draft"
+                || self.speculative.draft_model_path.is_some()
+                || self.speculative.draft_max_tokens > 0
+                || self.speculative.draft_n_gpu_layers.is_some()
+            {
                 bail!("speculative draft controls require staged serving");
+            }
+            if self.speculative.mode == "ngram" {
+                bail!("speculative ngram controls require staged serving");
             }
         }
         Ok(())
@@ -280,8 +293,18 @@ impl ResolvedSkippyConfig {
         }
         if self.speculative.mode == "draft" && self.speculative.draft_model_path.is_some() {
             "draft"
+        } else if self.speculative.mode == "ngram" && self.speculative.ngram_min > 0 {
+            "ngram"
         } else {
             "disabled"
+        }
+    }
+
+    fn speculative_window_for_embedded(&self, mode: &str) -> usize {
+        match mode {
+            "draft" => self.speculative.draft_max_tokens as usize,
+            "ngram" => self.speculative.ngram_max as usize,
+            _ => 0,
         }
     }
 
@@ -347,6 +370,8 @@ impl ResolvedEmbeddedOpenAiArgs {
             speculative_window: 0,
             adaptive_speculative_window: false,
             draft_n_gpu_layers: None,
+            ngram_min: 0,
+            ngram_max: 0,
             native_mtp_enabled: true,
             activation_width: 0,
             wire_dtype,
@@ -377,6 +402,8 @@ impl ResolvedEmbeddedOpenAiArgs {
             speculative_window: 0,
             adaptive_speculative_window: false,
             draft_n_gpu_layers: None,
+            ngram_min: 0,
+            ngram_max: 0,
             native_mtp_enabled: true,
             activation_width,
             wire_dtype,
@@ -411,6 +438,8 @@ impl ResolvedEmbeddedOpenAiArgs {
             speculative_window: self.speculative_window,
             adaptive_speculative_window: self.adaptive_speculative_window,
             draft_n_gpu_layers: self.draft_n_gpu_layers,
+            ngram_min: self.ngram_min,
+            ngram_max: self.ngram_max,
             native_mtp_enabled: self.native_mtp_enabled,
             activation_width: self.activation_width,
             wire_dtype: self.wire_dtype,

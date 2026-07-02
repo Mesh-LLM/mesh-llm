@@ -62,32 +62,110 @@ pub(super) fn resolve_speculative_config(
         global_config.and_then(|config| config.mode.as_deref()),
         Some("auto"),
     );
-    if mode == "ngram" {
-        unsupported_speculative_field("speculative.mode = \"ngram\"")?;
-    }
-    if pick_owned(
-        model_config.and_then(|config| config.draft_hf_repo.clone()),
-        global_config.and_then(|config| config.draft_hf_repo.clone()),
+    reject_unsupported_speculative_runtime_fields(model_config, global_config)?;
+    let mut mode = mode;
+    let mut draft_model_path = pick_owned(
+        model_config.and_then(|config| config.draft_model_path.clone()),
+        global_config.and_then(|config| config.draft_model_path.clone()),
     )
-    .is_some()
-    {
-        unsupported_speculative_field("speculative.draft_hf_repo")?;
+    .map(PathBuf::from);
+    let draft_max_tokens = super::support::pick_value(
+        model_config.and_then(|config| config.draft_max_tokens),
+        global_config.and_then(|config| config.draft_max_tokens),
+        0,
+    );
+    let draft_n_gpu_layers = pick_owned(
+        model_config.and_then(|config| config.draft_gpu_layers),
+        global_config.and_then(|config| config.draft_gpu_layers),
+    );
+    let ngram_min = super::support::pick_value(
+        model_config.and_then(|config| config.ngram_min),
+        global_config.and_then(|config| config.ngram_min),
+        0,
+    );
+    let ngram_max = super::support::pick_value(
+        model_config.and_then(|config| config.ngram_max),
+        global_config.and_then(|config| config.ngram_max),
+        0,
+    );
+    let pairing_fault = normalize_pairing_fault(pick_string(
+        model_config.and_then(|config| config.pairing_fault.as_deref()),
+        global_config.and_then(|config| config.pairing_fault.as_deref()),
+        Some("warn_disable"),
+    ));
+    let explicit = mode != "auto"
+        || draft_model_path.is_some()
+        || draft_max_tokens > 0
+        || draft_n_gpu_layers.is_some()
+        || ngram_min > 0
+        || ngram_max > 0;
+    if mode == "disabled" && draft_model_path.is_some() {
+        bail!("skippy speculative draft source cannot be set when speculative.mode = \"disabled\"");
     }
-    if pick_owned(
-        model_config.and_then(|config| config.draft_hf_file.clone()),
-        global_config.and_then(|config| config.draft_hf_file.clone()),
-    )
-    .is_some()
-    {
-        unsupported_speculative_field("speculative.draft_hf_file")?;
+    if mode == "draft" || (mode == "auto" && draft_model_path.is_some()) {
+        resolve_draft_speculative_mode(
+            &mut mode,
+            &mut draft_model_path,
+            draft_max_tokens,
+            pairing_fault.as_str(),
+            model_id,
+            model_path,
+        )?;
+    } else if mode == "ngram" || (mode == "auto" && (ngram_min > 0 || ngram_max > 0)) {
+        resolve_ngram_speculative_mode(&mut mode, ngram_min, ngram_max)?;
+    } else {
+        mode = "disabled".to_string();
+        draft_model_path = None;
     }
-    if pick_owned(
-        model_config.and_then(|config| config.draft_device.clone()),
-        global_config.and_then(|config| config.draft_device.clone()),
-    )
-    .is_some()
-    {
-        unsupported_speculative_field("speculative.draft_device")?;
+    Ok(ResolvedSpeculativeConfig {
+        strategy,
+        native_mtp_enabled,
+        mode,
+        draft_model_path,
+        pairing_fault,
+        draft_max_tokens,
+        explicit,
+        draft_n_gpu_layers,
+        ngram_min,
+        ngram_max,
+    })
+}
+
+fn reject_unsupported_speculative_runtime_fields(
+    model_config: Option<&SpeculativeConfig>,
+    global_config: Option<&SpeculativeConfig>,
+) -> Result<()> {
+    let unsupported_string_fields = [
+        (
+            model_config.and_then(|config| config.draft_hf_repo.clone()),
+            global_config.and_then(|config| config.draft_hf_repo.clone()),
+            "speculative.draft_hf_repo",
+        ),
+        (
+            model_config.and_then(|config| config.draft_hf_file.clone()),
+            global_config.and_then(|config| config.draft_hf_file.clone()),
+            "speculative.draft_hf_file",
+        ),
+        (
+            model_config.and_then(|config| config.draft_device.clone()),
+            global_config.and_then(|config| config.draft_device.clone()),
+            "speculative.draft_device",
+        ),
+        (
+            model_config.and_then(|config| config.draft_cache_type_k.clone()),
+            global_config.and_then(|config| config.draft_cache_type_k.clone()),
+            "speculative.draft_cache_type_k",
+        ),
+        (
+            model_config.and_then(|config| config.draft_cache_type_v.clone()),
+            global_config.and_then(|config| config.draft_cache_type_v.clone()),
+            "speculative.draft_cache_type_v",
+        ),
+    ];
+    for (model, global, field) in unsupported_string_fields {
+        if pick_owned(model, global).is_some() {
+            unsupported_speculative_field(field)?;
+        }
     }
     if pick_owned(
         model_config.and_then(|config| config.draft_threads),
@@ -96,22 +174,6 @@ pub(super) fn resolve_speculative_config(
     .is_some()
     {
         unsupported_speculative_field("speculative.draft_threads")?;
-    }
-    if pick_owned(
-        model_config.and_then(|config| config.draft_cache_type_k.clone()),
-        global_config.and_then(|config| config.draft_cache_type_k.clone()),
-    )
-    .is_some()
-    {
-        unsupported_speculative_field("speculative.draft_cache_type_k")?;
-    }
-    if pick_owned(
-        model_config.and_then(|config| config.draft_cache_type_v.clone()),
-        global_config.and_then(|config| config.draft_cache_type_v.clone()),
-    )
-    .is_some()
-    {
-        unsupported_speculative_field("speculative.draft_cache_type_v")?;
     }
     if pick_owned(
         model_config.and_then(|config| config.draft_min_tokens),
@@ -137,84 +199,51 @@ pub(super) fn resolve_speculative_config(
     {
         unsupported_speculative_field("speculative.draft_split_probability")?;
     }
-    if pick_owned(
-        model_config.and_then(|config| config.ngram_min),
-        global_config.and_then(|config| config.ngram_min),
-    )
-    .is_some()
-    {
-        unsupported_speculative_field("speculative.ngram_min")?;
-    }
-    if pick_owned(
-        model_config.and_then(|config| config.ngram_max),
-        global_config.and_then(|config| config.ngram_max),
-    )
-    .is_some()
-    {
-        unsupported_speculative_field("speculative.ngram_max")?;
-    }
+    Ok(())
+}
 
-    let mut mode = mode;
-    let mut draft_model_path = pick_owned(
-        model_config.and_then(|config| config.draft_model_path.clone()),
-        global_config.and_then(|config| config.draft_model_path.clone()),
-    )
-    .map(PathBuf::from);
-    let draft_max_tokens = super::support::pick_value(
-        model_config.and_then(|config| config.draft_max_tokens),
-        global_config.and_then(|config| config.draft_max_tokens),
-        0,
-    );
-    let draft_n_gpu_layers = pick_owned(
-        model_config.and_then(|config| config.draft_gpu_layers),
-        global_config.and_then(|config| config.draft_gpu_layers),
-    );
-    let pairing_fault = normalize_pairing_fault(pick_string(
-        model_config.and_then(|config| config.pairing_fault.as_deref()),
-        global_config.and_then(|config| config.pairing_fault.as_deref()),
-        Some("warn_disable"),
-    ));
-    let explicit = mode != "auto"
-        || draft_model_path.is_some()
-        || draft_max_tokens > 0
-        || draft_n_gpu_layers.is_some();
-    if mode == "disabled" && draft_model_path.is_some() {
-        bail!("skippy speculative draft source cannot be set when speculative.mode = \"disabled\"");
+fn resolve_draft_speculative_mode(
+    mode: &mut String,
+    draft_model_path: &mut Option<PathBuf>,
+    draft_max_tokens: u32,
+    pairing_fault: &str,
+    model_id: &str,
+    model_path: &Path,
+) -> Result<()> {
+    if draft_model_path.is_none() {
+        bail!("skippy speculative draft mode requires an explicit draft_model_path");
     }
-    if mode == "draft" || (mode == "auto" && draft_model_path.is_some()) {
-        if draft_model_path.is_none() {
-            bail!("skippy speculative draft mode requires an explicit draft_model_path");
-        }
-        if draft_max_tokens == 0 {
-            bail!("skippy speculative draft mode requires draft_max_tokens > 0");
-        }
-        mode = "draft".to_string();
-        let draft_path = draft_model_path.as_ref().expect("checked above");
-        if let Some(reason) = incompatible_draft_pair_reason(model_id, model_path, draft_path) {
-            match pairing_fault.as_str() {
-                "warn_disable" => {
-                    mode = "disabled".to_string();
-                    draft_model_path = None;
-                }
-                "fail_open" => {}
-                "fail_closed" => bail!("skippy incompatible speculative draft pairing: {reason}"),
-                _ => unreachable!(),
+    if draft_max_tokens == 0 {
+        bail!("skippy speculative draft mode requires draft_max_tokens > 0");
+    }
+    *mode = "draft".to_string();
+    let draft_path = draft_model_path.as_ref().expect("checked above");
+    if let Some(reason) = incompatible_draft_pair_reason(model_id, model_path, draft_path) {
+        match pairing_fault {
+            "warn_disable" => {
+                *mode = "disabled".to_string();
+                *draft_model_path = None;
             }
+            "fail_open" => {}
+            "fail_closed" => bail!("skippy incompatible speculative draft pairing: {reason}"),
+            _ => unreachable!(),
         }
-    } else {
-        mode = "disabled".to_string();
-        draft_model_path = None;
     }
-    Ok(ResolvedSpeculativeConfig {
-        strategy,
-        native_mtp_enabled,
-        mode,
-        draft_model_path,
-        pairing_fault,
-        draft_max_tokens,
-        explicit,
-        draft_n_gpu_layers,
-    })
+    Ok(())
+}
+
+fn resolve_ngram_speculative_mode(mode: &mut String, ngram_min: u32, ngram_max: u32) -> Result<()> {
+    if ngram_min == 0 {
+        bail!("skippy speculative ngram mode requires ngram_min > 0");
+    }
+    if ngram_max == 0 {
+        bail!("skippy speculative ngram mode requires ngram_max > 0");
+    }
+    if ngram_min > ngram_max {
+        bail!("skippy speculative ngram_min must be less than or equal to ngram_max");
+    }
+    *mode = "ngram".to_string();
+    Ok(())
 }
 
 fn package_generation_or_direct_default_supports_native_mtp_n1(

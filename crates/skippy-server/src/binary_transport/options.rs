@@ -42,6 +42,8 @@ pub struct EmbeddedOpenAiStageOptions {
     pub speculative_window: usize,
     pub adaptive_speculative_window: bool,
     pub draft_n_gpu_layers: Option<i32>,
+    pub ngram_min: usize,
+    pub ngram_max: usize,
 }
 
 impl BinaryStageOptions {
@@ -85,6 +87,8 @@ impl BinaryStageOptions {
                 speculative_window: args.openai_speculative_window,
                 adaptive_speculative_window: args.openai_adaptive_speculative_window,
                 draft_n_gpu_layers: args.openai_draft_n_gpu_layers,
+                ngram_min: args.openai_ngram_min,
+                ngram_max: args.openai_ngram_max,
             });
         let native_mtp_enabled = native_mtp_enabled_from_env();
         Ok(Self {

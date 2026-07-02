@@ -99,6 +99,8 @@ pub(crate) struct ResolvedSpeculativeConfig {
     pub(crate) draft_max_tokens: u32,
     pub(crate) explicit: bool,
     pub(crate) draft_n_gpu_layers: Option<i32>,
+    pub(crate) ngram_min: u32,
+    pub(crate) ngram_max: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -154,6 +156,8 @@ pub(crate) struct ResolvedEmbeddedOpenAiArgs {
     pub(crate) speculative_window: usize,
     pub(crate) adaptive_speculative_window: bool,
     pub(crate) draft_n_gpu_layers: Option<i32>,
+    pub(crate) ngram_min: usize,
+    pub(crate) ngram_max: usize,
     pub(crate) native_mtp_enabled: bool,
     pub(crate) activation_width: i32,
     pub(crate) wire_dtype: skippy_protocol::binary::WireActivationDType,
