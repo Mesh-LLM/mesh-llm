@@ -91,6 +91,24 @@ pub(crate) struct TuneBenchmarkCandidate {
     pub cache_type_v: TuneKvCacheType,
     pub mmap: TuneBoolOrAutoValue,
     pub mlock: bool,
+    pub speculative: TuneBenchmarkSpeculativeCandidate,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub(crate) enum TuneBenchmarkSpeculativeCandidate {
+    Disabled,
+    NativeMtpN1,
+    Draft {
+        draft_model_path: String,
+        draft_max_tokens: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft_min_tokens: Option<u32>,
+    },
+    Ngram {
+        ngram_min: u32,
+        ngram_max: u32,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]

@@ -49,7 +49,7 @@ pub(crate) mod tune_resolver;
 pub(crate) mod tune_runner;
 
 pub fn dispatch_gpu_command(
-    config_path: Option<&Path>,
+    _config_path: Option<&Path>,
     json_output: bool,
     command: Option<&GpuCommand>,
 ) -> Result<()> {
@@ -57,9 +57,6 @@ pub fn dispatch_gpu_command(
         Some(command) => match command {
             GpuCommand::Detect { json } => run_gpu_benchmark(json_output || *json),
             GpuCommand::RunBenchmark { backend } => run_gpu_backend_benchmark(*backend),
-            GpuCommand::Tune { .. } => {
-                tune_runner::run_tune_command(config_path, json_output, command)
-            }
         },
         None => run_gpus(json_output),
     }

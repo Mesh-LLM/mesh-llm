@@ -8,7 +8,7 @@ pub async fn dispatch_benchmark_command(
     command: &BenchmarkCommand,
 ) -> Result<()> {
     match command {
-        BenchmarkCommand::Tune { .. } => {
+        BenchmarkCommand::Tune(_) => {
             crate::gpus::tune_runner::run_benchmark_tune_command(config_path, command)
         }
         BenchmarkCommand::ImportPrompts {
@@ -34,5 +34,26 @@ fn map_prompt_source(source: PromptImportSource) -> benchmark_prompts::PromptImp
         PromptImportSource::MtBench => benchmark_prompts::PromptImportSource::MtBench,
         PromptImportSource::Gsm8k => benchmark_prompts::PromptImportSource::Gsm8k,
         PromptImportSource::Humaneval => benchmark_prompts::PromptImportSource::Humaneval,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_import_source_mapping_covers_all_cli_variants() {
+        assert_eq!(
+            map_prompt_source(PromptImportSource::MtBench),
+            benchmark_prompts::PromptImportSource::MtBench
+        );
+        assert_eq!(
+            map_prompt_source(PromptImportSource::Gsm8k),
+            benchmark_prompts::PromptImportSource::Gsm8k
+        );
+        assert_eq!(
+            map_prompt_source(PromptImportSource::Humaneval),
+            benchmark_prompts::PromptImportSource::Humaneval
+        );
     }
 }

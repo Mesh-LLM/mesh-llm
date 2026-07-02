@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
+use model_artifact::gguf::{scan_gguf_compact_meta, scan_gguf_tensor_names_any};
 use skippy_runtime::package::{PackageGenerationInfo, PackageSpeculativeDecodingInfo};
 use skippy_topology::infer_family_capability;
 
@@ -15,22 +16,40 @@ pub(super) fn resolve_speculative_config(
     model_path: &Path,
     package_generation: Option<&PackageGenerationInfo>,
 ) -> Result<ResolvedSpeculativeConfig> {
+    let spec_default = pick_owned(
+        model_config.and_then(|config| config.spec_default.as_ref()),
+        global_config.and_then(|config| config.spec_default.as_ref()),
+    );
+    if matches!(spec_default, Some(BoolOrAuto::Bool(true))) {
+        unsupported_speculative_field("speculative.spec_default = true")?;
+    }
+    let has_explicit_strategy = model_config
+        .and_then(|config| config.strategy.as_ref())
+        .is_some()
+        || global_config
+            .and_then(|config| config.strategy.as_ref())
+            .is_some();
+    let auto_defaults_enabled =
+        !matches!(spec_default, Some(BoolOrAuto::Bool(false))) || has_explicit_strategy;
+    let supports_native_mtp_n1 = package_generation_supports_native_mtp_n1(package_generation)
+        || direct_gguf_supports_native_mtp_n1(model_path);
     let strategy = pick_string_owned(
         model_config.and_then(|config| config.strategy.as_deref()),
         global_config.and_then(|config| config.strategy.as_deref()),
         Some("auto"),
     );
     let native_mtp_enabled = match strategy.as_str() {
-        "auto" => package_generation_supports_default_native_mtp(package_generation),
+        "auto" => {
+            auto_defaults_enabled
+                && package_generation_or_direct_default_supports_native_mtp_n1(
+                    package_generation,
+                    model_path,
+                )
+        }
         "native-mtp-n1" => {
-            if package_generation.is_some_and(|generation| {
-                !generation
-                    .speculative_decoding
-                    .as_ref()
-                    .is_some_and(speculative_supports_native_mtp_n1)
-            }) {
+            if !supports_native_mtp_n1 {
                 bail!(
-                    "skippy speculative.strategy = \"native-mtp-n1\" requires package generation metadata advertising native-mtp-n1"
+                    "skippy speculative.strategy = \"native-mtp-n1\" requires proven native-mtp-n1 support"
                 );
             }
             true
@@ -44,79 +63,95 @@ pub(super) fn resolve_speculative_config(
         Some("auto"),
     );
     if mode == "ngram" {
-        bail!("skippy speculative.mode = \"ngram\" is not supported by the embedded runtime");
+        unsupported_speculative_field("speculative.mode = \"ngram\"")?;
     }
     if pick_owned(
         model_config.and_then(|config| config.draft_hf_repo.clone()),
         global_config.and_then(|config| config.draft_hf_repo.clone()),
     )
     .is_some()
-        || pick_owned(
-            model_config.and_then(|config| config.draft_hf_file.clone()),
-            global_config.and_then(|config| config.draft_hf_file.clone()),
-        )
-        .is_some()
     {
-        bail!(
-            "skippy speculative Hugging Face draft sources are not supported by the embedded runtime"
-        );
+        unsupported_speculative_field("speculative.draft_hf_repo")?;
+    }
+    if pick_owned(
+        model_config.and_then(|config| config.draft_hf_file.clone()),
+        global_config.and_then(|config| config.draft_hf_file.clone()),
+    )
+    .is_some()
+    {
+        unsupported_speculative_field("speculative.draft_hf_file")?;
     }
     if pick_owned(
         model_config.and_then(|config| config.draft_device.clone()),
         global_config.and_then(|config| config.draft_device.clone()),
     )
     .is_some()
-        || pick_owned(
-            model_config.and_then(|config| config.draft_threads),
-            global_config.and_then(|config| config.draft_threads),
-        )
-        .is_some()
-        || pick_owned(
-            model_config.and_then(|config| config.draft_cache_type_k.clone()),
-            global_config.and_then(|config| config.draft_cache_type_k.clone()),
-        )
-        .is_some()
-        || pick_owned(
-            model_config.and_then(|config| config.draft_cache_type_v.clone()),
-            global_config.and_then(|config| config.draft_cache_type_v.clone()),
-        )
-        .is_some()
     {
-        bail!("skippy explicit draft runtime overrides are not supported by the embedded runtime");
+        unsupported_speculative_field("speculative.draft_device")?;
     }
-    let draft_min_tokens = pick_owned(
+    if pick_owned(
+        model_config.and_then(|config| config.draft_threads),
+        global_config.and_then(|config| config.draft_threads),
+    )
+    .is_some()
+    {
+        unsupported_speculative_field("speculative.draft_threads")?;
+    }
+    if pick_owned(
+        model_config.and_then(|config| config.draft_cache_type_k.clone()),
+        global_config.and_then(|config| config.draft_cache_type_k.clone()),
+    )
+    .is_some()
+    {
+        unsupported_speculative_field("speculative.draft_cache_type_k")?;
+    }
+    if pick_owned(
+        model_config.and_then(|config| config.draft_cache_type_v.clone()),
+        global_config.and_then(|config| config.draft_cache_type_v.clone()),
+    )
+    .is_some()
+    {
+        unsupported_speculative_field("speculative.draft_cache_type_v")?;
+    }
+    if pick_owned(
         model_config.and_then(|config| config.draft_min_tokens),
         global_config.and_then(|config| config.draft_min_tokens),
     )
-    .unwrap_or(0);
-    if draft_min_tokens > 0 {
-        bail!("skippy speculative.draft_min_tokens is not supported by the embedded runtime");
+    .is_some()
+    {
+        unsupported_speculative_field("speculative.draft_min_tokens")?;
     }
-    let draft_acceptance_threshold = pick_owned(
+    if pick_owned(
         model_config.and_then(|config| config.draft_acceptance_threshold),
         global_config.and_then(|config| config.draft_acceptance_threshold),
     )
-    .unwrap_or(0.0);
-    if draft_acceptance_threshold > 0.0 {
-        bail!(
-            "skippy speculative.draft_acceptance_threshold is not supported by the embedded runtime"
-        );
+    .is_some()
+    {
+        unsupported_speculative_field("speculative.draft_acceptance_threshold")?;
     }
-    let draft_split_probability = pick_owned(
+    if pick_owned(
         model_config.and_then(|config| config.draft_split_probability),
         global_config.and_then(|config| config.draft_split_probability),
     )
-    .unwrap_or(0.0);
-    if draft_split_probability > 0.0 {
-        bail!(
-            "skippy speculative.draft_split_probability is not supported by the embedded runtime"
-        );
+    .is_some()
+    {
+        unsupported_speculative_field("speculative.draft_split_probability")?;
     }
-    if let Some(BoolOrAuto::Bool(true)) = pick_owned(
-        model_config.and_then(|config| config.spec_default.as_ref()),
-        global_config.and_then(|config| config.spec_default.as_ref()),
-    ) {
-        bail!("skippy speculative.spec_default = true is not supported by the embedded runtime");
+    if pick_owned(
+        model_config.and_then(|config| config.ngram_min),
+        global_config.and_then(|config| config.ngram_min),
+    )
+    .is_some()
+    {
+        unsupported_speculative_field("speculative.ngram_min")?;
+    }
+    if pick_owned(
+        model_config.and_then(|config| config.ngram_max),
+        global_config.and_then(|config| config.ngram_max),
+    )
+    .is_some()
+    {
+        unsupported_speculative_field("speculative.ngram_max")?;
     }
 
     let mut mode = mode;
@@ -182,6 +217,14 @@ pub(super) fn resolve_speculative_config(
     })
 }
 
+fn package_generation_or_direct_default_supports_native_mtp_n1(
+    generation: Option<&PackageGenerationInfo>,
+    model_path: &Path,
+) -> bool {
+    package_generation_supports_default_native_mtp(generation)
+        || direct_gguf_supports_native_mtp_n1(model_path)
+}
+
 fn package_generation_supports_default_native_mtp(
     generation: Option<&PackageGenerationInfo>,
 ) -> bool {
@@ -199,6 +242,12 @@ fn package_generation_supports_default_native_mtp(
         })
 }
 
+fn package_generation_supports_native_mtp_n1(generation: Option<&PackageGenerationInfo>) -> bool {
+    generation
+        .and_then(|generation| generation.speculative_decoding.as_ref())
+        .is_some_and(speculative_supports_native_mtp_n1)
+}
+
 fn speculative_supports_native_mtp_n1(speculative: &PackageSpeculativeDecodingInfo) -> bool {
     speculative
         .strategies
@@ -208,6 +257,15 @@ fn speculative_supports_native_mtp_n1(speculative: &PackageSpeculativeDecodingIn
                 && strategy.prediction_depth == Some(1)
                 && !strategy.layer_indices.is_empty()
         })
+}
+
+fn direct_gguf_supports_native_mtp_n1(model_path: &Path) -> bool {
+    scan_gguf_compact_meta(model_path).is_some_and(|meta| meta.nextn_predict_layers > 0)
+        || scan_gguf_tensor_names_any(model_path, |name| name.contains(".nextn.")).unwrap_or(false)
+}
+
+fn unsupported_speculative_field(field: &str) -> Result<()> {
+    bail!("skippy {field} is not supported by the embedded runtime");
 }
 
 fn normalize_pairing_fault(value: &str) -> String {

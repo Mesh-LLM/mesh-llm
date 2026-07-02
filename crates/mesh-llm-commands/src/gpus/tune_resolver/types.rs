@@ -80,7 +80,7 @@ impl fmt::Display for TuneTargetResolveReason {
         match self {
             Self::EmptyInput => f.write_str("target is empty"),
             Self::RemoteRefRequiresDownload => {
-                f.write_str("remote-only refs are unsupported here; gpu tune is local-only and will not download")
+                f.write_str("remote-only refs are unsupported here; benchmark tune is local-only and will not download")
             }
             Self::NotFoundLocally => {
                 f.write_str("target is not an existing local path or installed cache ref")

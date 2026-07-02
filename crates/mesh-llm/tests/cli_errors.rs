@@ -42,15 +42,15 @@ fn hidden_gpu_benchmark_backend_errors_are_visible_on_stderr() {
 }
 
 #[test]
-fn gpu_tune_missing_target_names_model_and_reason() {
+fn benchmark_tune_missing_target_names_model_and_reason() {
     let temp = TempDir::new().expect("tempdir should be created");
     let config_path = temp.path().join("config.toml");
-    let missing_target = "definitely-missing-gpu-tune-target";
+    let missing_target = "definitely-missing-benchmark-tune-target";
     let output = Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
         .args([
             "--config",
             config_path.to_str().expect("config path should be utf-8"),
-            "gpu",
+            "benchmark",
             "tune",
             "--model",
             missing_target,
@@ -80,10 +80,10 @@ fn gpu_tune_missing_target_names_model_and_reason() {
 }
 
 #[test]
-fn gpu_tune_remote_only_target_reports_local_only_rejection() {
+fn benchmark_tune_remote_only_target_reports_local_only_rejection() {
     let remote_target = "hf://meshllm/example@rev/Q4_K_M/model.gguf";
     let output = Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
-        .args(["gpu", "tune", "--model", remote_target])
+        .args(["benchmark", "tune", "--model", remote_target])
         .output()
         .expect("mesh-llm command should run");
 

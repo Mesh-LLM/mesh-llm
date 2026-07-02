@@ -23,12 +23,19 @@ pub(super) fn push_string_kv(bytes: &mut Vec<u8>, key: &str, value: &str) {
 }
 
 pub(super) fn temp_model_file() -> NamedTempFile {
+    temp_model_file_with_tensor_names(&[], None)
+}
+
+pub(super) fn temp_model_file_with_tensor_names(
+    tensor_names: &[&str],
+    nextn_predict_layers: Option<u32>,
+) -> NamedTempFile {
     let mut file = NamedTempFile::new().expect("temp model file");
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"GGUF");
     bytes.extend_from_slice(&2u32.to_le_bytes());
-    bytes.extend_from_slice(&0i64.to_le_bytes());
-    bytes.extend_from_slice(&8i64.to_le_bytes());
+    bytes.extend_from_slice(&(tensor_names.len() as i64).to_le_bytes());
+    bytes.extend_from_slice(&(8 + i64::from(nextn_predict_layers.is_some())).to_le_bytes());
     push_string_kv(&mut bytes, "general.architecture", "llama");
     push_string_kv(&mut bytes, "tokenizer.ggml.model", "gpt2");
     push_u32_kv(&mut bytes, "llama.context_length", 8192);
@@ -37,6 +44,16 @@ pub(super) fn temp_model_file() -> NamedTempFile {
     push_u32_kv(&mut bytes, "llama.attention.head_count", 32);
     push_u32_kv(&mut bytes, "llama.attention.head_count_kv", 8);
     push_u32_kv(&mut bytes, "llama.attention.key_length", 128);
+    if let Some(value) = nextn_predict_layers {
+        push_u32_kv(&mut bytes, "llama.nextn_predict_layers", value);
+    }
+    for name in tensor_names {
+        push_gguf_string(&mut bytes, name);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+    }
     file.write_all(&bytes).expect("write fake gguf");
     file.flush().expect("flush fake gguf");
     file

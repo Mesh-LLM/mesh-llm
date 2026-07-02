@@ -2,7 +2,7 @@ fn log_target_selection(requested: &str, selection: &BenchmarkSelection) {
     if let Some(best) = &selection.recommended {
         eprintln!(
             "benchmark tune: target `{requested}` recommended {} decode_tok_s={}",
-            render_progress_candidate(&best.candidate),
+            render_benchmark_candidate(&best.candidate),
             best.decode_tok_s
                 .map(|rate| format!("{rate:.2}"))
                 .unwrap_or_else(|| "n/a".to_string()),
@@ -23,7 +23,7 @@ fn run_trial_with_progress(
         "benchmark tune: trial {}/{} start {}",
         index + 1,
         total,
-        render_progress_candidate(&candidate),
+        render_benchmark_candidate(&candidate),
     );
     let trial = run_trial(request, prepared, index, candidate);
     log_trial_result(index, total, &trial);
@@ -36,7 +36,7 @@ fn log_trial_result(index: usize, total: usize, trial: &TuneBenchmarkTrial) {
             "benchmark tune: trial {}/{} ok {} decode_tok_s={}{}",
             index + 1,
             total,
-            render_progress_candidate(&trial.candidate),
+            render_benchmark_candidate(&trial.candidate),
             trial
                 .decode_tok_s
                 .map(|rate| format!("{rate:.2}"))
@@ -47,28 +47,9 @@ fn log_trial_result(index: usize, total: usize, trial: &TuneBenchmarkTrial) {
             "benchmark tune: trial {}/{} failed {} error={}",
             index + 1,
             total,
-            render_progress_candidate(&trial.candidate),
+            render_benchmark_candidate(&trial.candidate),
             trial.error.as_deref().unwrap_or("unknown"),
         ),
-    }
-}
-
-fn render_progress_candidate(candidate: &TuneBenchmarkCandidate) -> String {
-    format!(
-        "ctx={} batch={} ubatch={} mmap={} mlock={}",
-        candidate.ctx_size,
-        candidate.batch,
-        candidate.ubatch,
-        render_progress_bool_or_auto(candidate.mmap),
-        candidate.mlock,
-    )
-}
-
-fn render_progress_bool_or_auto(value: TuneBoolOrAutoValue) -> &'static str {
-    match value {
-        TuneBoolOrAutoValue::Auto => "auto",
-        TuneBoolOrAutoValue::Enabled => "enabled",
-        TuneBoolOrAutoValue::Disabled => "disabled",
     }
 }
 

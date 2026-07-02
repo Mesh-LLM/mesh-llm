@@ -379,27 +379,6 @@ pub enum GpuCommand {
         #[arg(long, value_enum)]
         backend: GpuBenchmarkBackend,
     },
-    /// Recommend safe startup tuning for one or more local models.
-    Tune {
-        /// Tune exactly one local/configured model target.
-        #[arg(long, conflicts_with = "models")]
-        model: Option<String>,
-        /// Tune multiple local/configured model targets from a comma-separated list.
-        #[arg(long, value_delimiter = ',')]
-        models: Vec<String>,
-        /// Print machine-readable JSON output.
-        #[arg(long)]
-        json: bool,
-        /// Print equivalent launch arguments without writing config.
-        #[arg(long, conflicts_with = "apply", conflicts_with = "replace_existing")]
-        launch_args: bool,
-        /// Apply the recommended tuning changes non-interactively.
-        #[arg(long)]
-        apply: bool,
-        /// Replace existing explicit/effective tuning values during apply.
-        #[arg(long, requires = "apply")]
-        replace_existing: bool,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -1545,92 +1524,13 @@ mod tests {
     }
 
     #[test]
-    fn gpu_tune_parses_for_gpu_and_gpus_aliases() {
-        let cases = [
-            (
-                &["gpus", "tune"][..],
-                None,
-                Vec::<&str>::new(),
-                false,
-                false,
-                false,
-                false,
-            ),
-            (
-                &["gpu", "tune"][..],
-                None,
-                Vec::<&str>::new(),
-                false,
-                false,
-                false,
-                false,
-            ),
-            (
-                &["gpus", "tune", "--model", "Qwen3-8B-Q4_K_M.gguf"][..],
-                Some("Qwen3-8B-Q4_K_M.gguf"),
-                Vec::<&str>::new(),
-                false,
-                false,
-                false,
-                false,
-            ),
-            (
-                &["gpu", "tune", "--models", "a.gguf,b.gguf"][..],
-                None,
-                vec!["a.gguf", "b.gguf"],
-                false,
-                false,
-                false,
-                false,
-            ),
-            (
-                &["gpus", "tune", "--launch-args"][..],
-                None,
-                Vec::<&str>::new(),
-                false,
-                true,
-                false,
-                false,
-            ),
-            (
-                &["gpu", "tune", "--apply", "--replace-existing"][..],
-                None,
-                Vec::<&str>::new(),
-                false,
-                false,
-                true,
-                true,
-            ),
-            (
-                &["gpus", "tune", "--json"][..],
-                None,
-                Vec::<&str>::new(),
-                true,
-                false,
-                false,
-                false,
-            ),
-        ];
+    fn gpu_tune_is_not_a_gpu_subcommand() {
+        for spelling in ["gpu", "gpus"] {
+            let err = Cli::try_parse_from(["mesh-llm", spelling, "tune"])
+                .expect_err("tune should live under benchmark, not gpu/gpus");
 
-        for (
-            args,
-            expected_model,
-            expected_models,
-            expected_json,
-            expected_launch_args,
-            expected_apply,
-            expected_replace_existing,
-        ) in cases
-        {
-            assert_gpu_tune_parse(
-                args,
-                expected_model,
-                &expected_models,
-                expected_json,
-                expected_launch_args,
-                expected_apply,
-                expected_replace_existing,
-            );
+            let rendered = err.to_string();
+            assert!(rendered.contains("tune"), "unexpected error: {rendered}");
         }
     }
 
@@ -1652,6 +1552,18 @@ mod tests {
             "auto,true,false",
             "--mlock-values",
             "true,false",
+            "--speculative-types",
+            "native-mtp-n1,draft,ngram,disabled",
+            "--spec-draft-models",
+            "/models/qwen-draft.gguf",
+            "--spec-draft-max-tokens",
+            "4,8",
+            "--spec-draft-min-tokens",
+            "1,2",
+            "--spec-ngram-min",
+            "12,24",
+            "--spec-ngram-max",
+            "48,64",
             "--throughput-tolerance-pct",
             "2.5",
             "--max-tokens",
@@ -1666,35 +1578,24 @@ mod tests {
         ]);
 
         let Some(Command::Benchmark {
-            command:
-                BenchmarkCommand::Tune {
-                    model,
-                    models,
-                    json,
-                    ctx_sizes,
-                    batch_sizes,
-                    ubatch_sizes,
-                    mmap_values,
-                    mlock_values,
-                    throughput_tolerance_pct,
-                    max_tokens,
-                    startup_timeout_secs,
-                    request_timeout_secs,
-                    prompt,
-                },
+            command: BenchmarkCommand::Tune(tune),
         }) = cli.command
         else {
             panic!("expected benchmark tune command");
         };
+        assert_benchmark_tune_core_options(&tune);
+        assert_benchmark_tune_speculative_options(&tune);
+    }
 
-        assert_eq!(model.as_deref(), Some("qwen.gguf"));
-        assert!(models.is_empty());
-        assert!(json);
-        assert_eq!(ctx_sizes, vec![4096, 8192]);
-        assert_eq!(batch_sizes, vec![1024, 2048]);
-        assert_eq!(ubatch_sizes, vec![256, 512]);
+    fn assert_benchmark_tune_core_options(tune: &crate::benchmark::BenchmarkTuneCommand) {
+        assert_eq!(tune.model.as_deref(), Some("qwen.gguf"));
+        assert!(tune.models.is_empty());
+        assert!(tune.json);
+        assert_eq!(tune.ctx_sizes, vec![4096, 8192]);
+        assert_eq!(tune.batch_sizes, vec![1024, 2048]);
+        assert_eq!(tune.ubatch_sizes, vec![256, 512]);
         assert_eq!(
-            mmap_values,
+            tune.mmap_values,
             vec![
                 crate::benchmark::BenchmarkBoolOrAuto::Auto,
                 crate::benchmark::BenchmarkBoolOrAuto::Enabled,
@@ -1702,17 +1603,38 @@ mod tests {
             ]
         );
         assert_eq!(
-            mlock_values,
+            tune.mlock_values,
             vec![
                 crate::benchmark::BenchmarkBool::Enabled,
                 crate::benchmark::BenchmarkBool::Disabled,
             ]
         );
-        assert_eq!(throughput_tolerance_pct, 2.5);
-        assert_eq!(max_tokens, 64);
-        assert_eq!(startup_timeout_secs, 30);
-        assert_eq!(request_timeout_secs, 45);
-        assert_eq!(prompt, "hello");
+        assert_eq!(tune.throughput_tolerance_pct, 2.5);
+        assert_eq!(tune.max_tokens, 64);
+        assert_eq!(tune.startup_timeout_secs, 30);
+        assert_eq!(tune.request_timeout_secs, 45);
+        assert_eq!(tune.prompt, "hello");
+    }
+
+    fn assert_benchmark_tune_speculative_options(tune: &crate::benchmark::BenchmarkTuneCommand) {
+        assert_eq!(
+            tune.speculative_types,
+            vec![
+                crate::benchmark::BenchmarkSpeculativeType::NativeMtpN1,
+                crate::benchmark::BenchmarkSpeculativeType::Draft,
+                crate::benchmark::BenchmarkSpeculativeType::Ngram,
+                crate::benchmark::BenchmarkSpeculativeType::Disabled,
+            ]
+        );
+        assert!(!tune.no_speculative_tune);
+        assert_eq!(
+            tune.spec_draft_models,
+            vec![std::path::PathBuf::from("/models/qwen-draft.gguf")]
+        );
+        assert_eq!(tune.spec_draft_max_tokens, vec![4, 8]);
+        assert_eq!(tune.spec_draft_min_tokens, vec![1, 2]);
+        assert_eq!(tune.spec_ngram_min, vec![12, 24]);
+        assert_eq!(tune.spec_ngram_max, vec![48, 64]);
     }
 
     #[test]
@@ -1734,29 +1656,46 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_tune_no_speculative_tune_conflicts_with_explicit_speculative_types() {
+        for (flag, value) in [
+            ("--speculative-types", "draft"),
+            ("--spec-draft-models", "/models/draft.gguf"),
+            ("--spec-draft-max-tokens", "8"),
+            ("--spec-draft-min-tokens", "2"),
+            ("--spec-ngram-min", "12"),
+            ("--spec-ngram-max", "48"),
+        ] {
+            let err = Cli::try_parse_from([
+                "mesh-llm",
+                "benchmark",
+                "tune",
+                "--model",
+                "qwen.gguf",
+                "--no-speculative-tune",
+                flag,
+                value,
+            ])
+            .expect_err("conflicting speculative tune controls should be rejected");
+
+            let rendered = err.to_string();
+            assert!(rendered.contains("--no-speculative-tune"));
+            assert!(rendered.contains(flag));
+        }
+    }
+
+    #[test]
     fn benchmark_tune_defaults_to_broad_throughput_tolerance() {
         let cli = Cli::parse_from(["mesh-llm", "benchmark", "tune", "--model", "qwen.gguf"]);
 
         let Some(Command::Benchmark {
-            command:
-                BenchmarkCommand::Tune {
-                    throughput_tolerance_pct,
-                    ..
-                },
+            command: BenchmarkCommand::Tune(tune),
         }) = cli.command
         else {
             panic!("expected benchmark tune command");
         };
+        let throughput_tolerance_pct = tune.throughput_tolerance_pct;
 
         assert_eq!(throughput_tolerance_pct, 10.0);
-    }
-
-    #[test]
-    fn gpu_tune_rejects_removed_benchmark_flag() {
-        let err = Cli::try_parse_from(["mesh-llm", "gpu", "tune", "--benchmark"])
-            .expect_err("gpu tune should no longer accept benchmark-only flags");
-
-        assert!(err.to_string().contains("--benchmark"));
     }
 
     #[test]
@@ -1772,44 +1711,6 @@ mod tests {
         };
 
         assert_eq!(backend, GpuBenchmarkBackend::Cuda);
-    }
-
-    #[test]
-    fn gpu_tune_rejects_conflicting_model_selectors() {
-        let err = Cli::try_parse_from([
-            "mesh-llm",
-            "gpus",
-            "tune",
-            "--model",
-            "one.gguf",
-            "--models",
-            "two.gguf,three.gguf",
-        ])
-        .expect_err("conflicting model selectors should be rejected");
-
-        let rendered = err.to_string();
-        assert!(rendered.contains("--model"));
-        assert!(rendered.contains("--models"));
-    }
-
-    #[test]
-    fn gpu_tune_rejects_launch_args_with_apply() {
-        let err = Cli::try_parse_from(["mesh-llm", "gpu", "tune", "--launch-args", "--apply"])
-            .expect_err("launch-args and apply should be incompatible");
-
-        let rendered = err.to_string();
-        assert!(rendered.contains("--launch-args"));
-        assert!(rendered.contains("--apply"));
-    }
-
-    #[test]
-    fn gpu_tune_rejects_replace_existing_without_apply() {
-        let err = Cli::try_parse_from(["mesh-llm", "gpus", "tune", "--replace-existing"])
-            .expect_err("replace-existing should require apply");
-
-        let rendered = err.to_string();
-        assert!(rendered.contains("--replace-existing"));
-        assert!(rendered.contains("--apply"));
     }
 
     fn assert_gpu_command_parse(
@@ -1833,51 +1734,6 @@ mod tests {
                         );
                     }
                 }
-            }
-            other => panic!("unexpected command for {args:?}: {other:?}"),
-        }
-    }
-
-    fn assert_gpu_tune_parse(
-        args: &[&str],
-        expected_model: Option<&str>,
-        expected_models: &[&str],
-        expected_json: bool,
-        expected_launch_args: bool,
-        expected_apply: bool,
-        expected_replace_existing: bool,
-    ) {
-        let cli = Cli::parse_from(std::iter::once("mesh-llm").chain(args.iter().copied()));
-
-        match cli.command.expect("gpu tune command expected") {
-            Command::Gpus {
-                json: command_json,
-                command:
-                    Some(GpuCommand::Tune {
-                        model,
-                        models,
-                        json,
-                        launch_args,
-                        apply,
-                        replace_existing,
-                    }),
-            } => {
-                assert!(
-                    !command_json,
-                    "top-level gpus json should stay false for {args:?}"
-                );
-                assert_eq!(model.as_deref(), expected_model, "model for {args:?}");
-                assert_eq!(models, expected_models, "models for {args:?}");
-                assert_eq!(json, expected_json, "tune json for {args:?}");
-                assert_eq!(
-                    launch_args, expected_launch_args,
-                    "launch_args for {args:?}"
-                );
-                assert_eq!(apply, expected_apply, "apply for {args:?}");
-                assert_eq!(
-                    replace_existing, expected_replace_existing,
-                    "replace_existing for {args:?}"
-                );
             }
             other => panic!("unexpected command for {args:?}: {other:?}"),
         }

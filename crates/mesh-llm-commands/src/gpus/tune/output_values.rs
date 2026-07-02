@@ -72,6 +72,49 @@ pub(crate) fn render_recommended_value(value: &TuneRecommendedValue) -> String {
     }
 }
 
+pub(crate) fn render_benchmark_candidate(candidate: &TuneBenchmarkCandidate) -> String {
+    format!(
+        "ctx={} batch={} ubatch={} mmap={} mlock={} spec={}",
+        candidate.ctx_size,
+        candidate.batch,
+        candidate.ubatch,
+        render_benchmark_bool_or_auto(candidate.mmap),
+        candidate.mlock,
+        render_benchmark_speculative(&candidate.speculative),
+    )
+}
+
+pub(crate) fn render_benchmark_speculative(
+    speculative: &TuneBenchmarkSpeculativeCandidate,
+) -> String {
+    match speculative {
+        TuneBenchmarkSpeculativeCandidate::Disabled => "disabled".to_string(),
+        TuneBenchmarkSpeculativeCandidate::NativeMtpN1 => "native-mtp-n1".to_string(),
+        TuneBenchmarkSpeculativeCandidate::Draft {
+            draft_model_path,
+            draft_max_tokens,
+            draft_min_tokens,
+        } => match draft_min_tokens {
+            Some(draft_min_tokens) => format!(
+                "draft:path={draft_model_path}:min={draft_min_tokens}:max={draft_max_tokens}"
+            ),
+            None => format!("draft:path={draft_model_path}:max={draft_max_tokens}"),
+        },
+        TuneBenchmarkSpeculativeCandidate::Ngram {
+            ngram_min,
+            ngram_max,
+        } => format!("ngram:min={ngram_min}:max={ngram_max}"),
+    }
+}
+
+pub(crate) fn render_benchmark_bool_or_auto(value: TuneBoolOrAutoValue) -> &'static str {
+    match value {
+        TuneBoolOrAutoValue::Auto => "auto",
+        TuneBoolOrAutoValue::Enabled => "enabled",
+        TuneBoolOrAutoValue::Disabled => "disabled",
+    }
+}
+
 fn preserved_value(
     field: TuneField,
     model_entry: Option<&OutputModelConfigEntry>,

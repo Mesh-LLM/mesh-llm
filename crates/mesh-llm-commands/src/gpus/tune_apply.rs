@@ -55,7 +55,7 @@ fn collect_writable_targets(prepared: &[PreparedTunePlan]) -> Result<Vec<&Prepar
                 .collect::<Vec<_>>()
                 .join(", ");
             bail!(
-                "gpu tune apply aborted: requested target `{}` collides with multiple config rows for `{}` ({configured_models})",
+                "tune apply aborted: requested target `{}` collides with multiple config rows for `{}` ({configured_models})",
                 prepared.target.requested_input,
                 prepared.target.canonical_model_ref,
             );
@@ -78,7 +78,7 @@ fn collect_writable_targets(prepared: &[PreparedTunePlan]) -> Result<Vec<&Prepar
             )
         {
             bail!(
-                "gpu tune apply aborted: requested targets `{first_target}` and `{}` both map to config row {}",
+                "tune apply aborted: requested targets `{first_target}` and `{}` both map to config row {}",
                 prepared.target.requested_input,
                 config_match.row_index + 1,
             );
@@ -88,7 +88,7 @@ fn collect_writable_targets(prepared: &[PreparedTunePlan]) -> Result<Vec<&Prepar
             && prepared.target.config_matches.is_empty()
         {
             bail!(
-                "gpu tune apply aborted: configured target `{}` no longer maps to a config row",
+                "tune apply aborted: configured target `{}` no longer maps to a config row",
                 prepared.target.requested_input,
             );
         }
@@ -112,7 +112,7 @@ fn resolve_model_table<'a>(
     if let Some(config_match) = prepared.target.config_matches.first() {
         return models.get_mut(config_match.row_index).ok_or_else(|| {
             anyhow!(
-                "config row {} disappeared while applying gpu tune edits",
+                "config row {} disappeared while applying tune edits",
                 config_match.row_index + 1,
             )
         });

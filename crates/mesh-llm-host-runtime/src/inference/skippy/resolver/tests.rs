@@ -1015,6 +1015,120 @@ draft_acceptance_threshold = 0.5
 }
 
 #[test]
+fn schema_only_speculative_fields_fail_with_field_specific_runtime_diagnostics() {
+    let cases = [
+        (
+            r#"
+[defaults.speculative]
+mode = "ngram"
+"#,
+            "speculative.mode",
+        ),
+        (
+            r#"
+[defaults.speculative]
+draft_hf_repo = "mesh/test-draft"
+draft_hf_file = "draft.gguf"
+"#,
+            "speculative.draft_hf_repo",
+        ),
+        (
+            r#"
+[defaults.speculative]
+draft_device = "CUDA0"
+"#,
+            "speculative.draft_device",
+        ),
+        (
+            r#"
+[defaults.speculative]
+draft_threads = 2
+"#,
+            "speculative.draft_threads",
+        ),
+        (
+            r#"
+[defaults.speculative]
+draft_cache_type_k = "q8_0"
+"#,
+            "speculative.draft_cache_type_k",
+        ),
+        (
+            r#"
+[defaults.speculative]
+draft_cache_type_v = "q8_0"
+"#,
+            "speculative.draft_cache_type_v",
+        ),
+        (
+            r#"
+[defaults.speculative]
+draft_min_tokens = 1
+draft_max_tokens = 2
+"#,
+            "speculative.draft_min_tokens",
+        ),
+        (
+            r#"
+[defaults.speculative]
+draft_acceptance_threshold = 0.5
+"#,
+            "speculative.draft_acceptance_threshold",
+        ),
+        (
+            r#"
+[defaults.speculative]
+draft_split_probability = 0.5
+"#,
+            "speculative.draft_split_probability",
+        ),
+        (
+            r#"
+[defaults.speculative]
+ngram_min = 2
+"#,
+            "speculative.ngram_min",
+        ),
+        (
+            r#"
+[defaults.speculative]
+ngram_max = 4
+"#,
+            "speculative.ngram_max",
+        ),
+        (
+            r#"
+[defaults.speculative]
+spec_default = true
+"#,
+            "speculative.spec_default",
+        ),
+    ];
+
+    for (toml, field) in cases {
+        let mesh_config = parse_config(toml);
+        let model_file = temp_model_file();
+
+        let err = resolve_skippy_config(SkippyConfigResolveRequest {
+            mesh_config: &mesh_config,
+            model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+            model_path: model_file.path(),
+            model_bytes: 4 * 1024 * 1024 * 1024,
+            allocatable_memory_bytes: None,
+            request_defaults: None,
+            package_generation: None,
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains(field) && err.contains("not supported by the embedded runtime"),
+            "{field} diagnostic should be explicit, got: {err}"
+        );
+    }
+}
+
+#[test]
 fn integrated_full_surface_fixture_resolves_defaults_overrides_staged_and_runtime_paths() {
     let fixture = full_surface_fixture_with_model_paths();
     let request_defaults = RequestDefaultsConfig {

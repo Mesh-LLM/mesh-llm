@@ -98,27 +98,9 @@ lives in [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md).
 If you run `mesh-llm` with no arguments, it prints `--help` and exits. It does not start the console or bind ports until you choose a mode.
 Bare `mesh-llm serve` loads startup models from `[[models]]` in `~/.mesh-llm/config.toml`.
 
-## GPU tuning
+## Benchmark tuning
 
-`mesh-llm gpu tune` reviews startup tuning for already-downloaded local models. It is a local-only helper, not a downloader. Use it when you want the recommended startup shape before editing config or launch arguments for a one-off run.
-
-```bash
-mesh-llm gpu tune
-mesh-llm gpu tune --model /models/qwen3-8b.gguf
-mesh-llm gpu tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf
-mesh-llm gpu tune --model /models/qwen3-8b.gguf --launch-args
-mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply
-mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
-```
-
-1. No args reads configured models from `~/.mesh-llm/config.toml`.
-2. If a target is not already on disk, tune rejects it instead of fetching it.
-3. `--json` gives machine-readable review output. `--launch-args` is read-only and prints shell-safe `mesh-llm serve --model ...` output. It does not prompt or write config.
-4. `--apply` writes only supported nested `[[models]].model_fit` and `[[models]].hardware` fields, and preserves comments and unrelated TOML. `--replace-existing` lets those writes overwrite existing explicit values when you want the recommendation to replace what is already there.
-5. `mmap` and `mlock` are writable model-load controls. If `mlock` is unavailable, tune explains whether the current `RLIMIT_MEMLOCK` or `IPC_LOCK` access is too low and recommends `mlock=false`.
-6. `cpu_moe`, `n_cpu_moe`, `tensor_split`, and `placement` are reported as unsupported in v1.
-
-For measured local model-serving throughput, use `mesh-llm benchmark tune`. It shares `gpu tune` target resolution and startup planning, then creates temporary per-trial configs, starts isolated local `mesh-llm serve` children, sends OpenAI-compatible chat-completion requests, reports decode tok/s plus setup/readiness/request/shutdown/total timing stats for each context/batch/ubatch/mmap/mlock candidate, and keeps trial logs under `target/gpu-tune/`.
+`mesh-llm benchmark tune` measures local model-serving throughput for already-downloaded local models. It resolves local targets, plans safe startup settings, creates temporary per-trial configs, starts isolated local `mesh-llm serve` children, sends OpenAI-compatible chat-completion requests, reports decode tok/s plus setup/readiness/request/shutdown/total timing stats for each context/batch/ubatch/mmap/mlock/speculative-decoding candidate, and keeps trial logs under `target/gpu-tune/`.
 
 Benchmark tune reports the raw highest-throughput trial, the Pareto frontier for decode tok/s versus `ctx_size`, and a recommended trial. By default, the recommendation treats candidates within `10.0%` of the raw best decode tok/s as throughput-equivalent, then chooses the largest context window among those candidates.
 
@@ -127,10 +109,13 @@ mesh-llm benchmark tune --model /models/qwen3-8b.gguf
 mesh-llm benchmark tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --mmap-values auto,true,false --mlock-values true,false
+mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types auto
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --speculative-types draft,ngram,disabled --spec-draft-models /models/qwen3-draft.gguf --spec-draft-max-tokens 4,8,16
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --throughput-tolerance-pct 2.5
 ```
 
 If `--mmap-values` is omitted, benchmark tune tries `auto`, `true`, and `false`. If `--mlock-values` is omitted, it tries `false` and only tries `true` when the current mlock limit can cover the evaluated budget.
+If `--speculative-types` is omitted, benchmark tune uses `auto`: native MTP is tried first for MTP-looking targets, locally discoverable draft models are tried when available, and a disabled baseline is included for comparison. Use `--speculative-types native-mtp-n1,draft,ngram,disabled` to force an explicit speculative sweep, or `--no-speculative-tune` to reproduce the old disabled-baseline-only sweep.
 
 Use `mesh-llm gpus detect` when you want to refresh the raw hardware fingerprint, bandwidth, and compute hints rather than benchmark model-serving throughput.
 

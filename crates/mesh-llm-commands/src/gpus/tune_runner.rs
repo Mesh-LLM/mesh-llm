@@ -1,35 +1,12 @@
 use super::tune::TuneApplyMode;
 use super::{tune, tune_apply, tune_hardware, tune_resolver};
 use anyhow::{Result, bail};
-use mesh_llm_cli::{
-    GpuCommand,
-    benchmark::{BenchmarkBool, BenchmarkBoolOrAuto, BenchmarkCommand},
-};
+use mesh_llm_cli::benchmark::{BenchmarkBool, BenchmarkBoolOrAuto, BenchmarkCommand};
 use mesh_llm_config::{ConfigStore, load_config};
 use mesh_llm_system::hardware;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
-
-pub(crate) fn run_tune_command(
-    config_path: Option<&Path>,
-    json_output: bool,
-    command: &GpuCommand,
-) -> Result<()> {
-    let stdout = std::io::stdout();
-    let mut handle = stdout.lock();
-    run_tune_command_with_writer(config_path, json_output, command, &mut handle)
-}
-
-fn run_tune_command_with_writer(
-    config_path: Option<&Path>,
-    json_output: bool,
-    command: &GpuCommand,
-    writer: &mut impl Write,
-) -> Result<()> {
-    let args = gpu_tune_runner_args(command);
-    run_tune_request_with_writer(config_path, json_output, args, writer)
-}
 
 pub(crate) fn run_benchmark_tune_command(
     config_path: Option<&Path>,
@@ -57,7 +34,7 @@ fn run_tune_request_with_writer(
 ) -> Result<()> {
     let render_json = json_output || args.json;
     let apply_mode = tune_apply_mode(args.launch_args, args.apply, args.replace_existing);
-    validate_benchmark_args(&args)?;
+    validate_benchmark_args(args.benchmark.as_ref())?;
     let config = load_config(config_path)?;
     super::tune::recommendation_symbol_anchor();
     tune_resolver::resolver_symbol_anchor();
@@ -98,50 +75,11 @@ fn run_tune_request_with_writer(
             }),
     );
 
-    let survey = hardware::survey();
-    let mut prepared = Vec::new();
-    for target in &resolution.resolved {
-        let metadata =
-            match tune::inspect_local_gguf_metadata(&target.requested_input, &target.resolved_path)
-            {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    target_failures.push(tune::TuneTargetFailure {
-                        requested_input: target.requested_input.clone(),
-                        reason: error.to_string(),
-                    });
-                    continue;
-                }
-            };
-        let hardware = match tune_hardware::evaluate::evaluate_tune_hardware(
-            tune_hardware::types::TuneHardwareEvaluationInput {
-                config: &config,
-                target,
-                survey: &survey,
-            },
-        ) {
-            Ok(hardware) => hardware,
-            Err(error) => {
-                target_failures.push(tune::TuneTargetFailure {
-                    requested_input: target.requested_input.clone(),
-                    reason: error.message,
-                });
-                continue;
-            }
-        };
-        let plan = tune::build_tune_plan(tune::TuneRecommendationInput {
-            apply_mode,
-            config: &config,
-            target,
-            metadata: &metadata,
-            hardware: &hardware,
-            survey: &survey,
-        });
-        prepared.push(tune_apply::PreparedTunePlan::new(target.clone(), plan));
-    }
+    let prepared = prepare_tune_plans(&config, &resolution, apply_mode, &mut target_failures);
     let benchmark_reports = maybe_run_benchmark_reports(
-        benchmark_run_request(&config, &prepared, &args),
-        args.benchmark,
+        args.benchmark
+            .as_ref()
+            .map(|benchmark| benchmark_run_request(&config, &prepared, benchmark)),
     );
 
     if !global_safety_errors.is_empty() {
@@ -164,11 +102,17 @@ fn run_tune_request_with_writer(
             .map(|problem| format!("  - {problem}"))
             .collect::<Vec<_>>()
             .join("\n");
-        bail!("gpu tune apply aborted before writing config:\n{detail}");
+        bail!(
+            "{} apply aborted before writing config:\n{detail}",
+            command_label(args.command)
+        );
     }
 
     if resolution.resolved.is_empty() && target_failures.is_empty() {
-        bail!("gpu tune found no configured local model targets in the active config");
+        bail!(
+            "{} found no configured local model targets in the active config",
+            command_label(args.command)
+        );
     }
 
     if matches!(
@@ -210,7 +154,10 @@ fn run_tune_request_with_writer(
                 .map(|problem| format!("  - {problem}"))
                 .collect::<Vec<_>>()
                 .join("\n");
-            bail!("gpu tune could not produce any safe config edits:\n{detail}");
+            bail!(
+                "{} could not produce any safe config edits:\n{detail}",
+                command_label(args.command)
+            );
         }
     } else if prepared.is_empty() && !target_failures.is_empty() {
         emit_runner_output(
@@ -232,7 +179,10 @@ fn run_tune_request_with_writer(
             .map(|failure| format!("  - {}", failure.reason))
             .collect::<Vec<_>>()
             .join("\n");
-        bail!("gpu tune could not prepare any local targets:\n{detail}");
+        bail!(
+            "{} could not prepare any local targets:\n{detail}",
+            command_label(args.command)
+        );
     }
 
     emit_runner_output(
@@ -250,6 +200,63 @@ fn run_tune_request_with_writer(
         },
     )?;
     Ok(())
+}
+
+fn prepare_tune_plans(
+    config: &mesh_llm_config::MeshConfig,
+    resolution: &tune_resolver::TuneTargetResolution,
+    apply_mode: TuneApplyMode,
+    target_failures: &mut Vec<tune::TuneTargetFailure>,
+) -> Vec<tune_apply::PreparedTunePlan> {
+    let survey = hardware::survey();
+    let mut prepared = Vec::new();
+    for target in &resolution.resolved {
+        let metadata =
+            match tune::inspect_local_gguf_metadata(&target.requested_input, &target.resolved_path)
+            {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    target_failures.push(tune::TuneTargetFailure {
+                        requested_input: target.requested_input.clone(),
+                        reason: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+        let hardware = match tune_hardware::evaluate::evaluate_tune_hardware(
+            tune_hardware::types::TuneHardwareEvaluationInput {
+                config,
+                target,
+                survey: &survey,
+            },
+        ) {
+            Ok(hardware) => hardware,
+            Err(error) => {
+                target_failures.push(tune::TuneTargetFailure {
+                    requested_input: target.requested_input.clone(),
+                    reason: error.message,
+                });
+                continue;
+            }
+        };
+        let plan = tune::build_tune_plan(tune::TuneRecommendationInput {
+            apply_mode,
+            config,
+            target,
+            metadata: &metadata,
+            hardware: &hardware,
+            survey: &survey,
+        });
+        prepared.push(tune_apply::PreparedTunePlan::new(target.clone(), plan));
+    }
+    prepared
+}
+
+fn command_label(command: &'static str) -> &'static str {
+    match command {
+        "benchmark_tune" => "benchmark tune",
+        _ => command,
+    }
 }
 
 fn apply_failure_reason(prepared: &tune_apply::PreparedTunePlan) -> Option<String> {
@@ -279,11 +286,85 @@ fn apply_failure_reason(prepared: &tune_apply::PreparedTunePlan) -> Option<Strin
     })
 }
 
-fn validate_benchmark_args(args: &TuneRunnerArgs<'_>) -> Result<()> {
-    if args.benchmark
-        && (!args.throughput_tolerance_pct.is_finite() || args.throughput_tolerance_pct < 0.0)
-    {
+fn validate_benchmark_args(args: Option<&BenchmarkTuneArgs<'_>>) -> Result<()> {
+    let Some(args) = args else {
+        return Ok(());
+    };
+    if !args.throughput_tolerance_pct.is_finite() || args.throughput_tolerance_pct < 0.0 {
         bail!("--throughput-tolerance-pct must be finite and non-negative");
+    }
+    if args.max_tokens == 0 {
+        bail!("--max-tokens must be greater than zero");
+    }
+    validate_positive_values("--ctx-sizes", args.ctx_sizes)?;
+    validate_positive_values("--batch-sizes", args.batch_sizes)?;
+    validate_positive_values("--ubatch-sizes", args.ubatch_sizes)?;
+    validate_positive_values("--spec-draft-max-tokens", args.spec_draft_max_tokens)?;
+    validate_positive_values("--spec-draft-min-tokens", args.spec_draft_min_tokens)?;
+    validate_positive_values("--spec-ngram-min", args.spec_ngram_min)?;
+    validate_positive_values("--spec-ngram-max", args.spec_ngram_max)?;
+    validate_batch_ubatch_pairs(args.batch_sizes, args.ubatch_sizes)?;
+    validate_min_max_candidates(
+        "--spec-draft-min-tokens",
+        args.spec_draft_min_tokens,
+        "--spec-draft-max-tokens",
+        args.spec_draft_max_tokens,
+    )?;
+    validate_min_max_candidates(
+        "--spec-ngram-min",
+        args.spec_ngram_min,
+        "--spec-ngram-max",
+        args.spec_ngram_max,
+    )?;
+    Ok(())
+}
+
+fn validate_positive_values(name: &str, values: &[u32]) -> Result<()> {
+    if !values.is_empty() && !values.iter().any(|value| *value > 0) {
+        bail!("{name} must include at least one positive value");
+    }
+    Ok(())
+}
+
+fn validate_batch_ubatch_pairs(batch_sizes: &[u32], ubatch_sizes: &[u32]) -> Result<()> {
+    if batch_sizes.is_empty() || ubatch_sizes.is_empty() {
+        return Ok(());
+    }
+    let has_valid_pair = batch_sizes
+        .iter()
+        .copied()
+        .filter(|batch| *batch > 0)
+        .any(|batch| {
+            ubatch_sizes
+                .iter()
+                .copied()
+                .filter(|ubatch| *ubatch > 0)
+                .any(|ubatch| ubatch <= batch)
+        });
+    if !has_valid_pair {
+        bail!("benchmark candidate matrix has no valid batch/ubatch pairs");
+    }
+    Ok(())
+}
+
+fn validate_min_max_candidates(
+    min_name: &str,
+    mins: &[u32],
+    max_name: &str,
+    maxes: &[u32],
+) -> Result<()> {
+    if mins.is_empty() || maxes.is_empty() {
+        return Ok(());
+    }
+    let has_valid_pair = mins.iter().copied().filter(|value| *value > 0).any(|min| {
+        maxes
+            .iter()
+            .copied()
+            .filter(|value| *value > 0)
+            .any(|max| min <= max)
+    });
+    if !has_valid_pair {
+        bail!("benchmark candidate matrix has no valid {min_name}/{max_name} pairs");
     }
     Ok(())
 }
@@ -291,7 +372,7 @@ fn validate_benchmark_args(args: &TuneRunnerArgs<'_>) -> Result<()> {
 fn benchmark_run_request<'a>(
     config: &'a mesh_llm_config::MeshConfig,
     prepared: &'a [tune_apply::PreparedTunePlan],
-    args: &'a TuneRunnerArgs<'a>,
+    args: &'a BenchmarkTuneArgs<'a>,
 ) -> tune::TuneBenchmarkRunRequest<'a> {
     tune::TuneBenchmarkRunRequest {
         config,
@@ -301,6 +382,13 @@ fn benchmark_run_request<'a>(
         ubatch_sizes: args.ubatch_sizes,
         mmap_values: args.mmap_values,
         mlock_values: args.mlock_values,
+        speculative_types: args.speculative_types,
+        no_speculative_tune: args.no_speculative_tune,
+        spec_draft_models: args.spec_draft_models,
+        spec_draft_max_tokens: args.spec_draft_max_tokens,
+        spec_draft_min_tokens: args.spec_draft_min_tokens,
+        spec_ngram_min: args.spec_ngram_min,
+        spec_ngram_max: args.spec_ngram_max,
         throughput_tolerance_pct: args.throughput_tolerance_pct,
         max_tokens: args.max_tokens,
         startup_timeout_secs: args.startup_timeout_secs,
@@ -314,91 +402,61 @@ struct TuneRunnerArgs<'a> {
     model: Option<&'a str>,
     models: &'a [String],
     json: bool,
-    benchmark: bool,
-    ctx_sizes: &'a [u32],
-    batch_sizes: &'a [u32],
-    ubatch_sizes: &'a [u32],
-    mmap_values: &'a [BenchmarkBoolOrAuto],
-    mlock_values: &'a [BenchmarkBool],
-    throughput_tolerance_pct: f64,
-    max_tokens: u32,
-    startup_timeout_secs: u64,
-    request_timeout_secs: u64,
-    prompt: &'a str,
+    benchmark: Option<BenchmarkTuneArgs<'a>>,
     launch_args: bool,
     apply: bool,
     replace_existing: bool,
 }
 
-fn gpu_tune_runner_args(command: &GpuCommand) -> TuneRunnerArgs<'_> {
-    let GpuCommand::Tune {
-        model,
-        models,
-        json,
-        launch_args,
-        apply,
-        replace_existing,
-    } = command
-    else {
-        unreachable!("run_tune_command called for non-tune GPU command");
-    };
-    TuneRunnerArgs {
-        command: "gpu_tune",
-        model: model.as_deref(),
-        models,
-        json: *json,
-        benchmark: false,
-        ctx_sizes: &[],
-        batch_sizes: &[],
-        ubatch_sizes: &[],
-        mmap_values: &[],
-        mlock_values: &[],
-        throughput_tolerance_pct: 0.0,
-        max_tokens: 128,
-        startup_timeout_secs: 600,
-        request_timeout_secs: 600,
-        prompt: "",
-        launch_args: *launch_args,
-        apply: *apply,
-        replace_existing: *replace_existing,
-    }
+struct BenchmarkTuneArgs<'a> {
+    ctx_sizes: &'a [u32],
+    batch_sizes: &'a [u32],
+    ubatch_sizes: &'a [u32],
+    mmap_values: &'a [BenchmarkBoolOrAuto],
+    mlock_values: &'a [BenchmarkBool],
+    speculative_types: &'a [mesh_llm_cli::benchmark::BenchmarkSpeculativeType],
+    no_speculative_tune: bool,
+    spec_draft_models: &'a [std::path::PathBuf],
+    spec_draft_max_tokens: &'a [u32],
+    spec_draft_min_tokens: &'a [u32],
+    spec_ngram_min: &'a [u32],
+    spec_ngram_max: &'a [u32],
+    throughput_tolerance_pct: f64,
+    max_tokens: u32,
+    startup_timeout_secs: u64,
+    request_timeout_secs: u64,
+    prompt: &'a str,
 }
 
 fn benchmark_tune_runner_args(command: &BenchmarkCommand) -> TuneRunnerArgs<'_> {
-    let BenchmarkCommand::Tune {
-        model,
-        models,
-        json,
-        ctx_sizes,
-        batch_sizes,
-        ubatch_sizes,
-        mmap_values,
-        mlock_values,
-        throughput_tolerance_pct,
-        max_tokens,
-        startup_timeout_secs,
-        request_timeout_secs,
-        prompt,
-    } = command
-    else {
+    let BenchmarkCommand::Tune(args) = command else {
         unreachable!("run_benchmark_tune_command called for non-tune benchmark command");
     };
+    let args = args.as_ref();
     TuneRunnerArgs {
         command: "benchmark_tune",
-        model: model.as_deref(),
-        models,
-        json: *json,
-        benchmark: true,
-        ctx_sizes,
-        batch_sizes,
-        ubatch_sizes,
-        mmap_values,
-        mlock_values,
-        throughput_tolerance_pct: *throughput_tolerance_pct,
-        max_tokens: *max_tokens,
-        startup_timeout_secs: *startup_timeout_secs,
-        request_timeout_secs: *request_timeout_secs,
-        prompt,
+        model: args.model.as_deref(),
+        models: &args.models,
+        json: args.json,
+        benchmark: Some(BenchmarkTuneArgs {
+            ctx_sizes: &args.ctx_sizes,
+            batch_sizes: &args.batch_sizes,
+            ubatch_sizes: &args.ubatch_sizes,
+            mmap_values: &args.mmap_values,
+            mlock_values: &args.mlock_values,
+            speculative_types: &args.speculative_types,
+            no_speculative_tune: args.no_speculative_tune,
+            spec_draft_models: &args.spec_draft_models,
+            spec_draft_max_tokens: &args.spec_draft_max_tokens,
+            spec_draft_min_tokens: &args.spec_draft_min_tokens,
+            spec_ngram_min: &args.spec_ngram_min,
+            spec_ngram_max: &args.spec_ngram_max,
+            throughput_tolerance_pct: args.throughput_tolerance_pct,
+            max_tokens: args.max_tokens,
+            startup_timeout_secs: args.startup_timeout_secs,
+            request_timeout_secs: args.request_timeout_secs,
+            prompt: &args.prompt,
+        }),
         launch_args: false,
         apply: false,
         replace_existing: false,
@@ -435,14 +493,11 @@ fn emit_runner_output(writer: &mut impl Write, context: RunnerOutputContext<'_>)
 }
 
 fn maybe_run_benchmark_reports(
-    request: tune::TuneBenchmarkRunRequest<'_>,
-    benchmark: bool,
+    request: Option<tune::TuneBenchmarkRunRequest<'_>>,
 ) -> Vec<tune::TuneBenchmarkTargetReport> {
-    if benchmark {
-        run_benchmark_plans_on_plain_thread(request)
-    } else {
-        Vec::new()
-    }
+    request
+        .map(run_benchmark_plans_on_plain_thread)
+        .unwrap_or_default()
 }
 
 fn run_benchmark_plans_on_plain_thread(

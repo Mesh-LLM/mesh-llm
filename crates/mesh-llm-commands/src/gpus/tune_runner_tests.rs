@@ -1,6 +1,5 @@
-use super::super::dispatch_gpu_command;
 use super::*;
-use mesh_llm_cli::{GpuCommand, benchmark::BenchmarkCommand};
+use mesh_llm_cli::benchmark::{BenchmarkCommand, BenchmarkTuneCommand};
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
@@ -49,143 +48,11 @@ fn write_valid_tune_fixture(dir: &Path, name: &str) -> PathBuf {
     path
 }
 
-fn write_config_with_models(config_path: &Path, models: &[PathBuf]) {
-    let mut raw = String::from("version = 1\n");
-    for model in models {
-        raw.push_str(&format!("\n[[models]]\nmodel = \"{}\"\n", model.display()));
-    }
-    fs::write(config_path, raw).expect("fixture config should be written");
-}
-
-#[test]
-fn gpu_tune_dispatches_to_runner() {
-    let temp = tempdir().expect("tempdir should be created");
-    let path = temp.path().join("sample.gguf");
-    fs::write(&path, b"GGUF").expect("fixture GGUF should be written");
-    let command = GpuCommand::Tune {
-        model: Some(path.display().to_string()),
-        models: Vec::new(),
-        json: false,
-        launch_args: false,
-        apply: false,
-        replace_existing: false,
-    };
-
-    let result = dispatch_gpu_command(None, false, Some(&command));
-
-    assert!(
-        result
-            .expect_err("fake GGUF fixture should fail after runner planning")
-            .to_string()
-            .contains("could not read compact GGUF metadata"),
-        "expected tune dispatch to reach the runner and fail in planning"
-    );
-}
-
-#[test]
-fn gpu_tune_apply_fails_when_no_target_has_writable_edits() {
-    let temp = tempdir().expect("tempdir should be created");
-    let path = write_valid_tune_fixture(temp.path(), "insufficient-fit.gguf");
-    fs::OpenOptions::new()
-        .write(true)
-        .open(&path)
-        .expect("fixture GGUF should be reopenable")
-        .set_len(80 * 1024 * 1024 * 1024)
-        .expect("fixture GGUF should support sparse resize");
-    let config_path = temp.path().join("config.toml");
-    fs::write(&config_path, "version = 1\n").expect("fixture config should be written");
-    let command = GpuCommand::Tune {
-        model: Some(path.display().to_string()),
-        models: Vec::new(),
-        json: false,
-        launch_args: false,
-        apply: true,
-        replace_existing: false,
-    };
-
-    let result = dispatch_gpu_command(Some(&config_path), false, Some(&command));
-
-    let error = result.expect_err("apply should fail when no target produced writable edits");
-    let message = error.to_string();
-    assert!(
-        message.contains("gpu tune could not produce any safe config edits"),
-        "expected explicit apply failure, got: {message}"
-    );
-    assert!(
-        message.contains("model `") && message.contains("no safe startup plan fits"),
-        "expected per-target insufficient-fit reason, got: {message}"
-    );
-    assert_eq!(
-        fs::read_to_string(&config_path).expect("config should still be readable"),
-        "version = 1\n",
-        "failed apply should leave config unchanged"
-    );
-}
-
-#[test]
-fn gpu_tune_launch_args_is_read_only() {
-    let temp = tempdir().expect("tempdir should be created");
-    let path = write_valid_tune_fixture(temp.path(), "launch-args.gguf");
-    let config_path = temp.path().join("config.toml");
-    fs::write(&config_path, "version = 1\n").expect("fixture config should be written");
-    let command = GpuCommand::Tune {
-        model: Some(path.display().to_string()),
-        models: Vec::new(),
-        json: false,
-        launch_args: true,
-        apply: false,
-        replace_existing: false,
-    };
-    let before = fs::read_to_string(&config_path).expect("config should be readable before run");
-    let mut output = Vec::new();
-
-    run_tune_command_with_writer(Some(&config_path), false, &command, &mut output)
-        .expect("launch args review should succeed");
-
-    let after = fs::read_to_string(&config_path).expect("config should be readable after run");
-    assert_eq!(before, after, "launch-args must not mutate config");
-    let rendered = String::from_utf8(output).expect("launch args output should be utf8");
-    assert!(rendered.contains("mesh-llm serve --model"));
-    assert!(rendered.contains("# effective config settings:"));
-}
-
-#[test]
-fn gpu_tune_json_reports_per_model_errors_without_silent_failures() {
-    let temp = tempdir().expect("tempdir should be created");
-    let valid = write_valid_tune_fixture(temp.path(), "valid.gguf");
-    let missing = temp.path().join("missing.gguf");
-    let command = GpuCommand::Tune {
-        model: None,
-        models: vec![valid.display().to_string(), missing.display().to_string()],
-        json: true,
-        launch_args: false,
-        apply: false,
-        replace_existing: false,
-    };
-    let mut output = Vec::new();
-
-    run_tune_command_with_writer(None, false, &command, &mut output)
-        .expect("mixed review should still emit json output");
-
-    let value: Value = serde_json::from_slice(&output).expect("json output should deserialize");
-    assert_eq!(value["summary"]["total_targets"], Value::from(2));
-    assert_eq!(value["summary"]["ready_targets"], Value::from(1));
-    assert_eq!(value["summary"]["failed_targets"], Value::from(1));
-    assert_eq!(value["targets"][0]["status"], Value::from("ready"));
-    assert_eq!(value["targets"][1]["status"], Value::from("failed"));
-    assert!(
-        value["targets"][1]["reason"]
-            .as_str()
-            .expect("reason should be present")
-            .contains("installed cache ref")
-    );
-}
-
 #[test]
 fn benchmark_tune_json_uses_benchmark_command_context() {
     let temp = tempdir().expect("tempdir should be created");
     let missing = temp.path().join("missing.gguf");
-    let command = BenchmarkCommand::Tune {
+    let command = BenchmarkCommand::Tune(Box::new(BenchmarkTuneCommand {
         model: Some(missing.display().to_string()),
         models: Vec::new(),
         json: true,
@@ -194,12 +61,19 @@ fn benchmark_tune_json_uses_benchmark_command_context() {
         ubatch_sizes: vec![256],
         mmap_values: Vec::new(),
         mlock_values: Vec::new(),
+        speculative_types: Vec::new(),
+        no_speculative_tune: false,
+        spec_draft_models: Vec::new(),
+        spec_draft_max_tokens: Vec::new(),
+        spec_draft_min_tokens: Vec::new(),
+        spec_ngram_min: Vec::new(),
+        spec_ngram_max: Vec::new(),
         throughput_tolerance_pct: 3.0,
         max_tokens: 32,
         startup_timeout_secs: 5,
         request_timeout_secs: 5,
         prompt: "hello".to_string(),
-    };
+    }));
     let mut output = Vec::new();
 
     let result = run_benchmark_tune_command_with_writer(None, &command, &mut output);
@@ -208,8 +82,8 @@ fn benchmark_tune_json_uses_benchmark_command_context() {
     assert!(
         error
             .to_string()
-            .contains("gpu tune could not prepare any local targets"),
-        "expected tune preparation failure, got: {error:#}"
+            .contains("benchmark tune could not prepare any local targets"),
+        "expected benchmark preparation failure, got: {error:#}"
     );
     let value: Value = serde_json::from_slice(&output).expect("json output should deserialize");
     assert_eq!(value["command"], Value::from("benchmark_tune"));
@@ -223,108 +97,79 @@ fn benchmark_tune_json_uses_benchmark_command_context() {
 }
 
 #[test]
-fn gpu_tune_uses_configured_models_when_no_explicit_targets_and_leaves_config_unchanged() {
+fn benchmark_tune_rejects_zero_only_candidate_values_before_running_trials() {
     let temp = tempdir().expect("tempdir should be created");
-    let first = write_valid_tune_fixture(temp.path(), "configured-a.gguf")
-        .canonicalize()
-        .expect("first fixture should canonicalize");
-    let second = write_valid_tune_fixture(temp.path(), "configured-b.gguf")
-        .canonicalize()
-        .expect("second fixture should canonicalize");
-    let config_path = temp.path().join("config.toml");
-    write_config_with_models(&config_path, &[first, second]);
-    let before = fs::read_to_string(&config_path).expect("config should be readable before run");
-    let command = GpuCommand::Tune {
-        model: None,
+    let model = write_valid_tune_fixture(temp.path(), "zero-candidates.gguf");
+    let command = BenchmarkCommand::Tune(Box::new(BenchmarkTuneCommand {
+        model: Some(model.display().to_string()),
         models: Vec::new(),
         json: true,
-        launch_args: false,
-        apply: false,
-        replace_existing: false,
-    };
+        ctx_sizes: vec![0],
+        batch_sizes: vec![1024],
+        ubatch_sizes: vec![256],
+        mmap_values: Vec::new(),
+        mlock_values: Vec::new(),
+        speculative_types: Vec::new(),
+        no_speculative_tune: false,
+        spec_draft_models: Vec::new(),
+        spec_draft_max_tokens: Vec::new(),
+        spec_draft_min_tokens: Vec::new(),
+        spec_ngram_min: Vec::new(),
+        spec_ngram_max: Vec::new(),
+        throughput_tolerance_pct: 10.0,
+        max_tokens: 32,
+        startup_timeout_secs: 5,
+        request_timeout_secs: 5,
+        prompt: "hello".to_string(),
+    }));
     let mut output = Vec::new();
 
-    run_tune_command_with_writer(Some(&config_path), false, &command, &mut output)
-        .expect("configured review should succeed");
+    let result = run_benchmark_tune_command_with_writer(None, &command, &mut output);
 
-    let report: Value = serde_json::from_slice(&output).expect("json output should deserialize");
-    assert_eq!(report["summary"]["total_targets"], Value::from(2));
-    assert_eq!(report["summary"]["ready_targets"], Value::from(2));
-    assert_eq!(report["summary"]["failed_targets"], Value::from(0));
-    assert_eq!(report["targets"][0]["selection"], Value::from("configured"));
-    assert_eq!(report["targets"][1]["selection"], Value::from("configured"));
-    assert_eq!(
-        fs::read_to_string(&config_path).expect("config should be readable after run"),
-        before,
-        "review mode must not mutate config"
+    let error = result.expect_err("zero-only ctx sizes should be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("--ctx-sizes must include at least one positive value"),
+        "unexpected error: {error:#}"
     );
 }
 
 #[test]
-fn gpu_tune_explicit_model_limits_run_to_requested_target() {
+fn benchmark_tune_rejects_candidate_matrix_without_valid_batch_ubatch_pair() {
     let temp = tempdir().expect("tempdir should be created");
-    let first = write_valid_tune_fixture(temp.path(), "configured-a.gguf")
-        .canonicalize()
-        .expect("first fixture should canonicalize");
-    let second = write_valid_tune_fixture(temp.path(), "configured-b.gguf")
-        .canonicalize()
-        .expect("second fixture should canonicalize");
-    let config_path = temp.path().join("config.toml");
-    write_config_with_models(&config_path, &[first, second.clone()]);
-    let command = GpuCommand::Tune {
-        model: Some(second.display().to_string()),
+    let model = write_valid_tune_fixture(temp.path(), "invalid-batch-pair.gguf");
+    let command = BenchmarkCommand::Tune(Box::new(BenchmarkTuneCommand {
+        model: Some(model.display().to_string()),
         models: Vec::new(),
         json: true,
-        launch_args: false,
-        apply: false,
-        replace_existing: false,
-    };
+        ctx_sizes: vec![4096],
+        batch_sizes: vec![512],
+        ubatch_sizes: vec![1024],
+        mmap_values: Vec::new(),
+        mlock_values: Vec::new(),
+        speculative_types: Vec::new(),
+        no_speculative_tune: false,
+        spec_draft_models: Vec::new(),
+        spec_draft_max_tokens: Vec::new(),
+        spec_draft_min_tokens: Vec::new(),
+        spec_ngram_min: Vec::new(),
+        spec_ngram_max: Vec::new(),
+        throughput_tolerance_pct: 10.0,
+        max_tokens: 32,
+        startup_timeout_secs: 5,
+        request_timeout_secs: 5,
+        prompt: "hello".to_string(),
+    }));
     let mut output = Vec::new();
 
-    run_tune_command_with_writer(Some(&config_path), false, &command, &mut output)
-        .expect("explicit review should succeed");
+    let result = run_benchmark_tune_command_with_writer(None, &command, &mut output);
 
-    let report: Value = serde_json::from_slice(&output).expect("json output should deserialize");
-    assert_eq!(report["summary"]["total_targets"], Value::from(1));
-    assert_eq!(
-        report["targets"][0]["target"]["requested"],
-        Value::from(second.display().to_string())
+    let error = result.expect_err("ubatch larger than every batch should be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("benchmark candidate matrix has no valid batch/ubatch pairs"),
+        "unexpected error: {error:#}"
     );
-    assert_eq!(
-        report["targets"][0]["selection"],
-        Value::from("explicit_configured")
-    );
-}
-
-#[test]
-fn gpu_tune_apply_reports_mixed_success_and_failure_and_writes_ready_target() {
-    let temp = tempdir().expect("tempdir should be created");
-    let valid = write_valid_tune_fixture(temp.path(), "apply-success.gguf")
-        .canonicalize()
-        .expect("fixture should canonicalize");
-    let missing = temp.path().join("missing.gguf");
-    let config_path = temp.path().join("config.toml");
-    fs::write(&config_path, "version = 1\n").expect("fixture config should be written");
-    let command = GpuCommand::Tune {
-        model: None,
-        models: vec![valid.display().to_string(), missing.display().to_string()],
-        json: true,
-        launch_args: false,
-        apply: true,
-        replace_existing: false,
-    };
-    let mut output = Vec::new();
-
-    run_tune_command_with_writer(Some(&config_path), false, &command, &mut output)
-        .expect("apply should succeed when at least one target writes");
-
-    let report: Value = serde_json::from_slice(&output).expect("json output should deserialize");
-    assert_eq!(report["summary"]["total_targets"], Value::from(2));
-    assert_eq!(report["summary"]["written_targets"], Value::from(1));
-    assert_eq!(report["summary"]["failed_targets"], Value::from(1));
-    assert_eq!(report["targets"][0]["status"], Value::from("written"));
-    assert_eq!(report["targets"][1]["status"], Value::from("failed"));
-    let edited = fs::read_to_string(&config_path).expect("config should be readable after apply");
-    assert!(edited.contains(&format!("model = \"{}\"", valid.display())));
-    assert!(edited.contains("cache_type_k = \"q8_0\""));
 }

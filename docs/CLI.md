@@ -369,45 +369,10 @@ is present, the command requires `--public-key-file` and otherwise reports
 ### `gpus`
 
 Use this to inspect local GPU identity and capacity, including per-device VRAM, unified-memory state, and cached benchmark-derived bandwidth when present. `mesh-llm gpus detect` refreshes the raw hardware fingerprint, bandwidth, and compute hints used by local planning.
-For review and apply tuning of already-downloaded local models, use `mesh-llm gpu tune` or `mesh-llm gpus tune`.
-
-### `gpu tune`
-
-Use this to review or apply startup tuning for already-downloaded local models. The command is local-only. It rejects remote-only refs and any target that is not already on disk instead of fetching it.
-
-Examples:
-
-```bash
-mesh-llm gpu tune
-mesh-llm gpu tune --model /models/qwen3-8b.gguf
-mesh-llm gpu tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf
-mesh-llm gpu tune --model /models/qwen3-8b.gguf --launch-args
-mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply
-mesh-llm gpu tune --model /models/qwen3-8b.gguf --apply --replace-existing
-```
-
-Switches:
-
-- `--model <MODEL>`: tune one exact local model that is already downloaded.
-- `--models <MODELS>`: tune multiple exact local models, separated by commas.
-- `--json`: machine-readable tune report.
-- `--launch-args`: read-only output. Prints one shell-safe `mesh-llm serve --model ...` command per successful target, plus comments for writable, report-only, and unsupported fields. It conflicts with `--apply` and `--replace-existing`.
-- `--apply`: write the supported nested tune fields to `~/.mesh-llm/config.toml`. Existing comments and unrelated TOML stay in place.
-- `--replace-existing`: when used with `--apply`, overwrite existing explicit tune values instead of only filling gaps.
-
-Behavior:
-
-1. No target flags means tune the configured local models from `~/.mesh-llm/config.toml`. If that file has no models, the command fails and asks for `--model` or `--models`.
-2. `--model` and `--models` never trigger a download. If a target is not already installed, tune rejects it and leaves the machine untouched.
-3. `mmap` and `mlock` are writable model-load controls. `mlock` can warn that the current memlock limit or `IPC_LOCK` access is too low; tune never changes privileges and recommends `mlock=false` when locking is unavailable.
-4. `cpu_moe`, `n_cpu_moe`, `tensor_split`, and `placement` are reported as unsupported in v1 and are not written.
-5. `--apply` writes only supported nested fields under `[[models]].model_fit` and `[[models]].hardware`.
-6. `--replace-existing` can replace existing explicit values, including values inherited from `defaults.*`, when you want those recommendations written.
-7. Review and apply modes are for startup help, not benchmarking, and they do not promise maximum throughput.
 
 ### `benchmark tune`
 
-Use this to benchmark model-serving throughput for already-downloaded local models. It shares the same local target resolution and startup planning as `gpu tune`, then starts isolated trial `mesh-llm serve` children from temporary configs and reports per-candidate decode tok/s.
+Use this to benchmark model-serving throughput for already-downloaded local models. It resolves local targets, plans safe startup settings, then starts isolated trial `mesh-llm serve` children from temporary configs and reports per-candidate decode tok/s.
 
 The recommendation is tolerance-aware: benchmark tune reports the raw highest-throughput trial, computes the Pareto frontier for decode tok/s versus `ctx_size`, then recommends the largest context window whose decode throughput is within the configured tolerance of the raw best.
 
@@ -418,6 +383,8 @@ mesh-llm benchmark tune --model /models/qwen3-8b.gguf
 mesh-llm benchmark tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --mmap-values auto,true,false --mlock-values true,false
+mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types auto
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --speculative-types draft,ngram,disabled --spec-draft-models /models/qwen3-draft.gguf --spec-draft-max-tokens 4,8,16 --spec-ngram-min 12,24 --spec-ngram-max 48,64
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --throughput-tolerance-pct 2.5
 ```
 
@@ -430,6 +397,11 @@ Switches:
 - `--batch-sizes <VALUES>` / `--ubatch-sizes <VALUES>`: comma-separated batch and micro-batch values to benchmark. Candidates where `ubatch > batch` are skipped.
 - `--mmap-values <VALUES>`: comma-separated mmap values to benchmark independently: `auto`, `enabled`/`true`, or `disabled`/`false`. If omitted, benchmark tune tries all three.
 - `--mlock-values <VALUES>`: comma-separated mlock values to benchmark independently: `enabled`/`true` or `disabled`/`false`. If omitted, benchmark tune tries `false` and also tries `true` only when the mlock probe says the evaluated budget can be locked.
+- `--speculative-types <VALUES>`: comma-separated speculative decoding types to benchmark: `auto`, `native-mtp-n1`/`mtp`, `draft`, `ngram`, or `disabled`. If omitted, `auto` tries native MTP first for MTP-looking targets, then discovered draft candidates, then a disabled baseline.
+- `--no-speculative-tune`: skip speculative sweeps and benchmark only the disabled speculative baseline.
+- `--spec-draft-models <PATHS>`: comma-separated local draft GGUF paths for `draft` speculation trials. Tune also considers configured `draft_model_path` values and obvious local sibling draft/EAGLE GGUF files.
+- `--spec-draft-max-tokens <TOKENS>` / `--spec-draft-min-tokens <TOKENS>`: comma-separated draft-token window candidates for draft speculation.
+- `--spec-ngram-min <TOKENS>` / `--spec-ngram-max <TOKENS>`: comma-separated ngram token-window candidates for ngram speculation.
 - `--throughput-tolerance-pct <PCT>`: treat candidates within this percent of the raw best decode tok/s as throughput-equivalent, then prefer the largest `ctx_size` among them, default `10.0`.
 - `--max-tokens <TOKENS>`: generated tokens per measured request, default `128`.
 - `--startup-timeout-secs <SECONDS>` / `--request-timeout-secs <SECONDS>`: per-trial startup and HTTP request limits, both default `600`.

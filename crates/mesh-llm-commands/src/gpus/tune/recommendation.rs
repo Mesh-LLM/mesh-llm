@@ -79,7 +79,7 @@ pub(crate) fn build_tune_plan(input: TuneRecommendationInput<'_>) -> TunePlan {
     ));
     plan.field_statuses.push(TuneFieldStatus::Preserved {
         field: TuneField::Defaults,
-        reason: "defaults.* remains preserve-only in v1 and is never rewritten by gpu tune"
+        reason: "defaults.* remains preserve-only in v1 and is never rewritten by tune"
             .to_string(),
     });
     if let Some(diagnostic) = fit.diagnostic {

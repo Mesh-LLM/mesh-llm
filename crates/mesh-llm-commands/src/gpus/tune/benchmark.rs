@@ -6,6 +6,13 @@ pub(crate) struct TuneBenchmarkRunRequest<'a> {
     pub(crate) ubatch_sizes: &'a [u32],
     pub(crate) mmap_values: &'a [mesh_llm_cli::benchmark::BenchmarkBoolOrAuto],
     pub(crate) mlock_values: &'a [mesh_llm_cli::benchmark::BenchmarkBool],
+    pub(crate) speculative_types: &'a [mesh_llm_cli::benchmark::BenchmarkSpeculativeType],
+    pub(crate) no_speculative_tune: bool,
+    pub(crate) spec_draft_models: &'a [std::path::PathBuf],
+    pub(crate) spec_draft_max_tokens: &'a [u32],
+    pub(crate) spec_draft_min_tokens: &'a [u32],
+    pub(crate) spec_ngram_min: &'a [u32],
+    pub(crate) spec_ngram_max: &'a [u32],
     pub(crate) throughput_tolerance_pct: f64,
     pub(crate) max_tokens: u32,
     pub(crate) startup_timeout_secs: u64,
@@ -42,7 +49,9 @@ fn run_target_benchmarks(
     let trials = candidates
         .into_iter()
         .enumerate()
-        .map(|(index, candidate)| run_trial_with_progress(request, prepared, index, total, candidate))
+        .map(|(index, candidate)| {
+            run_trial_with_progress(request, prepared, index, total, candidate)
+        })
         .collect::<Vec<_>>();
     let selection = select_benchmark_trials(&trials, request.throughput_tolerance_pct);
     log_target_selection(&prepared.target.requested_input, &selection);
@@ -62,8 +71,7 @@ fn benchmark_candidates(
     request: &TuneBenchmarkRunRequest<'_>,
     prepared: &crate::gpus::tune_apply::PreparedTunePlan,
 ) -> Vec<TuneBenchmarkCandidate> {
-    let default_ctx =
-        default_model_fit_u32(request, prepared, TuneField::CtxSize).unwrap_or(8192);
+    let default_ctx = default_model_fit_u32(request, prepared, TuneField::CtxSize).unwrap_or(8192);
     let contexts = if request.ctx_sizes.is_empty() {
         default_context_sizes(default_ctx)
     } else {
@@ -79,12 +87,13 @@ fn benchmark_candidates(
     } else {
         unique_positive(request.ubatch_sizes)
     };
-    let cache_type_k =
-        recommended_cache_type(&prepared.plan, TuneField::CacheTypeK).unwrap_or(TuneKvCacheType::Q8_0);
+    let cache_type_k = recommended_cache_type(&prepared.plan, TuneField::CacheTypeK)
+        .unwrap_or(TuneKvCacheType::Q8_0);
     let cache_type_v =
         recommended_cache_type(&prepared.plan, TuneField::CacheTypeV).unwrap_or(cache_type_k);
     let mmap_values = benchmark_mmap_values(request.mmap_values, &prepared.plan);
     let mlock_values = benchmark_mlock_values(request.mlock_values, &prepared.plan);
+    let speculative_values = benchmark_speculative_values(request, prepared);
 
     let mut candidates = Vec::new();
     for ctx_size in contexts {
@@ -95,15 +104,18 @@ fn benchmark_candidates(
                 }
                 for mmap in &mmap_values {
                     for mlock in &mlock_values {
-                        candidates.push(TuneBenchmarkCandidate {
-                            ctx_size,
-                            batch: *batch,
-                            ubatch: *ubatch,
-                            cache_type_k,
-                            cache_type_v,
-                            mmap: *mmap,
-                            mlock: *mlock,
-                        });
+                        for speculative in &speculative_values {
+                            candidates.push(TuneBenchmarkCandidate {
+                                ctx_size,
+                                batch: *batch,
+                                ubatch: *ubatch,
+                                cache_type_k,
+                                cache_type_v,
+                                mmap: *mmap,
+                                mlock: *mlock,
+                                speculative: speculative.clone(),
+                            });
+                        }
                     }
                 }
             }
@@ -162,7 +174,10 @@ fn run_trial_inner(
     index: usize,
     candidate: &TuneBenchmarkCandidate,
 ) -> anyhow::Result<TuneBenchmarkTrial> {
-    anyhow::ensure!(request.max_tokens > 0, "--max-tokens must be greater than zero");
+    anyhow::ensure!(
+        request.max_tokens > 0,
+        "--max-tokens must be greater than zero"
+    );
     let mut timings = TrialTimingRecorder::new();
     let setup_started = std::time::Instant::now();
     let trial_dir = create_trial_dir(prepared, index)?;
@@ -482,10 +497,7 @@ fn send_chat_request(
 }
 
 fn response_completion_tokens(response: &serde_json::Value) -> Option<u64> {
-    response
-        .get("usage")?
-        .get("completion_tokens")?
-        .as_u64()
+    response.get("usage")?.get("completion_tokens")?.as_u64()
 }
 
 fn trial_config(
@@ -529,6 +541,48 @@ fn apply_candidate_overrides(
     let hardware = ensure_trial_subtable(table, "hardware")?;
     hardware["mmap"] = toml_edit::value(render_bool_or_auto(candidate.mmap));
     hardware["mlock"] = toml_edit::value(candidate.mlock);
+    apply_speculative_overrides(table, &candidate.speculative)?;
+    Ok(())
+}
+
+fn apply_speculative_overrides(
+    table: &mut toml_edit::Table,
+    speculative: &TuneBenchmarkSpeculativeCandidate,
+) -> anyhow::Result<()> {
+    let spec_table = ensure_trial_subtable(table, "speculative")?;
+    match speculative {
+        TuneBenchmarkSpeculativeCandidate::Disabled => {
+            spec_table["strategy"] = toml_edit::value("disabled");
+            spec_table["mode"] = toml_edit::value("disabled");
+        }
+        TuneBenchmarkSpeculativeCandidate::NativeMtpN1 => {
+            spec_table["strategy"] = toml_edit::value("native-mtp-n1");
+            spec_table["mode"] = toml_edit::value("auto");
+        }
+        TuneBenchmarkSpeculativeCandidate::Draft {
+            draft_model_path,
+            draft_max_tokens,
+            draft_min_tokens,
+        } => {
+            spec_table["strategy"] = toml_edit::value("disabled");
+            spec_table["mode"] = toml_edit::value("draft");
+            spec_table["draft_model_path"] = toml_edit::value(draft_model_path.as_str());
+            spec_table["draft_selection_policy"] = toml_edit::value("manual");
+            spec_table["draft_max_tokens"] = toml_edit::value(i64::from(*draft_max_tokens));
+            if let Some(draft_min_tokens) = draft_min_tokens {
+                spec_table["draft_min_tokens"] = toml_edit::value(i64::from(*draft_min_tokens));
+            }
+        }
+        TuneBenchmarkSpeculativeCandidate::Ngram {
+            ngram_min,
+            ngram_max,
+        } => {
+            spec_table["strategy"] = toml_edit::value("disabled");
+            spec_table["mode"] = toml_edit::value("ngram");
+            spec_table["ngram_min"] = toml_edit::value(i64::from(*ngram_min));
+            spec_table["ngram_max"] = toml_edit::value(i64::from(*ngram_max));
+        }
+    }
     Ok(())
 }
 
@@ -551,7 +605,9 @@ fn create_trial_dir(
     let mut dir = std::env::current_dir()?;
     dir.push("target");
     dir.push("gpu-tune");
-    dir.push(sanitize_path_component(&prepared.target.canonical_model_ref));
+    dir.push(sanitize_path_component(
+        &prepared.target.canonical_model_ref,
+    ));
     dir.push(format!(
         "{}-{index}",
         std::time::SystemTime::now()
@@ -617,12 +673,8 @@ fn benchmark_mmap_values(
         .copied()
         .map(|value| match value {
             mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Auto => TuneBoolOrAutoValue::Auto,
-            mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Enabled => {
-                TuneBoolOrAutoValue::Enabled
-            }
-            mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Disabled => {
-                TuneBoolOrAutoValue::Disabled
-            }
+            mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Enabled => TuneBoolOrAutoValue::Enabled,
+            mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Disabled => TuneBoolOrAutoValue::Disabled,
         })
         .collect::<Vec<_>>();
     values.sort_by_key(|value| match value {
@@ -656,6 +708,265 @@ fn benchmark_mlock_values(
     values.sort_unstable();
     values.dedup();
     values
+}
+
+fn benchmark_speculative_values(
+    request: &TuneBenchmarkRunRequest<'_>,
+    prepared: &crate::gpus::tune_apply::PreparedTunePlan,
+) -> Vec<TuneBenchmarkSpeculativeCandidate> {
+    if request.no_speculative_tune {
+        return vec![TuneBenchmarkSpeculativeCandidate::Disabled];
+    }
+    let requested = requested_speculative_types(request.speculative_types);
+    let mut candidates = Vec::new();
+    for requested_type in requested {
+        match requested_type {
+            mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Auto => {
+                push_auto_speculative_candidates(&mut candidates, request, prepared);
+            }
+            mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Disabled => {
+                candidates.push(TuneBenchmarkSpeculativeCandidate::Disabled);
+            }
+            mesh_llm_cli::benchmark::BenchmarkSpeculativeType::NativeMtpN1 => {
+                candidates.push(TuneBenchmarkSpeculativeCandidate::NativeMtpN1);
+            }
+            mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Draft => {
+                push_draft_speculative_candidates(&mut candidates, request, prepared);
+            }
+            mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Ngram => {
+                push_ngram_speculative_candidates(&mut candidates, request);
+            }
+        }
+    }
+    dedup_speculative_candidates(candidates)
+}
+
+fn requested_speculative_types(
+    requested: &[mesh_llm_cli::benchmark::BenchmarkSpeculativeType],
+) -> Vec<mesh_llm_cli::benchmark::BenchmarkSpeculativeType> {
+    if requested.is_empty() {
+        return vec![mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Auto];
+    }
+    let mut values = requested.to_vec();
+    values.sort_by_key(|value| speculative_type_priority(*value));
+    values.dedup();
+    values
+}
+
+fn speculative_type_priority(value: mesh_llm_cli::benchmark::BenchmarkSpeculativeType) -> u8 {
+    match value {
+        mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Auto => 0,
+        mesh_llm_cli::benchmark::BenchmarkSpeculativeType::NativeMtpN1 => 1,
+        mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Draft => 2,
+        mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Ngram => 3,
+        mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Disabled => 4,
+    }
+}
+
+fn push_auto_speculative_candidates(
+    candidates: &mut Vec<TuneBenchmarkSpeculativeCandidate>,
+    request: &TuneBenchmarkRunRequest<'_>,
+    prepared: &crate::gpus::tune_apply::PreparedTunePlan,
+) {
+    if looks_like_mtp_target(prepared) {
+        candidates.push(TuneBenchmarkSpeculativeCandidate::NativeMtpN1);
+    }
+    push_draft_speculative_candidates(candidates, request, prepared);
+    candidates.push(TuneBenchmarkSpeculativeCandidate::Disabled);
+}
+
+fn push_draft_speculative_candidates(
+    candidates: &mut Vec<TuneBenchmarkSpeculativeCandidate>,
+    request: &TuneBenchmarkRunRequest<'_>,
+    prepared: &crate::gpus::tune_apply::PreparedTunePlan,
+) {
+    let draft_models = discover_draft_model_candidates(request, prepared);
+    if draft_models.is_empty() {
+        return;
+    }
+    let max_tokens = positive_or_default(request.spec_draft_max_tokens, &[4, 8, 16]);
+    let min_tokens = optional_positive_values(request.spec_draft_min_tokens);
+    for draft_model_path in draft_models {
+        for draft_max_tokens in &max_tokens {
+            if min_tokens.is_empty() {
+                candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
+                    draft_model_path: draft_model_path.clone(),
+                    draft_max_tokens: *draft_max_tokens,
+                    draft_min_tokens: None,
+                });
+                continue;
+            }
+            for draft_min_tokens in &min_tokens {
+                if draft_min_tokens <= draft_max_tokens {
+                    candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
+                        draft_model_path: draft_model_path.clone(),
+                        draft_max_tokens: *draft_max_tokens,
+                        draft_min_tokens: Some(*draft_min_tokens),
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn push_ngram_speculative_candidates(
+    candidates: &mut Vec<TuneBenchmarkSpeculativeCandidate>,
+    request: &TuneBenchmarkRunRequest<'_>,
+) {
+    let ngram_min_values = positive_or_default(request.spec_ngram_min, &[12, 24]);
+    let ngram_max_values = positive_or_default(request.spec_ngram_max, &[48, 64]);
+    for ngram_min in &ngram_min_values {
+        for ngram_max in &ngram_max_values {
+            if ngram_min <= ngram_max {
+                candidates.push(TuneBenchmarkSpeculativeCandidate::Ngram {
+                    ngram_min: *ngram_min,
+                    ngram_max: *ngram_max,
+                });
+            }
+        }
+    }
+}
+
+fn positive_or_default(requested: &[u32], defaults: &[u32]) -> Vec<u32> {
+    if requested.is_empty() {
+        return defaults.to_vec();
+    }
+    unique_positive(requested)
+}
+
+fn optional_positive_values(requested: &[u32]) -> Vec<u32> {
+    if requested.is_empty() {
+        return Vec::new();
+    }
+    unique_positive(requested)
+}
+
+fn discover_draft_model_candidates(
+    request: &TuneBenchmarkRunRequest<'_>,
+    prepared: &crate::gpus::tune_apply::PreparedTunePlan,
+) -> Vec<String> {
+    let mut candidates = request
+        .spec_draft_models
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    if let Some(model_entry) = benchmark_model_entry(request.config, prepared)
+        && let Some(path) = model_entry
+            .speculative
+            .as_ref()
+            .and_then(|speculative| speculative.draft_model_path.as_ref())
+    {
+        candidates.push(path.clone());
+    }
+    if let Some(path) = request
+        .config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.speculative.as_ref())
+        .and_then(|speculative| speculative.draft_model_path.as_ref())
+    {
+        candidates.push(path.clone());
+    }
+    candidates.extend(discover_sibling_draft_models(
+        &prepared.target.resolved_path,
+    ));
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+fn discover_sibling_draft_models(model_path: &std::path::Path) -> Vec<String> {
+    let Some(parent) = model_path.parent() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let model_file_name = model_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path != model_path)
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+        })
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| looks_like_draft_model_name(name, model_file_name))
+        })
+        .map(|path| path.display().to_string())
+        .collect()
+}
+
+fn looks_like_draft_model_name(name: &str, target_name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let target_name = target_name.to_ascii_lowercase();
+    (name.contains("draft") || name.contains("eagle"))
+        && !target_name.is_empty()
+        && shares_model_family_token(&name, &target_name)
+}
+
+fn shares_model_family_token(left: &str, right: &str) -> bool {
+    left.split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| token.len() >= 4)
+        .any(|token| right.contains(token))
+}
+
+fn looks_like_mtp_target(prepared: &crate::gpus::tune_apply::PreparedTunePlan) -> bool {
+    [
+        &prepared.target.requested_input,
+        &prepared.target.canonical_model_ref,
+    ]
+    .into_iter()
+    .any(|value| contains_mtp_marker(value))
+        || prepared
+            .target
+            .resolved_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(contains_mtp_marker)
+}
+
+fn contains_mtp_marker(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    normalized.contains("-mtp")
+        || normalized.contains("_mtp")
+        || normalized.contains("/mtp")
+        || normalized.contains("mtp-gguf")
+        || normalized.contains("mtp_gguf")
+}
+
+fn dedup_speculative_candidates(
+    mut candidates: Vec<TuneBenchmarkSpeculativeCandidate>,
+) -> Vec<TuneBenchmarkSpeculativeCandidate> {
+    candidates.sort_by_key(speculative_candidate_sort_key);
+    candidates.dedup();
+    candidates
+}
+
+fn speculative_candidate_sort_key(candidate: &TuneBenchmarkSpeculativeCandidate) -> String {
+    match candidate {
+        TuneBenchmarkSpeculativeCandidate::NativeMtpN1 => "0:native-mtp-n1".to_string(),
+        TuneBenchmarkSpeculativeCandidate::Draft {
+            draft_model_path,
+            draft_max_tokens,
+            draft_min_tokens,
+        } => format!(
+            "1:draft:{draft_model_path}:{draft_max_tokens}:{}",
+            draft_min_tokens.unwrap_or(0)
+        ),
+        TuneBenchmarkSpeculativeCandidate::Ngram {
+            ngram_min,
+            ngram_max,
+        } => format!("2:ngram:{ngram_min}:{ngram_max}"),
+        TuneBenchmarkSpeculativeCandidate::Disabled => "9:disabled".to_string(),
+    }
 }
 
 fn recommended_u32(plan: &TunePlan, field: TuneField) -> Option<u32> {
@@ -741,45 +1052,27 @@ mod benchmark_tests {
 
     #[test]
     fn trial_config_renders_string_paths_and_hardware_edits() {
-        let prepared = PreparedTunePlan::new(
-            ResolvedTuneTarget {
-                requested_input: "model".to_string(),
-                canonical_model_ref: "model".to_string(),
-                resolved_path: std::path::PathBuf::from("/tmp/model with spaces.gguf"),
-                local_source: LocalTargetSource::FilesystemPath {
-                    synthetic_model_ref: "model".to_string(),
-                },
-                config_matches: Vec::new(),
-                selection: TuneTargetSelection::Explicit { configured: false },
-            },
-            TunePlan {
-                target: TuneTarget {
-                    requested: "model".to_string(),
-                    resolved: Some("/tmp/model with spaces.gguf".to_string()),
-                    config_model_ref: None,
-                    derived_profile: None,
-                },
-                apply_mode: TuneApplyMode::Review,
-                field_statuses: vec![
-                    TuneFieldStatus::Applied {
-                        recommendation: TuneRecommendation {
-                            field: TuneField::GpuLayers,
-                            value: TuneRecommendedValue::GpuLayers(TuneGpuLayersValue::All),
-                            rationale: "test".to_string(),
-                        },
-                        edit: TuneConfigEdit::SetHardwareGpuLayers(TuneGpuLayersValue::All),
+        let prepared = prepared_plan_fixture(
+            "/tmp/model with spaces.gguf",
+            Vec::new(),
+            vec![
+                TuneFieldStatus::Applied {
+                    recommendation: TuneRecommendation {
+                        field: TuneField::GpuLayers,
+                        value: TuneRecommendedValue::GpuLayers(TuneGpuLayersValue::All),
+                        rationale: "test".to_string(),
                     },
-                    TuneFieldStatus::Applied {
-                        recommendation: TuneRecommendation {
-                            field: TuneField::FitTargetMib,
-                            value: TuneRecommendedValue::FitTargetMib(60_000),
-                            rationale: "test".to_string(),
-                        },
-                        edit: TuneConfigEdit::SetHardwareFitTargetMib(60_000),
+                    edit: TuneConfigEdit::SetHardwareGpuLayers(TuneGpuLayersValue::All),
+                },
+                TuneFieldStatus::Applied {
+                    recommendation: TuneRecommendation {
+                        field: TuneField::FitTargetMib,
+                        value: TuneRecommendedValue::FitTargetMib(60_000),
+                        rationale: "test".to_string(),
                     },
-                ],
-                diagnostics: Vec::new(),
-            },
+                    edit: TuneConfigEdit::SetHardwareFitTargetMib(60_000),
+                },
+            ],
         );
         let candidate = TuneBenchmarkCandidate {
             ctx_size: 4096,
@@ -789,6 +1082,7 @@ mod benchmark_tests {
             cache_type_v: TuneKvCacheType::Q8_0,
             mmap: TuneBoolOrAutoValue::Disabled,
             mlock: true,
+            speculative: TuneBenchmarkSpeculativeCandidate::NativeMtpN1,
         };
 
         let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
@@ -797,13 +1091,17 @@ mod benchmark_tests {
 
         assert_eq!(model.model, "model");
         assert_eq!(
-            model.model_fit
+            model
+                .model_fit
                 .as_ref()
                 .and_then(|model_fit| model_fit.ctx_size),
             Some(4096)
         );
         assert!(matches!(
-            model.hardware.as_ref().and_then(|hardware| hardware.gpu_layers.as_ref()),
+            model
+                .hardware
+                .as_ref()
+                .and_then(|hardware| hardware.gpu_layers.as_ref()),
             Some(mesh_llm_config::IntegerOrString::Integer(-1))
         ));
         assert_eq!(
@@ -821,70 +1119,130 @@ mod benchmark_tests {
             Some("/tmp/model with spaces.gguf")
         );
         assert_eq!(
-            model.hardware.as_ref().and_then(|hardware| hardware.mmap.as_ref()),
+            model
+                .hardware
+                .as_ref()
+                .and_then(|hardware| hardware.mmap.as_ref()),
             Some(&mesh_llm_config::BoolOrAuto::Bool(false))
         );
         assert_eq!(
             model.hardware.as_ref().and_then(|hardware| hardware.mlock),
             Some(true)
         );
+        assert_eq!(
+            model
+                .speculative
+                .as_ref()
+                .and_then(|speculative| speculative.strategy.as_deref()),
+            Some("native-mtp-n1")
+        );
+        assert_eq!(
+            model
+                .speculative
+                .as_ref()
+                .and_then(|speculative| speculative.mode.as_deref()),
+            Some("auto")
+        );
+    }
+
+    #[test]
+    fn trial_config_renders_draft_speculative_candidate() {
+        let prepared = prepared_plan_fixture("/tmp/model.gguf", Vec::new(), Vec::new());
+        let candidate = TuneBenchmarkCandidate {
+            ctx_size: 4096,
+            batch: 2048,
+            ubatch: 1024,
+            cache_type_k: TuneKvCacheType::Q8_0,
+            cache_type_v: TuneKvCacheType::Q8_0,
+            mmap: TuneBoolOrAutoValue::Disabled,
+            mlock: false,
+            speculative: TuneBenchmarkSpeculativeCandidate::Draft {
+                draft_model_path: "/tmp/model-draft.gguf".to_string(),
+                draft_max_tokens: 8,
+                draft_min_tokens: Some(2),
+            },
+        };
+
+        let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
+        let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
+        let speculative = parsed
+            .models
+            .first()
+            .and_then(|model| model.speculative.as_ref())
+            .expect("speculative config exists");
+
+        assert_eq!(speculative.strategy.as_deref(), Some("disabled"));
+        assert_eq!(speculative.mode.as_deref(), Some("draft"));
+        assert_eq!(
+            speculative.draft_model_path.as_deref(),
+            Some("/tmp/model-draft.gguf")
+        );
+        assert_eq!(speculative.draft_max_tokens, Some(8));
+        assert_eq!(speculative.draft_min_tokens, Some(2));
+    }
+
+    #[test]
+    fn trial_config_renders_ngram_speculative_candidate() {
+        let prepared = prepared_plan_fixture("/tmp/model.gguf", Vec::new(), Vec::new());
+        let candidate = TuneBenchmarkCandidate {
+            ctx_size: 4096,
+            batch: 2048,
+            ubatch: 1024,
+            cache_type_k: TuneKvCacheType::Q8_0,
+            cache_type_v: TuneKvCacheType::Q8_0,
+            mmap: TuneBoolOrAutoValue::Disabled,
+            mlock: false,
+            speculative: TuneBenchmarkSpeculativeCandidate::Ngram {
+                ngram_min: 12,
+                ngram_max: 48,
+            },
+        };
+
+        let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
+        let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
+        let speculative = parsed
+            .models
+            .first()
+            .and_then(|model| model.speculative.as_ref())
+            .expect("speculative config exists");
+
+        assert_eq!(speculative.strategy.as_deref(), Some("disabled"));
+        assert_eq!(speculative.mode.as_deref(), Some("ngram"));
+        assert_eq!(speculative.ngram_min, Some(12));
+        assert_eq!(speculative.ngram_max, Some(48));
     }
 
     #[test]
     fn benchmark_candidates_sweep_mmap_and_available_mlock_independently() {
-        let prepared = PreparedTunePlan::new(
-            ResolvedTuneTarget {
-                requested_input: "model".to_string(),
-                canonical_model_ref: "model".to_string(),
-                resolved_path: std::path::PathBuf::from("/tmp/model.gguf"),
-                local_source: LocalTargetSource::FilesystemPath {
-                    synthetic_model_ref: "model".to_string(),
+        let prepared = prepared_plan_fixture(
+            "/tmp/model.gguf",
+            Vec::new(),
+            vec![TuneFieldStatus::Applied {
+                recommendation: TuneRecommendation {
+                    field: TuneField::Mlock,
+                    value: TuneRecommendedValue::Bool(true),
+                    rationale: "test".to_string(),
                 },
-                config_matches: Vec::new(),
-                selection: TuneTargetSelection::Explicit { configured: false },
-            },
-            TunePlan {
-                target: TuneTarget {
-                    requested: "model".to_string(),
-                    resolved: Some("/tmp/model.gguf".to_string()),
-                    config_model_ref: None,
-                    derived_profile: None,
-                },
-                apply_mode: TuneApplyMode::Review,
-                field_statuses: vec![TuneFieldStatus::Applied {
-                    recommendation: TuneRecommendation {
-                        field: TuneField::Mlock,
-                        value: TuneRecommendedValue::Bool(true),
-                        rationale: "test".to_string(),
-                    },
-                    edit: TuneConfigEdit::SetHardwareMlock(true),
-                }],
-                diagnostics: Vec::new(),
-            },
+                edit: TuneConfigEdit::SetHardwareMlock(true),
+            }],
         );
         let prepared = [prepared];
         let config = mesh_llm_config::MeshConfig::default();
         let request = TuneBenchmarkRunRequest {
-            config: &config,
-            prepared: &prepared,
             ctx_sizes: &[4096],
             batch_sizes: &[1024],
             ubatch_sizes: &[256],
-            mmap_values: &[],
-            mlock_values: &[],
-            throughput_tolerance_pct: 3.0,
-            max_tokens: 32,
-            startup_timeout_secs: 5,
-            request_timeout_secs: 5,
-            prompt: "hello",
+            ..benchmark_request_fixture(&config, &prepared)
         };
 
         let candidates = benchmark_candidates(&request, &prepared[0]);
 
         assert_eq!(candidates.len(), 6);
-        assert!(candidates.iter().any(|candidate| {
-            candidate.mmap == TuneBoolOrAutoValue::Auto && !candidate.mlock
-        }));
+        assert!(
+            candidates.iter().any(|candidate| {
+                candidate.mmap == TuneBoolOrAutoValue::Auto && !candidate.mlock
+            })
+        );
         assert!(candidates.iter().any(|candidate| {
             candidate.mmap == TuneBoolOrAutoValue::Enabled && candidate.mlock
         }));
@@ -908,46 +1266,20 @@ mod benchmark_tests {
             }],
             ..Default::default()
         };
-        let prepared = PreparedTunePlan::new(
-            ResolvedTuneTarget {
-                requested_input: "model".to_string(),
-                canonical_model_ref: "model".to_string(),
-                resolved_path: std::path::PathBuf::from("/tmp/model.gguf"),
-                local_source: LocalTargetSource::FilesystemPath {
-                    synthetic_model_ref: "model".to_string(),
-                },
-                config_matches: vec![ConfigModelMatch {
-                    row_index: 0,
-                    configured_model: "model".to_string(),
-                }],
-                selection: TuneTargetSelection::Configured,
-            },
-            TunePlan {
-                target: TuneTarget {
-                    requested: "model".to_string(),
-                    resolved: Some("/tmp/model.gguf".to_string()),
-                    config_model_ref: Some("model".to_string()),
-                    derived_profile: None,
-                },
-                apply_mode: TuneApplyMode::Review,
-                field_statuses: Vec::new(),
-                diagnostics: Vec::new(),
-            },
+        let prepared = prepared_plan_fixture(
+            "/tmp/model.gguf",
+            vec![ConfigModelMatch {
+                row_index: 0,
+                configured_model: "model".to_string(),
+            }],
+            Vec::new(),
         );
         let prepared = [prepared];
         let request = TuneBenchmarkRunRequest {
-            config: &config,
-            prepared: &prepared,
-            ctx_sizes: &[],
-            batch_sizes: &[],
-            ubatch_sizes: &[],
             mmap_values: &[mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Disabled],
             mlock_values: &[mesh_llm_cli::benchmark::BenchmarkBool::Disabled],
             throughput_tolerance_pct: 10.0,
-            max_tokens: 32,
-            startup_timeout_secs: 5,
-            request_timeout_secs: 5,
-            prompt: "hello",
+            ..benchmark_request_fixture(&config, &prepared)
         };
 
         let candidates = benchmark_candidates(&request, &prepared[0]);
@@ -966,6 +1298,110 @@ mod benchmark_tests {
                 .iter()
                 .any(|candidate| candidate.ctx_size == 131_072),
             "configured context should anchor the default context ladder"
+        );
+    }
+
+    #[test]
+    fn benchmark_candidates_auto_prioritizes_native_mtp_for_mtp_targets() {
+        let prepared =
+            prepared_plan_fixture("/tmp/Qwen3.6-27B-MTP-GGUF.gguf", Vec::new(), Vec::new());
+        let prepared = [prepared];
+        let config = mesh_llm_config::MeshConfig::default();
+        let request = TuneBenchmarkRunRequest {
+            ctx_sizes: &[4096],
+            batch_sizes: &[1024],
+            ubatch_sizes: &[256],
+            mmap_values: &[mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Disabled],
+            mlock_values: &[mesh_llm_cli::benchmark::BenchmarkBool::Disabled],
+            ..benchmark_request_fixture(&config, &prepared)
+        };
+
+        let candidates = benchmark_candidates(&request, &prepared[0]);
+        let speculation = candidates
+            .iter()
+            .map(|candidate| candidate.speculative.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            speculation,
+            vec![
+                TuneBenchmarkSpeculativeCandidate::NativeMtpN1,
+                TuneBenchmarkSpeculativeCandidate::Disabled,
+            ]
+        );
+    }
+
+    #[test]
+    fn benchmark_candidates_no_speculative_tune_uses_disabled_baseline_only() {
+        let prepared =
+            prepared_plan_fixture("/tmp/Qwen3.6-27B-MTP-GGUF.gguf", Vec::new(), Vec::new());
+        let prepared = [prepared];
+        let config = mesh_llm_config::MeshConfig::default();
+        let request = TuneBenchmarkRunRequest {
+            ctx_sizes: &[4096],
+            batch_sizes: &[1024],
+            ubatch_sizes: &[256],
+            mmap_values: &[mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Disabled],
+            mlock_values: &[mesh_llm_cli::benchmark::BenchmarkBool::Disabled],
+            no_speculative_tune: true,
+            ..benchmark_request_fixture(&config, &prepared)
+        };
+
+        let candidates = benchmark_candidates(&request, &prepared[0]);
+        let speculation = candidates
+            .iter()
+            .map(|candidate| candidate.speculative.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            speculation,
+            vec![TuneBenchmarkSpeculativeCandidate::Disabled]
+        );
+    }
+
+    #[test]
+    fn benchmark_candidates_explicit_speculative_sweeps_draft_and_ngram_settings() {
+        let prepared = prepared_plan_fixture("/tmp/qwen-target.gguf", Vec::new(), Vec::new());
+        let prepared = [prepared];
+        let config = mesh_llm_config::MeshConfig::default();
+        let draft_model = std::path::PathBuf::from("/tmp/qwen-draft.gguf");
+        let request = TuneBenchmarkRunRequest {
+            ctx_sizes: &[4096],
+            batch_sizes: &[1024],
+            ubatch_sizes: &[256],
+            mmap_values: &[mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Disabled],
+            mlock_values: &[mesh_llm_cli::benchmark::BenchmarkBool::Disabled],
+            speculative_types: &[
+                mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Draft,
+                mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Ngram,
+            ],
+            spec_draft_models: std::slice::from_ref(&draft_model),
+            spec_draft_max_tokens: &[4],
+            spec_draft_min_tokens: &[2],
+            spec_ngram_min: &[12],
+            spec_ngram_max: &[48],
+            ..benchmark_request_fixture(&config, &prepared)
+        };
+
+        let candidates = benchmark_candidates(&request, &prepared[0]);
+        let speculation = candidates
+            .iter()
+            .map(|candidate| candidate.speculative.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            speculation,
+            vec![
+                TuneBenchmarkSpeculativeCandidate::Draft {
+                    draft_model_path: "/tmp/qwen-draft.gguf".to_string(),
+                    draft_max_tokens: 4,
+                    draft_min_tokens: Some(2),
+                },
+                TuneBenchmarkSpeculativeCandidate::Ngram {
+                    ngram_min: 12,
+                    ngram_max: 48,
+                },
+            ]
         );
     }
 
@@ -1032,7 +1468,103 @@ mod benchmark_tests {
         );
     }
 
+    #[test]
+    fn selection_tie_breaks_toward_unlocked_auto_mmap() {
+        let trials = vec![
+            succeeded_trial_with_memory(8192, 20.0, 2000.0, TuneBoolOrAutoValue::Enabled, true),
+            succeeded_trial_with_memory(8192, 20.0, 2000.0, TuneBoolOrAutoValue::Disabled, false),
+            succeeded_trial_with_memory(8192, 20.0, 2000.0, TuneBoolOrAutoValue::Auto, false),
+        ];
+
+        let selection = select_benchmark_trials(&trials, 0.0);
+        let recommended = selection.recommended.expect("recommended trial");
+
+        assert_eq!(recommended.candidate.mmap, TuneBoolOrAutoValue::Auto);
+        assert!(!recommended.candidate.mlock);
+    }
+
+    fn prepared_plan_fixture(
+        resolved_path: &str,
+        config_matches: Vec<ConfigModelMatch>,
+        field_statuses: Vec<TuneFieldStatus>,
+    ) -> PreparedTunePlan {
+        let config_model_ref = config_matches
+            .first()
+            .map(|config_match| config_match.configured_model.clone());
+        let selection = if config_matches.is_empty() {
+            TuneTargetSelection::Explicit { configured: false }
+        } else {
+            TuneTargetSelection::Configured
+        };
+        PreparedTunePlan::new(
+            ResolvedTuneTarget {
+                requested_input: "model".to_string(),
+                canonical_model_ref: "model".to_string(),
+                resolved_path: std::path::PathBuf::from(resolved_path),
+                local_source: LocalTargetSource::FilesystemPath {
+                    synthetic_model_ref: "model".to_string(),
+                },
+                config_matches,
+                selection,
+            },
+            TunePlan {
+                target: TuneTarget {
+                    requested: "model".to_string(),
+                    resolved: Some(resolved_path.to_string()),
+                    config_model_ref,
+                    derived_profile: None,
+                },
+                apply_mode: TuneApplyMode::Review,
+                field_statuses,
+                diagnostics: Vec::new(),
+            },
+        )
+    }
+
+    fn benchmark_request_fixture<'a>(
+        config: &'a mesh_llm_config::MeshConfig,
+        prepared: &'a [PreparedTunePlan],
+    ) -> TuneBenchmarkRunRequest<'a> {
+        TuneBenchmarkRunRequest {
+            config,
+            prepared,
+            ctx_sizes: &[],
+            batch_sizes: &[],
+            ubatch_sizes: &[],
+            mmap_values: &[],
+            mlock_values: &[],
+            speculative_types: &[],
+            no_speculative_tune: false,
+            spec_draft_models: &[],
+            spec_draft_max_tokens: &[],
+            spec_draft_min_tokens: &[],
+            spec_ngram_min: &[],
+            spec_ngram_max: &[],
+            throughput_tolerance_pct: 3.0,
+            max_tokens: 32,
+            startup_timeout_secs: 5,
+            request_timeout_secs: 5,
+            prompt: "hello",
+        }
+    }
+
     fn succeeded_trial(ctx_size: u32, decode_tok_s: f64, request_ms: f64) -> TuneBenchmarkTrial {
+        succeeded_trial_with_memory(
+            ctx_size,
+            decode_tok_s,
+            request_ms,
+            TuneBoolOrAutoValue::Disabled,
+            false,
+        )
+    }
+
+    fn succeeded_trial_with_memory(
+        ctx_size: u32,
+        decode_tok_s: f64,
+        request_ms: f64,
+        mmap: TuneBoolOrAutoValue,
+        mlock: bool,
+    ) -> TuneBenchmarkTrial {
         TuneBenchmarkTrial {
             candidate: TuneBenchmarkCandidate {
                 ctx_size,
@@ -1040,8 +1572,9 @@ mod benchmark_tests {
                 ubatch: 1024,
                 cache_type_k: TuneKvCacheType::Q8_0,
                 cache_type_v: TuneKvCacheType::Q8_0,
-                mmap: TuneBoolOrAutoValue::Disabled,
-                mlock: false,
+                mmap,
+                mlock,
+                speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
             },
             status: TuneBenchmarkTrialStatus::Succeeded,
             completion_tokens: Some(128),

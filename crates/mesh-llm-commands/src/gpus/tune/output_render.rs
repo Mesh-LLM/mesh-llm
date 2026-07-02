@@ -109,7 +109,7 @@ fn render_command_label(command: &str) -> &'static str {
 
 pub(crate) fn render_tune_launch_args_output(report: &TuneRunReport) -> String {
     let mut rendered = String::new();
-    let _ = writeln!(&mut rendered, "# mesh-llm gpu tune --launch-args");
+    let _ = writeln!(&mut rendered, "# tune --launch-args");
     let _ = writeln!(
         &mut rendered,
         "# total={} ready={} written={} skipped={} failed={}",
@@ -176,12 +176,8 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
             Some(best) => {
                 let _ = writeln!(
                     rendered,
-                    "    Recommended: ctx={} batch={} ubatch={} mmap={} mlock={} decode_tok_s={}{}",
-                    best.candidate.ctx_size,
-                    best.candidate.batch,
-                    best.candidate.ubatch,
-                    render_bool_or_auto_candidate(best.candidate.mmap),
-                    best.candidate.mlock,
+                    "    Recommended: {} decode_tok_s={}{}",
+                    render_benchmark_candidate(&best.candidate),
                     best.decode_tok_s
                         .map(|value| format!("{value:.2}"))
                         .unwrap_or_else(|| "n/a".to_string()),
@@ -197,15 +193,11 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
         }
         if let Some(raw_best) = &benchmark.raw_best {
             let _ = writeln!(
-                rendered,
-                "    Raw best: ctx={} batch={} ubatch={} mmap={} mlock={} decode_tok_s={}{}",
-                raw_best.candidate.ctx_size,
-                raw_best.candidate.batch,
-                raw_best.candidate.ubatch,
-                render_bool_or_auto_candidate(raw_best.candidate.mmap),
-                raw_best.candidate.mlock,
-                raw_best
-                    .decode_tok_s
+                    rendered,
+                    "    Raw best: {} decode_tok_s={}{}",
+                    render_benchmark_candidate(&raw_best.candidate),
+                    raw_best
+                        .decode_tok_s
                     .map(|value| format!("{value:.2}"))
                     .unwrap_or_else(|| "n/a".to_string()),
                 render_timing_summary(raw_best.timings.as_ref()),
@@ -219,12 +211,8 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
             for trial in &benchmark.pareto_frontier {
                 let _ = writeln!(
                     rendered,
-                    "      - ctx={} batch={} ubatch={} mmap={} mlock={} decode_tok_s={}{}",
-                    trial.candidate.ctx_size,
-                    trial.candidate.batch,
-                    trial.candidate.ubatch,
-                    render_bool_or_auto_candidate(trial.candidate.mmap),
-                    trial.candidate.mlock,
+                    "      - {} decode_tok_s={}{}",
+                    render_benchmark_candidate(&trial.candidate),
                     trial
                         .decode_tok_s
                         .map(|value| format!("{value:.2}"))
@@ -245,12 +233,8 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
             };
             let _ = write!(
                 rendered,
-                "    - {status}: ctx={} batch={} ubatch={} mmap={} mlock={}",
-                trial.candidate.ctx_size,
-                trial.candidate.batch,
-                trial.candidate.ubatch,
-                render_bool_or_auto_candidate(trial.candidate.mmap),
-                trial.candidate.mlock,
+                "    - {status}: {}",
+                render_benchmark_candidate(&trial.candidate),
             );
             if let Some(rate) = trial.decode_tok_s {
                 let _ = write!(rendered, " decode_tok_s={rate:.2}");
@@ -266,14 +250,6 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
             }
             let _ = writeln!(rendered);
         }
-    }
-}
-
-fn render_bool_or_auto_candidate(value: TuneBoolOrAutoValue) -> &'static str {
-    match value {
-        TuneBoolOrAutoValue::Enabled => "enabled",
-        TuneBoolOrAutoValue::Disabled => "disabled",
-        TuneBoolOrAutoValue::Auto => "auto",
     }
 }
 
