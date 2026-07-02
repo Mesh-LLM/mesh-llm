@@ -415,10 +415,21 @@ fn maybe_run_benchmark_reports(
     benchmark: bool,
 ) -> Vec<tune::TuneBenchmarkTargetReport> {
     if benchmark {
-        tune::run_benchmark_plans(request)
+        run_benchmark_plans_on_plain_thread(request)
     } else {
         Vec::new()
     }
+}
+
+fn run_benchmark_plans_on_plain_thread(
+    request: tune::TuneBenchmarkRunRequest<'_>,
+) -> Vec<tune::TuneBenchmarkTargetReport> {
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(move || tune::run_benchmark_plans(request));
+        handle
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
 const fn tune_apply_mode(launch_args: bool, apply: bool, replace_existing: bool) -> TuneApplyMode {
