@@ -710,6 +710,24 @@ pub fn write_native_log_note(note: impl AsRef<str>) {
         let _ = writeln!(writer, "mesh-llm: {note}");
         let _ = writer.flush();
     }
+    forward_native_log_note(note);
+}
+
+fn forward_native_log_note(note: String) {
+    if !NATIVE_LOG_FORWARDING_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let event = NativeLogEvent {
+        message: format!("mesh-llm: {note}"),
+        category: "model",
+        params: Vec::new(),
+    };
+    if let Some(sender) = NATIVE_LOG_FILTERED_TX.get()
+        && let Ok(guard) = sender.lock()
+        && let Some(tx) = guard.as_ref()
+    {
+        let _ = tx.send(event);
+    }
 }
 
 fn clear_native_log_file() {
@@ -4974,6 +4992,36 @@ mod tests {
             Some(NativeLogEvent {
                 message: "init_tokenizer: initializing tokenizer for type 2".to_string(),
                 category: "tokenizer",
+                params: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn native_log_note_forwards_when_forwarding_enabled() {
+        let _native_log_guard = native_log_test_guard();
+
+        struct ResetNativeLogForwarding;
+
+        impl Drop for ResetNativeLogForwarding {
+            fn drop(&mut self) {
+                unregister_filtered_native_logs();
+                set_filtered_native_logs_enabled(false);
+            }
+        }
+
+        let _reset = ResetNativeLogForwarding;
+        unregister_filtered_native_logs();
+        let mut rx = register_filtered_native_logs();
+        set_filtered_native_logs_enabled(true);
+
+        write_native_log_note("skippy_model_open begin\nwith context");
+
+        assert_eq!(
+            rx.blocking_recv(),
+            Some(NativeLogEvent {
+                message: "mesh-llm: skippy_model_open begin with context".to_string(),
+                category: "model",
                 params: Vec::new(),
             })
         );
