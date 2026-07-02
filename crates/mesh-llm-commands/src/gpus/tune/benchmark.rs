@@ -545,7 +545,7 @@ fn trial_config(
     doc["version"] = toml_edit::value(1);
 
     let mut table = toml_edit::Table::new();
-    table["model"] = toml_edit::value(prepared.target.canonical_model_ref.clone());
+    table["model"] = toml_edit::value(trial_model_ref(prepared));
     crate::gpus::tune_apply::apply_config_edits(&mut table, &prepared.plan.config_edits())?;
     apply_resolved_model_path(&mut table, prepared)?;
     apply_candidate_overrides(&mut table, candidate)?;
@@ -554,6 +554,17 @@ fn trial_config(
     models.push(table);
     doc["models"] = toml_edit::Item::ArrayOfTables(models);
     Ok(doc.to_string())
+}
+
+fn trial_model_ref(prepared: &crate::gpus::tune_apply::PreparedTunePlan) -> String {
+    match &prepared.target.local_source {
+        crate::gpus::tune_resolver::LocalTargetSource::HuggingFaceCache { canonical_ref } => {
+            canonical_ref.clone()
+        }
+        crate::gpus::tune_resolver::LocalTargetSource::FilesystemPath { .. } => {
+            prepared.target.resolved_path.display().to_string()
+        }
+    }
 }
 
 fn apply_resolved_model_path(
@@ -1126,7 +1137,7 @@ mod benchmark_tests {
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let model = parsed.models.first().expect("model row exists");
 
-        assert_eq!(model.model, "model");
+        assert_eq!(model.model, "/tmp/model with spaces.gguf");
         assert_eq!(
             model
                 .model_fit
