@@ -1190,7 +1190,10 @@ fn write_package_artifact(
     let path = out_dir.join(&spec.relative_path);
     write_stage_artifact(source, &stage, &path)?;
     let relative_path = spec.relative_path.display().to_string();
-    run_artifact_hook(artifact_hook, &path, &relative_path)?;
+    // Read all artifact metadata from disk before running the hook: the upload
+    // hook may move or delete the local file (see split-model-job.sh, which
+    // uploads then unlinks each artifact to stay under the ephemeral storage
+    // limit). Reopening the file after the hook would fail once it is gone.
     let artifact_info = ModelInfo::open(&path)
         .with_context(|| format!("open package artifact {}", path.display()))?;
     let artifact_tensors = artifact_info
@@ -1199,12 +1202,13 @@ fn write_package_artifact(
     let metadata = fs::metadata(&path)
         .with_context(|| format!("read artifact metadata {}", path.display()))?;
     let artifact = PackageArtifact {
-        path: relative_path,
+        path: relative_path.clone(),
         tensor_count: artifact_tensors.len(),
         tensor_bytes: artifact_tensors.iter().map(|tensor| tensor.byte_size).sum(),
         artifact_bytes: metadata.len(),
         sha256: file_sha256(&path)?,
     };
+    run_artifact_hook(artifact_hook, &path, &relative_path)?;
     Ok(artifact)
 }
 
@@ -1948,13 +1952,64 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExplicitSourceIdentity, activation_width, local_artifact_files, model_distribution_id,
-        native_mtp_layer_indices, package_generation, resolve_gguf_shard_paths,
-        resolve_local_package_input,
+        ArtifactHook, ExplicitSourceIdentity, activation_width, local_artifact_files,
+        model_distribution_id, native_mtp_layer_indices, package_generation,
+        resolve_gguf_shard_paths, resolve_local_package_input, run_artifact_hook,
     };
     use skippy_ffi::TensorRole;
     use skippy_runtime::TensorInfo;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn artifact_hook_tolerates_a_hook_that_deletes_the_uploaded_file() {
+        // The production upload hook (split-model-job.sh) uploads each artifact
+        // and then unlinks it locally to stay under the HF Jobs ephemeral
+        // storage limit. write_package_artifact must therefore read all artifact
+        // metadata before invoking the hook; this test locks in that the hook is
+        // allowed to remove the file and still report success.
+        let dir = std::env::temp_dir().join(format!("skippy-hook-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let artifact = dir.join("shared").join("metadata.gguf");
+        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        std::fs::write(&artifact, b"artifact-bytes").unwrap();
+
+        let record = dir.join("hook-record.txt");
+        let hook = dir.join("delete-hook.sh");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/bash\nset -euo pipefail\n\
+                 printf '%s\\n%s\\n' \"$SKIPPY_PACKAGE_ARTIFACT_PATH\" \
+                 \"$SKIPPY_PACKAGE_ARTIFACT_RELATIVE_PATH\" > {record}\n\
+                 rm -f \"$SKIPPY_PACKAGE_ARTIFACT_PATH\"\n",
+                record = record.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let result = run_artifact_hook(
+            &ArtifactHook {
+                command: Some(hook),
+            },
+            &artifact,
+            "shared/metadata.gguf",
+        );
+        assert!(result.is_ok(), "hook run failed: {result:?}");
+        assert!(!artifact.exists(), "hook should have deleted the artifact");
+
+        let recorded = std::fs::read_to_string(&record).unwrap();
+        let mut lines = recorded.lines();
+        assert_eq!(lines.next().unwrap(), artifact.display().to_string());
+        assert_eq!(lines.next().unwrap(), "shared/metadata.gguf");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn model_distribution_id_uses_shared_gguf_stem_normalization() {
