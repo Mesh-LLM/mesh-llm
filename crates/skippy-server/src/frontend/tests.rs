@@ -1144,6 +1144,80 @@ fn parallel_tool_calls_false_keeps_first_call() {
 }
 
 #[test]
+fn emulated_output_final_parses_tool_call() {
+    let request = tool_request();
+    let parsed = parse_emulated_chat_output(
+        "Let me check.\nTOOL_CALL {\"name\": \"lookup\", \"arguments\": {\"city\": \"Sydney\"}}",
+        &request,
+        false,
+    )
+    .expect("emulated parse");
+
+    assert_eq!(parsed.content.as_deref(), Some("Let me check."));
+    let calls = parsed.tool_calls.expect("tool calls");
+    assert_eq!(calls[0]["function"]["name"], "lookup");
+    let args: serde_json::Value =
+        serde_json::from_str(calls[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+    assert_eq!(args["city"], "Sydney");
+}
+
+#[test]
+fn emulated_output_partial_withholds_tool_calls_and_incomplete_line() {
+    let request = tool_request();
+    // Streaming: the TOOL_CALL line is not yet newline-terminated.
+    let parsed = parse_emulated_chat_output(
+        "Let me check.\nTOOL_CALL {\"name\": \"lookup\", \"argumen",
+        &request,
+        true,
+    )
+    .expect("emulated parse");
+
+    // Tool calls are withheld while streaming.
+    assert!(parsed.tool_calls.is_none());
+    // Only the completed prose line is exposed; the partial marker line is held.
+    assert_eq!(parsed.content.as_deref(), Some("Let me check."));
+}
+
+#[test]
+fn emulated_output_respects_allowed_tool_names() {
+    let request = tool_request();
+    // "search" is not an allowed tool for this request (only "lookup" is).
+    let parsed = parse_emulated_chat_output(
+        "TOOL_CALL {\"name\": \"search\", \"arguments\": {}}",
+        &request,
+        false,
+    )
+    .expect("emulated parse");
+
+    assert!(parsed.tool_calls.is_none());
+}
+
+#[test]
+fn emulated_output_parallel_false_keeps_first_call() {
+    let mut request = tool_request();
+    request.parallel_tool_calls = Some(false);
+    let parsed = parse_emulated_chat_output(
+        "TOOL_CALL {\"name\": \"lookup\", \"arguments\": {\"city\": \"Sydney\"}}\n\
+         TOOL_CALL {\"name\": \"lookup\", \"arguments\": {\"city\": \"Melbourne\"}}",
+        &request,
+        false,
+    )
+    .expect("emulated parse");
+
+    let calls = parsed.tool_calls.expect("tool calls");
+    assert_eq!(calls.as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn emulated_output_plain_prose_has_no_tool_calls() {
+    let request = tool_request();
+    let parsed =
+        parse_emulated_chat_output("The capital is Canberra.", &request, false).expect("parse");
+    assert!(parsed.tool_calls.is_none());
+    assert_eq!(parsed.content.as_deref(), Some("The capital is Canberra."));
+}
+
+#[test]
 fn tool_call_stream_delta_adds_indexes() {
     let delta = tool_calls_stream_delta(json!([
         {"id":"call_a","type":"function","function":{"name":"lookup","arguments":"{}"}},

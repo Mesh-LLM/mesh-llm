@@ -82,7 +82,11 @@ mod prefix_cache;
 mod prompting;
 mod request;
 mod speculative;
+mod tool_emulation;
 mod util;
+
+#[cfg(test)]
+use prompting::parse_emulated_chat_output;
 mod wire_messages;
 
 use self::{

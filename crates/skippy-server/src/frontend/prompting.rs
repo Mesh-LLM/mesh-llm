@@ -1,5 +1,13 @@
 use super::*;
 
+/// Output of a single chat-template application, before it is folded into a
+/// [`PreparedGenerationPrompt`].
+struct RenderedChatPrompt {
+    prompt: String,
+    media: Vec<MediaInput>,
+    metadata_json: String,
+}
+
 impl StageOpenAiBackend {
     pub(super) fn prepare_chat_prompt(
         &self,
@@ -13,29 +21,82 @@ impl StageOpenAiBackend {
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
             runtime.media_marker()
         };
+
+        // Native path: render with tools and use the template's own metadata.
+        let native = self.render_chat_prompt(request, &options, &marker, None, true)?;
+
+        // If the request carries tools but the template does not support native
+        // tool calling, re-render with server-side tool-call emulation: strip
+        // tools, inject a text-convention instruction, and rewrite history so
+        // the template never sees tool roles. Tool-capable templates keep the
+        // native prompt unchanged.
+        if tool_calls_requested(request)
+            && !tool_emulation::template_supports_native_tool_calls(&native.metadata_json)
+            && let Some(tools) = request.tools.as_ref()
+            && let Some(instruction) = tool_emulation::build_emulation_instruction(tools)
+        {
+            let rewritten =
+                tool_emulation::rewrite_history_for_emulation(&request.messages, &instruction);
+            let emulated =
+                self.render_chat_prompt(request, &options, &marker, Some(&rewritten), false)?;
+            return Ok(PreparedGenerationPrompt {
+                text: emulated.prompt,
+                media: emulated.media,
+                chat_parse_metadata: Some(emulated.metadata_json),
+            });
+        }
+
+        Ok(PreparedGenerationPrompt {
+            text: native.prompt,
+            media: native.media,
+            chat_parse_metadata: Some(native.metadata_json),
+        })
+    }
+
+    /// Applies the chat template for the given messages. When `messages` is
+    /// `None`, the request's own messages are used. When `include_tools` is
+    /// false, `tools`/`tool_choice` are omitted (used by the emulation path).
+    fn render_chat_prompt(
+        &self,
+        request: &ChatCompletionRequest,
+        options: &ChatTemplateOptions,
+        marker: &str,
+        messages: Option<&[openai_frontend::ChatMessage]>,
+        include_tools: bool,
+    ) -> OpenAiResult<RenderedChatPrompt> {
+        let source_messages = messages.unwrap_or(&request.messages);
         let mut media = Vec::new();
-        let template_messages = request
-            .messages
+        let template_messages = source_messages
             .iter()
-            .map(|message| chat_message_generation_value(message, &marker, &mut media))
+            .map(|message| chat_message_generation_value(message, marker, &mut media))
             .collect::<OpenAiResult<Vec<_>>>()?;
         let messages_json = serde_json::to_string(&template_messages).map_err(|error| {
             OpenAiError::invalid_request(format!("serialize messages: {error}"))
         })?;
-        let tools_json = request
-            .tools
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|error| OpenAiError::invalid_request(format!("serialize tools: {error}")))?;
-        let tool_choice_json = request
-            .tool_choice
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|error| {
-                OpenAiError::invalid_request(format!("serialize tool_choice: {error}"))
-            })?;
+        let tools_json = if include_tools {
+            request
+                .tools
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|error| {
+                    OpenAiError::invalid_request(format!("serialize tools: {error}"))
+                })?
+        } else {
+            None
+        };
+        let tool_choice_json = if include_tools {
+            request
+                .tool_choice
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|error| {
+                    OpenAiError::invalid_request(format!("serialize tool_choice: {error}"))
+                })?
+        } else {
+            None
+        };
         let runtime = self
             .runtime
             .lock()
@@ -53,10 +114,10 @@ impl StageOpenAiBackend {
                 },
             )
             .map_err(openai_backend_error)?;
-        Ok(PreparedGenerationPrompt {
-            text: result.prompt,
+        Ok(RenderedChatPrompt {
+            prompt: result.prompt,
             media,
-            chat_parse_metadata: Some(result.metadata_json),
+            metadata_json: result.metadata_json,
         })
     }
 
@@ -70,6 +131,16 @@ impl StageOpenAiBackend {
         let Some(metadata) = metadata else {
             return Ok(None);
         };
+
+        // Emulation path: when tools were requested but the prompt was rendered
+        // without native tool support, the model emitted TOOL_CALL text lines.
+        // Parse those into OpenAI tool_calls instead of using the native parser.
+        if tool_calls_requested(request)
+            && !tool_emulation::template_supports_native_tool_calls(metadata)
+        {
+            return Ok(parse_emulated_chat_output(text, request, is_partial));
+        }
+
         let parsed_json = {
             let runtime = self
                 .runtime
@@ -203,4 +274,39 @@ impl StageOpenAiBackend {
             && hook_runtime.is_some()
             && hook_request.as_ref().is_some_and(chat_mesh_hooks_enabled)
     }
+}
+
+/// Parses generated text produced under tool-call emulation into a
+/// [`ParsedChatMessage`]. During streaming (`is_partial`) the trailing
+/// incomplete line is held back and tool calls are withheld, so a half-formed
+/// `TOOL_CALL` marker is never streamed as content and calls are emitted once,
+/// on finalization — matching native tool-call streaming semantics.
+pub(super) fn parse_emulated_chat_output(
+    text: &str,
+    request: &ChatCompletionRequest,
+    is_partial: bool,
+) -> Option<ParsedChatMessage> {
+    let allowed = request_allowed_tool_names(request);
+    let scan_text = if is_partial {
+        text.rsplit_once('\n')
+            .map(|(head, _)| head)
+            .unwrap_or_default()
+    } else {
+        text
+    };
+    let parse = tool_emulation::parse_emulated_tool_calls(scan_text, &allowed);
+    let tool_calls = if is_partial || parse.tool_calls.is_empty() {
+        None
+    } else {
+        let mut calls = parse.tool_calls;
+        if request.parallel_tool_calls == Some(false) {
+            calls.truncate(1);
+        }
+        Some(Value::Array(calls))
+    };
+    Some(ParsedChatMessage {
+        content: parse.content,
+        reasoning_content: None,
+        tool_calls,
+    })
 }
