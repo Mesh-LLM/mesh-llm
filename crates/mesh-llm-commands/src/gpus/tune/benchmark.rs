@@ -496,14 +496,24 @@ fn trial_config(
     doc["version"] = toml_edit::value(1);
 
     let mut table = toml_edit::Table::new();
-    table["model"] = toml_edit::value(prepared.target.resolved_path.display().to_string());
+    table["model"] = toml_edit::value(prepared.target.canonical_model_ref.clone());
     crate::gpus::tune_apply::apply_config_edits(&mut table, &prepared.plan.config_edits())?;
+    apply_resolved_model_path(&mut table, prepared)?;
     apply_candidate_overrides(&mut table, candidate)?;
 
     let mut models = toml_edit::ArrayOfTables::new();
     models.push(table);
     doc["models"] = toml_edit::Item::ArrayOfTables(models);
     Ok(doc.to_string())
+}
+
+fn apply_resolved_model_path(
+    table: &mut toml_edit::Table,
+    prepared: &crate::gpus::tune_apply::PreparedTunePlan,
+) -> anyhow::Result<()> {
+    let hardware = ensure_trial_subtable(table, "hardware")?;
+    hardware["model_path"] = toml_edit::value(prepared.target.resolved_path.display().to_string());
+    Ok(())
 }
 
 fn apply_candidate_overrides(
@@ -785,7 +795,7 @@ mod benchmark_tests {
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let model = parsed.models.first().expect("model row exists");
 
-        assert_eq!(model.model, "/tmp/model with spaces.gguf");
+        assert_eq!(model.model, "model");
         assert_eq!(
             model.model_fit
                 .as_ref()
@@ -802,6 +812,13 @@ mod benchmark_tests {
                 .as_ref()
                 .and_then(|hardware| hardware.fit_target_mib),
             Some(60_000)
+        );
+        assert_eq!(
+            model
+                .hardware
+                .as_ref()
+                .and_then(|hardware| hardware.model_path.as_deref()),
+            Some("/tmp/model with spaces.gguf")
         );
         assert_eq!(
             model.hardware.as_ref().and_then(|hardware| hardware.mmap.as_ref()),
