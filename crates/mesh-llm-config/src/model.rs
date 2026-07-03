@@ -542,7 +542,7 @@ pub struct SkippyConfig {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SpeculativeConfig {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_speculative_strategy")]
     pub strategy: Option<String>,
     #[serde(default)]
     pub mode: Option<String>,
@@ -580,6 +580,23 @@ pub struct SpeculativeConfig {
     pub ngram_max: Option<u32>,
     #[serde(default)]
     pub spec_default: Option<BoolOrAuto>,
+}
+
+fn deserialize_speculative_strategy<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(
+        Option::<String>::deserialize(deserializer)?.map(|strategy| {
+            if strategy == "native-mtp-n1" {
+                "mtp".to_string()
+            } else {
+                strategy
+            }
+        }),
+    )
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]

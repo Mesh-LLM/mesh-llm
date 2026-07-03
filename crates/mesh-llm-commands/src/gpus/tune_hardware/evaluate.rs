@@ -116,25 +116,43 @@ fn resolve_requested_gpu<'a>(
         ConfiguredDeviceSource::LegacyGpuId => resolve_requested_pinned_gpu(request, survey),
         ConfiguredDeviceSource::ModelHardwareDevice
         | ConfiguredDeviceSource::DefaultsHardwareDevice => {
-            match resolve_requested_pinned_gpu(request, survey) {
-                Ok(gpu) => Ok(gpu),
-                Err(diagnostic)
-                    if diagnostic.message.contains("not pinnable")
-                        || diagnostic.message.contains("available pinnable GPU IDs") =>
-                {
-                    resolve_backend_device(request, survey).map_err(|backend_err| {
-                        let mut combined = diagnostic.clone();
-                        combined.message.push_str(&format!(
-                            "; backend fallback also failed: {}",
-                            backend_err.message
-                        ));
-                        combined
-                    })
-                }
-                Err(diagnostic) => Err(diagnostic),
-            }
+            resolve_pinned_with_backend_fallback(request, survey)
         }
     }
+}
+
+fn resolve_pinned_with_backend_fallback<'a>(
+    request: &ConfiguredTuneDeviceRequest,
+    survey: &'a HardwareSurvey,
+) -> Result<&'a GpuFacts, TuneDiagnostic> {
+    let pinned_diagnostic = match resolve_requested_pinned_gpu(request, survey) {
+        Ok(gpu) => return Ok(gpu),
+        Err(diagnostic) => diagnostic,
+    };
+
+    if !pinned_diagnostic_allows_backend_fallback(&pinned_diagnostic) {
+        return Err(pinned_diagnostic);
+    }
+
+    resolve_backend_device(request, survey).map_err(|backend_diagnostic| {
+        combine_backend_fallback_error(pinned_diagnostic, backend_diagnostic)
+    })
+}
+
+fn pinned_diagnostic_allows_backend_fallback(diagnostic: &TuneDiagnostic) -> bool {
+    diagnostic.message.contains("not pinnable")
+        || diagnostic.message.contains("available pinnable GPU IDs")
+}
+
+fn combine_backend_fallback_error(
+    mut pinned_diagnostic: TuneDiagnostic,
+    backend_diagnostic: TuneDiagnostic,
+) -> TuneDiagnostic {
+    pinned_diagnostic.message.push_str(&format!(
+        "; backend fallback also failed: {}",
+        backend_diagnostic.message
+    ));
+    pinned_diagnostic
 }
 
 fn resolve_requested_pinned_gpu<'a>(

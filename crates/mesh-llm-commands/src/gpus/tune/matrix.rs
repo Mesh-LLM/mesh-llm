@@ -4,63 +4,71 @@ impl TuneField {
     }
 
     pub fn spec(self) -> TuneFieldSpec {
-        let config_path = match self {
-            Self::CacheTypeK => {
-                ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "cache_type_k"])
-            }
-            Self::CacheTypeV => {
-                ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "cache_type_v"])
-            }
-            Self::FlashAttention => {
-                ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "flash_attention"])
-            }
-            Self::CtxSize => {
-                ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "ctx_size"])
-            }
-            Self::Batch => ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "batch"]),
-            Self::Ubatch => {
-                ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "ubatch"])
-            }
-            Self::GpuLayers => {
-                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "gpu_layers"])
-            }
-            Self::FitTargetMib => {
-                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "fit_target_mib"])
-            }
-            Self::Device => {
-                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "device"])
-            }
-            Self::Mmap => ConfigPath::from_fields(["models", "<model-ref>", "hardware", "mmap"]),
-            Self::Mlock => ConfigPath::from_fields(["models", "<model-ref>", "hardware", "mlock"]),
-            Self::CpuMoe => {
-                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "cpu_moe"])
-            }
-            Self::NCpuMoe => {
-                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "n_cpu_moe"])
-            }
-            Self::TensorSplit => {
-                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "tensor_split"])
-            }
-            Self::Placement => {
-                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "placement"])
-            }
-            Self::Defaults => ConfigPath::from_fields(["defaults"]),
-        };
-        let support = match self {
-            Self::CacheTypeK
-            | Self::CacheTypeV
-            | Self::FlashAttention
-            | Self::CtxSize
-            | Self::Batch
-            | Self::Ubatch
-            | Self::GpuLayers
-            | Self::FitTargetMib
-            | Self::Mmap
-            | Self::Mlock => TuneFieldSupport::Writable,
-            Self::Device | Self::Defaults => TuneFieldSupport::PreserveOnly,
-            Self::CpuMoe | Self::NCpuMoe | Self::TensorSplit | Self::Placement => {
-                TuneFieldSupport::Unsupported
-            }
+        let (config_path, support) = match self {
+            Self::CacheTypeK => (
+                ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "cache_type_k"]),
+                TuneFieldSupport::Writable,
+            ),
+            Self::CacheTypeV => (
+                ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "cache_type_v"]),
+                TuneFieldSupport::Writable,
+            ),
+            Self::FlashAttention => (
+                ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "flash_attention"]),
+                TuneFieldSupport::Writable,
+            ),
+            Self::CtxSize => (
+                ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "ctx_size"]),
+                TuneFieldSupport::Writable,
+            ),
+            Self::Batch => (
+                ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "batch"]),
+                TuneFieldSupport::Writable,
+            ),
+            Self::Ubatch => (
+                ConfigPath::from_fields(["models", "<model-ref>", "model_fit", "ubatch"]),
+                TuneFieldSupport::Writable,
+            ),
+            Self::GpuLayers => (
+                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "gpu_layers"]),
+                TuneFieldSupport::Writable,
+            ),
+            Self::FitTargetMib => (
+                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "fit_target_mib"]),
+                TuneFieldSupport::Writable,
+            ),
+            Self::Device => (
+                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "device"]),
+                TuneFieldSupport::PreserveOnly,
+            ),
+            Self::Mmap => (
+                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "mmap"]),
+                TuneFieldSupport::Writable,
+            ),
+            Self::Mlock => (
+                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "mlock"]),
+                TuneFieldSupport::Writable,
+            ),
+            Self::CpuMoe => (
+                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "cpu_moe"]),
+                TuneFieldSupport::Unsupported,
+            ),
+            Self::NCpuMoe => (
+                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "n_cpu_moe"]),
+                TuneFieldSupport::Unsupported,
+            ),
+            Self::TensorSplit => (
+                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "tensor_split"]),
+                TuneFieldSupport::Unsupported,
+            ),
+            Self::Placement => (
+                ConfigPath::from_fields(["models", "<model-ref>", "hardware", "placement"]),
+                TuneFieldSupport::Unsupported,
+            ),
+            Self::Defaults => (
+                ConfigPath::from_fields(["defaults"]),
+                TuneFieldSupport::PreserveOnly,
+            ),
         };
         TuneFieldSpec {
             field: self,

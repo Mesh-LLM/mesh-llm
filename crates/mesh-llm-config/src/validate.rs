@@ -141,17 +141,11 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
         .defaults
         .as_ref()
         .and_then(|defaults| defaults.hardware.as_ref());
-    if let Some(defaults) = &config.defaults {
-        push_speculative_alias_diagnostic(
-            defaults.speculative.as_ref(),
-            "defaults.speculative",
-            &mut diagnostics,
-        );
-        if let Err(diagnostic) =
+    if let Some(defaults) = &config.defaults
+        && let Err(diagnostic) =
             validate_model_defaults(defaults, "defaults", config.gpu.assignment)
-        {
-            diagnostics.push(diagnostic);
-        }
+    {
+        diagnostics.push(diagnostic);
     }
     for (index, model) in config.models.iter().enumerate() {
         if model.model.trim().is_empty() {
@@ -160,11 +154,6 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
                 format!("models[{index}].model must not be empty"),
             ));
         }
-        push_speculative_alias_diagnostic(
-            model.speculative.as_ref(),
-            &format!("models[{index}].speculative"),
-            &mut diagnostics,
-        );
         if let Err(diagnostic) = validate_model_entry(
             model,
             &format!("models[{index}]"),
@@ -823,31 +812,10 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> DiagnosticResult {
     Ok(())
 }
 
-fn push_speculative_alias_diagnostic(
-    config: Option<&SpeculativeConfig>,
-    base_path: &str,
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-) {
-    if config.and_then(|config| config.strategy.as_deref()) != Some("native-mtp-n1") {
-        return;
-    }
-    let used_path = parsed_config_path(&format!("{base_path}.strategy"))
-        .unwrap_or_else(|| ConfigPath::from_fields(["speculative", "strategy"]));
-    let canonical_path = used_path.clone();
-    diagnostics.push(
-        alias_diagnostic(
-            used_path,
-            canonical_path,
-            "legacy speculative strategy native-mtp-n1 is treated as mtp",
-        )
-        .with_help("Use speculative.strategy = \"mtp\" for new config writes."),
-    );
-}
-
 fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> DiagnosticResult {
     validate_optional_enum(
         config.strategy.as_deref(),
-        &["auto", "disabled", "mtp", "native-mtp-n1"],
+        &["auto", "disabled", "mtp"],
         &format!("{base_path}.strategy"),
     )?;
     validate_optional_enum(
@@ -1826,7 +1794,7 @@ strategy = "mystery-oracle"
     }
 
     #[test]
-    fn speculative_strategy_native_mtp_n1_is_legacy_alias_warning() {
+    fn speculative_strategy_native_mtp_n1_alias_parses_as_mtp() {
         let config: MeshConfig = toml::from_str(
             r#"
 [defaults.speculative]
@@ -1835,21 +1803,39 @@ strategy = "native-mtp-n1"
         )
         .expect("config should parse before validation");
 
-        validate_config(&config).expect("legacy speculative strategy alias should not fail");
+        let strategy = config
+            .defaults
+            .as_ref()
+            .and_then(|defaults| defaults.speculative.as_ref())
+            .and_then(|speculative| speculative.strategy.as_deref());
+        assert_eq!(strategy, Some("mtp"));
+        validate_config(&config).expect("normalized speculative strategy should not fail");
+        assert!(validate_config_diagnostics(&config).is_empty());
+    }
+
+    #[test]
+    fn speculative_strategy_native_mtp_n1_raw_value_is_invalid() {
+        let config = MeshConfig {
+            defaults: Some(ModelConfigDefaults {
+                speculative: Some(SpeculativeConfig {
+                    strategy: Some("native-mtp-n1".to_string()),
+                    ..SpeculativeConfig::default()
+                }),
+                ..ModelConfigDefaults::default()
+            }),
+            ..MeshConfig::default()
+        };
+
         let diagnostics = validate_config_diagnostics(&config);
         assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].code, ConfigDiagnosticCode::AliasApplied);
-        assert_eq!(diagnostics[0].severity, ConfigDiagnosticSeverity::Warning);
         assert_eq!(
             diagnostics[0].path.as_ref().map(ConfigPath::render),
             Some("defaults.speculative.strategy".to_string())
         );
-        assert_eq!(
+        assert!(
             diagnostics[0]
-                .canonical_path
-                .as_ref()
-                .map(ConfigPath::render),
-            Some("defaults.speculative.strategy".to_string())
+                .message
+                .contains("defaults.speculative.strategy must be one of")
         );
     }
 

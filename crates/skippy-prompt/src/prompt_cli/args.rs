@@ -238,7 +238,10 @@ pub struct BinaryReplArgs {
     pub ngram_count_step_tokens: usize,
     #[arg(long, default_value_t = DEFAULT_MARGIN_STEP_TOKENS)]
     pub ngram_margin_step_tokens: usize,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Set mmap explicitly with --mmap true or --mmap false; unlike --mlock, omitting --mmap keeps the runtime default"
+    )]
     pub mmap: Option<bool>,
     #[arg(long)]
     pub mlock: bool,
