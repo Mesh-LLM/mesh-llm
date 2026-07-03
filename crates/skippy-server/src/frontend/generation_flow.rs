@@ -227,6 +227,7 @@ impl StageOpenAiBackend {
                     .map(|hub| hub.register(ids.request_id, ids.session_id))
                     .transpose()
                     .map_err(openai_backend_error)?;
+                let emulation_active = emulation_generation_active(hook_request.as_ref(), &prompt);
                 return self.generate_split_multimodal_text(
                     SplitMultimodalGeneration {
                         prompt,
@@ -241,6 +242,7 @@ impl StageOpenAiBackend {
                         downstream_wire_condition,
                         lane_pool,
                         prediction_return,
+                        emulation_active,
                     },
                     on_text_chunk,
                 );
@@ -571,7 +573,8 @@ impl StageOpenAiBackend {
             .map(String::as_str)
             .collect::<Vec<_>>();
         let mut collector =
-            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk);
+            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)
+                .with_emulation_stop(request.emulation_active);
         let wire_sampling = wire_sampling_config(&request.sampling);
         let session_id = request.ids.session_id;
         let request_id = request.ids.request_id;

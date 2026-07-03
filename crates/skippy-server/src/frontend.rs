@@ -1779,6 +1779,7 @@ struct SplitMultimodalGeneration<'a> {
     downstream_wire_condition: WireCondition,
     lane_pool: Arc<PersistentStageLanePool>,
     prediction_return: Option<PredictionReturnReceiver>,
+    emulation_active: bool,
 }
 
 struct EmbeddedLocalOutput {
