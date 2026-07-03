@@ -5,6 +5,24 @@ pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
 pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AbiVersion {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+}
+
+/// Whether a native runtime reporting `version` can back this binary's ABI
+/// bindings. Required symbol signatures may change between patches (for
+/// example `skippy_apply_chat_template_json` gained an argument in 0.1.28),
+/// so older runtimes must be rejected at load time.
+pub const fn runtime_abi_supported(version: AbiVersion) -> bool {
+    version.major == ABI_VERSION_MAJOR
+        && version.minor == ABI_VERSION_MINOR
+        && version.patch >= ABI_VERSION_PATCH
+}
+
 use std::ffi::{c_char, c_int, c_void};
 
 pub type LlamaLogCallback =
@@ -652,6 +670,37 @@ mod dynamic {
             .expect("MeshLLM native runtime library has not been loaded")
     }
 
+    type SkippyAbiVersionFn = unsafe extern "C" fn() -> AbiVersion;
+
+    fn check_runtime_abi(libraries: &[Library]) -> Result<(), NativeRuntimeLoadError> {
+        let mut abi_version = None;
+        for library in libraries.iter().rev() {
+            if let Ok(symbol) =
+                unsafe { library.get::<SkippyAbiVersionFn>(b"skippy_abi_version\0") }
+            {
+                abi_version = Some(unsafe { symbol() });
+                break;
+            }
+        }
+        let Some(version) = abi_version else {
+            return Err(NativeRuntimeLoadError::Load(
+                "native runtime symbol not found: skippy_abi_version".to_string(),
+            ));
+        };
+        if !runtime_abi_supported(version) {
+            return Err(NativeRuntimeLoadError::Load(format!(
+                "native runtime ABI {}.{}.{} is not compatible with required ABI {}.{}.{}",
+                version.major,
+                version.minor,
+                version.patch,
+                ABI_VERSION_MAJOR,
+                ABI_VERSION_MINOR,
+                ABI_VERSION_PATCH,
+            )));
+        }
+        Ok(())
+    }
+
     macro_rules! dynamic_symbols {
         ($($name:ident($($arg:ident: $arg_ty:ty),* $(,)?) $(-> $ret:ty)?;)+) => {
             #[allow(non_snake_case)]
@@ -677,6 +726,7 @@ mod dynamic {
                                 .map_err(|err| NativeRuntimeLoadError::Load(err.to_string()))?,
                         );
                     }
+                    check_runtime_abi(&libraries)?;
                     $(
                         let mut $name = None;
                         for library in libraries.iter().rev() {
@@ -1648,3 +1698,53 @@ unsafe extern "C" {
 }
 
 pub type Opaque = c_void;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const fn version(major: u32, minor: u32, patch: u32) -> AbiVersion {
+        AbiVersion {
+            major,
+            minor,
+            patch,
+        }
+    }
+
+    #[test]
+    fn accepts_current_and_newer_patch_runtimes() {
+        assert!(runtime_abi_supported(version(
+            ABI_VERSION_MAJOR,
+            ABI_VERSION_MINOR,
+            ABI_VERSION_PATCH,
+        )));
+        assert!(runtime_abi_supported(version(
+            ABI_VERSION_MAJOR,
+            ABI_VERSION_MINOR,
+            ABI_VERSION_PATCH + 1,
+        )));
+    }
+
+    #[test]
+    fn rejects_older_patch_runtimes() {
+        assert!(!runtime_abi_supported(version(
+            ABI_VERSION_MAJOR,
+            ABI_VERSION_MINOR,
+            ABI_VERSION_PATCH - 1,
+        )));
+    }
+
+    #[test]
+    fn rejects_major_and_minor_mismatches() {
+        assert!(!runtime_abi_supported(version(
+            ABI_VERSION_MAJOR + 1,
+            ABI_VERSION_MINOR,
+            ABI_VERSION_PATCH,
+        )));
+        assert!(!runtime_abi_supported(version(
+            ABI_VERSION_MAJOR,
+            ABI_VERSION_MINOR + 1,
+            ABI_VERSION_PATCH,
+        )));
+    }
+}

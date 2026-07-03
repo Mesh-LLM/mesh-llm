@@ -4170,14 +4170,14 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        ChatTemplateMessage, FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0,
-        LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, ModelInfo,
-        NativeLogAggregator, NativeLogEvent, RuntimeConfig, RuntimeLoadMode,
-        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SamplingConfig, StageModel, Status, TensorRole,
-        flush_native_log_writer, format_skippy_error, parse_cache_type, parse_layer_assign_index,
-        redirect_native_logs_to_file, register_filtered_native_logs, restore_native_logs,
-        set_filtered_native_logs_enabled, unregister_filtered_native_logs, write_native_log,
-        write_native_log_note,
+        ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, FlashAttentionType,
+        GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, LLAMA_SERVER_DEFAULT_N_BATCH,
+        LLAMA_SERVER_DEFAULT_N_UBATCH, ModelInfo, NativeLogAggregator, NativeLogEvent,
+        RuntimeConfig, RuntimeLoadMode, SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SamplingConfig,
+        StageModel, Status, TensorRole, flush_native_log_writer, format_skippy_error,
+        parse_cache_type, parse_layer_assign_index, redirect_native_logs_to_file,
+        register_filtered_native_logs, restore_native_logs, set_filtered_native_logs_enabled,
+        unregister_filtered_native_logs, write_native_log, write_native_log_note,
     };
     use std::{
         env,
@@ -4524,6 +4524,62 @@ mod tests {
         )?;
         assert!(prompt.contains("Template smoke prompt."));
         assert!(prompt.len() >= "Template smoke prompt.".len());
+        Ok(())
+    }
+
+    // Requires SKIPPY_CORRECTNESS_MODEL to point at a reasoning-capable model
+    // family whose chat parser extracts <think> blocks (e.g. Qwen3).
+    #[test]
+    fn chat_reasoning_markers_are_stripped_and_extracted_when_model_is_configured()
+    -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping chat reasoning smoke: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        let model = open_correctness_model(&model_path)?;
+        let rendered = model.apply_chat_template_json(
+            r#"[{"role":"user","content":"Say hi."}]"#,
+            ChatTemplateJsonOptions {
+                reasoning_format: Some(ChatReasoningFormat::Hidden),
+                ..ChatTemplateJsonOptions::default()
+            },
+        )?;
+        let metadata: Value = serde_json::from_str(&rendered.metadata_json)?;
+        assert_eq!(
+            metadata.get("reasoning_format").and_then(Value::as_str),
+            Some("auto"),
+        );
+
+        // The generation prompt may already open the thought block, in which
+        // case the model output continues inside it without the opening tag.
+        let generation_prompt = metadata
+            .get("generation_prompt")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let generated = if generation_prompt.contains("<think>") {
+            "Consider the greeting.</think>Hi there!"
+        } else {
+            "<think>Consider the greeting.</think>Hi there!"
+        };
+        let parsed = model.parse_chat_response_json(generated, &rendered.metadata_json, false)?;
+        let message: Value = serde_json::from_str(&parsed)?;
+        let content = message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            !content.contains("<think>") && !content.contains("</think>"),
+            "reasoning markers must be stripped from content: {content:?}"
+        );
+        assert!(
+            content.contains("Hi there!"),
+            "visible content must survive reasoning extraction: {content:?}"
+        );
+        assert_eq!(
+            message.get("reasoning_content").and_then(Value::as_str),
+            Some("Consider the greeting."),
+            "reasoning content must be extracted from the thought block"
+        );
         Ok(())
     }
 
