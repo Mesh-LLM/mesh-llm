@@ -6,8 +6,8 @@ Subject: [PATCH] Add non-frame native MTP decode ABI
 ---
  include/skippy.h        |  9 +++++++++
  include/skippy/common.h |  2 +-
- src/skippy.cpp          | 36 ++++++++++++++++++++++++++++++++++++
- 3 files changed, 46 insertions(+), 1 deletion(-)
+ src/skippy.cpp          | 38 ++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 48 insertions(+), 1 deletion(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
 index b3229f770..6f648e50e 100644
@@ -46,7 +46,7 @@ diff --git a/src/skippy.cpp b/src/skippy.cpp
 index 64672439f..428ded399 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
-@@ -3447,6 +3447,42 @@ enum skippy_status skippy_decode_step_sampled(
+@@ -3447,6 +3447,44 @@ enum skippy_status skippy_decode_step_sampled(
      return skippy_success(out_error);
  }
  
@@ -83,7 +83,9 @@ index 64672439f..428ded399 100644
 +        return status;
 +    }
 +
-+    return skippy_mtp_propose_next(session, *out_predicted_token, max_draft_tokens, out_mtp_draft, out_error);
++    const size_t bounded_max_draft_tokens =
++            std::min<size_t>(max_draft_tokens, SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS);
++    return skippy_mtp_propose_next(session, *out_predicted_token, bounded_max_draft_tokens, out_mtp_draft, out_error);
 +}
 +
  enum skippy_status skippy_decode_batch_sampled(
@@ -91,4 +93,3 @@ index 64672439f..428ded399 100644
          const llama_token * token_ids,
 -- 
 2.53.0
-
