@@ -24,6 +24,15 @@ describe('splitAssistantThinking', () => {
 
   it('splits Gemma channel thinking from final response text', () => {
     expect(
+      splitAssistantThinking('<|channel>thought\nCheck whether the prompt is a test.<channel|>Test received!')
+    ).toEqual([
+      { kind: 'thinking', text: '\nCheck whether the prompt is a test.', open: false },
+      { kind: 'response', text: 'Test received!' }
+    ])
+  })
+
+  it('splits legacy Gemma channel thinking from final response text', () => {
+    expect(
       splitAssistantThinking('<|channel|>thoughtCheck whether the prompt is a test.<channel|>Test received!')
     ).toEqual([
       { kind: 'thinking', text: 'Check whether the prompt is a test.', open: false },

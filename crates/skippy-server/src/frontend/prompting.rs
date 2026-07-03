@@ -108,6 +108,7 @@ impl StageOpenAiBackend {
                 ChatTemplateJsonOptions {
                     add_assistant: options.add_assistant,
                     enable_thinking: options.enable_thinking,
+                    reasoning_format: options.reasoning_format,
                     tools_json,
                     tool_choice_json,
                     parallel_tool_calls: request.parallel_tool_calls.unwrap_or(true),

@@ -17,7 +17,7 @@ impl OpenAiBackend for StageOpenAiBackend {
         apply_chat_request_defaults(&mut request, &self.request_defaults);
         ensure_chat_runtime_features_supported(&request)?;
         let sampling = chat_sampling_config(&request)?;
-        let template_options = chat_template_options(&request)?;
+        let template_options = chat_template_options(&request, &self.request_defaults)?;
         let parse_chat_output = chat_output_parser_required(&request, &template_options);
         let template_timer = PhaseTimer::start();
         let prompt = self.prepare_chat_prompt(&request, template_options)?;
@@ -65,6 +65,7 @@ impl OpenAiBackend for StageOpenAiBackend {
         } else {
             None
         };
+        let parsed_message = apply_reasoning_visibility(parsed_message, &template_options);
         let response =
             chat_response_from_generated_text(request.model.clone(), &output, parsed_message);
         let mut response_attrs = self.openai_attrs(&ids);
@@ -115,8 +116,9 @@ impl OpenAiBackend for StageOpenAiBackend {
         ensure_chat_runtime_features_supported(&request)?;
         let sampling = chat_sampling_config(&request)?;
         let include_usage = request.include_usage();
-        let template_options = chat_template_options(&request)?;
+        let template_options = chat_template_options(&request, &self.request_defaults)?;
         let parse_chat_output = chat_output_parser_required(&request, &template_options);
+        let emit_reasoning = template_exposes_reasoning(&template_options);
         let template_timer = PhaseTimer::start();
         let prompt = self.prepare_chat_prompt(&request, template_options)?;
         let mut template_attrs = self.openai_attrs(&ids);
@@ -151,6 +153,7 @@ impl OpenAiBackend for StageOpenAiBackend {
                 include_usage,
                 Some(request.clone()),
                 parse_chat_output,
+                emit_reasoning,
                 context,
                 ids,
             )
@@ -268,6 +271,7 @@ impl OpenAiBackend for StageOpenAiBackend {
                 sampling,
                 include_usage,
                 None,
+                false,
                 false,
                 context,
                 ids,
@@ -434,6 +438,7 @@ impl StageOpenAiBackend {
         include_usage: bool,
         hook_request: Option<ChatCompletionRequest>,
         parse_chat_output: bool,
+        emit_reasoning: bool,
         context: OpenAiRequestContext,
         ids: OpenAiGenerationIds,
     ) -> OpenAiResult<GenerationStream> {
@@ -456,6 +461,7 @@ impl StageOpenAiBackend {
                 backend.clone(),
                 request,
                 metadata,
+                emit_reasoning,
             ))
         } else {
             None

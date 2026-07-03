@@ -981,6 +981,36 @@ fn plain_chat_does_not_require_chat_output_parser() {
 }
 
 #[test]
+fn hidden_reasoning_format_requires_chat_output_parser_for_plain_chat() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hi"}]
+    }))
+    .unwrap();
+    let template_options = ChatTemplateOptions {
+        reasoning_format: Some(ChatReasoningFormat::Hidden),
+        ..ChatTemplateOptions::default()
+    };
+
+    assert!(chat_output_parser_required(&request, &template_options));
+}
+
+#[test]
+fn reasoning_format_none_leaves_plain_chat_unparsed() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hi"}]
+    }))
+    .unwrap();
+    let template_options = ChatTemplateOptions {
+        reasoning_format: Some(ChatReasoningFormat::None),
+        ..ChatTemplateOptions::default()
+    };
+
+    assert!(!chat_output_parser_required(&request, &template_options));
+}
+
+#[test]
 fn tools_require_chat_output_parser() {
     assert!(chat_output_parser_required(
         &tool_request(),
@@ -1057,6 +1087,46 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
     );
     assert_eq!(message.tool_calls, None);
     assert_eq!(response.choices[0].finish_reason, Some(FinishReason::Stop));
+}
+
+#[test]
+fn hidden_reasoning_visibility_removes_reasoning_content() {
+    let parsed = ParsedChatMessage {
+        content: Some("Final answer.".to_string()),
+        reasoning_content: Some("Checked facts first.".to_string()),
+        tool_calls: None,
+    };
+    let template_options = ChatTemplateOptions {
+        reasoning_format: Some(ChatReasoningFormat::Hidden),
+        ..ChatTemplateOptions::default()
+    };
+
+    let visible = apply_reasoning_visibility(Some(parsed), &template_options)
+        .expect("parsed message should remain");
+
+    assert_eq!(visible.content.as_deref(), Some("Final answer."));
+    assert_eq!(visible.reasoning_content, None);
+}
+
+#[test]
+fn auto_reasoning_visibility_keeps_reasoning_content() {
+    let parsed = ParsedChatMessage {
+        content: Some("Final answer.".to_string()),
+        reasoning_content: Some("Checked facts first.".to_string()),
+        tool_calls: None,
+    };
+    let template_options = ChatTemplateOptions {
+        reasoning_format: Some(ChatReasoningFormat::Auto),
+        ..ChatTemplateOptions::default()
+    };
+
+    let visible = apply_reasoning_visibility(Some(parsed), &template_options)
+        .expect("parsed message should remain");
+
+    assert_eq!(
+        visible.reasoning_content.as_deref(),
+        Some("Checked facts first.")
+    );
 }
 
 #[test]
@@ -1965,9 +2035,11 @@ fn request_defaults_fill_omitted_chat_fields_only() {
     assert_eq!(sampling.repeat_penalty, 1.2);
     assert_eq!(sampling.penalty_last_n, 64);
     assert_eq!(sampling.logit_bias.len(), 2);
+    let template_options = chat_template_options(&request, &test_request_defaults()).unwrap();
+    assert_eq!(template_options.enable_thinking, None);
     assert_eq!(
-        chat_template_options(&request).unwrap().enable_thinking,
-        None
+        template_options.reasoning_format,
+        Some(ChatReasoningFormat::Hidden)
     );
     assert_eq!(request.reasoning, None);
     assert_eq!(
@@ -2055,9 +2127,11 @@ fn explicit_chat_request_values_override_request_defaults() {
     assert_eq!(sampling.repeat_penalty, 1.8);
     assert_eq!(sampling.penalty_last_n, 24);
     assert_eq!(sampling.logit_bias.len(), 1);
+    let template_options = chat_template_options(&request, &test_request_defaults()).unwrap();
+    assert_eq!(template_options.enable_thinking, None);
     assert_eq!(
-        chat_template_options(&request).unwrap().enable_thinking,
-        None
+        template_options.reasoning_format,
+        Some(ChatReasoningFormat::Hidden)
     );
     assert_eq!(
         GenerationTokenLimit::from_request(request.effective_max_tokens(), 64),
@@ -2134,8 +2208,43 @@ fn canonical_reasoning_does_not_override_chat_template_thinking() {
     }))
     .unwrap();
 
-    let options = chat_template_options(&request).unwrap();
+    let options =
+        chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(options.enable_thinking, None);
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
+}
+
+#[test]
+fn chat_template_options_default_to_hidden_reasoning_parser() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
+        "messages": [{"role": "user", "content": "hello"}]
+    }))
+    .unwrap();
+
+    let options = chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default())
+        .expect("template options");
+
+    assert_eq!(options.enable_thinking, None);
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
+}
+
+#[test]
+fn request_default_reasoning_format_controls_chat_parser_mode() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
+        "messages": [{"role": "user", "content": "hello"}]
+    }))
+    .unwrap();
+    let defaults = EmbeddedOpenAiRequestDefaults {
+        reasoning_format: Some(EmbeddedReasoningFormat::None),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+
+    let options = chat_template_options(&request, &defaults).expect("template options");
+
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::None));
+    assert!(!chat_output_parser_required(&request, &options));
 }
 
 #[test]
@@ -2147,8 +2256,10 @@ fn reasoning_effort_does_not_override_chat_template_thinking() {
     }))
     .unwrap();
 
-    let options = chat_template_options(&request).unwrap();
+    let options =
+        chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(options.enable_thinking, None);
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
 }
 
 #[test]
@@ -2160,8 +2271,10 @@ fn top_level_reasoning_effort_does_not_override_chat_template_thinking() {
     }))
     .unwrap();
 
-    let options = chat_template_options(&request).unwrap();
+    let options =
+        chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(options.enable_thinking, None);
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
 }
 
 #[test]
@@ -2174,8 +2287,10 @@ fn provider_enable_thinking_does_not_override_chat_template_thinking() {
     }))
     .unwrap();
 
-    let options = chat_template_options(&request).unwrap();
+    let options =
+        chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(options.enable_thinking, None);
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
 }
 
 #[test]
@@ -2187,8 +2302,10 @@ fn chat_template_kwargs_enable_thinking_does_not_override_template() {
     }))
     .unwrap();
 
-    let options = chat_template_options(&request).unwrap();
+    let options =
+        chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(options.enable_thinking, None);
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
 }
 
 #[test]
@@ -2201,7 +2318,9 @@ fn thinking_boolean_aliases_do_not_override_chat_template_thinking() {
         }))
         .unwrap();
         assert_eq!(
-            chat_template_options(&request).unwrap().enable_thinking,
+            chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default())
+                .unwrap()
+                .enable_thinking,
             None,
             "top-level alias {field}"
         );
@@ -2213,7 +2332,9 @@ fn thinking_boolean_aliases_do_not_override_chat_template_thinking() {
         }))
         .unwrap();
         assert_eq!(
-            chat_template_options(&request).unwrap().enable_thinking,
+            chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default())
+                .unwrap()
+                .enable_thinking,
             None,
             "chat_template_kwargs alias {field}"
         );
@@ -2229,7 +2350,9 @@ fn reasoning_budget_does_not_override_chat_template_thinking() {
     }))
     .unwrap();
     assert_eq!(
-        chat_template_options(&request).unwrap().enable_thinking,
+        chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default())
+            .unwrap()
+            .enable_thinking,
         None
     );
 
@@ -2241,7 +2364,9 @@ fn reasoning_budget_does_not_override_chat_template_thinking() {
     }))
     .unwrap();
     assert_eq!(
-        chat_template_options(&request).unwrap().enable_thinking,
+        chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default())
+            .unwrap()
+            .enable_thinking,
         None
     );
 }

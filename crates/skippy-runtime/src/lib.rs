@@ -1378,9 +1378,38 @@ impl ChatTemplateMessage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatReasoningFormat {
+    Auto,
+    None,
+    Deepseek,
+    DeepseekLegacy,
+    Hidden,
+}
+
+impl ChatReasoningFormat {
+    pub const fn parser_name(self) -> &'static str {
+        match self {
+            Self::Auto | Self::Hidden => "auto",
+            Self::None => "none",
+            Self::Deepseek => "deepseek",
+            Self::DeepseekLegacy => "deepseek-legacy",
+        }
+    }
+
+    pub const fn parses_reasoning(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    pub const fn exposes_reasoning(self) -> bool {
+        !matches!(self, Self::None | Self::Hidden)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChatTemplateOptions {
     pub add_assistant: bool,
     pub enable_thinking: Option<bool>,
+    pub reasoning_format: Option<ChatReasoningFormat>,
 }
 
 impl Default for ChatTemplateOptions {
@@ -1388,6 +1417,7 @@ impl Default for ChatTemplateOptions {
         Self {
             add_assistant: true,
             enable_thinking: None,
+            reasoning_format: None,
         }
     }
 }
@@ -1396,6 +1426,7 @@ impl Default for ChatTemplateOptions {
 pub struct ChatTemplateJsonOptions {
     pub add_assistant: bool,
     pub enable_thinking: Option<bool>,
+    pub reasoning_format: Option<ChatReasoningFormat>,
     pub tools_json: Option<String>,
     pub tool_choice_json: Option<String>,
     pub parallel_tool_calls: bool,
@@ -1406,6 +1437,7 @@ impl Default for ChatTemplateJsonOptions {
         Self {
             add_assistant: true,
             enable_thinking: None,
+            reasoning_format: None,
             tools_json: None,
             tool_choice_json: None,
             parallel_tool_calls: true,
@@ -2333,6 +2365,7 @@ impl StageModel {
             ChatTemplateOptions {
                 add_assistant,
                 enable_thinking: None,
+                reasoning_format: None,
             },
         )
     }
@@ -2435,6 +2468,16 @@ impl StageModel {
             .as_ref()
             .map(|value| value.as_ptr())
             .unwrap_or(ptr::null());
+        let reasoning_format = options
+            .reasoning_format
+            .map(ChatReasoningFormat::parser_name)
+            .map(CString::new)
+            .transpose()
+            .context("reasoning format contains an interior NUL byte")?;
+        let reasoning_format_ptr = reasoning_format
+            .as_ref()
+            .map(|value| value.as_ptr())
+            .unwrap_or(ptr::null());
 
         let mut prompt_bytes = 0usize;
         let mut metadata_bytes = 0usize;
@@ -2449,6 +2492,7 @@ impl StageModel {
                 options.enable_thinking.is_some(),
                 options.enable_thinking.unwrap_or(true),
                 options.parallel_tool_calls,
+                reasoning_format_ptr,
                 ptr::null_mut(),
                 0,
                 &mut prompt_bytes,
@@ -2477,6 +2521,7 @@ impl StageModel {
                 options.enable_thinking.is_some(),
                 options.enable_thinking.unwrap_or(true),
                 options.parallel_tool_calls,
+                reasoning_format_ptr,
                 prompt.as_mut_ptr().cast(),
                 prompt.len(),
                 &mut prompt_bytes,

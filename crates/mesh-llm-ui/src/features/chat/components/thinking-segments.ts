@@ -20,8 +20,8 @@ type TagMatch = {
 
 const THINK_OPEN_TAG = '<think>'
 const THINK_CLOSE_TAG = '</think>'
-const GEMMA_THOUGHT_CHANNEL_TAGS = ['<|channel|>thought', '<channel|>thought']
-const GEMMA_CHANNEL_BOUNDARY_TAGS = ['<|channel|>', '<channel|>']
+const GEMMA_THOUGHT_CHANNEL_TAGS = ['<|channel>thought', '<|channel|>thought', '<channel|>thought']
+const GEMMA_CHANNEL_BOUNDARY_TAGS = ['<|channel>', '<|channel|>', '<channel|>']
 
 function indexOfTag(value: string, tag: string, fromIndex: number) {
   for (let index = fromIndex; index <= value.length - tag.length; index += 1) {

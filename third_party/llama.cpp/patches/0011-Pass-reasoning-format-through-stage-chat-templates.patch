@@ -1,0 +1,61 @@
+From 21f4cca9a98e72a916d949982e9e31cf99e2736a Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 3 Jul 2026 13:15:19 +1000
+Subject: [PATCH] Pass reasoning format through stage chat templates
+
+---
+ common/stage-chat.cpp   | 4 ++++
+ include/skippy.h        | 1 +
+ include/skippy/common.h | 2 +-
+ 3 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
+index bde9fedab..3298ed669 100644
+--- a/common/stage-chat.cpp
++++ b/common/stage-chat.cpp
+@@ -230,6 +230,7 @@ enum skippy_status skippy_apply_chat_template_json(
+         bool override_enable_thinking,
+         bool enable_thinking,
+         bool parallel_tool_calls,
++        const char * reasoning_format_name,
+         char * output_text,
+         size_t output_text_capacity,
+         size_t * out_text_bytes,
+@@ -282,6 +283,9 @@ enum skippy_status skippy_apply_chat_template_json(
+             inputs.chat_template_kwargs["enable_think"] = value;
+             inputs.chat_template_kwargs["think_enabled"] = value;
+         }
++        if (reasoning_format_name != nullptr && reasoning_format_name[0] != '\0') {
++            inputs.reasoning_format = common_reasoning_format_from_name(reasoning_format_name);
++        }
+ 
+         common_chat_templates_ptr tmpls = common_chat_templates_init(native_model, "");
+         common_chat_params params = common_chat_templates_apply(tmpls.get(), inputs);
+diff --git a/include/skippy.h b/include/skippy.h
+index 0e94e95bd..a298bd70d 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -540,6 +540,7 @@ LLAMA_API enum skippy_status skippy_apply_chat_template_json(
+         bool override_enable_thinking,
+         bool enable_thinking,
+         bool parallel_tool_calls,
++        const char * reasoning_format,
+         char * output_text,
+         size_t output_text_capacity,
+         size_t * out_text_bytes,
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index cfb4a8fa9..0e1f03511 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -26,7 +26,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 27
++#define SKIPPY_ABI_VERSION_PATCH 28
+ 
+ enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
+-- 
+2.54.0
+

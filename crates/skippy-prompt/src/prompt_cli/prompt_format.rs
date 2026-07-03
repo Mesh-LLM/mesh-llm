@@ -44,6 +44,7 @@ fn format_messages_for_model_with_options(
             ChatTemplateOptions {
                 add_assistant,
                 enable_thinking,
+                reasoning_format: None,
             },
         )
         .with_context(|| {

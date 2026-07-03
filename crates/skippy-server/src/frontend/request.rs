@@ -258,8 +258,22 @@ pub(super) fn completion_sampling_config(
 
 pub(super) fn chat_template_options(
     _request: &ChatCompletionRequest,
+    defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> OpenAiResult<ChatTemplateOptions> {
-    Ok(ChatTemplateOptions::default())
+    Ok(ChatTemplateOptions {
+        reasoning_format: Some(chat_reasoning_format(defaults.reasoning_format)),
+        ..ChatTemplateOptions::default()
+    })
+}
+
+fn chat_reasoning_format(value: Option<EmbeddedReasoningFormat>) -> ChatReasoningFormat {
+    match value.unwrap_or(EmbeddedReasoningFormat::Hidden) {
+        EmbeddedReasoningFormat::Auto => ChatReasoningFormat::Auto,
+        EmbeddedReasoningFormat::None => ChatReasoningFormat::None,
+        EmbeddedReasoningFormat::Deepseek => ChatReasoningFormat::Deepseek,
+        EmbeddedReasoningFormat::DeepseekLegacy => ChatReasoningFormat::DeepseekLegacy,
+        EmbeddedReasoningFormat::Hidden => ChatReasoningFormat::Hidden,
+    }
 }
 
 pub(super) fn ensure_chat_runtime_features_supported(

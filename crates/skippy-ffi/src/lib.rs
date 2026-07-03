@@ -1,6 +1,6 @@
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 27;
+pub const ABI_VERSION_PATCH: u32 = 28;
 pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
 pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
@@ -842,6 +842,7 @@ mod dynamic {
         override_enable_thinking: bool,
         enable_thinking: bool,
         parallel_tool_calls: bool,
+        reasoning_format: *const c_char,
         output_text: *mut c_char,
         output_text_capacity: usize,
         out_text_bytes: *mut usize,
@@ -966,6 +967,7 @@ mod dynamic {
         override_enable_thinking: bool,
         enable_thinking: bool,
         parallel_tool_calls: bool,
+        reasoning_format: *const c_char,
         output_text: *mut c_char,
         output_text_capacity: usize,
         out_text_bytes: *mut usize,
@@ -987,6 +989,7 @@ mod dynamic {
                 override_enable_thinking,
                 enable_thinking,
                 parallel_tool_calls,
+                reasoning_format,
                 output_text,
                 output_text_capacity,
                 out_text_bytes,
@@ -1491,6 +1494,7 @@ unsafe extern "C" {
         override_enable_thinking: bool,
         enable_thinking: bool,
         parallel_tool_calls: bool,
+        reasoning_format: *const c_char,
         output_text: *mut c_char,
         output_text_capacity: usize,
         out_text_bytes: *mut usize,

@@ -43,7 +43,7 @@ use skippy_protocol::binary::{
 };
 use skippy_protocol::{MessageBase, SCHEMA_VERSION, StageConfig, StageTopology};
 use skippy_runtime::{
-    ActivationFrame, ChatTemplateJsonOptions, ChatTemplateOptions,
+    ActivationFrame, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateOptions,
     FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow,
     LogitBias as RuntimeLogitBias, MAX_LOGIT_BIAS, MediaInput, ModelInfo, RuntimeConfig,
     RuntimeLoadMode, SamplingConfig, StageModel, StageSession, TokenSignal,
@@ -1524,9 +1524,29 @@ fn tool_calls_requested(request: &ChatCompletionRequest) -> bool {
 
 fn chat_output_parser_required(
     request: &ChatCompletionRequest,
-    _template_options: &ChatTemplateOptions,
+    template_options: &ChatTemplateOptions,
 ) -> bool {
     tool_calls_requested(request)
+        || template_options
+            .reasoning_format
+            .is_some_and(ChatReasoningFormat::parses_reasoning)
+}
+
+fn template_exposes_reasoning(template_options: &ChatTemplateOptions) -> bool {
+    template_options
+        .reasoning_format
+        .is_some_and(ChatReasoningFormat::exposes_reasoning)
+}
+
+fn apply_reasoning_visibility(
+    parsed: Option<ParsedChatMessage>,
+    template_options: &ChatTemplateOptions,
+) -> Option<ParsedChatMessage> {
+    let mut parsed = parsed?;
+    if !template_exposes_reasoning(template_options) {
+        parsed.reasoning_content = None;
+    }
+    Some(parsed)
 }
 
 fn chat_response_from_generated_text(
@@ -1839,6 +1859,7 @@ struct ChatOutputStreamParser {
     backend: StageOpenAiBackend,
     request: ChatCompletionRequest,
     metadata: String,
+    emit_reasoning: bool,
     text: String,
     emitted_content: String,
     emitted_reasoning_content: String,
@@ -1846,11 +1867,17 @@ struct ChatOutputStreamParser {
 }
 
 impl ChatOutputStreamParser {
-    fn new(backend: StageOpenAiBackend, request: ChatCompletionRequest, metadata: String) -> Self {
+    fn new(
+        backend: StageOpenAiBackend,
+        request: ChatCompletionRequest,
+        metadata: String,
+        emit_reasoning: bool,
+    ) -> Self {
         Self {
             backend,
             request,
             metadata,
+            emit_reasoning,
             text: String::new(),
             emitted_content: String::new(),
             emitted_reasoning_content: String::new(),
@@ -1881,10 +1908,12 @@ impl ChatOutputStreamParser {
             return Ok(Vec::new());
         };
         let mut events = Vec::new();
-        if let Some(delta) = suffix_delta(
-            parsed.reasoning_content.as_deref(),
-            &mut self.emitted_reasoning_content,
-        ) {
+        if self.emit_reasoning
+            && let Some(delta) = suffix_delta(
+                parsed.reasoning_content.as_deref(),
+                &mut self.emitted_reasoning_content,
+            )
+        {
             events.push(GenerationStreamEvent::ReasoningDelta(delta));
         }
         if let Some(delta) = suffix_delta(parsed.content.as_deref(), &mut self.emitted_content) {
