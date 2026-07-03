@@ -347,6 +347,19 @@ impl RuntimeState {
         Ok(output)
     }
 
+    pub fn decode_sampled_mtp(
+        &mut self,
+        session_id: &str,
+        token_id: i32,
+        sampling: Option<&SamplingConfig>,
+        max_draft_tokens: usize,
+    ) -> Result<(i32, Option<NativeMtpDraft>)> {
+        let session = self.session(session_id)?;
+        let output = session.decode_step_sampled_mtp(token_id, sampling, max_draft_tokens)?;
+        self.add_session_tokens(session_id, 1);
+        Ok(output)
+    }
+
     pub fn decode_frame_batch_sampled(
         &mut self,
         requests: &[RuntimeDecodeFrameBatchRequest<'_>],

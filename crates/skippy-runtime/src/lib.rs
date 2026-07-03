@@ -2862,6 +2862,44 @@ impl StageSession {
         Ok(predicted_token)
     }
 
+    pub fn decode_step_sampled_mtp(
+        &mut self,
+        token_id: i32,
+        sampling: Option<&SamplingConfig>,
+        max_draft_tokens: usize,
+    ) -> Result<(i32, Option<NativeMtpDraft>)> {
+        if skippy_ffi::skippy_decode_step_sampled_mtp_fn().is_none() {
+            let (predicted, draft, _) =
+                self.decode_step_frame_sampled_mtp(token_id, sampling, None, 0, max_draft_tokens)?;
+            return Ok((predicted, draft));
+        }
+
+        let mut predicted_token = 0_i32;
+        let mut mtp_draft = RawNativeMtpDraft::default();
+        let mut error = ptr::null_mut();
+        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let sampling_ptr = raw_sampling
+            .as_ref()
+            .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
+        let status = unsafe {
+            skippy_ffi::skippy_decode_step_sampled_mtp(
+                self.raw,
+                token_id,
+                sampling_ptr,
+                &mut predicted_token,
+                max_draft_tokens.min(skippy_ffi::NATIVE_MTP_MAX_DRAFT_TOKENS),
+                &mut mtp_draft,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        self.token_count = self
+            .token_count
+            .checked_add(1)
+            .context("session token count overflow")?;
+        Ok((predicted_token, NativeMtpDraft::from_raw(mtp_draft)))
+    }
+
     pub fn decode_batch_sampled(requests: &mut [DecodeBatchRequest<'_>]) -> Result<Vec<i32>> {
         if requests.is_empty() {
             return Ok(Vec::new());
@@ -4247,17 +4285,19 @@ fn free_error(error: *mut RawError) {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
     use serde_json::Value;
 
     use super::{
         ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, FlashAttentionType,
         GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, LLAMA_SERVER_DEFAULT_N_BATCH,
         LLAMA_SERVER_DEFAULT_N_UBATCH, ModelInfo, NativeLogAggregator, NativeLogEvent,
-        RuntimeConfig, RuntimeLoadMode, SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SamplingConfig,
-        StageModel, Status, TensorRole, flush_native_log_writer, format_skippy_error,
-        parse_cache_type, parse_layer_assign_index, redirect_native_logs_to_file,
-        register_filtered_native_logs, restore_native_logs, set_filtered_native_logs_enabled,
-        unregister_filtered_native_logs, write_native_log, write_native_log_note,
+        NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH,
+        SamplingConfig, StageModel, StageSession, Status, TensorRole, flush_native_log_writer,
+        format_skippy_error, parse_cache_type, parse_layer_assign_index,
+        redirect_native_logs_to_file, register_filtered_native_logs, restore_native_logs,
+        set_filtered_native_logs_enabled, unregister_filtered_native_logs, write_native_log,
+        write_native_log_note,
     };
     use std::{
         env,
@@ -5253,6 +5293,18 @@ mod tests {
             "configure_chat_sampling should return Ok even with bad metadata: {result:?}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn stage_session_exposes_non_frame_native_mtp_decode_api() {
+        type DecodeStepSampledMtp = fn(
+            &mut StageSession,
+            i32,
+            Option<&SamplingConfig>,
+            usize,
+        ) -> Result<(i32, Option<NativeMtpDraft>)>;
+
+        let _decode: DecodeStepSampledMtp = StageSession::decode_step_sampled_mtp;
     }
 }
 

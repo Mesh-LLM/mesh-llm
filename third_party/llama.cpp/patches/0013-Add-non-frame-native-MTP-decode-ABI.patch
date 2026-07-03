@@ -1,0 +1,94 @@
+From 909daf009cc97cc2c66501e9b9b3849fe76a84f6 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 3 Jul 2026 15:03:17 -0400
+Subject: [PATCH] Add non-frame native MTP decode ABI
+
+---
+ include/skippy.h        |  9 +++++++++
+ include/skippy/common.h |  2 +-
+ src/skippy.cpp          | 36 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 46 insertions(+), 1 deletion(-)
+
+diff --git a/include/skippy.h b/include/skippy.h
+index b3229f770..6f648e50e 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -283,6 +283,15 @@ LLAMA_API enum skippy_status skippy_decode_step_sampled(
+         llama_token * out_predicted_token,
+         struct skippy_error ** out_error);
+ 
++LLAMA_API enum skippy_status skippy_decode_step_sampled_mtp(
++        struct skippy_session * session,
++        llama_token token_id,
++        const struct skippy_sampling_config * sampling,
++        llama_token * out_predicted_token,
++        size_t max_draft_tokens,
++        struct skippy_native_mtp_draft * out_mtp_draft,
++        struct skippy_error ** out_error);
++
+ LLAMA_API enum skippy_status skippy_decode_batch_sampled(
+         struct skippy_session * const * sessions,
+         const llama_token * token_ids,
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index fecefb334..b7186bc9e 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -26,7 +26,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 29
++#define SKIPPY_ABI_VERSION_PATCH 30
+ 
+ enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 64672439f..428ded399 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -3447,6 +3447,42 @@ enum skippy_status skippy_decode_step_sampled(
+     return skippy_success(out_error);
+ }
+ 
++enum skippy_status skippy_decode_step_sampled_mtp(
++        struct skippy_session * session,
++        llama_token token_id,
++        const struct skippy_sampling_config * sampling,
++        llama_token * out_predicted_token,
++        size_t max_draft_tokens,
++        struct skippy_native_mtp_draft * out_mtp_draft,
++        struct skippy_error ** out_error) {
++    if (out_mtp_draft != nullptr) {
++        *out_mtp_draft = {
++            1,
++            false,
++            0,
++            {},
++            0,
++        };
++    }
++
++    enum skippy_status status = skippy_decode_step_sampled(
++            session,
++            token_id,
++            sampling,
++            nullptr,
++            0,
++            nullptr,
++            0,
++            nullptr,
++            out_predicted_token,
++            out_error);
++    if (status != SKIPPY_STATUS_OK || out_predicted_token == nullptr || *out_predicted_token < 0) {
++        return status;
++    }
++
++    return skippy_mtp_propose_next(session, *out_predicted_token, max_draft_tokens, out_mtp_draft, out_error);
++}
++
+ enum skippy_status skippy_decode_batch_sampled(
+         struct skippy_session * const * sessions,
+         const llama_token * token_ids,
+-- 
+2.53.0
+

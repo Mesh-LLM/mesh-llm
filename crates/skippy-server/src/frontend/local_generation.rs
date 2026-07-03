@@ -541,13 +541,11 @@ impl StageOpenAiBackend {
                         .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
                     token_runtime_lock_wait_ms = lock_timer.elapsed_ms();
                     let hold_timer = PhaseTimer::start();
-                    let (predicted, draft, _) = runtime
-                        .decode_frame_sampled_mtp(
+                    let (predicted, draft) = runtime
+                        .decode_sampled_mtp(
                             &session_id,
                             current,
                             request.sampling.enabled.then_some(request.sampling),
-                            None,
-                            0,
                             native_mtp_options.max_draft_tokens,
                         )
                         .map_err(openai_backend_error)?;
@@ -778,5 +776,12 @@ mod tests {
         assert!(!prompt_fits_single_prefill_sample(1, 2048));
         assert!(prompt_fits_single_prefill_sample(2048, 2048));
         assert!(!prompt_fits_single_prefill_sample(2049, 2048));
+    }
+
+    #[test]
+    fn local_native_mtp_decode_uses_non_frame_runtime_api() {
+        let source = include_str!("local_generation.rs");
+        assert!(source.contains(concat!(".decode", "_sampled_mtp(")));
+        assert!(!source.contains(concat!(".decode_frame", "_sampled_mtp(")));
     }
 }
