@@ -559,24 +559,34 @@ curl -fsS --max-time 30 "${OPENAI_BASE_URL}/chat/completions" \
 assert_json "$openai_prefix_hit_response" \
   '(.usage.prompt_tokens_details.cached_tokens // 0) > 0 and (.usage.prompt_tokens_details.cached_tokens // 0) < .usage.prompt_tokens'
 
+# SmolLM2-135M's chat template does not support native tool calling, so this
+# request exercises the server-side tool-call emulation path: the serving node
+# strips tools from the template, injects the TOOL_CALL text convention, and
+# parses any emitted TOOL_CALL line back into OpenAI tool_calls. A larger token
+# budget and a tool-forcing prompt give the tiny model a chance to actually call
+# the tool; we assert the response is always structurally valid and that any
+# tool_calls it does emit are well-formed (correct name + JSON arguments).
 openai_tools_request="$(jq -cn --arg model "$DENSE_MODEL_ID" '{
   model: $model,
-  messages: [{role: "user", content: "Say hi"}],
+  messages: [
+    {role: "system", content: "You have tools. Call get_weather to answer weather questions."},
+    {role: "user", content: "What is the weather in Paris? Use the get_weather tool."}
+  ],
   tools: [{
     type: "function",
     function: {
-      name: "lookup",
-      description: "Look up a value",
+      name: "get_weather",
+      description: "Get the current weather for a city",
       parameters: {
         type: "object",
-        properties: {city: {type: "string"}},
+        properties: {city: {type: "string", description: "the city name"}},
         required: ["city"]
       }
     }
   }],
   tool_choice: "auto",
   parallel_tool_calls: true,
-  max_tokens: 2
+  max_tokens: 64
 }')"
 openai_tools_response="$WORK_DIR/openai-tools.json"
 openai_tools_status="$(
@@ -592,8 +602,26 @@ if [[ "$openai_tools_status" != "200" ]]; then
   cat "$openai_tools_response" >&2 || true
   exit 1
 fi
+# The response must be a valid chat completion from the assistant. Requiring the
+# 135M model to reliably emit a tool call would be flaky, so we do not force a
+# tool_call, but any tool_calls returned by the emulation path must be
+# well-formed: a non-empty function name with arguments that parse as JSON.
 assert_json "$openai_tools_response" \
-  '.object == "chat.completion" and .choices[0].message.role == "assistant" and .usage.prompt_tokens > 0'
+  '.object == "chat.completion"
+   and .choices[0].message.role == "assistant"
+   and .usage.prompt_tokens > 0
+   and (
+     (.choices[0].message.tool_calls // []) as $tc
+     | ($tc | length) == 0
+       or ($tc | all(
+            (.function.name | type == "string" and (. | length) > 0)
+            and (.function.arguments | type == "string" and (fromjson | type == "object"))
+          ))
+   )'
+if [[ "$(jq -r '(.choices[0].message.tool_calls // []) | length' "$openai_tools_response")" -gt 0 ]]; then
+  echo "smoke: emulated tool_calls emitted by non-tool-capable model:"
+  jq -c '.choices[0].message.tool_calls' "$openai_tools_response" || true
+fi
 
 openai_logprobs_request="$(jq -cn --arg model "$DENSE_MODEL_ID" '{
   model: $model,
