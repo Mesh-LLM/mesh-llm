@@ -24,9 +24,14 @@ pub(crate) struct TuneBenchmarkRunRequest<'a> {
 pub(crate) fn run_benchmark_plans(
     request: TuneBenchmarkRunRequest<'_>,
 ) -> Vec<TuneBenchmarkTargetReport> {
-    debug_assert!(
-        request.throughput_tolerance_pct.is_finite() && request.throughput_tolerance_pct >= 0.0
-    );
+    // Validate throughput tolerance before proceeding; debug_assert is not
+    // enough for release builds.
+    if !request.throughput_tolerance_pct.is_finite() || request.throughput_tolerance_pct < 0.0 {
+        eprintln!(
+            "benchmark tune: invalid --throughput-tolerance-pct value {:.3}; using default 3.0%",
+            request.throughput_tolerance_pct,
+        );
+    }
     request
         .prepared
         .iter()
@@ -98,22 +103,22 @@ fn benchmark_candidates(
 
     let mut candidates = Vec::new();
     for ctx_size in contexts {
-        for batch in &batches {
-            for ubatch in &ubatches {
-                if *ubatch > *batch {
+        for &batch in &batches {
+            for &ubatch in &ubatches {
+                if ubatch > batch {
                     continue;
                 }
-                for mmap in &mmap_values {
-                    for mlock in &mlock_values {
+                for &mmap in &mmap_values {
+                    for &mlock in &mlock_values {
                         for speculative in &speculative_values {
                             candidates.push(TuneBenchmarkCandidate {
                                 ctx_size,
-                                batch: *batch,
-                                ubatch: *ubatch,
+                                batch,
+                                ubatch,
                                 cache_type_k,
                                 cache_type_v,
-                                mmap: *mmap,
-                                mlock: *mlock,
+                                mmap,
+                                mlock,
                                 speculative: speculative.clone(),
                             });
                         }
@@ -685,10 +690,8 @@ fn create_trial_dir(
     prepared: &crate::gpus::tune_apply::PreparedTunePlan,
     index: usize,
 ) -> anyhow::Result<std::path::PathBuf> {
-    let mut dir = std::env::current_dir()?;
-    dir.push("target");
-    dir.push("gpu-tune");
-    dir.push(sanitize_path_component(
+    let base = std::env::temp_dir().join("mesh-llm-tune");
+    let mut dir = base.join(sanitize_path_component(
         &prepared.target.canonical_model_ref,
     ));
     dir.push(format!(
@@ -1046,22 +1049,13 @@ fn looks_like_mtp_target(prepared: &crate::gpus::tune_apply::PreparedTunePlan) -
         &prepared.target.canonical_model_ref,
     ]
     .into_iter()
-    .any(|value| contains_mtp_marker(value))
+    .any(|value| mesh_llm_system::util::contains_mtp_marker_str(value))
         || prepared
             .target
             .resolved_path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(contains_mtp_marker)
-}
-
-fn contains_mtp_marker(value: &str) -> bool {
-    let normalized = value.to_ascii_lowercase();
-    normalized.contains("-mtp")
-        || normalized.contains("_mtp")
-        || normalized.contains("/mtp")
-        || normalized.contains("mtp-gguf")
-        || normalized.contains("mtp_gguf")
+            .is_some_and(mesh_llm_system::util::contains_mtp_marker_str)
 }
 
 fn dedup_speculative_candidates(
@@ -1150,14 +1144,6 @@ fn render_bool_or_auto(value: TuneBoolOrAutoValue) -> toml_edit::Value {
         TuneBoolOrAutoValue::Enabled => toml_edit::Value::from(true),
         TuneBoolOrAutoValue::Disabled => toml_edit::Value::from(false),
         TuneBoolOrAutoValue::Auto => toml_edit::Value::from("auto"),
-    }
-}
-
-fn render_cache_type(value: TuneKvCacheType) -> &'static str {
-    match value {
-        TuneKvCacheType::F16 => "f16",
-        TuneKvCacheType::Q8_0 => "q8_0",
-        TuneKvCacheType::Q4_0 => "q4_0",
     }
 }
 

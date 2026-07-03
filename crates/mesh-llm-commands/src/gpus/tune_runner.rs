@@ -36,9 +36,6 @@ fn run_tune_request_with_writer(
     let apply_mode = tune_apply_mode(args.launch_args, args.apply, args.replace_existing);
     validate_benchmark_args(args.benchmark.as_ref())?;
     let config = load_config(config_path)?;
-    super::tune::recommendation_symbol_anchor();
-    tune_resolver::resolver_symbol_anchor();
-    tune_hardware::dispatch_symbol_anchor();
 
     let resolution = if let Some(explicit_model) = args.model {
         tune_resolver::resolve_explicit_tune_targets(&config, &[explicit_model.to_string()])

@@ -70,14 +70,24 @@ pub(crate) fn render_recommended_value(value: &TuneRecommendedValue) -> String {
 
 pub(crate) fn render_benchmark_candidate(candidate: &TuneBenchmarkCandidate) -> String {
     format!(
-        "ctx={} batch={} ubatch={} mmap={} mlock={} spec={}",
+        "ctx={} batch={} ubatch={} cache_k={} cache_v={} mmap={} mlock={} spec={}",
         candidate.ctx_size,
         candidate.batch,
         candidate.ubatch,
+        render_cache_type(candidate.cache_type_k),
+        render_cache_type(candidate.cache_type_v),
         render_benchmark_bool_or_auto(candidate.mmap),
         candidate.mlock,
         render_benchmark_speculative(&candidate.speculative),
     )
+}
+
+fn render_cache_type(value: TuneKvCacheType) -> &'static str {
+    match value {
+        TuneKvCacheType::F16 => "f16",
+        TuneKvCacheType::Q8_0 => "q8_0",
+        TuneKvCacheType::Q4_0 => "q4_0",
+    }
 }
 
 pub(crate) fn render_benchmark_speculative(

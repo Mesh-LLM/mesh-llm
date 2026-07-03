@@ -6,4 +6,5 @@ pub mod embedded_release_footer;
 pub mod hardware;
 pub mod process;
 pub mod release_target;
+pub mod util;
 pub mod vram;

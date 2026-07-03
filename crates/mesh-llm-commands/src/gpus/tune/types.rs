@@ -21,7 +21,7 @@ pub enum TuneApplyMode {
     LaunchArgs,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, strum::EnumIter)]
 #[serde(rename_all = "snake_case")]
 pub enum TuneField {
     CacheTypeK,

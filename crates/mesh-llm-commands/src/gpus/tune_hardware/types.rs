@@ -47,6 +47,26 @@ pub(crate) enum TuneDeviceSelectionSource {
     CpuSystemRamFallback,
 }
 
+/// The subset of [`TuneDeviceSelectionSource`] variants that represent explicit
+/// user-configured device requests. This narrower enum eliminates unreachable
+/// arms in functions that only operate on configured device requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConfiguredDeviceSource {
+    ModelHardwareDevice,
+    DefaultsHardwareDevice,
+    LegacyGpuId,
+}
+
+impl From<ConfiguredDeviceSource> for TuneDeviceSelectionSource {
+    fn from(source: ConfiguredDeviceSource) -> Self {
+        match source {
+            ConfiguredDeviceSource::ModelHardwareDevice => Self::ModelHardwareDevice,
+            ConfiguredDeviceSource::DefaultsHardwareDevice => Self::DefaultsHardwareDevice,
+            ConfiguredDeviceSource::LegacyGpuId => Self::LegacyGpuId,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TuneMemorySource {
     EvaluatedGpuVram,

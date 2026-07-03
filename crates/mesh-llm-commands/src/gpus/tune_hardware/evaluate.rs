@@ -3,9 +3,9 @@ use super::device_request::{
 };
 use super::mlock::{TuneMlockProbe, detect_mlock_probe, evaluate_mlock};
 use super::types::{
-    EvaluatedTuneDevice, TuneDeviceSelectionSource, TuneDeviceTarget, TuneGpuTarget,
-    TuneHardwareEvaluation, TuneHardwareEvaluationInput, TuneMemoryBudget, TuneMemorySource,
-    display_list, is_pinnable_stable_id,
+    ConfiguredDeviceSource, EvaluatedTuneDevice, TuneDeviceSelectionSource, TuneDeviceTarget,
+    TuneGpuTarget, TuneHardwareEvaluation, TuneHardwareEvaluationInput, TuneMemoryBudget,
+    TuneMemorySource, display_list, is_pinnable_stable_id,
 };
 use crate::gpus::tune::{TuneDiagnostic, TuneDiagnosticCode, TuneDiagnosticSeverity, TuneField};
 use mesh_llm_system::{
@@ -17,11 +17,6 @@ pub(crate) fn evaluate_tune_hardware(
     input: TuneHardwareEvaluationInput<'_>,
 ) -> Result<TuneHardwareEvaluation, TuneDiagnostic> {
     evaluate_tune_hardware_with_probe(input, detect_mlock_probe())
-}
-
-pub(crate) fn hardware_symbol_anchor() {
-    let _ = evaluate_tune_hardware
-        as fn(TuneHardwareEvaluationInput<'_>) -> Result<TuneHardwareEvaluation, TuneDiagnostic>;
 }
 
 #[cfg(test)]
@@ -55,12 +50,20 @@ fn evaluate_device(
         let gpu = resolve_requested_gpu(device_request, survey)?;
         return Ok(EvaluatedTuneDevice {
             target: TuneDeviceTarget::Gpu(to_gpu_target(gpu)),
-            source: device_request.source,
+            source: TuneDeviceSelectionSource::from(device_request.source),
             report_only_main_gpu: effective_hardware.report_only_main_gpu,
         });
     }
 
-    if let Some(gpu) = survey.gpus.iter().find(|gpu| gpu.backend_device.is_some()) {
+    if let Some(gpu) = survey
+        .gpus
+        .iter()
+        .filter(|gpu| gpu.backend_device.is_some())
+        .max_by_key(|gpu| {
+            let capacity = VramCapacity::new(gpu.vram_bytes, gpu.reserved_bytes);
+            capacity.allocatable_bytes()
+        })
+    {
         return Ok(EvaluatedTuneDevice {
             target: TuneDeviceTarget::Gpu(to_gpu_target(gpu)),
             source: TuneDeviceSelectionSource::SurveyDefault,
@@ -110,23 +113,26 @@ fn resolve_requested_gpu<'a>(
     survey: &'a HardwareSurvey,
 ) -> Result<&'a GpuFacts, TuneDiagnostic> {
     match request.source {
-        TuneDeviceSelectionSource::LegacyGpuId => resolve_requested_pinned_gpu(request, survey),
-        TuneDeviceSelectionSource::ModelHardwareDevice
-        | TuneDeviceSelectionSource::DefaultsHardwareDevice => {
+        ConfiguredDeviceSource::LegacyGpuId => resolve_requested_pinned_gpu(request, survey),
+        ConfiguredDeviceSource::ModelHardwareDevice
+        | ConfiguredDeviceSource::DefaultsHardwareDevice => {
             match resolve_requested_pinned_gpu(request, survey) {
                 Ok(gpu) => Ok(gpu),
                 Err(diagnostic)
                     if diagnostic.message.contains("not pinnable")
                         || diagnostic.message.contains("available pinnable GPU IDs") =>
                 {
-                    resolve_backend_device(request, survey).map_err(|_| diagnostic)
+                    resolve_backend_device(request, survey).map_err(|backend_err| {
+                        let mut combined = diagnostic.clone();
+                        combined.message.push_str(&format!(
+                            "; backend fallback also failed: {}",
+                            backend_err.message
+                        ));
+                        combined
+                    })
                 }
                 Err(diagnostic) => Err(diagnostic),
             }
-        }
-        TuneDeviceSelectionSource::SurveyDefault
-        | TuneDeviceSelectionSource::CpuSystemRamFallback => {
-            unreachable!("survey defaults are resolved without a configured device request")
         }
     }
 }
@@ -185,13 +191,9 @@ fn missing_configured_device(
         .filter(|stable_id| is_pinnable_stable_id(stable_id))
         .collect::<Vec<_>>();
     let field_name = match request.source {
-        TuneDeviceSelectionSource::ModelHardwareDevice => "per-model hardware.device",
-        TuneDeviceSelectionSource::DefaultsHardwareDevice => "defaults.hardware.device",
-        TuneDeviceSelectionSource::LegacyGpuId => "legacy gpu_id",
-        TuneDeviceSelectionSource::SurveyDefault
-        | TuneDeviceSelectionSource::CpuSystemRamFallback => {
-            unreachable!("configured-device diagnostics only apply to explicit device requests")
-        }
+        ConfiguredDeviceSource::ModelHardwareDevice => "per-model hardware.device",
+        ConfiguredDeviceSource::DefaultsHardwareDevice => "defaults.hardware.device",
+        ConfiguredDeviceSource::LegacyGpuId => "legacy gpu_id",
     };
 
     TuneDiagnostic {

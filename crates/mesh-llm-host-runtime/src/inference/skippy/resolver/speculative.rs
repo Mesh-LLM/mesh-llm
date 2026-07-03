@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
+use mesh_llm_system::util::{contains_mtp_marker, validate_draft_min_max};
 use model_artifact::gguf::{scan_gguf_compact_meta, scan_gguf_tensor_names_any};
 use skippy_runtime::package::{PackageGenerationInfo, PackageSpeculativeDecodingInfo};
 use skippy_topology::infer_family_capability;
@@ -109,9 +110,7 @@ pub(super) fn resolve_speculative_config(
     if mode == "disabled" && draft_model_path.is_some() {
         bail!("skippy speculative draft source cannot be set when speculative.mode = \"disabled\"");
     }
-    if draft_max_tokens > 0 && draft_min_tokens > draft_max_tokens {
-        bail!("skippy speculative draft_min_tokens must be less than or equal to draft_max_tokens");
-    }
+    validate_draft_min_max(draft_min_tokens, draft_max_tokens).map_err(anyhow::Error::msg)?;
     if native_mtp_enabled && draft_model_path.is_some() {
         mode = "disabled".to_string();
     } else if mode == "draft" || (mode == "auto" && draft_model_path.is_some()) {
@@ -244,6 +243,8 @@ fn resolve_draft_speculative_mode(
     Ok(())
 }
 
+const NGRAM_WINDOW_MAX: u32 = 1024;
+
 fn resolve_ngram_speculative_mode(mode: &mut String, ngram_min: u32, ngram_max: u32) -> Result<()> {
     if ngram_min == 0 {
         bail!("skippy speculative ngram mode requires ngram_min > 0");
@@ -253,6 +254,9 @@ fn resolve_ngram_speculative_mode(mode: &mut String, ngram_min: u32, ngram_max: 
     }
     if ngram_min > ngram_max {
         bail!("skippy speculative ngram_min must be less than or equal to ngram_max");
+    }
+    if ngram_max > NGRAM_WINDOW_MAX {
+        bail!("skippy speculative ngram_max must not exceed {NGRAM_WINDOW_MAX}");
     }
     *mode = "ngram".to_string();
     Ok(())
@@ -300,12 +304,6 @@ fn speculative_supports_native_mtp(speculative: &PackageSpeculativeDecodingInfo)
 fn direct_gguf_supports_native_mtp(model_path: &Path) -> bool {
     scan_gguf_compact_meta(model_path).is_some_and(|meta| meta.nextn_predict_layers > 0)
         || scan_gguf_tensor_names_any(model_path, |name| name.contains(".nextn.")).unwrap_or(false)
-}
-
-fn contains_mtp_marker(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.to_ascii_lowercase().contains("mtp"))
 }
 
 fn unsupported_speculative_field(field: &str) -> Result<()> {

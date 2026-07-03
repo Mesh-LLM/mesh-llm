@@ -572,13 +572,14 @@ impl StageOpenAiBackend {
                     token_runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
                     token_runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
                 }
+                let is_first_draft = decoded_tokens == 0;
+                let draft_origin = if is_first_draft {
+                    NativeMtpDraftOrigin::InitialSerial
+                } else {
+                    NativeMtpDraftOrigin::SerialAfterGap
+                };
                 let native_mtp_decision = request.native_mtp_enabled.then(|| {
-                    native_mtp.observe_target_token(
-                        current,
-                        0,
-                        native_mtp_draft,
-                        NativeMtpDraftOrigin::SerialAfterGap,
-                    )
+                    native_mtp.observe_target_token(current, 0, native_mtp_draft, draft_origin)
                 });
                 runtime_lock_wait_ms += token_runtime_lock_wait_ms;
                 runtime_lock_wait_max_ms = runtime_lock_wait_max_ms.max(token_runtime_lock_wait_ms);

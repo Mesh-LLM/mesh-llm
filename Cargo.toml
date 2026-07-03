@@ -77,6 +77,7 @@ mesh-llm-skills = { path = "crates/mesh-llm-skills", version = "0.72.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+strum = { version = "0.28", features = ["derive"] }
 
 [patch.crates-io]
 hf-hub = { git = "https://github.com/Mesh-LLM/hf-hub", branch = "mesh-llm" }

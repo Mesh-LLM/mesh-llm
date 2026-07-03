@@ -810,6 +810,15 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> DiagnosticResult {
 }
 
 fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> DiagnosticResult {
+    // native-mtp-n1 is a legacy alias for mtp; route it through an alias
+    // warning instead of a hard rejection so existing configs do not break.
+    if config.strategy.as_deref() == Some("native-mtp-n1") {
+        let used_path = parsed_config_path(&format!("{base_path}.strategy"))
+            .unwrap_or_else(|| ConfigPath::from_fields(["speculative", "strategy"]));
+        let canonical_path = parsed_config_path(&format!("{base_path}.strategy"))
+            .unwrap_or_else(|| ConfigPath::from_fields(["speculative", "strategy"]));
+        return Err(alias_diagnostic(used_path, canonical_path, "native-mtp-n1"));
+    }
     validate_optional_enum(
         config.strategy.as_deref(),
         &["auto", "disabled", "mtp"],

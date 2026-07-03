@@ -1,4 +1,4 @@
-use super::types::TuneDeviceSelectionSource;
+use super::types::ConfiguredDeviceSource;
 use mesh_llm_config::{HardwareConfig, MeshConfig, ModelConfigEntry};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10,7 +10,7 @@ pub(crate) struct EffectiveTuneHardware {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ConfiguredTuneDeviceRequest {
     pub requested_value: String,
-    pub source: TuneDeviceSelectionSource,
+    pub source: ConfiguredDeviceSource,
 }
 
 pub(crate) fn effective_tune_hardware(
@@ -43,13 +43,13 @@ fn preferred_device_request(
     non_empty_owned(model_hardware.and_then(|hardware| hardware.device.clone()))
         .map(|requested_value| ConfiguredTuneDeviceRequest {
             requested_value,
-            source: TuneDeviceSelectionSource::ModelHardwareDevice,
+            source: ConfiguredDeviceSource::ModelHardwareDevice,
         })
         .or_else(|| {
             non_empty_owned(defaults_hardware.and_then(|hardware| hardware.device.clone())).map(
                 |requested_value| ConfiguredTuneDeviceRequest {
                     requested_value,
-                    source: TuneDeviceSelectionSource::DefaultsHardwareDevice,
+                    source: ConfiguredDeviceSource::DefaultsHardwareDevice,
                 },
             )
         })
@@ -57,7 +57,7 @@ fn preferred_device_request(
             non_empty_owned(model_entry.and_then(|entry| entry.gpu_id.clone())).map(
                 |requested_value| ConfiguredTuneDeviceRequest {
                     requested_value,
-                    source: TuneDeviceSelectionSource::LegacyGpuId,
+                    source: ConfiguredDeviceSource::LegacyGpuId,
                 },
             )
         })

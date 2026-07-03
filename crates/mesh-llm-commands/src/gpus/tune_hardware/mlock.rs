@@ -4,11 +4,13 @@ use super::types::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TuneMlockProbe {
+    #[allow(dead_code)]
     Supported { limit: TuneMlockLimit },
     Unsupported { reason: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum TuneMlockLimit {
     Unlimited,
     Bytes(u64),

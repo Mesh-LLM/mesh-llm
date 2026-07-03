@@ -1,22 +1,7 @@
 impl TuneField {
-    pub const ALL: [Self; 16] = [
-        Self::CacheTypeK,
-        Self::CacheTypeV,
-        Self::FlashAttention,
-        Self::CtxSize,
-        Self::Batch,
-        Self::Ubatch,
-        Self::GpuLayers,
-        Self::FitTargetMib,
-        Self::Device,
-        Self::Mmap,
-        Self::Mlock,
-        Self::CpuMoe,
-        Self::NCpuMoe,
-        Self::TensorSplit,
-        Self::Placement,
-        Self::Defaults,
-    ];
+    pub fn all() -> Vec<Self> {
+        <Self as strum::IntoEnumIterator>::iter().collect()
+    }
 
     pub fn spec(self) -> TuneFieldSpec {
         let config_path = match self {

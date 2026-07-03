@@ -14,10 +14,6 @@ pub(crate) struct TuneRecommendationInput<'a> {
     pub(crate) survey: &'a HardwareSurvey,
 }
 
-pub(crate) fn recommendation_symbol_anchor() {
-    let _ = build_tune_plan as fn(TuneRecommendationInput<'_>) -> TunePlan;
-}
-
 pub(crate) fn build_tune_plan(input: TuneRecommendationInput<'_>) -> TunePlan {
     let model_entry = matched_model_entry(input.config, input.target);
     let defaults = input.config.defaults.as_ref();
@@ -105,6 +101,38 @@ struct PlannedFit {
     diagnostic: Option<TuneDiagnostic>,
 }
 
+fn find_partial_gpu_layers_fit(
+    metadata: &TuneGgufMetadata,
+    layer_count: u32,
+    selected_budget: u64,
+    kv_bytes_per_token: u64,
+    quant: model_artifact::gguf::GgufKvCacheQuant,
+) -> Option<(TuneGpuLayersValue, u32)> {
+    let bytes_per_layer =
+        resident_model_bytes_for_layers(metadata.model_bytes, layer_count, 1);
+    let max_layers = selected_budget
+        .checked_div(bytes_per_layer)
+        .map(|layers| layers.min(u64::from(layer_count)) as u32)
+        .unwrap_or(0);
+    for layers in (1..=max_layers).rev() {
+        let resident =
+            resident_model_bytes_for_layers(metadata.model_bytes, layer_count, layers);
+        if !minimum_context_fits(resident, selected_budget, kv_bytes_per_token) {
+            continue;
+        }
+        return Some((
+            TuneGpuLayersValue::Count(layers),
+            planned_context_length(
+                &metadata.compact_meta,
+                resident,
+                selected_budget,
+                quant,
+            ),
+        ));
+    }
+    None
+}
+
 fn plan_fit(
     metadata: &TuneGgufMetadata,
     hardware: &TuneHardwareEvaluation,
@@ -150,31 +178,13 @@ fn plan_fit(
             } else if !cpu_can_fit {
                 None
             } else {
-                let bytes_per_layer =
-                    resident_model_bytes_for_layers(metadata.model_bytes, layer_count, 1);
-                let max_layers = selected_budget
-                    .checked_div(bytes_per_layer)
-                    .map(|layers| layers.min(u64::from(layer_count)) as u32)
-                    .unwrap_or(0);
-                let mut selected = None;
-                for layers in (1..=max_layers).rev() {
-                    let resident =
-                        resident_model_bytes_for_layers(metadata.model_bytes, layer_count, layers);
-                    if !minimum_context_fits(resident, selected_budget, kv_bytes_per_token) {
-                        continue;
-                    }
-                    selected = Some((
-                        TuneGpuLayersValue::Count(layers),
-                        planned_context_length(
-                            &metadata.compact_meta,
-                            resident,
-                            selected_budget,
-                            quant,
-                        ),
-                    ));
-                    break;
-                }
-                selected
+                find_partial_gpu_layers_fit(
+                    metadata,
+                    layer_count,
+                    selected_budget,
+                    kv_bytes_per_token,
+                    quant,
+                )
             }
         }
     };

@@ -65,11 +65,6 @@ pub(crate) fn resolve_explicit_tune_targets(
     resolve_explicit_tune_targets_with_probe(config, inputs, &|_| ())
 }
 
-pub(crate) fn resolver_symbol_anchor() {
-    let _ = resolve_configured_tune_targets as fn(&MeshConfig) -> TuneTargetResolution;
-    let _ = resolve_explicit_tune_targets as fn(&MeshConfig, &[String]) -> TuneTargetResolution;
-}
-
 #[cfg(test)]
 pub(crate) fn resolve_explicit_tune_targets_with_probe_for_tests(
     config: &MeshConfig,

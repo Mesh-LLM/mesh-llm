@@ -369,6 +369,8 @@ fn prompt_repl_launch(args: PromptArgs) -> Result<()> {
         ngram_confidence_step_tokens: args.ngram_confidence_step_tokens,
         ngram_max_confidence: args.ngram_max_confidence,
         ngram_count_step_tokens: args.ngram_count_step_tokens,
+        mmap: None,
+        mlock: false,
         ngram_margin_step_tokens: args.ngram_margin_step_tokens,
         startup_timeout_secs: args.startup_timeout_secs,
         decode_timeout_secs: args.decode_timeout_secs,

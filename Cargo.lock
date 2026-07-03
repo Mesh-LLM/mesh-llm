@@ -3878,6 +3878,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "strum",
  "tempfile",
  "tokio",
  "tokio-stream",
