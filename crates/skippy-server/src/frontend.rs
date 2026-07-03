@@ -1994,6 +1994,27 @@ enum TokenControl {
     Stop,
 }
 
+/// Whether generation for this request is running under tool-call emulation:
+/// the request carries tools and the rendered prompt metadata does not report
+/// native tool support (empty grammar triggers). Used to enable early
+/// generation stop once a complete emulated tool call has been produced.
+fn emulation_generation_active(
+    hook_request: Option<&ChatCompletionRequest>,
+    prompt: &PreparedGenerationPrompt,
+) -> bool {
+    let Some(request) = hook_request else {
+        return false;
+    };
+    if !tool_calls_requested(request) {
+        return false;
+    }
+    prompt
+        .chat_parse_metadata
+        .as_deref()
+        .map(|metadata| !tool_emulation::template_supports_native_tool_calls(metadata))
+        .unwrap_or(false)
+}
+
 struct TextGenerationCollector<'a, F>
 where
     F: FnMut(&str) -> OpenAiResult<()>,
@@ -2008,6 +2029,7 @@ where
     completion_tokens: usize,
     finish_reason: FinishReason,
     metrics: GenerationMetrics,
+    emulation_active: bool,
 }
 
 impl<'a, F> TextGenerationCollector<'a, F>
@@ -2031,7 +2053,17 @@ where
             completion_tokens: 0,
             finish_reason: finish_reason_for_generation(true),
             metrics: GenerationMetrics::default(),
+            emulation_active: false,
         }
+    }
+
+    /// Enables early generation stop once a complete emulated tool call is
+    /// generated. Mirrors goose's `tool_call_emitted -> Stop` so the model does
+    /// not ramble after emitting a call. Only active for emulated tools
+    /// requests; native requests are unaffected.
+    fn with_emulation_stop(mut self, emulation_active: bool) -> Self {
+        self.emulation_active = emulation_active;
+        self
     }
 
     fn push_token(&mut self, token: i32) -> OpenAiResult<TokenControl> {
@@ -2066,6 +2098,11 @@ where
             .any(|stop| !stop.is_empty() && self.text.contains(stop))
         {
             self.text = trim_at_stop(&self.text, &self.stop_values).to_string();
+            self.emit_safe_delta(true)?;
+            self.finish_reason = finish_reason_for_generation(false);
+            return Ok(TokenControl::Stop);
+        }
+        if self.emulation_active && tool_emulation::emulated_tool_call_complete(&self.text) {
             self.emit_safe_delta(true)?;
             self.finish_reason = finish_reason_for_generation(false);
             return Ok(TokenControl::Stop);

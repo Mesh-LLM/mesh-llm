@@ -176,6 +176,83 @@ pub(super) fn build_emulation_instruction(tools: &Value) -> Option<String> {
     Some(instruction)
 }
 
+/// Returns true once the generated text contains at least one complete emulated
+/// tool call: a `TOOL_CALL` marker followed by a balanced JSON object. This
+/// drives early generation stop (goose's `tool_call_emitted -> Stop`), so the
+/// model does not ramble after emitting a call. `<think>` spans are ignored so
+/// a marker inside reasoning does not stop generation prematurely.
+pub(super) fn emulated_tool_call_complete(text: &str) -> bool {
+    let scannable = strip_think_blocks(text);
+    let mut search_from = 0;
+    while let Some(marker_rel) = scannable[search_from..].find(TOOL_CALL_MARKER) {
+        let after_marker = search_from + marker_rel + TOOL_CALL_MARKER.len();
+        let rest = scannable[after_marker..]
+            .trim_start()
+            .trim_start_matches(':');
+        if let Some(end) = balanced_json_object_end(rest) {
+            // A complete JSON object with a name field is a complete call.
+            if serde_json::from_str::<Value>(&rest[..end])
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(|name| !name.trim().is_empty())
+                })
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+        search_from = after_marker;
+    }
+    false
+}
+
+/// Returns the byte index just past the first balanced top-level `{...}` JSON
+/// object at the start of `text` (after optional leading whitespace), or `None`
+/// if the object is not yet complete. String contents and escapes are handled
+/// so braces inside strings do not affect nesting.
+fn balanced_json_object_end(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if i >= bytes.len() || bytes[i] != b'{' {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+        } else {
+            match byte {
+                b'"' => in_string = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Flattens message content into plain text for history rewriting.
 fn content_text(content: Option<&MessageContent>) -> String {
     content
@@ -246,7 +323,9 @@ pub(super) fn rewrite_history_for_emulation(
                 let merged = if existing.trim().is_empty() {
                     instruction.to_string()
                 } else {
-                    format!("{existing}\n\n{instruction}")
+                    // Emulation frame takes the dominant leading position; the
+                    // client's system content is preserved below it as context.
+                    format!("{instruction}\n\n# Task context\n\n{existing}")
                 };
                 rewritten.push(plain_message("system", merged));
             }
@@ -303,20 +382,37 @@ pub(super) struct EmulatedParse {
 /// allow all).
 pub(super) fn parse_emulated_tool_calls(text: &str, allowed_names: &[String]) -> EmulatedParse {
     let scannable = strip_think_blocks(text);
-    let mut content_lines: Vec<String> = Vec::new();
     let mut tool_calls: Vec<Value> = Vec::new();
-
-    for line in scannable.lines() {
-        if let Some(call) = parse_tool_call_line(line, allowed_names) {
+    // Content is whatever remains after removing each TOOL_CALL marker + its
+    // JSON object. The marker can appear anywhere (line start, or right after a
+    // reasoning marker like `<|channel>...channel|>`), so scan the whole text
+    // rather than requiring the marker at the start of a line.
+    let mut content = String::new();
+    let mut cursor = 0;
+    while let Some(marker_rel) = scannable[cursor..].find(TOOL_CALL_MARKER) {
+        let marker_start = cursor + marker_rel;
+        let after_marker = marker_start + TOOL_CALL_MARKER.len();
+        let rest = &scannable[after_marker..];
+        let json_start_trimmed = rest.trim_start().trim_start_matches(':');
+        if let Some(end) = balanced_json_object_end(json_start_trimmed)
+            && let Some(call) = parse_tool_call_json(&json_start_trimmed[..end], allowed_names)
+        {
+            content.push_str(&scannable[cursor..marker_start]);
+            // Advance cursor past the consumed JSON object.
+            let consumed = json_start_trimmed.as_ptr() as usize - scannable.as_ptr() as usize + end;
+            cursor = consumed;
             tool_calls.push(call);
         } else {
-            content_lines.push(line.to_string());
+            // Not a complete/valid call: keep the marker text as content and
+            // move past it to avoid an infinite loop.
+            content.push_str(&scannable[cursor..after_marker]);
+            cursor = after_marker;
         }
     }
+    content.push_str(&scannable[cursor..]);
 
     let content = {
-        let joined = content_lines.join("\n");
-        let trimmed = joined.trim();
+        let trimmed = content.trim();
         if trimmed.is_empty() {
             None
         } else {
@@ -347,13 +443,11 @@ fn strip_think_blocks(text: &str) -> String {
     out
 }
 
-/// Parses a single line as a tool call if it carries the marker and a JSON
-/// object with a `name`. Returns the OpenAI tool-call object (without an id;
-/// downstream assembly assigns `call_mesh_*` ids).
-fn parse_tool_call_line(line: &str, allowed_names: &[String]) -> Option<Value> {
-    let trimmed = line.trim();
-    let after_marker = trimmed.strip_prefix(TOOL_CALL_MARKER)?;
-    let json_part = after_marker.trim_start().trim_start_matches(':').trim();
+/// Parses a JSON object string into an OpenAI tool-call object if it carries a
+/// non-empty `name` (and, when `allowed_names` is non-empty, an allowed one).
+/// Returns the tool-call object without an id; downstream assembly assigns
+/// `call_mesh_*` ids.
+fn parse_tool_call_json(json_part: &str, allowed_names: &[String]) -> Option<Value> {
     let payload = serde_json::from_str::<Value>(json_part).ok()?;
     let name = payload.get("name").and_then(Value::as_str)?.trim();
     if name.is_empty() {
@@ -511,6 +605,32 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_complete_detects_balanced_json() {
+        assert!(emulated_tool_call_complete(
+            "TOOL_CALL {\"name\": \"shell\", \"arguments\": {\"command\": \"ls\"}}"
+        ));
+        // Incomplete JSON: not yet complete.
+        assert!(!emulated_tool_call_complete(
+            "TOOL_CALL {\"name\": \"shell\", \"arguments\": {\"command\": \"l"
+        ));
+        // Marker but no object yet.
+        assert!(!emulated_tool_call_complete("Let me think. TOOL_CALL "));
+        // Braces inside a string do not prematurely balance.
+        assert!(emulated_tool_call_complete(
+            "TOOL_CALL {\"name\": \"echo\", \"arguments\": {\"text\": \"a}b{c\"}}"
+        ));
+        // No marker at all.
+        assert!(!emulated_tool_call_complete("just prose here"));
+    }
+
+    #[test]
+    fn tool_call_complete_ignores_marker_in_think_block() {
+        assert!(!emulated_tool_call_complete(
+            "<think>TOOL_CALL {\"name\": \"shell\", \"arguments\": {}}</think>"
+        ));
+    }
+
+    #[test]
     fn parse_plain_prose_has_no_tool_calls() {
         let parse = parse_emulated_tool_calls("Just a normal answer.", &[]);
         assert!(parse.tool_calls.is_empty());
@@ -545,6 +665,8 @@ mod tests {
                 .unwrap();
         assert!(system.contains("You are helpful."));
         assert!(system.contains("INSTRUCTION"));
+        // Emulation frame leads; client system content is preserved below it.
+        assert!(system.find("INSTRUCTION").unwrap() < system.find("You are helpful.").unwrap());
     }
 
     #[test]

@@ -138,6 +138,9 @@ impl StageOpenAiBackend {
         if tool_calls_requested(request)
             && !tool_emulation::template_supports_native_tool_calls(metadata)
         {
+            if !is_partial {
+                eprintln!("EMU_RAW_TEXT<<<{}>>>", text);
+            }
             return Ok(parse_emulated_chat_output(text, request, is_partial));
         }
 

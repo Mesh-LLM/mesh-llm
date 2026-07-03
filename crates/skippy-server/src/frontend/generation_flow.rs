@@ -90,8 +90,10 @@ impl StageOpenAiBackend {
         };
         let chat_sampling_metadata = prompt.chat_parse_metadata.as_deref();
 
+        let emulation_active = emulation_generation_active(hook_request.as_ref(), &prompt);
         let mut collector =
-            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk);
+            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)
+                .with_emulation_stop(emulation_active);
         let cache_stats = match self.mode.clone() {
             OpenAiBackendMode::LocalRuntime => self.generate_local_tokens(
                 LocalGeneration {
@@ -262,6 +264,7 @@ impl StageOpenAiBackend {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
+        let emulation_active = emulation_generation_active(hook_request.as_ref(), &prompt);
         let session_id = ids.session_label.clone();
         let prefill_timer = PhaseTimer::start();
         let (prefill, mut token_signal, mut signal_window) = {
@@ -382,7 +385,8 @@ impl StageOpenAiBackend {
         }
 
         let mut collector =
-            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk);
+            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)
+                .with_emulation_stop(emulation_active);
         let result = (|| {
             let decode_timer = PhaseTimer::start();
             let mut decoded_tokens = 0usize;
