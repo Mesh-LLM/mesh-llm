@@ -31,7 +31,7 @@ impl StageOpenAiBackend {
         // the template never sees tool roles. Tool-capable templates keep the
         // native prompt unchanged.
         if tool_calls_requested(request)
-            && !tool_emulation::template_supports_native_tool_calls(&native.metadata_json)
+            && tool_emulation::should_emulate_tool_calls(&native.metadata_json)
             && let Some(tools) = request.tools.as_ref()
             && let Some(instruction) = tool_emulation::build_emulation_instruction(tools)
         {
