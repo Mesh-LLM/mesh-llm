@@ -22,10 +22,10 @@ pub(super) fn detect_mlock_probe() -> TuneMlockProbe {
         if let Some(limit) = read_linux_mlock_limit() {
             return TuneMlockProbe::Supported { limit };
         }
-        return TuneMlockProbe::Unsupported {
+        TuneMlockProbe::Unsupported {
             reason: "mlock unavailable: could not read /proc/self/limits for the current process, and tune will not attempt privilege changes"
                 .to_string(),
-        };
+        }
     }
 
     #[cfg(not(target_os = "linux"))]

@@ -352,6 +352,75 @@ Switches:
 - `--auto`: print best invite token (useful for piping).
 - `--relay <RELAY>`: custom relay URL(s).
 
+### `benchmark`
+
+Use this to benchmark model-serving throughput and import prompt corpora. The
+`benchmark` command has two subcommands: `tune` and `import-prompts`.
+
+#### `benchmark tune`
+
+Tune model-serving settings by running isolated throughput trials against one or
+more local model targets. Trials sweep candidate values and recommend the best
+configuration.
+
+Usage:
+
+```bash
+mesh-llm benchmark tune
+mesh-llm benchmark tune --model Qwen3-0.6B-Q4_K_M
+mesh-llm benchmark tune --models Qwen3-0.6B-Q4_K_M,gemma-4-31B-it-Q4_K_M
+mesh-llm benchmark tune --model Qwen3-0.6B-Q4_K_M --ctx-sizes 4096,8192 --batch-sizes 512,1024 --ubatch-sizes 256,512
+```
+
+Core tuning switches:
+
+- `--model <MODEL>`: tune one specific local/configured model target.
+- `--models <MODELS>`: tune multiple local/configured model targets (comma-separated). Conflicts with `--model`.
+- `--json`: print machine-readable JSON output.
+- `--ctx-sizes <SIZES>`: context sizes to benchmark (comma-separated token counts).
+- `--batch-sizes <SIZES>`: batch sizes to benchmark (comma-separated).
+- `--ubatch-sizes <SIZES>`: micro-batch sizes to benchmark (comma-separated).
+- `--mmap-values <VALUES>`: mmap settings to benchmark independently (`auto`, `enabled`, `disabled`; comma-separated).
+- `--mlock-values <VALUES>`: mlock settings to benchmark independently (`enabled`, `disabled`; comma-separated).
+
+Speculative decoding tuning switches:
+
+- `--speculative-types <TYPES>`: speculative decoding types to sweep (`auto`, `disabled`, `mtp`, `draft`, `ngram`; comma-separated). Conflicts with `--no-speculative-tune`.
+- `--no-speculative-tune`: disable speculative decoding sweeps and only benchmark the disabled baseline.
+- `--spec-draft-models <PATHS>`: candidate draft GGUF paths for speculative draft mode (comma-separated).
+- `--spec-draft-max-tokens <N>`: candidate maximum draft-token windows for MTP and draft speculation (comma-separated).
+- `--spec-draft-min-tokens <N>`: candidate minimum draft-token windows for MTP and draft speculation (comma-separated).
+- `--spec-ngram-min <N>`: candidate minimum ngram draft-token counts (comma-separated).
+- `--spec-ngram-max <N>`: candidate maximum ngram draft-token counts (comma-separated).
+
+Additional switches:
+
+- `--throughput-tolerance-pct <PCT>`: treat candidates within this percent of the raw best tok/s as throughput-equivalent (default `10.0`).
+- `--max-tokens <N>`: maximum generated tokens per benchmark request (default `128`).
+- `--startup-timeout-secs <SECS>`: startup wait limit for each benchmark trial (default `600`).
+- `--request-timeout-secs <SECS>`: HTTP request timeout for each benchmark request (default `600`).
+- `--debug-telemetry`: capture Skippy debug telemetry in each trial log.
+- `--prompt <PROMPT>`: prompt sent during benchmark trials (default `"Write a concise paragraph about distributed GPU inference."`).
+
+#### `benchmark import-prompts`
+
+Import a prompt corpus from a supported online source into local JSONL.
+
+Usage:
+
+```bash
+mesh-llm benchmark import-prompts --source mt-bench --output ./corpus.jsonl
+mesh-llm benchmark import-prompts --source gsm8k --limit 50 --max-tokens 512 --output ./eval.jsonl
+```
+
+Switches:
+
+- `--source <SOURCE>`: online source to import (`mt-bench`, `gsm8k`, `humaneval`).
+- `--limit <LIMIT>`: maximum number of prompts to import (default `20`).
+- `--max-tokens <N>`: optional per-prompt decode budget hint written into the corpus.
+- `--output <PATH>`: output JSONL path (required).
+
+
 ### `goose`
 
 Use this to launch Goose already wired to mesh-llm’s OpenAI-compatible endpoint.
