@@ -1766,6 +1766,33 @@ impl StageModel {
         Self::open_parts_with_optional_event_reporter(paths, config, Some(event_reporter))
     }
 
+    pub fn attach_mtp_draft_model(
+        &mut self,
+        path: impl AsRef<Path>,
+        config: &RuntimeConfig,
+    ) -> Result<()> {
+        if self.raw.is_null() {
+            return Err(anyhow!("cannot attach MTP draft model to a null model"));
+        }
+        let attach_symbol = skippy_ffi::skippy_model_attach_mtp_draft_model_fn()
+            .ok_or_else(|| anyhow!("native runtime does not support external MTP draft models"))?;
+        let path = path.as_ref();
+        write_native_log_note(format!(
+            "skippy_model_attach_mtp_draft_model begin path={} {}",
+            path.display(),
+            config.native_log_summary()
+        ));
+        let path = CString::new(path.to_string_lossy().as_bytes())
+            .context("MTP draft model path contains an interior NUL byte")?;
+        let raw_config = config.as_raw()?;
+        let mut error = ptr::null_mut();
+        let status = unsafe { attach_symbol(self.raw, path.as_ptr(), &raw_config.raw, &mut error) };
+        write_native_log_note(format!(
+            "skippy_model_attach_mtp_draft_model returned status={status:?}"
+        ));
+        ensure_ok(status, error)
+    }
+
     pub fn create_session(&self) -> Result<StageSession> {
         write_native_log_note("skippy_session_create begin");
         let mut raw = ptr::null_mut();

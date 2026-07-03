@@ -72,10 +72,10 @@ pub struct BenchmarkTuneCommand {
     /// Candidate draft GGUF paths to benchmark for speculative draft mode.
     #[arg(long = "spec-draft-models", value_delimiter = ',')]
     pub spec_draft_models: Vec<PathBuf>,
-    /// Candidate maximum draft-token windows for speculative draft mode.
+    /// Candidate maximum draft-token windows for MTP and draft speculation.
     #[arg(long = "spec-draft-max-tokens", value_delimiter = ',')]
     pub spec_draft_max_tokens: Vec<u32>,
-    /// Candidate minimum draft-token windows for speculative draft mode.
+    /// Candidate minimum draft-token windows for MTP and draft speculation.
     #[arg(long = "spec-draft-min-tokens", value_delimiter = ',')]
     pub spec_draft_min_tokens: Vec<u32>,
     /// Candidate minimum ngram draft-token counts for ngram speculation.
@@ -96,6 +96,9 @@ pub struct BenchmarkTuneCommand {
     /// HTTP request timeout for each benchmark request.
     #[arg(long, default_value_t = 600)]
     pub request_timeout_secs: u64,
+    /// Capture Skippy debug telemetry in each trial log.
+    #[arg(long)]
+    pub debug_telemetry: bool,
     /// Prompt sent during benchmark trials.
     #[arg(
         long,

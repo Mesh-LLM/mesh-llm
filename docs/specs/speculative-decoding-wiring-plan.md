@@ -12,27 +12,26 @@ dimension. `mesh-llm benchmark tune` should automatically discover viable
 speculative modes, try them in the order most likely to improve decode tok/s,
 and write trial configs that use the same resolver path as normal serving.
 
-## Current Gaps
+## Current Status And Gaps
 
-- `mode = "ngram"` is accepted by config validation and UI schema but rejected
-  by the embedded runtime resolver.
-- Draft-model speculation only wires local `draft_model_path`,
-  `draft_max_tokens`, `draft_gpu_layers`, and `pairing_fault`.
+- `mode = "ngram"` is accepted by config validation, resolved for staged
+  serving, translated into embedded OpenAI args, and included in benchmark tune
+  auto fallback candidates.
+- Draft-model speculation wires local `draft_model_path`, `draft_max_tokens`,
+  `draft_min_tokens`, `draft_gpu_layers`, and `pairing_fault`.
 - Draft HF source fields are validated but runtime rejects them.
 - Draft runtime placement fields (`draft_device`, `draft_threads`,
   `draft_cache_type_k`, `draft_cache_type_v`) are validated but runtime rejects
   them.
-- Draft selection controls (`draft_min_tokens`,
-  `draft_acceptance_threshold`, `draft_split_probability`) are validated but
-  runtime rejects them.
+- Draft acceptance controls (`draft_acceptance_threshold`,
+  `draft_split_probability`) are validated but runtime rejects them.
 - `spec_default = true` is validated but runtime rejects it.
-- `strategy = "auto"` only enables native MTP when package generation metadata
-  is present. Direct GGUF MTP models do not automatically enable native MTP.
+- `strategy = "auto"` enables native MTP when package generation metadata or
+  direct GGUF inspection proves native MTP support.
 - Native MTP tuning controls are environment variables rather than first-class
   config fields.
-- `mesh-llm benchmark tune` only sweeps model fit, KV cache, `mmap`, and
-  `mlock`; it cannot currently discover or compare native MTP, draft-model, or
-  ngram speculation.
+- `mesh-llm benchmark tune` sweeps model fit, KV cache, `mmap`, `mlock`, native
+  MTP, local draft-model candidates, ngram candidates, and disabled baselines.
 - Trial output does not summarize speculative acceptance, rejection, draft
   window, or native-MTP verification telemetry, making a low-throughput MTP run
   hard to diagnose.
@@ -241,10 +240,10 @@ Benchmark CLI:
 - Default behavior should be automatic: `mesh-llm benchmark tune` includes
   viable speculative candidates without requiring extra flags.
 - Add opt-in controls to bound the search, for example:
-  `--speculative-values auto,disabled,native-mtp,draft,ngram`,
+  `--speculative-types auto,disabled,mtp,draft,ngram`,
   `--spec-draft-max-tokens 1,2,4,8`,
-  `--spec-draft-min-tokens 0,1,2`, and
-  `--spec-ngram-ranges 2:4,3:6`.
+  `--spec-draft-min-tokens 0,1,2`, `--spec-ngram-min 2,3`, and
+  `--spec-ngram-max 4,6`.
 - Add `--no-speculative-tune` to reproduce the old fit-only sweep.
 - Reject unsupported requested modes early with actionable diagnostics.
 

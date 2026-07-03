@@ -235,7 +235,7 @@ impl ResolvedSkippyConfig {
             },
             speculative_window: self.speculative_window_for_embedded(mode),
             adaptive_speculative_window: false,
-            draft_n_gpu_layers: if mode == "draft" {
+            draft_n_gpu_layers: if mode == "draft" || self.speculative.native_mtp_enabled {
                 self.speculative.draft_n_gpu_layers
             } else {
                 None
@@ -251,6 +251,11 @@ impl ResolvedSkippyConfig {
                 0
             },
             native_mtp_enabled: self.speculative.native_mtp_enabled,
+            native_mtp_draft_model_path: if self.speculative.native_mtp_enabled {
+                self.speculative.draft_model_path.clone()
+            } else {
+                None
+            },
             native_mtp_max_tokens: if self.speculative.native_mtp_enabled {
                 self.speculative.draft_max_tokens as usize
             } else {
@@ -283,23 +288,11 @@ impl ResolvedSkippyConfig {
             if self.skippy.prefill_controls_explicit {
                 bail!("skippy prefill chunk controls require staged serving");
             }
-            if self.speculative.mode == "draft"
-                || self.speculative.draft_model_path.is_some()
-                || self.speculative.draft_n_gpu_layers.is_some()
-            {
-                bail!("speculative draft controls require staged serving");
-            }
-            if self.speculative.mode == "ngram" {
-                bail!("speculative ngram controls require staged serving");
-            }
         }
         Ok(())
     }
 
-    fn speculative_mode_for_embedded(&self, staged: bool) -> &'static str {
-        if !staged {
-            return "disabled";
-        }
+    fn speculative_mode_for_embedded(&self, _staged: bool) -> &'static str {
         if self.speculative.mode == "draft" && self.speculative.draft_model_path.is_some() {
             "draft"
         } else if self.speculative.mode == "ngram" && self.speculative.ngram_min > 0 {
@@ -382,6 +375,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             ngram_min: 0,
             ngram_max: 0,
             native_mtp_enabled: true,
+            native_mtp_draft_model_path: None,
             native_mtp_max_tokens: 3,
             native_mtp_min_tokens: 0,
             activation_width: 0,
@@ -416,6 +410,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             ngram_min: 0,
             ngram_max: 0,
             native_mtp_enabled: true,
+            native_mtp_draft_model_path: None,
             native_mtp_max_tokens: 3,
             native_mtp_min_tokens: 0,
             activation_width,
@@ -454,6 +449,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             ngram_min: self.ngram_min,
             ngram_max: self.ngram_max,
             native_mtp_enabled: self.native_mtp_enabled,
+            native_mtp_draft_model_path: self.native_mtp_draft_model_path,
             native_mtp_max_tokens: self.native_mtp_max_tokens,
             native_mtp_min_tokens: self.native_mtp_min_tokens,
             activation_width: self.activation_width,

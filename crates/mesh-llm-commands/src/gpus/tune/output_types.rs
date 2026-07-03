@@ -99,6 +99,8 @@ pub(crate) struct TuneBenchmarkCandidate {
 pub(crate) enum TuneBenchmarkSpeculativeCandidate {
     Disabled,
     Mtp {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft_model_path: Option<String>,
         draft_max_tokens: u32,
         draft_min_tokens: u32,
     },

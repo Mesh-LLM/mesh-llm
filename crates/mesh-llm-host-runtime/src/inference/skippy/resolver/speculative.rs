@@ -31,8 +31,16 @@ pub(super) fn resolve_speculative_config(
             .is_some();
     let auto_defaults_enabled =
         !matches!(spec_default, Some(BoolOrAuto::Bool(false))) || has_explicit_strategy;
+    let mut draft_model_path = pick_owned(
+        model_config.and_then(|config| config.draft_model_path.clone()),
+        global_config.and_then(|config| config.draft_model_path.clone()),
+    )
+    .map(PathBuf::from);
     let supports_native_mtp = package_generation_supports_native_mtp(package_generation)
-        || direct_gguf_supports_native_mtp(model_path);
+        || direct_gguf_supports_native_mtp(model_path)
+        || draft_model_path
+            .as_ref()
+            .is_some_and(|path| path.is_file() && contains_mtp_marker(path));
     let strategy = pick_string_owned(
         model_config.and_then(|config| config.strategy.as_deref()),
         global_config.and_then(|config| config.strategy.as_deref()),
@@ -62,11 +70,6 @@ pub(super) fn resolve_speculative_config(
     );
     reject_unsupported_speculative_runtime_fields(model_config, global_config)?;
     let mut mode = mode;
-    let mut draft_model_path = pick_owned(
-        model_config.and_then(|config| config.draft_model_path.clone()),
-        global_config.and_then(|config| config.draft_model_path.clone()),
-    )
-    .map(PathBuf::from);
     let draft_max_tokens = super::support::pick_value(
         model_config.and_then(|config| config.draft_max_tokens),
         global_config.and_then(|config| config.draft_max_tokens),
@@ -109,7 +112,9 @@ pub(super) fn resolve_speculative_config(
     if draft_max_tokens > 0 && draft_min_tokens > draft_max_tokens {
         bail!("skippy speculative draft_min_tokens must be less than or equal to draft_max_tokens");
     }
-    if mode == "draft" || (mode == "auto" && draft_model_path.is_some()) {
+    if native_mtp_enabled && draft_model_path.is_some() {
+        mode = "disabled".to_string();
+    } else if mode == "draft" || (mode == "auto" && draft_model_path.is_some()) {
         resolve_draft_speculative_mode(
             &mut mode,
             &mut draft_model_path,
@@ -295,6 +300,12 @@ fn speculative_supports_native_mtp(speculative: &PackageSpeculativeDecodingInfo)
 fn direct_gguf_supports_native_mtp(model_path: &Path) -> bool {
     scan_gguf_compact_meta(model_path).is_some_and(|meta| meta.nextn_predict_layers > 0)
         || scan_gguf_tensor_names_any(model_path, |name| name.contains(".nextn.")).unwrap_or(false)
+}
+
+fn contains_mtp_marker(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().contains("mtp"))
 }
 
 fn unsupported_speculative_field(field: &str) -> Result<()> {

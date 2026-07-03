@@ -1572,6 +1572,7 @@ mod tests {
             "30",
             "--request-timeout-secs",
             "45",
+            "--debug-telemetry",
             "--prompt",
             "hello",
             "--json",
@@ -1613,6 +1614,7 @@ mod tests {
         assert_eq!(tune.max_tokens, 64);
         assert_eq!(tune.startup_timeout_secs, 30);
         assert_eq!(tune.request_timeout_secs, 45);
+        assert!(tune.debug_telemetry);
         assert_eq!(tune.prompt, "hello");
     }
 

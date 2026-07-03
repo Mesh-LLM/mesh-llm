@@ -275,6 +275,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                 ngram_min: openai_options.ngram_min,
                 ngram_max: openai_options.ngram_max,
                 native_mtp_enabled,
+                native_mtp_draft_model_path: None,
                 native_mtp_max_tokens: openai_options.native_mtp_max_tokens,
                 native_mtp_min_tokens: openai_options.native_mtp_min_tokens,
                 activation_width,

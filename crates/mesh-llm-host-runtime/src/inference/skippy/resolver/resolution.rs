@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
@@ -84,7 +84,8 @@ impl<'a> ResolverContext<'a> {
         let model_entry = mesh_config
             .models
             .iter()
-            .find(|entry| entry.model == request.model_id);
+            .find(|entry| entry.model == request.model_id)
+            .or_else(|| find_model_entry_by_resolved_path(mesh_config, request.model_path));
         let defaults = mesh_config.defaults.as_ref();
         let model_fit = model_entry.and_then(|entry| entry.model_fit.as_ref());
         let global_model_fit = defaults.and_then(|value| value.model_fit.as_ref());
@@ -101,6 +102,24 @@ impl<'a> ResolverContext<'a> {
             global_throughput,
         }
     }
+}
+
+fn find_model_entry_by_resolved_path<'a>(
+    mesh_config: &'a crate::plugin::MeshConfig,
+    model_path: &Path,
+) -> Option<&'a ModelConfigEntry> {
+    let requested_path = comparable_path(model_path);
+    mesh_config.models.iter().find(|entry| {
+        entry
+            .hardware
+            .as_ref()
+            .and_then(|hardware| hardware.model_path.as_deref())
+            .is_some_and(|configured| comparable_path(Path::new(configured)) == requested_path)
+    })
+}
+
+fn comparable_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn validate_supported_model_fit_controls(context: &ResolverContext<'_>) -> Result<()> {

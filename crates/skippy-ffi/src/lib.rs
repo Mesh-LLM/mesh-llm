@@ -249,6 +249,13 @@ pub struct ModelInfo {
     _private: [u8; 0],
 }
 
+pub type SkippyModelAttachMtpDraftModelFn = unsafe extern "C" fn(
+    target_model: *mut Model,
+    path: *const c_char,
+    config: *const RuntimeConfig,
+    out_error: *mut *mut Error,
+) -> Status;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ChatMessage {
@@ -946,6 +953,15 @@ mod dynamic {
         })
     }
 
+    pub fn skippy_model_attach_mtp_draft_model_fn() -> Option<SkippyModelAttachMtpDraftModelFn> {
+        static CACHE: OnceLock<Option<SkippyModelAttachMtpDraftModelFn>> = OnceLock::new();
+        *CACHE.get_or_init(|| {
+            symbols().lookup_optional::<SkippyModelAttachMtpDraftModelFn>(
+                b"skippy_model_attach_mtp_draft_model\0",
+            )
+        })
+    }
+
     pub fn skippy_model_open_from_parts_with_events_fn()
     -> Option<SkippyModelOpenFromPartsWithEventsFn> {
         static CACHE: OnceLock<Option<SkippyModelOpenFromPartsWithEventsFn>> = OnceLock::new();
@@ -1135,6 +1151,13 @@ unsafe extern "C" {
         path_count: usize,
         config: *const RuntimeConfig,
         out_model: *mut *mut Model,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_model_attach_mtp_draft_model(
+        target_model: *mut Model,
+        path: *const c_char,
+        config: *const RuntimeConfig,
         out_error: *mut *mut Error,
     ) -> Status;
 
@@ -1702,6 +1725,11 @@ unsafe extern "C" {
         logits_last: bool,
         new_n_past: *mut i32,
     ) -> c_int;
+}
+
+#[cfg(not(feature = "dynamic-runtime"))]
+pub fn skippy_model_attach_mtp_draft_model_fn() -> Option<SkippyModelAttachMtpDraftModelFn> {
+    Some(skippy_model_attach_mtp_draft_model)
 }
 
 pub type Opaque = c_void;

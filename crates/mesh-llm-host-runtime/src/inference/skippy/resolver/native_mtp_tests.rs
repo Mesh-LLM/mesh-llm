@@ -7,6 +7,7 @@ use skippy_runtime::package::{
     PackageWindowPolicyInfo,
 };
 use std::collections::BTreeMap;
+use std::io::Write;
 
 fn native_mtp_generation() -> PackageGenerationInfo {
     let mut strategies = BTreeMap::new();
@@ -208,6 +209,51 @@ strategy = "mtp"
     .to_string();
 
     assert!(error.contains("requires proven native MTP support"));
+}
+
+#[test]
+fn speculative_strategy_native_mtp_accepts_external_mtp_sidecar() {
+    let mut draft_file = tempfile::Builder::new()
+        .prefix("mtp-gemma-")
+        .suffix(".gguf")
+        .tempfile()
+        .expect("draft tempfile");
+    draft_file.write_all(b"GGUF").expect("write draft marker");
+    let draft_path = draft_file.path().display().to_string();
+    let mesh_config = parse_config(&format!(
+        r#"
+[defaults.speculative]
+strategy = "mtp"
+draft_model_path = "{draft_path}"
+draft_max_tokens = 3
+draft_min_tokens = 0
+"#
+    ));
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "google/gemma-4-31b-it:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("external MTP sidecar should prove native MTP support");
+
+    assert!(resolved.speculative.native_mtp_enabled);
+    assert_eq!(resolved.speculative.mode, "disabled");
+    let openai = resolved
+        .to_embedded_openai_args(4096, false)
+        .expect("openai args should build");
+    assert_eq!(
+        openai.native_mtp_draft_model_path.as_deref(),
+        Some(draft_file.path())
+    );
+    assert!(openai.draft_model_path.is_none());
+    assert_eq!(openai.native_mtp_max_tokens, 3);
+    assert_eq!(openai.native_mtp_min_tokens, 0);
 }
 
 #[test]

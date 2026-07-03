@@ -904,7 +904,7 @@ ngram_max = 6
 }
 
 #[test]
-fn speculative_ngram_requires_staged_serving() {
+fn speculative_ngram_translates_for_direct_embedded_openai() {
     let mesh_config = parse_config(
         r#"
 [defaults.speculative]
@@ -926,11 +926,144 @@ ngram_max = 6
     })
     .expect("ngram speculative config should resolve");
 
-    let err = resolved
+    resolved
         .to_model_load_options(SkippyTelemetryOptions::off())
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("speculative ngram controls require staged serving"));
+        .expect("direct model load options should allow ngram speculation");
+    let openai = resolved
+        .to_embedded_openai_args(0, false)
+        .expect("direct embedded OpenAI args should allow ngram");
+    assert_eq!(openai.speculative_window, 6);
+    assert_eq!(openai.ngram_min, 2);
+    assert_eq!(openai.ngram_max, 6);
+}
+
+#[test]
+fn speculative_draft_translates_for_direct_embedded_openai() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+mode = "draft"
+draft_model_path = "/models/qwen3-draft.gguf"
+draft_selection_policy = "manual"
+pairing_fault = "fail_open"
+draft_max_tokens = 8
+draft_min_tokens = 2
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("draft speculative config should resolve");
+
+    resolved
+        .to_model_load_options(SkippyTelemetryOptions::off())
+        .expect("direct model load options should allow draft speculation");
+    let openai = resolved
+        .to_embedded_openai_args(0, false)
+        .expect("direct embedded OpenAI args should allow draft");
+    assert_eq!(openai.speculative_window, 8);
+    assert_eq!(
+        openai.draft_model_path.as_deref(),
+        Some(Path::new("/models/qwen3-draft.gguf"))
+    );
+    assert_eq!(openai.draft_n_gpu_layers, None);
+}
+
+#[test]
+fn benchmark_shaped_model_entry_draft_translates_for_direct_embedded_openai() {
+    let mesh_config = parse_config(
+        r#"
+[[models]]
+model = "Qwen/Qwen3-0.6B:Q4_K_M"
+
+[models.hardware]
+model_path = "/models/qwen3.gguf"
+
+[models.speculative]
+strategy = "disabled"
+mode = "draft"
+draft_model_path = "/models/qwen3-draft.gguf"
+draft_selection_policy = "manual"
+pairing_fault = "fail_closed"
+draft_max_tokens = 4
+draft_min_tokens = 0
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("benchmark-shaped draft speculative config should resolve");
+
+    assert_eq!(resolved.speculative.mode, "draft");
+    assert_eq!(resolved.speculative.pairing_fault, "fail_closed");
+    let openai = resolved
+        .to_embedded_openai_args(0, false)
+        .expect("direct embedded OpenAI args should allow benchmark draft");
+    assert_eq!(openai.speculative_window, 4);
+    assert_eq!(
+        openai.draft_model_path.as_deref(),
+        Some(Path::new("/models/qwen3-draft.gguf"))
+    );
+}
+
+#[test]
+fn benchmark_shaped_hf_identity_row_matches_by_pinned_model_path_after_canonicalization() {
+    let model_file = temp_model_file();
+    let toml = format!(
+        r#"
+[[models]]
+model = "Qwen/Qwen3-GGUF@sha/qwen3-q4_k_m.gguf"
+
+[models.hardware]
+model_path = "{}"
+
+[models.speculative]
+strategy = "disabled"
+mode = "draft"
+draft_model_path = "/models/qwen3-draft.gguf"
+draft_selection_policy = "manual"
+pairing_fault = "fail_closed"
+draft_max_tokens = 4
+"#,
+        model_file.path().display()
+    );
+    let mesh_config = parse_config(&toml);
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-GGUF:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("benchmark HF identity row should match by pinned model_path");
+
+    let openai = resolved
+        .to_embedded_openai_args(0, false)
+        .expect("direct embedded OpenAI args should include draft");
+    assert_eq!(openai.speculative_window, 4);
+    assert_eq!(
+        openai.draft_model_path.as_deref(),
+        Some(Path::new("/models/qwen3-draft.gguf"))
+    );
 }
 
 #[test]
@@ -1116,14 +1249,6 @@ draft_cache_type_k = "q8_0"
 draft_cache_type_v = "q8_0"
 "#,
             "speculative.draft_cache_type_v",
-        ),
-        (
-            r#"
-[defaults.speculative]
-draft_min_tokens = 1
-draft_max_tokens = 2
-"#,
-            "speculative.draft_min_tokens",
         ),
         (
             r#"

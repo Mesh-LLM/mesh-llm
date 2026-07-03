@@ -26,6 +26,13 @@ For performance work, use a release build on the target host:
 just release-build
 ```
 
+On NVIDIA remote hosts, verify that the release binary is actually using CUDA
+before recording performance results. For Jetson/Orin-style aarch64 CUDA hosts,
+prefer the repo's CUDA backend build path for the host, for example
+`scripts/build-linux.sh --backend cuda --cuda-arch 87`, with the host CUDA
+toolkit paths exported as needed. A generic release build that reports CPU
+devices is not valid performance evidence for GPU tune work.
+
 If the run is on a remote node over SSH and will take time, use the
 `remote-observable-process` skill. Prefer a TTY/login shell and `tee` logs over
 detached first attempts.
@@ -59,6 +66,7 @@ mesh-llm benchmark tune \
   --speculative-types auto \
   --throughput-tolerance-pct 10 \
   --max-tokens 128 \
+  --debug-telemetry \
   --json
 ```
 
@@ -72,21 +80,24 @@ Rules:
   the current mlock probe says the evaluated budget can be locked.
 - If `--speculative-types` is omitted, tune uses `auto`: it tries
   `mtp` first when the model target looks like an MTP model, tries
-  discovered local draft-model candidates when available, then includes a
-  disabled baseline.
+  discovered local draft-model candidates when available, tries ngram
+  candidates as a model-free fallback, then includes a disabled baseline.
 - Use `--no-speculative-tune` when you need to reproduce the older
   fit-only/disabled-speculation behavior or isolate non-speculative regressions.
 - Use `--speculative-types mtp,draft,ngram,disabled` to force an
   explicit speculative sweep. `draft` requires either `--spec-draft-models`, a
   configured `draft_model_path`, or a local sibling GGUF whose filename looks
   like a draft/EAGLE model for the target.
-- Draft sweeps use `--spec-draft-max-tokens` and
+- MTP and draft sweeps use `--spec-draft-max-tokens` and
   `--spec-draft-min-tokens`. Ngram sweeps use `--spec-ngram-min` and
   `--spec-ngram-max`.
 - Use longer `--max-tokens` when decode throughput is noisy; use shorter values
   only for smoke checks.
 - Keep `--throughput-tolerance-pct` near the default `10` unless the user asks
   for stricter raw throughput optimization.
+- Add `--debug-telemetry` when you need proof that speculative decoding is
+  actually active. It runs trial children with Skippy debug telemetry mirrored
+  into `target/gpu-tune/.../serve.log`.
 
 ## Evidence
 
@@ -129,7 +140,8 @@ Call out tradeoffs explicitly:
 - If speculative decoding changes the winner, report both tok/s and the active
   speculative candidate. For MTP, inspect trial logs/telemetry for
   `llama_stage.native_mtp.enabled`, drafted/accepted/rejected counts, and
-  accept rate before concluding it is helping.
+  accept rate before concluding it is helping. Use `--debug-telemetry` if those
+  attributes are not present in the trial log.
 - If all trials fail, summarize the shared failure reason and link the trial log
   paths rather than claiming no viable configuration exists.
 - If results are close, avoid overfitting decimals; prefer the setting with the

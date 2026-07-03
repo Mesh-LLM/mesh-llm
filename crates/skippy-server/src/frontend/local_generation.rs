@@ -510,6 +510,9 @@ impl StageOpenAiBackend {
             let generation_hooks_active =
                 self.generation_hooks_active(&hook_request, hook_runtime.as_ref());
             let emit_token_debug = self.telemetry.is_debug_enabled();
+            let native_mtp_options = NativeMtpDecodeOptions::from_env()
+                .with_window(request.native_mtp_max_tokens, request.native_mtp_min_tokens);
+            let mut native_mtp = NativeMtpVerifier::default();
             let mut post_prefill_hook_checked = false;
             let mut last_mid_generation_hook_at = None;
             while !stopped && decoded_tokens < request.max_tokens as usize {
@@ -525,16 +528,58 @@ impl StageOpenAiBackend {
                 let token_signal;
                 let signal_window;
                 let decode_call_timer = PhaseTimer::start();
-                let outcome = self.decode_batcher.decode(
-                    &session_id,
-                    current,
-                    request.sampling.enabled.then_some(request.sampling),
-                )?;
-                current = outcome.predicted;
-                let token_batch_size = outcome.batch_size;
-                let token_batch_wait_ms = outcome.batch_wait_ms;
-                let token_runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
-                let token_runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+                let native_mtp_draft;
+                let token_batch_size;
+                let token_batch_wait_ms;
+                let token_runtime_lock_wait_ms;
+                let token_runtime_lock_hold_ms;
+                if request.native_mtp_enabled {
+                    let lock_timer = PhaseTimer::start();
+                    let mut runtime = self
+                        .runtime
+                        .lock()
+                        .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+                    token_runtime_lock_wait_ms = lock_timer.elapsed_ms();
+                    let hold_timer = PhaseTimer::start();
+                    let (predicted, draft, _) = runtime
+                        .decode_frame_sampled_mtp(
+                            &session_id,
+                            current,
+                            request.sampling.enabled.then_some(request.sampling),
+                            None,
+                            0,
+                            native_mtp_options.max_draft_tokens,
+                        )
+                        .map_err(openai_backend_error)?;
+                    current = predicted;
+                    native_mtp_draft = draft.map(|draft| NativeMtpDraft {
+                        tokens: draft.token_ids,
+                        proposal_compute_us: draft.proposal_compute_us,
+                    });
+                    token_batch_size = 1;
+                    token_batch_wait_ms = 0.0;
+                    token_runtime_lock_hold_ms = hold_timer.elapsed_ms();
+                } else {
+                    let outcome = self.decode_batcher.decode(
+                        &session_id,
+                        current,
+                        request.sampling.enabled.then_some(request.sampling),
+                    )?;
+                    current = outcome.predicted;
+                    native_mtp_draft = None;
+                    token_batch_size = outcome.batch_size;
+                    token_batch_wait_ms = outcome.batch_wait_ms;
+                    token_runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+                    token_runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+                }
+                let native_mtp_decision = request.native_mtp_enabled.then(|| {
+                    native_mtp.observe_target_token(
+                        current,
+                        0,
+                        native_mtp_draft,
+                        NativeMtpDraftOrigin::SerialAfterGap,
+                    )
+                });
                 runtime_lock_wait_ms += token_runtime_lock_wait_ms;
                 runtime_lock_wait_max_ms = runtime_lock_wait_max_ms.max(token_runtime_lock_wait_ms);
                 runtime_lock_hold_ms += token_runtime_lock_hold_ms;
@@ -615,6 +660,12 @@ impl StageOpenAiBackend {
                         json!(token_runtime_lock_hold_ms),
                     );
                     token_attrs.insert("llama_stage.predicted_token".to_string(), json!(current));
+                    if let Some(native_mtp_decision) = native_mtp_decision {
+                        token_attrs.insert(
+                            "llama_stage.native_mtp.verification".to_string(),
+                            json!(native_mtp_decision.label()),
+                        );
+                    }
                     token_attrs
                         .insert("llama_stage.message_kind".to_string(), json!("DecodeToken"));
                     self.emit_openai_phase("stage.openai_decode_token", token_timer, token_attrs);
@@ -662,6 +713,7 @@ impl StageOpenAiBackend {
                     stats,
                 );
             }
+            native_mtp.stats().insert_attrs(&mut attrs);
             self.emit_openai_summary("stage.openai_decode", decode_timer, attrs);
             Ok(())
         })();

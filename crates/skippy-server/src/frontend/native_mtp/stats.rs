@@ -38,6 +38,10 @@ pub(in crate::frontend) struct NativeMtpStats {
 }
 
 impl NativeMtpStats {
+    pub(in crate::frontend) fn enabled(self) -> bool {
+        self.drafted_tokens > 0 || self.verified_tokens() > 0
+    }
+
     pub(in crate::frontend) fn verified_tokens(self) -> u64 {
         self.accepted_tokens + self.rejected_tokens
     }
@@ -52,7 +56,7 @@ impl NativeMtpStats {
     }
 
     pub(in crate::frontend) fn insert_attrs(self, attrs: &mut BTreeMap<String, Value>) {
-        if self.drafted_tokens == 0 && self.verified_tokens() == 0 {
+        if !self.enabled() {
             attrs.insert("llama_stage.native_mtp.enabled".to_string(), json!(false));
             return;
         }
@@ -105,6 +109,7 @@ mod tests {
             attrs.get("llama_stage.native_mtp.enabled"),
             Some(&json!(false))
         );
+        assert!(!NativeMtpStats::default().enabled());
 
         let stats = NativeMtpStats {
             drafted_tokens: 1,
@@ -125,6 +130,7 @@ mod tests {
             attrs.get("llama_stage.native_mtp.accept_rate"),
             Some(&json!(1.0))
         );
+        assert!(stats.enabled());
     }
 
     #[test]

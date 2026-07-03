@@ -160,6 +160,7 @@ pub(crate) struct ResolvedEmbeddedOpenAiArgs {
     pub(crate) ngram_min: usize,
     pub(crate) ngram_max: usize,
     pub(crate) native_mtp_enabled: bool,
+    pub(crate) native_mtp_draft_model_path: Option<PathBuf>,
     pub(crate) native_mtp_max_tokens: usize,
     pub(crate) native_mtp_min_tokens: usize,
     pub(crate) activation_width: i32,

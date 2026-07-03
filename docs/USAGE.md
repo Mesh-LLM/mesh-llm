@@ -110,12 +110,14 @@ mesh-llm benchmark tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf --js
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --mmap-values auto,true,false --mlock-values true,false
 mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types auto
+mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types mtp --debug-telemetry --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --speculative-types draft,ngram,disabled --spec-draft-models /models/qwen3-draft.gguf --spec-draft-max-tokens 4,8,16
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --throughput-tolerance-pct 2.5
 ```
 
 If `--mmap-values` is omitted, benchmark tune tries `auto`, `true`, and `false`. If `--mlock-values` is omitted, it tries `false` and only tries `true` when the current mlock limit can cover the evaluated budget.
-If `--speculative-types` is omitted, benchmark tune uses `auto`: native MTP is tried first for MTP-looking targets, locally discoverable draft models are tried when available, and a disabled baseline is included for comparison. Use `--speculative-types mtp,draft,ngram,disabled` to force an explicit speculative sweep, or `--no-speculative-tune` to reproduce the old disabled-baseline-only sweep.
+If `--speculative-types` is omitted, benchmark tune uses `auto`: native MTP is tried first for MTP-looking targets, locally discoverable draft models are tried when available, ngram candidates are tried as a model-free fallback, and a disabled baseline is included for comparison. Use `--speculative-types mtp,draft,ngram,disabled` to force an explicit speculative sweep, or `--no-speculative-tune` to reproduce the old disabled-baseline-only sweep.
+Use `--debug-telemetry` when proving speculative decoding behavior: each trial log includes Skippy debug telemetry, including `llama_stage.native_mtp.*` summary attributes for MTP drafted, accepted, rejected, and accept-rate counts.
 
 Use `mesh-llm gpus detect` when you want to refresh the raw hardware fingerprint, bandwidth, and compute hints rather than benchmark model-serving throughput.
 
@@ -376,8 +378,6 @@ strategy                   = "auto"          # auto disabled mtp
 mode                       = "auto"          # auto off draft ngram lookahead
 draft_selection_policy     = "auto"          # auto manual heuristic
 pairing_fault              = "warn_disable"  # warn_disable fail_open fail_closed
-draft_max_tokens           = 16
-draft_min_tokens           = 1
 draft_acceptance_threshold = 0.0             # 0.0 = use runtime default
 spec_default               = "auto"          # bool or "auto"
 
@@ -389,6 +389,8 @@ spec_default               = "auto"          # bool or "auto"
 # Native MTP strategy override
 # strategy = "mtp"  # force native model MTP when available
 # strategy = "disabled"       # disable package/model native MTP
+# draft_max_tokens = 3        # MTP/draft max draft-token window
+# draft_min_tokens = 0        # MTP/draft min draft-token window
 
 # Draft hardware (leave unset to share host model's device)
 # draft_gpu_layers   = -1

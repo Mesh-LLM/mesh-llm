@@ -72,6 +72,7 @@ fn benchmark_tune_json_uses_benchmark_command_context() {
         max_tokens: 32,
         startup_timeout_secs: 5,
         request_timeout_secs: 5,
+        debug_telemetry: false,
         prompt: "hello".to_string(),
     }));
     let mut output = Vec::new();
@@ -120,6 +121,7 @@ fn benchmark_tune_rejects_zero_only_candidate_values_before_running_trials() {
         max_tokens: 32,
         startup_timeout_secs: 5,
         request_timeout_secs: 5,
+        debug_telemetry: false,
         prompt: "hello".to_string(),
     }));
     let mut output = Vec::new();
@@ -154,6 +156,7 @@ fn benchmark_tune_allows_zero_speculative_draft_min_tokens() {
         max_tokens: 32,
         startup_timeout_secs: 5,
         request_timeout_secs: 5,
+        debug_telemetry: false,
         prompt: "hello",
     };
 
@@ -184,6 +187,7 @@ fn benchmark_tune_rejects_candidate_matrix_without_valid_batch_ubatch_pair() {
         max_tokens: 32,
         startup_timeout_secs: 5,
         request_timeout_secs: 5,
+        debug_telemetry: false,
         prompt: "hello".to_string(),
     }));
     let mut output = Vec::new();

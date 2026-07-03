@@ -17,6 +17,7 @@ pub(crate) struct TuneBenchmarkRunRequest<'a> {
     pub(crate) max_tokens: u32,
     pub(crate) startup_timeout_secs: u64,
     pub(crate) request_timeout_secs: u64,
+    pub(crate) debug_telemetry: bool,
     pub(crate) prompt: &'a str,
 }
 
@@ -187,7 +188,13 @@ fn run_trial_inner(
 
     let port = reserve_local_port()?;
     let console = reserve_local_port()?;
-    let mut child = TrialChild::spawn(&config_path, &log_path, port, console)?;
+    let mut child = TrialChild::spawn(
+        &config_path,
+        &log_path,
+        port,
+        console,
+        request.debug_telemetry,
+    )?;
     let request_timeout = std::time::Duration::from_secs(request.request_timeout_secs.max(1));
     let client = reqwest::blocking::Client::builder()
         .timeout(request_timeout)
@@ -357,21 +364,12 @@ impl TrialChild {
         log_path: &std::path::Path,
         port: u16,
         console: u16,
+        debug_telemetry: bool,
     ) -> anyhow::Result<Self> {
         let exe = std::env::current_exe()?;
         let log = std::fs::File::create(log_path)?;
         let stderr = log.try_clone()?;
-        let child = std::process::Command::new(exe)
-            .arg("--config")
-            .arg(config_path)
-            .arg("--port")
-            .arg(port.to_string())
-            .arg("--console")
-            .arg(console.to_string())
-            .arg("--log-format")
-            .arg("json")
-            .arg("--headless")
-            .arg("serve")
+        let child = build_trial_child_command(&exe, config_path, port, console, debug_telemetry)
             .stdout(std::process::Stdio::from(log))
             .stderr(std::process::Stdio::from(stderr))
             .spawn()?;
@@ -387,6 +385,31 @@ impl Drop for TrialChild {
     fn drop(&mut self) {
         terminate_child(&mut self.child);
     }
+}
+
+fn build_trial_child_command(
+    exe: &std::path::Path,
+    config_path: &std::path::Path,
+    port: u16,
+    console: u16,
+    debug_telemetry: bool,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(exe);
+    if debug_telemetry {
+        command.arg("--debug").env("SKIPPY_TELEMETRY_STDERR", "1");
+    }
+    command
+        .arg("--config")
+        .arg(config_path)
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--console")
+        .arg(console.to_string())
+        .arg("--log-format")
+        .arg("json")
+        .arg("--headless")
+        .arg("serve");
+    command
 }
 
 fn terminate_child(child: &mut std::process::Child) {
@@ -604,11 +627,17 @@ fn apply_speculative_overrides(
             spec_table["mode"] = toml_edit::value("disabled");
         }
         TuneBenchmarkSpeculativeCandidate::Mtp {
+            draft_model_path,
             draft_max_tokens,
             draft_min_tokens,
         } => {
             spec_table["strategy"] = toml_edit::value("mtp");
             spec_table["mode"] = toml_edit::value("auto");
+            if let Some(draft_model_path) = draft_model_path {
+                spec_table["draft_model_path"] = toml_edit::value(draft_model_path.as_str());
+                spec_table["draft_selection_policy"] = toml_edit::value("manual");
+                spec_table["pairing_fault"] = toml_edit::value("fail_closed");
+            }
             spec_table["draft_max_tokens"] = toml_edit::value(i64::from(*draft_max_tokens));
             spec_table["draft_min_tokens"] = toml_edit::value(i64::from(*draft_min_tokens));
         }
@@ -621,6 +650,7 @@ fn apply_speculative_overrides(
             spec_table["mode"] = toml_edit::value("draft");
             spec_table["draft_model_path"] = toml_edit::value(draft_model_path.as_str());
             spec_table["draft_selection_policy"] = toml_edit::value("manual");
+            spec_table["pairing_fault"] = toml_edit::value("fail_closed");
             spec_table["draft_max_tokens"] = toml_edit::value(i64::from(*draft_max_tokens));
             if let Some(draft_min_tokens) = draft_min_tokens {
                 spec_table["draft_min_tokens"] = toml_edit::value(i64::from(*draft_min_tokens));
@@ -781,7 +811,7 @@ fn benchmark_speculative_values(
                 candidates.push(TuneBenchmarkSpeculativeCandidate::Disabled);
             }
             mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Mtp => {
-                push_mtp_speculative_candidates(&mut candidates, request);
+                push_mtp_speculative_candidates(&mut candidates, request, prepared);
             }
             mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Draft => {
                 push_draft_speculative_candidates(&mut candidates, request, prepared);
@@ -822,25 +852,36 @@ fn push_auto_speculative_candidates(
     prepared: &crate::gpus::tune_apply::PreparedTunePlan,
 ) {
     if looks_like_mtp_target(prepared) {
-        push_mtp_speculative_candidates(candidates, request);
+        push_mtp_speculative_candidates(candidates, request, prepared);
     }
     push_draft_speculative_candidates(candidates, request, prepared);
+    push_ngram_speculative_candidates(candidates, request);
     candidates.push(TuneBenchmarkSpeculativeCandidate::Disabled);
 }
 
 fn push_mtp_speculative_candidates(
     candidates: &mut Vec<TuneBenchmarkSpeculativeCandidate>,
     request: &TuneBenchmarkRunRequest<'_>,
+    prepared: &crate::gpus::tune_apply::PreparedTunePlan,
 ) {
+    let draft_models = discover_draft_model_candidates(request, prepared);
+    let draft_models = if draft_models.is_empty() {
+        vec![None]
+    } else {
+        draft_models.into_iter().map(Some).collect()
+    };
     let max_tokens = positive_or_default(request.spec_draft_max_tokens, &[2, 3, 4]);
     let min_tokens = values_or_default_allow_zero(request.spec_draft_min_tokens, &[0]);
-    for draft_max_tokens in max_tokens {
-        for draft_min_tokens in &min_tokens {
-            if *draft_min_tokens <= draft_max_tokens {
-                candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
-                    draft_max_tokens,
-                    draft_min_tokens: *draft_min_tokens,
-                });
+    for draft_model_path in draft_models {
+        for draft_max_tokens in &max_tokens {
+            for draft_min_tokens in &min_tokens {
+                if *draft_min_tokens <= *draft_max_tokens {
+                    candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
+                        draft_model_path: draft_model_path.clone(),
+                        draft_max_tokens: *draft_max_tokens,
+                        draft_min_tokens: *draft_min_tokens,
+                    });
+                }
             }
         }
     }
@@ -1034,9 +1075,13 @@ fn dedup_speculative_candidates(
 fn speculative_candidate_sort_key(candidate: &TuneBenchmarkSpeculativeCandidate) -> String {
     match candidate {
         TuneBenchmarkSpeculativeCandidate::Mtp {
+            draft_model_path,
             draft_max_tokens,
             draft_min_tokens,
-        } => format!("0:mtp:{draft_max_tokens}:{draft_min_tokens}"),
+        } => format!(
+            "0:mtp:{}:{draft_max_tokens}:{draft_min_tokens}",
+            draft_model_path.as_deref().unwrap_or("")
+        ),
         TuneBenchmarkSpeculativeCandidate::Draft {
             draft_model_path,
             draft_max_tokens,
@@ -1167,6 +1212,7 @@ mod benchmark_tests {
             mmap: TuneBoolOrAutoValue::Disabled,
             mlock: true,
             speculative: TuneBenchmarkSpeculativeCandidate::Mtp {
+                draft_model_path: None,
                 draft_max_tokens: 3,
                 draft_min_tokens: 0,
             },
@@ -1267,8 +1313,96 @@ mod benchmark_tests {
             speculative.draft_model_path.as_deref(),
             Some("/tmp/model-draft.gguf")
         );
+        assert_eq!(speculative.pairing_fault.as_deref(), Some("fail_closed"));
         assert_eq!(speculative.draft_max_tokens, Some(8));
         assert_eq!(speculative.draft_min_tokens, Some(2));
+    }
+
+    #[test]
+    fn trial_config_renders_mtp_speculative_sidecar_candidate() {
+        let prepared = prepared_plan_fixture("/tmp/model.gguf", Vec::new(), Vec::new());
+        let candidate = TuneBenchmarkCandidate {
+            ctx_size: 4096,
+            batch: 2048,
+            ubatch: 1024,
+            cache_type_k: TuneKvCacheType::Q8_0,
+            cache_type_v: TuneKvCacheType::Q8_0,
+            mmap: TuneBoolOrAutoValue::Enabled,
+            mlock: false,
+            speculative: TuneBenchmarkSpeculativeCandidate::Mtp {
+                draft_model_path: Some("/tmp/mtp-gemma.gguf".to_string()),
+                draft_max_tokens: 3,
+                draft_min_tokens: 0,
+            },
+        };
+
+        let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
+        let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
+        let speculative = parsed
+            .models
+            .first()
+            .and_then(|model| model.speculative.as_ref())
+            .expect("speculative config exists");
+
+        assert_eq!(speculative.strategy.as_deref(), Some("mtp"));
+        assert_eq!(speculative.mode.as_deref(), Some("auto"));
+        assert_eq!(
+            speculative.draft_model_path.as_deref(),
+            Some("/tmp/mtp-gemma.gguf")
+        );
+        assert_eq!(speculative.pairing_fault.as_deref(), Some("fail_closed"));
+        assert_eq!(speculative.draft_max_tokens, Some(3));
+        assert_eq!(speculative.draft_min_tokens, Some(0));
+    }
+
+    #[test]
+    fn trial_config_pins_resolved_model_path_for_huggingface_cache_targets() {
+        let prepared = PreparedTunePlan::new(
+            ResolvedTuneTarget {
+                requested_input: "/cache/snapshot/model.gguf".to_string(),
+                canonical_model_ref: "unsloth/example-GGUF:Q4_K_M".to_string(),
+                resolved_path: std::path::PathBuf::from("/cache/blobs/model"),
+                local_source: LocalTargetSource::HuggingFaceCache {
+                    canonical_ref: "unsloth/example-GGUF@sha/model.gguf".to_string(),
+                },
+                config_matches: Vec::new(),
+                selection: TuneTargetSelection::Explicit { configured: false },
+            },
+            TunePlan {
+                target: TuneTarget {
+                    requested: "/cache/snapshot/model.gguf".to_string(),
+                    resolved: Some("/cache/blobs/model".to_string()),
+                    config_model_ref: None,
+                    derived_profile: None,
+                },
+                apply_mode: TuneApplyMode::Review,
+                field_statuses: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+        );
+        let candidate = TuneBenchmarkCandidate {
+            ctx_size: 4096,
+            batch: 2048,
+            ubatch: 1024,
+            cache_type_k: TuneKvCacheType::Q8_0,
+            cache_type_v: TuneKvCacheType::Q8_0,
+            mmap: TuneBoolOrAutoValue::Enabled,
+            mlock: false,
+            speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
+        };
+
+        let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
+        let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
+        let model = parsed.models.first().expect("model row exists");
+
+        assert_eq!(model.model, "unsloth/example-GGUF@sha/model.gguf");
+        assert_eq!(
+            model
+                .hardware
+                .as_ref()
+                .and_then(|hardware| hardware.model_path.as_deref()),
+            Some("/cache/blobs/model")
+        );
     }
 
     #[test]
@@ -1322,6 +1456,7 @@ mod benchmark_tests {
             ctx_sizes: &[4096],
             batch_sizes: &[1024],
             ubatch_sizes: &[256],
+            no_speculative_tune: true,
             ..benchmark_request_fixture(&config, &prepared)
         };
 
@@ -1369,6 +1504,7 @@ mod benchmark_tests {
             mmap_values: &[mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Disabled],
             mlock_values: &[mesh_llm_cli::benchmark::BenchmarkBool::Disabled],
             throughput_tolerance_pct: 10.0,
+            no_speculative_tune: true,
             ..benchmark_request_fixture(&config, &prepared)
         };
 
@@ -1416,16 +1552,35 @@ mod benchmark_tests {
             speculation,
             vec![
                 TuneBenchmarkSpeculativeCandidate::Mtp {
+                    draft_model_path: None,
                     draft_max_tokens: 2,
                     draft_min_tokens: 0,
                 },
                 TuneBenchmarkSpeculativeCandidate::Mtp {
+                    draft_model_path: None,
                     draft_max_tokens: 3,
                     draft_min_tokens: 0,
                 },
                 TuneBenchmarkSpeculativeCandidate::Mtp {
+                    draft_model_path: None,
                     draft_max_tokens: 4,
                     draft_min_tokens: 0,
+                },
+                TuneBenchmarkSpeculativeCandidate::Ngram {
+                    ngram_min: 12,
+                    ngram_max: 48,
+                },
+                TuneBenchmarkSpeculativeCandidate::Ngram {
+                    ngram_min: 12,
+                    ngram_max: 64,
+                },
+                TuneBenchmarkSpeculativeCandidate::Ngram {
+                    ngram_min: 24,
+                    ngram_max: 48,
+                },
+                TuneBenchmarkSpeculativeCandidate::Ngram {
+                    ngram_min: 24,
+                    ngram_max: 64,
                 },
                 TuneBenchmarkSpeculativeCandidate::Disabled,
             ]
@@ -1457,6 +1612,82 @@ mod benchmark_tests {
         assert_eq!(
             speculation,
             vec![TuneBenchmarkSpeculativeCandidate::Disabled]
+        );
+    }
+
+    #[test]
+    fn benchmark_candidates_auto_includes_ngram_fallback_for_plain_targets() {
+        let prepared = prepared_plan_fixture("/tmp/qwen-target.gguf", Vec::new(), Vec::new());
+        let prepared = [prepared];
+        let config = mesh_llm_config::MeshConfig::default();
+        let request = TuneBenchmarkRunRequest {
+            ctx_sizes: &[4096],
+            batch_sizes: &[1024],
+            ubatch_sizes: &[256],
+            mmap_values: &[mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Disabled],
+            mlock_values: &[mesh_llm_cli::benchmark::BenchmarkBool::Disabled],
+            spec_ngram_min: &[2],
+            spec_ngram_max: &[4],
+            ..benchmark_request_fixture(&config, &prepared)
+        };
+
+        let candidates = benchmark_candidates(&request, &prepared[0]);
+        let speculation = candidates
+            .iter()
+            .map(|candidate| candidate.speculative.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            speculation,
+            vec![
+                TuneBenchmarkSpeculativeCandidate::Ngram {
+                    ngram_min: 2,
+                    ngram_max: 4,
+                },
+                TuneBenchmarkSpeculativeCandidate::Disabled,
+            ]
+        );
+    }
+
+    #[test]
+    fn benchmark_candidates_auto_orders_draft_before_ngram_when_discovered() {
+        let prepared = prepared_plan_fixture("/tmp/qwen-target.gguf", Vec::new(), Vec::new());
+        let prepared = [prepared];
+        let config = mesh_llm_config::MeshConfig::default();
+        let draft_model = std::path::PathBuf::from("/tmp/qwen-draft.gguf");
+        let request = TuneBenchmarkRunRequest {
+            ctx_sizes: &[4096],
+            batch_sizes: &[1024],
+            ubatch_sizes: &[256],
+            mmap_values: &[mesh_llm_cli::benchmark::BenchmarkBoolOrAuto::Disabled],
+            mlock_values: &[mesh_llm_cli::benchmark::BenchmarkBool::Disabled],
+            spec_draft_models: std::slice::from_ref(&draft_model),
+            spec_draft_max_tokens: &[4],
+            spec_ngram_min: &[2],
+            spec_ngram_max: &[4],
+            ..benchmark_request_fixture(&config, &prepared)
+        };
+
+        let candidates = benchmark_candidates(&request, &prepared[0]);
+        let speculation = candidates
+            .iter()
+            .map(|candidate| candidate.speculative.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            speculation,
+            vec![
+                TuneBenchmarkSpeculativeCandidate::Draft {
+                    draft_model_path: "/tmp/qwen-draft.gguf".to_string(),
+                    draft_max_tokens: 4,
+                    draft_min_tokens: None,
+                },
+                TuneBenchmarkSpeculativeCandidate::Ngram {
+                    ngram_min: 2,
+                    ngram_max: 4,
+                },
+                TuneBenchmarkSpeculativeCandidate::Disabled,
+            ]
         );
     }
 
@@ -1645,8 +1876,57 @@ mod benchmark_tests {
             max_tokens: 32,
             startup_timeout_secs: 5,
             request_timeout_secs: 5,
+            debug_telemetry: false,
             prompt: "hello",
         }
+    }
+
+    #[test]
+    fn debug_telemetry_enables_child_debug_and_stderr_spans() {
+        let command = build_trial_child_command(
+            std::path::Path::new("/bin/mesh-llm"),
+            std::path::Path::new("/tmp/config.toml"),
+            9337,
+            3131,
+            true,
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.contains(&"--debug".to_string()));
+        assert_eq!(args.last().map(String::as_str), Some("serve"));
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(key, _)| *key == "SKIPPY_TELEMETRY_STDERR")
+                .and_then(|(_, value)| value)
+                .map(|value| value.to_string_lossy()),
+            Some(std::borrow::Cow::Borrowed("1"))
+        );
+    }
+
+    #[test]
+    fn child_debug_telemetry_is_opt_in() {
+        let command = build_trial_child_command(
+            std::path::Path::new("/bin/mesh-llm"),
+            std::path::Path::new("/tmp/config.toml"),
+            9337,
+            3131,
+            false,
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(!args.contains(&"--debug".to_string()));
+        assert!(
+            command
+                .get_envs()
+                .all(|(key, _)| key != "SKIPPY_TELEMETRY_STDERR")
+        );
     }
 
     fn succeeded_trial(ctx_size: u32, decode_tok_s: f64, request_ms: f64) -> TuneBenchmarkTrial {

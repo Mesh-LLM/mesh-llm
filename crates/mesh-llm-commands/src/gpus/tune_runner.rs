@@ -393,6 +393,7 @@ fn benchmark_run_request<'a>(
         max_tokens: args.max_tokens,
         startup_timeout_secs: args.startup_timeout_secs,
         request_timeout_secs: args.request_timeout_secs,
+        debug_telemetry: args.debug_telemetry,
         prompt: args.prompt,
     }
 }
@@ -425,6 +426,7 @@ struct BenchmarkTuneArgs<'a> {
     max_tokens: u32,
     startup_timeout_secs: u64,
     request_timeout_secs: u64,
+    debug_telemetry: bool,
     prompt: &'a str,
 }
 
@@ -455,6 +457,7 @@ fn benchmark_tune_runner_args(command: &BenchmarkCommand) -> TuneRunnerArgs<'_> 
             max_tokens: args.max_tokens,
             startup_timeout_secs: args.startup_timeout_secs,
             request_timeout_secs: args.request_timeout_secs,
+            debug_telemetry: args.debug_telemetry,
             prompt: &args.prompt,
         }),
         launch_args: false,

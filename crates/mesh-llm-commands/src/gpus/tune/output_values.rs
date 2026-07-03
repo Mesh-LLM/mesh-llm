@@ -1,8 +1,6 @@
 use mesh_llm_config::{
-    BoolOrAuto as OutputBoolOrAuto,
-    FlashAttentionType as OutputFlashAttentionType,
-    IntegerOrString as OutputIntegerOrString,
-    ModelConfigDefaults as OutputModelConfigDefaults,
+    BoolOrAuto as OutputBoolOrAuto, FlashAttentionType as OutputFlashAttentionType,
+    IntegerOrString as OutputIntegerOrString, ModelConfigDefaults as OutputModelConfigDefaults,
     ModelConfigEntry as OutputModelConfigEntry,
 };
 
@@ -65,9 +63,7 @@ pub(crate) fn render_recommended_value(value: &TuneRecommendedValue) -> String {
         TuneRecommendedValue::Device(value) => value.clone(),
         TuneRecommendedValue::Bool(value) => value.to_string(),
         TuneRecommendedValue::BoolOrAuto(TuneBoolOrAutoValue::Enabled) => "enabled".to_string(),
-        TuneRecommendedValue::BoolOrAuto(TuneBoolOrAutoValue::Disabled) => {
-            "disabled".to_string()
-        }
+        TuneRecommendedValue::BoolOrAuto(TuneBoolOrAutoValue::Disabled) => "disabled".to_string(),
         TuneRecommendedValue::BoolOrAuto(TuneBoolOrAutoValue::Auto) => "auto".to_string(),
     }
 }
@@ -90,9 +86,13 @@ pub(crate) fn render_benchmark_speculative(
     match speculative {
         TuneBenchmarkSpeculativeCandidate::Disabled => "disabled".to_string(),
         TuneBenchmarkSpeculativeCandidate::Mtp {
+            draft_model_path,
             draft_max_tokens,
             draft_min_tokens,
-        } => format!("mtp:min={draft_min_tokens}:max={draft_max_tokens}"),
+        } => draft_model_path.as_ref().map_or_else(
+            || format!("mtp:min={draft_min_tokens}:max={draft_max_tokens}"),
+            |path| format!("mtp:path={path}:min={draft_min_tokens}:max={draft_max_tokens}"),
+        ),
         TuneBenchmarkSpeculativeCandidate::Draft {
             draft_model_path,
             draft_max_tokens,
@@ -145,11 +145,15 @@ fn preserved_value(
         TuneField::Ubatch => preserved_model_fit_u32(model_entry, defaults, TuneField::Ubatch)
             .map(TuneRecommendedValue::Ubatch),
         TuneField::GpuLayers => preserved_gpu_layers(model_entry, defaults),
-        TuneField::FitTargetMib => preserved_fit_target_mib(model_entry, defaults)
-            .map(TuneRecommendedValue::FitTargetMib),
-        TuneField::Device => preserved_device(model_entry, defaults).map(TuneRecommendedValue::Device),
-        TuneField::Mmap => preserved_mmap(model_entry, defaults)
-            .map(TuneRecommendedValue::BoolOrAuto),
+        TuneField::FitTargetMib => {
+            preserved_fit_target_mib(model_entry, defaults).map(TuneRecommendedValue::FitTargetMib)
+        }
+        TuneField::Device => {
+            preserved_device(model_entry, defaults).map(TuneRecommendedValue::Device)
+        }
+        TuneField::Mmap => {
+            preserved_mmap(model_entry, defaults).map(TuneRecommendedValue::BoolOrAuto)
+        }
         TuneField::Mlock => preserved_mlock(model_entry, defaults).map(TuneRecommendedValue::Bool),
         TuneField::CpuMoe
         | TuneField::NCpuMoe

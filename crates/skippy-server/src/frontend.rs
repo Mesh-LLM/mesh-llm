@@ -200,6 +200,9 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         adaptive_speculative_window: false,
         ngram_min: 0,
         ngram_max: 0,
+        native_mtp_enabled: false,
+        native_mtp_max_tokens: 1,
+        native_mtp_min_tokens: 0,
         generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: args.generation_concurrency,
@@ -243,6 +246,7 @@ pub struct EmbeddedOpenAiArgs {
     pub ngram_min: usize,
     pub ngram_max: usize,
     pub native_mtp_enabled: bool,
+    pub native_mtp_draft_model_path: Option<PathBuf>,
     pub native_mtp_max_tokens: usize,
     pub native_mtp_min_tokens: usize,
     pub activation_width: i32,
@@ -486,12 +490,21 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
     if args.draft_model_path.is_some() && args.speculative_window == 0 {
         bail!("--openai-speculative-window must be greater than zero when a draft model is set");
     }
+    if args.native_mtp_draft_model_path.is_some() && !args.native_mtp_enabled {
+        bail!("native MTP must be enabled when an MTP draft model is set");
+    }
     if args.ngram_min > args.ngram_max && args.ngram_max > 0 {
         bail!("--openai-ngram-min must be less than or equal to --openai-ngram-max");
     }
     if args.config.stage_index != 0 || args.config.layer_start != 0 {
         bail!("embedded OpenAI serving is only supported on stage 0");
     }
+    attach_native_mtp_draft_model(
+        args.native_mtp_draft_model_path.as_deref(),
+        &args.runtime,
+        &args.config,
+        args.draft_n_gpu_layers,
+    )?;
     let draft = open_draft_runner(
         args.draft_model_path.as_deref(),
         &args.config,
@@ -563,6 +576,9 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         adaptive_speculative_window: args.adaptive_speculative_window,
         ngram_min: args.ngram_min,
         ngram_max: args.ngram_max,
+        native_mtp_enabled: args.native_mtp_enabled,
+        native_mtp_max_tokens: args.native_mtp_max_tokens,
+        native_mtp_min_tokens: args.native_mtp_min_tokens,
         generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: args.generation_concurrency,
@@ -606,6 +622,9 @@ struct StageOpenAiBackend {
     adaptive_speculative_window: bool,
     ngram_min: usize,
     ngram_max: usize,
+    native_mtp_enabled: bool,
+    native_mtp_max_tokens: usize,
+    native_mtp_min_tokens: usize,
     generation_limit: Arc<Semaphore>,
     generation_queue_depth: Arc<AtomicUsize>,
     generation_queue_limit: usize,
@@ -1368,6 +1387,56 @@ fn open_draft_runner(
     )?))))
 }
 
+fn attach_native_mtp_draft_model(
+    path: Option<&Path>,
+    runtime: &Arc<Mutex<RuntimeState>>,
+    config: &StageConfig,
+    n_gpu_layers: Option<i32>,
+) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if !path.is_file() {
+        bail!("MTP draft model does not exist: {}", path.display());
+    }
+    let layer_count = model_layer_count(path)?;
+    let mut runtime = runtime
+        .lock()
+        .map_err(|_| anyhow!("runtime lock poisoned"))?;
+    runtime
+        .model
+        .attach_mtp_draft_model(
+            path,
+            &RuntimeConfig {
+                stage_index: 0,
+                layer_start: 0,
+                layer_end: layer_count,
+                ctx_size: config.ctx_size,
+                lane_count: config.lane_count,
+                n_batch: None,
+                n_ubatch: None,
+                n_threads: None,
+                n_threads_batch: None,
+                n_gpu_layers: n_gpu_layers.unwrap_or(config.n_gpu_layers),
+                mmap: config.mmap,
+                mlock: config.mlock,
+                selected_backend_device: config
+                    .selected_device
+                    .as_ref()
+                    .map(|device| device.backend_device.clone()),
+                cache_type_k: skippy_runtime::GGML_TYPE_F16,
+                cache_type_v: skippy_runtime::GGML_TYPE_F16,
+                flash_attn_type: RuntimeFlashAttentionType::Auto,
+                load_mode: RuntimeLoadMode::RuntimeSlice,
+                projector_path: None,
+                include_embeddings: true,
+                include_output: true,
+                filter_tensors_on_load: false,
+            },
+        )
+        .with_context(|| format!("attach MTP draft model {}", path.display()))
+}
+
 fn model_layer_count(path: &Path) -> Result<u32> {
     let info =
         ModelInfo::open(path).with_context(|| format!("open model info {}", path.display()))?;
@@ -1776,6 +1845,9 @@ struct LocalGeneration<'a> {
     max_tokens: u32,
     sampling: &'a SamplingConfig,
     chat_sampling_metadata: Option<&'a str>,
+    native_mtp_enabled: bool,
+    native_mtp_max_tokens: usize,
+    native_mtp_min_tokens: usize,
     hook_request: Option<ChatCompletionRequest>,
     hook_runtime: Option<tokio::runtime::Handle>,
     cancellation: Option<&'a openai_frontend::CancellationToken>,
