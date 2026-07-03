@@ -32,23 +32,29 @@ use serde_json::{Map, Value};
 /// call. The remainder of the line is a JSON object `{"name", "arguments"}`.
 pub(super) const TOOL_CALL_MARKER: &str = "TOOL_CALL";
 
-/// Returns true when the chat-template metadata reports native tool-calling
-/// support. Mirrors goose's `template_result_supports_native_tool_calling`:
-/// the template must both request tool-call parsing and provide a non-empty
-/// parser name.
+/// Returns true when the loaded model's chat template natively supports tool
+/// calling.
+///
+/// This is the mesh-llm analogue of goose's
+/// `template_result_supports_native_tool_calling`. goose reads llama.cpp's
+/// `parse_tool_calls` + parser fields, but in mesh-llm's patched runtime
+/// `parse_tool_calls` only reflects whether the request carried tools (it is
+/// true for every tools request) and `chat_parser` is always a non-empty PEG
+/// structure, so neither field distinguishes a tool-capable template.
+///
+/// The signal that does distinguish them is `grammar_triggers`: when the jinja
+/// template natively describes tool calls, applying it with tools yields a
+/// tool-call grammar trigger (e.g. `<tool_call>`). A template with no native
+/// tool support (for example SmolLM2-135M) yields an empty `grammar_triggers`
+/// list. We treat a non-empty `grammar_triggers` as native tool-call support.
 pub(super) fn template_supports_native_tool_calls(metadata_json: &str) -> bool {
     let Ok(metadata) = serde_json::from_str::<Value>(metadata_json) else {
         return false;
     };
-    let parse_tool_calls = metadata
-        .get("parse_tool_calls")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let parser_non_empty = metadata
-        .get("chat_parser")
-        .and_then(Value::as_str)
-        .is_some_and(|parser| !parser.trim().is_empty());
-    parse_tool_calls && parser_non_empty
+    metadata
+        .get("grammar_triggers")
+        .and_then(Value::as_array)
+        .is_some_and(|triggers| !triggers.is_empty())
 }
 
 /// Extracts the function objects from an OpenAI `tools` array value.
@@ -381,18 +387,18 @@ mod tests {
     }
 
     #[test]
-    fn native_detection_requires_both_signals() {
+    fn native_detection_uses_grammar_triggers() {
+        // Tool-capable template: applying it yields a tool-call grammar trigger.
         assert!(template_supports_native_tool_calls(
-            r#"{"parse_tool_calls": true, "chat_parser": "hermes"}"#
+            r#"{"chat_format": 2, "grammar_triggers": [{"type": 1, "value": "<tool_call>"}]}"#
         ));
+        // Non-tool-capable template (e.g. SmolLM2-135M): empty grammar triggers.
         assert!(!template_supports_native_tool_calls(
-            r#"{"parse_tool_calls": false, "chat_parser": "hermes"}"#
+            r#"{"chat_format": 2, "grammar_triggers": []}"#
         ));
+        // Missing field or non-array is treated as non-native.
         assert!(!template_supports_native_tool_calls(
-            r#"{"parse_tool_calls": true, "chat_parser": ""}"#
-        ));
-        assert!(!template_supports_native_tool_calls(
-            r#"{"parse_tool_calls": true}"#
+            r#"{"chat_format": 2}"#
         ));
         assert!(!template_supports_native_tool_calls("not json"));
     }

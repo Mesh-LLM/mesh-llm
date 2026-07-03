@@ -24,14 +24,24 @@ model name.
 ## Detection
 
 Emulation is gated on **template capability, not model size**. When the chat
-template is applied, the patched llama.cpp staged runtime returns
-`metadata_json` containing `parse_tool_calls` and `chat_parser`. A template
-supports native tool calling when `parse_tool_calls == true` **and**
-`chat_parser` is non-empty — the same signal goose checks
-(`template_result_supports_native_tool_calling`).
+template is applied with tools, the patched llama.cpp staged runtime returns
+`metadata_json`. A tool-capable jinja template yields a tool-call **grammar
+trigger** (for example `<tool_call>`), so `grammar_triggers` is non-empty; a
+template with no native tool support (for example SmolLM2-135M) yields an empty
+`grammar_triggers` list. Native support is therefore detected as a non-empty
+`grammar_triggers`.
 
-A lean, tool-trained model (for example Qwen3-0.6B with a small toolset) keeps
-native tool calling and sees **zero behavior change**.
+This is the mesh-llm analogue of goose's
+`template_result_supports_native_tool_calling`. goose reads llama.cpp's
+`parse_tool_calls` + parser fields, but in mesh-llm's patched runtime
+`parse_tool_calls` is true for *every* tools request and `chat_parser` is always
+a non-empty PEG structure, so neither distinguishes a tool-capable template.
+`grammar_triggers` is the field that does.
+
+A tool-trained model whose template emits a tool-call grammar trigger (for
+example Qwen2.5-0.5B and Qwen3.5-0.8B) keeps native tool calling and sees **zero
+behavior change**; a model whose template has no tool grammar (for example
+SmolLM2-135M) is routed through emulation.
 
 ## Request adaptation
 
