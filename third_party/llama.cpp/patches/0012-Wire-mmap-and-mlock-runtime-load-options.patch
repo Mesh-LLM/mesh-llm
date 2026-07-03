@@ -4,13 +4,12 @@ Date: Wed, 1 Jul 2026 23:52:26 -0400
 Subject: [PATCH] Wire mmap and mlock runtime load options
 
 ---
- include/skippy.h        |  3 +++
- include/skippy/common.h |  2 +-
- src/skippy.cpp          | 16 ++++++++++++++++
- 3 files changed, 20 insertions(+), 1 deletion(-)
+ include/skippy.h |  3 +++
+ src/skippy.cpp   | 16 ++++++++++++++++
+ 2 files changed, 19 insertions(+)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 0e94e95bd..ba0f1c6e5 100644
+index a298bd70d..e2abadb43 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -60,6 +60,9 @@ struct skippy_runtime_config {
@@ -23,19 +22,6 @@ index 0e94e95bd..ba0f1c6e5 100644
      int32_t cache_type_k;
      int32_t cache_type_v;
      int32_t flash_attn_type;
-diff --git a/include/skippy/common.h b/include/skippy/common.h
-index cfb4a8fa9..0e1f03511 100644
---- a/include/skippy/common.h
-+++ b/include/skippy/common.h
-@@ -26,7 +26,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 27
-+#define SKIPPY_ABI_VERSION_PATCH 28
- 
- enum skippy_feature {
-     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
 index e81f37864..fe49f366e 100644
 --- a/src/skippy.cpp
@@ -43,7 +29,7 @@ index e81f37864..fe49f366e 100644
 @@ -878,6 +878,20 @@ static enum skippy_status skippy_apply_selected_backend_device(
      return SKIPPY_STATUS_OK;
  }
- 
+
 +static void skippy_apply_model_load_memory_config(
 +        const struct skippy_runtime_config * config,
 +        llama_model_params & params) {
@@ -79,4 +65,3 @@ index e81f37864..fe49f366e 100644
          }
 -- 
 2.53.0
-
