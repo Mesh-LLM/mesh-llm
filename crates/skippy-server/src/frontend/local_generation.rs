@@ -528,7 +528,7 @@ impl StageOpenAiBackend {
                 let token_signal;
                 let signal_window;
                 let decode_call_timer = PhaseTimer::start();
-                let native_mtp_draft;
+                let mut native_mtp_draft;
                 let token_batch_size;
                 let token_batch_wait_ms;
                 let token_runtime_lock_wait_ms;
@@ -571,6 +571,14 @@ impl StageOpenAiBackend {
                     token_batch_wait_ms = outcome.batch_wait_ms;
                     token_runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
                     token_runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+                }
+                if native_mtp_draft
+                    .as_ref()
+                    .is_some_and(|draft: &NativeMtpDraft| {
+                        draft.tokens.len() < native_mtp_options.min_draft_tokens
+                    })
+                {
+                    native_mtp_draft = None;
                 }
                 let is_first_draft = decoded_tokens == 0;
                 let draft_origin = if is_first_draft {

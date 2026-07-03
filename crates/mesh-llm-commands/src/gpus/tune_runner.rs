@@ -77,23 +77,21 @@ fn run_tune_request_with_writer(
         args.benchmark
             .as_ref()
             .map(|benchmark| benchmark_run_request(&config, &prepared, benchmark)),
-    );
+    )?;
+    let output_context = RunnerOutputContext {
+        command: args.command,
+        render_json,
+        launch_args: args.launch_args,
+        config: &config,
+        apply_mode,
+        prepared: &prepared,
+        target_failures: &target_failures,
+        global_blockers: &[],
+        benchmark_reports: &benchmark_reports,
+    };
 
     if !global_safety_errors.is_empty() {
-        emit_runner_output(
-            writer,
-            RunnerOutputContext {
-                command: args.command,
-                render_json,
-                launch_args: args.launch_args,
-                config: &config,
-                apply_mode,
-                prepared: &prepared,
-                target_failures: &target_failures,
-                global_blockers: &global_safety_errors,
-                benchmark_reports: &benchmark_reports,
-            },
-        )?;
+        emit_runner_output_for(writer, output_context, &global_safety_errors)?;
         let detail = global_safety_errors
             .into_iter()
             .map(|problem| format!("  - {problem}"))
@@ -122,20 +120,7 @@ fn run_tune_request_with_writer(
         };
         let written = tune_apply::apply_prepared_tune_plans(&store, &prepared)?;
         if written == 0 {
-            emit_runner_output(
-                writer,
-                RunnerOutputContext {
-                    command: args.command,
-                    render_json,
-                    launch_args: args.launch_args,
-                    config: &config,
-                    apply_mode,
-                    prepared: &prepared,
-                    target_failures: &target_failures,
-                    global_blockers: &[],
-                    benchmark_reports: &benchmark_reports,
-                },
-            )?;
+            emit_runner_output_for(writer, output_context, &[])?;
             let mut apply_failures = target_failures
                 .into_iter()
                 .map(|failure| failure.reason)
@@ -157,20 +142,7 @@ fn run_tune_request_with_writer(
             );
         }
     } else if prepared.is_empty() && !target_failures.is_empty() {
-        emit_runner_output(
-            writer,
-            RunnerOutputContext {
-                command: args.command,
-                render_json,
-                launch_args: args.launch_args,
-                config: &config,
-                apply_mode,
-                prepared: &prepared,
-                target_failures: &target_failures,
-                global_blockers: &[],
-                benchmark_reports: &benchmark_reports,
-            },
-        )?;
+        emit_runner_output_for(writer, output_context, &[])?;
         let detail = target_failures
             .into_iter()
             .map(|failure| format!("  - {}", failure.reason))
@@ -182,20 +154,7 @@ fn run_tune_request_with_writer(
         );
     }
 
-    emit_runner_output(
-        writer,
-        RunnerOutputContext {
-            command: args.command,
-            render_json,
-            launch_args: args.launch_args,
-            config: &config,
-            apply_mode,
-            prepared: &prepared,
-            target_failures: &target_failures,
-            global_blockers: &[],
-            benchmark_reports: &benchmark_reports,
-        },
-    )?;
+    emit_runner_output_for(writer, output_context, &[])?;
     Ok(())
 }
 
@@ -463,6 +422,7 @@ fn benchmark_tune_runner_args(command: &BenchmarkCommand) -> TuneRunnerArgs<'_> 
     }
 }
 
+#[derive(Clone, Copy)]
 struct RunnerOutputContext<'a> {
     command: &'static str,
     render_json: bool,
@@ -492,17 +452,32 @@ fn emit_runner_output(writer: &mut impl Write, context: RunnerOutputContext<'_>)
     )
 }
 
+fn emit_runner_output_for(
+    writer: &mut impl Write,
+    base: RunnerOutputContext<'_>,
+    global_blockers: &[String],
+) -> Result<()> {
+    emit_runner_output(
+        writer,
+        RunnerOutputContext {
+            global_blockers,
+            ..base
+        },
+    )
+}
+
 fn maybe_run_benchmark_reports(
     request: Option<tune::TuneBenchmarkRunRequest<'_>>,
-) -> Vec<tune::TuneBenchmarkTargetReport> {
-    request
-        .map(run_benchmark_plans_on_plain_thread)
-        .unwrap_or_default()
+) -> Result<Vec<tune::TuneBenchmarkTargetReport>> {
+    match request {
+        Some(request) => run_benchmark_plans_on_plain_thread(request),
+        None => Ok(Vec::new()),
+    }
 }
 
 fn run_benchmark_plans_on_plain_thread(
     request: tune::TuneBenchmarkRunRequest<'_>,
-) -> Vec<tune::TuneBenchmarkTargetReport> {
+) -> Result<Vec<tune::TuneBenchmarkTargetReport>> {
     std::thread::scope(|scope| {
         let handle = scope.spawn(move || tune::run_benchmark_plans(request));
         handle

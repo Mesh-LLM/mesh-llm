@@ -7,7 +7,6 @@ use skippy_runtime::package::{
     PackageWindowPolicyInfo,
 };
 use std::collections::BTreeMap;
-use std::io::Write;
 
 fn native_mtp_generation() -> PackageGenerationInfo {
     let mut strategies = BTreeMap::new();
@@ -213,12 +212,7 @@ strategy = "mtp"
 
 #[test]
 fn speculative_strategy_native_mtp_accepts_external_mtp_sidecar() {
-    let mut draft_file = tempfile::Builder::new()
-        .prefix("mtp-gemma-")
-        .suffix(".gguf")
-        .tempfile()
-        .expect("draft tempfile");
-    draft_file.write_all(b"GGUF").expect("write draft marker");
+    let draft_file = temp_model_file_with_tensor_names(&["blk.10.nextn.eh_proj.weight"], None);
     let draft_path = draft_file.path().display().to_string();
     let mesh_config = parse_config(&format!(
         r#"

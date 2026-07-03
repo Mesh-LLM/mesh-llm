@@ -23,21 +23,21 @@ pub(crate) struct TuneBenchmarkRunRequest<'a> {
 
 pub(crate) fn run_benchmark_plans(
     request: TuneBenchmarkRunRequest<'_>,
-) -> Vec<TuneBenchmarkTargetReport> {
+) -> anyhow::Result<Vec<TuneBenchmarkTargetReport>> {
     // Validate throughput tolerance before proceeding; debug_assert is not
     // enough for release builds.
     if !request.throughput_tolerance_pct.is_finite() || request.throughput_tolerance_pct < 0.0 {
-        eprintln!(
-            "benchmark tune: invalid --throughput-tolerance-pct value {:.3}; using default 3.0%",
-            request.throughput_tolerance_pct,
+        anyhow::bail!(
+            "benchmark tune: invalid throughput_tolerance_pct {}; expected a finite non-negative value",
+            request.throughput_tolerance_pct
         );
     }
-    request
+    Ok(request
         .prepared
         .iter()
         .filter(|prepared| !plan_has_errors(&prepared.plan))
         .map(|prepared| run_target_benchmarks(&request, prepared))
-        .collect()
+        .collect())
 }
 
 fn run_target_benchmarks(
@@ -573,7 +573,9 @@ fn trial_config(
     doc["version"] = toml_edit::value(1);
 
     let mut table = toml_edit::Table::new();
-    table["model"] = toml_edit::value(trial_model_ref(prepared));
+    table["model"] = toml_edit::value(crate::gpus::tune_apply::appended_model_ref(
+        &prepared.target,
+    ));
     crate::gpus::tune_apply::apply_config_edits(&mut table, &prepared.plan.config_edits())?;
     apply_resolved_model_path(&mut table, prepared)?;
     apply_candidate_overrides(&mut table, candidate)?;
@@ -582,17 +584,6 @@ fn trial_config(
     models.push(table);
     doc["models"] = toml_edit::Item::ArrayOfTables(models);
     Ok(doc.to_string())
-}
-
-fn trial_model_ref(prepared: &crate::gpus::tune_apply::PreparedTunePlan) -> String {
-    match &prepared.target.local_source {
-        crate::gpus::tune_resolver::LocalTargetSource::HuggingFaceCache { canonical_ref } => {
-            canonical_ref.clone()
-        }
-        crate::gpus::tune_resolver::LocalTargetSource::FilesystemPath { .. } => {
-            prepared.target.resolved_path.display().to_string()
-        }
-    }
 }
 
 fn apply_resolved_model_path(
@@ -615,7 +606,9 @@ fn apply_candidate_overrides(
     model_fit["cache_type_k"] = toml_edit::value(render_cache_type(candidate.cache_type_k));
     model_fit["cache_type_v"] = toml_edit::value(render_cache_type(candidate.cache_type_v));
     let hardware = ensure_trial_subtable(table, "hardware")?;
-    hardware["mmap"] = toml_edit::value(render_bool_or_auto(candidate.mmap));
+    hardware["mmap"] = toml_edit::value(crate::gpus::tune_apply::render_bool_or_auto(
+        candidate.mmap,
+    ));
     hardware["mlock"] = toml_edit::value(candidate.mlock);
     apply_speculative_overrides(table, &candidate.speculative)?;
     Ok(())
@@ -1139,14 +1132,6 @@ fn recommended_cache_type(plan: &TunePlan, field: TuneField) -> Option<TuneKvCac
     })
 }
 
-fn render_bool_or_auto(value: TuneBoolOrAutoValue) -> toml_edit::Value {
-    match value {
-        TuneBoolOrAutoValue::Enabled => toml_edit::Value::from(true),
-        TuneBoolOrAutoValue::Disabled => toml_edit::Value::from(false),
-        TuneBoolOrAutoValue::Auto => toml_edit::Value::from("auto"),
-    }
-}
-
 fn plan_has_errors(plan: &TunePlan) -> bool {
     plan.field_statuses
         .iter()
@@ -1603,7 +1588,10 @@ mod benchmark_tests {
 
     #[test]
     fn benchmark_candidates_auto_includes_ngram_fallback_for_plain_targets() {
-        let prepared = prepared_plan_fixture("/tmp/qwen-target.gguf", Vec::new(), Vec::new());
+        let target_dir = tempfile::tempdir().expect("target tempdir");
+        let target_path = target_dir.path().join("qwen-target.gguf");
+        let prepared =
+            prepared_plan_fixture(&target_path.display().to_string(), Vec::new(), Vec::new());
         let prepared = [prepared];
         let config = mesh_llm_config::MeshConfig::default();
         let request = TuneBenchmarkRunRequest {
@@ -1637,10 +1625,13 @@ mod benchmark_tests {
 
     #[test]
     fn benchmark_candidates_auto_orders_draft_before_ngram_when_discovered() {
-        let prepared = prepared_plan_fixture("/tmp/qwen-target.gguf", Vec::new(), Vec::new());
+        let target_dir = tempfile::tempdir().expect("target tempdir");
+        let target_path = target_dir.path().join("qwen-target.gguf");
+        let prepared =
+            prepared_plan_fixture(&target_path.display().to_string(), Vec::new(), Vec::new());
         let prepared = [prepared];
         let config = mesh_llm_config::MeshConfig::default();
-        let draft_model = std::path::PathBuf::from("/tmp/qwen-draft.gguf");
+        let draft_model = target_dir.path().join("qwen-draft.gguf");
         let request = TuneBenchmarkRunRequest {
             ctx_sizes: &[4096],
             batch_sizes: &[1024],
@@ -1664,7 +1655,7 @@ mod benchmark_tests {
             speculation,
             vec![
                 TuneBenchmarkSpeculativeCandidate::Draft {
-                    draft_model_path: "/tmp/qwen-draft.gguf".to_string(),
+                    draft_model_path: draft_model.display().to_string(),
                     draft_max_tokens: 4,
                     draft_min_tokens: None,
                 },
@@ -1679,10 +1670,13 @@ mod benchmark_tests {
 
     #[test]
     fn benchmark_candidates_explicit_speculative_sweeps_draft_and_ngram_settings() {
-        let prepared = prepared_plan_fixture("/tmp/qwen-target.gguf", Vec::new(), Vec::new());
+        let target_dir = tempfile::tempdir().expect("target tempdir");
+        let target_path = target_dir.path().join("qwen-target.gguf");
+        let prepared =
+            prepared_plan_fixture(&target_path.display().to_string(), Vec::new(), Vec::new());
         let prepared = [prepared];
         let config = mesh_llm_config::MeshConfig::default();
-        let draft_model = std::path::PathBuf::from("/tmp/qwen-draft.gguf");
+        let draft_model = target_dir.path().join("qwen-draft.gguf");
         let request = TuneBenchmarkRunRequest {
             ctx_sizes: &[4096],
             batch_sizes: &[1024],
@@ -1711,7 +1705,7 @@ mod benchmark_tests {
             speculation,
             vec![
                 TuneBenchmarkSpeculativeCandidate::Draft {
-                    draft_model_path: "/tmp/qwen-draft.gguf".to_string(),
+                    draft_model_path: draft_model.display().to_string(),
                     draft_max_tokens: 4,
                     draft_min_tokens: Some(2),
                 },

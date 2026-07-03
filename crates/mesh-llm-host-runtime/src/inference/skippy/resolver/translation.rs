@@ -356,6 +356,7 @@ impl ResolvedEmbeddedOpenAiArgs {
         default_max_tokens: u32,
         generation_concurrency: usize,
         wire_dtype: skippy_protocol::binary::WireActivationDType,
+        native_mtp_enabled: bool,
     ) -> Self {
         Self {
             model_id: Some(model_id),
@@ -374,9 +375,9 @@ impl ResolvedEmbeddedOpenAiArgs {
             draft_n_gpu_layers: None,
             ngram_min: 0,
             ngram_max: 0,
-            native_mtp_enabled: true,
+            native_mtp_enabled,
             native_mtp_draft_model_path: None,
-            native_mtp_max_tokens: 3,
+            native_mtp_max_tokens: if native_mtp_enabled { 3 } else { 0 },
             native_mtp_min_tokens: 0,
             activation_width: 0,
             wire_dtype,
@@ -391,6 +392,7 @@ impl ResolvedEmbeddedOpenAiArgs {
         generation_concurrency: usize,
         activation_width: i32,
         wire_dtype: skippy_protocol::binary::WireActivationDType,
+        native_mtp_enabled: bool,
     ) -> Self {
         Self {
             model_id,
@@ -409,9 +411,9 @@ impl ResolvedEmbeddedOpenAiArgs {
             draft_n_gpu_layers: None,
             ngram_min: 0,
             ngram_max: 0,
-            native_mtp_enabled: true,
+            native_mtp_enabled,
             native_mtp_draft_model_path: None,
-            native_mtp_max_tokens: 3,
+            native_mtp_max_tokens: if native_mtp_enabled { 3 } else { 0 },
             native_mtp_min_tokens: 0,
             activation_width,
             wire_dtype,

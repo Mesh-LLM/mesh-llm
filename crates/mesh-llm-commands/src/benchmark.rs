@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use mesh_llm_cli::benchmark::{BenchmarkCommand, PromptImportSource};
 use mesh_llm_system::benchmark_prompts::{self, ImportPromptsArgs};
 use std::path::Path;
@@ -9,7 +9,20 @@ pub async fn dispatch_benchmark_command(
 ) -> Result<()> {
     match command {
         BenchmarkCommand::Tune(_) => {
-            crate::gpus::tune_runner::run_benchmark_tune_command(config_path, command)
+            // Benchmark tune trials block synchronously (HTTP polling, process
+            // spawn/wait) for potentially many minutes. Run them on a blocking
+            // thread pool so this does not tie up a Tokio worker thread for the
+            // whole run.
+            let config_path = config_path.map(|path| path.to_path_buf());
+            let command = command.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::gpus::tune_runner::run_benchmark_tune_command(
+                    config_path.as_deref(),
+                    &command,
+                )
+            })
+            .await
+            .context("benchmark tune task panicked")?
         }
         BenchmarkCommand::ImportPrompts {
             source,

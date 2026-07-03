@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum BenchmarkCommand {
     /// Tune model-serving settings by running isolated throughput trials.
     Tune(Box<BenchmarkTuneCommand>),
@@ -23,7 +23,7 @@ pub enum BenchmarkCommand {
     },
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct BenchmarkTuneCommand {
     /// Tune exactly one local/configured model target.
     #[arg(long, conflicts_with = "models")]

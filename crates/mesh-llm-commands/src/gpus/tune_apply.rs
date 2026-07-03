@@ -130,7 +130,7 @@ fn resolve_model_table<'a>(
     })
 }
 
-fn appended_model_ref(target: &ResolvedTuneTarget) -> String {
+pub(crate) fn appended_model_ref(target: &ResolvedTuneTarget) -> String {
     match &target.local_source {
         LocalTargetSource::HuggingFaceCache { canonical_ref } => canonical_ref.clone(),
         LocalTargetSource::FilesystemPath { .. } => target.resolved_path.display().to_string(),
@@ -204,7 +204,7 @@ fn render_gpu_layers(value_kind: TuneGpuLayersValue) -> i64 {
     }
 }
 
-fn render_bool_or_auto(value_kind: TuneBoolOrAutoValue) -> toml_edit::Value {
+pub(crate) fn render_bool_or_auto(value_kind: TuneBoolOrAutoValue) -> toml_edit::Value {
     match value_kind {
         TuneBoolOrAutoValue::Enabled => toml_edit::Value::from(true),
         TuneBoolOrAutoValue::Disabled => toml_edit::Value::from(false),

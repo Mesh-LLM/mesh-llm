@@ -32,8 +32,9 @@ use skippy_runtime::ModelInfo;
 use skippy_server::{
     DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs, EmbeddedRuntimeOptions, EmbeddedRuntimeStatus,
     EmbeddedServerHandle, EmbeddedState, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
-    OpenAiGuardrailsTarget, SkippyRuntimeHandle, binary_transport::PredictionReturnListener,
-    binary_transport::WireCondition, embedded_openai_backend, telemetry::Telemetry,
+    OpenAiGuardrailsTarget, SkippyRuntimeHandle, binary_transport::PredictionReturnHub,
+    binary_transport::PredictionReturnListener, binary_transport::WireCondition,
+    embedded_openai_backend, runtime_state::RuntimeState, telemetry::Telemetry,
     telemetry::TelemetryLevel,
 };
 
@@ -387,6 +388,54 @@ impl SkippyHttpHandle {
     }
 }
 
+/// Builds `EmbeddedOpenAiArgs`, filling most fields from `embedded_args` and
+/// taking only the handful that differ per load path as parameters.
+fn embedded_openai_args_from(
+    embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
+    config: StageConfig,
+    runtime: Arc<Mutex<RuntimeState>>,
+    prediction_returns: Option<Arc<PredictionReturnHub>>,
+    telemetry: Telemetry,
+    hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+) -> Result<EmbeddedOpenAiArgs> {
+    Ok(EmbeddedOpenAiArgs {
+        bind_addr: "127.0.0.1:0"
+            .parse()
+            .expect("static bind address should parse"),
+        config,
+        runtime,
+        model_id: embedded_args.model_id,
+        default_max_tokens: embedded_args.default_max_tokens,
+        request_defaults: embedded_args.request_defaults,
+        generation_concurrency: embedded_args.generation_concurrency,
+        prefill_chunk_size: embedded_args.prefill_chunk_size,
+        prefill_chunk_policy: embedded_args.prefill_chunk_policy,
+        prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
+        prefill_adaptive_start: embedded_args.prefill_adaptive_start,
+        prefill_adaptive_step: embedded_args.prefill_adaptive_step,
+        prefill_adaptive_max: embedded_args.prefill_adaptive_max,
+        draft_model_path: embedded_args.draft_model_path,
+        speculative_window: embedded_args.speculative_window,
+        adaptive_speculative_window: embedded_args.adaptive_speculative_window,
+        draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
+        ngram_min: embedded_args.ngram_min,
+        ngram_max: embedded_args.ngram_max,
+        native_mtp_enabled: embedded_args.native_mtp_enabled,
+        native_mtp_draft_model_path: embedded_args.native_mtp_draft_model_path,
+        native_mtp_max_tokens: embedded_args.native_mtp_max_tokens,
+        native_mtp_min_tokens: embedded_args.native_mtp_min_tokens,
+        activation_width: embedded_args.activation_width,
+        wire_dtype: embedded_args.wire_dtype,
+        reply_credit_limit: embedded_args.reply_credit_limit,
+        downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
+        downstream_wire_condition: WireCondition::new(0.0, None)?,
+        prediction_returns,
+        telemetry,
+        hook_policy,
+        openai_guardrails: None,
+    })
+}
+
 impl SkippyModelHandle {
     pub(crate) fn load(options: SkippyModelLoadOptions) -> Result<Self> {
         Self::load_with_hooks(options, None, survey::SurveyTelemetry::disabled())
@@ -427,45 +476,18 @@ impl SkippyModelHandle {
                 options.default_max_tokens,
                 options.generation_concurrency,
                 family_policy.activation_wire_dtype.into(),
+                options.native_mtp_enabled,
             )
         });
         let openai_guardrails = options.openai_guardrails.clone();
-        let binding = embedded_openai_backend(EmbeddedOpenAiArgs {
-            bind_addr: "127.0.0.1:0"
-                .parse()
-                .expect("static bind address should parse"),
-            config: stage_config.clone(),
-            runtime: runtime.runtime(),
-            model_id: embedded_args.model_id,
-            default_max_tokens: embedded_args.default_max_tokens,
-            request_defaults: embedded_args.request_defaults,
-            generation_concurrency: embedded_args.generation_concurrency,
-            prefill_chunk_size: embedded_args.prefill_chunk_size,
-            prefill_chunk_policy: embedded_args.prefill_chunk_policy,
-            prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
-            prefill_adaptive_start: embedded_args.prefill_adaptive_start,
-            prefill_adaptive_step: embedded_args.prefill_adaptive_step,
-            prefill_adaptive_max: embedded_args.prefill_adaptive_max,
-            draft_model_path: embedded_args.draft_model_path,
-            speculative_window: embedded_args.speculative_window,
-            adaptive_speculative_window: embedded_args.adaptive_speculative_window,
-            draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
-            ngram_min: embedded_args.ngram_min,
-            ngram_max: embedded_args.ngram_max,
-            native_mtp_enabled: embedded_args.native_mtp_enabled,
-            native_mtp_draft_model_path: embedded_args.native_mtp_draft_model_path,
-            native_mtp_max_tokens: embedded_args.native_mtp_max_tokens,
-            native_mtp_min_tokens: embedded_args.native_mtp_min_tokens,
-            activation_width: embedded_args.activation_width,
-            wire_dtype: embedded_args.wire_dtype,
-            reply_credit_limit: embedded_args.reply_credit_limit,
-            downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
-            downstream_wire_condition: WireCondition::new(0.0, None)?,
-            prediction_returns: None,
+        let binding = embedded_openai_backend(embedded_openai_args_from(
+            embedded_args,
+            stage_config.clone(),
+            runtime.runtime(),
+            None,
             telemetry,
             hook_policy,
-            openai_guardrails: None,
-        })
+        )?)
         .context("construct skippy OpenAI backend")?;
         let backend = wrap_host_guardrail_backend(
             binding.backend,
@@ -528,45 +550,18 @@ impl SkippyModelHandle {
                 options.default_max_tokens,
                 options.generation_concurrency,
                 family_policy.activation_wire_dtype.into(),
+                options.native_mtp_enabled,
             )
         });
         let openai_guardrails = options.openai_guardrails.clone();
-        let binding = embedded_openai_backend(EmbeddedOpenAiArgs {
-            bind_addr: "127.0.0.1:0"
-                .parse()
-                .expect("static bind address should parse"),
-            config: stage_config.clone(),
-            runtime: runtime.runtime(),
-            model_id: embedded_args.model_id,
-            default_max_tokens: embedded_args.default_max_tokens,
-            request_defaults: embedded_args.request_defaults,
-            generation_concurrency: embedded_args.generation_concurrency,
-            prefill_chunk_size: embedded_args.prefill_chunk_size,
-            prefill_chunk_policy: embedded_args.prefill_chunk_policy,
-            prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
-            prefill_adaptive_start: embedded_args.prefill_adaptive_start,
-            prefill_adaptive_step: embedded_args.prefill_adaptive_step,
-            prefill_adaptive_max: embedded_args.prefill_adaptive_max,
-            draft_model_path: embedded_args.draft_model_path,
-            speculative_window: embedded_args.speculative_window,
-            adaptive_speculative_window: embedded_args.adaptive_speculative_window,
-            draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
-            ngram_min: embedded_args.ngram_min,
-            ngram_max: embedded_args.ngram_max,
-            native_mtp_enabled: embedded_args.native_mtp_enabled,
-            native_mtp_draft_model_path: embedded_args.native_mtp_draft_model_path,
-            native_mtp_max_tokens: embedded_args.native_mtp_max_tokens,
-            native_mtp_min_tokens: embedded_args.native_mtp_min_tokens,
-            activation_width: embedded_args.activation_width,
-            wire_dtype: embedded_args.wire_dtype,
-            reply_credit_limit: embedded_args.reply_credit_limit,
-            downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
-            downstream_wire_condition: WireCondition::new(0.0, None)?,
-            prediction_returns: None,
+        let binding = embedded_openai_backend(embedded_openai_args_from(
+            embedded_args,
+            stage_config.clone(),
+            runtime.runtime(),
+            None,
             telemetry,
             hook_policy,
-            openai_guardrails: None,
-        })
+        )?)
         .context("construct skippy OpenAI backend")?;
         let backend = wrap_host_guardrail_backend(
             binding.backend,
@@ -603,6 +598,7 @@ impl SkippyModelHandle {
         let wire_dtype = family_policy_for_stage_config(&config)
             .activation_wire_dtype
             .into();
+        let native_mtp_enabled = config.native_mtp_enabled;
         Self::load_stage0_config_with_openai_args(
             config,
             resolver::ResolvedEmbeddedOpenAiArgs::embedded_stage_defaults(
@@ -611,6 +607,7 @@ impl SkippyModelHandle {
                 generation_concurrency,
                 activation_width,
                 wire_dtype,
+                native_mtp_enabled,
             ),
             hook_policy,
             telemetry,
@@ -708,42 +705,14 @@ impl SkippyModelHandle {
         let prediction_returns = prediction_return_listener
             .as_ref()
             .map(PredictionReturnListener::hub);
-        let binding = embedded_openai_backend(EmbeddedOpenAiArgs {
-            bind_addr: "127.0.0.1:0"
-                .parse()
-                .expect("static bind address should parse"),
-            config: runtime_config.clone(),
-            runtime: runtime.runtime(),
-            model_id: embedded_args.model_id,
-            default_max_tokens: embedded_args.default_max_tokens,
-            request_defaults: embedded_args.request_defaults,
-            generation_concurrency: embedded_args.generation_concurrency,
-            prefill_chunk_size: embedded_args.prefill_chunk_size,
-            prefill_chunk_policy: embedded_args.prefill_chunk_policy,
-            prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
-            prefill_adaptive_start: embedded_args.prefill_adaptive_start,
-            prefill_adaptive_step: embedded_args.prefill_adaptive_step,
-            prefill_adaptive_max: embedded_args.prefill_adaptive_max,
-            draft_model_path: embedded_args.draft_model_path,
-            speculative_window: embedded_args.speculative_window,
-            adaptive_speculative_window: embedded_args.adaptive_speculative_window,
-            draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
-            ngram_min: embedded_args.ngram_min,
-            ngram_max: embedded_args.ngram_max,
-            native_mtp_enabled: embedded_args.native_mtp_enabled,
-            native_mtp_draft_model_path: embedded_args.native_mtp_draft_model_path,
-            native_mtp_max_tokens: embedded_args.native_mtp_max_tokens,
-            native_mtp_min_tokens: embedded_args.native_mtp_min_tokens,
-            activation_width: embedded_args.activation_width,
-            wire_dtype: embedded_args.wire_dtype,
-            reply_credit_limit: embedded_args.reply_credit_limit,
-            downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
-            downstream_wire_condition: WireCondition::new(0.0, None)?,
+        let binding = embedded_openai_backend(embedded_openai_args_from(
+            embedded_args,
+            runtime_config.clone(),
+            runtime.runtime(),
             prediction_returns,
             telemetry,
             hook_policy,
-            openai_guardrails: None,
-        })
+        )?)
         .context("construct skippy stage 0 OpenAI backend")?;
         let backend = wrap_host_guardrail_backend(
             binding.backend,
@@ -836,42 +805,14 @@ impl SkippyModelHandle {
         let prediction_returns = prediction_return_listener
             .as_ref()
             .map(PredictionReturnListener::hub);
-        let binding = embedded_openai_backend(EmbeddedOpenAiArgs {
-            bind_addr: "127.0.0.1:0"
-                .parse()
-                .expect("static bind address should parse"),
-            config: runtime_config.clone(),
-            runtime: runtime.runtime(),
-            model_id: embedded_args.model_id,
-            default_max_tokens: embedded_args.default_max_tokens,
-            request_defaults: embedded_args.request_defaults,
-            generation_concurrency: embedded_args.generation_concurrency,
-            prefill_chunk_size: embedded_args.prefill_chunk_size,
-            prefill_chunk_policy: embedded_args.prefill_chunk_policy,
-            prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
-            prefill_adaptive_start: embedded_args.prefill_adaptive_start,
-            prefill_adaptive_step: embedded_args.prefill_adaptive_step,
-            prefill_adaptive_max: embedded_args.prefill_adaptive_max,
-            draft_model_path: embedded_args.draft_model_path,
-            speculative_window: embedded_args.speculative_window,
-            adaptive_speculative_window: embedded_args.adaptive_speculative_window,
-            draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
-            ngram_min: embedded_args.ngram_min,
-            ngram_max: embedded_args.ngram_max,
-            native_mtp_enabled: embedded_args.native_mtp_enabled,
-            native_mtp_draft_model_path: embedded_args.native_mtp_draft_model_path,
-            native_mtp_max_tokens: embedded_args.native_mtp_max_tokens,
-            native_mtp_min_tokens: embedded_args.native_mtp_min_tokens,
-            activation_width: embedded_args.activation_width,
-            wire_dtype: embedded_args.wire_dtype,
-            reply_credit_limit: embedded_args.reply_credit_limit,
-            downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
-            downstream_wire_condition: WireCondition::new(0.0, None)?,
+        let binding = embedded_openai_backend(embedded_openai_args_from(
+            embedded_args,
+            runtime_config.clone(),
+            runtime.runtime(),
             prediction_returns,
             telemetry,
             hook_policy,
-            openai_guardrails: None,
-        })
+        )?)
         .context("construct skippy stage 0 OpenAI backend")?;
         let backend = wrap_host_guardrail_backend(
             binding.backend,

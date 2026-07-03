@@ -412,7 +412,15 @@ struct GgufTensorInfo {
 
 /// Scan a GGUF file header and return compact structural metadata.
 /// Reads only the KV section, never tensor data. Returns None on any parse failure.
-pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
+struct GgufHeader {
+    file: std::fs::File,
+    n_tensors: usize,
+    n_kv: usize,
+}
+
+/// Opens `path`, validates the GGUF magic/version, and reads the tensor/KV
+/// header counts shared by every GGUF scan entry point below.
+fn open_gguf_header(path: &Path) -> Option<GgufHeader> {
     let mut f = std::fs::File::open(path).ok()?;
 
     let mut magic = [0u8; 4];
@@ -424,8 +432,32 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
     if version < 2 {
         return None;
     }
-    let _n_tensors = read_gguf_header_count(&mut f, MAX_GGUF_TENSOR_COUNT, "tensor count").ok()?;
+
+    let n_tensors = read_gguf_header_count(&mut f, MAX_GGUF_TENSOR_COUNT, "tensor count").ok()?;
     let n_kv = read_gguf_header_count(&mut f, MAX_GGUF_HEADER_KV_COUNT, "KV count").ok()?;
+
+    Some(GgufHeader {
+        file: f,
+        n_tensors,
+        n_kv,
+    })
+}
+
+/// Skips every KV pair without inspecting keys/values, for scans that only
+/// need the tensor-info table.
+fn skip_all_kv_pairs(f: &mut std::fs::File, n_kv: usize) -> Option<()> {
+    for _ in 0..n_kv {
+        let _key = read_gguf_string(f).ok()?;
+        let vtype = GgufType::from_u32(read_u32(f).ok()?)?;
+        skip_gguf_value(f, vtype).ok()?;
+    }
+    Some(())
+}
+
+pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
+    let GgufHeader {
+        file: mut f, n_kv, ..
+    } = open_gguf_header(path)?;
 
     let mut meta = GgufCompactMeta::default();
     for _ in 0..n_kv {
@@ -564,26 +596,13 @@ pub fn scan_gguf_tensor_names_any(
     path: &Path,
     mut matches: impl FnMut(&str) -> bool,
 ) -> Option<bool> {
-    let mut f = std::fs::File::open(path).ok()?;
+    let GgufHeader {
+        file: mut f,
+        n_tensors,
+        n_kv,
+    } = open_gguf_header(path)?;
 
-    let mut magic = [0u8; 4];
-    f.read_exact(&mut magic).ok()?;
-    if &magic != b"GGUF" {
-        return None;
-    }
-    let version = read_u32(&mut f).ok()?;
-    if version < 2 {
-        return None;
-    }
-
-    let n_tensors = read_gguf_header_count(&mut f, MAX_GGUF_TENSOR_COUNT, "tensor count").ok()?;
-    let n_kv = read_gguf_header_count(&mut f, MAX_GGUF_HEADER_KV_COUNT, "KV count").ok()?;
-
-    for _ in 0..n_kv {
-        let _key = read_gguf_string(&mut f).ok()?;
-        let vtype = GgufType::from_u32(read_u32(&mut f).ok()?)?;
-        skip_gguf_value(&mut f, vtype).ok()?;
-    }
+    skip_all_kv_pairs(&mut f, n_kv)?;
 
     for _ in 0..n_tensors {
         let name = read_gguf_string(&mut f).ok()?;
@@ -622,21 +641,12 @@ fn is_expert_partitioned_tensor(name: &str) -> bool {
 /// Scan GGUF tensor metadata and estimate which bytes are always resident versus
 /// expert-partitioned. Reads only the header and tensor-info tables.
 pub fn scan_gguf_tensor_byte_profile(path: &Path) -> Option<GgufTensorByteProfile> {
-    let mut f = std::fs::File::open(path).ok()?;
+    let GgufHeader {
+        file: mut f,
+        n_tensors,
+        n_kv,
+    } = open_gguf_header(path)?;
     let file_len = f.metadata().ok()?.len();
-
-    let mut magic = [0u8; 4];
-    f.read_exact(&mut magic).ok()?;
-    if &magic != b"GGUF" {
-        return None;
-    }
-    let version = read_u32(&mut f).ok()?;
-    if version < 2 {
-        return None;
-    }
-
-    let n_tensors = read_gguf_header_count(&mut f, MAX_GGUF_TENSOR_COUNT, "tensor count").ok()?;
-    let n_kv = read_gguf_header_count(&mut f, MAX_GGUF_HEADER_KV_COUNT, "KV count").ok()?;
 
     let mut expert_count = 0u32;
     let mut expert_used_count = 0u32;

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use mesh_llm_system::util::{contains_mtp_marker, validate_draft_min_max};
+use mesh_llm_system::util::validate_draft_min_max;
 use model_artifact::gguf::{scan_gguf_compact_meta, scan_gguf_tensor_names_any};
 use skippy_runtime::package::{PackageGenerationInfo, PackageSpeculativeDecodingInfo};
 use skippy_topology::infer_family_capability;
@@ -41,7 +41,7 @@ pub(super) fn resolve_speculative_config(
         || direct_gguf_supports_native_mtp(model_path)
         || draft_model_path
             .as_ref()
-            .is_some_and(|path| path.is_file() && contains_mtp_marker(path));
+            .is_some_and(|path| path.is_file() && direct_gguf_supports_native_mtp(path));
     let strategy = pick_string_owned(
         model_config.and_then(|config| config.strategy.as_deref()),
         global_config.and_then(|config| config.strategy.as_deref()),
@@ -110,7 +110,10 @@ pub(super) fn resolve_speculative_config(
     if mode == "disabled" && draft_model_path.is_some() {
         bail!("skippy speculative draft source cannot be set when speculative.mode = \"disabled\"");
     }
-    validate_draft_min_max(draft_min_tokens, draft_max_tokens).map_err(anyhow::Error::msg)?;
+    let effective_draft_max_tokens =
+        resolved_draft_max_tokens(native_mtp_enabled, draft_max_tokens);
+    validate_draft_min_max(draft_min_tokens, effective_draft_max_tokens)
+        .map_err(anyhow::Error::msg)?;
     if native_mtp_enabled && draft_model_path.is_some() {
         mode = "disabled".to_string();
     } else if mode == "draft" || (mode == "auto" && draft_model_path.is_some()) {
@@ -134,7 +137,7 @@ pub(super) fn resolve_speculative_config(
         mode,
         draft_model_path,
         pairing_fault,
-        draft_max_tokens: resolved_draft_max_tokens(native_mtp_enabled, draft_max_tokens),
+        draft_max_tokens: effective_draft_max_tokens,
         draft_min_tokens,
         explicit,
         draft_n_gpu_layers,
