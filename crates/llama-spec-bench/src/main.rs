@@ -285,6 +285,8 @@ fn open_full_model(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<Stag
             include_embeddings: true,
             include_output: true,
             filter_tensors_on_load: false,
+            mlock: false,
+            mmap: Some(true),
         },
     )
 }
