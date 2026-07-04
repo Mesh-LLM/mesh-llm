@@ -1573,6 +1573,9 @@ mod tests {
             "--request-timeout-secs",
             "45",
             "--debug-telemetry",
+            "--apply",
+            "--replace-existing",
+            "--launch-args",
             "--prompt",
             "hello",
             "--json",
@@ -1595,6 +1598,9 @@ mod tests {
         assert_eq!(tune.ctx_sizes, vec![4096, 8192]);
         assert_eq!(tune.batch_sizes, vec![1024, 2048]);
         assert_eq!(tune.ubatch_sizes, vec![256, 512]);
+        assert!(tune.apply);
+        assert!(tune.replace_existing);
+        assert!(tune.launch_args);
         assert_eq!(
             tune.mmap_values,
             vec![
@@ -1696,8 +1702,30 @@ mod tests {
             panic!("expected benchmark tune command");
         };
         let throughput_tolerance_pct = tune.throughput_tolerance_pct;
+        assert!(!tune.apply, "apply should be off by default");
+        assert!(
+            !tune.replace_existing,
+            "replace-existing should be off by default"
+        );
+        assert!(!tune.launch_args, "launch-args should be off by default");
 
         assert_eq!(throughput_tolerance_pct, 10.0);
+    }
+
+    #[test]
+    fn benchmark_tune_replace_existing_requires_apply() {
+        let err = Cli::try_parse_from([
+            "mesh-llm",
+            "benchmark",
+            "tune",
+            "--model",
+            "qwen.gguf",
+            "--replace-existing",
+        ])
+        .expect_err("replace-existing should require apply");
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("--apply"), "unexpected error: {rendered}");
     }
 
     #[test]

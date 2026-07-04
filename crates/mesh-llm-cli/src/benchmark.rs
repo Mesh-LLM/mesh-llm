@@ -84,6 +84,15 @@ pub struct BenchmarkTuneCommand {
     /// Candidate maximum ngram draft-token counts for ngram speculation.
     #[arg(long = "spec-ngram-max", value_delimiter = ',')]
     pub spec_ngram_max: Vec<u32>,
+    /// Persist the recommended settings to the local config file.
+    #[arg(long)]
+    pub apply: bool,
+    /// Replace existing writable config fields instead of preserving existing values.
+    #[arg(long, requires = "apply")]
+    pub replace_existing: bool,
+    /// Print launch-argument output instead of applying or reporting recommended fields.
+    #[arg(long)]
+    pub launch_args: bool,
     /// Treat candidates within this percent of the raw best tok/s as throughput-equivalent.
     #[arg(long, default_value_t = 10.0)]
     pub throughput_tolerance_pct: f64,

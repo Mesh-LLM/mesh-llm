@@ -387,6 +387,9 @@ mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types auto
 mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types mtp --debug-telemetry --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --speculative-types draft,ngram,disabled --spec-draft-models /models/qwen3-draft.gguf --spec-draft-max-tokens 4,8,16 --spec-ngram-min 12,24 --spec-ngram-max 48,64
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --throughput-tolerance-pct 2.5
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --apply
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --apply --replace-existing
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --launch-args
 ```
 
 Switches:
@@ -394,6 +397,9 @@ Switches:
 - `--model <MODEL>`: benchmark one exact local model that is already downloaded.
 - `--models <MODELS>`: benchmark multiple exact local models, separated by commas.
 - `--json`: machine-readable benchmark tune report.
+- `--apply`: persist the recommended settings to the local config file (`~/.mesh-llm/config.toml`).
+- `--replace-existing`: when persisting, overwrite existing writable recommendation fields instead of preserving current values.
+- `--launch-args`: print the exact `mesh-llm serve` arguments generated for the recommendation path instead of running benchmark output/apply mode.
 - `--ctx-sizes <TOKENS>`: comma-separated context sizes to benchmark. If omitted, tune derives a small context ladder up to the planned context.
 - `--batch-sizes <VALUES>` / `--ubatch-sizes <VALUES>`: comma-separated batch and micro-batch values to benchmark. Candidates where `ubatch > batch` are skipped.
 - `--mmap-values <VALUES>`: comma-separated mmap values to benchmark independently: `auto`, `enabled`/`true`, or `disabled`/`false`. If omitted, benchmark tune tries all three.

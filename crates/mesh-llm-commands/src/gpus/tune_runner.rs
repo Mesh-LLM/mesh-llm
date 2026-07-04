@@ -416,9 +416,9 @@ fn benchmark_tune_runner_args(command: &BenchmarkCommand) -> TuneRunnerArgs<'_> 
             debug_telemetry: args.debug_telemetry,
             prompt: &args.prompt,
         }),
-        launch_args: false,
-        apply: false,
-        replace_existing: false,
+        launch_args: args.launch_args,
+        apply: args.apply,
+        replace_existing: args.replace_existing,
     }
 }
 

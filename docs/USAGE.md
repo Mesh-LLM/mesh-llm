@@ -113,10 +113,14 @@ mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types auto
 mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types mtp --debug-telemetry --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --speculative-types draft,ngram,disabled --spec-draft-models /models/qwen3-draft.gguf --spec-draft-max-tokens 4,8,16
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --throughput-tolerance-pct 2.5
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --apply
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --apply --replace-existing
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --launch-args
 ```
 
 If `--mmap-values` is omitted, benchmark tune tries `auto`, `true`, and `false`. If `--mlock-values` is omitted, it tries `false` and only tries `true` when the current mlock limit can cover the evaluated budget.
 If `--speculative-types` is omitted, benchmark tune uses `auto`: native MTP is tried first for MTP-looking targets, locally discoverable draft models are tried when available, ngram candidates are tried as a model-free fallback, and a disabled baseline is included for comparison. Use `--speculative-types mtp,draft,ngram,disabled` to force an explicit speculative sweep, or `--no-speculative-tune` to reproduce the old disabled-baseline-only sweep.
+Use `--apply` to write the recommended settings into `~/.mesh-llm/config.toml`, and combine with `--replace-existing` to overwrite existing writable recommendation fields. `--launch-args` prints generated `mesh-llm serve` arguments for local launch without writing config.
 Use `--debug-telemetry` when proving speculative decoding behavior: each trial log includes Skippy debug telemetry, including `llama_stage.native_mtp.*` summary attributes for MTP drafted, accepted, rejected, and accept-rate counts.
 
 Use `mesh-llm gpus detect` when you want to refresh the raw hardware fingerprint, bandwidth, and compute hints rather than benchmark model-serving throughput.
