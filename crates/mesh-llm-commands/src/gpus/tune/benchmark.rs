@@ -189,7 +189,7 @@ fn run_trial_inner(
     let trial_dir = create_trial_dir(prepared, index)?;
     let config_path = trial_dir.join("config.toml");
     let log_path = trial_dir.join("serve.log");
-    std::fs::write(&config_path, trial_config(prepared, candidate)?)?;
+    std::fs::write(&config_path, trial_config(request.config, prepared, candidate)?)?;
 
     let port = reserve_local_port()?;
     let console = reserve_local_port()?;
@@ -566,11 +566,13 @@ fn response_completion_tokens(response: &serde_json::Value) -> Option<u64> {
 }
 
 fn trial_config(
+    config: &mesh_llm_config::MeshConfig,
     prepared: &crate::gpus::tune_apply::PreparedTunePlan,
     candidate: &TuneBenchmarkCandidate,
 ) -> anyhow::Result<String> {
     let mut doc = toml_edit::DocumentMut::new();
     doc["version"] = toml_edit::value(1);
+    apply_trial_runtime_config(&mut doc, config);
 
     let mut table = toml_edit::Table::new();
     table["model"] = toml_edit::value(crate::gpus::tune_apply::appended_model_ref(
@@ -584,6 +586,47 @@ fn trial_config(
     models.push(table);
     doc["models"] = toml_edit::Item::ArrayOfTables(models);
     Ok(doc.to_string())
+}
+
+fn apply_trial_runtime_config(doc: &mut toml_edit::DocumentMut, config: &mesh_llm_config::MeshConfig) {
+    let runtime = match ensure_trial_subtable(doc.as_table_mut(), "runtime") {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let _ = error;
+            return;
+        }
+    };
+
+    runtime["debug"] = toml_edit::value(config.runtime.debug);
+    runtime["listen_all"] = toml_edit::value(config.runtime.listen_all);
+    runtime["reconcile_model_targets"] =
+        toml_edit::value(config.runtime.reconcile_model_targets);
+    runtime["reconcile_model_target_demand_upgrades"] = toml_edit::value(
+        config.runtime.reconcile_model_target_demand_upgrades,
+    );
+
+    if config.runtime.native_runtime.mesh_version.is_some()
+        || config.runtime.native_runtime.skippy_abi.is_some()
+        || config.runtime.native_runtime.selection.is_some()
+    {
+        let native_runtime = match ensure_trial_subtable(runtime, "native_runtime") {
+            Ok(native_runtime) => native_runtime,
+            Err(error) => {
+                let _ = error;
+                return;
+            }
+        };
+
+        if let Some(mesh_version) = config.runtime.native_runtime.mesh_version.as_deref() {
+            native_runtime["mesh_version"] = toml_edit::value(mesh_version);
+        }
+        if let Some(skippy_abi) = config.runtime.native_runtime.skippy_abi.as_deref() {
+            native_runtime["skippy_abi"] = toml_edit::value(skippy_abi);
+        }
+        if let Some(selection) = config.runtime.native_runtime.selection.as_deref() {
+            native_runtime["selection"] = toml_edit::value(selection);
+        }
+    }
 }
 
 fn apply_resolved_model_path(
@@ -1189,7 +1232,7 @@ mod benchmark_tests {
             },
         };
 
-        let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
+        let rendered = trial_config(&mesh_llm_config::MeshConfig::default(), &prepared, &candidate).expect("trial config renders");
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let model = parsed.models.first().expect("model row exists");
 
@@ -1253,6 +1296,56 @@ mod benchmark_tests {
     }
 
     #[test]
+    fn trial_config_includes_runtime_native_runtime() {
+        let prepared = prepared_plan_fixture("/tmp/model.gguf", Vec::new(), Vec::new());
+        let candidate = TuneBenchmarkCandidate {
+            ctx_size: 4096,
+            batch: 2048,
+            ubatch: 1024,
+            cache_type_k: TuneKvCacheType::Q8_0,
+            cache_type_v: TuneKvCacheType::Q8_0,
+            mmap: TuneBoolOrAutoValue::Disabled,
+            mlock: false,
+            speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
+        };
+
+        let mut config = mesh_llm_config::MeshConfig::default();
+        config.runtime.native_runtime.mesh_version = Some("0.68.0".to_string());
+        config.runtime.native_runtime.skippy_abi = Some("0.1.25".to_string());
+        config.runtime.native_runtime.selection = Some(
+            "exact:meshllm-native-runtime-linux-x86_64-cuda12".to_string(),
+        );
+
+        let rendered = trial_config(&config, &prepared, &candidate).expect("trial config renders");
+        let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
+
+        assert_eq!(
+            parsed
+                .runtime
+                .native_runtime
+                .mesh_version
+                .as_deref(),
+            Some("0.68.0")
+        );
+        assert_eq!(
+            parsed
+                .runtime
+                .native_runtime
+                .skippy_abi
+                .as_deref(),
+            Some("0.1.25")
+        );
+        assert_eq!(
+            parsed
+                .runtime
+                .native_runtime
+                .selection
+                .as_deref(),
+            Some("exact:meshllm-native-runtime-linux-x86_64-cuda12")
+        );
+    }
+
+    #[test]
     fn trial_config_renders_draft_speculative_candidate() {
         let prepared = prepared_plan_fixture("/tmp/model.gguf", Vec::new(), Vec::new());
         let candidate = TuneBenchmarkCandidate {
@@ -1270,7 +1363,7 @@ mod benchmark_tests {
             },
         };
 
-        let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
+        let rendered = trial_config(&mesh_llm_config::MeshConfig::default(), &prepared, &candidate).expect("trial config renders");
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let speculative = parsed
             .models
@@ -1307,7 +1400,7 @@ mod benchmark_tests {
             },
         };
 
-        let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
+        let rendered = trial_config(&mesh_llm_config::MeshConfig::default(), &prepared, &candidate).expect("trial config renders");
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let speculative = parsed
             .models
@@ -1362,7 +1455,7 @@ mod benchmark_tests {
             speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
         };
 
-        let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
+        let rendered = trial_config(&mesh_llm_config::MeshConfig::default(), &prepared, &candidate).expect("trial config renders");
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let model = parsed.models.first().expect("model row exists");
 
@@ -1393,7 +1486,7 @@ mod benchmark_tests {
             },
         };
 
-        let rendered = trial_config(&prepared, &candidate).expect("trial config renders");
+        let rendered = trial_config(&mesh_llm_config::MeshConfig::default(), &prepared, &candidate).expect("trial config renders");
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let speculative = parsed
             .models
