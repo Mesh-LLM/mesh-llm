@@ -175,39 +175,51 @@ fn collect_legacy_draft_model_path_warnings(
     config: &MeshConfig,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) {
-    if config
+    if let Some(speculative) = config
         .defaults
         .as_ref()
         .and_then(|d| d.speculative.as_ref())
-        .is_some_and(|s| s.legacy_draft_model_path_used)
+        .filter(|s| s.legacy_draft_model_path_used)
     {
-        diagnostics.push(alias_diagnostic(
-            ConfigPath::from_fields(["defaults", "speculative", "draft_model_path"]),
-            ConfigPath::from_fields(["defaults", "speculative", "draft_model"]),
-            "draft_model_path is deprecated; rename to draft_model",
-        ));
-    }
-    for (index, model) in config.models.iter().enumerate() {
-        if model
-            .speculative
-            .as_ref()
-            .is_some_and(|s| s.legacy_draft_model_path_used)
+        // Only warn when the value looks like a model identifier (contains ':')
+        // because bare local paths cannot be migrated to draft_model without
+        // failing identifier validation.
+        if speculative
+            .draft_model
+            .as_deref()
+            .is_some_and(|v| v.contains(':'))
         {
             diagnostics.push(alias_diagnostic(
-                ConfigPath::from_fields([
-                    "models",
-                    &format!("[{index}]"),
-                    "speculative",
-                    "draft_model_path",
-                ]),
-                ConfigPath::from_fields([
-                    "models",
-                    &format!("[{index}]"),
-                    "speculative",
-                    "draft_model",
-                ]),
+                ConfigPath::from_fields(["defaults", "speculative", "draft_model_path"]),
+                ConfigPath::from_fields(["defaults", "speculative", "draft_model"]),
                 "draft_model_path is deprecated; rename to draft_model",
             ));
+        }
+    }
+    for (index, model) in config.models.iter().enumerate() {
+        if let Some(speculative) = model
+            .speculative
+            .as_ref()
+            .filter(|s| s.legacy_draft_model_path_used)
+        {
+            // Only warn when the value looks like a model identifier (contains ':')
+            // because bare local paths cannot be migrated to draft_model without
+            // failing identifier validation.
+            if speculative
+                .draft_model
+                .as_deref()
+                .is_some_and(|v| v.contains(':'))
+            {
+                let mut used_path = ConfigPath::from_fields(["models", "speculative", "draft_model_path"]);
+                used_path.segments.insert(1, ConfigPathSegment::Index { index });
+                let mut canonical_path = ConfigPath::from_fields(["models", "speculative", "draft_model"]);
+                canonical_path.segments.insert(1, ConfigPathSegment::Index { index });
+                diagnostics.push(alias_diagnostic(
+                    used_path,
+                    canonical_path,
+                    "draft_model_path is deprecated; rename to draft_model",
+                ));
+            }
         }
     }
 }
@@ -2074,7 +2086,7 @@ version = 1
 
 [defaults.speculative]
 strategy = "mtp"
-draft_model_path = "/models/draft.gguf"
+draft_model_path = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
 "#,
         )
         .expect("config should parse before validation");
@@ -2087,6 +2099,31 @@ draft_model_path = "/models/draft.gguf"
         assert!(
             alias_diag.is_some(),
             "expected legacy alias warning for draft_model_path, got diagnostics: {:?}",
+            diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn legacy_draft_model_path_bare_path_suppresses_migration_warning() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[defaults.speculative]
+strategy = "mtp"
+draft_model_path = "/models/draft.gguf"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let alias_diag = diagnostics.iter().find(|d| {
+            d.code == crate::diagnostic::ConfigDiagnosticCode::AliasApplied
+                && d.message.contains("draft_model_path")
+        });
+        assert!(
+            alias_diag.is_none(),
+            "bare path draft_model_path should not emit migration warning, got: {:?}",
             diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
         );
     }
