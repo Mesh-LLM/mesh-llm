@@ -64,6 +64,8 @@ pub struct BenchmarkTuneCommand {
             "spec_draft_models",
             "spec_draft_max_tokens",
             "spec_draft_min_tokens",
+            "spec_draft_acceptance_threshold",
+            "spec_draft_split_probability",
             "spec_ngram_min",
             "spec_ngram_max"
         ]
@@ -84,6 +86,12 @@ pub struct BenchmarkTuneCommand {
     /// Candidate maximum ngram draft-token counts for ngram speculation.
     #[arg(long = "spec-ngram-max", value_delimiter = ',')]
     pub spec_ngram_max: Vec<u32>,
+    /// Candidate draft-acceptance-threshold values for speculative draft sweeps.
+    #[arg(long = "spec-draft-acceptance-threshold", value_delimiter = ',')]
+    pub spec_draft_acceptance_threshold: Vec<f64>,
+    /// Candidate draft-split-probability values for speculative draft sweeps.
+    #[arg(long = "spec-draft-split-probability", value_delimiter = ',')]
+    pub spec_draft_split_probability: Vec<f64>,
     /// Persist the recommended settings to the local config file.
     #[arg(long)]
     pub apply: bool,

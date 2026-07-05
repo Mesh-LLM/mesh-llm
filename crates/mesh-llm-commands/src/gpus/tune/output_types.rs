@@ -94,7 +94,7 @@ pub(crate) struct TuneBenchmarkCandidate {
     pub speculative: TuneBenchmarkSpeculativeCandidate,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub(crate) enum TuneBenchmarkSpeculativeCandidate {
     Disabled,
@@ -103,12 +103,20 @@ pub(crate) enum TuneBenchmarkSpeculativeCandidate {
         draft_model_path: Option<String>,
         draft_max_tokens: u32,
         draft_min_tokens: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft_acceptance_threshold: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft_split_probability: Option<f64>,
     },
     Draft {
         draft_model_path: String,
         draft_max_tokens: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         draft_min_tokens: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft_acceptance_threshold: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft_split_probability: Option<f64>,
     },
     Ngram {
         ngram_min: u32,

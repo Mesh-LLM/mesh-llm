@@ -71,6 +71,8 @@ fn benchmark_tune_json_uses_benchmark_command_context() {
         spec_draft_min_tokens: Vec::new(),
         spec_ngram_min: Vec::new(),
         spec_ngram_max: Vec::new(),
+        spec_draft_acceptance_threshold: Vec::new(),
+        spec_draft_split_probability: Vec::new(),
         throughput_tolerance_pct: 3.0,
         max_tokens: 32,
         startup_timeout_secs: 5,
@@ -123,6 +125,8 @@ fn benchmark_tune_rejects_zero_only_candidate_values_before_running_trials() {
         spec_draft_min_tokens: Vec::new(),
         spec_ngram_min: Vec::new(),
         spec_ngram_max: Vec::new(),
+        spec_draft_acceptance_threshold: Vec::new(),
+        spec_draft_split_probability: Vec::new(),
         throughput_tolerance_pct: 10.0,
         max_tokens: 32,
         startup_timeout_secs: 5,
@@ -158,6 +162,8 @@ fn benchmark_tune_allows_zero_speculative_draft_min_tokens() {
         spec_draft_min_tokens: &[0],
         spec_ngram_min: &[],
         spec_ngram_max: &[],
+        spec_draft_acceptance_threshold: &[],
+        spec_draft_split_probability: &[],
         throughput_tolerance_pct: 10.0,
         max_tokens: 32,
         startup_timeout_secs: 5,
@@ -192,6 +198,8 @@ fn benchmark_tune_rejects_candidate_matrix_without_valid_batch_ubatch_pair() {
         spec_draft_min_tokens: Vec::new(),
         spec_ngram_min: Vec::new(),
         spec_ngram_max: Vec::new(),
+        spec_draft_acceptance_threshold: Vec::new(),
+        spec_draft_split_probability: Vec::new(),
         throughput_tolerance_pct: 10.0,
         max_tokens: 32,
         startup_timeout_secs: 5,
@@ -208,6 +216,76 @@ fn benchmark_tune_rejects_candidate_matrix_without_valid_batch_ubatch_pair() {
         error
             .to_string()
             .contains("benchmark candidate matrix has no valid batch/ubatch pairs"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn benchmark_tune_rejects_out_of_range_probability_values() {
+    let args = BenchmarkTuneArgs {
+        ctx_sizes: &[4096],
+        batch_sizes: &[1024],
+        ubatch_sizes: &[256],
+        mmap_values: &[],
+        mlock_values: &[],
+        speculative_types: &[],
+        no_speculative_tune: false,
+        spec_draft_models: &[],
+        spec_draft_max_tokens: &[],
+        spec_draft_min_tokens: &[],
+        spec_draft_acceptance_threshold: &[1.5],
+        spec_draft_split_probability: &[],
+        spec_ngram_min: &[],
+        spec_ngram_max: &[],
+        throughput_tolerance_pct: 10.0,
+        max_tokens: 32,
+        startup_timeout_secs: 5,
+        request_timeout_secs: 5,
+        debug_telemetry: false,
+        prompt: "hello",
+    };
+
+    let error = validate_benchmark_args(Some(&args))
+        .expect_err("acceptance threshold > 1.0 should be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("values must be finite probabilities in [0.0, 1.0]"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn benchmark_tune_rejects_negative_probability_values() {
+    let args = BenchmarkTuneArgs {
+        ctx_sizes: &[4096],
+        batch_sizes: &[1024],
+        ubatch_sizes: &[256],
+        mmap_values: &[],
+        mlock_values: &[],
+        speculative_types: &[],
+        no_speculative_tune: false,
+        spec_draft_models: &[],
+        spec_draft_max_tokens: &[],
+        spec_draft_min_tokens: &[],
+        spec_draft_acceptance_threshold: &[],
+        spec_draft_split_probability: &[-0.1],
+        spec_ngram_min: &[],
+        spec_ngram_max: &[],
+        throughput_tolerance_pct: 10.0,
+        max_tokens: 32,
+        startup_timeout_secs: 5,
+        request_timeout_secs: 5,
+        debug_telemetry: false,
+        prompt: "hello",
+    };
+
+    let error = validate_benchmark_args(Some(&args))
+        .expect_err("negative split probability should be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("values must be finite probabilities in [0.0, 1.0]"),
         "unexpected error: {error:#}"
     );
 }

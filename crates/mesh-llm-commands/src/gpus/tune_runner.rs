@@ -257,6 +257,14 @@ fn validate_benchmark_args(args: Option<&BenchmarkTuneArgs<'_>>) -> Result<()> {
     validate_positive_values("--batch-sizes", args.batch_sizes)?;
     validate_positive_values("--ubatch-sizes", args.ubatch_sizes)?;
     validate_positive_values("--spec-draft-max-tokens", args.spec_draft_max_tokens)?;
+    validate_probability_values(
+        "--spec-draft-acceptance-threshold",
+        args.spec_draft_acceptance_threshold,
+    )?;
+    validate_probability_values(
+        "--spec-draft-split-probability",
+        args.spec_draft_split_probability,
+    )?;
     validate_positive_values("--spec-ngram-min", args.spec_ngram_min)?;
     validate_positive_values("--spec-ngram-max", args.spec_ngram_max)?;
     validate_batch_ubatch_pairs(args.batch_sizes, args.ubatch_sizes)?;
@@ -278,6 +286,15 @@ fn validate_benchmark_args(args: Option<&BenchmarkTuneArgs<'_>>) -> Result<()> {
 fn validate_positive_values(name: &str, values: &[u32]) -> Result<()> {
     if !values.is_empty() && !values.iter().any(|value| *value > 0) {
         bail!("{name} must include at least one positive value");
+    }
+    Ok(())
+}
+
+fn validate_probability_values(name: &str, values: &[f64]) -> Result<()> {
+    for value in values {
+        if !value.is_finite() || *value < 0.0 || *value > 1.0 {
+            bail!("{name} values must be finite probabilities in [0.0, 1.0]");
+        }
     }
     Ok(())
 }
@@ -343,6 +360,8 @@ fn benchmark_run_request<'a>(
         spec_draft_models: args.spec_draft_models,
         spec_draft_max_tokens: args.spec_draft_max_tokens,
         spec_draft_min_tokens: args.spec_draft_min_tokens,
+        spec_draft_acceptance_threshold: args.spec_draft_acceptance_threshold,
+        spec_draft_split_probability: args.spec_draft_split_probability,
         spec_ngram_min: args.spec_ngram_min,
         spec_ngram_max: args.spec_ngram_max,
         throughput_tolerance_pct: args.throughput_tolerance_pct,
@@ -376,6 +395,8 @@ struct BenchmarkTuneArgs<'a> {
     spec_draft_models: &'a [std::path::PathBuf],
     spec_draft_max_tokens: &'a [u32],
     spec_draft_min_tokens: &'a [u32],
+    spec_draft_acceptance_threshold: &'a [f64],
+    spec_draft_split_probability: &'a [f64],
     spec_ngram_min: &'a [u32],
     spec_ngram_max: &'a [u32],
     throughput_tolerance_pct: f64,
@@ -407,6 +428,8 @@ fn benchmark_tune_runner_args(command: &BenchmarkCommand) -> TuneRunnerArgs<'_> 
             spec_draft_models: &args.spec_draft_models,
             spec_draft_max_tokens: &args.spec_draft_max_tokens,
             spec_draft_min_tokens: &args.spec_draft_min_tokens,
+            spec_draft_acceptance_threshold: &args.spec_draft_acceptance_threshold,
+            spec_draft_split_probability: &args.spec_draft_split_probability,
             spec_ngram_min: &args.spec_ngram_min,
             spec_ngram_max: &args.spec_ngram_max,
             throughput_tolerance_pct: args.throughput_tolerance_pct,

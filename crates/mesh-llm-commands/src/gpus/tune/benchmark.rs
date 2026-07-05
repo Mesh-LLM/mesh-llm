@@ -11,6 +11,8 @@ pub(crate) struct TuneBenchmarkRunRequest<'a> {
     pub(crate) spec_draft_models: &'a [std::path::PathBuf],
     pub(crate) spec_draft_max_tokens: &'a [u32],
     pub(crate) spec_draft_min_tokens: &'a [u32],
+    pub(crate) spec_draft_acceptance_threshold: &'a [f64],
+    pub(crate) spec_draft_split_probability: &'a [f64],
     pub(crate) spec_ngram_min: &'a [u32],
     pub(crate) spec_ngram_max: &'a [u32],
     pub(crate) throughput_tolerance_pct: f64,
@@ -671,6 +673,8 @@ fn apply_speculative_overrides(
             draft_model_path,
             draft_max_tokens,
             draft_min_tokens,
+            draft_acceptance_threshold,
+            draft_split_probability,
         } => {
             spec_table["strategy"] = toml_edit::value("mtp");
             spec_table["mode"] = toml_edit::value("auto");
@@ -681,11 +685,19 @@ fn apply_speculative_overrides(
             }
             spec_table["draft_max_tokens"] = toml_edit::value(i64::from(*draft_max_tokens));
             spec_table["draft_min_tokens"] = toml_edit::value(i64::from(*draft_min_tokens));
+            if let Some(threshold) = draft_acceptance_threshold {
+                spec_table["draft_acceptance_threshold"] = toml_edit::value(*threshold);
+            }
+            if let Some(probability) = draft_split_probability {
+                spec_table["draft_split_probability"] = toml_edit::value(*probability);
+            }
         }
         TuneBenchmarkSpeculativeCandidate::Draft {
             draft_model_path,
             draft_max_tokens,
             draft_min_tokens,
+            draft_acceptance_threshold,
+            draft_split_probability,
         } => {
             spec_table["strategy"] = toml_edit::value("disabled");
             spec_table["mode"] = toml_edit::value("draft");
@@ -695,6 +707,12 @@ fn apply_speculative_overrides(
             spec_table["draft_max_tokens"] = toml_edit::value(i64::from(*draft_max_tokens));
             if let Some(draft_min_tokens) = draft_min_tokens {
                 spec_table["draft_min_tokens"] = toml_edit::value(i64::from(*draft_min_tokens));
+            }
+            if let Some(threshold) = draft_acceptance_threshold {
+                spec_table["draft_acceptance_threshold"] = toml_edit::value(*threshold);
+            }
+            if let Some(probability) = draft_split_probability {
+                spec_table["draft_split_probability"] = toml_edit::value(*probability);
             }
         }
         TuneBenchmarkSpeculativeCandidate::Ngram {
@@ -911,17 +929,79 @@ fn push_mtp_speculative_candidates(
     };
     let max_tokens = positive_or_default(request.spec_draft_max_tokens, &[2, 3, 4]);
     let min_tokens = values_or_default_allow_zero(request.spec_draft_min_tokens, &[0]);
+    let acceptance_thresholds = optional_probability_values(request.spec_draft_acceptance_threshold);
+    let split_probabilities = optional_probability_values(request.spec_draft_split_probability);
     for draft_model_path in draft_models {
         for draft_max_tokens in &max_tokens {
             for draft_min_tokens in &min_tokens {
-                if *draft_min_tokens <= *draft_max_tokens {
-                    candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
-                        draft_model_path: draft_model_path.clone(),
-                        draft_max_tokens: *draft_max_tokens,
-                        draft_min_tokens: *draft_min_tokens,
-                    });
+                if *draft_min_tokens > *draft_max_tokens {
+                    continue;
                 }
+                push_mtp_threshold_cross_product(
+                    candidates,
+                    draft_model_path.clone(),
+                    *draft_max_tokens,
+                    *draft_min_tokens,
+                    &acceptance_thresholds,
+                    &split_probabilities,
+                );
             }
+        }
+    }
+}
+
+fn push_mtp_threshold_cross_product(
+    candidates: &mut Vec<TuneBenchmarkSpeculativeCandidate>,
+    draft_model_path: Option<String>,
+    draft_max_tokens: u32,
+    draft_min_tokens: u32,
+    acceptance_thresholds: &[f64],
+    split_probabilities: &[f64],
+) {
+    let base = || TuneBenchmarkSpeculativeCandidate::Mtp {
+        draft_model_path: draft_model_path.clone(),
+        draft_max_tokens,
+        draft_min_tokens,
+        draft_acceptance_threshold: None,
+        draft_split_probability: None,
+    };
+    if acceptance_thresholds.is_empty() && split_probabilities.is_empty() {
+        candidates.push(base());
+        return;
+    }
+    if acceptance_thresholds.is_empty() {
+        for split_probability in split_probabilities {
+            candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
+                draft_model_path: draft_model_path.clone(),
+                draft_max_tokens,
+                draft_min_tokens,
+                draft_acceptance_threshold: None,
+                draft_split_probability: Some(*split_probability),
+            });
+        }
+        return;
+    }
+    if split_probabilities.is_empty() {
+        for acceptance_threshold in acceptance_thresholds {
+            candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
+                draft_model_path: draft_model_path.clone(),
+                draft_max_tokens,
+                draft_min_tokens,
+                draft_acceptance_threshold: Some(*acceptance_threshold),
+                draft_split_probability: None,
+            });
+        }
+        return;
+    }
+    for acceptance_threshold in acceptance_thresholds {
+        for split_probability in split_probabilities {
+            candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
+                draft_model_path: draft_model_path.clone(),
+                draft_max_tokens,
+                draft_min_tokens,
+                draft_acceptance_threshold: Some(*acceptance_threshold),
+                draft_split_probability: Some(*split_probability),
+            });
         }
     }
 }
@@ -937,25 +1017,89 @@ fn push_draft_speculative_candidates(
     }
     let max_tokens = positive_or_default(request.spec_draft_max_tokens, &[4, 8, 16]);
     let min_tokens = optional_positive_values(request.spec_draft_min_tokens);
+    let acceptance_thresholds = optional_probability_values(request.spec_draft_acceptance_threshold);
+    let split_probabilities = optional_probability_values(request.spec_draft_split_probability);
     for draft_model_path in draft_models {
         for draft_max_tokens in &max_tokens {
             if min_tokens.is_empty() {
-                candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
-                    draft_model_path: draft_model_path.clone(),
-                    draft_max_tokens: *draft_max_tokens,
-                    draft_min_tokens: None,
-                });
+                push_draft_threshold_cross_product(
+                    candidates,
+                    draft_model_path.clone(),
+                    *draft_max_tokens,
+                    None,
+                    &acceptance_thresholds,
+                    &split_probabilities,
+                );
                 continue;
             }
             for draft_min_tokens in &min_tokens {
                 if draft_min_tokens <= draft_max_tokens {
-                    candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
-                        draft_model_path: draft_model_path.clone(),
-                        draft_max_tokens: *draft_max_tokens,
-                        draft_min_tokens: Some(*draft_min_tokens),
-                    });
+                    push_draft_threshold_cross_product(
+                        candidates,
+                        draft_model_path.clone(),
+                        *draft_max_tokens,
+                        Some(*draft_min_tokens),
+                        &acceptance_thresholds,
+                        &split_probabilities,
+                    );
                 }
             }
+        }
+    }
+}
+
+fn push_draft_threshold_cross_product(
+    candidates: &mut Vec<TuneBenchmarkSpeculativeCandidate>,
+    draft_model_path: String,
+    draft_max_tokens: u32,
+    draft_min_tokens: Option<u32>,
+    acceptance_thresholds: &[f64],
+    split_probabilities: &[f64],
+) {
+    let base = || TuneBenchmarkSpeculativeCandidate::Draft {
+        draft_model_path: draft_model_path.clone(),
+        draft_max_tokens,
+        draft_min_tokens,
+        draft_acceptance_threshold: None,
+        draft_split_probability: None,
+    };
+    if acceptance_thresholds.is_empty() && split_probabilities.is_empty() {
+        candidates.push(base());
+        return;
+    }
+    if acceptance_thresholds.is_empty() {
+        for split_probability in split_probabilities {
+            candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
+                draft_model_path: draft_model_path.clone(),
+                draft_max_tokens,
+                draft_min_tokens,
+                draft_acceptance_threshold: None,
+                draft_split_probability: Some(*split_probability),
+            });
+        }
+        return;
+    }
+    if split_probabilities.is_empty() {
+        for acceptance_threshold in acceptance_thresholds {
+            candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
+                draft_model_path: draft_model_path.clone(),
+                draft_max_tokens,
+                draft_min_tokens,
+                draft_acceptance_threshold: Some(*acceptance_threshold),
+                draft_split_probability: None,
+            });
+        }
+        return;
+    }
+    for acceptance_threshold in acceptance_thresholds {
+        for split_probability in split_probabilities {
+            candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
+                draft_model_path: draft_model_path.clone(),
+                draft_max_tokens,
+                draft_min_tokens,
+                draft_acceptance_threshold: Some(*acceptance_threshold),
+                draft_split_probability: Some(*split_probability),
+            });
         }
     }
 }
@@ -990,6 +1134,20 @@ fn optional_positive_values(requested: &[u32]) -> Vec<u32> {
         return Vec::new();
     }
     unique_positive(requested)
+}
+
+fn optional_probability_values(requested: &[f64]) -> Vec<f64> {
+    if requested.is_empty() {
+        return Vec::new();
+    }
+    let mut values = requested
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite() && *value >= 0.0 && *value <= 1.0)
+        .collect::<Vec<_>>();
+    values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    values.dedup_by(|a, b| a == b);
+    values
 }
 
 fn values_or_default_allow_zero(requested: &[u32], defaults: &[u32]) -> Vec<u32> {
@@ -1103,22 +1261,35 @@ fn dedup_speculative_candidates(
 }
 
 fn speculative_candidate_sort_key(candidate: &TuneBenchmarkSpeculativeCandidate) -> String {
+    fn fmt_prob(value: Option<f64>) -> String {
+        value
+            .map(|v| format!("{v:.6}"))
+            .unwrap_or_else(|| "-".to_string())
+    }
     match candidate {
         TuneBenchmarkSpeculativeCandidate::Mtp {
             draft_model_path,
             draft_max_tokens,
             draft_min_tokens,
+            draft_acceptance_threshold,
+            draft_split_probability,
         } => format!(
-            "0:mtp:{}:{draft_max_tokens}:{draft_min_tokens}",
-            draft_model_path.as_deref().unwrap_or("")
+            "0:mtp:{}:{draft_max_tokens}:{draft_min_tokens}:{}:{}",
+            draft_model_path.as_deref().unwrap_or(""),
+            fmt_prob(*draft_acceptance_threshold),
+            fmt_prob(*draft_split_probability),
         ),
         TuneBenchmarkSpeculativeCandidate::Draft {
             draft_model_path,
             draft_max_tokens,
             draft_min_tokens,
+            draft_acceptance_threshold,
+            draft_split_probability,
         } => format!(
-            "1:draft:{draft_model_path}:{draft_max_tokens}:{}",
-            draft_min_tokens.unwrap_or(0)
+            "1:draft:{draft_model_path}:{draft_max_tokens}:{}:{}:{}",
+            draft_min_tokens.unwrap_or(0),
+            fmt_prob(*draft_acceptance_threshold),
+            fmt_prob(*draft_split_probability),
         ),
         TuneBenchmarkSpeculativeCandidate::Ngram {
             ngram_min,
@@ -1229,6 +1400,8 @@ mod benchmark_tests {
                 draft_model_path: None,
                 draft_max_tokens: 3,
                 draft_min_tokens: 0,
+                draft_acceptance_threshold: None,
+                draft_split_probability: None,
             },
         };
 
@@ -1360,6 +1533,8 @@ mod benchmark_tests {
                 draft_model_path: "/tmp/model-draft.gguf".to_string(),
                 draft_max_tokens: 8,
                 draft_min_tokens: Some(2),
+                draft_acceptance_threshold: None,
+                draft_split_probability: None,
             },
         };
 
@@ -1397,6 +1572,8 @@ mod benchmark_tests {
                 draft_model_path: Some("/tmp/mtp-gemma.gguf".to_string()),
                 draft_max_tokens: 3,
                 draft_min_tokens: 0,
+                draft_acceptance_threshold: None,
+                draft_split_probability: None,
             },
         };
 
@@ -1619,16 +1796,22 @@ mod benchmark_tests {
                     draft_model_path: None,
                     draft_max_tokens: 2,
                     draft_min_tokens: 0,
+                    draft_acceptance_threshold: None,
+                    draft_split_probability: None,
                 },
                 TuneBenchmarkSpeculativeCandidate::Mtp {
                     draft_model_path: None,
                     draft_max_tokens: 3,
                     draft_min_tokens: 0,
+                    draft_acceptance_threshold: None,
+                    draft_split_probability: None,
                 },
                 TuneBenchmarkSpeculativeCandidate::Mtp {
                     draft_model_path: None,
                     draft_max_tokens: 4,
                     draft_min_tokens: 0,
+                    draft_acceptance_threshold: None,
+                    draft_split_probability: None,
                 },
                 TuneBenchmarkSpeculativeCandidate::Ngram {
                     ngram_min: 12,
@@ -1751,6 +1934,8 @@ mod benchmark_tests {
                     draft_model_path: draft_model.display().to_string(),
                     draft_max_tokens: 4,
                     draft_min_tokens: None,
+                    draft_acceptance_threshold: None,
+                    draft_split_probability: None,
                 },
                 TuneBenchmarkSpeculativeCandidate::Ngram {
                     ngram_min: 2,
@@ -1801,6 +1986,8 @@ mod benchmark_tests {
                     draft_model_path: draft_model.display().to_string(),
                     draft_max_tokens: 4,
                     draft_min_tokens: Some(2),
+                    draft_acceptance_threshold: None,
+                    draft_split_probability: None,
                 },
                 TuneBenchmarkSpeculativeCandidate::Ngram {
                     ngram_min: 12,
@@ -1943,6 +2130,8 @@ mod benchmark_tests {
             spec_draft_models: &[],
             spec_draft_max_tokens: &[],
             spec_draft_min_tokens: &[],
+            spec_draft_acceptance_threshold: &[],
+            spec_draft_split_probability: &[],
             spec_ngram_min: &[],
             spec_ngram_max: &[],
             throughput_tolerance_pct: 3.0,
