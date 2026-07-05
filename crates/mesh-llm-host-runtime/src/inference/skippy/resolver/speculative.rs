@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::models::find_model_path;
 use anyhow::{Result, bail};
 use mesh_llm_system::util::validate_draft_min_max;
 use model_artifact::gguf::{scan_gguf_compact_meta, scan_gguf_tensor_names_any};
@@ -36,6 +37,7 @@ pub(super) fn resolve_speculative_config(
         model_config.and_then(|config| config.draft_model_path.clone()),
         global_config.and_then(|config| config.draft_model_path.clone()),
     )
+    .map(resolve_draft_model_path)
     .map(PathBuf::from);
     let supports_native_mtp = package_generation_supports_native_mtp(package_generation)
         || direct_gguf_supports_native_mtp(model_path)
@@ -214,6 +216,21 @@ fn resolved_draft_max_tokens(native_mtp_enabled: bool, draft_max_tokens: u32) ->
         return 3;
     }
     draft_max_tokens
+}
+
+fn resolve_draft_model_path(raw: String) -> String {
+    let raw_path = PathBuf::from(&raw);
+    if raw_path.is_file() {
+        return raw;
+    }
+    if !raw.contains(':') {
+        return raw;
+    }
+    let candidate = find_model_path(&raw);
+    if candidate.exists() {
+        return candidate.to_string_lossy().into_owned();
+    }
+    raw
 }
 
 fn resolve_draft_speculative_mode(
