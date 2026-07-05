@@ -1187,16 +1187,17 @@ stage_layer_end = 24
 }
 
 #[test]
-fn unsupported_speculative_thresholds_fail_closed() {
+fn benchmark_speculative_thresholds_are_now_accepted() {
     let mesh_config = parse_config(
         r#"
 [defaults.speculative]
 draft_acceptance_threshold = 0.5
+draft_split_probability = 0.3
 "#,
     );
     let model_file = temp_model_file();
 
-    let err = resolve_skippy_config(SkippyConfigResolveRequest {
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
         mesh_config: &mesh_config,
         model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
         model_path: model_file.path(),
@@ -1205,10 +1206,11 @@ draft_acceptance_threshold = 0.5
         request_defaults: None,
         package_generation: None,
     })
-    .unwrap_err()
-    .to_string();
+    .expect("draft_acceptance_threshold and draft_split_probability should be accepted");
 
-    assert!(err.contains("draft_acceptance_threshold"));
+    // They are schema-level only for now; the resolver accepts and stores them
+    // on the resolved config, which the benchmark tune path writes into trial configs.
+    assert_eq!(resolved.speculative.mode, "disabled");
 }
 
 #[test]
@@ -1249,20 +1251,6 @@ draft_cache_type_k = "q8_0"
 draft_cache_type_v = "q8_0"
 "#,
             "speculative.draft_cache_type_v",
-        ),
-        (
-            r#"
-[defaults.speculative]
-draft_acceptance_threshold = 0.5
-"#,
-            "speculative.draft_acceptance_threshold",
-        ),
-        (
-            r#"
-[defaults.speculative]
-draft_split_probability = 0.5
-"#,
-            "speculative.draft_split_probability",
         ),
         (
             r#"

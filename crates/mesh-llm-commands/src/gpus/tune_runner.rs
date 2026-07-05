@@ -73,6 +73,31 @@ fn run_tune_request_with_writer(
     );
 
     let prepared = prepare_tune_plans(&config, &resolution, apply_mode, &mut target_failures);
+
+    if !global_safety_errors.is_empty() {
+        let output_context = RunnerOutputContext {
+            command: args.command,
+            render_json,
+            launch_args: args.launch_args,
+            config: &config,
+            apply_mode,
+            prepared: &prepared,
+            target_failures: &target_failures,
+            global_blockers: &[],
+            benchmark_reports: &[],
+        };
+        emit_runner_output_for(writer, output_context, &global_safety_errors)?;
+        let detail = global_safety_errors
+            .into_iter()
+            .map(|problem| format!("  - {problem}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!(
+            "{} apply aborted before writing config:\n{detail}",
+            command_label(args.command)
+        );
+    }
+
     let benchmark_reports = maybe_run_benchmark_reports(
         args.benchmark
             .as_ref()
@@ -89,19 +114,6 @@ fn run_tune_request_with_writer(
         global_blockers: &[],
         benchmark_reports: &benchmark_reports,
     };
-
-    if !global_safety_errors.is_empty() {
-        emit_runner_output_for(writer, output_context, &global_safety_errors)?;
-        let detail = global_safety_errors
-            .into_iter()
-            .map(|problem| format!("  - {problem}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        bail!(
-            "{} apply aborted before writing config:\n{detail}",
-            command_label(args.command)
-        );
-    }
 
     if resolution.resolved.is_empty() && target_failures.is_empty() {
         bail!(

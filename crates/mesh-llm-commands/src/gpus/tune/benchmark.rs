@@ -191,7 +191,10 @@ fn run_trial_inner(
     let trial_dir = create_trial_dir(prepared, index)?;
     let config_path = trial_dir.join("config.toml");
     let log_path = trial_dir.join("serve.log");
-    std::fs::write(&config_path, trial_config(request.config, prepared, candidate)?)?;
+    std::fs::write(
+        &config_path,
+        trial_config(request.config, prepared, candidate)?,
+    )?;
 
     let port = reserve_local_port()?;
     let console = reserve_local_port()?;
@@ -590,7 +593,10 @@ fn trial_config(
     Ok(doc.to_string())
 }
 
-fn apply_trial_runtime_config(doc: &mut toml_edit::DocumentMut, config: &mesh_llm_config::MeshConfig) {
+fn apply_trial_runtime_config(
+    doc: &mut toml_edit::DocumentMut,
+    config: &mesh_llm_config::MeshConfig,
+) {
     let runtime = match ensure_trial_subtable(doc.as_table_mut(), "runtime") {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -601,11 +607,9 @@ fn apply_trial_runtime_config(doc: &mut toml_edit::DocumentMut, config: &mesh_ll
 
     runtime["debug"] = toml_edit::value(config.runtime.debug);
     runtime["listen_all"] = toml_edit::value(config.runtime.listen_all);
-    runtime["reconcile_model_targets"] =
-        toml_edit::value(config.runtime.reconcile_model_targets);
-    runtime["reconcile_model_target_demand_upgrades"] = toml_edit::value(
-        config.runtime.reconcile_model_target_demand_upgrades,
-    );
+    runtime["reconcile_model_targets"] = toml_edit::value(config.runtime.reconcile_model_targets);
+    runtime["reconcile_model_target_demand_upgrades"] =
+        toml_edit::value(config.runtime.reconcile_model_target_demand_upgrades);
 
     if config.runtime.native_runtime.mesh_version.is_some()
         || config.runtime.native_runtime.skippy_abi.is_some()
@@ -651,9 +655,8 @@ fn apply_candidate_overrides(
     model_fit["cache_type_k"] = toml_edit::value(render_cache_type(candidate.cache_type_k));
     model_fit["cache_type_v"] = toml_edit::value(render_cache_type(candidate.cache_type_v));
     let hardware = ensure_trial_subtable(table, "hardware")?;
-    hardware["mmap"] = toml_edit::value(crate::gpus::tune_apply::render_bool_or_auto(
-        candidate.mmap,
-    ));
+    hardware["mmap"] =
+        toml_edit::value(crate::gpus::tune_apply::render_bool_or_auto(candidate.mmap));
     hardware["mlock"] = toml_edit::value(candidate.mlock);
     apply_speculative_overrides(table, &candidate.speculative)?;
     Ok(())
@@ -749,10 +752,11 @@ fn create_trial_dir(
         &prepared.target.canonical_model_ref,
     ));
     dir.push(format!(
-        "{}-{index}",
+        "{}-{}-{index}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs()
+            .as_nanos(),
+        std::process::id(),
     ));
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
@@ -929,7 +933,8 @@ fn push_mtp_speculative_candidates(
     };
     let max_tokens = positive_or_default(request.spec_draft_max_tokens, &[2, 3, 4]);
     let min_tokens = values_or_default_allow_zero(request.spec_draft_min_tokens, &[0]);
-    let acceptance_thresholds = optional_probability_values(request.spec_draft_acceptance_threshold);
+    let acceptance_thresholds =
+        optional_probability_values(request.spec_draft_acceptance_threshold);
     let split_probabilities = optional_probability_values(request.spec_draft_split_probability);
     for draft_model_path in draft_models {
         for draft_max_tokens in &max_tokens {
@@ -1017,7 +1022,8 @@ fn push_draft_speculative_candidates(
     }
     let max_tokens = positive_or_default(request.spec_draft_max_tokens, &[4, 8, 16]);
     let min_tokens = optional_positive_values(request.spec_draft_min_tokens);
-    let acceptance_thresholds = optional_probability_values(request.spec_draft_acceptance_threshold);
+    let acceptance_thresholds =
+        optional_probability_values(request.spec_draft_acceptance_threshold);
     let split_probabilities = optional_probability_values(request.spec_draft_split_probability);
     for draft_model_path in draft_models {
         for draft_max_tokens in &max_tokens {
@@ -1405,7 +1411,12 @@ mod benchmark_tests {
             },
         };
 
-        let rendered = trial_config(&mesh_llm_config::MeshConfig::default(), &prepared, &candidate).expect("trial config renders");
+        let rendered = trial_config(
+            &mesh_llm_config::MeshConfig::default(),
+            &prepared,
+            &candidate,
+        )
+        .expect("trial config renders");
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let model = parsed.models.first().expect("model row exists");
 
@@ -1485,35 +1496,22 @@ mod benchmark_tests {
         let mut config = mesh_llm_config::MeshConfig::default();
         config.runtime.native_runtime.mesh_version = Some("0.68.0".to_string());
         config.runtime.native_runtime.skippy_abi = Some("0.1.25".to_string());
-        config.runtime.native_runtime.selection = Some(
-            "exact:meshllm-native-runtime-linux-x86_64-cuda12".to_string(),
-        );
+        config.runtime.native_runtime.selection =
+            Some("exact:meshllm-native-runtime-linux-x86_64-cuda12".to_string());
 
         let rendered = trial_config(&config, &prepared, &candidate).expect("trial config renders");
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
 
         assert_eq!(
-            parsed
-                .runtime
-                .native_runtime
-                .mesh_version
-                .as_deref(),
+            parsed.runtime.native_runtime.mesh_version.as_deref(),
             Some("0.68.0")
         );
         assert_eq!(
-            parsed
-                .runtime
-                .native_runtime
-                .skippy_abi
-                .as_deref(),
+            parsed.runtime.native_runtime.skippy_abi.as_deref(),
             Some("0.1.25")
         );
         assert_eq!(
-            parsed
-                .runtime
-                .native_runtime
-                .selection
-                .as_deref(),
+            parsed.runtime.native_runtime.selection.as_deref(),
             Some("exact:meshllm-native-runtime-linux-x86_64-cuda12")
         );
     }
@@ -1538,7 +1536,12 @@ mod benchmark_tests {
             },
         };
 
-        let rendered = trial_config(&mesh_llm_config::MeshConfig::default(), &prepared, &candidate).expect("trial config renders");
+        let rendered = trial_config(
+            &mesh_llm_config::MeshConfig::default(),
+            &prepared,
+            &candidate,
+        )
+        .expect("trial config renders");
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let speculative = parsed
             .models
@@ -1577,7 +1580,12 @@ mod benchmark_tests {
             },
         };
 
-        let rendered = trial_config(&mesh_llm_config::MeshConfig::default(), &prepared, &candidate).expect("trial config renders");
+        let rendered = trial_config(
+            &mesh_llm_config::MeshConfig::default(),
+            &prepared,
+            &candidate,
+        )
+        .expect("trial config renders");
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let speculative = parsed
             .models
@@ -1632,7 +1640,12 @@ mod benchmark_tests {
             speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
         };
 
-        let rendered = trial_config(&mesh_llm_config::MeshConfig::default(), &prepared, &candidate).expect("trial config renders");
+        let rendered = trial_config(
+            &mesh_llm_config::MeshConfig::default(),
+            &prepared,
+            &candidate,
+        )
+        .expect("trial config renders");
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let model = parsed.models.first().expect("model row exists");
 
@@ -1663,7 +1676,12 @@ mod benchmark_tests {
             },
         };
 
-        let rendered = trial_config(&mesh_llm_config::MeshConfig::default(), &prepared, &candidate).expect("trial config renders");
+        let rendered = trial_config(
+            &mesh_llm_config::MeshConfig::default(),
+            &prepared,
+            &candidate,
+        )
+        .expect("trial config renders");
         let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
         let speculative = parsed
             .models

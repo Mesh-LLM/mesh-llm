@@ -192,22 +192,7 @@ fn reject_unsupported_speculative_runtime_fields(
     {
         unsupported_speculative_field("speculative.draft_threads")?;
     }
-    if pick_owned(
-        model_config.and_then(|config| config.draft_acceptance_threshold),
-        global_config.and_then(|config| config.draft_acceptance_threshold),
-    )
-    .is_some()
-    {
-        unsupported_speculative_field("speculative.draft_acceptance_threshold")?;
-    }
-    if pick_owned(
-        model_config.and_then(|config| config.draft_split_probability),
-        global_config.and_then(|config| config.draft_split_probability),
-    )
-    .is_some()
-    {
-        unsupported_speculative_field("speculative.draft_split_probability")?;
-    }
+
     Ok(())
 }
 
