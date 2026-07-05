@@ -92,6 +92,8 @@ pub(crate) struct TuneBenchmarkCandidate {
     pub mmap: TuneBoolOrAutoValue,
     pub mlock: bool,
     pub speculative: TuneBenchmarkSpeculativeCandidate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flash_attention: Option<TuneFlashAttentionValue>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]

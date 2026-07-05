@@ -69,7 +69,7 @@ pub(crate) fn render_recommended_value(value: &TuneRecommendedValue) -> String {
 }
 
 pub(crate) fn render_benchmark_candidate(candidate: &TuneBenchmarkCandidate) -> String {
-    format!(
+    let mut s = format!(
         "ctx={} batch={} ubatch={} cache_k={} cache_v={} mmap={} mlock={} spec={}",
         candidate.ctx_size,
         candidate.batch,
@@ -79,7 +79,15 @@ pub(crate) fn render_benchmark_candidate(candidate: &TuneBenchmarkCandidate) -> 
         render_benchmark_bool_or_auto(candidate.mmap),
         candidate.mlock,
         render_benchmark_speculative(&candidate.speculative),
-    )
+    );
+    if let Some(fa) = candidate.flash_attention {
+        let fa_str = match fa {
+            TuneFlashAttentionValue::Enabled => "enabled",
+            TuneFlashAttentionValue::Disabled => "disabled",
+        };
+        s.push_str(&format!(" flash={fa_str}"));
+    }
+    s
 }
 
 fn render_cache_type(value: TuneKvCacheType) -> &'static str {

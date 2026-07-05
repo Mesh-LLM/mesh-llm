@@ -6,6 +6,7 @@ pub(crate) struct TuneBenchmarkRunRequest<'a> {
     pub(crate) ubatch_sizes: &'a [u32],
     pub(crate) mmap_values: &'a [mesh_llm_cli::benchmark::BenchmarkBoolOrAuto],
     pub(crate) mlock_values: &'a [mesh_llm_cli::benchmark::BenchmarkBool],
+    pub(crate) flash_attention_values: &'a [mesh_llm_cli::benchmark::BenchmarkFlashAttention],
     pub(crate) speculative_types: &'a [mesh_llm_cli::benchmark::BenchmarkSpeculativeType],
     pub(crate) no_speculative_tune: bool,
     pub(crate) spec_draft_models: &'a [std::path::PathBuf],
@@ -102,27 +103,31 @@ fn benchmark_candidates(
     let mmap_values = benchmark_mmap_values(request.mmap_values, &prepared.plan);
     let mlock_values = benchmark_mlock_values(request.mlock_values, &prepared.plan);
     let speculative_values = benchmark_speculative_values(request, prepared);
+    let flash_attention_values = benchmark_flash_attention_values(request.flash_attention_values);
 
     let mut candidates = Vec::new();
-    for ctx_size in contexts {
-        for &batch in &batches {
-            for &ubatch in &ubatches {
-                if ubatch > batch {
-                    continue;
-                }
-                for &mmap in &mmap_values {
-                    for &mlock in &mlock_values {
-                        for speculative in &speculative_values {
-                            candidates.push(TuneBenchmarkCandidate {
-                                ctx_size,
-                                batch,
-                                ubatch,
-                                cache_type_k,
-                                cache_type_v,
-                                mmap,
-                                mlock,
-                                speculative: speculative.clone(),
-                            });
+    for &fa in &flash_attention_values {
+        for ctx_size in &contexts {
+            for &batch in &batches {
+                for &ubatch in &ubatches {
+                    if ubatch > batch {
+                        continue;
+                    }
+                    for &mmap in &mmap_values {
+                        for &mlock in &mlock_values {
+                            for speculative in &speculative_values {
+                                candidates.push(TuneBenchmarkCandidate {
+                                    ctx_size: *ctx_size,
+                                    batch,
+                                    ubatch,
+                                    cache_type_k,
+                                    cache_type_v,
+                                    mmap,
+                                    mlock,
+                                    speculative: speculative.clone(),
+                                    flash_attention: fa,
+                                });
+                            }
                         }
                     }
                 }
@@ -654,6 +659,10 @@ fn apply_candidate_overrides(
     model_fit["ubatch"] = toml_edit::value(i64::from(candidate.ubatch));
     model_fit["cache_type_k"] = toml_edit::value(render_cache_type(candidate.cache_type_k));
     model_fit["cache_type_v"] = toml_edit::value(render_cache_type(candidate.cache_type_v));
+    if let Some(fa) = candidate.flash_attention {
+        model_fit["flash_attention"] =
+            toml_edit::value(crate::gpus::tune_apply::render_flash_attention(fa));
+    }
     let hardware = ensure_trial_subtable(table, "hardware")?;
     hardware["mmap"] =
         toml_edit::value(crate::gpus::tune_apply::render_bool_or_auto(candidate.mmap));
@@ -850,6 +859,29 @@ fn benchmark_mlock_values(
         })
         .collect::<Vec<_>>();
     values.sort_unstable();
+    values.dedup();
+    values
+}
+
+fn benchmark_flash_attention_values(
+    requested: &[mesh_llm_cli::benchmark::BenchmarkFlashAttention],
+) -> Vec<Option<TuneFlashAttentionValue>> {
+    if requested.is_empty() {
+        return vec![None];
+    }
+    let mut values = requested
+        .iter()
+        .copied()
+        .map(|value| match value {
+            mesh_llm_cli::benchmark::BenchmarkFlashAttention::On => {
+                Some(TuneFlashAttentionValue::Enabled)
+            }
+            mesh_llm_cli::benchmark::BenchmarkFlashAttention::Off => {
+                Some(TuneFlashAttentionValue::Disabled)
+            }
+        })
+        .collect::<Vec<_>>();
+    values.sort_unstable_by_key(|v| v.is_none());
     values.dedup();
     values
 }
@@ -1409,6 +1441,7 @@ mod benchmark_tests {
                 draft_acceptance_threshold: None,
                 draft_split_probability: None,
             },
+            flash_attention: None,
         };
 
         let rendered = trial_config(
@@ -1491,6 +1524,7 @@ mod benchmark_tests {
             mmap: TuneBoolOrAutoValue::Disabled,
             mlock: false,
             speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
+            flash_attention: None,
         };
 
         let mut config = mesh_llm_config::MeshConfig::default();
@@ -1534,6 +1568,7 @@ mod benchmark_tests {
                 draft_acceptance_threshold: None,
                 draft_split_probability: None,
             },
+            flash_attention: None,
         };
 
         let rendered = trial_config(
@@ -1578,6 +1613,7 @@ mod benchmark_tests {
                 draft_acceptance_threshold: None,
                 draft_split_probability: None,
             },
+            flash_attention: None,
         };
 
         let rendered = trial_config(
@@ -1638,6 +1674,7 @@ mod benchmark_tests {
             mmap: TuneBoolOrAutoValue::Enabled,
             mlock: false,
             speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
+            flash_attention: None,
         };
 
         let rendered = trial_config(
@@ -1674,6 +1711,7 @@ mod benchmark_tests {
                 ngram_min: 12,
                 ngram_max: 48,
             },
+            flash_attention: None,
         };
 
         let rendered = trial_config(
@@ -2143,6 +2181,7 @@ mod benchmark_tests {
             ubatch_sizes: &[],
             mmap_values: &[],
             mlock_values: &[],
+            flash_attention_values: &[],
             speculative_types: &[],
             no_speculative_tune: false,
             spec_draft_models: &[],
@@ -2236,6 +2275,7 @@ mod benchmark_tests {
                 mmap,
                 mlock,
                 speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
+                flash_attention: None,
             },
             status: TuneBenchmarkTrialStatus::Succeeded,
             completion_tokens: Some(128),

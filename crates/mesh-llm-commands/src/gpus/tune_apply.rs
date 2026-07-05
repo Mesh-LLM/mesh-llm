@@ -190,7 +190,7 @@ fn render_kv_cache_type(value_kind: TuneKvCacheType) -> &'static str {
     }
 }
 
-fn render_flash_attention(value_kind: TuneFlashAttentionValue) -> &'static str {
+pub(crate) fn render_flash_attention(value_kind: TuneFlashAttentionValue) -> &'static str {
     match value_kind {
         TuneFlashAttentionValue::Enabled => "enabled",
         TuneFlashAttentionValue::Disabled => "disabled",

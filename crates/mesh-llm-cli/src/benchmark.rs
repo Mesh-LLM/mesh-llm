@@ -49,6 +49,9 @@ pub struct BenchmarkTuneCommand {
     /// mlock values to benchmark independently: enabled, disabled.
     #[arg(long = "mlock-values", value_delimiter = ',')]
     pub mlock_values: Vec<BenchmarkBool>,
+    /// Flash attention values to benchmark independently: on, off.
+    #[arg(long = "flash-attention", value_delimiter = ',')]
+    pub flash_attention: Vec<BenchmarkFlashAttention>,
     /// Speculative decoding types to benchmark: auto, disabled, mtp, draft, ngram.
     #[arg(
         long = "speculative-types",
@@ -139,6 +142,14 @@ pub enum BenchmarkBool {
     Enabled,
     #[value(alias = "false")]
     Disabled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum BenchmarkFlashAttention {
+    #[value(alias = "enabled", alias = "true", alias = "1")]
+    On,
+    #[value(alias = "disabled", alias = "false", alias = "0")]
+    Off,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

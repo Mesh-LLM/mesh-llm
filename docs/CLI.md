@@ -383,6 +383,7 @@ mesh-llm benchmark tune --model /models/qwen3-8b.gguf
 mesh-llm benchmark tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --mmap-values auto,true,false --mlock-values true,false
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --flash-attention on,off
 mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types auto
 mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types mtp --debug-telemetry --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --speculative-types draft,ngram,disabled --spec-draft-models /models/qwen3-draft.gguf --spec-draft-max-tokens 4,8,16 --spec-ngram-min 12,24 --spec-ngram-max 48,64
@@ -404,6 +405,7 @@ Switches:
 - `--batch-sizes <VALUES>` / `--ubatch-sizes <VALUES>`: comma-separated batch and micro-batch values to benchmark. Candidates where `ubatch > batch` are skipped.
 - `--mmap-values <VALUES>`: comma-separated mmap values to benchmark independently: `auto`, `enabled`/`true`, or `disabled`/`false`. If omitted, benchmark tune tries all three.
 - `--mlock-values <VALUES>`: comma-separated mlock values to benchmark independently: `enabled`/`true` or `disabled`/`false`. If omitted, benchmark tune tries `false` and also tries `true` only when the mlock probe says the evaluated budget can be locked.
+- `--flash-attention <VALUES>`: comma-separated flash attention values to benchmark independently: `on`/`enabled`/`true` or `off`/`disabled`/`false`. When omitted, flash attention is not varied during the sweep. When supplied (e.g. `--flash-attention on,off`), trial count doubles and the recommendation applies the best flash attention setting.
 - `--speculative-types <VALUES>`: comma-separated speculative decoding types to benchmark: `auto`, `mtp`, `draft`, `ngram`, or `disabled`. If omitted, `auto` tries native MTP first for MTP-looking targets, then discovered draft candidates, then ngram candidates, then a disabled baseline.
 - `--no-speculative-tune`: skip speculative sweeps and benchmark only the disabled speculative baseline.
 - `--spec-draft-models <PATHS>`: comma-separated local draft GGUF paths for `draft` speculation trials. Tune also considers configured `draft_model_path` values and obvious local sibling draft/EAGLE GGUF files.

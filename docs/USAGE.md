@@ -100,7 +100,7 @@ Bare `mesh-llm serve` loads startup models from `[[models]]` in `~/.mesh-llm/con
 
 ## Benchmark tuning
 
-`mesh-llm benchmark tune` measures local model-serving throughput for already-downloaded local models. It resolves local targets, plans safe startup settings, creates temporary per-trial configs, starts isolated local `mesh-llm serve` children, sends OpenAI-compatible chat-completion requests, reports decode tok/s plus setup/readiness/request/shutdown/total timing stats for each context/batch/ubatch/mmap/mlock/speculative-decoding candidate, and keeps trial logs under `target/gpu-tune/`.
+`mesh-llm benchmark tune` measures local model-serving throughput for already-downloaded local models. It resolves local targets, plans safe startup settings, creates temporary per-trial configs, starts isolated local `mesh-llm serve` children, sends OpenAI-compatible chat-completion requests, reports decode tok/s plus setup/readiness/request/shutdown/total timing stats for each context/batch/ubatch/mmap/mlock/flash-attention/speculative-decoding candidate, and keeps trial logs under `target/gpu-tune/`.
 
 Benchmark tune reports the raw highest-throughput trial, the Pareto frontier for decode tok/s versus `ctx_size`, and a recommended trial. By default, the recommendation treats candidates within `10.0%` of the raw best decode tok/s as throughput-equivalent, then chooses the largest context window among those candidates.
 
@@ -109,6 +109,7 @@ mesh-llm benchmark tune --model /models/qwen3-8b.gguf
 mesh-llm benchmark tune --models /models/qwen3-8b.gguf,/models/mixtral.gguf --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --ctx-sizes 4096,8192,16384 --batch-sizes 1024,2048 --ubatch-sizes 256,512
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --mmap-values auto,true,false --mlock-values true,false
+mesh-llm benchmark tune --model /models/qwen3-8b.gguf --flash-attention on,off
 mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types auto
 mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types mtp --debug-telemetry --json
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --speculative-types draft,ngram,disabled --spec-draft-models /models/qwen3-draft.gguf --spec-draft-max-tokens 4,8,16
@@ -118,7 +119,7 @@ mesh-llm benchmark tune --model /models/qwen3-8b.gguf --apply --replace-existing
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --launch-args
 ```
 
-If `--mmap-values` is omitted, benchmark tune tries `auto`, `true`, and `false`. If `--mlock-values` is omitted, it tries `false` and only tries `true` when the current mlock limit can cover the evaluated budget.
+If `--mmap-values` is omitted, benchmark tune tries `auto`, `true`, and `false`. If `--mlock-values` is omitted, it tries `false` and only tries `true` when the current mlock limit can cover the evaluated budget. If `--flash-attention` is omitted, flash attention is not varied during the sweep; when supplied (e.g. `--flash-attention on,off`), trial count doubles and the recommendation applies the best flash attention setting.
 If `--speculative-types` is omitted, benchmark tune uses `auto`: native MTP is tried first for MTP-looking targets, locally discoverable draft models are tried when available, ngram candidates are tried as a model-free fallback, and a disabled baseline is included for comparison. Use `--speculative-types mtp,draft,ngram,disabled` to force an explicit speculative sweep, or `--no-speculative-tune` to reproduce the old disabled-baseline-only sweep.
 Use `--apply` to write the recommended settings into `~/.mesh-llm/config.toml`, and combine with `--replace-existing` to overwrite existing writable recommendation fields. `--launch-args` prints generated `mesh-llm serve` arguments for local launch without writing config.
 Use `--debug-telemetry` when proving speculative decoding behavior: each trial log includes Skippy debug telemetry, including `llama_stage.native_mtp.*` summary attributes for MTP drafted, accepted, rejected, and accept-rate counts.
