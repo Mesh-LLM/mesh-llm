@@ -210,10 +210,16 @@ fn collect_legacy_draft_model_path_warnings(
                 .as_deref()
                 .is_some_and(|v| v.contains(':'))
             {
-                let mut used_path = ConfigPath::from_fields(["models", "speculative", "draft_model_path"]);
-                used_path.segments.insert(1, ConfigPathSegment::Index { index });
-                let mut canonical_path = ConfigPath::from_fields(["models", "speculative", "draft_model"]);
-                canonical_path.segments.insert(1, ConfigPathSegment::Index { index });
+                let mut used_path =
+                    ConfigPath::from_fields(["models", "speculative", "draft_model_path"]);
+                used_path
+                    .segments
+                    .insert(1, ConfigPathSegment::Index { index });
+                let mut canonical_path =
+                    ConfigPath::from_fields(["models", "speculative", "draft_model"]);
+                canonical_path
+                    .segments
+                    .insert(1, ConfigPathSegment::Index { index });
                 diagnostics.push(alias_diagnostic(
                     used_path,
                     canonical_path,

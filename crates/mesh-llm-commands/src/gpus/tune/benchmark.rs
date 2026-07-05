@@ -691,7 +691,12 @@ fn apply_speculative_overrides(
             spec_table["strategy"] = toml_edit::value("mtp");
             spec_table["mode"] = toml_edit::value("auto");
             if let Some(draft_model) = draft_model {
-                spec_table["draft_model"] = toml_edit::value(draft_model.as_str());
+                let key = if draft_model.contains(':') {
+                    "draft_model"
+                } else {
+                    "draft_model_path"
+                };
+                spec_table[key] = toml_edit::value(draft_model.as_str());
                 spec_table["draft_selection_policy"] = toml_edit::value("manual");
                 spec_table["pairing_fault"] = toml_edit::value("fail_closed");
             }
@@ -713,7 +718,12 @@ fn apply_speculative_overrides(
         } => {
             spec_table["strategy"] = toml_edit::value("disabled");
             spec_table["mode"] = toml_edit::value("draft");
-            spec_table["draft_model"] = toml_edit::value(draft_model.as_str());
+            let key = if draft_model.contains(':') {
+                "draft_model"
+            } else {
+                "draft_model_path"
+            };
+            spec_table[key] = toml_edit::value(draft_model.as_str());
             spec_table["draft_selection_policy"] = toml_edit::value("manual");
             spec_table["pairing_fault"] = toml_edit::value("fail_closed");
             spec_table["draft_max_tokens"] = toml_edit::value(i64::from(*draft_max_tokens));
