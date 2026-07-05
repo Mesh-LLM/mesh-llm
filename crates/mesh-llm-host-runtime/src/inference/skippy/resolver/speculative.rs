@@ -34,8 +34,8 @@ pub(super) fn resolve_speculative_config(
     let auto_defaults_enabled =
         !matches!(spec_default, Some(BoolOrAuto::Bool(false))) || has_explicit_strategy;
     let mut draft_model_path = pick_owned(
-        model_config.and_then(|config| config.draft_model_path.clone()),
-        global_config.and_then(|config| config.draft_model_path.clone()),
+        model_config.and_then(|config| config.draft_model.clone()),
+        global_config.and_then(|config| config.draft_model.clone()),
     )
     .map(resolve_draft_model_path)
     .map(PathBuf::from);

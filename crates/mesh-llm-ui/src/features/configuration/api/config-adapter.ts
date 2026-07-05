@@ -1192,7 +1192,7 @@ function modelConfigFromEntry(
 
   config.tensorSplit = stringModelEntryValue(entry, 'models.<model-ref>.hardware.tensor_split')
   config.mmproj = stringModelEntryValue(entry, placementPaths.mmproj ?? DEFAULT_MODEL_PLACEMENT_PATHS.mmproj!)
-  config.draftModelPath = stringModelEntryValue(entry, 'models.<model-ref>.speculative.draft_model_path')
+  config.draftModelPath = stringModelEntryValue(entry, 'models.<model-ref>.speculative.draft_model')
 
   const flashAttention = stringModelEntryValue(
     entry,
@@ -1879,7 +1879,7 @@ function writeSelectedModelConfig(
     placementPaths.mmproj ?? DEFAULT_MODEL_PLACEMENT_PATHS.mmproj!,
     config?.mmproj?.trim()
   )
-  writeOptionalModelEntryPath(entry, 'models.<model-ref>.speculative.draft_model_path', config?.draftModelPath?.trim())
+  writeOptionalModelEntryPath(entry, 'models.<model-ref>.speculative.draft_model', config?.draftModelPath?.trim())
   writeOptionalModelEntryPath(
     entry,
     placementPaths.flashAttention ?? DEFAULT_MODEL_PLACEMENT_PATHS.flashAttention!,

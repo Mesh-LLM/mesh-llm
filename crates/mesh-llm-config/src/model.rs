@@ -539,47 +539,154 @@ pub struct SkippyConfig {
     pub prefill_chunk_schedule: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpeculativeConfig {
-    #[serde(default, deserialize_with = "deserialize_speculative_strategy")]
     pub strategy: Option<String>,
-    #[serde(default)]
     pub mode: Option<String>,
-    #[serde(default)]
-    pub draft_model_path: Option<String>,
-    #[serde(default)]
+    pub draft_model: Option<String>,
     pub draft_hf_repo: Option<String>,
-    #[serde(default)]
     pub draft_hf_file: Option<String>,
-    #[serde(default)]
     pub draft_selection_policy: Option<String>,
-    #[serde(default)]
     pub pairing_fault: Option<String>,
-    #[serde(default)]
     pub draft_max_tokens: Option<u32>,
-    #[serde(default)]
     pub draft_min_tokens: Option<u32>,
-    #[serde(default)]
     pub draft_acceptance_threshold: Option<f64>,
-    #[serde(default)]
     pub draft_split_probability: Option<f64>,
-    #[serde(default)]
     pub draft_gpu_layers: Option<i32>,
-    #[serde(default)]
     pub draft_device: Option<String>,
-    #[serde(default)]
     pub draft_threads: Option<usize>,
-    #[serde(default)]
     pub draft_cache_type_k: Option<String>,
-    #[serde(default)]
     pub draft_cache_type_v: Option<String>,
-    #[serde(default)]
     pub ngram_min: Option<u32>,
-    #[serde(default)]
     pub ngram_max: Option<u32>,
-    #[serde(default)]
     pub spec_default: Option<BoolOrAuto>,
+    pub(crate) legacy_draft_model_path_used: bool,
+}
+
+/// Raw deserialization helper that accepts both `draft_model` and the legacy
+/// `draft_model_path` key. The public `SpeculativeConfig` is constructed from
+/// this after detecting which key was used.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpeculativeConfigRaw {
+    #[serde(default, deserialize_with = "deserialize_speculative_strategy")]
+    strategy: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    draft_model: Option<String>,
+    #[serde(default)]
+    draft_model_path: Option<String>,
+    #[serde(default)]
+    draft_hf_repo: Option<String>,
+    #[serde(default)]
+    draft_hf_file: Option<String>,
+    #[serde(default)]
+    draft_selection_policy: Option<String>,
+    #[serde(default)]
+    pairing_fault: Option<String>,
+    #[serde(default)]
+    draft_max_tokens: Option<u32>,
+    #[serde(default)]
+    draft_min_tokens: Option<u32>,
+    #[serde(default)]
+    draft_acceptance_threshold: Option<f64>,
+    #[serde(default)]
+    draft_split_probability: Option<f64>,
+    #[serde(default)]
+    draft_gpu_layers: Option<i32>,
+    #[serde(default)]
+    draft_device: Option<String>,
+    #[serde(default)]
+    draft_threads: Option<usize>,
+    #[serde(default)]
+    draft_cache_type_k: Option<String>,
+    #[serde(default)]
+    draft_cache_type_v: Option<String>,
+    #[serde(default)]
+    ngram_min: Option<u32>,
+    #[serde(default)]
+    ngram_max: Option<u32>,
+    #[serde(default)]
+    spec_default: Option<BoolOrAuto>,
+}
+
+impl<'de> Deserialize<'de> for SpeculativeConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = SpeculativeConfigRaw::deserialize(deserializer)?;
+        let legacy_used = raw.draft_model_path.is_some();
+        if raw.draft_model.is_some() && raw.draft_model_path.is_some() {
+            return Err(serde::de::Error::custom(
+                "speculative config cannot set both `draft_model` and the legacy `draft_model_path`; \
+                 use `draft_model` only",
+            ));
+        }
+        Ok(SpeculativeConfig {
+            strategy: raw.strategy,
+            mode: raw.mode,
+            draft_model: raw.draft_model.or(raw.draft_model_path),
+            draft_hf_repo: raw.draft_hf_repo,
+            draft_hf_file: raw.draft_hf_file,
+            draft_selection_policy: raw.draft_selection_policy,
+            pairing_fault: raw.pairing_fault,
+            draft_max_tokens: raw.draft_max_tokens,
+            draft_min_tokens: raw.draft_min_tokens,
+            draft_acceptance_threshold: raw.draft_acceptance_threshold,
+            draft_split_probability: raw.draft_split_probability,
+            draft_gpu_layers: raw.draft_gpu_layers,
+            draft_device: raw.draft_device,
+            draft_threads: raw.draft_threads,
+            draft_cache_type_k: raw.draft_cache_type_k,
+            draft_cache_type_v: raw.draft_cache_type_v,
+            ngram_min: raw.ngram_min,
+            ngram_max: raw.ngram_max,
+            spec_default: raw.spec_default,
+            legacy_draft_model_path_used: legacy_used,
+        })
+    }
+}
+
+impl Serialize for SpeculativeConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(Some(21))?;
+        map.serialize_entry("strategy", &self.strategy)?;
+        map.serialize_entry("mode", &self.mode)?;
+        if self.legacy_draft_model_path_used {
+            if let Some(ref v) = self.draft_model {
+                map.serialize_entry("draft_model_path", v)?;
+            }
+        } else if let Some(ref v) = self.draft_model {
+            map.serialize_entry("draft_model", v)?;
+        }
+        map.serialize_entry("draft_hf_repo", &self.draft_hf_repo)?;
+        map.serialize_entry("draft_hf_file", &self.draft_hf_file)?;
+        map.serialize_entry("draft_selection_policy", &self.draft_selection_policy)?;
+        map.serialize_entry("pairing_fault", &self.pairing_fault)?;
+        map.serialize_entry("draft_max_tokens", &self.draft_max_tokens)?;
+        map.serialize_entry("draft_min_tokens", &self.draft_min_tokens)?;
+        map.serialize_entry(
+            "draft_acceptance_threshold",
+            &self.draft_acceptance_threshold,
+        )?;
+        map.serialize_entry("draft_split_probability", &self.draft_split_probability)?;
+        map.serialize_entry("draft_gpu_layers", &self.draft_gpu_layers)?;
+        map.serialize_entry("draft_device", &self.draft_device)?;
+        map.serialize_entry("draft_threads", &self.draft_threads)?;
+        map.serialize_entry("draft_cache_type_k", &self.draft_cache_type_k)?;
+        map.serialize_entry("draft_cache_type_v", &self.draft_cache_type_v)?;
+        map.serialize_entry("ngram_min", &self.ngram_min)?;
+        map.serialize_entry("ngram_max", &self.ngram_max)?;
+        map.serialize_entry("spec_default", &self.spec_default)?;
+        map.end()
+    }
 }
 
 fn deserialize_speculative_strategy<'de, D>(

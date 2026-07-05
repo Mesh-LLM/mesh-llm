@@ -533,10 +533,10 @@ export function appendSelectedModelConfig(
     appendModelConfigLine(
       modelLines,
       sectionLines,
-      'models.<model-ref>.speculative.draft_model_path',
+      'models.<model-ref>.speculative.draft_model',
       config.draftModelPath.trim()
     )
-    emittedKeys.add('draft_model_path')
+    emittedKeys.add('draft_model')
   }
   if (config.flashAttention) {
     appendModelConfigLine(

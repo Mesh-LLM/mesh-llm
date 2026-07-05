@@ -14,7 +14,7 @@ pub(super) fn apply_speculative_behavior(
         "mode" | "draft_selection_policy" | "pairing_fault" | "spec_default" => {
             set_static_options(setting);
         }
-        "draft_model_path" => {
+        "draft_model" => {
             set_text_format(setting, ConfigTextFormat::Path);
             non_empty(setting);
             push_mode_dependency(setting, prefix, "draft", suffix);

@@ -17,7 +17,7 @@ and write trial configs that use the same resolver path as normal serving.
 - `mode = "ngram"` is accepted by config validation, resolved for staged
   serving, translated into embedded OpenAI args, and included in benchmark tune
   auto fallback candidates.
-- Draft-model speculation wires local `draft_model_path`, `draft_max_tokens`,
+- Draft-model speculation wires local `draft_model`, `draft_max_tokens`,
   `draft_min_tokens`, `draft_gpu_layers`, and `pairing_fault`.
 - Draft HF source fields are validated but runtime rejects them.
 - Draft runtime placement fields (`draft_device`, `draft_threads`,
@@ -64,7 +64,7 @@ dropping or rejecting them:
 - `strategy`
 - `native_mtp_enabled`
 - `mode`
-- `draft_model_path`
+- `draft_model`
 - `draft_hf_repo`
 - `draft_hf_file`
 - `draft_selection_policy`
@@ -108,7 +108,7 @@ Make `strategy = "auto"` enable native MTP for direct GGUF MTP models:
 Make `draft_hf_repo` and `draft_hf_file` work:
 
 - Resolve/download draft GGUFs through existing model resolver/HF artifact code.
-- Preserve explicit local `draft_model_path` as the highest-priority source.
+- Preserve explicit local `draft_model` as the highest-priority source.
 - Implement `draft_selection_policy = "auto"` as a bounded local/catalog search
   for a compatible draft when no explicit source exists.
 - Keep `pairing_fault` semantics:

@@ -792,7 +792,7 @@
       }
     },
     {
-      "canonical_path": "defaults.speculative.draft_model_path",
+      "canonical_path": "defaults.speculative.draft_model",
       "support": "supported",
       "source": {
         "kind": "built_in"

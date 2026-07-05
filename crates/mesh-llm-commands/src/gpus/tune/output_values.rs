@@ -109,13 +109,13 @@ pub(crate) fn render_benchmark_speculative(
     match speculative {
         TuneBenchmarkSpeculativeCandidate::Disabled => "disabled".to_string(),
         TuneBenchmarkSpeculativeCandidate::Mtp {
-            draft_model_path,
+            draft_model,
             draft_max_tokens,
             draft_min_tokens,
             draft_acceptance_threshold,
             draft_split_probability,
         } => {
-            let mut base = draft_model_path.as_ref().map_or_else(
+            let mut base = draft_model.as_ref().map_or_else(
                 || format!("mtp:min={draft_min_tokens}:max={draft_max_tokens}"),
                 |path| format!("mtp:path={path}:min={draft_min_tokens}:max={draft_max_tokens}"),
             );
@@ -124,7 +124,7 @@ pub(crate) fn render_benchmark_speculative(
             base
         }
         TuneBenchmarkSpeculativeCandidate::Draft {
-            draft_model_path,
+            draft_model,
             draft_max_tokens,
             draft_min_tokens,
             draft_acceptance_threshold,
@@ -132,9 +132,9 @@ pub(crate) fn render_benchmark_speculative(
         } => {
             let mut base = match draft_min_tokens {
                 Some(draft_min_tokens) => format!(
-                    "draft:path={draft_model_path}:min={draft_min_tokens}:max={draft_max_tokens}"
+                    "draft:path={draft_model}:min={draft_min_tokens}:max={draft_max_tokens}"
                 ),
-                None => format!("draft:path={draft_model_path}:max={draft_max_tokens}"),
+                None => format!("draft:path={draft_model}:max={draft_max_tokens}"),
             };
             append_prob(&mut base, "accept", *draft_acceptance_threshold);
             append_prob(&mut base, "split", *draft_split_probability);

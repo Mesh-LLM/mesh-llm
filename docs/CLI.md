@@ -408,7 +408,7 @@ Switches:
 - `--flash-attention <VALUES>`: comma-separated flash attention values to benchmark independently: `on`/`enabled`/`true` or `off`/`disabled`/`false`. When omitted, flash attention is not varied during the sweep. When supplied (e.g. `--flash-attention on,off`), trial count doubles and the recommendation applies the best flash attention setting.
 - `--speculative-types <VALUES>`: comma-separated speculative decoding types to benchmark: `auto`, `mtp`, `draft`, `ngram`, or `disabled`. If omitted, `auto` tries native MTP first for MTP-looking targets, then discovered draft candidates, then ngram candidates, then a disabled baseline.
 - `--no-speculative-tune`: skip speculative sweeps and benchmark only the disabled speculative baseline.
-- `--spec-draft-models <PATHS>`: comma-separated local draft GGUF paths for `draft` speculation trials. Tune also considers configured `draft_model_path` values and obvious local sibling draft/EAGLE GGUF files.
+- `--spec-draft-models <PATHS>`: comma-separated local draft GGUF paths for `draft` speculation trials. Tune also considers configured `draft_model` values and obvious local sibling draft/EAGLE GGUF files.
 - `--spec-draft-max-tokens <TOKENS>` / `--spec-draft-min-tokens <TOKENS>`: comma-separated draft-token window candidates for MTP and draft speculation.
 - `--spec-ngram-min <TOKENS>` / `--spec-ngram-max <TOKENS>`: comma-separated ngram token-window candidates for ngram speculation.
 - `--throughput-tolerance-pct <PCT>`: treat candidates within this percent of the raw best decode tok/s as throughput-equivalent, then prefer the largest `ctx_size` among them, default `10.0`.

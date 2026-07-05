@@ -603,10 +603,7 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             &format!("{prefix}.mode"),
             string_enum(["auto", "disabled", "draft", "ngram"]),
         ),
-        basic_setting(
-            &format!("{prefix}.draft_model_path"),
-            ConfigValueSchema::Path,
-        ),
+        basic_setting(&format!("{prefix}.draft_model"), ConfigValueSchema::Path),
         basic_setting(
             &format!("{prefix}.draft_hf_repo"),
             ConfigValueSchema::String,
@@ -1240,7 +1237,7 @@ mod tests {
             ConfigValueSchema::Url
         );
         assert_eq!(
-            schema_value("defaults.speculative.draft_model_path"),
+            schema_value("defaults.speculative.draft_model"),
             ConfigValueSchema::Path
         );
     }

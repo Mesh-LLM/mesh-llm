@@ -387,7 +387,7 @@ draft_acceptance_threshold = 0.0             # 0.0 = use runtime default
 spec_default               = "auto"          # bool or "auto"
 
 # Draft model source (per-model is more typical; these are global fallbacks)
-# draft_model_path = "/models/draft.gguf"
+# draft_model = "org/draft-GGUF:Q4_K_M"
 # draft_hf_repo    = "org/draft-GGUF"
 # draft_hf_file    = "draft-q4_k_m.gguf"
 
@@ -546,7 +546,7 @@ prefill_chunk_schedule = "128,256,512,1024"
 
 [models.speculative]
 mode                   = "draft"
-draft_model_path       = "/models/qwen3-0.6b-q8.gguf"
+draft_model            = "org/qwen3-0.6b-draft:Q8_0"
 draft_selection_policy = "manual"
 pairing_fault          = "warn_disable"
 draft_max_tokens       = 8

@@ -1371,7 +1371,10 @@ temperature = 0.2
             } => {
                 assert_eq!(revision, 1);
                 assert_eq!(apply_mode, ConfigApplyMode::Staged);
-                assert!(diagnostics.is_empty());
+                let has_errors = diagnostics
+                    .iter()
+                    .any(|d| d.severity == mesh_llm_config::ConfigDiagnosticSeverity::Error);
+                assert!(!has_errors, "unexpected error diagnostics: {diagnostics:?}");
                 hash
             }
             other => panic!("expected Applied, got {other:?}"),

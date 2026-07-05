@@ -2064,7 +2064,7 @@ describe('adaptStatusToConfiguration', () => {
           mmproj: '/models/mmproj.gguf'
         },
         speculative: {
-          draft_model_path: '/models/draft.gguf'
+          draft_model: '/models/draft.gguf'
         },
         throughput: {
           parallel: 3

@@ -102,7 +102,7 @@ pub(crate) enum TuneBenchmarkSpeculativeCandidate {
     Disabled,
     Mtp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        draft_model_path: Option<String>,
+        draft_model: Option<String>,
         draft_max_tokens: u32,
         draft_min_tokens: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,7 +111,7 @@ pub(crate) enum TuneBenchmarkSpeculativeCandidate {
         draft_split_probability: Option<f64>,
     },
     Draft {
-        draft_model_path: String,
+        draft_model: String,
         draft_max_tokens: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         draft_min_tokens: Option<u32>,

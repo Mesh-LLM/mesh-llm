@@ -682,7 +682,7 @@ fn apply_speculative_overrides(
             spec_table["mode"] = toml_edit::value("disabled");
         }
         TuneBenchmarkSpeculativeCandidate::Mtp {
-            draft_model_path,
+            draft_model,
             draft_max_tokens,
             draft_min_tokens,
             draft_acceptance_threshold,
@@ -690,8 +690,8 @@ fn apply_speculative_overrides(
         } => {
             spec_table["strategy"] = toml_edit::value("mtp");
             spec_table["mode"] = toml_edit::value("auto");
-            if let Some(draft_model_path) = draft_model_path {
-                spec_table["draft_model_path"] = toml_edit::value(draft_model_path.as_str());
+            if let Some(draft_model) = draft_model {
+                spec_table["draft_model"] = toml_edit::value(draft_model.as_str());
                 spec_table["draft_selection_policy"] = toml_edit::value("manual");
                 spec_table["pairing_fault"] = toml_edit::value("fail_closed");
             }
@@ -705,7 +705,7 @@ fn apply_speculative_overrides(
             }
         }
         TuneBenchmarkSpeculativeCandidate::Draft {
-            draft_model_path,
+            draft_model,
             draft_max_tokens,
             draft_min_tokens,
             draft_acceptance_threshold,
@@ -713,7 +713,7 @@ fn apply_speculative_overrides(
         } => {
             spec_table["strategy"] = toml_edit::value("disabled");
             spec_table["mode"] = toml_edit::value("draft");
-            spec_table["draft_model_path"] = toml_edit::value(draft_model_path.as_str());
+            spec_table["draft_model"] = toml_edit::value(draft_model.as_str());
             spec_table["draft_selection_policy"] = toml_edit::value("manual");
             spec_table["pairing_fault"] = toml_edit::value("fail_closed");
             spec_table["draft_max_tokens"] = toml_edit::value(i64::from(*draft_max_tokens));
@@ -968,7 +968,7 @@ fn push_mtp_speculative_candidates(
     let acceptance_thresholds =
         optional_probability_values(request.spec_draft_acceptance_threshold);
     let split_probabilities = optional_probability_values(request.spec_draft_split_probability);
-    for draft_model_path in draft_models {
+    for draft_model in draft_models {
         for draft_max_tokens in &max_tokens {
             for draft_min_tokens in &min_tokens {
                 if *draft_min_tokens > *draft_max_tokens {
@@ -976,7 +976,7 @@ fn push_mtp_speculative_candidates(
                 }
                 push_mtp_threshold_cross_product(
                     candidates,
-                    draft_model_path.clone(),
+                    draft_model.clone(),
                     *draft_max_tokens,
                     *draft_min_tokens,
                     &acceptance_thresholds,
@@ -989,14 +989,14 @@ fn push_mtp_speculative_candidates(
 
 fn push_mtp_threshold_cross_product(
     candidates: &mut Vec<TuneBenchmarkSpeculativeCandidate>,
-    draft_model_path: Option<String>,
+    draft_model: Option<String>,
     draft_max_tokens: u32,
     draft_min_tokens: u32,
     acceptance_thresholds: &[f64],
     split_probabilities: &[f64],
 ) {
     let base = || TuneBenchmarkSpeculativeCandidate::Mtp {
-        draft_model_path: draft_model_path.clone(),
+        draft_model: draft_model.clone(),
         draft_max_tokens,
         draft_min_tokens,
         draft_acceptance_threshold: None,
@@ -1009,7 +1009,7 @@ fn push_mtp_threshold_cross_product(
     if acceptance_thresholds.is_empty() {
         for split_probability in split_probabilities {
             candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
-                draft_model_path: draft_model_path.clone(),
+                draft_model: draft_model.clone(),
                 draft_max_tokens,
                 draft_min_tokens,
                 draft_acceptance_threshold: None,
@@ -1021,7 +1021,7 @@ fn push_mtp_threshold_cross_product(
     if split_probabilities.is_empty() {
         for acceptance_threshold in acceptance_thresholds {
             candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
-                draft_model_path: draft_model_path.clone(),
+                draft_model: draft_model.clone(),
                 draft_max_tokens,
                 draft_min_tokens,
                 draft_acceptance_threshold: Some(*acceptance_threshold),
@@ -1033,7 +1033,7 @@ fn push_mtp_threshold_cross_product(
     for acceptance_threshold in acceptance_thresholds {
         for split_probability in split_probabilities {
             candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
-                draft_model_path: draft_model_path.clone(),
+                draft_model: draft_model.clone(),
                 draft_max_tokens,
                 draft_min_tokens,
                 draft_acceptance_threshold: Some(*acceptance_threshold),
@@ -1057,12 +1057,12 @@ fn push_draft_speculative_candidates(
     let acceptance_thresholds =
         optional_probability_values(request.spec_draft_acceptance_threshold);
     let split_probabilities = optional_probability_values(request.spec_draft_split_probability);
-    for draft_model_path in draft_models {
+    for draft_model in draft_models {
         for draft_max_tokens in &max_tokens {
             if min_tokens.is_empty() {
                 push_draft_threshold_cross_product(
                     candidates,
-                    draft_model_path.clone(),
+                    draft_model.clone(),
                     *draft_max_tokens,
                     None,
                     &acceptance_thresholds,
@@ -1074,7 +1074,7 @@ fn push_draft_speculative_candidates(
                 if draft_min_tokens <= draft_max_tokens {
                     push_draft_threshold_cross_product(
                         candidates,
-                        draft_model_path.clone(),
+                        draft_model.clone(),
                         *draft_max_tokens,
                         Some(*draft_min_tokens),
                         &acceptance_thresholds,
@@ -1088,14 +1088,14 @@ fn push_draft_speculative_candidates(
 
 fn push_draft_threshold_cross_product(
     candidates: &mut Vec<TuneBenchmarkSpeculativeCandidate>,
-    draft_model_path: String,
+    draft_model: String,
     draft_max_tokens: u32,
     draft_min_tokens: Option<u32>,
     acceptance_thresholds: &[f64],
     split_probabilities: &[f64],
 ) {
     let base = || TuneBenchmarkSpeculativeCandidate::Draft {
-        draft_model_path: draft_model_path.clone(),
+        draft_model: draft_model.clone(),
         draft_max_tokens,
         draft_min_tokens,
         draft_acceptance_threshold: None,
@@ -1108,7 +1108,7 @@ fn push_draft_threshold_cross_product(
     if acceptance_thresholds.is_empty() {
         for split_probability in split_probabilities {
             candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
-                draft_model_path: draft_model_path.clone(),
+                draft_model: draft_model.clone(),
                 draft_max_tokens,
                 draft_min_tokens,
                 draft_acceptance_threshold: None,
@@ -1120,7 +1120,7 @@ fn push_draft_threshold_cross_product(
     if split_probabilities.is_empty() {
         for acceptance_threshold in acceptance_thresholds {
             candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
-                draft_model_path: draft_model_path.clone(),
+                draft_model: draft_model.clone(),
                 draft_max_tokens,
                 draft_min_tokens,
                 draft_acceptance_threshold: Some(*acceptance_threshold),
@@ -1132,7 +1132,7 @@ fn push_draft_threshold_cross_product(
     for acceptance_threshold in acceptance_thresholds {
         for split_probability in split_probabilities {
             candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
-                draft_model_path: draft_model_path.clone(),
+                draft_model: draft_model.clone(),
                 draft_max_tokens,
                 draft_min_tokens,
                 draft_acceptance_threshold: Some(*acceptance_threshold),
@@ -1211,7 +1211,7 @@ fn discover_draft_model_candidates(
         && let Some(path) = model_entry
             .speculative
             .as_ref()
-            .and_then(|speculative| speculative.draft_model_path.as_ref())
+            .and_then(|speculative| speculative.draft_model.as_ref())
     {
         candidates.push(path.clone());
     }
@@ -1220,7 +1220,7 @@ fn discover_draft_model_candidates(
         .defaults
         .as_ref()
         .and_then(|defaults| defaults.speculative.as_ref())
-        .and_then(|speculative| speculative.draft_model_path.as_ref())
+        .and_then(|speculative| speculative.draft_model.as_ref())
     {
         candidates.push(path.clone());
     }
@@ -1306,25 +1306,25 @@ fn speculative_candidate_sort_key(candidate: &TuneBenchmarkSpeculativeCandidate)
     }
     match candidate {
         TuneBenchmarkSpeculativeCandidate::Mtp {
-            draft_model_path,
+            draft_model,
             draft_max_tokens,
             draft_min_tokens,
             draft_acceptance_threshold,
             draft_split_probability,
         } => format!(
             "0:mtp:{}:{draft_max_tokens}:{draft_min_tokens}:{}:{}",
-            draft_model_path.as_deref().unwrap_or(""),
+            draft_model.as_deref().unwrap_or(""),
             fmt_prob(*draft_acceptance_threshold),
             fmt_prob(*draft_split_probability),
         ),
         TuneBenchmarkSpeculativeCandidate::Draft {
-            draft_model_path,
+            draft_model,
             draft_max_tokens,
             draft_min_tokens,
             draft_acceptance_threshold,
             draft_split_probability,
         } => format!(
-            "1:draft:{draft_model_path}:{draft_max_tokens}:{}:{}:{}",
+            "1:draft:{draft_model}:{draft_max_tokens}:{}:{}:{}",
             draft_min_tokens.unwrap_or(0),
             fmt_prob(*draft_acceptance_threshold),
             fmt_prob(*draft_split_probability),
@@ -1435,7 +1435,7 @@ mod benchmark_tests {
             mmap: TuneBoolOrAutoValue::Disabled,
             mlock: true,
             speculative: TuneBenchmarkSpeculativeCandidate::Mtp {
-                draft_model_path: None,
+                draft_model: None,
                 draft_max_tokens: 3,
                 draft_min_tokens: 0,
                 draft_acceptance_threshold: None,
@@ -1562,7 +1562,7 @@ mod benchmark_tests {
             mmap: TuneBoolOrAutoValue::Disabled,
             mlock: false,
             speculative: TuneBenchmarkSpeculativeCandidate::Draft {
-                draft_model_path: "/tmp/model-draft.gguf".to_string(),
+                draft_model: "/tmp/model-draft.gguf".to_string(),
                 draft_max_tokens: 8,
                 draft_min_tokens: Some(2),
                 draft_acceptance_threshold: None,
@@ -1587,7 +1587,7 @@ mod benchmark_tests {
         assert_eq!(speculative.strategy.as_deref(), Some("disabled"));
         assert_eq!(speculative.mode.as_deref(), Some("draft"));
         assert_eq!(
-            speculative.draft_model_path.as_deref(),
+            speculative.draft_model.as_deref(),
             Some("/tmp/model-draft.gguf")
         );
         assert_eq!(speculative.pairing_fault.as_deref(), Some("fail_closed"));
@@ -1607,7 +1607,7 @@ mod benchmark_tests {
             mmap: TuneBoolOrAutoValue::Enabled,
             mlock: false,
             speculative: TuneBenchmarkSpeculativeCandidate::Mtp {
-                draft_model_path: Some("/tmp/mtp-gemma.gguf".to_string()),
+                draft_model: Some("/tmp/mtp-gemma.gguf".to_string()),
                 draft_max_tokens: 3,
                 draft_min_tokens: 0,
                 draft_acceptance_threshold: None,
@@ -1632,7 +1632,7 @@ mod benchmark_tests {
         assert_eq!(speculative.strategy.as_deref(), Some("mtp"));
         assert_eq!(speculative.mode.as_deref(), Some("auto"));
         assert_eq!(
-            speculative.draft_model_path.as_deref(),
+            speculative.draft_model.as_deref(),
             Some("/tmp/mtp-gemma.gguf")
         );
         assert_eq!(speculative.pairing_fault.as_deref(), Some("fail_closed"));
@@ -1849,21 +1849,21 @@ mod benchmark_tests {
             speculation,
             vec![
                 TuneBenchmarkSpeculativeCandidate::Mtp {
-                    draft_model_path: None,
+                    draft_model: None,
                     draft_max_tokens: 2,
                     draft_min_tokens: 0,
                     draft_acceptance_threshold: None,
                     draft_split_probability: None,
                 },
                 TuneBenchmarkSpeculativeCandidate::Mtp {
-                    draft_model_path: None,
+                    draft_model: None,
                     draft_max_tokens: 3,
                     draft_min_tokens: 0,
                     draft_acceptance_threshold: None,
                     draft_split_probability: None,
                 },
                 TuneBenchmarkSpeculativeCandidate::Mtp {
-                    draft_model_path: None,
+                    draft_model: None,
                     draft_max_tokens: 4,
                     draft_min_tokens: 0,
                     draft_acceptance_threshold: None,
@@ -1987,7 +1987,7 @@ mod benchmark_tests {
             speculation,
             vec![
                 TuneBenchmarkSpeculativeCandidate::Draft {
-                    draft_model_path: draft_model.display().to_string(),
+                    draft_model: draft_model.display().to_string(),
                     draft_max_tokens: 4,
                     draft_min_tokens: None,
                     draft_acceptance_threshold: None,
@@ -2039,7 +2039,7 @@ mod benchmark_tests {
             speculation,
             vec![
                 TuneBenchmarkSpeculativeCandidate::Draft {
-                    draft_model_path: draft_model.display().to_string(),
+                    draft_model: draft_model.display().to_string(),
                     draft_max_tokens: 4,
                     draft_min_tokens: Some(2),
                     draft_acceptance_threshold: None,
