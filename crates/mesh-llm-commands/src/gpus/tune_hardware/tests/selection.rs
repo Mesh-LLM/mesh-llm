@@ -201,6 +201,88 @@ fn gpu_tune_reports_missing_configured_gpu() {
 }
 
 #[test]
+fn gpu_tune_falls_back_to_backend_device_for_non_pinnable_hardware_default() {
+    let config = config_with_defaults_and_model(
+        HardwareConfig {
+            device: Some("nvidia-cuda-0".to_string()),
+            ..HardwareConfig::default()
+        },
+        ModelConfigEntry::default(),
+    );
+    let target = sample_target(true);
+    let survey = survey_with_gpus(vec![sample_gpu(0, "uuid:GPU-abc123-def456", Some("nvidia-cuda-0"))]);
+
+    let evaluation = evaluate_with_probe(
+        &config,
+        &target,
+        &survey,
+        TuneMlockProbe::Supported {
+            limit: TuneMlockLimit::Unlimited,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        evaluation.evaluated_device.source,
+        TuneDeviceSelectionSource::DefaultsHardwareDevice
+    );
+    assert_eq!(
+        evaluation.evaluated_device.target,
+        TuneDeviceTarget::Gpu(TuneGpuTarget {
+            index: 0,
+            display_name: "GPU 0".to_string(),
+            stable_id: Some("uuid:GPU-abc123-def456".to_string()),
+            backend_device: Some("nvidia-cuda-0".to_string()),
+        })
+    );
+}
+
+#[test]
+fn gpu_tune_backend_fallback_failure_merges_diagnostics_for_non_pinnable_hardware_default() {
+    let config = config_with_defaults_and_model(
+        HardwareConfig {
+            device: Some("nvidia-cuda-0".to_string()),
+            ..HardwareConfig::default()
+        },
+        ModelConfigEntry::default(),
+    );
+    let target = sample_target(true);
+    let survey = survey_with_gpus(vec![sample_gpu(
+        0,
+        "uuid:GPU-abc123-def456",
+        Some("CUDA0"),
+    )]);
+
+    let error = evaluate_with_probe(
+        &config,
+        &target,
+        &survey,
+        TuneMlockProbe::Supported {
+            limit: TuneMlockLimit::Unlimited,
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code, TuneDiagnosticCode::MissingConfiguredDevice);
+    assert_eq!(error.field, Some(TuneField::Device));
+    assert!(
+        error.message.contains("nvidia-cuda-0"),
+        "expected the requested device to appear in the merged diagnostic, got: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains("backend fallback also failed:"),
+        "expected the backend-fallback suffix in the merged diagnostic, got: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains("requested backend device was not present in the survey"),
+        "expected the backend resolver's detail string in the merged diagnostic, got: {}",
+        error.message
+    );
+}
+
+#[test]
 fn gpu_tune_falls_back_to_cpu_system_ram_when_no_selectable_gpu() {
     let config = MeshConfig::default();
     let target = sample_target(false);

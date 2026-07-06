@@ -1,3 +1,7 @@
+use mesh_llm_config::ConfigPath;
+
+use super::*;
+
 impl TuneField {
     pub fn all() -> Vec<Self> {
         <Self as strum::IntoEnumIterator>::iter().collect()

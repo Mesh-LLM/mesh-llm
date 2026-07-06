@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::json;
 
-fn sample_target() -> TuneTarget {
+pub(crate) fn sample_target() -> TuneTarget {
     TuneTarget {
         requested: "hf://mesh/example.gguf".to_string(),
         resolved: Some("/models/example.gguf".to_string()),

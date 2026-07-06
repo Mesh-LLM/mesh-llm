@@ -1,3 +1,7 @@
+use serde::Serialize;
+
+use super::*;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TuneTargetFailure {
     pub requested_input: String,

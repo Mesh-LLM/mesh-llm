@@ -5,27 +5,36 @@ use super::{
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const GGUF_TYPE_UINT8: u32 = 0;
 const GGUF_TYPE_UINT32: u32 = 4;
 const GGUF_TYPE_STRING: u32 = 8;
 
-fn temp_file_path(prefix: &str) -> PathBuf {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be after unix epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!("{prefix}-{unique}.gguf"))
+/// RAII fixture that owns a temporary directory with a single GGUF fixture file.
+/// The file and directory are removed on drop — no manual `fs::remove_file` needed.
+struct TempGgufFixture {
+    _dir: tempfile::TempDir,
 }
 
-fn write_bytes(prefix: &str, bytes: &[u8]) -> PathBuf {
-    let path = temp_file_path(prefix);
-    let mut file = fs::File::create(&path).expect("test fixture should create file");
+impl TempGgufFixture {
+    fn new() -> Self {
+        Self {
+            _dir: tempfile::tempdir().expect("TempGgufFixture::new"),
+        }
+    }
+
+    fn path(&self) -> PathBuf {
+        self._dir.path().join("fixture.gguf")
+    }
+}
+
+fn write_bytes(bytes: &[u8]) -> TempGgufFixture {
+    let fixture = TempGgufFixture::new();
+    let mut file = fs::File::create(fixture.path()).expect("test fixture should create file");
     file.write_all(bytes)
         .expect("test fixture should write file");
     file.flush().expect("test fixture should flush file");
-    path
+    fixture
 }
 
 fn push_gguf_string(bytes: &mut Vec<u8>, value: &str) {
@@ -62,7 +71,7 @@ fn align_offset(value: usize, alignment: usize) -> usize {
     }
 }
 
-fn write_valid_tune_fixture(include_tensors: bool) -> PathBuf {
+fn write_valid_tune_fixture(include_tensors: bool) -> TempGgufFixture {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"GGUF");
     bytes.extend_from_slice(&2u32.to_le_bytes());
@@ -82,14 +91,14 @@ fn write_valid_tune_fixture(include_tensors: bool) -> PathBuf {
         let data_start = align_offset(bytes.len(), 32);
         bytes.resize(data_start + 96, 0);
     }
-    write_bytes("mesh-llm-gpu-tune-valid", &bytes)
+    write_bytes(&bytes)
 }
 
 #[test]
 fn gpu_tune_reads_compact_meta() {
-    let path = write_valid_tune_fixture(true);
+    let fixture = write_valid_tune_fixture(true);
 
-    let metadata = inspect_local_gguf_metadata("sample-model", &path)
+    let metadata = inspect_local_gguf_metadata("sample-model", &fixture.path())
         .expect("valid tune GGUF fixture should parse");
 
     assert_eq!(metadata.compact_meta.architecture, "llama");
@@ -107,8 +116,6 @@ fn gpu_tune_reads_compact_meta() {
             panic!("expected exact tensor profile")
         }
     }
-
-    let _ = fs::remove_file(path);
 }
 
 #[test]
@@ -116,7 +123,7 @@ fn gpu_tune_reads_layer_package_metadata_from_shared_metadata_artifact() {
     let metadata_fixture = write_valid_tune_fixture(true);
     let package_dir = tempfile::tempdir().expect("package tempdir should be created");
     let package_metadata_path = package_dir.path().join("metadata.gguf");
-    fs::copy(&metadata_fixture, &package_metadata_path)
+    fs::copy(metadata_fixture.path(), &package_metadata_path)
         .expect("metadata fixture should be copied into package");
     fs::write(
         package_dir.path().join("model-package.json"),
@@ -146,8 +153,6 @@ fn gpu_tune_reads_layer_package_metadata_from_shared_metadata_artifact() {
     assert_eq!(metadata.compact_meta.architecture, "llama");
     assert_eq!(metadata.compact_meta.layer_count, 24);
     assert_eq!(metadata.model_bytes, 333);
-
-    let _ = fs::remove_file(metadata_fixture);
 }
 
 #[test]
@@ -158,9 +163,9 @@ fn gpu_tune_reports_missing_required_metadata() {
     bytes.extend_from_slice(&0i64.to_le_bytes());
     bytes.extend_from_slice(&1i64.to_le_bytes());
     push_string_kv(&mut bytes, "general.architecture", "llama");
-    let path = write_bytes("mesh-llm-gpu-tune-missing-meta", &bytes);
+    let fixture = write_bytes(&bytes);
 
-    let error = inspect_local_gguf_metadata("broken-model", &path)
+    let error = inspect_local_gguf_metadata("broken-model", &fixture.path())
         .expect_err("missing required metadata should fail");
 
     assert_eq!(
@@ -177,8 +182,6 @@ fn gpu_tune_reports_missing_required_metadata() {
         }
     );
     assert!(error.to_string().contains("model `broken-model`"));
-
-    let _ = fs::remove_file(path);
 }
 
 #[test]
@@ -196,9 +199,9 @@ fn gpu_tune_degrades_safely_when_tensor_profile_is_unavailable() {
     push_u32_kv(&mut bytes, "llama.block_count", 24);
     push_u32_kv(&mut bytes, "llama.attention.key_length", 128);
     push_u32_kv(&mut bytes, "llama.attention.value_length", 128);
-    let path = write_bytes("mesh-llm-gpu-tune-broken-tensors", &bytes);
+    let fixture = write_bytes(&bytes);
 
-    let metadata = inspect_local_gguf_metadata("dense-model", &path)
+    let metadata = inspect_local_gguf_metadata("dense-model", &fixture.path())
         .expect("compact metadata should stay usable when tensor profile parsing fails");
 
     match metadata.tensor_profile {
@@ -208,8 +211,6 @@ fn gpu_tune_degrades_safely_when_tensor_profile_is_unavailable() {
             assert!(model_bytes > 0);
         }
     }
-
-    let _ = fs::remove_file(path);
 }
 
 #[test]

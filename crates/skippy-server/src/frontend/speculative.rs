@@ -49,6 +49,15 @@ pub(super) struct OpenAiSpeculativeStats {
     pub(super) adaptive_window_enabled: bool,
 }
 
+/// Upper bound on the n-gram suffix length scanned during speculative
+/// proposal generation. Without a cap, `propose_ngram_tokens` performs a
+/// nested scan (`match_len` × `candidate_start` × per-candidate slice
+/// compare) over the full history, giving O(N³) worst case behavior. Real
+/// n-gram repeats beyond a handful of tokens are vanishingly rare, so
+/// bounding the outer match loop at this many tokens keeps the scan
+/// tractable on long contexts without losing useful proposals.
+const MAX_NGRAM_MATCH: usize = 32;
+
 pub(super) fn propose_ngram_tokens(
     history: &[i32],
     min_match_tokens: usize,
@@ -57,8 +66,9 @@ pub(super) fn propose_ngram_tokens(
     if min_match_tokens == 0 || max_proposed_tokens == 0 || history.len() < min_match_tokens * 2 {
         return Vec::new();
     }
-    let longest_match = history.len() / 2;
-    for match_len in (min_match_tokens..=longest_match).rev() {
+    let upper_match = (history.len() / 2).min(MAX_NGRAM_MATCH);
+    let start_match = min_match_tokens.min(upper_match);
+    for match_len in (start_match..=upper_match).rev() {
         let suffix_start = history.len() - match_len;
         let suffix = &history[suffix_start..];
         let latest_candidate_start = suffix_start.saturating_sub(match_len);

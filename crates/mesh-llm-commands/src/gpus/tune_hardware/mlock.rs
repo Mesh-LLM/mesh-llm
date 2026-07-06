@@ -4,12 +4,16 @@ use super::types::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TuneMlockProbe {
+    /// `Supported` is never constructed on non-Linux targets, so Clippy
+    /// flags its fields as dead code when checked without `--cfg target_os`.
     #[allow(dead_code)]
     Supported { limit: TuneMlockLimit },
     Unsupported { reason: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Only constructed on Linux via `read_linux_mlock_limit`; dead-code warning
+/// suppressed for cross-compilation targets that skip the Linux helpers.
 #[allow(dead_code)]
 pub(crate) enum TuneMlockLimit {
     Unlimited,

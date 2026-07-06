@@ -27,6 +27,8 @@ use tokio::sync::mpsc;
 mod devices;
 pub mod package;
 mod runtime_events;
+mod native_mtp;
+pub use native_mtp::NativeMtpDraft;
 
 pub const MAX_LOGIT_BIAS: usize = 256;
 pub const GGML_TYPE_F16: u32 = 1;
@@ -1258,32 +1260,6 @@ pub struct DecodeFrameBatchRequest<'a> {
 pub struct DecodeFrameBatchOutput {
     pub predicted_token: i32,
     pub output: ActivationFrame,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NativeMtpDraft {
-    pub token_ids: Vec<i32>,
-    pub proposal_compute_us: i64,
-}
-
-const NATIVE_MTP_DRAFT_VERSION: u32 = 1;
-
-impl NativeMtpDraft {
-    fn from_raw(raw: RawNativeMtpDraft) -> Option<Self> {
-        if !raw.available || raw.version != NATIVE_MTP_DRAFT_VERSION {
-            return None;
-        }
-        let token_count = usize::try_from(raw.token_count)
-            .ok()?
-            .min(skippy_ffi::NATIVE_MTP_MAX_DRAFT_TOKENS);
-        if token_count == 0 {
-            return None;
-        }
-        Some(Self {
-            token_ids: raw.token_ids[..token_count].to_vec(),
-            proposal_compute_us: raw.proposal_compute_us,
-        })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,3 +1,5 @@
+use super::*;
+
 pub(crate) struct TuneOutputRequest<'a> {
     pub(crate) command: &'static str,
     pub(crate) json_output: bool,

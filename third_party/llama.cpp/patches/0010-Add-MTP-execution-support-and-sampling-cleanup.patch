@@ -1424,9 +1424,9 @@ index 4dcd0d96..e81f3786 100644
 +        return skippy_success(out_error);
 +    }
 +
-+    const size_t draft_limit = std::max<size_t>(
-+            1,
-+            std::min<size_t>(max_draft_tokens, SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS));
++    const size_t draft_limit = std::min<size_t>(
++            max_draft_tokens,
++            SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS);
 +    llama_token token = predicted_token;
 +    llama_pos pos = session->n_past;
 +    int32_t n_seq_id = 1;

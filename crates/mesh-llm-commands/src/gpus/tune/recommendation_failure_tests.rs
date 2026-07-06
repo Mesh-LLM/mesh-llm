@@ -1,3 +1,7 @@
+use mesh_llm_config::MeshConfig;
+
+use super::*;
+
 #[test]
 fn gpu_tune_fails_when_context_cannot_fit_even_with_quantized_kv() {
     let plan = build_tune_plan(TuneRecommendationInput {

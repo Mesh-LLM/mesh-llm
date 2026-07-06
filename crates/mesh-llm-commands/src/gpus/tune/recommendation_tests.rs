@@ -5,13 +5,11 @@ use crate::gpus::tune_hardware::types::{
 use crate::gpus::tune_resolver::{
     ConfigModelMatch, LocalTargetSource, ResolvedTuneTarget, TuneTargetSelection,
 };
-use mesh_llm_config::{
-    FlashAttentionType, HardwareConfig, IntegerOrString, MeshConfig, ModelConfigDefaults,
-    ModelConfigEntry, ModelFitConfig,
-};
 use mesh_llm_system::hardware::{GpuFacts, HardwareSurvey};
 
-fn sample_metadata(
+use super::*;
+
+pub(crate) fn sample_metadata(
     model_bytes: u64,
     layer_count: u32,
     context_length: u32,
@@ -40,7 +38,7 @@ fn sample_metadata(
     }
 }
 
-fn recommendation_target(configured: bool) -> ResolvedTuneTarget {
+pub(crate) fn recommendation_target(configured: bool) -> ResolvedTuneTarget {
     ResolvedTuneTarget {
         requested_input: "hf://mesh/example.gguf".to_string(),
         canonical_model_ref: "hf://mesh/example.gguf".to_string(),
@@ -64,7 +62,7 @@ fn recommendation_target(configured: bool) -> ResolvedTuneTarget {
     }
 }
 
-fn survey_with_gpu(gpu_allocatable_bytes: u64, system_ram_bytes: u64) -> HardwareSurvey {
+pub(crate) fn survey_with_gpu(gpu_allocatable_bytes: u64, system_ram_bytes: u64) -> HardwareSurvey {
     let total_bytes = gpu_allocatable_bytes.saturating_add(1024 * 1024 * 1024);
     HardwareSurvey {
         vram_bytes: system_ram_bytes,
@@ -89,7 +87,7 @@ fn survey_with_gpu(gpu_allocatable_bytes: u64, system_ram_bytes: u64) -> Hardwar
     }
 }
 
-fn gpu_hardware(allocatable_bytes: u64) -> TuneHardwareEvaluation {
+pub(crate) fn gpu_hardware(allocatable_bytes: u64) -> TuneHardwareEvaluation {
     TuneHardwareEvaluation {
         evaluated_device: EvaluatedTuneDevice {
             target: TuneDeviceTarget::Gpu(TuneGpuTarget {
@@ -114,7 +112,7 @@ fn gpu_hardware(allocatable_bytes: u64) -> TuneHardwareEvaluation {
     }
 }
 
-fn status_for(plan: &TunePlan, field: TuneField) -> &TuneFieldStatus {
+pub(crate) fn status_for(plan: &TunePlan, field: TuneField) -> &TuneFieldStatus {
     plan.field_statuses
         .iter()
         .find(|status| match status {
@@ -133,7 +131,7 @@ fn status_for(plan: &TunePlan, field: TuneField) -> &TuneFieldStatus {
         .unwrap_or_else(|| panic!("missing field status for {field:?}"))
 }
 
-fn assert_applied_kv(plan: &TunePlan, field: TuneField, value: TuneKvCacheType) {
+pub(crate) fn assert_applied_kv(plan: &TunePlan, field: TuneField, value: TuneKvCacheType) {
     match status_for(plan, field) {
         TuneFieldStatus::Applied { recommendation, .. } => {
             assert_eq!(
@@ -145,7 +143,7 @@ fn assert_applied_kv(plan: &TunePlan, field: TuneField, value: TuneKvCacheType) 
     }
 }
 
-fn assert_applied_flash_attention(plan: &TunePlan, value: TuneFlashAttentionValue) {
+pub(crate) fn assert_applied_flash_attention(plan: &TunePlan, value: TuneFlashAttentionValue) {
     match status_for(plan, TuneField::FlashAttention) {
         TuneFieldStatus::Applied { recommendation, .. } => {
             assert_eq!(
@@ -157,7 +155,7 @@ fn assert_applied_flash_attention(plan: &TunePlan, value: TuneFlashAttentionValu
     }
 }
 
-fn assert_applied_context(plan: &TunePlan, value: u32) {
+pub(crate) fn assert_applied_context(plan: &TunePlan, value: u32) {
     match status_for(plan, TuneField::CtxSize) {
         TuneFieldStatus::Applied { recommendation, .. } => {
             assert_eq!(
@@ -169,7 +167,7 @@ fn assert_applied_context(plan: &TunePlan, value: u32) {
     }
 }
 
-fn assert_applied_batch(plan: &TunePlan, value: u32) {
+pub(crate) fn assert_applied_batch(plan: &TunePlan, value: u32) {
     match status_for(plan, TuneField::Batch) {
         TuneFieldStatus::Applied { recommendation, .. } => {
             assert_eq!(recommendation.value, TuneRecommendedValue::Batch(value));
@@ -178,7 +176,7 @@ fn assert_applied_batch(plan: &TunePlan, value: u32) {
     }
 }
 
-fn assert_applied_ubatch(plan: &TunePlan, value: u32) {
+pub(crate) fn assert_applied_ubatch(plan: &TunePlan, value: u32) {
     match status_for(plan, TuneField::Ubatch) {
         TuneFieldStatus::Applied { recommendation, .. } => {
             assert_eq!(recommendation.value, TuneRecommendedValue::Ubatch(value));
@@ -187,7 +185,7 @@ fn assert_applied_ubatch(plan: &TunePlan, value: u32) {
     }
 }
 
-fn assert_applied_gpu_layers(plan: &TunePlan, value: TuneGpuLayersValue) {
+pub(crate) fn assert_applied_gpu_layers(plan: &TunePlan, value: TuneGpuLayersValue) {
     match status_for(plan, TuneField::GpuLayers) {
         TuneFieldStatus::Applied { recommendation, .. } => {
             assert_eq!(recommendation.value, TuneRecommendedValue::GpuLayers(value));
@@ -196,7 +194,7 @@ fn assert_applied_gpu_layers(plan: &TunePlan, value: TuneGpuLayersValue) {
     }
 }
 
-fn assert_applied_fit_target(plan: &TunePlan, value: u64) {
+pub(crate) fn assert_applied_fit_target(plan: &TunePlan, value: u64) {
     match status_for(plan, TuneField::FitTargetMib) {
         TuneFieldStatus::Applied { recommendation, .. } => {
             assert_eq!(
@@ -208,13 +206,13 @@ fn assert_applied_fit_target(plan: &TunePlan, value: u64) {
     }
 }
 
-fn assert_preserved(plan: &TunePlan, field: TuneField, expected_path: &str) {
+pub(crate) fn assert_preserved(plan: &TunePlan, field: TuneField, expected_path: &str) {
     match status_for(plan, field) {
         TuneFieldStatus::Preserved { reason, .. } => assert!(reason.contains(expected_path)),
         other => panic!("expected preserved status, got {other:?}"),
     }
 }
 
-const fn gib() -> u64 {
+pub(crate) const fn gib() -> u64 {
     1024 * 1024 * 1024
 }

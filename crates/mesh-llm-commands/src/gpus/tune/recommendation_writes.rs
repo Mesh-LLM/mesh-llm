@@ -1,4 +1,10 @@
-fn push_kv_statuses(
+use mesh_llm_config::{ModelConfigDefaults, ModelConfigEntry};
+
+use crate::gpus::tune_hardware::types::TuneHardwareEvaluation;
+
+use super::*;
+
+pub(crate) fn push_kv_statuses(
     plan: &mut TunePlan,
     apply_mode: TuneApplyMode,
     model_entry: Option<&ModelConfigEntry>,
@@ -45,7 +51,7 @@ fn push_kv_statuses(
     }
 }
 
-fn push_flash_attention_status(
+pub(crate) fn push_flash_attention_status(
     plan: &mut TunePlan,
     apply_mode: TuneApplyMode,
     model_entry: Option<&ModelConfigEntry>,
@@ -73,7 +79,7 @@ fn push_flash_attention_status(
     });
 }
 
-fn push_context_status(
+pub(crate) fn push_context_status(
     plan: &mut TunePlan,
     apply_mode: TuneApplyMode,
     model_entry: Option<&ModelConfigEntry>,
@@ -102,7 +108,7 @@ fn push_context_status(
     });
 }
 
-fn push_batch_statuses(
+pub(crate) fn push_batch_statuses(
     plan: &mut TunePlan,
     apply_mode: TuneApplyMode,
     model_entry: Option<&ModelConfigEntry>,
@@ -152,7 +158,7 @@ fn push_batch_statuses(
     }
 }
 
-fn push_gpu_layers_status(
+pub(crate) fn push_gpu_layers_status(
     plan: &mut TunePlan,
     apply_mode: TuneApplyMode,
     model_entry: Option<&ModelConfigEntry>,
@@ -189,7 +195,7 @@ fn push_gpu_layers_status(
     });
 }
 
-fn push_fit_target_status(
+pub(crate) fn push_fit_target_status(
     plan: &mut TunePlan,
     apply_mode: TuneApplyMode,
     model_entry: Option<&ModelConfigEntry>,
@@ -216,7 +222,7 @@ fn push_fit_target_status(
     });
 }
 
-fn push_mmap_status(
+pub(crate) fn push_mmap_status(
     plan: &mut TunePlan,
     apply_mode: TuneApplyMode,
     model_entry: Option<&ModelConfigEntry>,
@@ -242,7 +248,7 @@ fn push_mmap_status(
     });
 }
 
-fn push_mlock_status(
+pub(crate) fn push_mlock_status(
     plan: &mut TunePlan,
     apply_mode: TuneApplyMode,
     model_entry: Option<&ModelConfigEntry>,

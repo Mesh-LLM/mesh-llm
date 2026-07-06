@@ -181,13 +181,15 @@ fn collect_legacy_draft_model_path_warnings(
         .and_then(|d| d.speculative.as_ref())
         .filter(|s| s.legacy_draft_model_path_used)
     {
-        // Only warn when the value looks like a model identifier (contains ':')
-        // because bare local paths cannot be migrated to draft_model without
-        // failing identifier validation.
+        // Only warn when the value looks like a model identifier (a ':' that
+        // sits after the last '/', as in `Org/Name:Q4_K_M`). Bare local paths
+        // including Windows-style absolutes like `C:/models/draft.gguf` put
+        // their ':' before the slash and are not identifiers, so they cannot
+        // be migrated to draft_model without failing identifier validation.
         if speculative
             .draft_model
             .as_deref()
-            .is_some_and(|v| v.contains(':'))
+            .is_some_and(looks_like_model_identifier)
         {
             diagnostics.push(alias_diagnostic(
                 ConfigPath::from_fields(["defaults", "speculative", "draft_model_path"]),
@@ -202,13 +204,15 @@ fn collect_legacy_draft_model_path_warnings(
             .as_ref()
             .filter(|s| s.legacy_draft_model_path_used)
         {
-            // Only warn when the value looks like a model identifier (contains ':')
-            // because bare local paths cannot be migrated to draft_model without
-            // failing identifier validation.
+            // Only warn when the value looks like a model identifier (a ':'
+            // that sits after the last '/', as in `Org/Name:Q4_K_M`). Bare
+            // local paths including Windows-style absolutes like
+            // `C:/models/draft.gguf` cannot be migrated to draft_model
+            // without failing identifier validation.
             if speculative
                 .draft_model
                 .as_deref()
-                .is_some_and(|v| v.contains(':'))
+                .is_some_and(looks_like_model_identifier)
             {
                 let mut used_path =
                     ConfigPath::from_fields(["models", "speculative", "draft_model_path"]);
@@ -1465,8 +1469,28 @@ fn validate_optional_path(value: Option<&str>, path: &str) -> DiagnosticResult {
     Ok(())
 }
 
+/// Heuristic for distinguishing a model identifier (`Org/Name:Q4_K_M`) from a
+/// bare filesystem path (`/models/draft.gguf`, `C:/models/draft.gguf`). The
+/// strict identifier validator requires a `':'` separator, but a Windows-style
+/// absolute path also contains a `':'` immediately after the drive letter.
+/// Identifiers place the quantization marker *after* the last `/`, so this
+/// returns true only when the value contains a `:` that follows a `/`.
+fn looks_like_model_identifier(value: &str) -> bool {
+    let Some(colon) = value.rfind(':') else {
+        return false;
+    };
+    match value.rfind('/') {
+        Some(slash) => colon > slash,
+        None => false,
+    }
+}
+
 /// Validate that a `draft_model` value is a model identifier (e.g. `Qwen/Qwen3-0.6B:Q4_K_M`),
-/// not a bare file path. Identifiers must contain `:` to distinguish them from paths.
+/// not a bare file path. Identifiers must contain a `:` quantization marker that follows
+/// the last `/`, so that Windows-style absolute paths like `C:/models/draft.gguf` are not
+/// mistaken for identifiers. When `legacy_path_used` is true, the value is treated as a
+/// filesystem path and the identifier-shape check is skipped; `validate_path_chars` is still
+/// applied so NUL bytes and control characters are rejected on legacy paths too.
 fn validate_model_identifier(
     value: Option<&str>,
     path: &str,
@@ -1474,8 +1498,12 @@ fn validate_model_identifier(
 ) -> DiagnosticResult {
     if let Some(value) = value {
         let trimmed = value.trim();
-        if !trimmed.is_empty() && !legacy_path_used {
-            if !trimmed.contains(':') {
+        if !trimmed.is_empty() {
+            // Reject NUL bytes and control characters regardless of which key
+            // supplied the value; legacy paths should not bypass path-char
+            // validation.
+            validate_path_chars(trimmed, path)?;
+            if !legacy_path_used && !looks_like_model_identifier(trimmed) {
                 return Err(validation_diagnostic(
                     path,
                     format!(
@@ -1484,7 +1512,6 @@ fn validate_model_identifier(
                     ),
                 ));
             }
-            validate_path_chars(trimmed, path)?;
         }
     }
     Ok(())
@@ -2131,6 +2158,86 @@ draft_model_path = "/models/draft.gguf"
             alias_diag.is_none(),
             "bare path draft_model_path should not emit migration warning, got: {:?}",
             diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn legacy_draft_model_path_windows_style_absolute_suppresses_migration_warning() {
+        // The previous `contains(':')` heuristic falsely fired for
+        // Windows-style absolute paths like `C:/models/draft.gguf` because
+        // they contain a `:` after the drive letter. The fix requires the
+        // colon quantization marker to follow the last `/`, so the path-like
+        // value is no longer mistaken for an identifier.
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[defaults.speculative]
+strategy = "mtp"
+draft_model_path = "C:/models/draft.gguf"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let alias_diag = diagnostics.iter().find(|d| {
+            d.code == crate::diagnostic::ConfigDiagnosticCode::AliasApplied
+                && d.message.contains("draft_model_path")
+        });
+        assert!(
+            alias_diag.is_none(),
+            "Windows-style absolute path draft_model_path should not emit migration warning, got: {:?}",
+            diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn legacy_draft_model_path_rejects_nul_bytes() {
+        // Legacy-path values should not bypass `validate_path_chars`. A NUL
+        // byte inside a `draft_model_path` value must be rejected even when
+        // `legacy_draft_model_path_used` is true.
+        let config = MeshConfig {
+            defaults: Some(ModelConfigDefaults {
+                speculative: Some(SpeculativeConfig {
+                    strategy: Some("mtp".to_string()),
+                    draft_model: Some("bad\0path".to_string()),
+                    legacy_draft_model_path_used: true,
+                    ..SpeculativeConfig::default()
+                }),
+                ..ModelConfigDefaults::default()
+            }),
+            ..MeshConfig::default()
+        };
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(
+            text.contains("must not contain NUL bytes"),
+            "expected NUL-byte rejection on legacy path, got: {text}"
+        );
+    }
+
+    #[test]
+    fn legacy_draft_model_path_rejects_control_characters() {
+        // Control characters must also be rejected on legacy-path values.
+        let config = MeshConfig {
+            defaults: Some(ModelConfigDefaults {
+                speculative: Some(SpeculativeConfig {
+                    strategy: Some("mtp".to_string()),
+                    draft_model: Some("bad\u{0001}path".to_string()),
+                    legacy_draft_model_path_used: true,
+                    ..SpeculativeConfig::default()
+                }),
+                ..ModelConfigDefaults::default()
+            }),
+            ..MeshConfig::default()
+        };
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(
+            text.contains("must not contain control characters"),
+            "expected control-character rejection on legacy path, got: {text}"
         );
     }
 

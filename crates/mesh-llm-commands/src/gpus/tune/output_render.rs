@@ -1,5 +1,7 @@
 use std::fmt::Write as _;
 
+use super::*;
+
 pub(crate) fn render_tune_human_output(report: &TuneRunReport) -> String {
     let mut rendered = String::new();
     let _ = writeln!(
@@ -36,7 +38,11 @@ pub(crate) fn render_tune_human_output(report: &TuneRunReport) -> String {
     for target in &report.targets {
         let _ = writeln!(&mut rendered);
         let _ = writeln!(&mut rendered, "Target: {}", target.target.requested);
-        let _ = writeln!(&mut rendered, "  Status: {}", render_target_status(target.status));
+        let _ = writeln!(
+            &mut rendered,
+            "  Status: {}",
+            render_target_status(target.status)
+        );
         let _ = writeln!(&mut rendered, "  Selection: {}", target.selection);
         if let Some(resolved) = &target.target.resolved {
             let _ = writeln!(&mut rendered, "  Resolved: {resolved}");
@@ -58,7 +64,12 @@ pub(crate) fn render_tune_human_output(report: &TuneRunReport) -> String {
                 summary.error,
             );
         }
-        write_section(&mut rendered, "Config edits", &target.config_edits, render_config_edit_line);
+        write_section(
+            &mut rendered,
+            "Config edits",
+            &target.config_edits,
+            render_config_edit_line,
+        );
         write_section(
             &mut rendered,
             "Preserved",
@@ -125,7 +136,11 @@ pub(crate) fn render_tune_launch_args_output(report: &TuneRunReport) -> String {
     for target in &report.targets {
         let _ = writeln!(&mut rendered);
         let _ = writeln!(&mut rendered, "# target: {}", target.target.requested);
-        let _ = writeln!(&mut rendered, "# status: {}", render_target_status(target.status));
+        let _ = writeln!(
+            &mut rendered,
+            "# status: {}",
+            render_target_status(target.status)
+        );
         if let Some(reason) = &target.reason {
             let _ = writeln!(&mut rendered, "# reason: {reason}");
         }
@@ -193,21 +208,18 @@ fn write_benchmark_section(rendered: &mut String, benchmarks: &[TuneBenchmarkTar
         }
         if let Some(raw_best) = &benchmark.raw_best {
             let _ = writeln!(
-                    rendered,
-                    "    Raw best: {} decode_tok_s={}{}",
-                    render_benchmark_candidate(&raw_best.candidate),
-                    raw_best
-                        .decode_tok_s
+                rendered,
+                "    Raw best: {} decode_tok_s={}{}",
+                render_benchmark_candidate(&raw_best.candidate),
+                raw_best
+                    .decode_tok_s
                     .map(|value| format!("{value:.2}"))
                     .unwrap_or_else(|| "n/a".to_string()),
                 render_timing_summary(raw_best.timings.as_ref()),
             );
         }
         if !benchmark.pareto_frontier.is_empty() {
-            let _ = writeln!(
-                rendered,
-                "    Pareto frontier (decode tok/s vs ctx_size):"
-            );
+            let _ = writeln!(rendered, "    Pareto frontier (decode tok/s vs ctx_size):");
             for trial in &benchmark.pareto_frontier {
                 let _ = writeln!(
                     rendered,
@@ -285,7 +297,11 @@ fn write_timing_fields(rendered: &mut String, timings: &TuneBenchmarkTimingStats
 }
 
 fn render_setting_line(setting: &TuneRenderedSetting) -> String {
-    let mut rendered = format!("{} ({})", setting.config_path, render_field_name(setting.field));
+    let mut rendered = format!(
+        "{} ({})",
+        setting.config_path,
+        render_field_name(setting.field)
+    );
     if let Some(value) = &setting.value {
         let _ = write!(&mut rendered, " = {}", render_recommended_value(value));
     }

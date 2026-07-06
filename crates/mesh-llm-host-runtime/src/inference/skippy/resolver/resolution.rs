@@ -119,7 +119,15 @@ fn find_model_entry_by_resolved_path<'a>(
 }
 
 fn comparable_path(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    match path.canonicalize() {
+        Ok(canonical) => canonical,
+        Err(e) => {
+            tracing::warn!(
+                "failed to canonicalize path {path:?}: {e}; using raw path for config entry lookup, which may miss entries"
+            );
+            path.to_path_buf()
+        }
+    }
 }
 
 fn validate_supported_model_fit_controls(context: &ResolverContext<'_>) -> Result<()> {

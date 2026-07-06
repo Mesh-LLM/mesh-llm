@@ -1,11 +1,13 @@
-struct BenchmarkSelection {
-    recommended: Option<TuneBenchmarkTrial>,
-    raw_best: Option<TuneBenchmarkTrial>,
-    pareto_frontier: Vec<TuneBenchmarkTrial>,
-    reason: Option<String>,
+use super::*;
+
+pub(crate) struct BenchmarkSelection {
+    pub(crate) recommended: Option<TuneBenchmarkTrial>,
+    pub(crate) raw_best: Option<TuneBenchmarkTrial>,
+    pub(crate) pareto_frontier: Vec<TuneBenchmarkTrial>,
+    pub(crate) reason: Option<String>,
 }
 
-fn select_benchmark_trials(
+pub(crate) fn select_benchmark_trials(
     trials: &[TuneBenchmarkTrial],
     throughput_tolerance_pct: f64,
 ) -> BenchmarkSelection {
@@ -91,10 +93,7 @@ fn dominates_for_frontier(left: &TuneBenchmarkTrial, right: &TuneBenchmarkTrial)
         && (left_rate > right_rate || left_ctx > right_ctx)
 }
 
-fn compare_raw_best(
-    left: &TuneBenchmarkTrial,
-    right: &TuneBenchmarkTrial,
-) -> std::cmp::Ordering {
+fn compare_raw_best(left: &TuneBenchmarkTrial, right: &TuneBenchmarkTrial) -> std::cmp::Ordering {
     compare_decode_tok_s(left, right)
         .then_with(|| left.candidate.ctx_size.cmp(&right.candidate.ctx_size))
         .then_with(|| compare_lower_optional_f64(request_ms(left), request_ms(right)))
@@ -150,7 +149,10 @@ fn compare_lower_optional_f64(left: Option<f64>, right: Option<f64>) -> std::cmp
 }
 
 fn request_ms(trial: &TuneBenchmarkTrial) -> Option<f64> {
-    trial.timings.as_ref().and_then(|timings| timings.request_ms)
+    trial
+        .timings
+        .as_ref()
+        .and_then(|timings| timings.request_ms)
 }
 
 fn readiness_ms(trial: &TuneBenchmarkTrial) -> Option<f64> {

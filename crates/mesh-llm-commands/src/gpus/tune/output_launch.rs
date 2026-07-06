@@ -1,4 +1,6 @@
-fn build_launch_preview(
+use super::*;
+
+pub(crate) fn build_launch_preview(
     prepared: &crate::gpus::tune_apply::PreparedTunePlan,
     settings: &[TuneRenderedSetting],
     status: TuneTargetStatus,
@@ -21,7 +23,11 @@ fn build_launch_preview(
         argv.push(device);
     }
     Some(TuneLaunchPreview {
-        shell: argv.iter().map(|arg| shell_quote(arg)).collect::<Vec<_>>().join(" "),
+        shell: argv
+            .iter()
+            .map(|arg| shell_quote(arg))
+            .collect::<Vec<_>>()
+            .join(" "),
         config_settings: settings
             .iter()
             .filter(|setting| {
@@ -54,28 +60,40 @@ fn build_launch_preview(
 }
 
 fn setting_context_size(settings: &[TuneRenderedSetting]) -> Option<u32> {
-    settings.iter().find_map(|setting| match setting.value.as_ref()? {
-        TuneRecommendedValue::ContextSize(value)
-            if matches!(
-                setting.status,
-                TuneRenderedSettingStatus::Applied | TuneRenderedSettingStatus::Preserved
-            ) => Some(*value),
-        _ => None,
-    })
+    settings
+        .iter()
+        .find_map(|setting| match setting.value.as_ref()? {
+            TuneRecommendedValue::ContextSize(value)
+                if matches!(
+                    setting.status,
+                    TuneRenderedSettingStatus::Applied | TuneRenderedSettingStatus::Preserved
+                ) =>
+            {
+                Some(*value)
+            }
+            _ => None,
+        })
 }
 
 fn setting_device(settings: &[TuneRenderedSetting]) -> Option<String> {
-    settings.iter().find_map(|setting| match setting.value.as_ref()? {
-        TuneRecommendedValue::Device(value)
-            if matches!(
-                setting.status,
-                TuneRenderedSettingStatus::Preserved | TuneRenderedSettingStatus::ReportOnly
-            ) => Some(value.clone()),
-        _ => None,
-    })
+    settings
+        .iter()
+        .find_map(|setting| match setting.value.as_ref()? {
+            TuneRecommendedValue::Device(value)
+                if matches!(
+                    setting.status,
+                    TuneRenderedSettingStatus::Preserved | TuneRenderedSettingStatus::ReportOnly
+                ) =>
+            {
+                Some(value.clone())
+            }
+            _ => None,
+        })
 }
 
-fn render_selection(selection: &crate::gpus::tune_resolver::TuneTargetSelection) -> String {
+pub(crate) fn render_selection(
+    selection: &crate::gpus::tune_resolver::TuneTargetSelection,
+) -> String {
     match selection {
         crate::gpus::tune_resolver::TuneTargetSelection::Configured => "configured".to_string(),
         crate::gpus::tune_resolver::TuneTargetSelection::Explicit { configured: true } => {

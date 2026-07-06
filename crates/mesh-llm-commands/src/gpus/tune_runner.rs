@@ -74,29 +74,18 @@ fn run_tune_request_with_writer(
 
     let prepared = prepare_tune_plans(&config, &resolution, apply_mode, &mut target_failures);
 
-    if !global_safety_errors.is_empty() {
-        let output_context = RunnerOutputContext {
-            command: args.command,
-            render_json,
-            launch_args: args.launch_args,
-            config: &config,
-            apply_mode,
-            prepared: &prepared,
-            target_failures: &target_failures,
-            global_blockers: &[],
-            benchmark_reports: &[],
-        };
-        emit_runner_output_for(writer, output_context, &global_safety_errors)?;
-        let detail = global_safety_errors
-            .into_iter()
-            .map(|problem| format!("  - {problem}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        bail!(
-            "{} apply aborted before writing config:\n{detail}",
-            command_label(args.command)
-        );
-    }
+    let global_context = RunnerOutputContext {
+        command: args.command,
+        render_json,
+        launch_args: args.launch_args,
+        config: &config,
+        apply_mode,
+        prepared: &prepared,
+        target_failures: &target_failures,
+        global_blockers: &[],
+        benchmark_reports: &[],
+    };
+    bail_on_global_safety_errors(writer, global_context, &global_safety_errors)?;
 
     let benchmark_reports = maybe_run_benchmark_reports(
         args.benchmark
@@ -122,51 +111,82 @@ fn run_tune_request_with_writer(
         );
     }
 
+    handle_apply_mode(writer, output_context, config_path)?;
+
+    emit_runner_output_for(writer, output_context, &[])?;
+    Ok(())
+}
+
+fn bail_on_global_safety_errors(
+    writer: &mut impl Write,
+    context: RunnerOutputContext<'_>,
+    errors: &[String],
+) -> Result<()> {
+    if errors.is_empty() {
+        return Ok(());
+    }
+    emit_runner_output_for(writer, context, errors)?;
+    let detail = errors
+        .iter()
+        .map(|problem| format!("  - {problem}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    bail!(
+        "{} apply aborted before writing config:\n{detail}",
+        command_label(context.command)
+    )
+}
+
+fn handle_apply_mode(
+    writer: &mut impl Write,
+    context: RunnerOutputContext<'_>,
+    config_path: Option<&Path>,
+) -> Result<()> {
     if matches!(
-        apply_mode,
+        context.apply_mode,
         TuneApplyMode::ApplyMissing | TuneApplyMode::ReplaceExisting
     ) {
         let store = match config_path {
             Some(path) => ConfigStore::open(path),
             None => ConfigStore::default_path()?,
         };
-        let written = tune_apply::apply_prepared_tune_plans(&store, &prepared)?;
+        emit_runner_output_for(writer, context, &[])?;
+        let written = tune_apply::apply_prepared_tune_plans(&store, context.prepared)?;
         if written == 0 {
-            emit_runner_output_for(writer, output_context, &[])?;
-            let mut apply_failures = target_failures
-                .into_iter()
-                .map(|failure| failure.reason)
-                .collect::<Vec<_>>();
-            apply_failures.extend(prepared.iter().filter_map(apply_failure_reason));
+            let mut apply_failures: Vec<String> = context
+                .target_failures
+                .iter()
+                .map(|failure| failure.reason.clone())
+                .collect();
+            apply_failures.extend(context.prepared.iter().filter_map(apply_failure_reason));
             if apply_failures.is_empty() {
                 apply_failures.push(
                     "resolved targets produced no writable tune edits for apply mode".to_string(),
                 );
             }
             let detail = apply_failures
-                .into_iter()
+                .iter()
                 .map(|problem| format!("  - {problem}"))
                 .collect::<Vec<_>>()
                 .join("\n");
             bail!(
                 "{} could not produce any safe config edits:\n{detail}",
-                command_label(args.command)
+                command_label(context.command)
             );
         }
-    } else if prepared.is_empty() && !target_failures.is_empty() {
-        emit_runner_output_for(writer, output_context, &[])?;
-        let detail = target_failures
-            .into_iter()
+    } else if context.prepared.is_empty() && !context.target_failures.is_empty() {
+        emit_runner_output_for(writer, context, &[])?;
+        let detail = context
+            .target_failures
+            .iter()
             .map(|failure| format!("  - {}", failure.reason))
             .collect::<Vec<_>>()
             .join("\n");
         bail!(
             "{} could not prepare any local targets:\n{detail}",
-            command_label(args.command)
+            command_label(context.command)
         );
     }
-
-    emit_runner_output_for(writer, output_context, &[])?;
     Ok(())
 }
 

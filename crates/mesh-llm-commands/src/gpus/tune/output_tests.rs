@@ -1,4 +1,9 @@
-fn sample_output_plan() -> TunePlan {
+use crate::gpus::tune_apply::PreparedTunePlan;
+use mesh_llm_config::MeshConfig;
+
+use super::*;
+
+pub(crate) fn sample_output_plan() -> TunePlan {
     TunePlan {
         target: sample_target(),
         apply_mode: TuneApplyMode::Review,
@@ -159,16 +164,20 @@ fn gpu_tune_output_never_marks_unsupported_fields_as_applied() {
     );
 
     let target = &report.targets[0];
-    assert!(target
-        .config_edits
-        .iter()
-        .all(|setting| setting.field != TuneField::TensorSplit));
-    assert!(target
-        .settings
-        .iter()
-        .any(|setting| setting.field == TuneField::TensorSplit
-            && setting.status == TuneRenderedSettingStatus::Unsupported
-            && !setting.applied_write));
+    assert!(
+        target
+            .config_edits
+            .iter()
+            .all(|setting| setting.field != TuneField::TensorSplit)
+    );
+    assert!(
+        target
+            .settings
+            .iter()
+            .any(|setting| setting.field == TuneField::TensorSplit
+                && setting.status == TuneRenderedSettingStatus::Unsupported
+                && !setting.applied_write)
+    );
 }
 
 #[test]
@@ -217,8 +226,10 @@ fn gpu_tune_json_reports_per_model_errors_without_silent_failures_output_builder
     assert_eq!(value["summary"]["failed_targets"], serde_json::json!(2));
     assert_eq!(value["targets"][0]["status"], serde_json::json!("failed"));
     assert_eq!(value["targets"][1]["status"], serde_json::json!("failed"));
-    assert!(value["targets"][1]["reason"]
-        .as_str()
-        .expect("reason should be a string")
-        .contains("installed cache ref"));
+    assert!(
+        value["targets"][1]["reason"]
+            .as_str()
+            .expect("reason should be a string")
+            .contains("installed cache ref")
+    );
 }

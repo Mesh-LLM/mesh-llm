@@ -1,3 +1,10 @@
+use crate::gpus::tune_apply::{PreparedTunePlan, apply_prepared_tune_plans};
+use mesh_llm_config::{ConfigStore, parse_config_toml};
+use tempfile::tempdir;
+use toml_edit::DocumentMut;
+
+use super::*;
+
 #[test]
 fn gpu_tune_apply_preserves_comments_and_writes_nested_fields() {
     let temp = tempdir().expect("tempdir should be created");

@@ -1,4 +1,6 @@
-fn log_target_selection(requested: &str, selection: &BenchmarkSelection) {
+use super::*;
+
+pub(crate) fn log_target_selection(requested: &str, selection: &BenchmarkSelection) {
     if let Some(best) = &selection.recommended {
         eprintln!(
             "benchmark tune: target `{requested}` recommended {} decode_tok_s={}",
@@ -12,7 +14,7 @@ fn log_target_selection(requested: &str, selection: &BenchmarkSelection) {
     }
 }
 
-fn run_trial_with_progress(
+pub(crate) fn run_trial_with_progress(
     request: &TuneBenchmarkRunRequest<'_>,
     prepared: &crate::gpus::tune_apply::PreparedTunePlan,
     index: usize,

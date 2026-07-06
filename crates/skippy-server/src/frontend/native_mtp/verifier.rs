@@ -391,4 +391,128 @@ mod tests {
 
         assert_eq!(verifier.stats().verification_compute_us, i64::MAX);
     }
+
+    #[test]
+    fn empty_span_returns_no_pending_first_decision_and_zero_counts() {
+        let mut verifier = NativeMtpVerifier::default();
+        let result = verifier.observe_taken_draft_span(&[], &[], 0);
+        assert_eq!(result.accepted_count, 0);
+        assert!(!result.rejected);
+        assert_eq!(result.first_decision, NativeMtpVerification::NoPending);
+        assert_eq!(verifier.stats(), NativeMtpStats::default());
+    }
+
+    #[test]
+    fn span_with_all_accepts_increments_accepted_count() {
+        let mut verifier = NativeMtpVerifier::default();
+        let result = verifier.observe_taken_draft_span(&[10, 11, 12], &[10, 11, 12], 5);
+        assert_eq!(result.accepted_count, 3);
+        assert!(!result.rejected);
+        assert_eq!(
+            result.first_decision,
+            NativeMtpVerification::Accepted {
+                draft: 10,
+                target: 10,
+            }
+        );
+        assert_eq!(
+            verifier.stats(),
+            NativeMtpStats {
+                verification_count: 3,
+                verification_compute_us: 5,
+                accepted_tokens: 3,
+                ..NativeMtpStats::default()
+            }
+        );
+    }
+
+    #[test]
+    fn span_with_rejected_at_first_position_marks_rejected() {
+        let mut verifier = NativeMtpVerifier::default();
+        let result = verifier.observe_taken_draft_span(&[10], &[99], 7);
+        assert_eq!(result.accepted_count, 0);
+        assert!(result.rejected);
+        assert_eq!(
+            result.first_decision,
+            NativeMtpVerification::Rejected {
+                draft: 10,
+                target: 99,
+            }
+        );
+        assert_eq!(
+            verifier.stats(),
+            NativeMtpStats {
+                verification_count: 1,
+                verification_compute_us: 7,
+                rejected_tokens: 1,
+                ..NativeMtpStats::default()
+            }
+        );
+    }
+
+    #[test]
+    fn span_with_mixed_accept_then_reject_breaks_after_reject() {
+        let mut verifier = NativeMtpVerifier::default();
+        let result = verifier.observe_taken_draft_span(&[10, 11, 12], &[10, 11, 99], 4);
+        assert_eq!(result.accepted_count, 2);
+        assert!(result.rejected);
+        assert_eq!(
+            result.first_decision,
+            NativeMtpVerification::Accepted {
+                draft: 10,
+                target: 10,
+            }
+        );
+        assert_eq!(
+            verifier.stats(),
+            NativeMtpStats {
+                verification_count: 3,
+                verification_compute_us: 4,
+                accepted_tokens: 2,
+                rejected_tokens: 1,
+                ..NativeMtpStats::default()
+            }
+        );
+    }
+
+    #[test]
+    fn span_breaks_when_targets_run_out_before_drafts() {
+        let mut verifier = NativeMtpVerifier::default();
+        let result = verifier.observe_taken_draft_span(&[10, 11, 12], &[10], 3);
+        assert_eq!(result.accepted_count, 1);
+        assert!(!result.rejected);
+        assert_eq!(
+            result.first_decision,
+            NativeMtpVerification::Accepted {
+                draft: 10,
+                target: 10,
+            }
+        );
+        assert_eq!(
+            verifier.stats(),
+            NativeMtpStats {
+                verification_count: 1,
+                verification_compute_us: 3,
+                accepted_tokens: 1,
+                ..NativeMtpStats::default()
+            }
+        );
+    }
+
+    #[test]
+    fn span_attributes_compute_time_to_first_iteration_only() {
+        let mut verifier = NativeMtpVerifier::default();
+        let result = verifier.observe_taken_draft_span(&[10, 11], &[10, 11], 42);
+        assert_eq!(result.accepted_count, 2);
+        assert!(!result.rejected);
+        assert_eq!(
+            verifier.stats(),
+            NativeMtpStats {
+                verification_count: 2,
+                verification_compute_us: 42,
+                accepted_tokens: 2,
+                ..NativeMtpStats::default()
+            }
+        );
+    }
 }

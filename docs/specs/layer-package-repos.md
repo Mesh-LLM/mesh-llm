@@ -313,6 +313,8 @@ Operators may override the package recommendation in `config.toml` with
 defaults), `mtp` (force the current native MTP strategy), and
 `disabled` (disable native MTP for the configured model/default scope).
 
+Operators may also pass the legacy `native-mtp-n1` value; the runtime normalizes it to `mtp` for backward compatibility. New configs should use `mtp`.
+
 ## Layer Selection
 
 For a stage with `layer_start..layer_end`, consumers select:

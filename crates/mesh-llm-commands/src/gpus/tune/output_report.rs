@@ -1,5 +1,7 @@
 use crate::gpus::tune_apply::PreparedTunePlan;
 
+use super::*;
+
 pub(crate) fn build_tune_run_report(
     command: &'static str,
     config: &mesh_llm_config::MeshConfig,

@@ -1,4 +1,8 @@
-fn push_cpu_moe_statuses(plan: &mut TunePlan, metadata: &TuneGgufMetadata) {
+use crate::gpus::tune_hardware::types::TuneMemorySource;
+
+use super::*;
+
+pub(crate) fn push_cpu_moe_statuses(plan: &mut TunePlan, metadata: &TuneGgufMetadata) {
     let expert_count = match &metadata.tensor_profile {
         TuneTensorProfile::Exact(profile) => profile.expert_count,
         TuneTensorProfile::DegradedFallback { .. } => 0,
@@ -27,14 +31,14 @@ fn push_cpu_moe_statuses(plan: &mut TunePlan, metadata: &TuneGgufMetadata) {
     ));
 }
 
-fn unsupported_status(field: TuneField, reason: &str) -> TuneFieldStatus {
+pub(crate) fn unsupported_status(field: TuneField, reason: &str) -> TuneFieldStatus {
     TuneFieldStatus::Unsupported {
         field,
         reason: reason.to_string(),
     }
 }
 
-fn invalid_existing_value_diagnostic(field: TuneField, value: &str) -> TuneDiagnostic {
+pub(crate) fn invalid_existing_value_diagnostic(field: TuneField, value: &str) -> TuneDiagnostic {
     TuneDiagnostic {
         severity: TuneDiagnosticSeverity::Error,
         code: TuneDiagnosticCode::InvalidExistingValue,
@@ -43,7 +47,7 @@ fn invalid_existing_value_diagnostic(field: TuneField, value: &str) -> TuneDiagn
     }
 }
 
-fn insufficient_memory_diagnostic(
+pub(crate) fn insufficient_memory_diagnostic(
     source: &TuneMemorySource,
     budget_bytes: u64,
     model_bytes: u64,

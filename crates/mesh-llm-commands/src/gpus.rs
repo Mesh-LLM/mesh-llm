@@ -6,53 +6,15 @@ use mesh_llm_system::{
     vram::VramCapacity,
 };
 use serde_json::{Value, json};
-use std::path::Path;
 
-pub mod tune {
-    include!("gpus/tune/types.rs");
-    include!("gpus/tune/matrix.rs");
-    include!("gpus/tune/metadata.rs");
-    include!("gpus/tune/output_types.rs");
-    include!("gpus/tune/output_report.rs");
-    include!("gpus/tune/output_values.rs");
-    include!("gpus/tune/benchmark_selection.rs");
-    include!("gpus/tune/benchmark_progress.rs");
-    include!("gpus/tune/benchmark.rs");
-    include!("gpus/tune/output_launch.rs");
-    include!("gpus/tune/output_emit.rs");
-    include!("gpus/tune/output_render.rs");
-    include!("gpus/tune/planning.rs");
-    include!("gpus/tune/recommendation.rs");
-    include!("gpus/tune/recommendation_existing.rs");
-    include!("gpus/tune/recommendation_reports.rs");
-    include!("gpus/tune/recommendation_writes.rs");
-
-    #[cfg(test)]
-    mod tests {
-        include!("gpus/tune/tests.rs");
-        include!("gpus/tune/metadata_tests.rs");
-        include!("gpus/tune/output_tests.rs");
-        include!("gpus/tune/recommendation_tests.rs");
-        include!("gpus/tune/recommendation_defaults_tests.rs");
-        include!("gpus/tune/recommendation_failure_tests.rs");
-        include!("gpus/tune/apply_test_support.rs");
-        include!("gpus/tune/apply_write_tests.rs");
-        include!("gpus/tune/apply_collision_tests.rs");
-    }
-}
+pub mod tune;
 
 pub(crate) mod tune_apply;
-#[path = "gpus/tune_hardware.rs"]
 pub(crate) mod tune_hardware;
 pub(crate) mod tune_resolver;
-#[path = "gpus/tune_runner.rs"]
 pub(crate) mod tune_runner;
 
-pub fn dispatch_gpu_command(
-    _config_path: Option<&Path>,
-    json_output: bool,
-    command: Option<&GpuCommand>,
-) -> Result<()> {
+pub fn dispatch_gpu_command(json_output: bool, command: Option<&GpuCommand>) -> Result<()> {
     match command {
         Some(command) => match command {
             GpuCommand::Detect { json } => run_gpu_benchmark(json_output || *json),

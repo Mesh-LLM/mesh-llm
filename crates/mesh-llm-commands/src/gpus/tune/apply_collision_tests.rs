@@ -1,3 +1,13 @@
+use crate::gpus::tune_apply::{PreparedTunePlan, apply_prepared_tune_plans};
+use crate::gpus::tune_resolver::{
+    ConfigModelMatch, LocalTargetSource, ResolvedTuneTarget, TuneTargetSelection,
+};
+use mesh_llm_config::ConfigStore;
+use model_hf::store::model_ref_for_path;
+use tempfile::tempdir;
+
+use super::*;
+
 #[test]
 fn gpu_tune_apply_aborts_on_duplicate_config_collision_without_partial_write() {
     let temp = tempdir().expect("tempdir should be created");

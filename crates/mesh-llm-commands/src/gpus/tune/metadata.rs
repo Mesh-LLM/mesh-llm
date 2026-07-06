@@ -180,9 +180,9 @@ fn package_artifact_path(
 ) -> Result<PathBuf, TuneGgufMetadataError> {
     let path = Path::new(relative_path);
     let safe = !relative_path.trim().is_empty()
-        && path.components().all(|component| {
-            matches!(component, Component::Normal(_) | Component::CurDir)
-        });
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir));
     if !safe {
         return Err(package_metadata_error(
             model,
@@ -198,9 +198,11 @@ fn package_model_bytes(manifest: &serde_json::Value) -> Option<u64> {
 
 fn source_model_file_bytes(manifest: &serde_json::Value) -> Option<u64> {
     let files = manifest.pointer("/source_model/files")?.as_array()?;
-    checked_sum(files.iter().filter_map(|file| {
-        file.get("size_bytes").and_then(serde_json::Value::as_u64)
-    }))
+    checked_sum(
+        files
+            .iter()
+            .filter_map(|file| file.get("size_bytes").and_then(serde_json::Value::as_u64)),
+    )
 }
 
 fn artifact_bytes(manifest: &serde_json::Value) -> Option<u64> {

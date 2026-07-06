@@ -224,7 +224,7 @@ fn snap_context_length_down(value: u32) -> u32 {
         .rev()
         .copied()
         .find(|step| *step <= value)
-        .unwrap_or(MIN_AUTO_CONTEXT_LENGTH)
+        .unwrap_or(value)
 }
 
 #[cfg(test)]

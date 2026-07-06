@@ -4,6 +4,8 @@ use mesh_llm_config::{
     ModelConfigEntry as OutputModelConfigEntry,
 };
 
+use super::*;
+
 pub(crate) fn render_apply_mode(mode: TuneApplyMode) -> &'static str {
     match mode {
         TuneApplyMode::Review => "review",
@@ -155,7 +157,7 @@ pub(crate) fn render_benchmark_bool_or_auto(value: TuneBoolOrAutoValue) -> &'sta
     }
 }
 
-fn preserved_value(
+pub(crate) fn preserved_value(
     field: TuneField,
     model_entry: Option<&OutputModelConfigEntry>,
     defaults: Option<&OutputModelConfigDefaults>,

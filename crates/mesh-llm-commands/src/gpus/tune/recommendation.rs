@@ -1,9 +1,9 @@
-use crate::gpus::tune_hardware::types::{
-    TuneDeviceTarget, TuneHardwareEvaluation, TuneMemorySource,
-};
+use crate::gpus::tune_hardware::types::{TuneDeviceTarget, TuneHardwareEvaluation};
 use crate::gpus::tune_resolver::{ResolvedTuneTarget, TuneTargetSelection};
-use mesh_llm_config::{MeshConfig, ModelConfigDefaults, ModelConfigEntry};
+use mesh_llm_config::{MeshConfig, ModelConfigEntry};
 use mesh_llm_system::hardware::HardwareSurvey;
+
+use super::*;
 
 pub(crate) struct TuneRecommendationInput<'a> {
     pub(crate) apply_mode: TuneApplyMode,
@@ -75,8 +75,7 @@ pub(crate) fn build_tune_plan(input: TuneRecommendationInput<'_>) -> TunePlan {
     ));
     plan.field_statuses.push(TuneFieldStatus::Preserved {
         field: TuneField::Defaults,
-        reason: "defaults.* remains preserve-only in v1 and is never rewritten by tune"
-            .to_string(),
+        reason: "defaults.* remains preserve-only in v1 and is never rewritten by tune".to_string(),
     });
     if let Some(diagnostic) = fit.diagnostic {
         plan.diagnostics.push(diagnostic.clone());
@@ -93,12 +92,12 @@ pub(crate) fn build_tune_plan(input: TuneRecommendationInput<'_>) -> TunePlan {
 }
 
 #[derive(Clone)]
-struct PlannedFit {
-    ctx_size: u32,
-    batch: u32,
-    ubatch: u32,
-    gpu_layers: TuneGpuLayersValue,
-    diagnostic: Option<TuneDiagnostic>,
+pub(crate) struct PlannedFit {
+    pub(crate) ctx_size: u32,
+    pub(crate) batch: u32,
+    pub(crate) ubatch: u32,
+    pub(crate) gpu_layers: TuneGpuLayersValue,
+    pub(crate) diagnostic: Option<TuneDiagnostic>,
 }
 
 fn find_partial_gpu_layers_fit(
@@ -108,26 +107,19 @@ fn find_partial_gpu_layers_fit(
     kv_bytes_per_token: u64,
     quant: model_artifact::gguf::GgufKvCacheQuant,
 ) -> Option<(TuneGpuLayersValue, u32)> {
-    let bytes_per_layer =
-        resident_model_bytes_for_layers(metadata.model_bytes, layer_count, 1);
+    let bytes_per_layer = resident_model_bytes_for_layers(metadata.model_bytes, layer_count, 1);
     let max_layers = selected_budget
         .checked_div(bytes_per_layer)
         .map(|layers| layers.min(u64::from(layer_count)) as u32)
         .unwrap_or(0);
     for layers in (1..=max_layers).rev() {
-        let resident =
-            resident_model_bytes_for_layers(metadata.model_bytes, layer_count, layers);
+        let resident = resident_model_bytes_for_layers(metadata.model_bytes, layer_count, layers);
         if !minimum_context_fits(resident, selected_budget, kv_bytes_per_token) {
             continue;
         }
         return Some((
             TuneGpuLayersValue::Count(layers),
-            planned_context_length(
-                &metadata.compact_meta,
-                resident,
-                selected_budget,
-                quant,
-            ),
+            planned_context_length(&metadata.compact_meta, resident, selected_budget, quant),
         ));
     }
     None
@@ -212,7 +204,7 @@ fn plan_fit(
     }
 }
 
-fn matched_model_entry<'a>(
+pub(crate) fn matched_model_entry<'a>(
     config: &'a MeshConfig,
     target: &ResolvedTuneTarget,
 ) -> Option<&'a ModelConfigEntry> {

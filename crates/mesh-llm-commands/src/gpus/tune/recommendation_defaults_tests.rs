@@ -1,3 +1,10 @@
+use mesh_llm_config::{
+    FlashAttentionType, HardwareConfig, IntegerOrString, MeshConfig, ModelConfigDefaults,
+    ModelConfigEntry, ModelFitConfig,
+};
+
+use super::*;
+
 #[test]
 fn gpu_tune_recommends_stable_defaults() {
     let plan = build_tune_plan(TuneRecommendationInput {

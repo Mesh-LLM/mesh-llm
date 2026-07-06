@@ -113,7 +113,9 @@ fn resolve_requested_gpu<'a>(
     survey: &'a HardwareSurvey,
 ) -> Result<&'a GpuFacts, TuneDiagnostic> {
     match request.source {
-        ConfiguredDeviceSource::LegacyGpuId => resolve_requested_pinned_gpu(request, survey),
+        ConfiguredDeviceSource::LegacyGpuId => {
+            resolve_requested_pinned_gpu(request, survey).map_err(|(_err, diagnostic)| diagnostic)
+        }
         ConfiguredDeviceSource::ModelHardwareDevice
         | ConfiguredDeviceSource::DefaultsHardwareDevice => {
             resolve_pinned_with_backend_fallback(request, survey)
@@ -125,12 +127,12 @@ fn resolve_pinned_with_backend_fallback<'a>(
     request: &ConfiguredTuneDeviceRequest,
     survey: &'a HardwareSurvey,
 ) -> Result<&'a GpuFacts, TuneDiagnostic> {
-    let pinned_diagnostic = match resolve_requested_pinned_gpu(request, survey) {
+    let (pinned_error, pinned_diagnostic) = match resolve_requested_pinned_gpu(request, survey) {
         Ok(gpu) => return Ok(gpu),
-        Err(diagnostic) => diagnostic,
+        Err(tuple) => tuple,
     };
 
-    if !pinned_diagnostic_allows_backend_fallback(&pinned_diagnostic) {
+    if !pinned_diagnostic_allows_backend_fallback(&pinned_error) {
         return Err(pinned_diagnostic);
     }
 
@@ -139,9 +141,10 @@ fn resolve_pinned_with_backend_fallback<'a>(
     })
 }
 
-fn pinned_diagnostic_allows_backend_fallback(diagnostic: &TuneDiagnostic) -> bool {
-    diagnostic.message.contains("not pinnable")
-        || diagnostic.message.contains("available pinnable GPU IDs")
+fn pinned_diagnostic_allows_backend_fallback(
+    error: &mesh_llm_system::hardware::PinnedGpuResolverError,
+) -> bool {
+    matches!(error, mesh_llm_system::hardware::PinnedGpuResolverError::NonPinnableConfiguredId { .. })
 }
 
 fn combine_backend_fallback_error(
@@ -158,9 +161,12 @@ fn combine_backend_fallback_error(
 fn resolve_requested_pinned_gpu<'a>(
     request: &ConfiguredTuneDeviceRequest,
     survey: &'a HardwareSurvey,
-) -> Result<&'a GpuFacts, TuneDiagnostic> {
+) -> Result<&'a GpuFacts, (mesh_llm_system::hardware::PinnedGpuResolverError, TuneDiagnostic)> {
     resolve_pinned_gpu_strict(Some(&request.requested_value), &survey.gpus)
-        .map_err(|error| missing_configured_device(request, survey, &error.to_string()))
+        .map_err(|error| {
+            let diagnostic = missing_configured_device(request, survey, &error.to_string());
+            (error, diagnostic)
+        })
 }
 
 fn resolve_backend_device<'a>(

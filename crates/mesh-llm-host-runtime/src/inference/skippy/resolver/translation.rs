@@ -27,6 +27,12 @@ use super::types::{
     ResolvedStageKvCache,
 };
 
+/// Default maximum number of draft tokens for native MTP sidecar probes when
+/// no explicit `draft_max_tokens` is configured. Three tokens is a reasonable
+/// default: long enough to confirm or reject the draft trajectory without
+/// over-committing speculative decode resources.
+const DEFAULT_NATIVE_MTP_MAX_TOKENS: usize = 3;
+
 impl ResolvedSkippyConfig {
     pub(crate) fn to_model_load_options(
         &self,
@@ -377,7 +383,11 @@ impl ResolvedEmbeddedOpenAiArgs {
             ngram_max: 0,
             native_mtp_enabled,
             native_mtp_draft_model_path: None,
-            native_mtp_max_tokens: if native_mtp_enabled { 3 } else { 0 },
+            native_mtp_max_tokens: if native_mtp_enabled {
+                DEFAULT_NATIVE_MTP_MAX_TOKENS
+            } else {
+                0
+            },
             native_mtp_min_tokens: 0,
             activation_width: 0,
             wire_dtype,
@@ -413,7 +423,11 @@ impl ResolvedEmbeddedOpenAiArgs {
             ngram_max: 0,
             native_mtp_enabled,
             native_mtp_draft_model_path: None,
-            native_mtp_max_tokens: if native_mtp_enabled { 3 } else { 0 },
+            native_mtp_max_tokens: if native_mtp_enabled {
+                DEFAULT_NATIVE_MTP_MAX_TOKENS
+            } else {
+                0
+            },
             native_mtp_min_tokens: 0,
             activation_width,
             wire_dtype,

@@ -1,11 +1,15 @@
+use mesh_llm_config::{ModelConfigDefaults, ModelConfigEntry};
+
+use super::*;
+
 #[derive(Clone, Copy)]
-enum ExistingValueSource {
+pub(crate) enum ExistingValueSource {
     ModelNested,
     ModelLegacy,
     Defaults,
 }
 
-fn preserve_reason(source: ExistingValueSource, field: TuneField) -> String {
+pub(crate) fn preserve_reason(source: ExistingValueSource, field: TuneField) -> String {
     let rendered = match (source, field) {
         (ExistingValueSource::ModelNested, TuneField::CacheTypeK) => {
             "models[].model_fit.cache_type_k"
@@ -50,7 +54,7 @@ fn preserve_reason(source: ExistingValueSource, field: TuneField) -> String {
     format!("existing {rendered} remains authoritative")
 }
 
-fn existing_cache_type_k(
+pub(crate) fn existing_cache_type_k(
     model_entry: Option<&ModelConfigEntry>,
     defaults: Option<&ModelConfigDefaults>,
 ) -> Option<(String, ExistingValueSource)> {
@@ -74,7 +78,7 @@ fn existing_cache_type_k(
         })
 }
 
-fn existing_cache_type_v(
+pub(crate) fn existing_cache_type_v(
     model_entry: Option<&ModelConfigEntry>,
     defaults: Option<&ModelConfigDefaults>,
 ) -> Option<(String, ExistingValueSource)> {
@@ -98,7 +102,7 @@ fn existing_cache_type_v(
         })
 }
 
-fn existing_flash_attention_source(
+pub(crate) fn existing_flash_attention_source(
     model_entry: Option<&ModelConfigEntry>,
     defaults: Option<&ModelConfigDefaults>,
 ) -> Option<ExistingValueSource> {
@@ -120,7 +124,7 @@ fn existing_flash_attention_source(
         })
 }
 
-fn existing_ctx_size_source(
+pub(crate) fn existing_ctx_size_source(
     model_entry: Option<&ModelConfigEntry>,
     defaults: Option<&ModelConfigDefaults>,
 ) -> Option<ExistingValueSource> {
@@ -142,7 +146,7 @@ fn existing_ctx_size_source(
         })
 }
 
-fn existing_batch_source(
+pub(crate) fn existing_batch_source(
     model_entry: Option<&ModelConfigEntry>,
     defaults: Option<&ModelConfigDefaults>,
 ) -> Option<ExistingValueSource> {
@@ -160,7 +164,7 @@ fn existing_batch_source(
         })
 }
 
-fn existing_ubatch_source(
+pub(crate) fn existing_ubatch_source(
     model_entry: Option<&ModelConfigEntry>,
     defaults: Option<&ModelConfigDefaults>,
 ) -> Option<ExistingValueSource> {
@@ -182,7 +186,7 @@ fn existing_ubatch_source(
         })
 }
 
-fn existing_gpu_layers_source(
+pub(crate) fn existing_gpu_layers_source(
     model_entry: Option<&ModelConfigEntry>,
     defaults: Option<&ModelConfigDefaults>,
 ) -> Option<ExistingValueSource> {
@@ -201,7 +205,7 @@ fn existing_gpu_layers_source(
         })
 }
 
-fn existing_fit_target_source(
+pub(crate) fn existing_fit_target_source(
     model_entry: Option<&ModelConfigEntry>,
     defaults: Option<&ModelConfigDefaults>,
 ) -> Option<ExistingValueSource> {
@@ -218,7 +222,7 @@ fn existing_fit_target_source(
         })
 }
 
-fn existing_mmap_source(
+pub(crate) fn existing_mmap_source(
     model_entry: Option<&ModelConfigEntry>,
     defaults: Option<&ModelConfigDefaults>,
 ) -> Option<ExistingValueSource> {
@@ -236,7 +240,7 @@ fn existing_mmap_source(
         })
 }
 
-fn existing_mlock_source(
+pub(crate) fn existing_mlock_source(
     model_entry: Option<&ModelConfigEntry>,
     defaults: Option<&ModelConfigDefaults>,
 ) -> Option<ExistingValueSource> {
@@ -253,7 +257,9 @@ fn existing_mlock_source(
         })
 }
 
-fn parse_gpu_layers_value(value: Option<&mesh_llm_config::IntegerOrString>) -> Option<i32> {
+pub(crate) fn parse_gpu_layers_value(
+    value: Option<&mesh_llm_config::IntegerOrString>,
+) -> Option<i32> {
     match value? {
         mesh_llm_config::IntegerOrString::Integer(value) => i32::try_from(*value).ok(),
         mesh_llm_config::IntegerOrString::String(value) if value.eq_ignore_ascii_case("auto") => {

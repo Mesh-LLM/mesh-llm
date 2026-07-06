@@ -44,11 +44,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         }
         Command::Update { .. } => mesh_llm_commands::update::run_update(cli).await,
         Command::Gpus { json, command } => {
-            mesh_llm_commands::gpus::dispatch_gpu_command(
-                cli.config.as_deref(),
-                *json,
-                command.as_ref(),
-            )?;
+            mesh_llm_commands::gpus::dispatch_gpu_command(*json, command.as_ref())?;
             Ok(())
         }
         Command::Runtime { command } => {

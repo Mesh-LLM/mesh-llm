@@ -1,3 +1,5 @@
+use super::*;
+
 const BUILTIN_BATCH: u32 = 512;
 const BUILTIN_UBATCH: u32 = 128;
 const BUILTIN_SAFETY_MARGIN_GB: f64 = 2.0;
@@ -10,13 +12,15 @@ const FALLBACK_CONTEXT_16K_FREE_BYTES: u64 = 6_000_000_000;
 const FALLBACK_CONTEXT_32K_FREE_BYTES: u64 = 12_000_000_000;
 const FALLBACK_CONTEXT_64K_FREE_BYTES: u64 = 30_000_000_000;
 
-fn derive_fit_target_mib(allocatable_memory_bytes: u64) -> u64 {
+pub(crate) fn derive_fit_target_mib(allocatable_memory_bytes: u64) -> u64 {
     let allocatable_mib = allocatable_memory_bytes / (1024 * 1024);
     let reserve_mib = (BUILTIN_SAFETY_MARGIN_GB * 1024.0).round().max(0.0) as u64;
     allocatable_mib.saturating_sub(reserve_mib)
 }
 
-fn recommended_kv_cache_quant(model_bytes: u64) -> model_artifact::gguf::GgufKvCacheQuant {
+pub(crate) fn recommended_kv_cache_quant(
+    model_bytes: u64,
+) -> model_artifact::gguf::GgufKvCacheQuant {
     if model_bytes >= LARGE_MODEL_MIN_BYTES {
         model_artifact::gguf::GgufKvCacheQuant::Q4_0
     } else {
@@ -24,7 +28,7 @@ fn recommended_kv_cache_quant(model_bytes: u64) -> model_artifact::gguf::GgufKvC
     }
 }
 
-fn tune_kv_cache_type(value: &str) -> Option<TuneKvCacheType> {
+pub(crate) fn tune_kv_cache_type(value: &str) -> Option<TuneKvCacheType> {
     match value {
         value if value.eq_ignore_ascii_case("f16") => Some(TuneKvCacheType::F16),
         value if value.eq_ignore_ascii_case("q8_0") => Some(TuneKvCacheType::Q8_0),
@@ -33,7 +37,9 @@ fn tune_kv_cache_type(value: &str) -> Option<TuneKvCacheType> {
     }
 }
 
-fn tune_kv_cache_type_from_quant(quant: model_artifact::gguf::GgufKvCacheQuant) -> TuneKvCacheType {
+pub(crate) fn tune_kv_cache_type_from_quant(
+    quant: model_artifact::gguf::GgufKvCacheQuant,
+) -> TuneKvCacheType {
     match quant.v {
         model_artifact::gguf::GgufKvCacheType::F16 => TuneKvCacheType::F16,
         model_artifact::gguf::GgufKvCacheType::Q8_0 => TuneKvCacheType::Q8_0,
@@ -41,22 +47,22 @@ fn tune_kv_cache_type_from_quant(quant: model_artifact::gguf::GgufKvCacheQuant) 
     }
 }
 
-fn effective_flash_attention(cache_type_v: &TuneKvCacheType) -> TuneFlashAttentionValue {
+pub(crate) fn effective_flash_attention(cache_type_v: &TuneKvCacheType) -> TuneFlashAttentionValue {
     match cache_type_v {
         TuneKvCacheType::F16 => TuneFlashAttentionValue::Disabled,
         TuneKvCacheType::Q8_0 | TuneKvCacheType::Q4_0 => TuneFlashAttentionValue::Enabled,
     }
 }
 
-fn recommended_batch(ctx_size: u32) -> u32 {
+pub(crate) fn recommended_batch(ctx_size: u32) -> u32 {
     ctx_size.min(BUILTIN_BATCH)
 }
 
-fn recommended_ubatch(batch: u32) -> u32 {
+pub(crate) fn recommended_ubatch(batch: u32) -> u32 {
     batch.clamp(1, BUILTIN_UBATCH)
 }
 
-fn minimum_context_fits(
+pub(crate) fn minimum_context_fits(
     resident_model_bytes: u64,
     memory_budget_bytes: u64,
     kv_bytes_per_token: u64,
@@ -65,7 +71,11 @@ fn minimum_context_fits(
     resident_model_bytes.saturating_add(required_kv) <= memory_budget_bytes
 }
 
-fn resident_model_bytes_for_layers(model_bytes: u64, layer_count: u32, gpu_layers: u32) -> u64 {
+pub(crate) fn resident_model_bytes_for_layers(
+    model_bytes: u64,
+    layer_count: u32,
+    gpu_layers: u32,
+) -> u64 {
     if gpu_layers == 0 || layer_count == 0 {
         return 0;
     }
@@ -75,7 +85,7 @@ fn resident_model_bytes_for_layers(model_bytes: u64, layer_count: u32, gpu_layer
     rounded.min(u128::from(u64::MAX)) as u64
 }
 
-fn planned_context_length(
+pub(crate) fn planned_context_length(
     metadata: &model_artifact::gguf::GgufCompactMeta,
     resident_model_bytes: u64,
     memory_budget_bytes: u64,
@@ -137,5 +147,5 @@ fn snap_context_length_down(value: u32) -> u32 {
         .rev()
         .copied()
         .find(|step| *step <= value)
-        .unwrap_or(MIN_AUTO_CONTEXT_LENGTH)
+        .unwrap_or(value)
 }

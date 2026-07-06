@@ -1,3 +1,4 @@
+mod batched_verify;
 mod decode;
 mod draft;
 mod env;
@@ -5,6 +6,7 @@ mod stats;
 mod trim;
 mod verifier;
 
+pub(super) use batched_verify::BatchedVerifyControl;
 pub(super) use decode::{NativeMtpDecodeCounters, NativeMtpDecodeOptions};
 pub(super) use draft::{NativeMtpDraft, NativeMtpDraftOrigin, PendingNativeMtpDraft};
 pub(in crate::frontend) use env::{
