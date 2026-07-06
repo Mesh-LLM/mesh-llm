@@ -25,9 +25,9 @@ use skippy_ffi::{
 use tokio::sync::mpsc;
 
 mod devices;
+mod native_mtp;
 pub mod package;
 mod runtime_events;
-mod native_mtp;
 pub use native_mtp::NativeMtpDraft;
 
 pub const MAX_LOGIT_BIAS: usize = 256;

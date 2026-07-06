@@ -325,52 +325,20 @@ pub(crate) fn push_mtp_threshold_cross_product(
     acceptance_thresholds: &[f64],
     split_probabilities: &[f64],
 ) {
-    let base = || TuneBenchmarkSpeculativeCandidate::Mtp {
-        draft_model: draft_model.clone(),
-        draft_max_tokens,
-        draft_min_tokens,
-        draft_acceptance_threshold: None,
-        draft_split_probability: None,
-    };
-    if acceptance_thresholds.is_empty() && split_probabilities.is_empty() {
-        candidates.push(base());
-        return;
-    }
-    if acceptance_thresholds.is_empty() {
-        for split_probability in split_probabilities {
-            candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
+    push_threshold_cross_product(
+        candidates,
+        acceptance_thresholds,
+        split_probabilities,
+        |draft_acceptance_threshold, draft_split_probability| {
+            TuneBenchmarkSpeculativeCandidate::Mtp {
                 draft_model: draft_model.clone(),
                 draft_max_tokens,
                 draft_min_tokens,
-                draft_acceptance_threshold: None,
-                draft_split_probability: Some(*split_probability),
-            });
-        }
-        return;
-    }
-    if split_probabilities.is_empty() {
-        for acceptance_threshold in acceptance_thresholds {
-            candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
-                draft_model: draft_model.clone(),
-                draft_max_tokens,
-                draft_min_tokens,
-                draft_acceptance_threshold: Some(*acceptance_threshold),
-                draft_split_probability: None,
-            });
-        }
-        return;
-    }
-    for acceptance_threshold in acceptance_thresholds {
-        for split_probability in split_probabilities {
-            candidates.push(TuneBenchmarkSpeculativeCandidate::Mtp {
-                draft_model: draft_model.clone(),
-                draft_max_tokens,
-                draft_min_tokens,
-                draft_acceptance_threshold: Some(*acceptance_threshold),
-                draft_split_probability: Some(*split_probability),
-            });
-        }
-    }
+                draft_acceptance_threshold,
+                draft_split_probability,
+            }
+        },
+    );
 }
 
 pub(crate) fn push_draft_speculative_candidates(
@@ -424,50 +392,52 @@ pub(crate) fn push_draft_threshold_cross_product(
     acceptance_thresholds: &[f64],
     split_probabilities: &[f64],
 ) {
-    let base = || TuneBenchmarkSpeculativeCandidate::Draft {
-        draft_model: draft_model.clone(),
-        draft_max_tokens,
-        draft_min_tokens,
-        draft_acceptance_threshold: None,
-        draft_split_probability: None,
-    };
+    push_threshold_cross_product(
+        candidates,
+        acceptance_thresholds,
+        split_probabilities,
+        |draft_acceptance_threshold, draft_split_probability| {
+            TuneBenchmarkSpeculativeCandidate::Draft {
+                draft_model: draft_model.clone(),
+                draft_max_tokens,
+                draft_min_tokens,
+                draft_acceptance_threshold,
+                draft_split_probability,
+            }
+        },
+    );
+}
+
+fn push_threshold_cross_product<F>(
+    candidates: &mut Vec<TuneBenchmarkSpeculativeCandidate>,
+    acceptance_thresholds: &[f64],
+    split_probabilities: &[f64],
+    mut build_candidate: F,
+) where
+    F: FnMut(Option<f64>, Option<f64>) -> TuneBenchmarkSpeculativeCandidate,
+{
     if acceptance_thresholds.is_empty() && split_probabilities.is_empty() {
-        candidates.push(base());
+        candidates.push(build_candidate(None, None));
         return;
     }
     if acceptance_thresholds.is_empty() {
         for split_probability in split_probabilities {
-            candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
-                draft_model: draft_model.clone(),
-                draft_max_tokens,
-                draft_min_tokens,
-                draft_acceptance_threshold: None,
-                draft_split_probability: Some(*split_probability),
-            });
+            candidates.push(build_candidate(None, Some(*split_probability)));
         }
         return;
     }
     if split_probabilities.is_empty() {
         for acceptance_threshold in acceptance_thresholds {
-            candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
-                draft_model: draft_model.clone(),
-                draft_max_tokens,
-                draft_min_tokens,
-                draft_acceptance_threshold: Some(*acceptance_threshold),
-                draft_split_probability: None,
-            });
+            candidates.push(build_candidate(Some(*acceptance_threshold), None));
         }
         return;
     }
     for acceptance_threshold in acceptance_thresholds {
         for split_probability in split_probabilities {
-            candidates.push(TuneBenchmarkSpeculativeCandidate::Draft {
-                draft_model: draft_model.clone(),
-                draft_max_tokens,
-                draft_min_tokens,
-                draft_acceptance_threshold: Some(*acceptance_threshold),
-                draft_split_probability: Some(*split_probability),
-            });
+            candidates.push(build_candidate(
+                Some(*acceptance_threshold),
+                Some(*split_probability),
+            ));
         }
     }
 }
@@ -670,47 +640,35 @@ pub(crate) fn speculative_candidate_sort_key(
 }
 
 pub(crate) fn recommended_u32(plan: &TunePlan, field: TuneField) -> Option<u32> {
-    plan.field_statuses.iter().find_map(|status| match status {
-        TuneFieldStatus::Applied { recommendation, .. }
-        | TuneFieldStatus::ReportOnly { recommendation, .. }
-            if recommendation.field == field =>
-        {
-            match recommendation.value {
-                TuneRecommendedValue::ContextSize(value)
-                | TuneRecommendedValue::Batch(value)
-                | TuneRecommendedValue::Ubatch(value) => Some(value),
-                _ => None,
-            }
-        }
+    tune_field_recommendation(plan, field).and_then(|recommendation| match recommendation {
+        TuneRecommendedValue::ContextSize(value)
+        | TuneRecommendedValue::Batch(value)
+        | TuneRecommendedValue::Ubatch(value) => Some(*value),
         _ => None,
     })
 }
 
 pub(crate) fn recommended_bool(plan: &TunePlan, field: TuneField) -> Option<bool> {
-    plan.field_statuses.iter().find_map(|status| match status {
-        TuneFieldStatus::Applied { recommendation, .. }
-        | TuneFieldStatus::ReportOnly { recommendation, .. }
-            if recommendation.field == field =>
-        {
-            match recommendation.value {
-                TuneRecommendedValue::Bool(value) => Some(value),
-                _ => None,
-            }
-        }
+    tune_field_recommendation(plan, field).and_then(|recommendation| match recommendation {
+        TuneRecommendedValue::Bool(value) => Some(*value),
         _ => None,
     })
 }
 
 pub(crate) fn recommended_cache_type(plan: &TunePlan, field: TuneField) -> Option<TuneKvCacheType> {
+    tune_field_recommendation(plan, field).and_then(|recommendation| match recommendation {
+        TuneRecommendedValue::KvCacheType(value) => Some(*value),
+        _ => None,
+    })
+}
+
+fn tune_field_recommendation(plan: &TunePlan, field: TuneField) -> Option<&TuneRecommendedValue> {
     plan.field_statuses.iter().find_map(|status| match status {
         TuneFieldStatus::Applied { recommendation, .. }
         | TuneFieldStatus::ReportOnly { recommendation, .. }
             if recommendation.field == field =>
         {
-            match recommendation.value {
-                TuneRecommendedValue::KvCacheType(value) => Some(value),
-                _ => None,
-            }
+            Some(&recommendation.value)
         }
         _ => None,
     })

@@ -10,7 +10,7 @@ pub(crate) fn trial_config(
 ) -> anyhow::Result<String> {
     let mut doc = toml_edit::DocumentMut::new();
     doc["version"] = toml_edit::value(1);
-    apply_trial_runtime_config(&mut doc, config);
+    apply_trial_runtime_config(&mut doc, config)?;
 
     let mut table = toml_edit::Table::new();
     table["model"] = toml_edit::value(crate::gpus::tune_apply::appended_model_ref(
@@ -29,14 +29,8 @@ pub(crate) fn trial_config(
 pub(crate) fn apply_trial_runtime_config(
     doc: &mut toml_edit::DocumentMut,
     config: &mesh_llm_config::MeshConfig,
-) {
-    let runtime = match ensure_trial_subtable(doc.as_table_mut(), "runtime") {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            let _ = error;
-            return;
-        }
-    };
+) -> anyhow::Result<()> {
+    let runtime = ensure_trial_subtable(doc.as_table_mut(), "runtime")?;
 
     runtime["debug"] = toml_edit::value(config.runtime.debug);
     runtime["listen_all"] = toml_edit::value(config.runtime.listen_all);
@@ -48,13 +42,7 @@ pub(crate) fn apply_trial_runtime_config(
         || config.runtime.native_runtime.skippy_abi.is_some()
         || config.runtime.native_runtime.selection.is_some()
     {
-        let native_runtime = match ensure_trial_subtable(runtime, "native_runtime") {
-            Ok(native_runtime) => native_runtime,
-            Err(error) => {
-                let _ = error;
-                return;
-            }
-        };
+        let native_runtime = ensure_trial_subtable(runtime, "native_runtime")?;
 
         if let Some(mesh_version) = config.runtime.native_runtime.mesh_version.as_deref() {
             native_runtime["mesh_version"] = toml_edit::value(mesh_version);
@@ -66,6 +54,8 @@ pub(crate) fn apply_trial_runtime_config(
             native_runtime["selection"] = toml_edit::value(selection);
         }
     }
+
+    Ok(())
 }
 
 pub(crate) fn apply_resolved_model_path(

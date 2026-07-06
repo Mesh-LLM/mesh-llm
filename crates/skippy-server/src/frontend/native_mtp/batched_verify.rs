@@ -4,11 +4,11 @@ use openai_frontend::{OpenAiError, OpenAiResult};
 use skippy_protocol::binary::WireReplyKind;
 
 use super::super::{
-    embedded_verify_message, ms_to_us, native_mtp_trim_action, EmbeddedSessionControl,
-    EmbeddedStageZeroGeneration, NativeMtpDecodeCounters,
+    EmbeddedSessionControl, EmbeddedStageZeroGeneration, NativeMtpDecodeCounters,
     NativeMtpDecodeOptions, NativeMtpDraft, NativeMtpDraftOrigin, NativeMtpTrimAction,
-    NativeMtpVerifier, PendingNativeMtpDraft, PhaseTimer, StageOpenAiBackend,
-    TokenControl, VerifySpanMessageArgs, WireSamplingConfig,
+    NativeMtpVerifier, PendingNativeMtpDraft, PhaseTimer, StageOpenAiBackend, TokenControl,
+    VerifySpanMessageArgs, WireSamplingConfig, embedded_verify_message, ms_to_us,
+    native_mtp_trim_action,
 };
 
 /// Control signal returned after processing a batched native MTP verify step.
@@ -57,10 +57,8 @@ impl StageOpenAiBackend {
         // Token emission callback
         on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
     ) -> OpenAiResult<BatchedVerifyControl> {
-        let batched_token_timer =
-            self.telemetry.is_debug_enabled().then(PhaseTimer::start);
-        let native_mtp_remaining =
-            (request.max_tokens as usize).saturating_sub(*decoded_tokens);
+        let batched_token_timer = self.telemetry.is_debug_enabled().then(PhaseTimer::start);
+        let native_mtp_remaining = (request.max_tokens as usize).saturating_sub(*decoded_tokens);
         let native_mtp_draft_tokens = pending_native_mtp_draft
             .tokens
             .into_iter()
@@ -119,10 +117,8 @@ impl StageOpenAiBackend {
         let accepted = !span.rejected;
         let verified_draft_count = span.accepted_count + usize::from(span.rejected);
         for index in 0..verified_draft_count {
-            native_mtp_counters.observe_batched_verification(
-                native_mtp_draft_origin,
-                index < span.accepted_count,
-            );
+            native_mtp_counters
+                .observe_batched_verification(native_mtp_draft_origin, index < span.accepted_count);
         }
         let commit_token_count = span.accepted_count.saturating_add(1);
         let consumed_positions = verify_inputs.len();
@@ -149,8 +145,7 @@ impl StageOpenAiBackend {
             }
         }
         if !accepted && native_mtp_options.reject_cooldown_tokens > 0 {
-            *native_mtp_reject_cooldown_remaining =
-                native_mtp_options.reject_cooldown_tokens;
+            *native_mtp_reject_cooldown_remaining = native_mtp_options.reject_cooldown_tokens;
             *native_mtp_suppress_cooldown_drafts_remaining =
                 native_mtp_options.suppress_cooldown_draft_limit;
             native_mtp.clear_pending_draft();
@@ -176,13 +171,10 @@ impl StageOpenAiBackend {
             NativeMtpTrimAction::None => {}
             NativeMtpTrimAction::FullSession => {
                 let target_token_count = prefill_token_count + *decoded_tokens;
-                let defer_trim =
-                    native_mtp_options.defer_reject_trim && !accepted && !reached_stop;
+                let defer_trim = native_mtp_options.defer_reject_trim && !accepted && !reached_stop;
                 let trim = if defer_trim {
-                    let trim = self.trim_embedded_stage_session_local(
-                        session_key,
-                        target_token_count,
-                    )?;
+                    let trim =
+                        self.trim_embedded_stage_session_local(session_key, target_token_count)?;
                     native_mtp_counters.observe_deferred_reject_trim(trim.local_ms);
                     trim
                 } else {
@@ -207,19 +199,23 @@ impl StageOpenAiBackend {
             decode_runtime_lock_hold_max_ms.max(verify.stats.runtime_lock_hold_ms);
         *decode_runtime_lock_acquires += 1;
         *decode_forward_activation_encode_ms += verify.stats.activation_encode_ms;
-        *decode_output_activation_bytes = decode_output_activation_bytes
-            .saturating_add(verify.stats.output_activation_bytes);
-        *decode_forward_activation_bytes = decode_forward_activation_bytes
-            .saturating_add(verify.stats.forward_activation_bytes);
+        *decode_output_activation_bytes =
+            decode_output_activation_bytes.saturating_add(verify.stats.output_activation_bytes);
+        *decode_forward_activation_bytes =
+            decode_forward_activation_bytes.saturating_add(verify.stats.forward_activation_bytes);
         *decode_forward_write_ms += verify.stats.forward_write_ms;
         *decode_downstream_wait_ms += verify.stats.downstream_wait_ms;
 
         if let Some(batched_token_timer) = batched_token_timer {
             let mut token_attrs = self.openai_attrs(request.ids);
-            token_attrs
-                .insert("llama_stage.decode_step".to_string(), serde_json::json!(decode_step));
-            token_attrs
-                .insert("llama_stage.message_kind".to_string(), serde_json::json!("VerifySpan"));
+            token_attrs.insert(
+                "llama_stage.decode_step".to_string(),
+                serde_json::json!(decode_step),
+            );
+            token_attrs.insert(
+                "llama_stage.message_kind".to_string(),
+                serde_json::json!("VerifySpan"),
+            );
             token_attrs.insert(
                 "llama_stage.native_mtp.batched_verification".to_string(),
                 serde_json::json!(true),

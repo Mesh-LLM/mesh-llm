@@ -7,11 +7,17 @@ mod tests;
 mod trial;
 mod trial_config;
 
+const MAX_BENCHMARK_TRIALS_PER_TARGET: usize = 512;
+
 pub(crate) use candidates::*;
+// Re-export flattened benchmark helpers for downstream tune call-sites.
 #[allow(unused_imports)]
-pub(crate) use trial::*;
-#[allow(unused_imports)]
-pub(crate) use trial_config::*;
+pub(crate) use trial::{
+    TrialChild, TrialReadinessWait, build_trial_child_command, finish_failed_trial, run_trial,
+    run_trial_inner, send_chat_request, send_chat_request_with_watchdog,
+    trial_startup_failure_from_log, trial_startup_failure_from_log_line,
+};
+pub(crate) use trial_config::trial_config;
 
 // Re-export types from sibling modules that benchmark consumers need.
 // output_types.rs and benchmark_selection.rs are flat-included in the tune
@@ -61,19 +67,27 @@ pub(crate) fn run_benchmark_plans(
             request.throughput_tolerance_pct
         );
     }
-    Ok(request
+    request
         .prepared
         .iter()
         .filter(|prepared| !plan_has_errors(&prepared.plan))
         .map(|prepared| run_target_benchmarks(&request, prepared))
-        .collect())
+        .collect::<anyhow::Result<Vec<_>>>()
 }
 
 fn run_target_benchmarks(
     request: &TuneBenchmarkRunRequest<'_>,
     prepared: &crate::gpus::tune_apply::PreparedTunePlan,
-) -> TuneBenchmarkTargetReport {
+) -> anyhow::Result<TuneBenchmarkTargetReport> {
     let candidates = benchmark_candidates(request, prepared);
+    if candidates.len() > MAX_BENCHMARK_TRIALS_PER_TARGET {
+        anyhow::bail!(
+            "benchmark tune: target `{}` produced {} trial candidates, exceeding the hard cap of {}",
+            prepared.target.requested_input,
+            candidates.len(),
+            MAX_BENCHMARK_TRIALS_PER_TARGET
+        );
+    }
     eprintln!(
         "benchmark tune: target `{}` running {} trials (throughput tolerance {:.2}%)",
         prepared.target.requested_input,
@@ -91,7 +105,7 @@ fn run_target_benchmarks(
     let selection = select_benchmark_trials(&trials, request.throughput_tolerance_pct);
     super::log_target_selection(&prepared.target.requested_input, &selection);
 
-    TuneBenchmarkTargetReport {
+    Ok(TuneBenchmarkTargetReport {
         requested: prepared.target.requested_input.clone(),
         throughput_tolerance_pct: request.throughput_tolerance_pct,
         best: selection.recommended,
@@ -99,7 +113,7 @@ fn run_target_benchmarks(
         pareto_frontier: selection.pareto_frontier,
         selection_reason: selection.reason,
         trials,
-    }
+    })
 }
 
 fn plan_has_errors(plan: &crate::gpus::tune::TunePlan) -> bool {

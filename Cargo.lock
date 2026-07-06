@@ -3871,6 +3871,7 @@ dependencies = [
  "model-hf",
  "model-package",
  "model-ref",
+ "nix 0.29.0",
  "rand 0.10.1",
  "reqwest 0.12.28",
  "rpassword",

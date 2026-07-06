@@ -29,8 +29,8 @@ pub(crate) mod native_mtp;
 
 use crate::{
     cli::{
-        ChainArgs, DtypeMatrixArgs, FlashAttentionArg, RuntimeArgs, ServerArgs,
-        SingleStepArgs, SplitScanArgs, StageLoadMode, StateHandoffArgs, StatePayloadKind,
+        ChainArgs, DtypeMatrixArgs, FlashAttentionArg, RuntimeArgs, ServerArgs, SingleStepArgs,
+        SplitScanArgs, StageLoadMode, StateHandoffArgs, StatePayloadKind,
     },
     report::{
         BaselineReport, BoundaryReport, ChainReport, ChainStageReport, DtypeMatrixReport,
@@ -46,8 +46,8 @@ use crate::{
 
 use native_mtp::{
     emit_report, ensure_native_mtp_artifact_if_required, native_mtp_requirement,
-    native_mtp_satisfies_requirement, native_mtp_sideband_report,
-    native_mtp_verification_report, native_mtp_verification_satisfies_requirement,
+    native_mtp_satisfies_requirement, native_mtp_sideband_report, native_mtp_verification_report,
+    native_mtp_verification_satisfies_requirement,
 };
 
 struct FullModelResult {
@@ -2865,7 +2865,6 @@ fn split_report(
         },
     }
 }
-
 
 #[derive(Clone, Copy)]
 struct PackageStageSpec {
