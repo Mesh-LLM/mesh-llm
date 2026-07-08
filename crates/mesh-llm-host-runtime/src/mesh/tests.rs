@@ -3416,16 +3416,16 @@ fn incoming_peer_promoted_after_valid_gossip() {
     );
 
     assert!(
-        !stream_allowed_before_admission(STREAM_TUNNEL),
+        !stream_allowed_before_admission(STREAM_TUNNEL, TrustPolicy::Off),
         "raw tunnel streams must be gated until after admission"
     );
     assert!(
-        stream_allowed_before_admission(STREAM_TUNNEL_HTTP),
+        stream_allowed_before_admission(STREAM_TUNNEL_HTTP, TrustPolicy::Off),
         "HTTP tunnel streams must be allowed for passive SDK clients"
     );
 
     assert!(
-        stream_allowed_before_admission(STREAM_GOSSIP),
+        stream_allowed_before_admission(STREAM_GOSSIP, TrustPolicy::Off),
         "STREAM_GOSSIP must always be allowed — it is the admission path"
     );
 
@@ -3479,22 +3479,22 @@ fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
         STREAM_PLUGIN_MESH_STREAM,
     ] {
         assert!(
-            !stream_allowed_before_admission(stream_type),
+            !stream_allowed_before_admission(stream_type, TrustPolicy::Off),
             "stream {:#04x} must be quarantine-gated for unadmitted peers — if this fails, the gate is broken",
             stream_type
         );
     }
 
     assert!(
-        stream_allowed_before_admission(STREAM_GOSSIP),
+        stream_allowed_before_admission(STREAM_GOSSIP, TrustPolicy::Off),
         "STREAM_GOSSIP must bypass the gate (it is the admission handshake)"
     );
     assert!(
-        stream_allowed_before_admission(STREAM_ROUTE_REQUEST),
+        stream_allowed_before_admission(STREAM_ROUTE_REQUEST, TrustPolicy::Off),
         "STREAM_ROUTE_REQUEST must bypass the gate (passive/client request-only path)"
     );
     assert!(
-        stream_allowed_before_admission(STREAM_TUNNEL_HTTP),
+        stream_allowed_before_admission(STREAM_TUNNEL_HTTP, TrustPolicy::Off),
         "STREAM_TUNNEL_HTTP must bypass the gate (passive/client inference path)"
     );
 
@@ -3517,7 +3517,7 @@ fn passive_route_table_request_does_not_admit_peer() {
     );
 
     assert!(
-        stream_allowed_before_admission(STREAM_ROUTE_REQUEST),
+        stream_allowed_before_admission(STREAM_ROUTE_REQUEST, TrustPolicy::Off),
         "STREAM_ROUTE_REQUEST must be allowed before admission (passive/client path)"
     );
 
@@ -3531,7 +3531,7 @@ fn passive_route_table_request_does_not_admit_peer() {
         STREAM_PLUGIN_MESH_STREAM,
     ] {
         assert!(
-            !stream_allowed_before_admission(gated),
+            !stream_allowed_before_admission(gated, TrustPolicy::Off),
             "stream {:#04x} must remain gated after a route request — route request must not unlock other streams",
             gated
         );
@@ -5367,11 +5367,11 @@ fn dead_peer_ttl_expires() {
 #[test]
 fn non_scope_tunnel_streams_pass_through_without_proto_validation() {
     assert!(
-        !stream_allowed_before_admission(STREAM_TUNNEL),
+        !stream_allowed_before_admission(STREAM_TUNNEL, TrustPolicy::Off),
         "STREAM_TUNNEL (0x02) must be gated until after gossip admission"
     );
     assert!(
-        stream_allowed_before_admission(STREAM_TUNNEL_HTTP),
+        stream_allowed_before_admission(STREAM_TUNNEL_HTTP, TrustPolicy::Off),
         "STREAM_TUNNEL_HTTP (0x04) must be allowed for passive SDK inference"
     );
 
@@ -5417,7 +5417,7 @@ fn non_scope_tunnel_streams_pass_through_without_proto_validation() {
     );
 
     assert!(
-        !stream_allowed_before_admission(STREAM_TUNNEL),
+        !stream_allowed_before_admission(STREAM_TUNNEL, TrustPolicy::Off),
         "STREAM_TUNNEL must require admission (raw tunnel security boundary)"
     );
 }
@@ -5753,11 +5753,11 @@ async fn test_on_demand_transitive_peer_connection_completes_gossip() -> Result<
 #[test]
 fn legacy_config_stream_ids_are_reserved_and_require_admission() {
     assert!(
-        !stream_allowed_before_admission(STREAM_CONFIG_SUBSCRIBE),
+        !stream_allowed_before_admission(STREAM_CONFIG_SUBSCRIBE, TrustPolicy::Off),
         "reserved STREAM_CONFIG_SUBSCRIBE (0x0b) must not bypass admission"
     );
     assert!(
-        !stream_allowed_before_admission(STREAM_CONFIG_PUSH),
+        !stream_allowed_before_admission(STREAM_CONFIG_PUSH, TrustPolicy::Off),
         "reserved STREAM_CONFIG_PUSH (0x0c) must not bypass admission"
     );
 }
@@ -8144,4 +8144,44 @@ fn active_stage_refresh_timeout_marks_cached_stage_failed() {
         status.error.as_deref(),
         Some("stage status refresh timed out")
     );
+}
+
+#[test]
+fn passive_streams_are_gated_when_trust_policy_active() {
+    // With any active trust policy, only gossip bypasses the quarantine
+    // gate. A leaked invite token must not be a bearer credential for
+    // inference: a caller rejected by the trust gate (UntrustedOwner) must
+    // not be able to route requests via the passive paths.
+    for policy in [
+        TrustPolicy::PreferOwned,
+        TrustPolicy::RequireOwned,
+        TrustPolicy::Allowlist,
+    ] {
+        assert!(
+            stream_allowed_before_admission(STREAM_GOSSIP, policy),
+            "gossip must always be allowed ({policy:?}) — it is the admission path"
+        );
+        assert!(
+            !stream_allowed_before_admission(STREAM_TUNNEL_HTTP, policy),
+            "HTTP tunnel must be gated under {policy:?} — otherwise a leaked token serves inference"
+        );
+        assert!(
+            !stream_allowed_before_admission(STREAM_ROUTE_REQUEST, policy),
+            "route request must be gated under {policy:?}"
+        );
+        assert!(
+            !stream_allowed_before_admission(STREAM_TUNNEL, policy),
+            "raw tunnel must stay gated under {policy:?}"
+        );
+    }
+
+    // TrustPolicy::Off keeps the open-mesh posture: passive paths stay open.
+    assert!(stream_allowed_before_admission(
+        STREAM_TUNNEL_HTTP,
+        TrustPolicy::Off
+    ));
+    assert!(stream_allowed_before_admission(
+        STREAM_ROUTE_REQUEST,
+        TrustPolicy::Off
+    ));
 }
