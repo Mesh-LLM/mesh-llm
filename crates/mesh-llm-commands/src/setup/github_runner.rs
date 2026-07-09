@@ -125,11 +125,28 @@ impl GhCommandRunner for ProcessGhCommandRunner {
                 }
                 Ok(None) => {
                     if started_at.elapsed() >= self.timeout {
-                        child
-                            .kill()
-                            .map_err(|error| GhCommandError::KillFailed(error.to_string()))?;
-                        let _ = child.wait();
-                        return Err(GhCommandError::TimedOut(command.display_name()));
+                        match child.try_wait() {
+                            Ok(Some(_)) => {
+                                let output = child.wait_with_output().map_err(|error| {
+                                    GhCommandError::WaitFailed(error.to_string())
+                                })?;
+                                return Ok(GhCommandOutput {
+                                    success: output.status.success(),
+                                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                                });
+                            }
+                            Ok(None) => {
+                                child.kill().map_err(|error| {
+                                    GhCommandError::KillFailed(error.to_string())
+                                })?;
+                                let _ = child.wait();
+                                return Err(GhCommandError::TimedOut(command.display_name()));
+                            }
+                            Err(error) => {
+                                return Err(GhCommandError::WaitFailed(error.to_string()));
+                            }
+                        }
                     }
                     thread::sleep(GH_POLL_INTERVAL);
                 }

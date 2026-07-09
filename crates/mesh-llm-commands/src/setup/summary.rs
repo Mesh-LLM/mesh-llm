@@ -1,5 +1,6 @@
 use super::SetupPlan;
 use super::command::{CliSetupActions, SetupServiceOutcome};
+use super::service::ServiceInstallStatus;
 use crate::runtime_native::{
     SetupNativeRuntimeOutcome, SetupNativeRuntimePruneResult, SetupNativeRuntimeStatus,
 };
@@ -144,12 +145,10 @@ fn service_brief(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
     match plan.service {
         super::SetupServicePlan::Skip => style_muted("not installed"),
         super::SetupServicePlan::Install => match actions.service_outcome {
-            SetupServiceOutcome::Installed(ref report)
-                if report.summary == "installed and started" =>
-            {
-                style_ok("running")
-            }
-            SetupServiceOutcome::Installed(_) => style_warn("installed; start manually"),
+            SetupServiceOutcome::Installed(ref report) => match report.status {
+                ServiceInstallStatus::Started => style_ok("running"),
+                ServiceInstallStatus::NeedsManualStart => style_warn("installed; start manually"),
+            },
             SetupServiceOutcome::NotRequested | SetupServiceOutcome::PrintedGuidance => {
                 style_muted("not recorded")
             }
@@ -171,6 +170,9 @@ fn github_brief(actions: &CliSetupActions<'_>) -> Option<String> {
         | super::github::SetupGitHubOutcome::EligibilityCheckFailed(_) => {
             Some(style_warn("not starred"))
         }
+        super::github::SetupGitHubOutcome::CliUnavailable => Some(style_muted("gh unavailable")),
+        super::github::SetupGitHubOutcome::NotAuthenticated => Some(style_muted("gh signed out")),
+        super::github::SetupGitHubOutcome::NotEvaluated => Some(style_muted("not recorded")),
         _ => None,
     }
 }
@@ -192,5 +194,41 @@ pub(crate) fn service_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>) -
                 "not recorded".to_string()
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime_native::NativeRuntimeConfigSelection;
+    use crate::setup::SetupEnvironment;
+    use crate::setup::SetupPlatform;
+    use crate::setup::github::SetupGitHubOutcome;
+
+    fn actions_with_github_outcome(github_outcome: SetupGitHubOutcome) -> CliSetupActions<'static> {
+        let mut actions = CliSetupActions::new(
+            SetupEnvironment {
+                platform: SetupPlatform::Linux,
+                interactive: false,
+            },
+            NativeRuntimeConfigSelection::default(),
+            false,
+        );
+        actions.github_outcome = github_outcome;
+        actions
+    }
+
+    #[test]
+    fn github_brief_reports_unavailable_cli() {
+        let actions = actions_with_github_outcome(SetupGitHubOutcome::CliUnavailable);
+
+        assert_eq!(github_brief(&actions), Some("gh unavailable".to_string()));
+    }
+
+    #[test]
+    fn github_brief_reports_unauthenticated_cli() {
+        let actions = actions_with_github_outcome(SetupGitHubOutcome::NotAuthenticated);
+
+        assert_eq!(github_brief(&actions), Some("gh signed out".to_string()));
     }
 }

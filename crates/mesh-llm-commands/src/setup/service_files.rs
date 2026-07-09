@@ -1,15 +1,12 @@
 use super::service_templates::{render_service_env_file, render_service_runner};
 use anyhow::{Result, anyhow};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 pub(crate) fn ensure_service_env_file(service_env_file: &Path) -> Result<()> {
-    if service_env_file.exists() {
-        return Ok(());
-    }
-
     let parent = service_env_file.parent().ok_or_else(|| {
         anyhow!(
             "service env file path has no parent: {}",
@@ -17,7 +14,15 @@ pub(crate) fn ensure_service_env_file(service_env_file: &Path) -> Result<()> {
         )
     })?;
     fs::create_dir_all(parent)?;
-    fs::write(service_env_file, render_service_env_file())?;
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(service_env_file)
+    {
+        Ok(mut file) => file.write_all(render_service_env_file().as_bytes())?,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
     Ok(())
 }
 

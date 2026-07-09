@@ -75,3 +75,20 @@ fn uninstall_accepts_automation_flags() {
     assert!(json);
     assert!(verbose);
 }
+
+#[test]
+fn uninstall_accepts_purge_config() {
+    let cli = Cli::parse_from(["mesh-llm", "uninstall", "--purge-config"]);
+
+    let Some(Command::Uninstall {
+        purge_config,
+        keep_config,
+        ..
+    }) = cli.command
+    else {
+        panic!("expected uninstall command");
+    };
+
+    assert!(purge_config);
+    assert!(!keep_config);
+}

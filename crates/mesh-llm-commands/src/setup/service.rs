@@ -10,11 +10,18 @@ use std::fs;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ServiceInstallReport {
+    pub(crate) status: ServiceInstallStatus,
     pub(crate) summary: String,
     pub(crate) messages: Vec<String>,
     pub(crate) service_file: std::path::PathBuf,
     pub(crate) env_file: std::path::PathBuf,
     pub(crate) runner_file: Option<std::path::PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ServiceInstallStatus {
+    Started,
+    NeedsManualStart,
 }
 
 pub(crate) fn install_service(
@@ -107,6 +114,11 @@ fn install_systemd_service(
     messages.push("Boot without login (optional): sudo loginctl enable-linger $USER".to_string());
 
     Ok(ServiceInstallReport {
+        status: if started {
+            ServiceInstallStatus::Started
+        } else {
+            ServiceInstallStatus::NeedsManualStart
+        },
         summary: if started {
             "installed and started".to_string()
         } else {
@@ -226,6 +238,11 @@ fn install_launchd_service(
     ));
 
     Ok(ServiceInstallReport {
+        status: if started {
+            ServiceInstallStatus::Started
+        } else {
+            ServiceInstallStatus::NeedsManualStart
+        },
         summary: if started {
             "installed and started".to_string()
         } else {

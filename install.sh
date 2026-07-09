@@ -218,19 +218,6 @@ platform_error_message() {
     esac
 }
 
-platform_asset_name() {
-    case "$(platform_id)" in
-        Darwin/arm64) printf 'mesh-llm-aarch64-apple-darwin.tar.gz\n' ;;
-        Darwin/x86_64) printf 'mesh-llm-x86_64-apple-darwin.tar.gz\n' ;;
-        Linux/aarch64) printf 'mesh-llm-aarch64-unknown-linux-gnu.tar.gz\n' ;;
-        Linux/x86_64) printf 'mesh-llm-x86_64-unknown-linux-gnu.tar.gz\n' ;;
-        *)
-            echo "error: unsupported platform: $(platform_id)" >&2
-            exit 1
-            ;;
-    esac
-}
-
 tegra_model_text() {
     if [[ -n "${MESH_LLM_TEST_TEGRA_MODEL:-}" ]]; then
         printf '%s\n' "$MESH_LLM_TEST_TEGRA_MODEL"

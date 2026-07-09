@@ -203,7 +203,8 @@ where
     if plan.requires_confirmation && !confirm_uninstall()? {
         bail!("uninstall cancelled");
     }
-    let outcome = execute_uninstall_plan(&plan, &mut stop_processes)?;
+    let mut outcome = execute_uninstall_plan(&plan, &mut stop_processes)?;
+    add_option_warnings(&options, &mut outcome);
     render_outcome(&outcome, options.json, options.verbose)
 }
 
@@ -358,16 +359,17 @@ fn paths_match(left: &Path, right: &Path) -> bool {
 
 #[cfg(windows)]
 fn schedule_windows_deferred_binary_delete(path: &Path) -> Result<()> {
+    let escaped_path = path.to_string_lossy().replace('\'', "''");
+    let script =
+        format!("Start-Sleep -Seconds 1; Remove-Item -LiteralPath '{escaped_path}' -Force");
     Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            "Start-Sleep -Seconds 1; Remove-Item -LiteralPath $args[0] -Force",
-            "--",
+            &script,
         ])
-        .arg(path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -438,6 +440,15 @@ fn run_best_effort(command: &mut Command, outcome: &mut UninstallOutcome) {
         Err(error) => outcome
             .warnings
             .push(format!("failed to run `{:?}`: {error}", command)),
+    }
+}
+
+fn add_option_warnings(options: &UninstallOptions, outcome: &mut UninstallOutcome) {
+    if options.purge_config && options.keep_config {
+        outcome.warnings.push(
+            "--purge-config was ignored because --keep-config was also set; preserving configuration"
+                .to_string(),
+        );
     }
 }
 
@@ -720,6 +731,32 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn purge_config_keep_config_conflict_reports_warning() {
+        let mut outcome = UninstallOutcome {
+            dry_run: false,
+            removed: Vec::new(),
+            scheduled_removal: Vec::new(),
+            already_absent: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let opts = UninstallOptions {
+            purge_config: true,
+            keep_config: true,
+            ..options()
+        };
+
+        add_option_warnings(&opts, &mut outcome);
+
+        assert_eq!(
+            outcome.warnings,
+            vec![
+                "--purge-config was ignored because --keep-config was also set; preserving configuration"
+                    .to_string()
+            ]
+        );
     }
 
     #[test]

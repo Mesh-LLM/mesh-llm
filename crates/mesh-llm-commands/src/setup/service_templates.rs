@@ -31,10 +31,11 @@ pub(crate) fn render_systemd_unit(
         "ExecStart={} serve",
         systemd_quote_token(&binary_path.to_string_lossy())
     );
+    let service_env_file = systemd_escape_token(&service_env_file.to_string_lossy());
     format!(
         "# mesh-llm serve (startup models come from {mesh_config_file})\n[Unit]\nDescription=Mesh LLM user service\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nEnvironmentFile=-{service_env_file}\n\n{exec_line}\nWorkingDirectory=%h\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
         mesh_config_file = mesh_config_file.display(),
-        service_env_file = service_env_file.display(),
+        service_env_file = service_env_file,
         exec_line = exec_line,
     )
 }
@@ -71,10 +72,14 @@ fn xml_escape(value: &str) -> String {
 }
 
 fn systemd_quote_token(value: &str) -> String {
-    let escaped = value
+    let escaped = systemd_escape_token(value);
+    format!("\"{escaped}\"")
+}
+
+fn systemd_escape_token(value: &str) -> String {
+    value
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('$', "$$")
-        .replace('%', "%%");
-    format!("\"{escaped}\"")
+        .replace('%', "%%")
 }

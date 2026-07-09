@@ -40,9 +40,12 @@ pub(crate) fn confirm_yes_no(message: &str, default: ConfirmDefault) -> Result<O
             .context("failed to flush confirmation prompt")?;
 
         let mut reply = String::new();
-        io::stdin()
+        let bytes_read = io::stdin()
             .read_line(&mut reply)
             .context("failed to read confirmation")?;
+        if bytes_read == 0 {
+            return Ok(Some(false));
+        }
 
         match reply.trim().to_ascii_lowercase().as_str() {
             "" => return Ok(Some(default.empty_reply())),

@@ -40,19 +40,23 @@ fn setup_command_args<'a>(
             verbose: *verbose,
         },
         environment: SetupEnvironment {
-            platform: current_setup_platform(),
+            platform: current_setup_platform()?,
             interactive: std::io::stdin().is_terminal() && std::io::stderr().is_terminal(),
         },
         configured,
     })
 }
 
-fn current_setup_platform() -> SetupPlatform {
-    match std::env::consts::OS {
-        "linux" => SetupPlatform::Linux,
-        "macos" => SetupPlatform::MacOs,
-        "windows" => SetupPlatform::Windows,
-        _ => SetupPlatform::Linux,
+fn current_setup_platform() -> Result<SetupPlatform> {
+    setup_platform_from_os(std::env::consts::OS)
+}
+
+fn setup_platform_from_os(os: &str) -> Result<SetupPlatform> {
+    match os {
+        "linux" => Ok(SetupPlatform::Linux),
+        "macos" => Ok(SetupPlatform::MacOs),
+        "windows" => Ok(SetupPlatform::Windows),
+        _ => bail!("mesh-llm setup is not supported on {os}"),
     }
 }
 
@@ -103,6 +107,17 @@ mod tests {
             error
                 .to_string()
                 .contains("dispatch_setup_command called for non-setup command")
+        );
+    }
+
+    #[test]
+    fn setup_platform_rejects_unknown_operating_systems() {
+        let error = setup_platform_from_os("freebsd").expect_err("unsupported OS should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("mesh-llm setup is not supported on freebsd")
         );
     }
 }

@@ -46,9 +46,9 @@ Usage: install.ps1 [-PreRelease] [-InstallDir <DIR>] [-Flavor <FLAVOR>] [-NoPath
 Options:
   -PreRelease             Install the latest published GitHub prerelease instead of the latest stable release.
   -InstallDir <DIR>       Install directory. Defaults to %LOCALAPPDATA%\mesh-llm\bin.
-  -Flavor <FLAVOR>        Legacy compatibility flag. The installer always installs the Windows x64 host binary and `mesh-llm.exe setup` now chooses the runtime.
+  -Flavor <FLAVOR>        Legacy compatibility flag. The installer always installs the Windows x64 host binary and ``mesh-llm.exe setup`` now chooses the runtime.
   -NoPathUpdate           Do not add the install directory to the user Path.
-  -NoSetup                Do not run `mesh-llm.exe setup`; print the exact command instead.
+  -NoSetup                Do not run ``mesh-llm.exe setup``; print the exact command instead.
   -Help                   Show this help text.
 
 Environment overrides:
@@ -203,7 +203,7 @@ function Write-FlavorCompatibilityWarning {
         return
     }
 
-    Write-Warning "Ignoring legacy -Flavor '$legacyFlavor'. The Windows installer now always installs the x64 host binary; run `mesh-llm.exe setup` to choose the recommended runtime."
+    Write-Warning "Ignoring legacy -Flavor '$legacyFlavor'. The Windows installer now always installs the x64 host binary; run ``mesh-llm.exe setup`` to choose the recommended runtime."
 }
 
 function Get-StaleBinaryNames {

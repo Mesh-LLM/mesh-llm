@@ -1,5 +1,5 @@
 use super::SetupPlatform;
-use super::service::install_service;
+use super::service::{ServiceInstallStatus, install_service};
 use super::service_paths::ServiceInstallContext;
 use super::service_runner::{ServiceCommand, ServiceCommandRunner};
 use super::service_templates::{
@@ -134,6 +134,7 @@ fn linux_service_install_writes_systemd_files_and_runs_expected_commands() {
     let report = install_service(&context, &mut runner).expect("systemd install should succeed");
 
     assert_eq!(report.summary, "installed and started");
+    assert_eq!(report.status, ServiceInstallStatus::Started);
     assert_eq!(
         fs::read_to_string(&report.env_file).expect("env file should exist"),
         render_service_env_file()
@@ -151,6 +152,22 @@ fn linux_service_install_writes_systemd_files_and_runs_expected_commands() {
             ServiceCommand::new("systemctl", ["--user", "enable", "mesh-llm.service"]),
             ServiceCommand::new("systemctl", ["--user", "restart", "mesh-llm.service"]),
         ]
+    );
+}
+
+#[test]
+fn systemd_unit_escapes_percent_in_environment_file_path() {
+    let rendered = render_systemd_unit(
+        &PathBuf::from("/Users/example/.local/bin/mesh-llm"),
+        &PathBuf::from("/Users/example/.config/mesh-llm/%service.env"),
+        &PathBuf::from("/Users/example/.mesh-llm/config.toml"),
+    );
+
+    assert!(rendered.contains("EnvironmentFile=-/Users/example/.config/mesh-llm/%%service.env"));
+    assert!(
+        !rendered
+            .lines()
+            .any(|line| line == "EnvironmentFile=-/Users/example/.config/mesh-llm/%service.env")
     );
 }
 

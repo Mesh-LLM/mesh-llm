@@ -30,6 +30,8 @@ command instead.
 - detect the host platform and architecture
 - download the matching release archive
 - verify checksum sidecars when available
+- warn and continue when a `.sha256` checksum sidecar is missing by default;
+  fail closed only when `MESH_LLM_REQUIRE_CHECKSUM=1` is set
 - install the `mesh-llm` executable into the selected directory
 - update or print PATH guidance
 - run or print `mesh-llm setup`
