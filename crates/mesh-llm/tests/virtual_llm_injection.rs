@@ -311,7 +311,7 @@ async fn test_injection_framing() {
         let display = if content.is_empty() {
             format!(
                 "(reasoning only) {}",
-                &reasoning.chars().take(100).collect::<String>()
+                reasoning.chars().take(100).collect::<String>()
             )
         } else {
             content.chars().take(100).collect::<String>()
@@ -349,7 +349,7 @@ async fn test_injection_framing() {
             let display = if content.is_empty() {
                 format!(
                     "(reasoning only) {}",
-                    &reasoning.chars().take(100).collect::<String>()
+                    reasoning.chars().take(100).collect::<String>()
                 )
             } else {
                 content.chars().take(100).collect::<String>()
