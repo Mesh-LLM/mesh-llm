@@ -1,7 +1,7 @@
-From 21f4cca9a98e72a916d949982e9e31cf99e2736a Mon Sep 17 00:00:00 2001
+From aa6df6adcbd99d5ea03676c07f4393c9dee68e74 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 3 Jul 2026 13:15:19 +1000
-Subject: [PATCH] Pass reasoning format through stage chat templates
+Subject: [PATCH 11/14] Pass reasoning format through stage chat templates
 
 ---
  common/stage-chat.cpp   | 4 ++++
@@ -10,7 +10,7 @@ Subject: [PATCH] Pass reasoning format through stage chat templates
  3 files changed, 6 insertions(+), 1 deletion(-)
 
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
-index bde9fedab..3298ed669 100644
+index bde9feda..3298ed66 100644
 --- a/common/stage-chat.cpp
 +++ b/common/stage-chat.cpp
 @@ -230,6 +230,7 @@ enum skippy_status skippy_apply_chat_template_json(
@@ -32,10 +32,10 @@ index bde9fedab..3298ed669 100644
          common_chat_templates_ptr tmpls = common_chat_templates_init(native_model, "");
          common_chat_params params = common_chat_templates_apply(tmpls.get(), inputs);
 diff --git a/include/skippy.h b/include/skippy.h
-index 0e94e95bd..a298bd70d 100644
+index 6857640c..24b52cdf 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -540,6 +540,7 @@ LLAMA_API enum skippy_status skippy_apply_chat_template_json(
+@@ -544,6 +544,7 @@ LLAMA_API enum skippy_status skippy_apply_chat_template_json(
          bool override_enable_thinking,
          bool enable_thinking,
          bool parallel_tool_calls,
@@ -44,7 +44,7 @@ index 0e94e95bd..a298bd70d 100644
          size_t output_text_capacity,
          size_t * out_text_bytes,
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index cfb4a8fa9..0e1f03511 100644
+index cfb4a8fa..0e1f0351 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -57,5 +57,5 @@ index cfb4a8fa9..0e1f03511 100644
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 -- 
-2.54.0
+2.54.0 (Apple Git-157)
 

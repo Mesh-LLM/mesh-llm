@@ -1,7 +1,7 @@
-From 052166b177780ccd1a641a24ae12cdebcf08ae0d Mon Sep 17 00:00:00 2001
+From dbac8541abdc9c6c4dc3baf12ceca90fb9043bfe Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 1 Jul 2026 23:52:26 -0400
-Subject: [PATCH] Wire mmap and mlock runtime load options
+Subject: [PATCH 12/14] Wire mmap and mlock runtime load options
 
 ---
  include/skippy.h |  3 +++
@@ -9,7 +9,7 @@ Subject: [PATCH] Wire mmap and mlock runtime load options
  2 files changed, 19 insertions(+)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index a298bd70d..e2abadb43 100644
+index 24b52cdf..82e5b49f 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -60,6 +60,9 @@ struct skippy_runtime_config {
@@ -23,13 +23,13 @@ index a298bd70d..e2abadb43 100644
      int32_t cache_type_v;
      int32_t flash_attn_type;
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index e81f37864..fe49f366e 100644
+index 8af180e5..fcd8a48f 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -878,6 +878,20 @@ static enum skippy_status skippy_apply_selected_backend_device(
      return SKIPPY_STATUS_OK;
  }
-
+ 
 +static void skippy_apply_model_load_memory_config(
 +        const struct skippy_runtime_config * config,
 +        llama_model_params & params) {
@@ -47,7 +47,7 @@ index e81f37864..fe49f366e 100644
  static void skippy_emit_observable_backend_device(
          skippy_runtime_event_scope * event_scope,
          const struct skippy_runtime_config * config,
-@@ -2768,6 +2782,7 @@ static enum skippy_status skippy_model_open_impl(
+@@ -2790,6 +2804,7 @@ static enum skippy_status skippy_model_open_impl(
      llama_model_params params = llama_model_default_params();
      if (config != nullptr) {
          params.n_gpu_layers = config->n_gpu_layers;
@@ -55,7 +55,7 @@ index e81f37864..fe49f366e 100644
          if (config->disable_repack || config->filter_tensors_on_load) {
              params.use_extra_bufts = false;
          }
-@@ -2853,6 +2868,7 @@ static enum skippy_status skippy_model_open_from_parts_impl(
+@@ -2875,6 +2890,7 @@ static enum skippy_status skippy_model_open_from_parts_impl(
      llama_model_params params = llama_model_default_params();
      if (config != nullptr) {
          params.n_gpu_layers = config->n_gpu_layers;
@@ -64,4 +64,5 @@ index e81f37864..fe49f366e 100644
              params.use_extra_bufts = false;
          }
 -- 
-2.53.0
+2.54.0 (Apple Git-157)
+

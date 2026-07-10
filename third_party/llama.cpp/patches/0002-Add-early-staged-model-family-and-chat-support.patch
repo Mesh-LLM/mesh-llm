@@ -1,7 +1,7 @@
-From 5625209c975d14399629caa50adf3cbb810dbcf5 Mon Sep 17 00:00:00 2001
+From 774c69d06b369118b7e73b31f799247523234a18 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 02/10] Add early staged model-family and chat support
+Subject: [PATCH 02/14] Add early staged model-family and chat support
 
 Squashes the first Qwen MoE staged-runtime support, native KV page basics, session reset, token EOG exposure, batched token verification, chat-template ABI, and the first wider model-family support pass.
 ---
@@ -319,7 +319,7 @@ index 7ab93d35..23a46e0f 100644
          const char * path,
          struct skippy_model_info ** out_info,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 118987b3..dfde71c8 100644
+index 36faacbd..d3a03342 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -22,6 +22,7 @@
@@ -349,7 +349,7 @@ index 118987b3..dfde71c8 100644
  // dedup helpers
  
  static ggml_tensor * build_attn_inp_kq_mask(
-@@ -155,6 +168,18 @@ bool llm_graph_input_embd_h::can_reuse(const llm_graph_params & params) {
+@@ -135,6 +148,18 @@ bool llm_graph_input_embd_h::can_reuse(const llm_graph_params & params) {
      return res;
  }
  
@@ -368,7 +368,7 @@ index 118987b3..dfde71c8 100644
  void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
      if (ubatch->pos && pos) {
          const int64_t n_tokens = ubatch->n_tokens;
-@@ -967,17 +992,22 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
+@@ -969,17 +994,22 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
  }
  
  void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
@@ -396,7 +396,7 @@ index 118987b3..dfde71c8 100644
      }
  
      const int64_t n_rs = mctx->get_recr()->get_n_rs();
-@@ -1020,9 +1050,14 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
+@@ -1022,9 +1052,14 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
  // Instead of creating a hybrid input, the graph can simply create 2 separate inputs.
  // Refactoring is required in the future.
  void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
@@ -414,7 +414,7 @@ index 118987b3..dfde71c8 100644
      const int64_t n_rs = mctx->get_recr()->get_n_rs();
  
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index b943320e..31083518 100644
+index c03fb1ce..32406ff2 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -38,9 +38,17 @@ struct skippy_graph_filter {
@@ -435,7 +435,7 @@ index b943320e..31083518 100644
  
  // certain models (typically multi-modal) can produce different types of graphs
  enum llm_graph_type {
-@@ -154,6 +162,18 @@ public:
+@@ -160,6 +168,18 @@ public:
      const int64_t n_embd = 0;
  };
  
@@ -455,7 +455,7 @@ index b943320e..31083518 100644
  public:
      llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 12bf5c37..906e9eac 100644
+index e70583e6..e8be39b0 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -4,6 +4,7 @@
@@ -466,7 +466,7 @@ index 12bf5c37..906e9eac 100644
  
  #include <algorithm>
  #include <cassert>
-@@ -1240,6 +1241,352 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
+@@ -1224,6 +1225,352 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
      return layers[ikv].k;
  }
  
@@ -863,10 +863,10 @@ index 531d99db..d9301c19 100644
      // graph_build API
      //
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 9b0e00ae..561e9850 100644
+index f4310743..4e43bfbc 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1091,13 +1091,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1095,13 +1095,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
      };
  
      auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
@@ -880,7 +880,7 @@ index 9b0e00ae..561e9850 100644
          // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
          // the tensor is duplicated
          // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
-@@ -1131,22 +1124,38 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1135,22 +1128,38 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                      break;
              }
  
@@ -929,10 +929,10 @@ index 9b0e00ae..561e9850 100644
          if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
              const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index d58ebac2..3196973f 100644
+index 7dea38c8..4ea21038 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -1367,13 +1367,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1381,13 +1381,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
              }
  
              // MoE expert weight scales (per-expert, shape {n_expert})
@@ -1685,7 +1685,7 @@ index 7b0876cb..f119cb0c 100644
      cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
  
 diff --git a/src/models/qwen3next.cpp b/src/models/qwen3next.cpp
-index 97200a44..e68c24dd 100644
+index 09b66423..8c925a86 100644
 --- a/src/models/qwen3next.cpp
 +++ b/src/models/qwen3next.cpp
 @@ -112,15 +112,27 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
@@ -1717,10 +1717,10 @@ index 97200a44..e68c24dd 100644
  
 -    for (int il = 0; il < n_layer; ++il) {
 +    for (int il = il_start; il < il_end; ++il) {
-         ggml_tensor * inpSA = inpL;
+         res->t_layer_inp[il] = inpL;
  
-         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
-@@ -137,7 +149,7 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
+         ggml_tensor * inpSA = inpL;
+@@ -139,7 +151,7 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
              cur = build_layer_attn(inp->get_attn(), cur, inp_pos, il);
          }
  
@@ -1729,7 +1729,7 @@ index 97200a44..e68c24dd 100644
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -169,6 +181,13 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
+@@ -171,6 +183,13 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
      }
      cur = inpL;
  
@@ -2347,5 +2347,5 @@ index 26169320..50e25c8f 100644
          const char * path,
          struct skippy_model_info ** out_info,
 -- 
-2.53.0
+2.54.0 (Apple Git-157)
 

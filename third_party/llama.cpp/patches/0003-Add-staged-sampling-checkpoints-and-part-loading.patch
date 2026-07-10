@@ -1,7 +1,7 @@
-From a4f23f17019419c4e1f7acd2bea9bd9ee18159f9 Mon Sep 17 00:00:00 2001
+From cdd3c130c83f3e33bf202388cb75d74c63344397 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 03/10] Add staged sampling, checkpoints, and part loading
+Subject: [PATCH 03/14] Add staged sampling, checkpoints, and part loading
 
 Squashes sampling configuration, batched verification frames, recurrent/native session checkpoints, logit bias, session trim, verification handoff fixes, split-metadata stripping, thinking toggle support, and ordered GGUF part loading.
 ---
@@ -49,10 +49,10 @@ index 39d6331a..60d53fc4 100644
  
      for (size_t i = 0; i < message_count; ++i) {
 diff --git a/include/llama.h b/include/llama.h
-index f723c9f6..d562b5a3 100644
+index a311ac20..4460a6a0 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -502,6 +502,13 @@ extern "C" {
+@@ -506,6 +506,13 @@ extern "C" {
                                   size_t    n_paths,
                struct llama_model_params    params);
  
@@ -245,10 +245,10 @@ index 23a46e0f..4dd985da 100644
          size_t output_text_capacity,
          size_t * out_text_bytes,
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 561e9850..97372c4c 100644
+index 4e43bfbc..14f64c0f 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -528,6 +528,7 @@ llama_model_loader::llama_model_loader(
+@@ -531,6 +531,7 @@ llama_model_loader::llama_model_loader(
          void * set_tensor_data_ud,
          const std::string & fname,
          std::vector<std::string> & splits,
@@ -256,7 +256,7 @@ index 561e9850..97372c4c 100644
          FILE * file,
          bool use_mmap,
          bool use_direct_io,
-@@ -596,11 +597,50 @@ llama_model_loader::llama_model_loader(
+@@ -599,11 +600,50 @@ llama_model_loader::llama_model_loader(
              n_bytes    += ggml_nbytes(cur);
              weights_map.emplace(tensor_name, llama_tensor_weight(files.back().get(), 0, metadata, cur));
          }
@@ -321,10 +321,10 @@ index 3fb84fdd..d889c99d 100644
          bool use_mmap,
          bool use_direct_io,
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 847e79f4..338e6382 100644
+index aebbc1ff..78112d9a 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
-@@ -879,7 +879,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+@@ -881,7 +881,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
      const llama_model_kv_override * kv_overrides = params->kv_overrides;
      std::vector<std::string> splits = {};
      llama_model_loader ml(/*metadata*/ nullptr, /*set_tensor_data*/ nullptr, /*set_tensor_data_ud*/ nullptr,
@@ -1330,5 +1330,5 @@ index 50e25c8f..ab5a147c 100644
      gguf_set_val_bool(out_ctx, "skippy.package.materialized", true);
      gguf_set_val_u32(out_ctx, "skippy.package.part_count", static_cast<uint32_t>(input_count));
 -- 
-2.53.0
+2.54.0 (Apple Git-157)
 

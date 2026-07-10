@@ -1,7 +1,7 @@
-From be13ce7e46bea3e444fcf0aee3e611a7d9fbaabc Mon Sep 17 00:00:00 2001
+From a5efd500c194af551953a0fef9c1d851cde7a1e0 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 09/10] Add chat grammar, device enumeration, and runtime
+Subject: [PATCH 09/14] Add chat grammar, device enumeration, and runtime
  events
 
 Squashes chat grammar exception containment and lazy triggering, backend device enumeration, min-p sampling, KV cell compaction, and model-open runtime events.
@@ -446,10 +446,10 @@ index 00000000..382f1e69
 +
 +#endif
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index c29fe289..3e2e8abb 100644
+index e5c0a061..43e9492a 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -751,11 +751,28 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
+@@ -735,11 +735,28 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
  }
  
  llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool optimize) {
@@ -481,7 +481,7 @@ index c29fe289..3e2e8abb 100644
  }
  
  llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
-@@ -1182,6 +1199,93 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+@@ -1166,6 +1183,93 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
      }
  }
  
@@ -575,7 +575,7 @@ index c29fe289..3e2e8abb 100644
  bool llama_kv_cache::get_can_shift() const {
      // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
      if (model.arch == LLM_ARCH_STEP35) {
-@@ -2894,8 +2998,9 @@ llama_kv_cache_context::llama_kv_cache_context(
+@@ -2878,8 +2982,9 @@ llama_kv_cache_context::llama_kv_cache_context(
          llama_kv_cache * kv,
          llama_context * lctx,
          bool do_shift,
@@ -1451,7 +1451,7 @@ index 27dc78b0..4dcd0d96 100644
  
  enum skippy_status skippy_model_free(
 diff --git a/tests/test-chat-auto-parser.cpp b/tests/test-chat-auto-parser.cpp
-index 5cc10575..ad3276e7 100644
+index d15fdd2c..8e662c3e 100644
 --- a/tests/test-chat-auto-parser.cpp
 +++ b/tests/test-chat-auto-parser.cpp
 @@ -57,6 +57,7 @@ static void test_seed_oss_tool_with_reasoning(testing & t);
@@ -1501,11 +1501,11 @@ index 5cc10575..ad3276e7 100644
  static common_chat_template load_cohere_template(testing & t) {
      return load_template(t, "models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja");
  }
-@@ -2090,4 +2116,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
+@@ -2089,4 +2115,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
          }
      }
  }
 -
 -- 
-2.53.0
+2.54.0 (Apple Git-157)
 

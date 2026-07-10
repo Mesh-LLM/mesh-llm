@@ -1,7 +1,7 @@
-From 21cd005d8e0a4e5b1bb3bc0768969d4cb1bedafd Mon Sep 17 00:00:00 2001
+From d2756d3e1f86a93ed1b328ace967b56a669046d7 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 01/10] Add Skippy ABI and package writer foundation
+Subject: [PATCH 01/14] Add Skippy ABI and package writer foundation
 
 Squashes the initial Skippy ABI headers, model info entrypoints, single-stage runtime baseline, runtime-slice tensor filtering, activation-frame execution, GGUF slice writing, and package part composition.
 ---
@@ -346,7 +346,7 @@ index 320784c3..5298c337 100644
              unicode-data.cpp
              unicode.cpp
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 4c86e43c..118987b3 100644
+index a8fd11eb..36faacbd 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -21,6 +21,20 @@
@@ -370,7 +370,7 @@ index 4c86e43c..118987b3 100644
  // dedup helpers
  
  static ggml_tensor * build_attn_inp_kq_mask(
-@@ -2164,28 +2178,32 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+@@ -2173,28 +2187,32 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
      {
          auto & cur = inps[0];
  
@@ -421,7 +421,7 @@ index 4c86e43c..118987b3 100644
      }
  
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 4b5b75c6..b943320e 100644
+index 97141ef9..c03fb1ce 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -30,6 +30,18 @@ class llama_memory_recurrent_context;
@@ -444,7 +444,7 @@ index 4b5b75c6..b943320e 100644
  enum llm_graph_type {
      LLM_GRAPH_TYPE_DEFAULT,
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index e07b0d23..9b0e00ae 100644
+index 28f8bb79..f4310743 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -17,6 +17,16 @@ static const size_t kiB = 1024;
@@ -464,7 +464,7 @@ index e07b0d23..9b0e00ae 100644
  const char * llama_file_version_name(llama_fver version) {
      switch (version) {
          case GGUF_FILE_VERSION_V1: return "GGUF V1 (support until nov 2023)";
-@@ -1103,6 +1113,40 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1107,6 +1117,40 @@ struct ggml_tensor * llama_model_loader::create_tensor(
              throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
          }
  
@@ -2080,5 +2080,5 @@ index 00000000..26169320
 +
 +}
 -- 
-2.53.0
+2.54.0 (Apple Git-157)
 

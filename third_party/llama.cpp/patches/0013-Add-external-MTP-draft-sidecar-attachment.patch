@@ -1,7 +1,7 @@
-From f7a2fbdf2f817d09b95f410dbbf9329991ff3c1c Mon Sep 17 00:00:00 2001
+From 47644eabc90e1e5cd2dc2264327084935531d7d0 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 3 Jul 2026 12:18:37 -0400
-Subject: [PATCH] Add external MTP draft sidecar attachment
+Subject: [PATCH 13/14] Add external MTP draft sidecar attachment
 
 ---
  include/skippy.h        |  6 ++++
@@ -10,7 +10,7 @@ Subject: [PATCH] Add external MTP draft sidecar attachment
  3 files changed, 84 insertions(+), 3 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index e2abadb43..b3229f770 100644
+index 82e5b49f..0ace0355 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -157,6 +157,12 @@ LLAMA_API enum skippy_status skippy_model_open_with_events(
@@ -27,19 +27,20 @@ index e2abadb43..b3229f770 100644
          const char * const * paths,
          size_t path_count,
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 0e1f03511..fecefb334 100644
+index 0e1f0351..fecefb33 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
-@@ -27,5 +27,5 @@ extern "C" {
+@@ -26,7 +26,7 @@ extern "C" {
+ 
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
 -#define SKIPPY_ABI_VERSION_PATCH 28
--
 +#define SKIPPY_ABI_VERSION_PATCH 29
-+
+ 
  enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index d0181ad35..64672439f 100644
+index fcd8a48f..db17f7d2 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -46,6 +46,7 @@ using json = nlohmann::ordered_json;
@@ -170,3 +171,6 @@ index d0181ad35..64672439f 100644
          if (model->ctx != nullptr) {
              llama_free(model->ctx);
          }
+-- 
+2.54.0 (Apple Git-157)
+

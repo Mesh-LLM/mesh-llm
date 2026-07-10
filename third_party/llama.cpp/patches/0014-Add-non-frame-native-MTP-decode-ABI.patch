@@ -1,7 +1,7 @@
-From 909daf009cc97cc2c66501e9b9b3849fe76a84f6 Mon Sep 17 00:00:00 2001
+From 8875e2ff2c0e697c8dc78783d803468e6de043b9 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 3 Jul 2026 15:03:17 -0400
-Subject: [PATCH] Add non-frame native MTP decode ABI
+Subject: [PATCH 14/14] Add non-frame native MTP decode ABI
 
 ---
  include/skippy.h        |  9 +++++++++
@@ -10,7 +10,7 @@ Subject: [PATCH] Add non-frame native MTP decode ABI
  3 files changed, 48 insertions(+), 1 deletion(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index b3229f770..6f648e50e 100644
+index 0ace0355..c5a4c4b7 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -283,6 +283,15 @@ LLAMA_API enum skippy_status skippy_decode_step_sampled(
@@ -30,7 +30,7 @@ index b3229f770..6f648e50e 100644
          struct skippy_session * const * sessions,
          const llama_token * token_ids,
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index fecefb334..b7186bc9e 100644
+index fecefb33..b7186bc9 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -43,7 +43,7 @@ index fecefb334..b7186bc9e 100644
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 64672439f..428ded399 100644
+index db17f7d2..5f5596ce 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -3447,6 +3447,44 @@ enum skippy_status skippy_decode_step_sampled(
@@ -92,4 +92,5 @@ index 64672439f..428ded399 100644
          struct skippy_session * const * sessions,
          const llama_token * token_ids,
 -- 
-2.53.0
+2.54.0 (Apple Git-157)
+
