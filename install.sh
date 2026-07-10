@@ -622,7 +622,9 @@ setup_command_string() {
     local -a command=("$INSTALL_DIR/mesh-llm" setup)
     local token
     local rendered=""
-    command+=("${SETUP_ARGS[@]}")
+    if ((${#SETUP_ARGS[@]} > 0)); then
+        command+=("${SETUP_ARGS[@]}")
+    fi
     for token in "${command[@]}"; do
         printf -v rendered '%s%q ' "$rendered" "$token"
     done
@@ -641,7 +643,11 @@ run_or_print_setup() {
         else
             echo
         fi
-        "$binary" setup "${SETUP_ARGS[@]}"
+        if ((${#SETUP_ARGS[@]} > 0)); then
+            "$binary" setup "${SETUP_ARGS[@]}"
+        else
+            "$binary" setup
+        fi
         return 0
     fi
 
