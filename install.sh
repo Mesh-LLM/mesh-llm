@@ -601,8 +601,22 @@ remove_stale_binaries() {
     done < <(stale_binary_names)
 }
 
+validate_bundle() {
+    local bundle_dir="$1"
+    local binary="$bundle_dir/mesh-llm"
+    if [[ ! -f "$binary" ]]; then
+        echo "error: release archive did not contain an installable mesh-llm binary" >&2
+        return 1
+    fi
+    if [[ ! -x "$binary" ]]; then
+        echo "error: mesh-llm binary in release archive is not executable" >&2
+        return 1
+    fi
+}
+
 install_bundle() {
     local bundle_dir="$1"
+    validate_bundle "$bundle_dir"
     remove_stale_binaries
     local file
     for file in "$bundle_dir"/*; do

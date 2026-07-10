@@ -242,6 +242,35 @@ class InstallScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("could not download release archive", result.stderr)
 
+    def test_install_bundle_preserves_existing_binary_when_replacement_is_missing(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+            installed_binary = install_dir / "mesh-llm"
+            installed_binary.write_text("existing binary\n", encoding="utf-8")
+            bundle_dir = tmp_path / "mesh-bundle"
+            bundle_dir.mkdir()
+            (bundle_dir / "README.txt").write_text("malformed bundle\n", encoding="utf-8")
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                f"install_bundle {shlex_quote(str(bundle_dir))}",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "did not contain an installable mesh-llm binary",
+                result.stderr,
+            )
+            self.assertEqual(
+                installed_binary.read_text(encoding="utf-8"),
+                "existing binary\n",
+            )
+
     def test_main_runs_setup_interactively(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result, calls, tools = self._run_main(tmp, interactive=True)
