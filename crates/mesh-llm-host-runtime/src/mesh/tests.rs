@@ -8147,16 +8147,12 @@ fn active_stage_refresh_timeout_marks_cached_stage_failed() {
 }
 
 #[test]
-fn passive_streams_are_gated_when_trust_policy_active() {
-    // With any active trust policy, only gossip bypasses the quarantine
+fn passive_streams_are_gated_when_trust_policy_enforces_ownership() {
+    // With an enforcing trust policy, only gossip bypasses the quarantine
     // gate. A leaked invite token must not be a bearer credential for
     // inference: a caller rejected by the trust gate (UntrustedOwner) must
     // not be able to route requests via the passive paths.
-    for policy in [
-        TrustPolicy::PreferOwned,
-        TrustPolicy::RequireOwned,
-        TrustPolicy::Allowlist,
-    ] {
+    for policy in [TrustPolicy::RequireOwned, TrustPolicy::Allowlist] {
         assert!(
             stream_allowed_before_admission(STREAM_GOSSIP, policy),
             "gossip must always be allowed ({policy:?}) — it is the admission path"
@@ -8175,13 +8171,13 @@ fn passive_streams_are_gated_when_trust_policy_active() {
         );
     }
 
-    // TrustPolicy::Off keeps the open-mesh posture: passive paths stay open.
-    assert!(stream_allowed_before_admission(
-        STREAM_TUNNEL_HTTP,
-        TrustPolicy::Off
-    ));
-    assert!(stream_allowed_before_admission(
-        STREAM_ROUTE_REQUEST,
-        TrustPolicy::Off
-    ));
+    // Non-enforcing policies keep passive paths open. PreferOwned is advisory:
+    // it warns about unattributed peers but does not reject them.
+    for policy in [TrustPolicy::Off, TrustPolicy::PreferOwned] {
+        assert!(stream_allowed_before_admission(STREAM_TUNNEL_HTTP, policy));
+        assert!(stream_allowed_before_admission(
+            STREAM_ROUTE_REQUEST,
+            policy
+        ));
+    }
 }

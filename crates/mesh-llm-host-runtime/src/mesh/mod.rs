@@ -2538,7 +2538,7 @@ pub(crate) fn is_peer_admitted(peers: &HashMap<EndpointId, PeerInfo>, id: &Endpo
 /// Returns `true` if the given stream type is permitted before a peer has
 /// been admitted through gossip, under the node's trust policy.
 ///
-/// With `TrustPolicy::Off` (the default open-mesh posture), three streams
+/// With a non-enforcing trust policy (`Off` or `PreferOwned`), three streams
 /// bypass the quarantine gate:
 /// - `STREAM_GOSSIP (0x01)`: the admission handshake itself.
 /// - `STREAM_ROUTE_REQUEST (0x05)`: passive/client request-only path — caller
@@ -2546,12 +2546,13 @@ pub(crate) fn is_peer_admitted(peers: &HashMap<EndpointId, PeerInfo>, id: &Endpo
 /// - `STREAM_TUNNEL_HTTP (0x04)`: passive SDK inference path for callers that
 ///   have an invite token but should not need a local `/v1` HTTP listener.
 ///
-/// When a trust policy is active (`PreferOwned`/`RequireOwned`/`Allowlist`),
-/// only `STREAM_GOSSIP` bypasses the gate. Otherwise a leaked invite token is
-/// a bearer credential for inference: a caller rejected by the trust gate
-/// (e.g. `UntrustedOwner` under `Allowlist`) could still route requests via
-/// the passive paths without ever being admitted. If a node enforces who may
-/// join, the same enforcement must cover who may consume.
+/// When a trust policy enforces ownership (`RequireOwned` or `Allowlist`), only
+/// `STREAM_GOSSIP` bypasses the gate. Otherwise a leaked invite token is a
+/// bearer credential for inference: a caller rejected by the trust gate (e.g.
+/// `UntrustedOwner` under `Allowlist`) could still route requests via the
+/// passive paths without ever being admitted. If a node enforces who may join,
+/// the same enforcement must cover who may consume. `PreferOwned` remains
+/// advisory and therefore preserves the passive-client behavior of `Off`.
 ///
 /// Every other stream — including raw tunnel (0x02) — always requires the
 /// remote to have completed gossip first.
@@ -2559,7 +2560,10 @@ pub(crate) fn stream_allowed_before_admission(stream_type: u8, trust_policy: Tru
     if stream_type == STREAM_GOSSIP {
         return true;
     }
-    if !matches!(trust_policy, TrustPolicy::Off) {
+    if matches!(
+        trust_policy,
+        TrustPolicy::RequireOwned | TrustPolicy::Allowlist
+    ) {
         return false;
     }
     stream_type == STREAM_ROUTE_REQUEST || stream_type == STREAM_TUNNEL_HTTP
