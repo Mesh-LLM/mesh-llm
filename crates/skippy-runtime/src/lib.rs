@@ -5084,14 +5084,24 @@ mod tests {
 
         write_native_log_note("skippy_model_open begin\nwith context");
 
-        assert_eq!(
-            rx.blocking_recv(),
-            Some(NativeLogEvent {
-                message: "mesh-llm: skippy_model_open begin with context".to_string(),
-                category: "model",
-                params: Vec::new(),
-            })
-        );
+        let expected = NativeLogEvent {
+            message: "mesh-llm: skippy_model_open begin with context".to_string(),
+            category: "model",
+            params: Vec::new(),
+        };
+        let mut events = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(event) if event == expected => break,
+                Ok(event) => events.push(event),
+                Err(TryRecvError::Empty) => {
+                    panic!("expected forwarded native log note, got {events:?}")
+                }
+                Err(error) => {
+                    panic!("expected forwarded native log note, receiver errored: {error}")
+                }
+            }
+        }
     }
 
     #[test]

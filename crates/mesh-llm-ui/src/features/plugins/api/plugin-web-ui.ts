@@ -1,5 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { PluginSummaryRaw, PluginWebUiPageRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
+import type {
+  PluginSummaryRaw,
+  PluginWebUiConfigMutationRequest,
+  PluginWebUiPageRaw,
+  PluginWebUiStateRaw,
+  PluginWebUiVisibleConfigRaw
+} from '@/lib/api/plugin-types'
 import { ApiError } from '@/lib/api/errors'
 import { env } from '@/lib/env'
 import { pluginKeys, statusKeys } from '@/lib/query/query-keys'
@@ -36,6 +42,10 @@ function pluginWebUiEnabledEndpoint(pluginName: string): string {
   return `${pluginWebUiEndpoint(pluginName)}/enabled`
 }
 
+function pluginWebUiConfigEndpoint(pluginName: string): string {
+  return `${pluginWebUiEndpoint(pluginName)}/config`
+}
+
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const body = await response.text()
@@ -47,6 +57,19 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
 export function pluginWebUiAssetUrl(pluginName: string, assetPath: string): string {
   const encodedAssetPath = assetPath.split('/').filter(Boolean).map(encodeURIComponent).join('/')
   return `${pluginWebUiEndpoint(pluginName)}/assets/${encodedAssetPath}`
+}
+
+export function resolvePluginWebUiAssetUrl(
+  pluginName: string,
+  webUi: Pick<PluginWebUiStateRaw, 'asset_base_url'>,
+  assetPath: string
+): string {
+  const encodedAssetPath = assetPath.split('/').filter(Boolean).map(encodeURIComponent).join('/')
+  if (webUi.asset_base_url) {
+    const baseUrl = webUi.asset_base_url.endsWith('/') ? webUi.asset_base_url : `${webUi.asset_base_url}/`
+    return new URL(encodedAssetPath, new URL(baseUrl, window.location.origin)).toString()
+  }
+  return new URL(pluginWebUiAssetUrl(pluginName, assetPath), window.location.origin).toString()
 }
 
 export async function fetchPluginSummaries(): Promise<readonly PluginSummaryRaw[]> {
@@ -66,6 +89,23 @@ export async function setPluginWebUiEnabled(pluginName: string, enabled: boolean
     body: JSON.stringify({ enabled })
   })
   return parseJsonResponse<PluginWebUiStateRaw>(response)
+}
+
+export async function fetchPluginWebUiConfig(pluginName: string): Promise<PluginWebUiVisibleConfigRaw> {
+  const response = await fetch(pluginWebUiConfigEndpoint(pluginName))
+  return parseJsonResponse<PluginWebUiVisibleConfigRaw>(response)
+}
+
+export async function requestPluginWebUiConfigMutation(
+  pluginName: string,
+  request: PluginWebUiConfigMutationRequest
+): Promise<PluginWebUiVisibleConfigRaw> {
+  const response = await fetch(pluginWebUiConfigEndpoint(pluginName), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...request, plugin: request.plugin ?? pluginName })
+  })
+  return parseJsonResponse<PluginWebUiVisibleConfigRaw>(response)
 }
 
 export function isPluginWebUiNavigationEligible(webUi: PluginWebUiStateRaw): boolean {
@@ -97,7 +137,9 @@ export function adaptPluginSummaryToWebUiEntry(summary: PluginSummaryRaw): Plugi
   }
 }
 
-export function adaptPluginSummariesToWebUiEntries(summaries: readonly PluginSummaryRaw[]): readonly PluginWebUiEntry[] {
+export function adaptPluginSummariesToWebUiEntries(
+  summaries: readonly PluginSummaryRaw[]
+): readonly PluginWebUiEntry[] {
   return summaries.map(adaptPluginSummaryToWebUiEntry)
 }
 
@@ -128,6 +170,29 @@ export function usePluginWebUiQuery(pluginName: string, options?: { enabled?: bo
     queryFn: () => fetchPluginWebUi(pluginName),
     staleTime: 30_000,
     enabled: options?.enabled ?? true
+  })
+}
+
+export function usePluginWebUiConfigQuery(pluginName: string, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: pluginKeys.webUiConfig(pluginName),
+    queryFn: () => fetchPluginWebUiConfig(pluginName),
+    staleTime: 30_000,
+    enabled: options?.enabled ?? true
+  })
+}
+
+export function usePluginWebUiConfigMutation(pluginName: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (request: PluginWebUiConfigMutationRequest) => requestPluginWebUiConfigMutation(pluginName, request),
+    onSuccess: (config) => {
+      queryClient.setQueryData(pluginKeys.webUiConfig(pluginName), config)
+      void queryClient.invalidateQueries({ queryKey: pluginKeys.webUiConfig(pluginName) })
+      void queryClient.invalidateQueries({ queryKey: pluginKeys.webUi(pluginName) })
+      void queryClient.invalidateQueries({ queryKey: pluginKeys.list() })
+      void queryClient.invalidateQueries({ queryKey: statusKeys.detail() })
+    }
   })
 }
 

@@ -32,7 +32,13 @@ const pluginQueryMocks = vi.hoisted(() => ({
   importBundle: vi.fn(),
   register: vi.fn(),
   mountConfig: vi.fn(),
-  unmountConfig: vi.fn()
+  unmountConfig: vi.fn(),
+  visibleConfig: {
+    plugin: 'blackboard',
+    settings: { endpoint_url: 'https://blackboard.local/v1', retention_days: 30 },
+    schema: { plugin_name: 'blackboard' }
+  },
+  mutateConfig: vi.fn()
 }))
 
 vi.mock('@tanstack/react-router', () => ({
@@ -66,6 +72,15 @@ vi.mock('@/features/plugins/api/plugin-web-ui', async (importOriginal) => {
     useSetPluginWebUiEnabledMutation: vi.fn(() => ({
       isPending: false,
       mutate: pluginQueryMocks.toggle
+    })),
+    usePluginWebUiConfigQuery: vi.fn((pluginName: string) => ({
+      data: { ...pluginQueryMocks.visibleConfig, plugin: pluginName },
+      isError: false,
+      isPending: false
+    })),
+    usePluginWebUiConfigMutation: vi.fn((pluginName: string) => ({
+      isPending: false,
+      mutateAsync: (request: unknown) => pluginQueryMocks.mutateConfig(pluginName, request)
     }))
   }
 })
@@ -311,13 +326,30 @@ describe('ConfigurationPage', () => {
     featureFlagMocks.signingAttestationEnabled = false
     featureFlagMocks.wakePolicyConfigurationEnabled = false
     pluginQueryMocks.summaries = []
+    pluginQueryMocks.visibleConfig = {
+      plugin: 'blackboard',
+      settings: { endpoint_url: 'https://blackboard.local/v1', retention_days: 30 },
+      schema: { plugin_name: 'blackboard' }
+    }
+    pluginQueryMocks.mutateConfig.mockResolvedValue(pluginQueryMocks.visibleConfig)
     pluginQueryMocks.importBundle.mockResolvedValue({ registerMeshPluginUi: pluginQueryMocks.register })
     pluginQueryMocks.register.mockReturnValue({ configSections: { settings: pluginQueryMocks.mountConfig } })
     pluginQueryMocks.mountConfig.mockImplementation(
       ({ element, host, section }: MeshPluginUiConfigMountContext): MeshPluginUiMountHandle => {
         const node = document.createElement('div')
         node.textContent = `Mounted ${host.plugin.name} ${section.id}`
-        element.appendChild(node)
+        const setting = document.createElement('output')
+        setting.textContent = String(host.config.visible.settings.endpoint_url)
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.textContent = 'Save retention'
+        button.addEventListener('click', () => {
+          void host.config.requestMutation({
+            plugin: host.plugin.name,
+            settings: { retention_days: 45 }
+          })
+        })
+        element.append(node, setting, button)
         return {
           unmount: () => {
             pluginQueryMocks.unmountConfig()
@@ -716,6 +748,7 @@ describe('ConfigurationPage', () => {
     expect(screen.getByText('Web UI ready')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
     expect(await screen.findByText('Mounted blackboard settings')).toBeInTheDocument()
+    expect(screen.getByText('https://blackboard.local/v1')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Endpoint URL' })).toHaveValue('https://blackboard.local/v1')
 
     const toggle = screen.getByRole('switch', { name: 'blackboard web UI projection' })
@@ -724,6 +757,14 @@ describe('ConfigurationPage', () => {
     await user.click(toggle)
 
     expect(pluginQueryMocks.toggle).toHaveBeenCalledWith(false)
+    await user.click(screen.getByRole('button', { name: 'Save retention' }))
+    await waitFor(() =>
+      expect(pluginQueryMocks.mutateConfig).toHaveBeenCalledWith('blackboard', {
+        plugin: 'blackboard',
+        settings: { retention_days: 45 }
+      })
+    )
+    expect(await screen.findByText('Plugin settings saved.')).toBeInTheDocument()
     expect(pluginQueryMocks.importBundle).toHaveBeenCalledWith(
       'http://localhost:3000/api/plugins/blackboard/web-ui/assets/settings.js'
     )

@@ -266,7 +266,19 @@ describe('app router routes', () => {
 
   it('mounts a ready plugin page through the typed host bundle contract', async () => {
     installReadyPluginBundle()
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(readyPluginWebUi())))
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/plugins/blackboard/web-ui/config') && init?.method === 'PATCH') {
+        expect(JSON.parse(String(init.body))).toEqual({
+          plugin: 'blackboard',
+          settings: { retention_days: 45 }
+        })
+        return jsonResponse(visiblePluginConfig({ retention_days: 45 }))
+      }
+      if (url.endsWith('/api/plugins/blackboard/web-ui/config')) return jsonResponse(visiblePluginConfig())
+      return jsonResponse(readyPluginWebUi())
+    })
+    vi.stubGlobal('fetch', fetchMock)
 
     renderRouterAt('/plugins/blackboard/dashboard')
 
@@ -279,6 +291,14 @@ describe('app router routes', () => {
     expect(pluginBundleProbe.host?.plugin.name).toBe('blackboard')
     expect(pluginBundleProbe.host?.page.id).toBe('dashboard')
     expect(pluginBundleProbe.host?.network.fetchPlugin).toEqual(expect.any(Function))
+    expect(pluginBundleProbe.host?.config.visible.settings.retention_days).toBe(30)
+    await act(async () => {
+      await pluginBundleProbe.host?.config.requestMutation({ settings: { retention_days: 45 } })
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/plugins/blackboard/web-ui/config',
+      expect.objectContaining({ method: 'PATCH' })
+    )
     expect(document.title).toBe('MeshLLM - Plugin')
   })
 
@@ -288,7 +308,10 @@ describe('app router routes', () => {
     ['plugin_not_running', pluginNotRunningWebUi()],
     ['nondeclaring', nonePluginWebUi()]
   ])('renders the %s fallback without importing bundle code', async (_label, webUi) => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(webUi)))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(webUi))
+    )
 
     renderRouterAt('/plugins/blackboard/dashboard')
 
@@ -298,7 +321,10 @@ describe('app router routes', () => {
   })
 
   it('does not import a ready bundle when the requested page id is undeclared', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(readyPluginWebUi())))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(readyPluginWebUi()))
+    )
 
     renderRouterAt('/plugins/blackboard/missing')
 
@@ -306,9 +332,25 @@ describe('app router routes', () => {
     expect(pluginBundleProbe.importBundle).not.toHaveBeenCalled()
   })
 
+  it('does not import a ready bundle when the host omits asset_base_url', async () => {
+    const { asset_base_url: _assetBaseUrl, ...webUi } = readyPluginWebUi()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(webUi))
+    )
+
+    renderRouterAt('/plugins/blackboard/dashboard')
+
+    await screen.findByRole('heading', { name: 'Plugin web UI asset route is unavailable' })
+    expect(pluginBundleProbe.importBundle).not.toHaveBeenCalled()
+  })
+
   it('unmounts the plugin page exactly once when navigation leaves the route', async () => {
     installReadyPluginBundle()
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(readyPluginWebUi())))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(readyPluginWebUi()))
+    )
     const testRouter = renderRouterAt('/plugins/blackboard/dashboard')
 
     await screen.findByText('Mounted blackboard dashboard')
@@ -323,7 +365,10 @@ describe('app router routes', () => {
 
   it('unmounts the plugin page exactly once when metadata changes to disabled', async () => {
     installReadyPluginBundle()
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(readyPluginWebUi())))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(readyPluginWebUi()))
+    )
     const queryClient = new QueryClient()
 
     renderRouterAt('/plugins/blackboard/dashboard', queryClient)
@@ -340,17 +385,19 @@ describe('app router routes', () => {
 })
 
 function installReadyPluginBundle() {
-  pluginBundleProbe.mount.mockImplementation(({ element, host, page }: MeshPluginUiMountContext): MeshPluginUiMountHandle => {
-    const node = document.createElement('div')
-    node.textContent = `Mounted ${host.plugin.name} ${page.id}`
-    element.appendChild(node)
-    return {
-      unmount: () => {
-        pluginBundleProbe.unmount()
-        node.remove()
+  pluginBundleProbe.mount.mockImplementation(
+    ({ element, host, page }: MeshPluginUiMountContext): MeshPluginUiMountHandle => {
+      const node = document.createElement('div')
+      node.textContent = `Mounted ${host.plugin.name} ${page.id}`
+      element.appendChild(node)
+      return {
+        unmount: () => {
+          pluginBundleProbe.unmount()
+          node.remove()
+        }
       }
     }
-  })
+  )
   pluginBundleProbe.register.mockImplementation((host: MeshPluginUiHost): MeshPluginUiRegistration => {
     pluginBundleProbe.host = host
     return { pages: { dashboard: pluginBundleProbe.mount } }
@@ -375,6 +422,14 @@ function readyPluginWebUi(): PluginWebUiStateRaw {
     ],
     config_sections: [],
     asset_base_url: '/api/plugins/blackboard/web-ui/assets/'
+  }
+}
+
+function visiblePluginConfig(settings: Record<string, unknown> = { retention_days: 30 }) {
+  return {
+    plugin: 'blackboard',
+    settings,
+    schema: { plugin_name: 'blackboard' }
   }
 }
 

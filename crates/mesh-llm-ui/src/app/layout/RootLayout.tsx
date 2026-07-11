@@ -153,7 +153,10 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
 
   const onPluginPageChange = useCallback(
     (item: TopNavPluginPageItem) => {
-      void router.navigate({ to: '/plugins/$pluginName/$pageId', params: { pluginName: item.pluginName, pageId: item.pageId } })
+      void router.navigate({
+        to: '/plugins/$pluginName/$pageId',
+        params: { pluginName: item.pluginName, pageId: item.pageId }
+      })
     },
     [router]
   )

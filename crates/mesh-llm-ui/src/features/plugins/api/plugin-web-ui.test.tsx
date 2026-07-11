@@ -9,7 +9,10 @@ import type { PluginSummaryRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-typ
 import {
   adaptPluginSummariesToWebUiEntries,
   buildPluginWebUiNavItems,
+  fetchPluginWebUiConfig,
   pluginWebUiAssetUrl,
+  requestPluginWebUiConfigMutation,
+  resolvePluginWebUiAssetUrl,
   usePluginWebUiQuery,
   useSetPluginWebUiEnabledMutation
 } from '@/features/plugins/api/plugin-web-ui'
@@ -74,25 +77,37 @@ describe('plugin web UI data adapters', () => {
 
   it.each([
     ['disabled', { state: 'disabled', declared: true, enabled: false, available: false, unavailable_reason: 'off' }],
-    ['invalid', { state: 'invalid', declared: true, enabled: true, available: false, unavailable_reason: 'bad bundle' }],
+    [
+      'invalid',
+      { state: 'invalid', declared: true, enabled: true, available: false, unavailable_reason: 'bad bundle' }
+    ],
     [
       'plugin_not_running',
-      { state: 'plugin_not_running', declared: true, enabled: true, available: false, unavailable_reason: 'not running' }
+      {
+        state: 'plugin_not_running',
+        declared: true,
+        enabled: true,
+        available: false,
+        unavailable_reason: 'not running'
+      }
     ],
     ['none', { state: 'none', declared: false, enabled: false, available: false }]
-  ] satisfies readonly [string, PluginWebUiStateRaw][])('keeps %s web UI state visible but not nav eligible', (_label, webUi) => {
-    const [entry] = adaptPluginSummariesToWebUiEntries([pluginSummary('demo', webUi)])
+  ] satisfies readonly [string, PluginWebUiStateRaw][])(
+    'keeps %s web UI state visible but not nav eligible',
+    (_label, webUi) => {
+      const [entry] = adaptPluginSummariesToWebUiEntries([pluginSummary('demo', webUi)])
 
-    expect(entry).toEqual(
-      expect.objectContaining({
-        pluginName: 'demo',
-        state: webUi.state,
-        declared: webUi.declared,
-        navigationEligible: false
-      })
-    )
-    expect(buildPluginWebUiNavItems(entry ? [entry] : [])).toEqual([])
-  })
+      expect(entry).toEqual(
+        expect.objectContaining({
+          pluginName: 'demo',
+          state: webUi.state,
+          declared: webUi.declared,
+          navigationEligible: false
+        })
+      )
+      expect(buildPluginWebUiNavItems(entry ? [entry] : [])).toEqual([])
+    }
+  )
 
   it('derives asset URLs under the plugin web UI asset endpoint', () => {
     expect(pluginWebUiAssetUrl('blackboard', 'chunks/dashboard.js')).toBe(
@@ -100,6 +115,51 @@ describe('plugin web UI data adapters', () => {
     )
     expect(pluginWebUiAssetUrl('demo plugin', 'icons/settings icon.svg')).toBe(
       '/api/plugins/demo%20plugin/web-ui/assets/icons/settings%20icon.svg'
+    )
+    expect(resolvePluginWebUiAssetUrl('blackboard', READY_WEB_UI, 'settings.js')).toBe(
+      'http://localhost:3000/api/plugins/blackboard/web-ui/assets/settings.js'
+    )
+  })
+
+  it('uses the plugin-scoped config endpoint for visible settings and mutations', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url.endsWith('/api/plugins/blackboard/web-ui/config') && !init) {
+        return jsonResponse({
+          plugin: 'blackboard',
+          settings: { retention_days: 30 },
+          schema: { plugin_name: 'blackboard' }
+        })
+      }
+      if (url.endsWith('/api/plugins/blackboard/web-ui/config')) {
+        expect(init?.method).toBe('PATCH')
+        expect(JSON.parse(String(init?.body))).toEqual({
+          plugin: 'blackboard',
+          settings: { retention_days: 45 }
+        })
+        return jsonResponse({
+          plugin: 'blackboard',
+          settings: { retention_days: 45 },
+          schema: { plugin_name: 'blackboard' }
+        })
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchPluginWebUiConfig('blackboard')).resolves.toEqual({
+      plugin: 'blackboard',
+      settings: { retention_days: 30 },
+      schema: { plugin_name: 'blackboard' }
+    })
+    await expect(requestPluginWebUiConfigMutation('blackboard', { settings: { retention_days: 45 } })).resolves.toEqual(
+      {
+        plugin: 'blackboard',
+        settings: { retention_days: 45 },
+        schema: { plugin_name: 'blackboard' }
+      }
     )
   })
 })
@@ -143,8 +203,13 @@ describe('plugin web UI query hooks', () => {
 
     await waitFor(() => expect(result.current.metadata.data?.state).toBe('disabled'))
     expect(fetchMock).toHaveBeenCalledWith('/api/plugins/blackboard/web-ui')
-    expect(fetchMock).toHaveBeenCalledWith('/api/plugins/blackboard/web-ui/enabled', expect.objectContaining({ method: 'PATCH' }))
-    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/api/plugins/blackboard/web-ui'))).toHaveLength(2)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/plugins/blackboard/web-ui/enabled',
+      expect.objectContaining({ method: 'PATCH' })
+    )
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/api/plugins/blackboard/web-ui'))
+    ).toHaveLength(2)
   })
 })
 

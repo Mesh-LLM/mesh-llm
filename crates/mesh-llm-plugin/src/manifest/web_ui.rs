@@ -186,16 +186,23 @@ impl TryFrom<&proto::PluginWebUiManifest> for PackagedPluginWebUi {
     type Error = anyhow::Error;
 
     fn try_from(value: &proto::PluginWebUiManifest) -> Result<Self> {
-        validate_single_bundle(&value.bundles)?;
+        let bundle_id = validate_v1_bundle_contract(value)?;
         let pages = value
             .pages
             .iter()
-            .map(PackagedPluginWebUiPage::try_from)
+            .map(|page| {
+                PackagedPluginWebUiPage::try_from_with_bundle_id(page, bundle_id.as_deref())
+            })
             .collect::<Result<Vec<_>>>()?;
         let config_sections = value
             .config_sections
             .iter()
-            .map(PackagedPluginWebUiConfigSection::try_from)
+            .map(|section| {
+                PackagedPluginWebUiConfigSection::try_from_with_bundle_id(
+                    section,
+                    bundle_id.as_deref(),
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
         let bundles = value
             .bundles
@@ -215,7 +222,21 @@ impl TryFrom<&proto::PluginWebUiPageManifest> for PackagedPluginWebUiPage {
     type Error = anyhow::Error;
 
     fn try_from(value: &proto::PluginWebUiPageManifest) -> Result<Self> {
-        validate_relative_path("web UI page route", &value.route)?;
+        Self::try_from_with_bundle_id(value, None)
+    }
+}
+
+impl PackagedPluginWebUiPage {
+    fn try_from_with_bundle_id(
+        value: &proto::PluginWebUiPageManifest,
+        expected_bundle_id: Option<&str>,
+    ) -> Result<Self> {
+        validate_route_slug("web UI page route", &value.route)?;
+        validate_bundle_reference(
+            "web UI page bundle_id",
+            &value.bundle_id,
+            expected_bundle_id,
+        )?;
         validate_relative_path("web UI page entry_script", &value.entry_script)?;
         if let Some(icon) = &value.icon {
             validate_relative_path("web UI page icon", icon)?;
@@ -235,6 +256,20 @@ impl TryFrom<&proto::PluginWebUiConfigSectionManifest> for PackagedPluginWebUiCo
     type Error = anyhow::Error;
 
     fn try_from(value: &proto::PluginWebUiConfigSectionManifest) -> Result<Self> {
+        Self::try_from_with_bundle_id(value, None)
+    }
+}
+
+impl PackagedPluginWebUiConfigSection {
+    fn try_from_with_bundle_id(
+        value: &proto::PluginWebUiConfigSectionManifest,
+        expected_bundle_id: Option<&str>,
+    ) -> Result<Self> {
+        validate_bundle_reference(
+            "web UI config section bundle_id",
+            &value.bundle_id,
+            expected_bundle_id,
+        )?;
         validate_relative_path("web UI config section entry_script", &value.entry_script)?;
         if let Some(parent_tab) = &value.parent_tab {
             validate_config_parent_tab(parent_tab)?;
@@ -253,6 +288,7 @@ impl TryFrom<&proto::PluginWebUiBundleManifest> for PackagedPluginWebUiBundle {
     type Error = anyhow::Error;
 
     fn try_from(value: &proto::PluginWebUiBundleManifest) -> Result<Self> {
+        validate_non_empty("web UI bundle id", &value.id)?;
         validate_relative_path("web UI bundle root_path", &value.root_path)?;
         Ok(Self {
             id: value.id.clone(),
@@ -261,9 +297,36 @@ impl TryFrom<&proto::PluginWebUiBundleManifest> for PackagedPluginWebUiBundle {
     }
 }
 
-fn validate_single_bundle(bundles: &[proto::PluginWebUiBundleManifest]) -> Result<()> {
-    if bundles.len() > 1 {
-        bail!("web UI v1 supports exactly one bundle root");
+fn validate_v1_bundle_contract(value: &proto::PluginWebUiManifest) -> Result<Option<String>> {
+    if value.pages.is_empty() && value.config_sections.is_empty() && value.bundles.is_empty() {
+        return Ok(None);
+    }
+    let [bundle] = value.bundles.as_slice() else {
+        bail!(
+            "web UI v1 declarations with pages or config sections must declare exactly one bundle root"
+        );
+    };
+    validate_non_empty("web UI bundle id", &bundle.id)?;
+    Ok(Some(bundle.id.clone()))
+}
+
+fn validate_bundle_reference(
+    field_name: &str,
+    value: &str,
+    expected_bundle_id: Option<&str>,
+) -> Result<()> {
+    validate_non_empty(field_name, value)?;
+    if let Some(expected) = expected_bundle_id
+        && value != expected
+    {
+        bail!("{field_name} must reference declared web UI bundle `{expected}`, got `{value}`");
+    }
+    Ok(())
+}
+
+fn validate_non_empty(field_name: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("{field_name} must be non-empty");
     }
     Ok(())
 }
@@ -271,6 +334,20 @@ fn validate_single_bundle(bundles: &[proto::PluginWebUiBundleManifest]) -> Resul
 fn validate_config_parent_tab(parent_tab: &str) -> Result<()> {
     if parent_tab != INTEGRATIONS_PARENT_TAB {
         bail!("web UI config section parent_tab must be `integrations`");
+    }
+    Ok(())
+}
+
+fn validate_route_slug(field_name: &str, value: &str) -> Result<()> {
+    validate_non_empty(field_name, value)?;
+    if has_remote_url_scheme(value) || value.contains("://") {
+        bail!("{field_name} must be a slug, got URL-like value `{value}`");
+    }
+    if value.contains('/') || value.contains('\\') {
+        bail!("{field_name} must be a slug without path separators `{value}`");
+    }
+    if value == "." || value == ".." || value.starts_with('.') {
+        bail!("{field_name} must be a slug without traversal or hidden path syntax `{value}`");
     }
     Ok(())
 }

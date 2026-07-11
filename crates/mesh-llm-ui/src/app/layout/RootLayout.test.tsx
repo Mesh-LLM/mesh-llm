@@ -88,7 +88,10 @@ describe('RootLayout', () => {
     footerSpy.mockReset()
     useStatusQuerySpy.mockReturnValue({ data: undefined })
     vi.stubGlobal('EventSource', EventSourceStub)
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([])))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse([]))
+    )
   })
 
   it('does not start the live status stream in harness mode', () => {
@@ -240,7 +243,10 @@ describe('RootLayout', () => {
     const readyWebUi = pluginWebUi('ready')
     const disabledWebUi = pluginWebUi('disabled')
     const queryClient = new QueryClient()
-    queryClient.setQueryData(pluginKeys.list(), [pluginSummary('blackboard', readyWebUi), pluginSummary('offline', disabledWebUi)])
+    queryClient.setQueryData(pluginKeys.list(), [
+      pluginSummary('blackboard', readyWebUi),
+      pluginSummary('offline', disabledWebUi)
+    ])
     useStatusQuerySpy.mockReturnValue({
       data: {
         node_id: 'node-1',

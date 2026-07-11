@@ -350,6 +350,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn install_plugin_schema_roundtrip() {
         let temp = TempDir::new().unwrap();
         let install_root = temp.path().join("installed");

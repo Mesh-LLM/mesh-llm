@@ -1,5 +1,10 @@
 import { env } from '@/lib/env'
-import type { PluginWebUiPageRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
+import type {
+  PluginWebUiConfigMutationRequest,
+  PluginWebUiPageRaw,
+  PluginWebUiStateRaw,
+  PluginWebUiVisibleConfigRaw
+} from '@/lib/api/plugin-types'
 import type {
   MeshPluginUiAppearance,
   MeshPluginUiHost,
@@ -12,9 +17,10 @@ type CreateMeshPluginUiHostInput = {
   readonly pluginName: string
   readonly page: PluginWebUiPageRaw
   readonly webUi: PluginWebUiStateRaw
+  readonly visibleConfig: PluginWebUiVisibleConfigRaw
   readonly navigateTo: (path: string) => void
   readonly openPluginPage: (pageId: string) => void
-  readonly requestConfigMutation?: (request: unknown) => Promise<void>
+  readonly requestConfigMutation: (request: PluginWebUiConfigMutationRequest) => Promise<PluginWebUiVisibleConfigRaw>
   readonly showToast?: (toast: MeshPluginUiToast) => void
 }
 
@@ -75,6 +81,7 @@ export function createMeshPluginUiHost({
   pluginName,
   page,
   webUi,
+  visibleConfig,
   navigateTo,
   openPluginPage,
   requestConfigMutation,
@@ -95,8 +102,8 @@ export function createMeshPluginUiHost({
       }
     },
     config: {
-      visible: webUi,
-      requestMutation: requestConfigMutation ?? (() => Promise.resolve())
+      visible: visibleConfig,
+      requestMutation: requestConfigMutation
     },
     navigation: {
       navigateTo,

@@ -1,4 +1,10 @@
-import type { PluginWebUiConfigSectionRaw, PluginWebUiPageRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
+import type {
+  PluginWebUiConfigMutationRequest,
+  PluginWebUiConfigSectionRaw,
+  PluginWebUiPageRaw,
+  PluginWebUiStateRaw,
+  PluginWebUiVisibleConfigRaw
+} from '@/lib/api/plugin-types'
 
 export type MeshPluginUiAppearance = {
   readonly theme: string
@@ -47,8 +53,8 @@ export type MeshPluginUiHost = {
     readonly json: (path: string, init?: RequestInit) => Promise<unknown>
   }
   readonly config: {
-    readonly visible: PluginWebUiStateRaw
-    readonly requestMutation: (request: unknown) => Promise<void>
+    readonly visible: PluginWebUiVisibleConfigRaw
+    readonly requestMutation: (request: PluginWebUiConfigMutationRequest) => Promise<PluginWebUiVisibleConfigRaw>
   }
   readonly navigation: {
     readonly navigateTo: (path: string) => void
@@ -94,5 +100,7 @@ export type MeshPluginUiRegistration = {
 }
 
 export type MeshPluginUiBundleModule = {
-  readonly registerMeshPluginUi: (host: MeshPluginUiHost) => MeshPluginUiRegistration | Promise<MeshPluginUiRegistration>
+  readonly registerMeshPluginUi: (
+    host: MeshPluginUiHost
+  ) => MeshPluginUiRegistration | Promise<MeshPluginUiRegistration>
 }

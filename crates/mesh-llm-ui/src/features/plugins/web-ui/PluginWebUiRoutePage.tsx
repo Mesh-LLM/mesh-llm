@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from '@tanstack/react-router'
 import { Boxes, ShieldAlert } from 'lucide-react'
 import { InfoBanner } from '@/components/ui/InfoBanner'
-import { pluginWebUiAssetUrl, usePluginWebUiQuery } from '@/features/plugins/api/plugin-web-ui'
+import {
+  resolvePluginWebUiAssetUrl,
+  usePluginWebUiConfigMutation,
+  usePluginWebUiConfigQuery,
+  usePluginWebUiQuery
+} from '@/features/plugins/api/plugin-web-ui'
 import { importPluginUiBundle } from '@/features/plugins/web-ui/bundle-loader'
 import { createMeshPluginUiHost } from '@/features/plugins/web-ui/host-surface'
 import type { PluginWebUiPageRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
@@ -10,7 +15,12 @@ import type { MeshPluginUiMountHandle } from '@/features/plugins/web-ui/host-con
 
 type PluginRouteEligibility =
   | { readonly kind: 'ready'; readonly page: PluginWebUiPageRaw }
-  | { readonly kind: 'fallback'; readonly title: string; readonly detail: string; readonly tone: 'warn' | 'bad' | 'muted' }
+  | {
+      readonly kind: 'fallback'
+      readonly title: string
+      readonly detail: string
+      readonly tone: 'warn' | 'bad' | 'muted'
+    }
 
 type MountStatus =
   | { readonly kind: 'idle' }
@@ -64,16 +74,27 @@ function assertNever(value: never): never {
   throw new TypeError(`Unhandled plugin web UI state: ${String(value)}`)
 }
 
-function resolvePluginRouteEligibility(webUi: PluginWebUiStateRaw | undefined, pageId: string): PluginRouteEligibility | null {
+function resolvePluginRouteEligibility(
+  webUi: PluginWebUiStateRaw | undefined,
+  pageId: string
+): PluginRouteEligibility | null {
   if (!webUi) return null
   if (webUi.state !== 'ready') return fallbackForState(webUi)
   if (!webUi.declared || !webUi.enabled || !webUi.available) return fallbackForState(webUi)
+  if (!webUi.asset_base_url) {
+    return {
+      kind: 'fallback',
+      title: 'Plugin web UI asset route is unavailable',
+      detail: 'The host marked this plugin ready without a bundle asset base URL.',
+      tone: 'bad'
+    }
+  }
   const page = webUi.pages?.find((candidate) => candidate.id === pageId)
   return page ? { kind: 'ready', page } : fallbackForState(webUi)
 }
 
-function sameOriginAssetUrl(pluginName: string, entryScript: string): string {
-  const assetUrl = new URL(pluginWebUiAssetUrl(pluginName, entryScript), window.location.origin)
+function sameOriginAssetUrl(pluginName: string, webUi: PluginWebUiStateRaw, entryScript: string): string {
+  const assetUrl = new URL(resolvePluginWebUiAssetUrl(pluginName, webUi, entryScript), window.location.origin)
   if (assetUrl.origin !== window.location.origin) throw new TypeError('Plugin web UI asset URL must be same-origin')
   return assetUrl.href
 }
@@ -112,34 +133,47 @@ export function PluginWebUiRoutePage() {
   const { pluginName, pageId } = useParams({ from: '/plugins/$pluginName/$pageId' })
   const router = useRouter()
   const metadataQuery = usePluginWebUiQuery(pluginName)
+  const visibleConfigQuery = usePluginWebUiConfigQuery(pluginName, { enabled: metadataQuery.data?.state === 'ready' })
+  const configMutation = usePluginWebUiConfigMutation(pluginName)
+  const mutateConfigRef = useRef(configMutation.mutateAsync)
   const mountRef = useRef<HTMLDivElement | null>(null)
   const [mountStatus, setMountStatus] = useState<MountStatus>({ kind: 'idle' })
+  const [notification, setNotification] = useState<string | null>(null)
   const eligibility = useMemo(
     () => resolvePluginRouteEligibility(metadataQuery.data, pageId),
     [metadataQuery.data, pageId]
   )
 
   useEffect(() => {
-    if (eligibility?.kind !== 'ready' || !metadataQuery.data) {
-      setMountStatus({ kind: 'idle' })
-      return undefined
+    mutateConfigRef.current = configMutation.mutateAsync
+  }, [configMutation.mutateAsync])
+
+  useEffect(() => {
+    if (eligibility?.kind !== 'ready' || !metadataQuery.data || !visibleConfigQuery.data) {
+      const timeout = window.setTimeout(() => setMountStatus({ kind: 'idle' }), 0)
+      return () => window.clearTimeout(timeout)
     }
 
     let cancelled = false
     let cleanup: (() => void) | undefined
 
-    setMountStatus({ kind: 'loading' })
+    const loadingTimeout = window.setTimeout(() => {
+      if (!cancelled) setMountStatus({ kind: 'loading' })
+    }, 0)
 
     const mountPluginPage = async () => {
-      const assetUrl = sameOriginAssetUrl(pluginName, eligibility.page.entry_script)
+      const assetUrl = sameOriginAssetUrl(pluginName, metadataQuery.data, eligibility.page.entry_script)
       const module = await importPluginUiBundle(assetUrl)
       const host = createMeshPluginUiHost({
         pluginName,
         page: eligibility.page,
         webUi: metadataQuery.data,
+        visibleConfig: visibleConfigQuery.data,
         navigateTo: (path) => void router.navigate({ to: path }),
         openPluginPage: (nextPageId) =>
-          void router.navigate({ to: '/plugins/$pluginName/$pageId', params: { pluginName, pageId: nextPageId } })
+          void router.navigate({ to: '/plugins/$pluginName/$pageId', params: { pluginName, pageId: nextPageId } }),
+        requestConfigMutation: (request) => mutateConfigRef.current(request),
+        showToast: (toast) => setNotification(toast.description ? `${toast.title}: ${toast.description}` : toast.title)
       })
       const registration = await module.registerMeshPluginUi(host)
       const mountPage = registration.pages[eligibility.page.id]
@@ -167,12 +201,20 @@ export function PluginWebUiRoutePage() {
 
     return () => {
       cancelled = true
+      window.clearTimeout(loadingTimeout)
       cleanup?.()
     }
-  }, [eligibility, metadataQuery.data, pluginName, router])
+  }, [eligibility, metadataQuery.data, pluginName, router, visibleConfigQuery.data])
 
   if (metadataQuery.isPending) {
-    return <PluginRouteFallback kind="fallback" title="Loading plugin web UI" detail="Fetching plugin UI metadata." tone="muted" />
+    return (
+      <PluginRouteFallback
+        kind="fallback"
+        title="Loading plugin web UI"
+        detail="Fetching plugin UI metadata."
+        tone="muted"
+      />
+    )
   }
 
   if (metadataQuery.isError) {
@@ -205,8 +247,19 @@ export function PluginWebUiRoutePage() {
         </div>
       ) : null}
       {mountStatus.kind === 'error' ? (
-        <div className="border-b border-border-soft px-5 py-2 text-[length:var(--density-type-caption)] text-bad" role="alert">
+        <div
+          className="border-b border-border-soft px-5 py-2 text-[length:var(--density-type-caption)] text-bad"
+          role="alert"
+        >
           {mountStatus.message}
+        </div>
+      ) : null}
+      {notification ? (
+        <div
+          className="border-b border-border-soft px-5 py-2 text-[length:var(--density-type-caption)] text-foreground"
+          role="status"
+        >
+          {notification}
         </div>
       ) : null}
       <section ref={mountRef} className="min-h-0 flex-1 p-5" aria-label={`${eligibility.page.label} plugin host`} />

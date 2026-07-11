@@ -1,11 +1,5 @@
-import type {
-  GpuInfo,
-  LatencySource
-} from '@/lib/api/types'
-import type {
-  PluginSummaryRaw,
-  PluginWebUiStateRaw
-} from '@/lib/api/plugin-types'
+import type { GpuInfo, LatencySource } from '@/lib/api/types'
+import type { PluginSummaryRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
 
 export type LiveNodeState = 'client' | 'standby' | 'loading' | 'serving'
 

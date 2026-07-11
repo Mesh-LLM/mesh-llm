@@ -17,9 +17,10 @@ silently drift from the implementation.
 
 ## Contract Summary
 
-The manifest declares one local bundle root, one page, and one Integrations
-config section. Bundle paths are package-relative only. Do not use remote URL
-schemes, absolute paths, traversal segments, or multiple bundle roots.
+The manifest declares one local bundle id/root, one page, and one Integrations
+config section. Bundle paths are package-relative only. Page `route` values are
+slugs, not paths or URLs. Do not use remote URL schemes, absolute paths,
+traversal segments, unknown `bundle_id` references, or multiple bundle roots.
 
 The bundle exports `registerMeshPluginUi(host)` and returns handlers for:
 
@@ -30,9 +31,12 @@ Both handlers return an object with `unmount()`. Unmount removes DOM content and
 unsubscribes from host state updates.
 
 The config section demonstrates the narrow host surface for persisted settings:
-it calls `host.config.requestMutation(...)` with the plugin-owned setting key
-`retention_days`. The host owns persistence and validation through the existing
-plugin config schema. The bundle does not write config files directly.
+it reads `host.config.visible.settings.retention_days`, calls
+`host.config.requestMutation(...)` with the plugin-owned setting key
+`retention_days`, then updates the input from the returned visible config. The
+host owns persistence and validation through `/api/plugins/:plugin/web-ui/config`
+and the existing plugin config schema. The bundle does not write config files
+directly.
 
 The non-UI capability `exemplar.notes.v1` remains present in lifecycle samples
 when web UI projection is disabled or invalid. Disabling web UI is projection
@@ -58,3 +62,16 @@ If the console or `/api/plugins/<plugin>/web-ui` reports `invalid`:
 If assets are missing, the plugin can still run and advertise non-UI
 capabilities. Fix the package contents rather than disabling the plugin process
 unless the non-UI behavior is also broken.
+
+## Persisted Setting Reproduction
+
+1. Open the exemplar in the Configuration `Plugins` tab.
+2. Confirm the Retention config section shows the current `retention_days`
+   value from `host.config.visible.settings`.
+3. Change the value and click `Save retention`.
+4. Confirm the host sends `PATCH /api/plugins/web-ui-exemplar/web-ui/config`
+   with only `settings.retention_days`.
+5. Confirm the saved config changes `[[plugin]].settings.retention_days` while
+   leaving `enabled` and `web_ui_enabled` unchanged.
+6. Refresh plugin metadata and confirm non-UI capability `exemplar.notes.v1`
+   remains represented.

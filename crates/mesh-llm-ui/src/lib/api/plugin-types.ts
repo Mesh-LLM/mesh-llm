@@ -33,6 +33,18 @@ export type PluginWebUiStateRaw = {
   readonly asset_base_url?: string
 }
 
+export type PluginWebUiVisibleConfigRaw = {
+  readonly plugin: string
+  readonly settings: Readonly<Record<string, unknown>>
+  readonly schema?: unknown
+}
+
+export type PluginWebUiConfigMutationRequest = {
+  readonly plugin?: string
+  readonly settings?: Readonly<Record<string, unknown>>
+  readonly unset?: readonly string[]
+}
+
 export type PluginToolSummaryRaw = {
   readonly name: string
   readonly description?: string

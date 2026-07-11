@@ -1,12 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
-import { pluginWebUiAssetUrl } from '@/features/plugins/api/plugin-web-ui'
+import {
+  resolvePluginWebUiAssetUrl,
+  usePluginWebUiConfigMutation,
+  usePluginWebUiConfigQuery
+} from '@/features/plugins/api/plugin-web-ui'
 import { importPluginUiBundle } from '@/features/plugins/web-ui/bundle-loader'
-import type { MeshPluginUiConfigMountContext, MeshPluginUiMountHandle } from '@/features/plugins/web-ui/host-contract'
+import type {
+  MeshPluginUiConfigMountContext,
+  MeshPluginUiMountHandle,
+  MeshPluginUiToast
+} from '@/features/plugins/web-ui/host-contract'
 import { createMeshPluginUiHost } from '@/features/plugins/web-ui/host-surface'
 import type { PluginSummaryRaw, PluginWebUiConfigSectionRaw, PluginWebUiPageRaw } from '@/lib/api/plugin-types'
 
 type ConfigMountStatus =
   { readonly kind: 'loading' } | { readonly kind: 'mounted' } | { readonly kind: 'error'; readonly message: string }
+
+type MutationStatus =
+  | { readonly kind: 'idle' }
+  | { readonly kind: 'pending' }
+  | { readonly kind: 'success'; readonly message: string }
+  | { readonly kind: 'error'; readonly message: string }
 
 type PluginConfigSectionMountProps = {
   readonly pluginName: string
@@ -14,8 +28,9 @@ type PluginConfigSectionMountProps = {
   readonly webUi: PluginSummaryRaw['web_ui']
 }
 
-function sameOriginAssetUrl(pluginName: string, entryScript: string): string {
-  const assetUrl = new URL(pluginWebUiAssetUrl(pluginName, entryScript), window.location.origin)
+function sameOriginAssetUrl(pluginName: string, webUi: PluginSummaryRaw['web_ui'], entryScript: string): string {
+  if (!webUi.asset_base_url) throw new TypeError('Plugin web UI asset base URL is unavailable')
+  const assetUrl = new URL(resolvePluginWebUiAssetUrl(pluginName, webUi, entryScript), window.location.origin)
   if (assetUrl.origin !== window.location.origin) throw new TypeError('Plugin web UI asset URL must be same-origin')
   return assetUrl.href
 }
@@ -46,21 +61,67 @@ function sectionPage(section: PluginWebUiConfigSectionRaw): PluginWebUiPageRaw {
 export function PluginConfigSectionMount({ pluginName, section, webUi }: PluginConfigSectionMountProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const [mountStatus, setMountStatus] = useState<ConfigMountStatus>({ kind: 'loading' })
+  const [mutationStatus, setMutationStatus] = useState<MutationStatus>({ kind: 'idle' })
+  const visibleConfigQuery = usePluginWebUiConfigQuery(pluginName)
+  const configMutation = usePluginWebUiConfigMutation(pluginName)
+  const mutateConfigRef = useRef(configMutation.mutateAsync)
+  const visibleConfigRef = useRef(visibleConfigQuery.data)
+  const visibleConfigReady = Boolean(visibleConfigQuery.data)
 
   useEffect(() => {
+    mutateConfigRef.current = configMutation.mutateAsync
+  }, [configMutation.mutateAsync])
+
+  useEffect(() => {
+    visibleConfigRef.current = visibleConfigQuery.data
+  }, [visibleConfigQuery.data])
+
+  useEffect(() => {
+    if (!visibleConfigReady) {
+      const timeout = window.setTimeout(() => setMountStatus({ kind: 'loading' }), 0)
+      return () => window.clearTimeout(timeout)
+    }
+
     let cancelled = false
     let cleanup: (() => void) | undefined
 
+    const loadingTimeout = window.setTimeout(() => {
+      if (!cancelled) setMountStatus({ kind: 'loading' })
+    }, 0)
+
+    const showToast = (toast: MeshPluginUiToast) => {
+      setMutationStatus({
+        kind: toast.tone === 'error' ? 'error' : 'success',
+        message: toast.description ? `${toast.title}: ${toast.description}` : toast.title
+      })
+    }
+
     const mountSection = async () => {
+      const visibleConfig = visibleConfigRef.current
+      if (!visibleConfig) return
       const page = sectionPage(section)
-      const module = await importPluginUiBundle(sameOriginAssetUrl(pluginName, section.entry_script))
+      const module = await importPluginUiBundle(sameOriginAssetUrl(pluginName, webUi, section.entry_script))
       const host = createMeshPluginUiHost({
         pluginName,
         page,
         webUi,
+        visibleConfig,
         navigateTo: (path) => window.location.assign(path),
         openPluginPage: (pageId) =>
-          window.location.assign(`/plugins/${encodeURIComponent(pluginName)}/${encodeURIComponent(pageId)}`)
+          window.location.assign(`/plugins/${encodeURIComponent(pluginName)}/${encodeURIComponent(pageId)}`),
+        requestConfigMutation: async (request) => {
+          setMutationStatus({ kind: 'pending' })
+          try {
+            const result = await mutateConfigRef.current(request)
+            setMutationStatus({ kind: 'success', message: 'Plugin settings saved.' })
+            return result
+          } catch (error) {
+            const message = errorMessage(error)
+            setMutationStatus({ kind: 'error', message })
+            throw error
+          }
+        },
+        showToast
       })
       const registration = await module.registerMeshPluginUi(host)
       const mount = registration.configSections?.[section.id]
@@ -88,9 +149,10 @@ export function PluginConfigSectionMount({ pluginName, section, webUi }: PluginC
 
     return () => {
       cancelled = true
+      window.clearTimeout(loadingTimeout)
       cleanup?.()
     }
-  }, [pluginName, section, webUi])
+  }, [pluginName, section, visibleConfigReady, webUi])
 
   return (
     <section
@@ -111,6 +173,16 @@ export function PluginConfigSectionMount({ pluginName, section, webUi }: PluginC
       {mountStatus.kind === 'error' ? (
         <div className="type-caption border-b border-border-soft px-4 py-2 text-bad" role="alert">
           {mountStatus.message}
+        </div>
+      ) : null}
+      {mutationStatus.kind !== 'idle' ? (
+        <div
+          className={`type-caption border-b border-border-soft px-4 py-2 ${
+            mutationStatus.kind === 'error' ? 'text-bad' : 'text-fg-dim'
+          }`}
+          role={mutationStatus.kind === 'error' ? 'alert' : 'status'}
+        >
+          {mutationStatus.kind === 'pending' ? 'Saving plugin settings...' : mutationStatus.message}
         </div>
       ) : null}
       <section ref={mountRef} className="min-h-[72px] p-4" aria-label={`${section.title} plugin config host`} />

@@ -172,7 +172,10 @@ function PluginIntegrationCard({
 
 export function PluginIntegrationsPanel({ metadataEnabled, settingsContent }: PluginIntegrationsPanelProps) {
   const summariesQuery = usePluginSummariesQuery({ enabled: metadataEnabled })
-  const summaries = metadataEnabled ? (summariesQuery.data ?? []) : []
+  const summaries = useMemo(
+    () => (metadataEnabled ? (summariesQuery.data ?? []) : []),
+    [metadataEnabled, summariesQuery.data]
+  )
   const entries = useMemo(() => adaptPluginSummariesToWebUiEntries(summaries), [summaries])
 
   return (

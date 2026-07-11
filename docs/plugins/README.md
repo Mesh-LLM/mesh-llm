@@ -92,11 +92,18 @@ Use the typed builders from `mesh_llm_plugin::manifest`:
 Rules for the declared bundle paths:
 
 - keep paths package-relative
-- use one bundle root
+- declare exactly one non-empty bundle id and one bundle root for v1
+- set every page and config-section `bundle_id` to that declared bundle id
+- keep page `route` values as slugs, not paths or URLs; do not include `/`,
+  `\`, protocol syntax, or traversal-style dot prefixes
 - keep page and config-section entry scripts inside that root
 - reject remote URL schemes, absolute paths, and traversal segments
 - treat `parent_tab = "integrations"` as the only supported parent-tab value for
   config sections, or omit `parent_tab`
+
+The manifest proto keeps the bundle field repeated as a forward-compatible wire
+shape. V1 validation intentionally permits only one bundle root so the host has
+one deterministic `asset_base_url` for page and config-section imports.
 
 ### State Matrix
 
@@ -116,13 +123,41 @@ The web UI API uses the existing plugin namespace and these exact routes:
 
 - `GET /api/plugins/:plugin/web-ui`
 - `PATCH /api/plugins/:plugin/web-ui/enabled`
+- `GET /api/plugins/:plugin/web-ui/config`
+- `PATCH /api/plugins/:plugin/web-ui/config`
 - `GET /api/plugins/:plugin/web-ui/assets/*asset`
 
 The toggle route changes only the persisted `web_ui_enabled` projection
 preference. It does not start, stop, or disable the plugin process.
 
 Asset delivery is host-owned and same-origin. It serves only validated installed
-bundle assets and only when the projection is `ready`.
+bundle assets and only when the projection is `ready`. Console mounts use the
+backend-provided `asset_base_url` from the web UI state; a ready state without
+that URL is treated as a host error and no bundle code is imported.
+
+The config route is also host-owned and plugin-scoped. `GET` returns:
+
+```json
+{
+  "plugin": "example",
+  "settings": { "retention_days": 30 },
+  "schema": { "plugin_name": "example" }
+}
+```
+
+`PATCH` accepts a settings-only mutation:
+
+```json
+{
+  "plugin": "example",
+  "settings": { "retention_days": 45 },
+  "unset": ["old_setting"]
+}
+```
+
+The `plugin` field must match the mounted plugin when present. Mutations may
+only touch plugin-owned `settings` keys; host-owned fields such as `enabled`,
+`web_ui_enabled`, `command`, `args`, `url`, and `startup` are rejected.
 
 The console route is static TanStack routing, not dynamic route injection:
 
@@ -139,9 +174,13 @@ handlers for pages and config sections.
 
 - each mount handler returns an object with `unmount()`
 - `unmount()` must tear down DOM content and detach host subscriptions
-- config sections use the host config mutation surface, not direct file writes
+- read current plugin settings from `host.config.visible.settings`
+- config sections use `host.config.requestMutation(...)`, not direct file writes
+- mutation errors reject the returned promise and are rendered by the host shell
+- user-visible notices can be emitted with `host.notifications.show(...)`
 - the host imports bundle code only after the projection is ready, enabled,
-  available, and the requested page or section exists
+  available, has a same-origin `asset_base_url`, and the requested page or
+  section exists
 
 ### Validation And Remediation
 
