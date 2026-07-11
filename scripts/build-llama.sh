@@ -130,6 +130,24 @@ if [[ ! -d "$LLAMA_WORKDIR/.git" ]]; then
   exit 1
 fi
 
+# The LunarG SDK ships GCC runtime DLLs in its Bin directories. GitHub Actions
+# prepends those directories to PATH, so a MinGW-built vulkan-shaders-gen can
+# load the SDK's older libstdc++ instead of the runtime matching its compiler
+# and fail with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139). Keep the selected
+# compiler's runtime first; glslc remains discoverable later on PATH.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if [[ "$LLAMA_BACKEND" == "vulkan" ]]; then
+      MINGW_CXX="$(command -v g++ || true)"
+      if [[ -n "$MINGW_CXX" ]]; then
+        MINGW_RUNTIME_DIR="$(dirname "$MINGW_CXX")"
+        export PATH="$MINGW_RUNTIME_DIR:$PATH"
+        echo "prioritizing MinGW runtime for Vulkan build: $MINGW_RUNTIME_DIR"
+      fi
+    fi
+    ;;
+esac
+
 SCCACHE_BIN="${SCCACHE:-${SCCACHE_PATH:-}}"
 if [[ -z "$SCCACHE_BIN" ]] && command -v sccache >/dev/null 2>&1; then
   SCCACHE_BIN="$(command -v sccache)"
