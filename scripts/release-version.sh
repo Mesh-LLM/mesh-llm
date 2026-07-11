@@ -159,7 +159,7 @@ update_known_mesh_versions() {
     ' "$next" "$file"; then
         return
     fi
-    after="$(perl -0777 -pe 's/(fn known_mesh_llm_versions\(\).*?\&\[\n\s*)/${1}"'"$next"'", /s' "$file")"
+    after="$(perl -0777 -pe 's/(fn known_mesh_llm_versions\(\).*?\&\[\r?\n\s*)/${1}"'"$next"'", /s' "$file")"
     if [[ "$before" == "$after" ]]; then
         echo "failed to add $next to known mesh-llm versions in $file" >&2
         exit 1

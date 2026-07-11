@@ -363,6 +363,9 @@ jobs:
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
       - uses: dtolnay/rust-toolchain@stable
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
@@ -430,6 +433,9 @@ jobs:
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache native runtime CUDA backend build
         uses: actions/cache@v5
@@ -489,6 +495,9 @@ jobs:
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache native runtime ROCm backend build
         uses: actions/cache@v5
