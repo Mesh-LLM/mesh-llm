@@ -334,6 +334,40 @@ describe('TopNav', () => {
     expect(onTabChange).toHaveBeenCalledWith('configuration')
   })
 
+  it('renders auxiliary plugin pages separately from primary tabs', async () => {
+    const user = userEvent.setup()
+    const onPluginPageChange = vi.fn()
+
+    renderTopNav({
+      onPluginPageChange,
+      pluginNavItems: [
+        {
+          pluginName: 'blackboard',
+          pageId: 'dashboard',
+          label: 'Blackboard dashboard',
+          href: '/plugins/blackboard/dashboard'
+        }
+      ]
+    })
+
+    expect(screen.getByRole('link', { name: 'Network' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Chat' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Plugin pages' }))
+
+    const pluginLink = await screen.findByRole('link', { name: /Blackboard dashboard/ })
+    expect(pluginLink).toHaveAttribute('href', '/plugins/blackboard/dashboard')
+
+    await user.click(pluginLink)
+
+    expect(onPluginPageChange).toHaveBeenCalledWith({
+      pluginName: 'blackboard',
+      pageId: 'dashboard',
+      label: 'Blackboard dashboard',
+      href: '/plugins/blackboard/dashboard'
+    })
+  })
+
   it('selects auto, dark, and light from the nav theme menu', async () => {
     const user = userEvent.setup()
     const onThemeChange = vi.fn()

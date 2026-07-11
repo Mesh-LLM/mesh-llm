@@ -614,6 +614,10 @@ gpu_id = "pci:0000:65:00.0"
                 vec!["plugin.<plugin-name>.enabled"],
             ),
             (
+                "PluginConfigEditor::web_ui_enabled",
+                vec!["plugin.<plugin-name>.web_ui_enabled"],
+            ),
+            (
                 "PluginConfigEditor::command",
                 vec!["plugin.<plugin-name>.command"],
             ),

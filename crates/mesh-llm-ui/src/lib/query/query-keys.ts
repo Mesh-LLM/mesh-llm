@@ -8,6 +8,12 @@ export const modelKeys = {
   catalog: () => [...modelKeys.all, 'catalog'] as const
 }
 
+export const pluginKeys = {
+  all: ['plugins'] as const,
+  list: () => [...pluginKeys.all, 'list'] as const,
+  webUi: (pluginName: string) => [...pluginKeys.all, 'web-ui', pluginName] as const
+}
+
 export const chatKeys = {
   all: ['chat'] as const,
   conversations: () => [...chatKeys.all, 'conversations'] as const,

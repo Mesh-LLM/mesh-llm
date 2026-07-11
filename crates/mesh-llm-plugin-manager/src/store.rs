@@ -26,6 +26,72 @@ pub const SUPPORTED_PLUGIN_SCHEMA_VERSION: u32 = 1;
 pub struct InstalledPluginManifestMetadata {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub config_schema: Option<InstalledPluginConfigSchema>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub web_ui: Option<InstalledPluginWebUiMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginWebUiMetadata {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<InstalledPluginWebUiPageMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_sections: Vec<InstalledPluginWebUiConfigSectionMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bundles: Vec<InstalledPluginWebUiBundleMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub asset_root: Option<PathBuf>,
+    #[serde(default)]
+    pub validation: InstalledPluginWebUiValidation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginWebUiPageMetadata {
+    pub id: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub icon: Option<String>,
+    pub route: String,
+    pub bundle_id: String,
+    pub entry_script: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginWebUiConfigSectionMetadata {
+    pub id: String,
+    pub title: String,
+    pub entry_script: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub parent_tab: Option<String>,
+    pub bundle_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginWebUiBundleMetadata {
+    pub id: String,
+    pub root_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginWebUiValidation {
+    pub status: InstalledPluginWebUiValidationStatus,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reason: Option<String>,
+}
+
+impl Default for InstalledPluginWebUiValidation {
+    fn default() -> Self {
+        Self {
+            status: InstalledPluginWebUiValidationStatus::Invalid,
+            reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledPluginWebUiValidationStatus {
+    Valid,
+    Invalid,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -191,6 +257,17 @@ impl InstalledPluginMetadata {
     pub fn executable_path(&self) -> PathBuf {
         self.install_path
             .join(format!("{}{}", self.name, std::env::consts::EXE_SUFFIX))
+    }
+
+    pub fn web_ui_asset_root_path(&self) -> Option<PathBuf> {
+        let web_ui = self.manifest.as_ref()?.web_ui.as_ref()?;
+        if web_ui.validation.status != InstalledPluginWebUiValidationStatus::Valid {
+            return None;
+        }
+        web_ui
+            .asset_root
+            .as_ref()
+            .map(|asset_root| self.install_path.join(asset_root))
     }
 }
 
@@ -385,6 +462,7 @@ mod tests {
                         control_behavior: None,
                     }],
                 }),
+                web_ui: None,
             }),
             last_protocol_version: Some(2),
             last_status: Some("running".to_string()),

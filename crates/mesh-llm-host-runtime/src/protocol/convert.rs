@@ -1057,6 +1057,7 @@ fn legacy_proto_config_to_mesh(
         .map(|p| PluginConfigEntry {
             name: p.name.clone(),
             enabled: p.enabled,
+            web_ui_enabled: None,
             command: p.command.clone(),
             args: p.args.clone(),
             url: None,

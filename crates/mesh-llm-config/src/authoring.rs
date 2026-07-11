@@ -486,6 +486,7 @@ impl ConfigEditor {
                 self.config.plugins.push(PluginConfigEntry {
                     name,
                     enabled: None,
+                    web_ui_enabled: None,
                     command: None,
                     args: Vec::new(),
                     url: None,
@@ -679,6 +680,11 @@ impl PluginConfigEditor<'_> {
 
     pub fn enabled(&mut self, enabled: bool) -> &mut Self {
         self.plugin.enabled = Some(enabled);
+        self
+    }
+
+    pub fn web_ui_enabled(&mut self, enabled: Option<bool>) -> &mut Self {
+        self.plugin.web_ui_enabled = enabled;
         self
     }
 
@@ -1177,5 +1183,66 @@ ctx_size = 8192
             deserialized.models[0].derived_profile(),
             config.models[0].derived_profile()
         );
+    }
+
+    #[test]
+    fn plugin_web_ui_preference_roundtrips_absence_and_explicit_values() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor.upsert_plugin("default-ui").unwrap();
+        editor
+            .upsert_plugin("hidden-ui")
+            .unwrap()
+            .web_ui_enabled(Some(false));
+        editor
+            .upsert_plugin("shown-ui")
+            .unwrap()
+            .web_ui_enabled(Some(true));
+
+        let config = editor.into_config();
+        let serialized = config_to_toml(&config).expect("should serialize");
+        let toml_str = serialized.to_string();
+
+        assert!(!toml_str.contains("default-ui\"\nweb_ui_enabled"));
+        assert!(toml_str.contains("name = \"hidden-ui\"\nweb_ui_enabled = false"));
+        assert!(toml_str.contains("name = \"shown-ui\"\nweb_ui_enabled = true"));
+
+        let deserialized = parse_config_toml(&serialized).expect("should deserialize");
+        assert_eq!(deserialized.plugins[0].web_ui_enabled, None);
+        assert_eq!(deserialized.plugins[1].web_ui_enabled, Some(false));
+        assert_eq!(deserialized.plugins[2].web_ui_enabled, Some(true));
+    }
+
+    #[test]
+    fn plugin_web_ui_preference_does_not_mutate_runtime_enabled_flag() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor
+            .upsert_plugin("blackboard")
+            .unwrap()
+            .enabled(true)
+            .web_ui_enabled(Some(false));
+
+        let config = editor.into_config();
+
+        assert_eq!(config.plugins[0].enabled, Some(true));
+        assert_eq!(config.plugins[0].web_ui_enabled, Some(false));
+    }
+
+    #[test]
+    fn plugin_web_ui_preference_can_clear_explicit_choice_without_disabling_plugin() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor
+            .upsert_plugin("blackboard")
+            .unwrap()
+            .enabled(true)
+            .web_ui_enabled(Some(false));
+        editor
+            .upsert_plugin("blackboard")
+            .unwrap()
+            .web_ui_enabled(None);
+
+        let config = editor.into_config();
+
+        assert_eq!(config.plugins[0].enabled, Some(true));
+        assert_eq!(config.plugins[0].web_ui_enabled, None);
     }
 }

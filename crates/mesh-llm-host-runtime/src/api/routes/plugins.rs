@@ -1,9 +1,11 @@
 use super::super::{
     MeshApi,
-    http::{respond_error, respond_json},
+    http::{respond_bytes_cached, respond_error, respond_json},
 };
-use crate::plugin::stapler;
+use crate::plugin::{PluginWebUiState, PluginWebUiStateKind, stapler};
+use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::path::{Component, Path};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use url::form_urlencoded;
@@ -16,6 +18,22 @@ enum HttpBindingTransferMode {
     StreamedBidirectional,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PluginApiRoute<'a> {
+    List,
+    Endpoints,
+    Providers,
+    Provider(&'a str),
+    Manifest(&'a str),
+    Tools(&'a str),
+    ToolCall(&'a str),
+    WebUiMetadata(&'a str),
+    WebUiEnabled(&'a str),
+    WebUiAsset(&'a str),
+    StapledHttp,
+    Unmatched,
+}
+
 pub(super) async fn handle(
     stream: &mut TcpStream,
     state: &MeshApi,
@@ -25,30 +43,81 @@ pub(super) async fn handle(
     body: &str,
     raw_request: &[u8],
 ) -> anyhow::Result<()> {
-    match (method, path_only) {
-        ("GET", "/api/plugins") => handle_list(stream, state).await,
-        ("GET", "/api/plugins/endpoints") => handle_endpoints(stream, state).await,
-        ("GET", "/api/plugins/providers") => handle_providers(stream, state).await,
-        ("GET", p) if p.starts_with("/api/plugins/providers/") => {
-            handle_provider(stream, state, p).await
+    match classify_plugin_route(method, path_only) {
+        PluginApiRoute::List => handle_list(stream, state).await,
+        PluginApiRoute::Endpoints => handle_endpoints(stream, state).await,
+        PluginApiRoute::Providers => handle_providers(stream, state).await,
+        PluginApiRoute::Provider(route_path) => handle_provider(stream, state, route_path).await,
+        PluginApiRoute::Manifest(route_path) => handle_manifest(stream, state, route_path).await,
+        PluginApiRoute::Tools(route_path) => handle_tools(stream, state, route_path).await,
+        PluginApiRoute::ToolCall(route_path) => handle_call(stream, state, route_path, body).await,
+        PluginApiRoute::WebUiMetadata(route_path) => {
+            handle_web_ui_metadata(stream, state, route_path).await
         }
-        ("GET", p) if p.starts_with("/api/plugins/") && p.ends_with("/manifest") => {
-            handle_manifest(stream, state, p).await
+        PluginApiRoute::WebUiEnabled(route_path) => {
+            handle_web_ui_enabled(stream, state, route_path, body).await
         }
-        ("GET", p) if p.starts_with("/api/plugins/") && p.ends_with("/tools") => {
-            handle_tools(stream, state, p).await
+        PluginApiRoute::WebUiAsset(route_path) => {
+            handle_web_ui_asset(stream, state, route_path).await
         }
-        ("POST", p) if p.starts_with("/api/plugins/") && p.contains("/tools/") => {
-            handle_call(stream, state, p, body).await
-        }
-        (m, p)
-            if p.starts_with("/api/plugins/")
-                && matches!(m, "GET" | "POST" | "PUT" | "PATCH" | "DELETE") =>
-        {
+        PluginApiRoute::StapledHttp => {
             handle_stapled_http(stream, state, method, path, path_only, body, raw_request).await
         }
-        _ => Ok(()),
+        PluginApiRoute::Unmatched => Ok(()),
     }
+}
+
+fn classify_plugin_route<'a>(method: &str, path: &'a str) -> PluginApiRoute<'a> {
+    match method {
+        "GET" => classify_plugin_get_route(path),
+        "POST" if is_plugin_tool_call_route(path) => PluginApiRoute::ToolCall(path),
+        "PATCH" if is_plugin_web_ui_enabled_route(path) => PluginApiRoute::WebUiEnabled(path),
+        "POST" | "PUT" | "PATCH" | "DELETE" if is_plugin_route(path) => PluginApiRoute::StapledHttp,
+        _ => PluginApiRoute::Unmatched,
+    }
+}
+
+fn classify_plugin_get_route(path: &str) -> PluginApiRoute<'_> {
+    match path {
+        "/api/plugins" => PluginApiRoute::List,
+        "/api/plugins/endpoints" => PluginApiRoute::Endpoints,
+        "/api/plugins/providers" => PluginApiRoute::Providers,
+        _ if path.starts_with("/api/plugins/providers/") => PluginApiRoute::Provider(path),
+        _ if is_plugin_manifest_route(path) => PluginApiRoute::Manifest(path),
+        _ if is_plugin_tools_route(path) => PluginApiRoute::Tools(path),
+        _ if is_plugin_web_ui_metadata_route(path) => PluginApiRoute::WebUiMetadata(path),
+        _ if is_plugin_web_ui_asset_route(path) => PluginApiRoute::WebUiAsset(path),
+        _ if is_plugin_route(path) => PluginApiRoute::StapledHttp,
+        _ => PluginApiRoute::Unmatched,
+    }
+}
+
+fn is_plugin_route(path: &str) -> bool {
+    path.starts_with("/api/plugins/")
+}
+
+fn is_plugin_manifest_route(path: &str) -> bool {
+    is_plugin_route(path) && path.ends_with("/manifest")
+}
+
+fn is_plugin_tools_route(path: &str) -> bool {
+    is_plugin_route(path) && path.ends_with("/tools")
+}
+
+fn is_plugin_tool_call_route(path: &str) -> bool {
+    is_plugin_route(path) && path.contains("/tools/")
+}
+
+fn is_plugin_web_ui_metadata_route(path: &str) -> bool {
+    is_plugin_route(path) && path.ends_with("/web-ui")
+}
+
+fn is_plugin_web_ui_enabled_route(path: &str) -> bool {
+    is_plugin_route(path) && path.ends_with("/web-ui/enabled")
+}
+
+fn is_plugin_web_ui_asset_route(path: &str) -> bool {
+    is_plugin_route(path) && path.contains("/web-ui/assets/")
 }
 
 async fn handle_list(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
@@ -179,6 +248,181 @@ async fn handle_call(
         respond_error(stream, 404, "Not found").await?;
     }
     Ok(())
+}
+
+async fn handle_web_ui_metadata(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    path: &str,
+) -> anyhow::Result<()> {
+    let rest = &path["/api/plugins/".len()..];
+    let plugin_name = rest.trim_end_matches("/web-ui");
+    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+    match plugin_manager.web_ui_state(plugin_name).await {
+        Ok(web_ui) => respond_json(stream, 200, &web_ui).await?,
+        Err(error) => respond_error(stream, 404, &error.to_string()).await?,
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct WebUiEnabledRequest {
+    enabled: bool,
+}
+
+async fn handle_web_ui_enabled(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    path: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let rest = &path["/api/plugins/".len()..];
+    let plugin_name = rest.trim_end_matches("/web-ui/enabled");
+    let request: WebUiEnabledRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
+    };
+    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+    let current = match plugin_manager.web_ui_state(plugin_name).await {
+        Ok(web_ui) => web_ui,
+        Err(error) => return respond_error(stream, 404, &error.to_string()).await,
+    };
+    if !current.declared {
+        return respond_error(stream, 400, "Plugin does not declare a web UI").await;
+    }
+    if let Err(error) = state
+        .capture_node
+        .set_plugin_web_ui_enabled(plugin_name, request.enabled)
+        .await
+    {
+        return respond_error(stream, 500, &error.to_string()).await;
+    }
+    match plugin_manager
+        .set_web_ui_enabled(plugin_name, request.enabled)
+        .await
+    {
+        Ok(web_ui) => respond_json(stream, 200, &web_ui).await?,
+        Err(error) => respond_error(stream, 404, &error.to_string()).await?,
+    }
+    Ok(())
+}
+
+async fn handle_web_ui_asset(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    path: &str,
+) -> anyhow::Result<()> {
+    let Some((plugin_name, asset_path)) = parse_web_ui_asset_path(path) else {
+        respond_error(stream, 404, "Not found").await?;
+        return Ok(());
+    };
+    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+    let web_ui = match plugin_manager.web_ui_state(plugin_name).await {
+        Ok(web_ui) => web_ui,
+        Err(_) => {
+            respond_error(stream, 404, "Not found").await?;
+            return Ok(());
+        }
+    };
+    match web_ui.state {
+        PluginWebUiStateKind::Ready => {
+            serve_ready_web_ui_asset(stream, &plugin_manager, plugin_name, asset_path, &web_ui)
+                .await?
+        }
+        PluginWebUiStateKind::Invalid | PluginWebUiStateKind::PluginNotRunning => {
+            let reason = web_ui
+                .unavailable_reason
+                .as_deref()
+                .unwrap_or("plugin web UI is unavailable");
+            respond_error(stream, 409, reason).await?;
+        }
+        PluginWebUiStateKind::None | PluginWebUiStateKind::Disabled => {
+            respond_error(stream, 404, "Not found").await?;
+        }
+    }
+    Ok(())
+}
+
+async fn serve_ready_web_ui_asset(
+    stream: &mut TcpStream,
+    plugin_manager: &crate::plugin::PluginManager,
+    plugin_name: &str,
+    asset_path: &str,
+    web_ui: &PluginWebUiState,
+) -> anyhow::Result<()> {
+    if web_ui.asset_base_url.is_none() {
+        respond_error(stream, 409, "plugin web UI asset root is unavailable").await?;
+        return Ok(());
+    }
+    let Some(rel) = clean_web_ui_asset_path(asset_path) else {
+        respond_error(stream, 404, "Not found").await?;
+        return Ok(());
+    };
+    let Some(root) = plugin_manager.web_ui_asset_root(plugin_name).await? else {
+        respond_error(stream, 409, "plugin web UI asset root is unavailable").await?;
+        return Ok(());
+    };
+    let Some(full_path) = canonical_web_ui_asset_path(&root, &rel) else {
+        respond_error(stream, 404, "Not found").await?;
+        return Ok(());
+    };
+    match std::fs::read(&full_path) {
+        Ok(contents) => {
+            respond_bytes_cached(
+                stream,
+                200,
+                "OK",
+                mesh_llm_ui::content_type(&rel),
+                mesh_llm_ui::cache_control(&rel),
+                &contents,
+            )
+            .await?;
+        }
+        Err(_) => respond_error(stream, 404, "Not found").await?,
+    }
+    Ok(())
+}
+
+fn parse_web_ui_asset_path(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix("/api/plugins/")?;
+    let (plugin_name, asset_path) = rest.split_once("/web-ui/assets/")?;
+    if plugin_name.is_empty() || asset_path.is_empty() {
+        return None;
+    }
+    Some((plugin_name, asset_path))
+}
+
+fn clean_web_ui_asset_path(path: &str) -> Option<String> {
+    let decoded = urlencoding::decode(path).ok()?;
+    if decoded.contains("..") {
+        return None;
+    }
+    let rel = decoded.trim_start_matches('/');
+    if rel.is_empty() || rel.starts_with('.') || Path::new(rel).is_absolute() {
+        return None;
+    }
+    if Path::new(rel)
+        .components()
+        .any(|component| match component {
+            Component::Normal(name) => name.to_string_lossy().starts_with('.'),
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => true,
+        })
+    {
+        return None;
+    }
+    Some(rel.to_string())
+}
+
+fn canonical_web_ui_asset_path(root: &Path, rel: &str) -> Option<std::path::PathBuf> {
+    let root = root.canonicalize().ok()?;
+    let full_path = root.join(rel).canonicalize().ok()?;
+    if !full_path.starts_with(&root) || !full_path.is_file() {
+        return None;
+    }
+    Some(full_path)
 }
 
 async fn handle_stapled_http(
@@ -455,7 +699,15 @@ mod tests {
     use crate::api::MeshApi;
     use crate::mesh::{Node, NodeRole};
     use crate::network::affinity;
-    use crate::plugin::{self};
+    use crate::plugin::{self, PluginSummary, PluginWebUiStateInput, derive_plugin_web_ui_state};
+    use mesh_llm_plugin_manager::{
+        InstalledPluginManifestMetadata, InstalledPluginMetadata,
+        InstalledPluginWebUiBundleMetadata, InstalledPluginWebUiConfigSectionMetadata,
+        InstalledPluginWebUiMetadata, InstalledPluginWebUiPageMetadata,
+        InstalledPluginWebUiValidation, InstalledPluginWebUiValidationStatus, PluginStore,
+    };
+    use serial_test::serial;
+    use std::path::{Path, PathBuf};
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
 
@@ -549,7 +801,22 @@ mod tests {
     }
 
     async fn build_test_api_with_plugin_manager(plugin_manager: plugin::PluginManager) -> MeshApi {
+        let config_dir = tempfile::tempdir().unwrap();
+        build_test_api_with_plugin_manager_and_config_path(
+            plugin_manager,
+            &config_dir.keep().join("config.toml"),
+        )
+        .await
+    }
+
+    async fn build_test_api_with_plugin_manager_and_config_path(
+        plugin_manager: plugin::PluginManager,
+        config_path: &Path,
+    ) -> MeshApi {
         let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+        node.replace_config_state_for_test(config_path)
+            .await
+            .unwrap();
         let runtime_data_collector = node.runtime_data_collector();
         let runtime_data_producer =
             runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
@@ -568,6 +835,423 @@ mod tests {
             runtime_data_collector,
             runtime_data_producer,
         })
+    }
+
+    struct PluginStoreEnvGuard {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl PluginStoreEnvGuard {
+        fn install(path: &Path) -> Self {
+            let previous = std::env::var_os("MESH_LLM_PLUGIN_DIR");
+            unsafe { std::env::set_var("MESH_LLM_PLUGIN_DIR", path) };
+            Self { previous }
+        }
+    }
+
+    impl Drop for PluginStoreEnvGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(previous) => unsafe { std::env::set_var("MESH_LLM_PLUGIN_DIR", previous) },
+                None => unsafe { std::env::remove_var("MESH_LLM_PLUGIN_DIR") },
+            }
+        }
+    }
+
+    fn installed_metadata(
+        name: &str,
+        install_path: PathBuf,
+        validation_status: InstalledPluginWebUiValidationStatus,
+    ) -> InstalledPluginMetadata {
+        InstalledPluginMetadata {
+            name: name.to_string(),
+            source_repository: format!("https://github.com/mesh-llm/{name}"),
+            installed_version: "v1.0.0".to_string(),
+            target_triple: "test-target".to_string(),
+            downloaded_asset_name: format!("{name}.tar.gz"),
+            install_path,
+            enabled: true,
+            manifest: Some(InstalledPluginManifestMetadata {
+                config_schema: None,
+                web_ui: Some(InstalledPluginWebUiMetadata {
+                    pages: vec![InstalledPluginWebUiPageMetadata {
+                        id: "home".to_string(),
+                        label: "Home".to_string(),
+                        icon: None,
+                        route: "home".to_string(),
+                        bundle_id: "main".to_string(),
+                        entry_script: "assets/app.js".to_string(),
+                    }],
+                    config_sections: vec![InstalledPluginWebUiConfigSectionMetadata {
+                        id: "settings".to_string(),
+                        title: "Settings".to_string(),
+                        entry_script: "assets/settings.js".to_string(),
+                        parent_tab: Some("integrations".to_string()),
+                        bundle_id: "main".to_string(),
+                    }],
+                    bundles: vec![InstalledPluginWebUiBundleMetadata {
+                        id: "main".to_string(),
+                        root_path: "web".to_string(),
+                    }],
+                    asset_root: Some(PathBuf::from("web")),
+                    validation: InstalledPluginWebUiValidation {
+                        status: validation_status,
+                        reason: Some("bundle failed validation".to_string()),
+                    },
+                }),
+            }),
+            last_protocol_version: Some(1),
+            last_status: Some("running".to_string()),
+            last_error: None,
+        }
+    }
+
+    fn summary_from_metadata(
+        metadata: &InstalledPluginMetadata,
+        web_ui_enabled: Option<bool>,
+        status: &str,
+        error: Option<String>,
+    ) -> PluginSummary {
+        PluginSummary {
+            name: metadata.name.clone(),
+            kind: "installed".to_string(),
+            enabled: status == "running",
+            status: status.to_string(),
+            pid: None,
+            version: Some(metadata.installed_version.clone()),
+            capabilities: Vec::new(),
+            command: None,
+            args: Vec::new(),
+            tools: Vec::new(),
+            manifest: None,
+            web_ui: derive_plugin_web_ui_state(PluginWebUiStateInput {
+                plugin_name: &metadata.name,
+                live_manifest: None,
+                installed_metadata: Some(metadata),
+                web_ui_enabled,
+                runtime_available: status == "running",
+                runtime_unavailable_reason: error.as_deref(),
+            }),
+            startup: None,
+            error,
+        }
+    }
+
+    fn nondeclaring_summary(name: &str) -> PluginSummary {
+        PluginSummary {
+            name: name.to_string(),
+            kind: "external".to_string(),
+            enabled: true,
+            status: "running".to_string(),
+            pid: None,
+            version: None,
+            capabilities: Vec::new(),
+            command: None,
+            args: Vec::new(),
+            tools: Vec::new(),
+            manifest: None,
+            web_ui: crate::plugin::PluginWebUiState::default(),
+            startup: None,
+            error: None,
+        }
+    }
+
+    async fn call_plugins_route(state: &MeshApi, method: &str, path: &str, body: &str) -> String {
+        let (mut observed_client, mut response_stream) = connected_tcp_streams().await;
+        let raw_request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        handle(
+            &mut response_stream,
+            state,
+            method,
+            path,
+            path,
+            body,
+            raw_request.as_bytes(),
+        )
+        .await
+        .unwrap();
+        response_stream.shutdown().await.unwrap();
+        let mut response_bytes = Vec::new();
+        observed_client
+            .read_to_end(&mut response_bytes)
+            .await
+            .unwrap();
+        String::from_utf8(response_bytes).unwrap()
+    }
+
+    fn response_body(response: &str) -> &str {
+        response.split("\r\n\r\n").nth(1).unwrap_or("")
+    }
+
+    fn json_body(response: &str) -> Value {
+        serde_json::from_str(response_body(response)).unwrap()
+    }
+
+    fn prepare_installed_plugin(
+        store: &PluginStore,
+        temp: &Path,
+        name: &str,
+        validation_status: InstalledPluginWebUiValidationStatus,
+    ) -> InstalledPluginMetadata {
+        let install_path = temp.join("installed").join(name);
+        std::fs::create_dir_all(install_path.join("web/assets")).unwrap();
+        std::fs::write(
+            install_path.join("web/assets/app.js"),
+            "export const ok = true;",
+        )
+        .unwrap();
+        std::fs::write(install_path.join("web/assets/settings.js"), "export {};").unwrap();
+        let metadata = installed_metadata(name, install_path, validation_status);
+        store.save(&metadata).unwrap();
+        metadata
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn plugin_web_ui_api_serves_metadata_toggle_assets_and_updated_summary() {
+        let temp = tempfile::tempdir().unwrap();
+        let _env = PluginStoreEnvGuard::install(temp.path());
+        let store = PluginStore::new(temp.path());
+        let metadata = prepare_installed_plugin(
+            &store,
+            temp.path(),
+            "demo",
+            InstalledPluginWebUiValidationStatus::Valid,
+        );
+        let plugin_manager =
+            plugin::PluginManager::for_test_summaries(vec![summary_from_metadata(
+                &metadata, None, "running", None,
+            )]);
+        let config_path = temp.path().join("config.toml");
+        let state =
+            build_test_api_with_plugin_manager_and_config_path(plugin_manager, &config_path).await;
+
+        let metadata_response =
+            call_plugins_route(&state, "GET", "/api/plugins/demo/web-ui", "").await;
+        let metadata_body = json_body(&metadata_response);
+        assert!(metadata_response.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(metadata_body["state"], "ready");
+        assert_eq!(
+            metadata_body["asset_base_url"],
+            "/api/plugins/demo/web-ui/assets/"
+        );
+
+        let asset_response = call_plugins_route(
+            &state,
+            "GET",
+            "/api/plugins/demo/web-ui/assets/assets/app.js",
+            "",
+        )
+        .await;
+        assert!(asset_response.starts_with("HTTP/1.1 200 OK"));
+        assert!(asset_response.contains("Content-Type: text/javascript; charset=utf-8"));
+        assert!(asset_response.contains("Cache-Control: public, max-age=31536000, immutable"));
+        assert_eq!(response_body(&asset_response), "export const ok = true;");
+
+        let disable_response = call_plugins_route(
+            &state,
+            "PATCH",
+            "/api/plugins/demo/web-ui/enabled",
+            r#"{"enabled":false}"#,
+        )
+        .await;
+        let disable_body = json_body(&disable_response);
+        assert!(disable_response.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(disable_body["state"], "disabled");
+        let persisted = std::fs::read_to_string(&config_path).unwrap();
+        assert!(persisted.contains("name = \"demo\""));
+        assert!(persisted.contains("web_ui_enabled = false"));
+        let persisted_config: crate::plugin::MeshConfig = toml::from_str(&persisted).unwrap();
+        assert_eq!(persisted_config.plugins[0].enabled, None);
+        assert_eq!(persisted_config.plugins[0].web_ui_enabled, Some(false));
+
+        let summary_response = call_plugins_route(&state, "GET", "/api/plugins", "").await;
+        let summary_body = json_body(&summary_response);
+        assert_eq!(summary_body[0]["status"], "running");
+        assert_eq!(summary_body[0]["enabled"], true);
+        assert_eq!(summary_body[0]["web_ui"]["state"], "disabled");
+
+        let enable_response = call_plugins_route(
+            &state,
+            "PATCH",
+            "/api/plugins/demo/web-ui/enabled",
+            r#"{"enabled":true}"#,
+        )
+        .await;
+        let enable_body = json_body(&enable_response);
+        assert!(enable_response.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(enable_body["state"], "ready");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn plugin_web_ui_api_rejects_failure_paths_without_stapled_fallback() {
+        let temp = tempfile::tempdir().unwrap();
+        let _env = PluginStoreEnvGuard::install(temp.path());
+        let store = PluginStore::new(temp.path());
+        let ready = prepare_installed_plugin(
+            &store,
+            temp.path(),
+            "ready",
+            InstalledPluginWebUiValidationStatus::Valid,
+        );
+        let disabled = prepare_installed_plugin(
+            &store,
+            temp.path(),
+            "disabled",
+            InstalledPluginWebUiValidationStatus::Valid,
+        );
+        let invalid = prepare_installed_plugin(
+            &store,
+            temp.path(),
+            "invalid",
+            InstalledPluginWebUiValidationStatus::Invalid,
+        );
+        let stopped = prepare_installed_plugin(
+            &store,
+            temp.path(),
+            "stopped",
+            InstalledPluginWebUiValidationStatus::Valid,
+        );
+        let plugin_manager = plugin::PluginManager::for_test_summaries(vec![
+            summary_from_metadata(&ready, None, "running", None),
+            summary_from_metadata(&disabled, Some(false), "running", None),
+            summary_from_metadata(&invalid, None, "running", None),
+            summary_from_metadata(
+                &stopped,
+                None,
+                "disabled",
+                Some("plugin process is disabled".to_string()),
+            ),
+            nondeclaring_summary("plain"),
+        ]);
+        let config_path = temp.path().join("config.toml");
+        let state =
+            build_test_api_with_plugin_manager_and_config_path(plugin_manager, &config_path).await;
+
+        let ordered = call_plugins_route(&state, "GET", "/api/plugins/ready/web-ui", "").await;
+        assert!(ordered.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(json_body(&ordered)["state"], "ready");
+
+        let disabled_metadata =
+            call_plugins_route(&state, "GET", "/api/plugins/disabled/web-ui", "").await;
+        assert!(disabled_metadata.starts_with("HTTP/1.1 200 OK"));
+        let disabled_body = json_body(&disabled_metadata);
+        assert_eq!(disabled_body["state"], "disabled");
+        assert_eq!(disabled_body["available"], false);
+        assert_eq!(
+            disabled_body["unavailable_reason"],
+            "web UI disabled by configuration"
+        );
+
+        let invalid_metadata =
+            call_plugins_route(&state, "GET", "/api/plugins/invalid/web-ui", "").await;
+        assert!(invalid_metadata.starts_with("HTTP/1.1 200 OK"));
+        let invalid_body = json_body(&invalid_metadata);
+        assert_eq!(invalid_body["state"], "invalid");
+        assert_eq!(invalid_body["available"], false);
+        assert_eq!(
+            invalid_body["unavailable_reason"],
+            "bundle failed validation"
+        );
+
+        let stopped_metadata =
+            call_plugins_route(&state, "GET", "/api/plugins/stopped/web-ui", "").await;
+        assert!(stopped_metadata.starts_with("HTTP/1.1 200 OK"));
+        let stopped_body = json_body(&stopped_metadata);
+        assert_eq!(stopped_body["state"], "plugin_not_running");
+        assert_eq!(stopped_body["available"], false);
+        assert_eq!(
+            stopped_body["unavailable_reason"],
+            "plugin process is disabled"
+        );
+
+        let plain_metadata =
+            call_plugins_route(&state, "GET", "/api/plugins/plain/web-ui", "").await;
+        assert!(plain_metadata.starts_with("HTTP/1.1 200 OK"));
+        let plain_body = json_body(&plain_metadata);
+        assert_eq!(plain_body["state"], "none");
+        assert_eq!(plain_body["declared"], false);
+        assert_eq!(plain_body["available"], false);
+
+        let disabled_asset = call_plugins_route(
+            &state,
+            "GET",
+            "/api/plugins/disabled/web-ui/assets/assets/app.js",
+            "",
+        )
+        .await;
+        assert!(disabled_asset.starts_with("HTTP/1.1 404 Not Found"));
+
+        let invalid_asset = call_plugins_route(
+            &state,
+            "GET",
+            "/api/plugins/invalid/web-ui/assets/assets/app.js",
+            "",
+        )
+        .await;
+        assert!(invalid_asset.starts_with("HTTP/1.1 409 Conflict"));
+        assert_eq!(
+            json_body(&invalid_asset)["error"],
+            "bundle failed validation"
+        );
+
+        let stopped_asset = call_plugins_route(
+            &state,
+            "GET",
+            "/api/plugins/stopped/web-ui/assets/assets/app.js",
+            "",
+        )
+        .await;
+        assert!(stopped_asset.starts_with("HTTP/1.1 409 Conflict"));
+        assert_eq!(
+            json_body(&stopped_asset)["error"],
+            "plugin process is disabled"
+        );
+
+        let traversal = call_plugins_route(
+            &state,
+            "GET",
+            "/api/plugins/ready/web-ui/assets/%2e%2e/secret.txt",
+            "",
+        )
+        .await;
+        assert!(traversal.starts_with("HTTP/1.1 404 Not Found"));
+
+        let missing_asset = call_plugins_route(
+            &state,
+            "GET",
+            "/api/plugins/ready/web-ui/assets/assets/missing.js",
+            "",
+        )
+        .await;
+        assert!(missing_asset.starts_with("HTTP/1.1 404 Not Found"));
+
+        let unknown_asset = call_plugins_route(
+            &state,
+            "GET",
+            "/api/plugins/unknown/web-ui/assets/assets/app.js",
+            "",
+        )
+        .await;
+        assert!(unknown_asset.starts_with("HTTP/1.1 404 Not Found"));
+
+        let nondeclaring_toggle = call_plugins_route(
+            &state,
+            "PATCH",
+            "/api/plugins/plain/web-ui/enabled",
+            r#"{"enabled":false}"#,
+        )
+        .await;
+        assert!(nondeclaring_toggle.starts_with("HTTP/1.1 400 Bad Request"));
+        assert_eq!(
+            json_body(&nondeclaring_toggle)["error"],
+            "Plugin does not declare a web UI"
+        );
+        assert!(!config_path.exists());
     }
 
     #[cfg(unix)]

@@ -149,12 +149,14 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
         );
     }
     Ok(Some(plugin::ExternalPluginSpec {
-        name: metadata.name,
+        name: metadata.name.clone(),
         command: executable.display().to_string(),
         args: Vec::new(),
         url: None,
         env: Default::default(),
         startup: Default::default(),
+        web_ui_enabled: None,
+        installed_metadata: Some(metadata),
     }))
 }
 

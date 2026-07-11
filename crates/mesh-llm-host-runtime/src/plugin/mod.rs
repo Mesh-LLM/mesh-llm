@@ -44,9 +44,9 @@ pub use self::config::{
     ConfigEditor, ConfigStore, GpuAssignment, GpuConfig, LocalServingNodeConfig, MeshConfig,
     MeshRequirementsConfig, ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor,
     ModelRuntimeKind, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PluginHostMode,
-    PluginStartupConfig, ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig,
-    bundled_cli_plugin_spec, config_path, config_to_toml, load_config, parse_config_toml,
-    resolve_plugins, validate_config_file,
+    PluginStartupConfig, PluginWebUiPreference, ResolvedPlugins, TelemetryConfig,
+    TelemetryMetricsConfig, bundled_cli_plugin_spec, config_path, config_to_toml, load_config,
+    parse_config_toml, resolve_plugins, validate_config_file,
 };
 #[cfg(test)]
 pub(crate) use self::config::{
@@ -71,6 +71,10 @@ pub(crate) use self::transport::{
 };
 #[cfg(test)]
 use mesh_llm_plugin::MeshVisibility;
+use mesh_llm_plugin_manager::{
+    InstalledPluginMetadata, InstalledPluginWebUiMetadata, InstalledPluginWebUiValidationStatus,
+    PluginStore, default_store_root,
+};
 use tokio::sync::oneshot;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
@@ -157,6 +161,8 @@ pub struct PluginSummary {
     pub tools: Vec<ToolSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest: Option<PluginManifestOverview>,
+    #[serde(default)]
+    pub web_ui: PluginWebUiState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub startup: Option<PluginStartupSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -176,6 +182,64 @@ pub struct PluginManifestOverview {
     pub mesh_event_subscriptions: usize,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub capabilities: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_ui: Option<PluginWebUiManifestOverview>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct PluginWebUiState {
+    pub state: PluginWebUiStateKind,
+    pub declared: bool,
+    pub enabled: bool,
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub pages: Vec<PluginWebUiPageOverview>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub config_sections: Vec<PluginWebUiConfigSectionOverview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_base_url: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginWebUiStateKind {
+    #[default]
+    None,
+    Ready,
+    Disabled,
+    Invalid,
+    PluginNotRunning,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PluginWebUiManifestOverview {
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub pages: Vec<PluginWebUiPageOverview>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub config_sections: Vec<PluginWebUiConfigSectionOverview>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PluginWebUiPageOverview {
+    pub id: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub route: String,
+    pub bundle_id: String,
+    pub entry_script: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PluginWebUiConfigSectionOverview {
+    pub id: String,
+    pub title: String,
+    pub entry_script: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_tab: Option<String>,
+    pub bundle_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -439,6 +503,7 @@ impl PluginManager {
         spec: &ExternalPluginSpec,
         error: &anyhow::Error,
     ) -> PluginSummary {
+        let error_message = error.to_string();
         tracing::warn!(
             plugin = %spec.name,
             command = %spec.command,
@@ -458,8 +523,16 @@ impl PluginManager {
             args: spec.args.clone(),
             tools: Vec::new(),
             manifest: None,
+            web_ui: derive_plugin_web_ui_state(PluginWebUiStateInput {
+                plugin_name: &spec.name,
+                live_manifest: None,
+                installed_metadata: spec.installed_metadata.as_ref(),
+                web_ui_enabled: spec.web_ui_enabled,
+                runtime_available: false,
+                runtime_unavailable_reason: Some(&error_message),
+            }),
             startup: Some(spec.startup.summary()),
-            error: Some(error.to_string()),
+            error: Some(error_message),
         }
     }
 
@@ -490,6 +563,28 @@ impl PluginManager {
                     .iter()
                     .map(|name| (*name).to_string())
                     .collect(),
+                test_endpoints: Arc::new(Mutex::new(Vec::new())),
+                test_inference_endpoints: Arc::new(Mutex::new(Vec::new())),
+                test_manifests: Arc::new(Mutex::new(BTreeMap::new())),
+                test_stream_handlers: Arc::new(Mutex::new(BTreeMap::new())),
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_summaries(summaries: Vec<PluginSummary>) -> Self {
+        Self {
+            inner: Arc::new(PluginManagerInner {
+                plugins: BTreeMap::new(),
+                inactive: summaries
+                    .into_iter()
+                    .map(|summary| (summary.name.clone(), summary))
+                    .collect(),
+                endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
+                runtime_data: RuntimeDataCollector::new(),
+                rpc_bridge: Arc::new(Mutex::new(None)),
+                shutting_down: AtomicBool::new(false),
+                bridged_plugins: BTreeSet::new(),
                 test_endpoints: Arc::new(Mutex::new(Vec::new())),
                 test_inference_endpoints: Arc::new(Mutex::new(Vec::new())),
                 test_manifests: Arc::new(Mutex::new(BTreeMap::new())),
@@ -556,7 +651,7 @@ impl PluginManager {
                 let mut summaries = manifests
                     .into_iter()
                     .map(|(name, manifest)| PluginSummary {
-                        name,
+                        name: name.clone(),
                         kind: "bridge".into(),
                         enabled: true,
                         status: "running".into(),
@@ -567,6 +662,14 @@ impl PluginManager {
                         args: Vec::new(),
                         tools: Vec::new(),
                         manifest: Some(plugin_manifest_overview(&manifest)),
+                        web_ui: derive_plugin_web_ui_state(PluginWebUiStateInput {
+                            plugin_name: &name,
+                            live_manifest: Some(&manifest),
+                            installed_metadata: None,
+                            web_ui_enabled: None,
+                            runtime_available: true,
+                            runtime_unavailable_reason: None,
+                        }),
                         startup: None,
                         error: None,
                     })
@@ -588,6 +691,62 @@ impl PluginManager {
         summaries.extend(self.inner.inactive.values().cloned());
         summaries.sort_by(|a, b| a.name.cmp(&b.name));
         summaries
+    }
+
+    pub async fn web_ui_state(&self, name: &str) -> Result<PluginWebUiState> {
+        Ok(self.plugin_summary(name).await?.web_ui)
+    }
+
+    pub async fn set_web_ui_enabled(&self, name: &str, enabled: bool) -> Result<PluginWebUiState> {
+        if let Some(plugin) = self.inner.plugins.get(name) {
+            return Ok(plugin.set_web_ui_enabled(enabled).await);
+        }
+
+        if let Some(summary) = self.inner.inactive.get(name) {
+            let web_ui = inactive_web_ui_state(summary, Some(enabled));
+            let mut updated = summary.clone();
+            updated.web_ui = web_ui.clone();
+            self.publish_plugin_summary(&updated);
+            return Ok(web_ui);
+        }
+
+        #[cfg(test)]
+        if self.is_test_bridge_enabled(name) {
+            let summary = self.plugin_summary(name).await?;
+            let web_ui = projected_existing_web_ui_state(&summary, Some(enabled));
+            let mut updated = summary;
+            updated.web_ui = web_ui.clone();
+            self.publish_plugin_summary(&updated);
+            return Ok(web_ui);
+        }
+
+        anyhow::bail!("Unknown plugin '{name}'")
+    }
+
+    pub async fn web_ui_asset_root(&self, name: &str) -> Result<Option<std::path::PathBuf>> {
+        if let Some(plugin) = self.inner.plugins.get(name) {
+            return Ok(plugin.web_ui_asset_root());
+        }
+        if self.inner.inactive.contains_key(name) || self.is_test_bridge_enabled(name) {
+            return Ok(installed_plugin_metadata(name).and_then(|metadata| {
+                metadata
+                    .web_ui_asset_root_path()
+                    .filter(|asset_root| asset_root.is_dir())
+            }));
+        }
+        anyhow::bail!("Unknown plugin '{name}'")
+    }
+
+    async fn plugin_summary(&self, name: &str) -> Result<PluginSummary> {
+        #[cfg(test)]
+        if self.is_test_bridge_enabled(name) {
+            let _ = self.publish_test_bridge_snapshot(name).await;
+        }
+        self.list()
+            .await
+            .into_iter()
+            .find(|summary| summary.name == name)
+            .with_context(|| format!("Unknown plugin '{name}'"))
     }
 
     pub async fn shutdown(&self) {
@@ -656,6 +815,14 @@ impl PluginManager {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: Some(plugin_manifest_overview(&manifest)),
+            web_ui: derive_plugin_web_ui_state(PluginWebUiStateInput {
+                plugin_name,
+                live_manifest: Some(&manifest),
+                installed_metadata: None,
+                web_ui_enabled: None,
+                runtime_available: true,
+                runtime_unavailable_reason: None,
+            }),
             startup: None,
             error: None,
         };
@@ -1479,6 +1646,7 @@ pub(crate) async fn connect_test_side_stream(
 }
 
 pub(crate) fn plugin_manifest_overview(manifest: &proto::PluginManifest) -> PluginManifestOverview {
+    let web_ui = plugin_web_ui_manifest_overview_from_proto(manifest.web_ui.as_ref());
     PluginManifestOverview {
         operations: manifest.operations.len(),
         resources: manifest.resources.len(),
@@ -1490,6 +1658,308 @@ pub(crate) fn plugin_manifest_overview(manifest: &proto::PluginManifest) -> Plug
         mesh_channels: manifest.mesh_channels.len(),
         mesh_event_subscriptions: manifest.mesh_event_subscriptions.len(),
         capabilities: manifest.capabilities.clone(),
+        web_ui,
+    }
+}
+
+pub(crate) struct PluginWebUiStateInput<'a> {
+    pub plugin_name: &'a str,
+    pub live_manifest: Option<&'a proto::PluginManifest>,
+    pub installed_metadata: Option<&'a InstalledPluginMetadata>,
+    pub web_ui_enabled: Option<bool>,
+    pub runtime_available: bool,
+    pub runtime_unavailable_reason: Option<&'a str>,
+}
+
+pub(crate) fn derive_plugin_web_ui_state(input: PluginWebUiStateInput<'_>) -> PluginWebUiState {
+    let declaration = plugin_web_ui_declaration(&input);
+    let Some(declaration) = declaration else {
+        return PluginWebUiState::default();
+    };
+    let preference = plugin_web_ui_preference(input.web_ui_enabled, true);
+    match preference {
+        PluginWebUiPreference::None => PluginWebUiState::default(),
+        PluginWebUiPreference::Disabled => declaration.state(
+            PluginWebUiStateKind::Disabled,
+            false,
+            false,
+            Some("web UI disabled by configuration".into()),
+        ),
+        PluginWebUiPreference::Enabled => enabled_plugin_web_ui_state(input, declaration),
+    }
+}
+
+fn enabled_plugin_web_ui_state(
+    input: PluginWebUiStateInput<'_>,
+    declaration: PluginWebUiDeclaration,
+) -> PluginWebUiState {
+    if let Some(reason) = declaration.invalid_reason.clone() {
+        return declaration.state(PluginWebUiStateKind::Invalid, true, false, Some(reason));
+    }
+    if !input.runtime_available {
+        let reason = input
+            .runtime_unavailable_reason
+            .unwrap_or("plugin process is not running")
+            .to_string();
+        return declaration.state(
+            PluginWebUiStateKind::PluginNotRunning,
+            true,
+            false,
+            Some(reason),
+        );
+    }
+    declaration.state(PluginWebUiStateKind::Ready, true, true, None)
+}
+
+fn inactive_web_ui_state(
+    summary: &PluginSummary,
+    web_ui_enabled: Option<bool>,
+) -> PluginWebUiState {
+    if let Some(metadata) = installed_plugin_metadata(&summary.name) {
+        return derive_plugin_web_ui_state(PluginWebUiStateInput {
+            plugin_name: &summary.name,
+            live_manifest: None,
+            installed_metadata: Some(&metadata),
+            web_ui_enabled,
+            runtime_available: summary.status == "running",
+            runtime_unavailable_reason: summary.error.as_deref(),
+        });
+    }
+    projected_existing_web_ui_state(summary, web_ui_enabled)
+}
+
+fn projected_existing_web_ui_state(
+    summary: &PluginSummary,
+    web_ui_enabled: Option<bool>,
+) -> PluginWebUiState {
+    let mut web_ui = summary.web_ui.clone();
+    if !web_ui.declared {
+        return PluginWebUiState::default();
+    }
+    match plugin_web_ui_preference(web_ui_enabled, true) {
+        PluginWebUiPreference::None => return PluginWebUiState::default(),
+        PluginWebUiPreference::Disabled => {
+            web_ui.state = PluginWebUiStateKind::Disabled;
+            web_ui.enabled = false;
+            web_ui.available = false;
+            web_ui.unavailable_reason = Some("web UI disabled by configuration".into());
+        }
+        PluginWebUiPreference::Enabled => {
+            web_ui.enabled = true;
+            if summary.status == "running" && web_ui.asset_base_url.is_some() {
+                web_ui.state = PluginWebUiStateKind::Ready;
+                web_ui.available = true;
+                web_ui.unavailable_reason = None;
+            } else if summary.status != "running" {
+                web_ui.state = PluginWebUiStateKind::PluginNotRunning;
+                web_ui.available = false;
+                web_ui.unavailable_reason = summary
+                    .error
+                    .clone()
+                    .or_else(|| Some("plugin process is not running".to_string()));
+            } else if web_ui.state == PluginWebUiStateKind::Disabled {
+                web_ui.state = PluginWebUiStateKind::Invalid;
+                web_ui.available = false;
+                web_ui.unavailable_reason = Some("web UI bundle metadata is unavailable".into());
+            }
+        }
+    }
+    web_ui
+}
+
+fn installed_plugin_metadata(name: &str) -> Option<InstalledPluginMetadata> {
+    let root = default_store_root().ok()?;
+    PluginStore::new(root).load_optional(name).ok().flatten()
+}
+
+fn plugin_web_ui_preference(
+    web_ui_enabled: Option<bool>,
+    declares_web_ui: bool,
+) -> PluginWebUiPreference {
+    PluginConfigEntry {
+        name: String::new(),
+        enabled: None,
+        web_ui_enabled,
+        command: None,
+        args: Vec::new(),
+        url: None,
+        settings: BTreeMap::new(),
+        startup: PluginStartupConfig::default(),
+    }
+    .web_ui_preference(declares_web_ui)
+}
+
+#[derive(Clone, Debug)]
+struct PluginWebUiDeclaration {
+    pages: Vec<PluginWebUiPageOverview>,
+    config_sections: Vec<PluginWebUiConfigSectionOverview>,
+    asset_base_url: Option<String>,
+    invalid_reason: Option<String>,
+}
+
+impl PluginWebUiDeclaration {
+    fn state(
+        self,
+        state: PluginWebUiStateKind,
+        enabled: bool,
+        available: bool,
+        unavailable_reason: Option<String>,
+    ) -> PluginWebUiState {
+        PluginWebUiState {
+            state,
+            declared: true,
+            enabled,
+            available,
+            unavailable_reason,
+            pages: self.pages,
+            config_sections: self.config_sections,
+            asset_base_url: self.asset_base_url,
+        }
+    }
+}
+
+fn plugin_web_ui_declaration(input: &PluginWebUiStateInput<'_>) -> Option<PluginWebUiDeclaration> {
+    if let Some(metadata) = input.installed_metadata
+        && let Some(web_ui) = metadata
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.web_ui.as_ref())
+    {
+        return Some(plugin_web_ui_declaration_from_installed(
+            input.plugin_name,
+            metadata,
+            web_ui,
+        ));
+    }
+    input
+        .live_manifest
+        .and_then(|manifest| manifest.web_ui.as_ref())
+        .map(plugin_web_ui_declaration_from_proto)
+}
+
+fn plugin_web_ui_declaration_from_installed(
+    plugin_name: &str,
+    metadata: &InstalledPluginMetadata,
+    web_ui: &InstalledPluginWebUiMetadata,
+) -> PluginWebUiDeclaration {
+    let invalid_reason = match web_ui.validation.status {
+        InstalledPluginWebUiValidationStatus::Valid
+            if metadata.web_ui_asset_root_path().is_some() =>
+        {
+            None
+        }
+        InstalledPluginWebUiValidationStatus::Valid => {
+            Some("web UI bundle asset root is missing".into())
+        }
+        InstalledPluginWebUiValidationStatus::Invalid => web_ui
+            .validation
+            .reason
+            .clone()
+            .or_else(|| Some("web UI bundle is invalid".into())),
+    };
+    PluginWebUiDeclaration {
+        pages: web_ui
+            .pages
+            .iter()
+            .map(plugin_web_ui_page_from_installed)
+            .collect(),
+        config_sections: web_ui
+            .config_sections
+            .iter()
+            .map(plugin_web_ui_config_section_from_installed)
+            .collect(),
+        asset_base_url: metadata
+            .web_ui_asset_root_path()
+            .map(|_| format!("/api/plugins/{plugin_name}/web-ui/assets/")),
+        invalid_reason,
+    }
+}
+
+fn plugin_web_ui_declaration_from_proto(
+    web_ui: &proto::PluginWebUiManifest,
+) -> PluginWebUiDeclaration {
+    let overview = PluginWebUiManifestOverview {
+        pages: web_ui
+            .pages
+            .iter()
+            .map(plugin_web_ui_page_from_proto)
+            .collect(),
+        config_sections: web_ui
+            .config_sections
+            .iter()
+            .map(plugin_web_ui_config_section_from_proto)
+            .collect(),
+    };
+    PluginWebUiDeclaration {
+        pages: overview.pages,
+        config_sections: overview.config_sections,
+        asset_base_url: None,
+        invalid_reason: Some("web UI bundle metadata is unavailable".into()),
+    }
+}
+
+fn plugin_web_ui_manifest_overview_from_proto(
+    web_ui: Option<&proto::PluginWebUiManifest>,
+) -> Option<PluginWebUiManifestOverview> {
+    web_ui.map(|web_ui| PluginWebUiManifestOverview {
+        pages: web_ui
+            .pages
+            .iter()
+            .map(plugin_web_ui_page_from_proto)
+            .collect(),
+        config_sections: web_ui
+            .config_sections
+            .iter()
+            .map(plugin_web_ui_config_section_from_proto)
+            .collect(),
+    })
+}
+
+fn plugin_web_ui_page_from_proto(page: &proto::PluginWebUiPageManifest) -> PluginWebUiPageOverview {
+    PluginWebUiPageOverview {
+        id: page.id.clone(),
+        label: page.label.clone(),
+        icon: page.icon.clone(),
+        route: page.route.clone(),
+        bundle_id: page.bundle_id.clone(),
+        entry_script: page.entry_script.clone(),
+    }
+}
+
+fn plugin_web_ui_config_section_from_proto(
+    section: &proto::PluginWebUiConfigSectionManifest,
+) -> PluginWebUiConfigSectionOverview {
+    PluginWebUiConfigSectionOverview {
+        id: section.id.clone(),
+        title: section.title.clone(),
+        entry_script: section.entry_script.clone(),
+        parent_tab: section.parent_tab.clone(),
+        bundle_id: section.bundle_id.clone(),
+    }
+}
+
+fn plugin_web_ui_page_from_installed(
+    page: &mesh_llm_plugin_manager::InstalledPluginWebUiPageMetadata,
+) -> PluginWebUiPageOverview {
+    PluginWebUiPageOverview {
+        id: page.id.clone(),
+        label: page.label.clone(),
+        icon: page.icon.clone(),
+        route: page.route.clone(),
+        bundle_id: page.bundle_id.clone(),
+        entry_script: page.entry_script.clone(),
+    }
+}
+
+fn plugin_web_ui_config_section_from_installed(
+    section: &mesh_llm_plugin_manager::InstalledPluginWebUiConfigSectionMetadata,
+) -> PluginWebUiConfigSectionOverview {
+    PluginWebUiConfigSectionOverview {
+        id: section.id.clone(),
+        title: section.title.clone(),
+        entry_script: section.entry_script.clone(),
+        parent_tab: section.parent_tab.clone(),
+        bundle_id: section.bundle_id.clone(),
     }
 }
 
@@ -1916,6 +2386,160 @@ mod tests {
         }
     }
 
+    fn web_ui_manifest() -> proto::PluginWebUiManifest {
+        proto::PluginWebUiManifest {
+            pages: vec![proto::PluginWebUiPageManifest {
+                id: "home".into(),
+                label: "Home".into(),
+                icon: Some("icons/home.svg".into()),
+                route: "index.html".into(),
+                bundle_id: "main".into(),
+                entry_script: "assets/app.js".into(),
+            }],
+            config_sections: vec![proto::PluginWebUiConfigSectionManifest {
+                id: "settings".into(),
+                title: "Settings".into(),
+                entry_script: "assets/settings.js".into(),
+                parent_tab: Some("integrations".into()),
+                bundle_id: "main".into(),
+            }],
+            bundles: vec![proto::PluginWebUiBundleManifest {
+                id: "main".into(),
+                root_path: "web".into(),
+            }],
+        }
+    }
+
+    fn installed_metadata_with_web_ui(
+        validation: InstalledPluginWebUiValidationStatus,
+        asset_root: Option<&str>,
+    ) -> InstalledPluginMetadata {
+        InstalledPluginMetadata {
+            name: "demo".into(),
+            source_repository: "https://github.com/mesh-llm/demo".into(),
+            installed_version: "v1.0.0".into(),
+            target_triple: "test-target".into(),
+            downloaded_asset_name: "demo.tar.gz".into(),
+            install_path: std::env::temp_dir().join("mesh-llm-demo-plugin"),
+            enabled: true,
+            manifest: Some(mesh_llm_plugin_manager::InstalledPluginManifestMetadata {
+                config_schema: None,
+                web_ui: Some(mesh_llm_plugin_manager::InstalledPluginWebUiMetadata {
+                    pages: vec![mesh_llm_plugin_manager::InstalledPluginWebUiPageMetadata {
+                        id: "home".into(),
+                        label: "Home".into(),
+                        icon: Some("icons/home.svg".into()),
+                        route: "index.html".into(),
+                        bundle_id: "main".into(),
+                        entry_script: "assets/app.js".into(),
+                    }],
+                    config_sections: vec![
+                        mesh_llm_plugin_manager::InstalledPluginWebUiConfigSectionMetadata {
+                            id: "settings".into(),
+                            title: "Settings".into(),
+                            entry_script: "assets/settings.js".into(),
+                            parent_tab: Some("integrations".into()),
+                            bundle_id: "main".into(),
+                        },
+                    ],
+                    bundles: vec![
+                        mesh_llm_plugin_manager::InstalledPluginWebUiBundleMetadata {
+                            id: "main".into(),
+                            root_path: "web".into(),
+                        },
+                    ],
+                    asset_root: asset_root.map(std::path::PathBuf::from),
+                    validation: mesh_llm_plugin_manager::InstalledPluginWebUiValidation {
+                        status: validation,
+                        reason: Some("bundle failed validation".into()),
+                    },
+                }),
+            }),
+            last_protocol_version: Some(1),
+            last_status: Some("running".into()),
+            last_error: None,
+        }
+    }
+
+    fn plugin_web_ui_state_for_test(
+        installed_metadata: Option<&InstalledPluginMetadata>,
+        web_ui_enabled: Option<bool>,
+        runtime_available: bool,
+    ) -> PluginWebUiState {
+        derive_plugin_web_ui_state(PluginWebUiStateInput {
+            plugin_name: "demo",
+            live_manifest: None,
+            installed_metadata,
+            web_ui_enabled,
+            runtime_available,
+            runtime_unavailable_reason: Some("plugin process is not running"),
+        })
+    }
+
+    #[test]
+    fn plugin_web_ui_state_is_ready_for_enabled_valid_running_plugin() {
+        let metadata = installed_metadata_with_web_ui(
+            InstalledPluginWebUiValidationStatus::Valid,
+            Some("web"),
+        );
+
+        let state = plugin_web_ui_state_for_test(Some(&metadata), None, true);
+
+        assert_eq!(state.state, PluginWebUiStateKind::Ready);
+        assert!(state.declared);
+        assert!(state.enabled);
+        assert!(state.available);
+        assert_eq!(
+            state.asset_base_url.as_deref(),
+            Some("/api/plugins/demo/web-ui/assets/")
+        );
+        assert_eq!(state.pages.len(), 1);
+        assert_eq!(state.config_sections.len(), 1);
+    }
+
+    #[test]
+    fn plugin_web_ui_state_covers_none_disabled_invalid_and_not_running() {
+        let valid = installed_metadata_with_web_ui(
+            InstalledPluginWebUiValidationStatus::Valid,
+            Some("web"),
+        );
+        let invalid = installed_metadata_with_web_ui(
+            InstalledPluginWebUiValidationStatus::Invalid,
+            Some("web"),
+        );
+        let missing_bundle =
+            installed_metadata_with_web_ui(InstalledPluginWebUiValidationStatus::Valid, None);
+
+        let none = plugin_web_ui_state_for_test(None, None, true);
+        let disabled = plugin_web_ui_state_for_test(Some(&valid), Some(false), true);
+        let invalid_state = plugin_web_ui_state_for_test(Some(&invalid), None, true);
+        let missing_bundle_state = plugin_web_ui_state_for_test(Some(&missing_bundle), None, true);
+        let not_running = plugin_web_ui_state_for_test(Some(&valid), None, false);
+
+        assert_eq!(none.state, PluginWebUiStateKind::None);
+        assert_eq!(disabled.state, PluginWebUiStateKind::Disabled);
+        assert!(!disabled.enabled);
+        assert_eq!(invalid_state.state, PluginWebUiStateKind::Invalid);
+        assert_eq!(missing_bundle_state.state, PluginWebUiStateKind::Invalid);
+        assert_eq!(not_running.state, PluginWebUiStateKind::PluginNotRunning);
+        assert!(not_running.enabled);
+        assert!(!not_running.available);
+    }
+
+    #[test]
+    fn plugin_manifest_overview_includes_web_ui_declaration() {
+        let manifest = proto::PluginManifest {
+            web_ui: Some(web_ui_manifest()),
+            ..proto::PluginManifest::default()
+        };
+
+        let overview = plugin_manifest_overview(&manifest);
+
+        let web_ui = overview.web_ui.expect("web UI overview should be present");
+        assert_eq!(web_ui.pages[0].id, "home");
+        assert_eq!(web_ui.config_sections[0].id, "settings");
+    }
+
     async fn spawn_fake_models_server(
         responses: Vec<(&'static str, &'static str)>,
     ) -> (String, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
@@ -1954,6 +2578,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "demo".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: Some("mesh-llm-plugin-demo".into()),
                 args: vec!["--stdio".into()],
                 url: None,
@@ -1978,6 +2603,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "metrics".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: Some("mesh-llm-plugin-metrics".into()),
                 args: Vec::new(),
                 url: None,
@@ -2012,6 +2638,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "missing-optional".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: None,
                 args: Vec::new(),
                 url: None,
@@ -2060,6 +2687,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: BLOBSTORE_PLUGIN_ID.into(),
                 enabled: Some(false),
+                web_ui_enabled: None,
                 command: None,
                 args: Vec::new(),
                 url: None,
@@ -2080,6 +2708,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "endpoint-plugin".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: Some("endpoint-plugin".into()),
                 args: Vec::new(),
                 url: Some("http://gpu-box:8000/v1".into()),
@@ -2105,6 +2734,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "endpoint-plugin".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: Some("/opt/plugins/endpoint-plugin".into()),
                 args: vec!["--verbose".into()],
                 url: None,
@@ -2129,6 +2759,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "endpoint-plugin".into(),
                 enabled: Some(false),
+                web_ui_enabled: None,
                 command: None,
                 args: Vec::new(),
                 url: Some("http://gpu-box:8000/v1".into()),
@@ -2163,6 +2794,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "demo".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: Some("/tmp/demo".into()),
                 args: vec!["--flag".into()],
                 url: None,
@@ -2189,6 +2821,8 @@ mod tests {
                 url: None,
                 env: BTreeMap::new(),
                 startup: PluginStartupOptions::default(),
+                web_ui_enabled: None,
+                installed_metadata: None,
             }],
             inactive: Vec::new(),
         };
@@ -2207,6 +2841,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
+        let specs = ResolvedPlugins {
+            externals: vec![ExternalPluginSpec {
+                name: "demo".into(),
+                command: "mesh-llm-definitely-missing-plugin-binary".into(),
+                args: Vec::new(),
+                url: None,
+                env: BTreeMap::new(),
+                startup: PluginStartupOptions::default(),
+                web_ui_enabled: None,
+                installed_metadata: Some(installed_metadata_with_web_ui(
+                    InstalledPluginWebUiValidationStatus::Valid,
+                    Some("web"),
+                )),
+            }],
+            inactive: Vec::new(),
+        };
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+
+        let manager = PluginManager::start(&specs, private_host_mode(), mesh_tx)
+            .await
+            .expect("broken plugin should not stop manager startup");
+        let summaries = manager.list().await;
+        manager.shutdown().await;
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "demo");
+        assert_eq!(summaries[0].status, "error");
+        assert_eq!(
+            summaries[0].web_ui.state,
+            PluginWebUiStateKind::PluginNotRunning
+        );
+        assert_eq!(summaries[0].web_ui.pages.len(), 1);
+        assert_eq!(summaries[0].web_ui.config_sections.len(), 1);
+    }
+
+    #[tokio::test]
     async fn lazy_start_plugin_does_not_block_manager_startup() {
         let specs = ResolvedPlugins {
             externals: vec![ExternalPluginSpec {
@@ -2220,6 +2891,8 @@ mod tests {
                     lazy_start: true,
                     ..PluginStartupOptions::default()
                 },
+                web_ui_enabled: None,
+                installed_metadata: None,
             }],
             inactive: Vec::new(),
         };
@@ -2296,6 +2969,7 @@ mod tests {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: None,
+            web_ui: PluginWebUiState::default(),
             startup: None,
             error: None,
         }

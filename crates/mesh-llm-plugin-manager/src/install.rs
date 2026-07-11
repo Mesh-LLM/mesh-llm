@@ -326,7 +326,10 @@ mod tests {
         InstalledPluginManifestMetadata, InstalledPluginNumericControl,
         InstalledPluginOptionsSource, InstalledPluginRestartScope, InstalledPluginSettingSchema,
         InstalledPluginTextFormat, InstalledPluginValueKind, InstalledPluginValueSchema,
-        InstalledPluginVisibility, SUPPORTED_PLUGIN_SCHEMA_VERSION,
+        InstalledPluginVisibility, InstalledPluginWebUiBundleMetadata,
+        InstalledPluginWebUiConfigSectionMetadata, InstalledPluginWebUiMetadata,
+        InstalledPluginWebUiPageMetadata, InstalledPluginWebUiValidation,
+        InstalledPluginWebUiValidationStatus, SUPPORTED_PLUGIN_SCHEMA_VERSION,
     };
 
     fn write_tar_gz(archive_path: &Path, plugin_name: &str, files: &[(&str, &[u8])]) -> Result<()> {
@@ -466,6 +469,32 @@ mod tests {
                     },
                 ],
             }),
+            web_ui: Some(InstalledPluginWebUiMetadata {
+                pages: vec![InstalledPluginWebUiPageMetadata {
+                    id: "dashboard".to_string(),
+                    label: "Dashboard".to_string(),
+                    icon: None,
+                    route: "dashboard".to_string(),
+                    bundle_id: "main".to_string(),
+                    entry_script: "assets/main.js".to_string(),
+                }],
+                config_sections: vec![InstalledPluginWebUiConfigSectionMetadata {
+                    id: "settings".to_string(),
+                    title: "Settings".to_string(),
+                    entry_script: "assets/settings.js".to_string(),
+                    parent_tab: Some("integrations".to_string()),
+                    bundle_id: "main".to_string(),
+                }],
+                bundles: vec![InstalledPluginWebUiBundleMetadata {
+                    id: "main".to_string(),
+                    root_path: "web-ui".to_string(),
+                }],
+                asset_root: None,
+                validation: InstalledPluginWebUiValidation {
+                    status: InstalledPluginWebUiValidationStatus::Invalid,
+                    reason: None,
+                },
+            }),
         })
         .unwrap();
         write_tar_gz(
@@ -475,6 +504,8 @@ mod tests {
                 ("plugin.toml", b"name = \"demo\""),
                 (executable_name.as_str(), b""),
                 ("plugin-manifest.json", packaged_manifest.as_slice()),
+                ("web-ui/assets/main.js", b"console.log('main')"),
+                ("web-ui/assets/settings.js", b"console.log('settings')"),
             ],
         )
         .unwrap();
@@ -548,6 +579,21 @@ mod tests {
                 .as_ref()
                 .and_then(|behavior| behavior.text_format),
             Some(InstalledPluginTextFormat::Url)
+        );
+        let loaded = store.load("demo").unwrap();
+        let web_ui = loaded
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.web_ui.as_ref())
+            .expect("stored web UI metadata");
+        assert_eq!(web_ui.asset_root.as_deref(), Some(Path::new("web-ui")));
+        assert_eq!(
+            web_ui.validation.status,
+            InstalledPluginWebUiValidationStatus::Valid
+        );
+        assert_eq!(
+            loaded.web_ui_asset_root_path(),
+            Some(loaded.install_path.join("web-ui"))
         );
     }
 }

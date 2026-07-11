@@ -4,8 +4,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 mod control_behavior;
+#[cfg(test)]
+mod exemplar_tests;
+mod web_ui;
 
 use self::control_behavior::PackagedPluginControlBehavior;
+use self::web_ui::PackagedPluginWebUi;
+pub use self::web_ui::{
+    PluginWebUiBuilder, PluginWebUiBundleBuilder, PluginWebUiConfigSectionBuilder,
+    PluginWebUiPageBuilder, web_ui, web_ui_bundle, web_ui_config_section, web_ui_page,
+};
 
 #[cfg(test)]
 use self::control_behavior::{
@@ -25,6 +33,7 @@ pub enum ManifestEntry {
     Endpoint(proto::EndpointManifest),
     MeshChannel(proto::MeshChannelManifest),
     MeshEventSubscription(proto::MeshEventSubscriptionManifest),
+    WebUi(proto::PluginWebUiManifest),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -69,6 +78,7 @@ impl PluginManifestBuilder {
             ManifestEntry::MeshEventSubscription(subscription) => {
                 self.manifest.mesh_event_subscriptions.push(subscription);
             }
+            ManifestEntry::WebUi(web_ui) => self.manifest.web_ui = Some(web_ui),
         }
     }
 }
@@ -255,6 +265,8 @@ fn value_schema(kind: proto::PluginConfigValueKind) -> proto::PluginConfigValueS
 struct PackagedPluginManifest {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     config_schema: Option<PackagedPluginConfigSchema>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    web_ui: Option<PackagedPluginWebUi>,
 }
 
 impl TryFrom<&proto::PluginManifest> for PackagedPluginManifest {
@@ -266,8 +278,16 @@ impl TryFrom<&proto::PluginManifest> for PackagedPluginManifest {
             .as_ref()
             .map(PackagedPluginConfigSchema::try_from)
             .transpose()?;
+        let web_ui = value
+            .web_ui
+            .as_ref()
+            .map(PackagedPluginWebUi::try_from)
+            .transpose()?;
 
-        Ok(Self { config_schema })
+        Ok(Self {
+            config_schema,
+            web_ui,
+        })
     }
 }
 
@@ -883,6 +903,18 @@ impl From<proto::MeshEventSubscriptionManifest> for ManifestEntry {
     }
 }
 
+impl From<proto::PluginWebUiManifest> for ManifestEntry {
+    fn from(value: proto::PluginWebUiManifest) -> Self {
+        Self::WebUi(value)
+    }
+}
+
+impl From<PluginWebUiBuilder> for ManifestEntry {
+    fn from(value: PluginWebUiBuilder) -> Self {
+        Self::WebUi(value.into())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct OperationBuilder {
     inner: proto::OperationManifest,
@@ -1325,6 +1357,7 @@ fn default_binding_id(path: &str, operation_name: &str) -> String {
 mod tests {
     use super::*;
     use crate::{Plugin, PluginMetadata, inference, mcp, plugin_server_info};
+    use prost::Message;
 
     #[allow(dead_code)]
     #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -1654,6 +1687,58 @@ mod tests {
         assert_eq!(control_behavior.enable_when.len(), 1);
         assert_eq!(control_behavior.disable_when.len(), 1);
         assert_eq!(control_behavior.conflicts.len(), 1);
+    }
+
+    #[test]
+    fn manifest_builder_preserves_web_ui_proto_and_package_json_metadata() {
+        let manifest = crate::plugin_manifest![
+            web_ui()
+                .bundle(web_ui_bundle("main", "dist"))
+                .page(
+                    web_ui_page("dashboard", "Dashboard", "dashboard", "dashboard.js")
+                        .icon("icons/dashboard.svg")
+                        .bundle_id("main"),
+                )
+                .config_section(
+                    web_ui_config_section("settings", "Settings", "settings.js")
+                        .parent_tab("integrations")
+                        .bundle_id("main"),
+                )
+        ];
+
+        let web_ui = manifest.web_ui.as_ref().expect("web_ui should be present");
+        assert_eq!(web_ui.pages[0].id, "dashboard");
+        assert_eq!(web_ui.pages[0].icon.as_deref(), Some("icons/dashboard.svg"));
+        assert_eq!(
+            web_ui.config_sections[0].parent_tab.as_deref(),
+            Some("integrations")
+        );
+        assert_eq!(web_ui.bundles[0].root_path, "dist");
+
+        let encoded = package_manifest_json(&manifest).expect("manifest json");
+        let decoded: PackagedPluginManifest =
+            serde_json::from_str(&encoded).expect("manifest should deserialize");
+        let packaged_web_ui = decoded.web_ui.expect("web_ui json should be present");
+
+        assert_eq!(packaged_web_ui.pages[0].route, "dashboard");
+        assert_eq!(packaged_web_ui.pages[0].entry_script, "dashboard.js");
+        assert_eq!(packaged_web_ui.config_sections[0].title, "Settings");
+        assert_eq!(packaged_web_ui.bundles[0].id, "main");
+    }
+
+    #[test]
+    fn old_manifest_bytes_decode_without_web_ui() {
+        let old_shape = proto::PluginManifest {
+            capabilities: vec!["demo.v1".into()],
+            ..Default::default()
+        };
+        let mut encoded = Vec::new();
+        old_shape.encode(&mut encoded).expect("encode manifest");
+
+        let decoded = proto::PluginManifest::decode(encoded.as_slice()).expect("decode manifest");
+
+        assert_eq!(decoded.capabilities, vec!["demo.v1"]);
+        assert!(decoded.web_ui.is_none());
     }
 
     #[test]

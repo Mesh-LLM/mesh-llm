@@ -19,11 +19,30 @@ import { DeveloperPlaygroundPage } from '@/features/developer/pages/DeveloperPla
 import { DashboardPageSurface } from '@/features/network/pages/DashboardPage'
 import { parseDeveloperPlaygroundSearch } from '@/features/developer/playground/developer-playground-tabs'
 import { ReservesPageContent } from '@/features/reserves/pages/ReservesPage'
-import { statusKeys } from '@/lib/query/query-keys'
+import { PluginWebUiRoutePage } from '@/features/plugins/web-ui/PluginWebUiRoutePage'
+import { pluginKeys, statusKeys } from '@/lib/query/query-keys'
+import type { PluginWebUiStateRaw } from '@/lib/api/plugin-types'
+import type {
+  MeshPluginUiHost,
+  MeshPluginUiMountContext,
+  MeshPluginUiMountHandle,
+  MeshPluginUiRegistration
+} from '@/features/plugins/web-ui/host-contract'
 
 const routeCacheProbe = vi.hoisted(() => ({
   dashboardClient: undefined as QueryClient | undefined,
   chatClient: undefined as QueryClient | undefined
+}))
+const pluginBundleProbe = vi.hoisted(() => ({
+  importBundle: vi.fn(),
+  register: vi.fn(),
+  mount: vi.fn(),
+  unmount: vi.fn(),
+  host: undefined as MeshPluginUiHost | undefined
+}))
+
+vi.mock('@/features/plugins/web-ui/bundle-loader', () => ({
+  importPluginUiBundle: pluginBundleProbe.importBundle
 }))
 
 vi.mock('@/features/reserves/pages/ReservesPage', () => ({
@@ -127,12 +146,19 @@ const developerPlaygroundRoute = createRoute({
   validateSearch: parseDeveloperPlaygroundSearch,
   component: DeveloperPlaygroundPage
 })
+const pluginWebUiRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/plugins/$pluginName/$pageId',
+  head: () => ({ meta: [{ title: 'MeshLLM - Plugin' }] }),
+  component: PluginWebUiRoutePage
+})
 const testRouteTree = rootRoute.addChildren([
   indexRoute,
   reservesRoute,
   chatRoute,
   configurationRoute,
   configurationTabRoute,
+  pluginWebUiRoute,
   developerPlaygroundRoute
 ])
 
@@ -156,6 +182,15 @@ function renderRouterWithHistory(history: ReturnType<typeof createMemoryHistory>
 }
 
 describe('app router routes', () => {
+  beforeEach(() => {
+    pluginBundleProbe.importBundle.mockReset()
+    pluginBundleProbe.register.mockReset()
+    pluginBundleProbe.mount.mockReset()
+    pluginBundleProbe.unmount.mockReset()
+    pluginBundleProbe.host = undefined
+    vi.unstubAllGlobals()
+  })
+
   it.each([
     ['/', 'MeshLLM - Dashboard', 'Dashboard route'],
     ['/reserves', 'MeshLLM - Reserves', 'Reserves route'],
@@ -228,4 +263,161 @@ describe('app router routes', () => {
     await screen.findByText('Chat route cache: dashboard-cache')
     expect(routeCacheProbe.chatClient).toBe(routeCacheProbe.dashboardClient)
   })
+
+  it('mounts a ready plugin page through the typed host bundle contract', async () => {
+    installReadyPluginBundle()
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(readyPluginWebUi())))
+
+    renderRouterAt('/plugins/blackboard/dashboard')
+
+    expect(await screen.findByText('Mounted blackboard dashboard')).toBeInTheDocument()
+    expect(pluginBundleProbe.importBundle).toHaveBeenCalledWith(
+      'http://localhost:3000/api/plugins/blackboard/web-ui/assets/dashboard.js'
+    )
+    expect(pluginBundleProbe.register).toHaveBeenCalledTimes(1)
+    expect(pluginBundleProbe.mount).toHaveBeenCalledTimes(1)
+    expect(pluginBundleProbe.host?.plugin.name).toBe('blackboard')
+    expect(pluginBundleProbe.host?.page.id).toBe('dashboard')
+    expect(pluginBundleProbe.host?.network.fetchPlugin).toEqual(expect.any(Function))
+    expect(document.title).toBe('MeshLLM - Plugin')
+  })
+
+  it.each([
+    ['disabled', disabledPluginWebUi()],
+    ['invalid', invalidPluginWebUi()],
+    ['plugin_not_running', pluginNotRunningWebUi()],
+    ['nondeclaring', nonePluginWebUi()]
+  ])('renders the %s fallback without importing bundle code', async (_label, webUi) => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(webUi)))
+
+    renderRouterAt('/plugins/blackboard/dashboard')
+
+    await screen.findByRole('heading')
+    expect(pluginBundleProbe.importBundle).not.toHaveBeenCalled()
+    expect(pluginBundleProbe.mount).not.toHaveBeenCalled()
+  })
+
+  it('does not import a ready bundle when the requested page id is undeclared', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(readyPluginWebUi())))
+
+    renderRouterAt('/plugins/blackboard/missing')
+
+    await screen.findByRole('heading', { name: 'Plugin page is not declared' })
+    expect(pluginBundleProbe.importBundle).not.toHaveBeenCalled()
+  })
+
+  it('unmounts the plugin page exactly once when navigation leaves the route', async () => {
+    installReadyPluginBundle()
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(readyPluginWebUi())))
+    const testRouter = renderRouterAt('/plugins/blackboard/dashboard')
+
+    await screen.findByText('Mounted blackboard dashboard')
+
+    await act(async () => {
+      await testRouter.navigate({ to: '/chat' })
+    })
+
+    await screen.findByText('Chat route cache: missing')
+    expect(pluginBundleProbe.unmount).toHaveBeenCalledTimes(1)
+  })
+
+  it('unmounts the plugin page exactly once when metadata changes to disabled', async () => {
+    installReadyPluginBundle()
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(readyPluginWebUi())))
+    const queryClient = new QueryClient()
+
+    renderRouterAt('/plugins/blackboard/dashboard', queryClient)
+
+    await screen.findByText('Mounted blackboard dashboard')
+
+    act(() => {
+      queryClient.setQueryData(pluginKeys.webUi('blackboard'), disabledPluginWebUi())
+    })
+
+    await screen.findByRole('heading', { name: 'Plugin web UI is disabled' })
+    expect(pluginBundleProbe.unmount).toHaveBeenCalledTimes(1)
+  })
 })
+
+function installReadyPluginBundle() {
+  pluginBundleProbe.mount.mockImplementation(({ element, host, page }: MeshPluginUiMountContext): MeshPluginUiMountHandle => {
+    const node = document.createElement('div')
+    node.textContent = `Mounted ${host.plugin.name} ${page.id}`
+    element.appendChild(node)
+    return {
+      unmount: () => {
+        pluginBundleProbe.unmount()
+        node.remove()
+      }
+    }
+  })
+  pluginBundleProbe.register.mockImplementation((host: MeshPluginUiHost): MeshPluginUiRegistration => {
+    pluginBundleProbe.host = host
+    return { pages: { dashboard: pluginBundleProbe.mount } }
+  })
+  pluginBundleProbe.importBundle.mockResolvedValue({ registerMeshPluginUi: pluginBundleProbe.register })
+}
+
+function readyPluginWebUi(): PluginWebUiStateRaw {
+  return {
+    state: 'ready',
+    declared: true,
+    enabled: true,
+    available: true,
+    pages: [
+      {
+        id: 'dashboard',
+        label: 'Blackboard dashboard',
+        route: 'dashboard',
+        bundle_id: 'main',
+        entry_script: 'dashboard.js'
+      }
+    ],
+    config_sections: [],
+    asset_base_url: '/api/plugins/blackboard/web-ui/assets/'
+  }
+}
+
+function disabledPluginWebUi(): PluginWebUiStateRaw {
+  return {
+    ...readyPluginWebUi(),
+    state: 'disabled',
+    enabled: false,
+    available: false,
+    unavailable_reason: 'web UI disabled by configuration'
+  }
+}
+
+function invalidPluginWebUi(): PluginWebUiStateRaw {
+  return {
+    ...readyPluginWebUi(),
+    state: 'invalid',
+    available: false,
+    unavailable_reason: 'bundle missing'
+  }
+}
+
+function pluginNotRunningWebUi(): PluginWebUiStateRaw {
+  return {
+    ...readyPluginWebUi(),
+    state: 'plugin_not_running',
+    available: false,
+    unavailable_reason: 'plugin process unavailable'
+  }
+}
+
+function nonePluginWebUi(): PluginWebUiStateRaw {
+  return {
+    state: 'none',
+    declared: false,
+    enabled: false,
+    available: false
+  }
+}
+
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' }
+  })
+}

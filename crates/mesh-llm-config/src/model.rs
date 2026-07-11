@@ -1238,6 +1238,8 @@ pub struct PluginConfigEntry {
     pub name: String,
     #[serde(default)]
     pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_ui_enabled: Option<bool>,
     #[serde(default)]
     pub command: Option<String>,
     #[serde(default)]
@@ -1249,6 +1251,23 @@ pub struct PluginConfigEntry {
     pub settings: BTreeMap<String, toml::Value>,
     #[serde(default, skip_serializing_if = "PluginStartupConfig::is_default")]
     pub startup: PluginStartupConfig,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PluginWebUiPreference {
+    None,
+    Enabled,
+    Disabled,
+}
+
+impl PluginConfigEntry {
+    pub const fn web_ui_preference(&self, declares_web_ui: bool) -> PluginWebUiPreference {
+        match (declares_web_ui, self.web_ui_enabled) {
+            (false, _) => PluginWebUiPreference::None,
+            (true, Some(false)) => PluginWebUiPreference::Disabled,
+            (true, Some(true) | None) => PluginWebUiPreference::Enabled,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

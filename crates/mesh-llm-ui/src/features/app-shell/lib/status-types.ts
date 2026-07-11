@@ -1,4 +1,11 @@
-import type { GpuInfo, LatencySource } from '@/lib/api/types'
+import type {
+  GpuInfo,
+  LatencySource
+} from '@/lib/api/types'
+import type {
+  PluginSummaryRaw,
+  PluginWebUiStateRaw
+} from '@/lib/api/plugin-types'
 
 export type LiveNodeState = 'client' | 'standby' | 'loading' | 'serving'
 
@@ -198,6 +205,9 @@ export type RuntimeInfo = {
   stages?: RuntimeStage[]
 }
 
+export type PluginWebUiState = PluginWebUiStateRaw
+export type PluginSummary = PluginSummaryRaw
+
 export type MeshRequirementsSummary = {
   policy_hash: string
   requirements: {
@@ -253,6 +263,7 @@ export type StatusPayload = {
   first_joined_mesh_ts?: number
   mesh_requirements?: MeshRequirementsSummary
   recent_mesh_rejections?: MeshRequirementRejection[]
+  plugins?: PluginSummary[]
 }
 
 export type ModelServingStat = {

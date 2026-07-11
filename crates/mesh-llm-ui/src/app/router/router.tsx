@@ -53,6 +53,13 @@ const configurationTabRoute = createRoute({
   ),
   errorComponent: FeatureErrorBoundary
 })
+const pluginWebUiRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/plugins/$pluginName/$pageId',
+  head: () => ({ meta: [{ title: 'MeshLLM - Plugin' }] }),
+  component: lazyRouteComponent(() => import('@/features/plugins/web-ui/PluginWebUiRoutePage'), 'PluginWebUiRoutePage'),
+  errorComponent: FeatureErrorBoundary
+})
 const developerPlaygroundRoute = env.isDevelopment
   ? createRoute({
       getParentRoute: () => rootRoute,
@@ -76,6 +83,7 @@ export const routeTree = rootRoute.addChildren([
   chatRoute,
   configurationRoute,
   configurationTabRoute,
+  pluginWebUiRoute,
   ...(developerPlaygroundRoute ? [developerPlaygroundRoute] : []),
   ...(enableMeshVizPerfRoute ? [meshVizPerfRoute] : [])
 ])

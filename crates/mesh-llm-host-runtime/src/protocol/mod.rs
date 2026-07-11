@@ -2046,6 +2046,7 @@ alias = "model-alias"
             plugins: vec![PluginConfigEntry {
                 name: "demo".to_string(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: Some("mesh-llm".to_string()),
                 args: vec!["--plugin".to_string()],
                 url: None,

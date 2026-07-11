@@ -1,5 +1,6 @@
 use super::installed::{
-    ConfiguredExternalPlugin, append_installed_plugins, configured_external_plugin_spec,
+    ConfiguredExternalPlugin, append_installed_plugins,
+    configured_disabled_installed_plugin_summary, configured_external_plugin_spec,
 };
 use super::schema_validation::strict_plugin_schema_availability;
 use super::{BLOBSTORE_PLUGIN_ID, PluginStartupOptions, PluginSummary};
@@ -16,10 +17,11 @@ pub use mesh_llm_config::{
     MeshRequirementsConfig, ModelConfigDefaults, ModelConfigEditor, ModelConfigEntry,
     ModelDefaultsEditor, ModelFitConfig, ModelRuntimeKind, MultimodalConfig, NativeRuntimeConfig,
     OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PluginStartupConfig,
-    PrefixCacheConfig, ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig,
-    ReservedObjectConfig, SkippyConfig, SpeculativeConfig, StringOrStringList, TelemetryConfig,
-    TelemetryMetricsConfig, TensorSplitConfig, ThroughputConfig, config_path, config_to_toml,
-    parse_config_toml as base_parse_config_toml, validate_config_with_plugin_schemas,
+    PluginWebUiPreference, PrefixCacheConfig, ReasoningBudget, ReasoningEnabled,
+    RequestDefaultsConfig, ReservedObjectConfig, SkippyConfig, SpeculativeConfig,
+    StringOrStringList, TelemetryConfig, TelemetryMetricsConfig, TensorSplitConfig,
+    ThroughputConfig, config_path, config_to_toml, parse_config_toml as base_parse_config_toml,
+    validate_config_with_plugin_schemas,
 };
 use mesh_llm_plugin::MeshVisibility;
 use std::collections::BTreeMap;
@@ -274,6 +276,8 @@ pub struct ExternalPluginSpec {
     /// Extra environment passed only to the plugin process.
     pub env: BTreeMap<String, String>,
     pub startup: PluginStartupOptions,
+    pub web_ui_enabled: Option<bool>,
+    pub installed_metadata: Option<mesh_llm_plugin_manager::InstalledPluginMetadata>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -306,6 +310,9 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
             continue;
         }
         if !enabled {
+            if let Some(summary) = configured_disabled_installed_plugin_summary(entry) {
+                inactive.push(summary);
+            }
             continue;
         }
         match configured_external_plugin_spec(entry)? {
@@ -343,6 +350,8 @@ pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
         url: None,
         env: BTreeMap::new(),
         startup: PluginStartupOptions::default(),
+        web_ui_enabled: None,
+        installed_metadata: None,
     })
 }
 
@@ -434,6 +443,7 @@ mod tests {
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
                 config_schema: schema,
+                web_ui: None,
             }),
             last_protocol_version: Some(1),
             last_status: Some("installed".to_string()),

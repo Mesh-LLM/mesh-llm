@@ -31,6 +31,10 @@ pub use store::{
     InstalledPluginObjectProperty, InstalledPluginOptionsSource,
     InstalledPluginPresentationMetadata, InstalledPluginRestartScope, InstalledPluginSettingSchema,
     InstalledPluginTextFormat, InstalledPluginValueKind, InstalledPluginValueSchema,
-    InstalledPluginVisibility, PluginStore, SUPPORTED_PLUGIN_SCHEMA_VERSION, default_store_root,
+    InstalledPluginVisibility, InstalledPluginWebUiBundleMetadata,
+    InstalledPluginWebUiConfigSectionMetadata, InstalledPluginWebUiMetadata,
+    InstalledPluginWebUiPageMetadata, InstalledPluginWebUiValidation,
+    InstalledPluginWebUiValidationStatus, PluginStore, SUPPORTED_PLUGIN_SCHEMA_VERSION,
+    default_store_root,
 };
 pub use target::{ArchiveExt, PluginTarget, UnsupportedTarget};

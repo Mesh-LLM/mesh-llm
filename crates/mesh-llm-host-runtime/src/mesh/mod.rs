@@ -8477,6 +8477,81 @@ impl Node {
         self.owner_control_update_from_state(&state)
     }
 
+    pub(crate) async fn set_plugin_web_ui_enabled(
+        &self,
+        plugin_name: &str,
+        enabled: bool,
+    ) -> anyhow::Result<()> {
+        use crate::runtime::config_state::{ApplyResult, ConfigApplyMode};
+
+        let config_state = Arc::clone(&self.config_state);
+        let revision_tx = Arc::clone(&self.config_revision_tx);
+        let plugin_name = plugin_name.to_string();
+        let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let mut state = config_state.blocking_lock();
+            let expected_revision = state.revision();
+            let mut config = state.config().clone();
+            match config
+                .plugins
+                .iter_mut()
+                .find(|plugin| plugin.name == plugin_name)
+            {
+                Some(plugin) => plugin.web_ui_enabled = Some(enabled),
+                None => config.plugins.push(crate::plugin::PluginConfigEntry {
+                    name: plugin_name,
+                    enabled: None,
+                    web_ui_enabled: Some(enabled),
+                    command: None,
+                    args: Vec::new(),
+                    url: None,
+                    settings: std::collections::BTreeMap::new(),
+                    startup: crate::plugin::PluginStartupConfig::default(),
+                }),
+            }
+            let result = state.apply(config, expected_revision);
+            Ok((result, state.revision()))
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("plugin web UI config task panicked: {error}"))??;
+
+        match apply_result {
+            (ApplyResult::Applied { apply_mode, .. }, revision) => {
+                if apply_mode == ConfigApplyMode::Staged {
+                    let _ = revision_tx.send(revision);
+                }
+                Ok(())
+            }
+            (
+                ApplyResult::PersistedWithRevisionTrackingError {
+                    revision, error, ..
+                },
+                _,
+            ) => {
+                let _ = revision_tx.send(revision);
+                anyhow::bail!(error)
+            }
+            (ApplyResult::RevisionConflict { current_revision }, _) => {
+                anyhow::bail!("config revision conflict at revision {current_revision}")
+            }
+            (ApplyResult::ValidationError { error, .. }, _)
+            | (ApplyResult::PersistError(error), _) => {
+                anyhow::bail!(error)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn replace_config_state_for_test(
+        &self,
+        path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        let state = crate::runtime::config_state::ConfigState::load(path)?;
+        let revision = state.revision();
+        *self.config_state.lock().await = state;
+        let _ = self.config_revision_tx.send(revision);
+        Ok(())
+    }
+
     fn owner_control_watch_response(
         &self,
         include_snapshot: bool,

@@ -10,6 +10,7 @@ Plugin-specific documentation:
 
 - [Flash-MoE](flash-moe.md) - external OpenAI-compatible backend adapter for single-node SSD expert streaming
 - [Telemetry](telemetry.md) - OTLP metrics-only runtime telemetry and external metrics plugin notes
+- [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift
 
 The main goals are:
 
@@ -67,6 +68,117 @@ details through environment variables:
 Plugin-specific configuration should live in the plugin process or use generic
 plugin config fields. The host should not special-case behavior for a plugin by
 repository or package name.
+
+## Plugin Web UI Projection Contract
+
+For the maintained source-owned sample, start with
+[`docs/plugins/exemplars/web-ui/`](exemplars/web-ui/README.md). The manifest,
+bundle, config, and lifecycle fixtures there are part of the contract, and the
+tests read them directly so the docs and implementation stay aligned.
+
+### Manifest Fields
+
+The manifest's `web_ui` block is additive. It declares the local bundle roots,
+page entries, and optional configuration-section entries that the host may
+project.
+
+Use the typed builders from `mesh_llm_plugin::manifest`:
+
+- `web_ui`
+- `web_ui_page`
+- `web_ui_config_section`
+- `web_ui_bundle`
+
+Rules for the declared bundle paths:
+
+- keep paths package-relative
+- use one bundle root
+- keep page and config-section entry scripts inside that root
+- reject remote URL schemes, absolute paths, and traversal segments
+- treat `parent_tab = "integrations"` as the only supported parent-tab value for
+  config sections, or omit `parent_tab`
+
+### State Matrix
+
+The host exposes exactly these web UI state names:
+
+| State | Meaning |
+|---|---|
+| `none` | The plugin does not declare a web UI projection. |
+| `ready` | The manifest and installed bundle are valid, and the host may mount it. |
+| `disabled` | The projection is installed and valid, but the persisted `web_ui_enabled` preference is off. |
+| `invalid` | The manifest or installed bundle failed validation, or the bundle root is missing. |
+| `plugin_not_running` | The plugin process is stopped, but installed metadata still carries the projection state. |
+
+### API And Console Surface
+
+The web UI API uses the existing plugin namespace and these exact routes:
+
+- `GET /api/plugins/:plugin/web-ui`
+- `PATCH /api/plugins/:plugin/web-ui/enabled`
+- `GET /api/plugins/:plugin/web-ui/assets/*asset`
+
+The toggle route changes only the persisted `web_ui_enabled` projection
+preference. It does not start, stop, or disable the plugin process.
+
+Asset delivery is host-owned and same-origin. It serves only validated installed
+bundle assets and only when the projection is `ready`.
+
+The console route is static TanStack routing, not dynamic route injection:
+
+- `/plugins/$pluginName/$pageId`
+
+Plugin routes do not become primary app tabs. The existing Configuration
+`Plugins` tab owns config-section projection, and only ready config sections in
+the `integrations` projection mount there.
+
+### Bundle Contract
+
+Typed author bundles export `registerMeshPluginUi(host)` and return mount
+handlers for pages and config sections.
+
+- each mount handler returns an object with `unmount()`
+- `unmount()` must tear down DOM content and detach host subscriptions
+- config sections use the host config mutation surface, not direct file writes
+- the host imports bundle code only after the projection is ready, enabled,
+  available, and the requested page or section exists
+
+### Validation And Remediation
+
+If the projection is `invalid` or assets are missing:
+
+1. Check the packaged bundle root and the entry script paths in the manifest.
+2. Remove remote URLs, absolute paths, and traversal segments.
+3. Keep the bundle rooted under one directory and split files inside that root.
+4. Confirm config sections either omit `parent_tab` or use `integrations`.
+5. Reinstall or update the plugin package, then reload mesh-llm so the
+   installed metadata is revalidated.
+
+Invalid or missing web UI assets do not stop the plugin process or its
+non-UI capabilities.
+
+### Compatibility Guarantees
+
+The web UI contract is additive and projection-only.
+
+- older nodes can ignore unknown manifest fields
+- `web_ui_enabled` stays independent from the plugin process `enabled` flag
+- invalid, disabled, missing, and stopped web UIs remain visible in summary and
+  API state
+- disabling projection does not disable the plugin process
+
+### Non-Goals
+
+This contract does not include:
+
+- iframe or sandbox isolation
+- remote UI assets
+- marketplace or discovery flow for plugin UIs
+- RBAC specific to plugin web UIs
+- a generic plugin event bus
+- a schema-driven generic settings editor
+- dynamic TanStack route mutation
+- disabling the plugin process when web UI projection is turned off
 
 ## High-Level Model
 
