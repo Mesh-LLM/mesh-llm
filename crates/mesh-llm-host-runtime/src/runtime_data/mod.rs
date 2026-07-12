@@ -764,6 +764,7 @@ pub(crate) mod tests {
                     ..Default::default()
                 },
             )]),
+            display_name_by_name: HashMap::new(),
         };
         let snapshot = collector.build_model_view(ModelViewInput {
             peers: vec![],
@@ -807,6 +808,57 @@ pub(crate) mod tests {
             "mesh-llm serve --auto --model Example-Model"
         );
         assert_eq!(payload[0].fit_label, "Likely comfortable");
+    }
+
+    #[test]
+    fn runtime_data_model_snapshot_uses_local_display_name_for_synthetic_refs() {
+        let collector = RuntimeDataCollector::new();
+        let synthetic_ref = "local-gguf/sha256-66243256b95c5f7c".to_string();
+        let local_inventory = LocalModelInventorySnapshot {
+            model_names: HashSet::from([synthetic_ref.clone()]),
+            size_by_name: HashMap::from([(synthetic_ref.clone(), 8_000_000_000)]),
+            metadata_by_name: HashMap::from([(
+                synthetic_ref.clone(),
+                crate::proto::node::CompactModelMetadata {
+                    model_key: synthetic_ref.clone(),
+                    context_length: 32_768,
+                    quantization_type: "Q4_K_M".to_string(),
+                    ..Default::default()
+                },
+            )]),
+            display_name_by_name: HashMap::from([(
+                synthetic_ref.clone(),
+                "MyModel-7B-Q4_K_M".to_string(),
+            )]),
+        };
+        let snapshot = collector.build_model_view(ModelViewInput {
+            peers: vec![],
+            catalog: vec![MeshCatalogEntry {
+                model_name: synthetic_ref.clone(),
+                descriptor: None,
+            }],
+            served_models: vec![],
+            active_demand: HashMap::new(),
+            my_serving_models: vec![],
+            my_hosted_models: vec![],
+            local_inventory,
+            node_hostname: Some("node.local".into()),
+            my_vram_gb: 24.0,
+            model_name: "Another-Model".into(),
+            model_size_bytes: 0,
+            now_unix_secs: 1_700_000_000,
+        });
+
+        let payload = mesh_models(snapshot);
+        assert_eq!(payload.len(), 1);
+        // The canonical name stays the synthetic ref.
+        assert_eq!(payload[0].name, synthetic_ref);
+        // The display name is the GGUF file stem, not the synthetic ref.
+        assert_eq!(payload[0].display_name, "MyModel-7B-Q4_K_M");
+        // Local metadata still flows through.
+        assert_eq!(payload[0].size_gb, 8.0);
+        assert_eq!(payload[0].context_length, Some(32_768));
+        assert_eq!(payload[0].quantization, Some("Q4_K_M".to_string()));
     }
 
     #[test]
@@ -870,6 +922,7 @@ pub(crate) mod tests {
                 model_names: HashSet::from([model_name.clone()]),
                 size_by_name: HashMap::new(),
                 metadata_by_name: HashMap::new(),
+                display_name_by_name: HashMap::new(),
             },
             node_hostname: Some("node.local".into()),
             my_vram_gb: 24.0,
@@ -919,6 +972,7 @@ pub(crate) mod tests {
                 model_names: HashSet::from([model_name.clone()]),
                 size_by_name: HashMap::new(),
                 metadata_by_name: HashMap::new(),
+                display_name_by_name: HashMap::new(),
             },
             node_hostname: Some("node.local".into()),
             my_vram_gb: 24.0,
@@ -971,6 +1025,7 @@ pub(crate) mod tests {
                 model_names: HashSet::from([model_name.clone()]),
                 size_by_name: HashMap::new(),
                 metadata_by_name: HashMap::new(),
+                display_name_by_name: HashMap::new(),
             },
             node_hostname: Some("node.local".into()),
             my_vram_gb: 24.0,

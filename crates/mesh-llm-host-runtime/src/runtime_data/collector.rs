@@ -403,6 +403,7 @@ impl RuntimeDataCollector {
         let local_model_names = std::mem::take(&mut input.local_inventory.model_names);
         let mut metadata_by_name = std::mem::take(&mut input.local_inventory.metadata_by_name);
         let mut size_by_name = std::mem::take(&mut input.local_inventory.size_by_name);
+        let display_name_by_name = std::mem::take(&mut input.local_inventory.display_name_by_name);
         for peer in &input.peers {
             for meta in &peer.available_model_metadata {
                 metadata_by_name
@@ -439,6 +440,7 @@ impl RuntimeDataCollector {
             local_model_names: &local_model_names,
             metadata_by_name: &metadata_by_name,
             size_by_name: &size_by_name,
+            display_name_by_name: &display_name_by_name,
         };
         let models = catalog
             .iter()
@@ -493,6 +495,7 @@ struct ModelViewBuildContext<'a> {
     local_model_names: &'a HashSet<String>,
     metadata_by_name: &'a HashMap<String, crate::proto::node::CompactModelMetadata>,
     size_by_name: &'a HashMap<String, u64>,
+    display_name_by_name: &'a HashMap<String, String>,
 }
 
 fn build_model_payload_from_catalog_entry(
@@ -509,7 +512,9 @@ fn build_model_payload_from_catalog_entry(
         || input.my_hosted_models.iter().any(|served| served == name)
         || input.my_serving_models.iter().any(|served| served == name)
         || name == &input.model_name;
-    let display_name = crate::models::installed_model_display_name(name);
+    let display_name = crate::models::loaded_remote_catalog_display_name(name)
+        .or_else(|| ctx.display_name_by_name.get(name).cloned())
+        .unwrap_or_else(|| name.to_string());
     let route_stats = is_warm.then(|| {
         http_route_stats(
             name,

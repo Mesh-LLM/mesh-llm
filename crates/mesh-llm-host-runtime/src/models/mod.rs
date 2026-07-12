@@ -42,8 +42,9 @@ pub use resolve::{
     download_model_ref_with_progress_details, download_model_ref_with_progress_details_direct,
     find_loaded_remote_catalog_model_exact, find_remote_catalog_model_exact,
     installed_model_capabilities, installed_model_display_name, installed_model_huggingface_ref,
-    remote_catalog_model_draft_ref, remote_catalog_model_ref, resolve_model_spec,
-    resolve_model_spec_with_progress, show_exact_model, show_model_variants_with_progress,
+    loaded_remote_catalog_display_name, remote_catalog_model_draft_ref, remote_catalog_model_ref,
+    resolve_model_spec, resolve_model_spec_with_progress, show_exact_model,
+    show_model_variants_with_progress,
 };
 pub use search::{
     SearchArtifactFilter, SearchHit, SearchProgress, SearchSort, search_catalog_json_payload,
