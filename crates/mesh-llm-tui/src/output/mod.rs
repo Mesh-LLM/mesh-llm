@@ -11006,6 +11006,8 @@ mod tests {
 
     #[test]
     fn join_token_slice_handles_narrow_widths() {
+        assert_eq!(join_token_visible_slice("", 0, 5), "");
+        assert_eq!(join_token_visible_slice("abcdef", 0, 0), "");
         assert_eq!(join_token_visible_slice("abcdef", 0, 1), "…");
         assert_eq!(join_token_visible_slice("abcdef", 2, 1), "…");
         assert_eq!(join_token_visible_slice("abcdef", 5, 1), "…");
