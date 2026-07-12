@@ -403,10 +403,14 @@ jobs:
             cuda_major: '12'
             cuda_architectures: '75;80;86;87;89;90'
             cuda_architectures_cache: '75_80_86_87_89_90'
+            cmake_build_parallel_level: ''
           - cuda_version: '13.1.2'
             cuda_major: '13'
             cuda_architectures: '75;80;86;87;89;90;100;103;120;121'
             cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'
+            # Limit concurrent multi-architecture nvcc invocations in this
+            # expanded CUDA 13 lane.
+            cmake_build_parallel_level: 2
     container:
       image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
     env:
@@ -415,6 +419,7 @@ jobs:
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-cuda-sm${{ matrix.cuda_architectures_cache }}
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
       MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
+      CMAKE_BUILD_PARALLEL_LEVEL: ${{ matrix.cmake_build_parallel_level }}
     steps:
       - name: Install base packages
         run: |
