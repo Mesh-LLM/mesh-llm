@@ -62,6 +62,15 @@ struct InventoryScanEntry {
     missing_cache_file: bool,
 }
 
+fn synthetic_local_display_name(entry: &InventoryScanEntry) -> Option<String> {
+    entry
+        .model_key
+        .starts_with(SYNTHETIC_LOCAL_GGUF_PREFIX)
+        .then(|| entry.path.file_stem())
+        .flatten()
+        .map(|stem| stem.to_string_lossy().into_owned())
+}
+
 impl CachedCompactModelMetadata {
     fn into_proto(self) -> crate::proto::node::CompactModelMetadata {
         crate::proto::node::CompactModelMetadata {
@@ -324,13 +333,11 @@ where
     let mut snapshot = LocalModelInventorySnapshot::default();
     for entry in entries {
         snapshot.model_names.insert(entry.model_key.clone());
-        if entry.model_key.starts_with(SYNTHETIC_LOCAL_GGUF_PREFIX)
-            && let Some(stem) = entry.path.file_stem().and_then(|stem| stem.to_str())
-        {
+        if let Some(display_name) = synthetic_local_display_name(&entry) {
             snapshot
                 .display_name_by_name
                 .entry(entry.model_key.clone())
-                .or_insert_with(|| stem.to_string());
+                .or_insert(display_name);
         }
         snapshot
             .size_by_name
@@ -362,6 +369,25 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    #[cfg(unix)]
+    #[test]
+    fn synthetic_display_name_preserves_non_utf8_file_stems_lossily() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let entry = InventoryScanEntry {
+            path: PathBuf::from(std::ffi::OsString::from_vec(b"Model-\xff.gguf".to_vec())),
+            size: 0,
+            model_key: format!("{SYNTHETIC_LOCAL_GGUF_PREFIX}hash"),
+            quantization_type: String::new(),
+            scans_metadata: false,
+            missing_cache_file: false,
+        };
+
+        assert_eq!(
+            synthetic_local_display_name(&entry).as_deref(),
+            Some("Model-�")
+        );
+    }
     struct EnvGuard {
         key: &'static str,
         previous: Option<std::ffi::OsString>,

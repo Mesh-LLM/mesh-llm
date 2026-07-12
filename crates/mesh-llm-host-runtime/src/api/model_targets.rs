@@ -573,19 +573,45 @@ mod tests {
     #[test]
     fn display_name_falls_back_to_local_inventory_label_for_synthetic_refs() {
         let synthetic_ref = "local-gguf/sha256-66243256b95c5f7c";
-        let mut index = CatalogTargetIndex::default();
-        index
-            .local_display_name_by_ref
-            .insert(synthetic_ref.to_string(), "MyModel-7B-Q4_K_M".to_string());
+        let lookup = build_model_target_lookup(ModelTargetSource {
+            local_interests: vec![LocalModelInterest {
+                model_ref: synthetic_ref.to_string(),
+                submission_source: None,
+                created_at_unix: 1,
+                updated_at_unix: 1,
+            }],
+            local_display_names: HashMap::from([(
+                synthetic_ref.to_string(),
+                "MyModel-7B-Q4_K_M".to_string(),
+            )]),
+            node_explicit_model_interests: Vec::new(),
+            peers: Vec::new(),
+            catalog: Vec::new(),
+            active_demand: HashMap::new(),
+            requested_models: Vec::new(),
+            my_hosted_models: Vec::new(),
+            local_role: mesh::NodeRole::Worker,
+            local_vram_bytes: 0,
+            now: 1,
+        });
 
         assert_eq!(
-            display_name_for_model_ref(synthetic_ref, &index),
+            lookup.by_model_ref[synthetic_ref].display_name,
             "MyModel-7B-Q4_K_M"
         );
+
         // Catalog display names still win when present.
-        index
-            .display_name_by_ref
-            .insert(synthetic_ref.to_string(), "Catalog Name".to_string());
+        let index = CatalogTargetIndex {
+            display_name_by_ref: HashMap::from([(
+                synthetic_ref.to_string(),
+                "Catalog Name".to_string(),
+            )]),
+            local_display_name_by_ref: HashMap::from([(
+                synthetic_ref.to_string(),
+                "MyModel-7B-Q4_K_M".to_string(),
+            )]),
+            ..CatalogTargetIndex::default()
+        };
         assert_eq!(
             display_name_for_model_ref(synthetic_ref, &index),
             "Catalog Name"
