@@ -637,13 +637,13 @@ Use this to stop local `mesh-llm` instances tracked in the runtime root.
 
 ### `blackboard` (plugin)
 
-Shared mesh notes — post, search, and read notes across the mesh. Blackboard was moved from a built-in command to an [installable plugin](plugins.md#using-plugins):
+Shared mesh notes — post, search, and read notes across the mesh. Blackboard was moved from a built-in command to an [installable plugin](/docs/pages/plugins/#use-plugin-features):
 
 ```bash
 mesh-llm plugins install blackboard
 ```
 
-Once installed, it runs as a managed plugin process when mesh-llm starts. See the [plugins documentation](plugins.md#using-plugins) for configuration and usage.
+Once installed, it runs as a managed plugin process when mesh-llm starts. See the [plugins documentation](/docs/pages/plugins/#use-plugin-features) for configuration and usage.
 
 ### `plugins` / `plugin`
 
@@ -662,7 +662,7 @@ Subcommands:
 - `plugins search [query]`: search the plugin catalog.
 - `plugins list`: list installed/configured plugins.
 
-See [plugins documentation](plugins.md#using-plugins) for more detail.
+See [plugins documentation](/docs/pages/plugins/#use-plugin-features) for more detail.
 
 
 ### `auth`

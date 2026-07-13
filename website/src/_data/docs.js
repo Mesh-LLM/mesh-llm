@@ -24,7 +24,7 @@ export default [
     title: "Running Models",
     description: "Serve local models, use Hugging Face GGUFs, and scale across machines.",
     links: [
-      ["Run your first model", "/docs/pages/quickstart/#serve-a-model"],
+      ["Run your first model", "/docs/pages/quickstart/#3-start-one-private-node"],
       ["Choose a model", "/docs/pages/choose-a-model/"],
       ["Running large models", "/docs/pages/running-large-models/"],
       ["Console chat", "/docs/pages/console-chat/"],
