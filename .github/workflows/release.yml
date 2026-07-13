@@ -1445,6 +1445,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ needs.metadata.outputs.tag }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Prepare dispatched release version
@@ -1465,6 +1466,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ needs.metadata.outputs.tag }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Prepare dispatched release version
