@@ -12,7 +12,7 @@ Add the tagged Mesh-LLM package to `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.72.1"),
+    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "{{ site.sdkVersion }}"),
 ],
 targets: [
     .target(
@@ -40,25 +40,31 @@ let client = try await Client.connectPublic(
     query: PublicMeshQuery(model: "Qwen3")
 )
 
-try await client.start()
-defer { Task { await client.stop() } }
+do {
+    try await client.start()
 
-let models = try await client.inference.listModels()
-let request = ChatRequest(
-    model: models[0].id,
-    messages: [ChatMessage(role: "user", content: "Say hello from Swift.")]
-)
+    let models = try await client.inference.listModels()
+    let request = ChatRequest(
+        model: models[0].id,
+        messages: [ChatMessage(role: "user", content: "Say hello from Swift.")]
+    )
 
-for try await event in client.inference.chat(request) {
-    switch event {
-    case .tokenDelta(_, let delta):
-        print(delta, terminator: "")
-    case .completed:
-        print()
-    default:
-        break
+    for try await event in client.inference.chat(request) {
+        switch event {
+        case .tokenDelta(_, let delta):
+            print(delta, terminator: "")
+        case .completed:
+            print()
+        default:
+            break
+        }
     }
+} catch {
+    await client.stop()
+    throw error
 }
+
+await client.stop()
 ```
 
 For a private mesh, initialize `Client` with `InviteToken(...)` and the app's persisted owner keypair instead of `Client.connectPublic(...)`.
@@ -88,31 +94,36 @@ let node = try Node(
     ownerKeypairBytesHex: generateOwnerKeypairHex()
 )
 
-try await node.start()
-defer { Task { try? await node.stop() } }
+do {
+    try await node.start()
 
-let modelRef = ProcessInfo.processInfo.environment["MESH_SDK_MODEL_REF"]
-    ?? "Qwen2.5-3B-Instruct-Q4_K_M"
-_ = try await node.models.download(modelRef)
-let served = try await node.serving.load(
-    modelRef,
-    options: LoadModelOptions(devicePolicy: .auto)
-)
+    let modelRef = ProcessInfo.processInfo.environment["MESH_SDK_MODEL_REF"]
+        ?? "Qwen2.5-3B-Instruct-Q4_K_M"
+    _ = try await node.models.download(modelRef)
+    let served = try await node.serving.load(
+        modelRef,
+        options: LoadModelOptions(devicePolicy: .auto)
+    )
 
-let request = ChatRequest(
-    model: served.modelId,
-    messages: [ChatMessage(role: "user", content: "Say hello from local serving.")]
-)
-for try await event in node.inference.chat(request) {
-    if case .tokenDelta(_, let delta) = event {
-        print(delta, terminator: "")
+    let request = ChatRequest(
+        model: served.modelId,
+        messages: [ChatMessage(role: "user", content: "Say hello from local serving.")]
+    )
+    for try await event in node.inference.chat(request) {
+        if case .tokenDelta(_, let delta) = event {
+            print(delta, terminator: "")
+        }
     }
-}
 
-try await node.serving.unloadModel(
-    served.modelId,
-    options: UnloadModelOptions(drainTimeoutMs: 1_000, force: false)
-)
+    try await node.serving.unloadModel(
+        served.modelId,
+        options: UnloadModelOptions(drainTimeoutMs: 1_000, force: false)
+    )
+    try await node.stop()
+} catch {
+    try? await node.stop()
+    throw error
+}
 ```
 
 Handle `MeshError.ServingUnsupported` for iOS and other targets without validated local serving. The current support line is macOS local serving; Mac Catalyst is under validation and iOS should use `Client` to reach another serving node.

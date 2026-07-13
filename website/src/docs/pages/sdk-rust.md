@@ -13,7 +13,7 @@ Client-only application:
 ```toml
 [dependencies]
 anyhow = "1"
-mesh-llm-sdk = "0.72.1"
+mesh-llm-sdk = "{{ site.sdkVersion }}"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -22,7 +22,7 @@ Serving application:
 ```toml
 [dependencies]
 anyhow = "1"
-mesh-llm-sdk = { version = "0.72.1", features = ["serving"] }
+mesh-llm-sdk = { version = "{{ site.sdkVersion }}", features = ["serving"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -68,6 +68,7 @@ let outcome = install_native_runtime(NativeRuntimeInstallOptions {
     selection: RuntimeSelection::Recommended,
     cache_dir: Some(app_cache_dir.join("mesh-llm-native-runtimes")),
     bundle_dirs: vec![app_resources.join("meshllm-native-runtime")],
+    allow_download: false,
     ..Default::default()
 })
 .await?;

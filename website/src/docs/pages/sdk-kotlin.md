@@ -24,7 +24,7 @@ repositories {
 }
 
 dependencies {
-    implementation("ai.meshllm:meshllm-android:0.72.1")
+    implementation("ai.meshllm:meshllm-android:{{ site.sdkVersion }}")
 }
 ```
 

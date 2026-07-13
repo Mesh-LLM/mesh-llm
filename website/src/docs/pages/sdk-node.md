@@ -11,7 +11,7 @@ Use [`@meshllm/sdk`](https://www.npmjs.com/package/@meshllm/sdk) in Node.js serv
 ```json
 {
   "dependencies": {
-    "@meshllm/sdk": "0.72.1"
+    "@meshllm/sdk": "{{ site.sdkVersion }}"
   }
 }
 ```

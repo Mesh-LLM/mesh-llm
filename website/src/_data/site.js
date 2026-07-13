@@ -1,3 +1,14 @@
+import { readFileSync } from 'node:fs';
+
+const cargoToml = readFileSync(new URL('../../../Cargo.toml', import.meta.url), 'utf8');
+const sdkVersion = cargoToml.match(
+  /\[workspace\.package\][\s\S]*?\nversion\s*=\s*"([^"]+)"/
+)?.[1];
+
+if (!sdkVersion) {
+  throw new Error('Unable to determine the SDK version from Cargo.toml');
+}
+
 const site = {
   title: 'Mesh LLM',
   description: 'Mesh serves large local models across multiple machines through one OpenAI-compatible endpoint.',
@@ -6,7 +17,8 @@ const site = {
   githubUrl: 'https://github.com/Mesh-LLM/mesh-llm',
   githubRepo: 'Mesh-LLM/mesh-llm',
   githubStarsFallback: '1.1k',
-  githubReleaseFallback: 'v0.71.0',
+  githubReleaseFallback: `v${sdkVersion}`,
+  sdkVersion,
 };
 
 const fetchLatestReleaseTag = async (repo) => {
