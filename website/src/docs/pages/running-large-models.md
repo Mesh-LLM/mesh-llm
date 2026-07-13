@@ -2,6 +2,8 @@
 
 Start with one working node first. After console chat works, use additional machines or catalog layer packages for larger models.
 
+If you are just trying Mesh for the first time, do not start here. Run the [Quickstart](/docs/pages/quickstart/) first.
+
 ## Add serving machines
 
 Run the same private mesh name on each machine:
@@ -56,5 +58,3 @@ flowchart LR
 ```
 
 The [architecture hub](/docs/pages/architecture/) explains how Mesh routes requests into Skippy. See the [model package specification](/docs/pages/model-package-spec/) for the manifest schema, artifact checksums, and stage-selection rules. For package publishing and validation, see [Layer package repositories](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/LAYER_PACKAGE_REPOS.md).
-
-If you are just trying Mesh for the first time, do not start here. Run the [Quickstart](/docs/pages/quickstart/) first.

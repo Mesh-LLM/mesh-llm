@@ -5,41 +5,45 @@ async function renderMermaid() {
     return;
   }
 
-  const { default: mermaid } = await import(
-    "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
-  );
+  try {
+    const { default: mermaid } = await import(
+      "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
+    );
 
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: "strict",
-    theme: "dark",
-    flowchart: {
-      curve: "basis",
-      htmlLabels: true,
-    },
-    sequence: {
-      useMaxWidth: true,
-    },
-  });
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "loose",
+      theme: "dark",
+      flowchart: {
+        curve: "basis",
+        htmlLabels: true,
+      },
+      sequence: {
+        useMaxWidth: true,
+      },
+    });
 
-  const nodes = [];
+    const nodes = [];
 
-  blocks.forEach((code) => {
-    const container = document.createElement("div");
-    const pre = code.parentElement;
-    const frame = pre?.parentElement?.classList.contains("code-copy-frame")
-      ? pre.parentElement
-      : pre;
+    blocks.forEach((code) => {
+      const container = document.createElement("div");
+      const pre = code.parentElement;
+      const frame = pre?.parentElement?.classList.contains("code-copy-frame")
+        ? pre.parentElement
+        : pre;
 
-    container.className = "mermaid";
-    container.setAttribute("role", "img");
-    container.setAttribute("aria-label", "Architecture diagram");
-    container.textContent = code.textContent;
-    frame?.replaceWith(container);
-    nodes.push(container);
-  });
+      container.className = "mermaid";
+      container.setAttribute("role", "img");
+      container.setAttribute("aria-label", "Diagram");
+      container.textContent = code.textContent;
+      frame?.replaceWith(container);
+      nodes.push(container);
+    });
 
-  mermaid.run({ nodes });
+    await mermaid.run({ nodes });
+  } catch (err) {
+    console.error("Mermaid rendering failed:", err);
+  }
 }
 
 if (document.readyState === "loading") {

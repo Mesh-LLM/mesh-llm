@@ -4509,7 +4509,7 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   padding: 16px;
   border: 1px solid var(--line-2);
   border-radius: 8px;
-  background: #07090d;
+  background: var(--bg);
   text-align: center;
 }
 

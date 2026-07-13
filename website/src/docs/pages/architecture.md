@@ -28,6 +28,10 @@ flowchart TD
 
 The important boundary is that mesh-llm owns the product and network behavior, while Skippy owns model execution. The OpenAI API stays stable whether the request is handled locally, by a peer, or by a multi-stage pipeline.
 
+## Product and control surfaces
+
+The inference API at `:9337/v1` is the application-facing path. The local management API at `:3131` supplies status, discovery, lifecycle, and runtime views to the React Mesh LLM console and to operators using scripts or the CLI. An owned node-control API provides configuration, inventory, and runtime commands for attested hosts through the owner-control lane; it uses explicit endpoint authorization and remains separate from the mesh plane used for join, gossip, routing, and inference.
+
 ## What happens to a request
 
 1. An application sends an OpenAI-compatible request to the node's `/v1` endpoint. SDK clients may use direct mesh transport instead of a local HTTP listener.
@@ -88,7 +92,7 @@ Protocol changes should be additive: older nodes must be able to ignore new opti
 
 ### Routing and election
 
-Every node exposes the same OpenAI-facing shape. A request is routed by model identity rather than by a user selecting a machine. Per-model election decides which node or stage-0 target is authoritative, while passive clients receive a smaller route view instead of full mesh gossip.
+Every node exposes the same OpenAI-facing shape and can route a request to an eligible host or worker node. Routing is based on model identity rather than a user selecting a machine. Per-model election decides which node or stage-0 target is authoritative, while passive clients receive a smaller route view instead of full mesh gossip.
 
 Routing also considers request affinity. Reusing a target for a shared prefix can preserve cache locality, while health and topology changes can drain or replace a target. The router is advisory only until a target is healthy and ready; a process that has merely spawned is not routable.
 
@@ -149,6 +153,7 @@ Start with [Mesh workflows](/docs/pages/private-meshes/) for operators, [Running
 | Mesh, gossip, and peers | `crates/mesh-llm-host-runtime/src/mesh/` |
 | Routing, proxying, tunnels, and affinity | `crates/mesh-llm-host-runtime/src/network/` |
 | Model resolution and inventory | `crates/mesh-llm-host-runtime/src/models/` and `model-*` crates |
+| React Mesh LLM console and management server | `crates/mesh-llm-ui/`, `crates/mesh-llm-console-server/` |
 | SDK facade and embedded node | `crates/mesh-llm-sdk/`, `crates/mesh-llm-api-server/`, `crates/mesh-llm-node/` |
 | FFI and language packages | `crates/mesh-llm-ffi/`, `crates/mesh-llm-nodejs/`, `sdk/` |
 | Skippy runtime and stage serving | `crates/skippy-*` and `crates/mesh-llm-embedded-runtime/` |
