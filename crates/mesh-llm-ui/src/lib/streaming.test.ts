@@ -15,6 +15,22 @@ describe('createRafBatcher', () => {
     expect(onUpdate).toHaveBeenCalledWith('background response')
     expect(requestFrame).not.toHaveBeenCalled()
   })
+
+  it('cancels a pending animation frame when the tab becomes hidden', () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame')
+    const cancelFrame = vi.spyOn(window, 'cancelAnimationFrame')
+    const onUpdate = vi.fn()
+    const batcher = createRafBatcher(onUpdate)
+
+    batcher.push('visible response')
+    const frame = requestFrame.mock.results[0].value
+    visibility.mockReturnValue('hidden')
+    batcher.push('background response')
+
+    expect(cancelFrame).toHaveBeenCalledWith(frame)
+    expect(onUpdate).toHaveBeenCalledWith('background response')
+  })
 })
 
 // ---------------------------------------------------------------------------
