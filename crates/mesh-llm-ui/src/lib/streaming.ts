@@ -72,6 +72,17 @@ export function createRafBatcher(callback: (text: string) => void) {
     /** Call on every stream update — stores the latest text snapshot + raf check. */
     push(text: string) {
       latest = text
+      // Browsers suspend requestAnimationFrame in background tabs. Publish
+      // network-driven stream updates directly there so generation keeps
+      // advancing while the user works in another tab.
+      if (document.visibilityState === 'hidden') {
+        if (raf) {
+          window.cancelAnimationFrame(raf)
+          raf = 0
+        }
+        callback(latest)
+        return
+      }
       if (!raf) {
         raf = window.requestAnimationFrame(() => {
           raf = 0

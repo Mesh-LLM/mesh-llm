@@ -1,6 +1,21 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { hasBlobContent, parseApiErrorBody } from '@/lib/streaming'
+import { createRafBatcher, hasBlobContent, parseApiErrorBody } from '@/lib/streaming'
+
+afterEach(() => vi.restoreAllMocks())
+
+describe('createRafBatcher', () => {
+  it('publishes updates without waiting for animation frames in a hidden tab', () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame')
+    const onUpdate = vi.fn()
+
+    createRafBatcher(onUpdate).push('background response')
+
+    expect(onUpdate).toHaveBeenCalledWith('background response')
+    expect(requestFrame).not.toHaveBeenCalled()
+  })
+})
 
 // ---------------------------------------------------------------------------
 // hasBlobContent
