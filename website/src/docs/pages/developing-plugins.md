@@ -162,6 +162,34 @@ storage_path = "/var/lib/mesh-notes"
 retention_days = 14
 ```
 
+Declare the schema in Rust with the manifest helpers. The host receives this manifest during initialization and uses it to validate `[plugin.settings]`:
+
+```rust
+use mesh_llm_plugin::{
+    PluginMetadata, SimplePlugin, config_integer, config_schema, config_setting,
+    plugin_manifest, plugin_server_info,
+};
+
+let manifest = plugin_manifest![
+    config_schema("notes").setting(
+        config_setting("retention_days", config_integer())
+            .default_value(&14)
+            .description("How long to retain entries."),
+    ),
+];
+
+let plugin = SimplePlugin::new(
+    PluginMetadata::new(
+        "notes",
+        "1.0.0",
+        plugin_server_info("notes", "1.0.0", "Notes", "Shared notes services", None::<String>),
+    )
+    .with_manifest(manifest),
+);
+```
+
+The same manifest can be passed to `InternalRpcPluginBuilder::with_manifest` when using the internal-RPC API. See the [`config_schema` and `config_setting` helpers](https://github.com/Mesh-LLM/mesh-llm/blob/main/crates/mesh-llm-plugin/src/manifest.rs) for the complete schema surface.
+
 Prefer typed settings with useful descriptions, defaults, constraints, and explicit restart scope. Do not make users put plugin settings at the top level of `config.toml`.
 
 ## Package and release a plugin

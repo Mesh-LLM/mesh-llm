@@ -18,7 +18,7 @@ The Mesh-LLM organization currently publishes five first-party plugin repositori
 | [`openai-endpoint`](https://github.com/Mesh-LLM/openai-endpoint) | Add an already-running OpenAI-compatible server such as vLLM, TGI, Ollama, or Lemonade Server. | `mesh-llm plugins install openai-endpoint` |
 | [`flash-moe`](https://github.com/Mesh-LLM/flash-moe) | Attach a Flash-MoE inference endpoint, or let the plugin supervise a local Flash-MoE process. | `mesh-llm plugins install flash-moe` |
 | [`metrics`](https://github.com/Mesh-LLM/metrics) | Advertise metrics support for mesh-llm telemetry. Configure the OTLP destination in mesh-llm, not in the plugin. | `mesh-llm plugins install metrics` |
-| [`agents`](https://github.com/Mesh-LLM/agents) | Run mesh-native A2A agents and expose their tools through the mesh MCP endpoint. | `mesh-llm plugins install Mesh-LLM/agents` |
+| [`agents`](https://github.com/Mesh-LLM/agents) | Run mesh-native A2A agents and expose their tools through the mesh MCP endpoint. | `mesh-llm plugins install agents` |
 
 The catalog is intentionally conservative: repositories such as `hf-hub`, `hf-mesh-skippy-splitter`, `iroh-fabric`, `MeshChat`, and `desktop-app` are useful Mesh-LLM projects, but they are not plugin packages.
 
@@ -45,6 +45,8 @@ You can also install directly from a GitHub repository. This is useful when a pl
 mesh-llm plugins install Mesh-LLM/openai-endpoint
 mesh-llm plugins install Mesh-LLM/openai-endpoint@0.1.2
 ```
+
+Use the catalog name, such as `agents`, for catalog installs. Use the fully qualified `owner/repository` form, such as `Mesh-LLM/agents`, only when installing directly from GitHub.
 
 The installer selects a native release archive using the plugin name, version, operating system, and CPU architecture. It does not download GPU-specific plugin variants. If a plugin does not publish an archive for your target, build it from its repository and configure the binary with `command`.
 
@@ -106,6 +108,12 @@ mode = "strict"
 retention_days = 14
 ```
 
+## Plugin storage
+
+By default, mesh-llm stores plugin metadata under `~/.mesh-llm/plugins/` and extracted plugin files under `~/.mesh-llm/plugins/installed/<name>/`. The metadata record at `~/.mesh-llm/plugins/<name>/plugin-install.json` records the source, version, target, install path, enabled state, and packaged settings schema.
+
+Set `MESH_LLM_PLUGIN_DIR` to use a different store root. With that override, the corresponding paths are `<root>/<name>/plugin-install.json` and `<root>/installed/<name>/`. The extracted directory contains the plugin executable, documentation, and any bundled `skills/` directories. Use `mesh-llm plugins info <name>` to confirm the resolved install path before inspecting files manually.
+
 ## Use plugin features
 
 The host aggregates plugin capabilities into the local console and MCP endpoint. Plugin-owned names are namespaced to prevent collisions:
@@ -131,7 +139,7 @@ mesh-llm plugins disable openai-endpoint
 mesh-llm plugins delete openai-endpoint
 ```
 
-Disabling keeps the archive and metadata on disk but prevents startup. Deleting removes the installed archive, extracted files, and local metadata. Restart mesh-llm after changing a plugin's configuration unless the plugin's own documentation says that it can be reloaded dynamically.
+Disabling keeps the extracted files and metadata on disk but prevents startup. Deleting removes the extracted files and local metadata. Restart mesh-llm after changing a plugin's configuration unless the plugin's own documentation says that it can be reloaded dynamically.
 
 ## Troubleshoot startup
 
