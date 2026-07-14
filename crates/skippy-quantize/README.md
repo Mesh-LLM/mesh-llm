@@ -471,6 +471,13 @@ pass `--keep-quant` to retain it. It does not pass `--max-memory` to
 quantization because the unpatched llama API quant backend does not expose a
 memory-budget knob.
 
+Pass `--resume-package` to reuse package artifacts already present in
+`--package-dir`. Each artifact uses its own quantization manifest, so an
+interrupted package build resumes at the first missing artifact. The package
+transform hook keeps its completed output in quant scratch and atomically
+links it into the package, avoiding a second model-sized copy while preserving
+a resumable result until package preflight succeeds.
+
 ## Validation
 
 Useful checks:

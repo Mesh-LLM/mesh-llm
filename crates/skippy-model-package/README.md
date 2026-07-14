@@ -88,6 +88,13 @@ skippy-model-package write-package ./model.gguf \
 This keeps canonical package identity tied to real model coordinates rather
 than inferred from arbitrary filesystem paths.
 
+`--transform-artifact-command` runs an in-place transformation before package
+metadata is measured, so the manifest describes the transformed artifact.
+`--after-artifact-command` remains suitable for upload hooks that may remove
+the artifact after its metadata is captured. Pass `--resume-existing-artifacts`
+to reuse existing artifacts; transform and upload hooks are still run for each
+resumed artifact.
+
 `validate-package` checks the source-model checksum, manifest artifact checksums
 and sizes, declared tensor counts/bytes, layer coverage, duplicate layers, and
 exact owned tensor coverage against the source model.

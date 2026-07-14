@@ -71,6 +71,8 @@ enum Command {
         #[arg(long)]
         after_artifact_command: Option<PathBuf>,
         #[arg(long)]
+        transform_artifact_command: Option<PathBuf>,
+        #[arg(long)]
         model_id: Option<String>,
         #[arg(long)]
         source_repo: Option<String>,
@@ -78,6 +80,8 @@ enum Command {
         source_revision: Option<String>,
         #[arg(long)]
         source_file: Option<String>,
+        #[arg(long)]
+        resume_existing_artifacts: bool,
     },
     Validate {
         full: PathBuf,
@@ -405,10 +409,12 @@ fn main() -> Result<()> {
             out_dir,
             projectors,
             after_artifact_command,
+            transform_artifact_command,
             model_id,
             source_repo,
             source_revision,
             source_file,
+            resume_existing_artifacts,
         } => write_package(
             model,
             out_dir,
@@ -416,12 +422,16 @@ fn main() -> Result<()> {
             ArtifactHook {
                 command: after_artifact_command,
             },
+            ArtifactHook {
+                command: transform_artifact_command,
+            },
             ExplicitSourceIdentity {
                 model_id,
                 source_repo,
                 source_revision,
                 source_file,
             },
+            resume_existing_artifacts,
         ),
         Command::Validate { full, slices } => validate(full, slices),
         Command::ValidatePackage { full, package } => validate_package(full, package),
@@ -517,7 +527,9 @@ fn write_package(
     out_dir: PathBuf,
     projectors: Vec<PathBuf>,
     artifact_hook: ArtifactHook,
+    artifact_transform: ArtifactHook,
     explicit: ExplicitSourceIdentity,
+    resume_existing_artifacts: bool,
 ) -> Result<()> {
     let input = resolve_package_input(model, explicit)?;
     fs::create_dir_all(&out_dir)
@@ -552,6 +564,8 @@ fn write_package(
         },
         &out_dir,
         &artifact_hook,
+        &artifact_transform,
+        resume_existing_artifacts,
     )?;
     progress.finish_step(&artifact_progress_detail(&metadata))?;
     progress.start_step("shared/embeddings.gguf")?;
@@ -568,6 +582,8 @@ fn write_package(
         },
         &out_dir,
         &artifact_hook,
+        &artifact_transform,
+        resume_existing_artifacts,
     )?;
     progress.finish_step(&artifact_progress_detail(&embeddings))?;
     progress.start_step("shared/output.gguf")?;
@@ -584,6 +600,8 @@ fn write_package(
         },
         &out_dir,
         &artifact_hook,
+        &artifact_transform,
+        resume_existing_artifacts,
     )?;
     progress.finish_step(&artifact_progress_detail(&output))?;
 
@@ -604,6 +622,8 @@ fn write_package(
             },
             &out_dir,
             &artifact_hook,
+            &artifact_transform,
+            resume_existing_artifacts,
         )?;
         progress.finish_step(&artifact_progress_detail(&artifact))?;
         layers.push(PackageLayer {
@@ -1178,6 +1198,8 @@ fn write_package_artifact(
     spec: PackageArtifactSpec,
     out_dir: &Path,
     artifact_hook: &ArtifactHook,
+    artifact_transform: &ArtifactHook,
+    resume_existing_artifacts: bool,
 ) -> Result<PackageArtifact> {
     let stage = stage_plan_from_tensors(
         spec.stage_index as usize,
@@ -1188,28 +1210,35 @@ fn write_package_artifact(
         tensors,
     );
     let path = out_dir.join(&spec.relative_path);
-    write_stage_artifact(source, &stage, &path)?;
+    if !should_resume_package_artifact(&path, resume_existing_artifacts) {
+        write_stage_artifact(source, &stage, &path)?;
+    }
     let relative_path = spec.relative_path.display().to_string();
-    // Read all artifact metadata from disk before running the hook: the upload
-    // hook may move or delete the local file (see split-model-job.sh, which
-    // uploads then unlinks each artifact to stay under the ephemeral storage
-    // limit). Reopening the file after the hook would fail once it is gone.
-    let artifact_info = ModelInfo::open(&path)
+    run_artifact_hook(artifact_transform, &path, &relative_path)?;
+    let artifact = read_package_artifact(&path, &spec.relative_path)?;
+    run_artifact_hook(artifact_hook, &path, &artifact.path)?;
+    Ok(artifact)
+}
+
+fn should_resume_package_artifact(path: &Path, resume_existing_artifacts: bool) -> bool {
+    resume_existing_artifacts && path.is_file()
+}
+
+fn read_package_artifact(path: &Path, relative_path: &Path) -> Result<PackageArtifact> {
+    let artifact_info = ModelInfo::open(path)
         .with_context(|| format!("open package artifact {}", path.display()))?;
     let artifact_tensors = artifact_info
         .tensors()
         .with_context(|| format!("read package artifact tensors {}", path.display()))?;
-    let metadata = fs::metadata(&path)
-        .with_context(|| format!("read artifact metadata {}", path.display()))?;
-    let artifact = PackageArtifact {
-        path: relative_path.clone(),
+    let metadata =
+        fs::metadata(path).with_context(|| format!("read artifact metadata {}", path.display()))?;
+    Ok(PackageArtifact {
+        path: relative_path.display().to_string(),
         tensor_count: artifact_tensors.len(),
         tensor_bytes: artifact_tensors.iter().map(|tensor| tensor.byte_size).sum(),
         artifact_bytes: metadata.len(),
-        sha256: file_sha256(&path)?,
-    };
-    run_artifact_hook(artifact_hook, &path, &relative_path)?;
-    Ok(artifact)
+        sha256: file_sha256(path)?,
+    })
 }
 
 fn copy_projector_artifact(
@@ -1955,6 +1984,7 @@ mod tests {
         ArtifactHook, ExplicitSourceIdentity, activation_width, local_artifact_files,
         model_distribution_id, native_mtp_layer_indices, package_generation,
         resolve_gguf_shard_paths, resolve_local_package_input, run_artifact_hook,
+        should_resume_package_artifact,
     };
     use skippy_ffi::TensorRole;
     use skippy_runtime::TensorInfo;
@@ -2242,6 +2272,22 @@ mod tests {
 
         let error = activation_width(&model).unwrap_err().to_string();
         assert!(error.contains("array nesting exceeds"), "{error}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn resumes_only_existing_artifacts_when_requested() {
+        let dir = unique_test_dir("resume-artifact");
+        std::fs::create_dir_all(&dir).unwrap();
+        let artifact = dir.join("layer-000.gguf");
+        std::fs::write(&artifact, b"existing").unwrap();
+
+        assert!(should_resume_package_artifact(&artifact, true));
+        assert!(!should_resume_package_artifact(&artifact, false));
+        assert!(!should_resume_package_artifact(
+            &dir.join("missing.gguf"),
+            true
+        ));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
