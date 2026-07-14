@@ -414,6 +414,7 @@ test-all:
     # Each UI step runs in a subshell so cd doesn't leak between steps.
     echo "=== 1/10 Repo consistency ==="
     just with-lld cargo run -p xtask -- repo-consistency ci-crate-lists
+    just with-lld cargo run -p xtask -- repo-consistency publish-crates
     echo ""
     echo "=== 2/10 Rust format check ==="
     just with-lld cargo fmt --all -- --check
