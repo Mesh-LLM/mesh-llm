@@ -428,10 +428,38 @@ fn take_warm_or_connect_downstream(
         .lock()
         .map_err(|_| anyhow!("warm downstream lock poisoned"))?
         .take();
-    warm.map_or_else(
-        || connect_binary_downstream(config, timeout_secs),
-        |stream| Ok(Some(stream)),
-    )
+    match warm {
+        Some(stream) if warm_downstream_is_healthy(&stream)? => Ok(Some(stream)),
+        Some(_) | None => connect_binary_downstream(config, timeout_secs),
+    }
+}
+
+fn warm_downstream_is_healthy(stream: &TcpStream) -> Result<bool> {
+    let previous_timeout = stream
+        .read_timeout()
+        .context("read warm downstream timeout")?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(1)))
+        .context("set warm downstream health-check timeout")?;
+    let mut byte = [0_u8; 1];
+    let peek_result = stream.peek(&mut byte);
+    stream
+        .set_read_timeout(previous_timeout)
+        .context("restore warm downstream timeout")?;
+
+    Ok(match peek_result {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ) =>
+        {
+            true
+        }
+        Err(_) => false,
+    })
 }
 
 fn prepare_binary_stage_connection(stream: &TcpStream) -> Result<()> {

@@ -6,7 +6,7 @@ use super::{
 };
 use std::{
     io,
-    net::{TcpListener, TcpStream},
+    net::{Shutdown, TcpListener, TcpStream},
     os::fd::AsRawFd,
     thread,
     time::Duration,
@@ -84,6 +84,37 @@ fn warm_downstream_connection_is_consumed_before_connecting() {
         .unwrap();
 
     assert_eq!(result.peer_addr().unwrap(), client.local_addr().unwrap());
+    assert!(warm.lock().unwrap().is_none());
+}
+
+#[test]
+fn stale_warm_downstream_connection_is_replaced() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = listener.local_addr().unwrap().to_string();
+    let client = TcpStream::connect(&endpoint).unwrap();
+    let (stale_server, _) = listener.accept().unwrap();
+    client.shutdown(Shutdown::Both).unwrap();
+
+    for _ in 0..20 {
+        if !super::warm_downstream_is_healthy(&stale_server).unwrap() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!super::warm_downstream_is_healthy(&stale_server).unwrap());
+
+    let mut config = prefix_cache_test_config();
+    config.downstream.as_mut().unwrap().endpoint = endpoint;
+    let warm = std::sync::Arc::new(std::sync::Mutex::new(Some(stale_server)));
+    let replacement = super::take_warm_or_connect_downstream(&config, &warm, 1)
+        .unwrap()
+        .unwrap();
+    let (accepted, _) = listener.accept().unwrap();
+
+    assert_eq!(
+        accepted.peer_addr().unwrap(),
+        replacement.local_addr().unwrap()
+    );
     assert!(warm.lock().unwrap().is_none());
 }
 
