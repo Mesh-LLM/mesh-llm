@@ -104,6 +104,7 @@ type DefaultsTabProps = {
   data: ConfigurationDefaultsHarnessData
   values: ConfigurationDefaultsValues
   onSettingValueChange: (settingId: string, value: string) => void
+  summarySupplement?: ReactNode
   onResetAll?: () => void
   configFilePath?: string
   readOnlyNotice?: ReactNode
@@ -357,7 +358,8 @@ export function DefaultsTab({
   summaryDescription,
   summaryStatus,
   summaryTitle = 'Inherited defaults',
-  summaryTitleId = 'defaults-summary-heading'
+  summaryTitleId = 'defaults-summary-heading',
+  summarySupplement
 }: DefaultsTabProps) {
   const { activeCategoryId, setActiveCategoryId } = useDefaultsSettingsState(data)
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(() => readShowAdvancedSettings())
@@ -473,6 +475,8 @@ export function DefaultsTab({
         status={summaryStatus ?? (changedCount === 0 ? 'all upstream' : `${changedCount} modified`)}
         title={summaryTitle}
       />
+
+      {summarySupplement}
 
       {readOnlyNotice}
 

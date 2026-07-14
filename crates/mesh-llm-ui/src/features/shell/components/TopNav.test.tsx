@@ -334,7 +334,7 @@ describe('TopNav', () => {
     expect(onTabChange).toHaveBeenCalledWith('configuration')
   })
 
-  it('renders auxiliary plugin pages separately from primary tabs', async () => {
+  it('renders a single auxiliary plugin page as a direct navigation item', async () => {
     const user = userEvent.setup()
     const onPluginPageChange = vi.fn()
 
@@ -345,7 +345,8 @@ describe('TopNav', () => {
           pluginName: 'blackboard',
           pageId: 'dashboard',
           label: 'Blackboard dashboard',
-          href: '/plugins/blackboard/dashboard'
+          href: '/plugins/blackboard/dashboard',
+          active: true
         }
       ]
     })
@@ -353,10 +354,9 @@ describe('TopNav', () => {
     expect(screen.getByRole('link', { name: 'Network' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Chat' })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Plugin pages' }))
-
-    const pluginLink = await screen.findByRole('link', { name: /Blackboard dashboard/ })
+    const pluginLink = screen.getByRole('link', { name: 'Blackboard dashboard' })
     expect(pluginLink).toHaveAttribute('href', '/plugins/blackboard/dashboard')
+    expect(pluginLink).toHaveAttribute('aria-current', 'page')
 
     await user.click(pluginLink)
 
@@ -364,8 +364,35 @@ describe('TopNav', () => {
       pluginName: 'blackboard',
       pageId: 'dashboard',
       label: 'Blackboard dashboard',
-      href: '/plugins/blackboard/dashboard'
+      href: '/plugins/blackboard/dashboard',
+      active: true
     })
+  })
+
+  it('groups multiple plugin pages in the auxiliary navigation menu', async () => {
+    const user = userEvent.setup()
+
+    renderTopNav({
+      pluginNavItems: [
+        {
+          pluginName: 'blackboard',
+          pageId: 'dashboard',
+          label: 'Blackboard dashboard',
+          href: '/plugins/blackboard/dashboard'
+        },
+        {
+          pluginName: 'notes',
+          pageId: 'notes',
+          label: 'Notes',
+          href: '/plugins/notes/notes'
+        }
+      ]
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Plugin pages' }))
+
+    expect(await screen.findByRole('link', { name: /Blackboard dashboard/ })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Notes/ })).toBeInTheDocument()
   })
 
   it('selects auto, dark, and light from the nav theme menu', async () => {

@@ -87,12 +87,14 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
   test.use({ colorScheme: 'dark', viewport: { width: 1440, height: 1000 } })
 
   test('is installed, running, rendered, configurable, and independently disableable', async ({ page, request }) => {
+    test.slow()
     const diagnostics = collectBrowserDiagnostics(page)
     const browserApiResponses = collectBrowserApiResponses(page)
     await mkdir(evidenceDirectory, { recursive: true })
 
     await page.addInitScript((preferences) => {
       window.localStorage.setItem('mesh-llm-ui-preview:preferences:v1', JSON.stringify(preferences))
+      window.localStorage.setItem('mesh-llm-ui-preview:data-mode:v1', 'live')
     }, darkUiPreferences)
 
     try {
@@ -134,12 +136,23 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
       const invalidConfigResponse = await setRetentionDays(request, 0)
       expect(invalidConfigResponse.status()).toBe(422)
 
-      await page.goto(`/plugins/${pluginName}/overview`)
+      await page.goto('/')
       await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
-      await expect(page.getByRole('heading', { name: 'Exemplar Overview', level: 1 })).toBeVisible()
-      const pluginHost = page.getByRole('region', { name: 'Exemplar Overview plugin host' })
-      await expect(pluginHost.getByRole('heading', { name: 'Exemplar Overview', level: 2 })).toBeVisible()
-      await expect(pluginHost).toContainText('exemplar.notes.v1 remains available')
+      const pluginNavLink = page.getByRole('link', { name: 'Exemplar Notes' })
+      await expect(pluginNavLink).toBeVisible()
+      await pluginNavLink.click()
+      await expect(page).toHaveURL(new RegExp(`/plugins/${pluginName}/overview$`))
+      await expect(page.getByRole('heading', { name: 'Exemplar Notes', level: 1 })).toBeVisible()
+      const pluginHost = page.getByRole('region', { name: 'Exemplar Notes plugin host' })
+      await expect(pluginHost.getByRole('heading', { name: 'Exemplar Notes', level: 2 })).toBeVisible()
+      await expect(pluginHost).toContainText('exemplar.notes.v1 capability remains available')
+      await expect(pluginHost.getByText('30 days', { exact: true })).toBeVisible()
+      await expect(pluginHost.getByRole('meter', { name: 'Configured retention days' })).toHaveAttribute(
+        'aria-valuenow',
+        '30'
+      )
+      await pluginHost.getByRole('button', { name: 'Add sample note' }).click()
+      await expect(pluginHost.getByRole('status')).toHaveText('Sample note 1 will be retained for 30 days.')
       await expect(page.getByText('Plugin page mounted')).toBeAttached()
       await expectBrowserApiResponse(browserApiResponses, `${pluginApi}/web-ui`)
       await expectBrowserApiResponse(browserApiResponses, `${pluginApi}/web-ui/assets/register-mesh-plugin-ui.js`)
@@ -149,41 +162,60 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
         animations: 'disabled'
       })
 
-      await page.goto('/configuration/plugins')
+      await pluginHost.getByRole('button', { name: 'Open plugin settings' }).click()
+      await expect(page).toHaveURL(/\/configuration\/plugins$/)
       await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
       await expect(page.getByRole('heading', { name: 'Configuration', level: 1 })).toBeVisible()
       await expect(page.getByRole('tab', { name: 'Plugins' })).toHaveAttribute('aria-selected', 'true')
+      const settingsBanner = page.getByRole('heading', { name: 'Plugin settings' })
+      const installedPluginsHeading = page.getByRole('heading', { name: 'Installed plugins' })
+      await expect(settingsBanner).toBeVisible()
+      await expect(installedPluginsHeading).toBeVisible()
+      const settingsBannerBox = await settingsBanner.boundingBox()
+      const installedPluginsBox = await installedPluginsHeading.boundingBox()
+      expect(settingsBannerBox?.y).toBeLessThan(installedPluginsBox?.y ?? Number.POSITIVE_INFINITY)
       const pluginCard = page.getByRole('article', { name: pluginName })
       await expect(pluginCard.getByText('running', { exact: true })).toBeVisible()
       await expect(pluginCard.getByText('Web UI ready', { exact: true })).toBeVisible()
       await expect(pluginCard.getByText('Assets available', { exact: true })).toBeVisible()
       await expect(pluginCard.getByRole('switch', { name: `${pluginName} web UI projection` })).toBeChecked()
 
-      const configHost = pluginCard.getByRole('region', { name: 'Exemplar Retention plugin config host' })
-      const retentionInput = configHost.getByRole('spinbutton')
-      await expect(retentionInput).toHaveValue('30')
-      await retentionInput.fill('46')
-      await configHost.getByRole('button', { name: 'Save retention' }).click()
-      await expect(pluginCard.getByRole('status')).toContainText(/Retention saved|Plugin settings saved/)
+      const configHost = pluginCard.getByRole('region', { name: 'Exemplar page plugin config host' })
+      await expect(configHost).toContainText('Current retention: 30 days')
+      await expect(configHost.getByRole('button', { name: 'Open exemplar page' })).toBeVisible()
+
+      await page.getByRole('button', { name: /Web Ui Exemplar/ }).click()
+      const retentionControl = page.getByRole('slider', { name: 'Retention days' })
+      await expect(retentionControl).toHaveValue('30')
+      await retentionControl.press('End')
+      await expect(retentionControl).toHaveValue('365')
+      const saveConfigButton = page.getByRole('button', { name: 'Save config' })
+      await saveConfigButton.click()
       await expect
         .poll(async () => {
           const response = await request.get(`${pluginApi}/web-ui/config`)
           const body = (await response.json()) as { settings: { retention_days: number } }
           return body.settings.retention_days
         })
-        .toBe(46)
-      await page.reload()
-      await expect(
-        page
-          .getByRole('article', { name: pluginName })
-          .getByRole('region', { name: 'Exemplar Retention plugin config host' })
-          .getByRole('spinbutton')
-      ).toHaveValue('46')
+        .toBe(365)
+      await expect(saveConfigButton).toHaveAccessibleName('Save config')
       await page.screenshot({
         path: `${evidenceDirectory}/02-plugin-settings-persisted.png`,
         fullPage: true,
         animations: 'disabled'
       })
+      await retentionControl.scrollIntoViewIfNeeded()
+      await page.screenshot({
+        path: `${evidenceDirectory}/03-plugin-schema-setting.png`,
+        animations: 'disabled'
+      })
+
+      await page.goto(`/plugins/${pluginName}/overview`)
+      await expect(page).toHaveURL(new RegExp(`/plugins/${pluginName}/overview$`))
+      const updatedPluginHost = page.getByRole('region', { name: 'Exemplar Notes plugin host' })
+      await expect(updatedPluginHost.getByText('365 days', { exact: true })).toBeVisible()
+      await updatedPluginHost.getByRole('button', { name: 'Add sample note' }).click()
+      await expect(updatedPluginHost.getByRole('status')).toHaveText('Sample note 1 will be retained for 365 days.')
 
       await setWebUiEnabled(request, false)
       await expectWebUiState(request, 'disabled')
@@ -196,7 +228,7 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
       await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
       await expect(page.getByRole('heading', { name: 'Plugin web UI is disabled', level: 1 })).toBeVisible()
       await page.screenshot({
-        path: `${evidenceDirectory}/03-plugin-ui-disabled-capability-alive.png`,
+        path: `${evidenceDirectory}/04-plugin-ui-disabled-capability-alive.png`,
         fullPage: true,
         animations: 'disabled'
       })
@@ -215,7 +247,9 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
             color_scheme: await page.locator('html').getAttribute('data-theme'),
             web_ui_ready: true,
             browser_page_rendered: true,
-            settings_persisted: 46,
+            settings_persisted: 365,
+            direct_navigation_item: 'Exemplar Notes',
+            page_interaction: 'Sample note 1 will be retained for 365 days.',
             invalid_setting_status: 422,
             disabled_asset_status: 404,
             non_ui_capability_while_disabled: 'available',

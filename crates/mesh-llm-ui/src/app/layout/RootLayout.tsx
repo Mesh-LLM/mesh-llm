@@ -147,9 +147,10 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
       pluginName: item.pluginName,
       pageId: item.pageId,
       label: item.label,
-      href: hrefWithBasePath(`/plugins/${encodeURIComponent(item.pluginName)}/${encodeURIComponent(item.pageId)}`)
+      href: hrefWithBasePath(`/plugins/${encodeURIComponent(item.pluginName)}/${encodeURIComponent(item.pageId)}`),
+      active: pathname === `/plugins/${encodeURIComponent(item.pluginName)}/${encodeURIComponent(item.pageId)}`
     }))
-  }, [liveMode, pluginSummariesQuery.data])
+  }, [liveMode, pathname, pluginSummariesQuery.data])
 
   const onPluginPageChange = useCallback(
     (item: TopNavPluginPageItem) => {

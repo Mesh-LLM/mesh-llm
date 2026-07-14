@@ -3,23 +3,25 @@
 This source-owned exemplar is the maintained, runnable reference for a v1
 plugin web UI package. It builds as a standalone Rust plugin, generates its
 package manifest from the same runtime declaration, installs from a local
-archive, mounts a page and a settings section in the React console, and keeps
-an MCP status tool available when the UI projection is disabled. Tests read
-these files directly so the contract cannot silently drift.
+archive, adds an auxiliary console navigation item, mounts an interactive page
+and a page-actions section, renders its setting through the host's standard
+schema controls, and keeps an MCP status tool available when the UI projection
+is disabled. Tests read these files directly so the contract cannot silently
+drift.
 
 ## Files
 
-| File | Purpose |
-|---|---|
-| `Cargo.toml`, `src/main.rs` | Standalone plugin crate and runtime entrypoint. |
-| `manifest.rs` | Runtime manifest, config schema, MCP tool, and web UI declaration. |
-| `plugin.toml` | Native package marker required by the installer. |
-| `plugin.package.json` | Checked-in expected output for `plugin-manifest.json`. |
-| `config.toml` | Operator config sample showing `web_ui_enabled` independent from plugin process `enabled` and a plugin setting persisted through host config. |
-| `bundle/host-contract.d.ts` | Self-contained public TypeScript author contract; it does not import console source. |
-| `bundle/register-mesh-plugin-ui.js` | Directly shippable ES module loaded by the React host. |
-| `bundle/register-mesh-plugin-ui.ts` | Typed author-source variant of the same bundle behavior. |
-| `lifecycle-states.json` | Canonical state examples for `none`, `ready`, `disabled`, `invalid`, and `plugin_not_running`. |
+| File                                | Purpose                                                                                                                                       |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Cargo.toml`, `src/main.rs`         | Standalone plugin crate and runtime entrypoint.                                                                                               |
+| `manifest.rs`                       | Runtime manifest, config schema, MCP tool, and web UI declaration.                                                                            |
+| `plugin.toml`                       | Native package marker required by the installer.                                                                                              |
+| `plugin.package.json`               | Checked-in expected output for `plugin-manifest.json`.                                                                                        |
+| `config.toml`                       | Operator config sample showing `web_ui_enabled` independent from plugin process `enabled` and a plugin setting persisted through host config. |
+| `bundle/host-contract.d.ts`         | Self-contained public TypeScript author contract; it does not import console source.                                                          |
+| `bundle/register-mesh-plugin-ui.js` | Directly shippable ES module loaded by the React host.                                                                                        |
+| `bundle/register-mesh-plugin-ui.ts` | Typed author-source variant of the same bundle behavior.                                                                                      |
+| `lifecycle-states.json`             | Canonical state examples for `none`, `ready`, `disabled`, `invalid`, and `plugin_not_running`.                                                |
 
 ## Build, Package, And Install Locally
 
@@ -79,10 +81,14 @@ curl --fail -X POST http://127.0.0.1:13131/api/plugins/web-ui-exemplar/tools/sta
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-Open `http://127.0.0.1:13131/plugins/web-ui-exemplar/overview`. Confirm the
-plugin page is present in auxiliary navigation, the page text names
-`exemplar.notes.v1`, and Configuration -> Plugins shows the Exemplar Retention
-section. Change the value and confirm a refresh shows the persisted value.
+Open `http://127.0.0.1:13131/` in live data mode. Confirm `Exemplar Notes`
+appears as a direct auxiliary navigation item, click it, and add a sample note.
+The page must show the configured retention window and name
+`exemplar.notes.v1`. Open Configuration -> Plugins, confirm the Plugin settings
+banner is the first item, select the Web UI Exemplar category, and change
+Retention days with the host-rendered numeric control. Save the configuration,
+return through the `Exemplar Notes` navigation item, and confirm the retention
+window and new sample-note message use the saved value.
 
 Disable only the UI projection, then prove the asset is hidden while the MCP
 tool is still callable:
@@ -103,25 +109,26 @@ to clean every build, archive, store, and installed-plugin artifact.
 ## Contract Summary
 
 The manifest declares one local bundle id/root, one page, and one Integrations
-config section. Bundle paths are package-relative only. Page `route` values are
+config section. The ready page becomes a direct auxiliary navigation item while
+it is the only eligible plugin page. Bundle paths are package-relative only. Page `route` values are
 slugs, not paths or URLs. Do not use remote URL schemes, absolute paths,
 traversal segments, unknown `bundle_id` references, or multiple bundle roots.
 
 The bundle exports `registerMeshPluginUi(host)` and returns handlers for:
 
 - page id `overview`
-- config section id `retention`
+- config section id `page-actions`
 
 Both handlers return an object with `unmount()`. Unmount removes DOM content and
 unsubscribes from host state updates.
 
-The config section demonstrates the narrow host surface for persisted settings:
-it reads `host.config.visible.settings.retention_days`, calls
-`host.config.requestMutation(...)` with the plugin-owned setting key
-`retention_days`, then updates the input from the returned visible config. The
-host owns persistence and validation through `/api/plugins/:plugin/web-ui/config`
-and the existing plugin config schema. The bundle does not write config files
-directly.
+The page and config section read
+`host.config.visible.settings.retention_days`. The page turns that setting into
+a visible retention meter and uses it in the interactive sample-note status.
+The config section provides a styled shortcut to the page and points authors to
+the host-rendered schema control below it. The bundle does not duplicate the
+numeric setting, write config files directly, or bypass owner-control save and
+validation.
 
 The non-UI capability `exemplar.notes.v1` and MCP tool `status` remain present
 when web UI projection is disabled or invalid. Disabling web UI is projection
@@ -150,13 +157,16 @@ unless the non-UI behavior is also broken.
 
 ## Persisted Setting Reproduction
 
-1. Open the exemplar in the Configuration `Plugins` tab.
-2. Confirm the Retention config section shows the current `retention_days`
-   value from `host.config.visible.settings`.
-3. Change the value and click `Save retention`.
-4. Confirm the host sends `PATCH /api/plugins/web-ui-exemplar/web-ui/config`
-   with only `settings.retention_days`.
+1. Open the Configuration `Plugins` tab and confirm the Plugin settings banner
+   precedes installed-plugin metadata.
+2. Select the Web UI Exemplar schema category and confirm Retention days uses
+   the same host numeric control as other bounded integer settings.
+3. Change the value and click `Save config`.
+4. Confirm the owner-control save persists the schema-backed
+   `plugin.web-ui-exemplar.settings.retention_days` value.
 5. Confirm the saved config changes `[[plugin]].settings.retention_days` while
    leaving `enabled` and `web_ui_enabled` unchanged.
-6. Refresh plugin metadata and confirm non-UI capability `exemplar.notes.v1`
+6. Click the `Exemplar Notes` navigation item and confirm both the retention
+   meter and a newly added sample note use the saved number of days.
+7. Refresh plugin metadata and confirm non-UI capability `exemplar.notes.v1`
    remains represented.

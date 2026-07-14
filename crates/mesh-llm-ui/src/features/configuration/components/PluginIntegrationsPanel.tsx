@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react'
+import { useMemo } from 'react'
 import { PlugZap, ShieldAlert } from 'lucide-react'
 import { StatusBadge, type StatusBadgeTone } from '@/components/ui/StatusBadge'
 import {
@@ -13,7 +13,6 @@ import { cn } from '@/lib/cn'
 
 type PluginIntegrationsPanelProps = {
   readonly metadataEnabled: boolean
-  readonly settingsContent: ReactNode
 }
 
 function assertNever(value: never): never {
@@ -170,7 +169,7 @@ function PluginIntegrationCard({
   )
 }
 
-export function PluginIntegrationsPanel({ metadataEnabled, settingsContent }: PluginIntegrationsPanelProps) {
+export function PluginIntegrationsPanel({ metadataEnabled }: PluginIntegrationsPanelProps) {
   const summariesQuery = usePluginSummariesQuery({ enabled: metadataEnabled })
   const summaries = useMemo(
     () => (metadataEnabled ? (summariesQuery.data ?? []) : []),
@@ -179,7 +178,7 @@ export function PluginIntegrationsPanel({ metadataEnabled, settingsContent }: Pl
   const entries = useMemo(() => adaptPluginSummariesToWebUiEntries(summaries), [summaries])
 
   return (
-    <div className="space-y-[14px]">
+    <div className="space-y-[14px]" data-plugin-integration-metadata="true">
       {metadataEnabled && summariesQuery.isPending ? (
         <section className="panel-shell rounded-[var(--radius-lg)] border border-border bg-panel p-4">
           <div className="type-label text-fg-faint">Installed plugins</div>
@@ -213,9 +212,6 @@ export function PluginIntegrationsPanel({ metadataEnabled, settingsContent }: Pl
           </div>
         </section>
       ) : null}
-      <section aria-label="Plugin schema settings" className="min-w-0">
-        {settingsContent}
-      </section>
     </div>
   )
 }

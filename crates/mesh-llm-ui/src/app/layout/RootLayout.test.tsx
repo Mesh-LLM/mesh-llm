@@ -274,7 +274,8 @@ describe('RootLayout', () => {
               pluginName: 'blackboard',
               pageId: 'dashboard',
               label: 'Blackboard dashboard',
-              href: '/plugins/blackboard/dashboard'
+              href: '/plugins/blackboard/dashboard',
+              active: false
             }
           ]
         })

@@ -9,7 +9,9 @@
   "color_scheme": "dark",
   "web_ui_ready": true,
   "browser_page_rendered": true,
-  "settings_persisted": 46,
+  "settings_persisted": 365,
+  "direct_navigation_item": "Exemplar Notes",
+  "page_interaction": "Sample note 1 will be retained for 365 days.",
   "invalid_setting_status": 422,
   "disabled_asset_status": 404,
   "non_ui_capability_while_disabled": "available",
@@ -17,6 +19,26 @@
   "browser_api_responses": [
     {
       "method": "GET",
+      "path": "/api/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/models",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/events",
+      "status": 200
+    },
+    {
+      "method": "GET",
       "path": "/api/plugins/web-ui-exemplar/web-ui",
       "status": 200
     },
@@ -32,7 +54,27 @@
     },
     {
       "method": "GET",
-      "path": "/api/models",
+      "path": "/api/runtime/control-bootstrap",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime/config-schema",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime/config-control-state",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/runtime/control/get-config",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/runtime/control/apply-config",
       "status": 200
     },
     {
@@ -42,7 +84,12 @@
     },
     {
       "method": "GET",
-      "path": "/api/status",
+      "path": "/api/plugins",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins/web-ui-exemplar/web-ui/config",
       "status": 200
     },
     {
@@ -62,32 +109,12 @@
     },
     {
       "method": "GET",
-      "path": "/api/plugins",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/plugins/web-ui-exemplar/web-ui/config",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/plugins/web-ui-exemplar/web-ui/assets/register-mesh-plugin-ui.js",
-      "status": 200
-    },
-    {
-      "method": "PATCH",
-      "path": "/api/plugins/web-ui-exemplar/web-ui/config",
+      "path": "/api/plugins/web-ui-exemplar/web-ui",
       "status": 200
     },
     {
       "method": "GET",
       "path": "/api/plugins",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/plugins/web-ui-exemplar/web-ui/config",
       "status": 200
     },
     {
@@ -97,37 +124,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/status",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/runtime/control-bootstrap",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/models",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/runtime/config-schema",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/runtime/config-control-state",
-      "status": 200
-    },
-    {
-      "method": "POST",
-      "path": "/api/runtime/control/get-config",
-      "status": 200
-    },
-    {
-      "method": "GET",
-      "path": "/api/plugins",
+      "path": "/api/events",
       "status": 200
     },
     {
@@ -143,6 +140,21 @@
     {
       "method": "GET",
       "path": "/api/plugins/web-ui-exemplar/web-ui",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/events",
       "status": 200
     }
   ],

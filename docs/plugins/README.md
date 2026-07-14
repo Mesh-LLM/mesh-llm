@@ -58,12 +58,12 @@ The `stapler` is the host projection layer that turns plugin manifests into expo
 When `mesh-llm` launches an external plugin, it provides the host connection
 details through environment variables:
 
-| Variable | Meaning |
-|---|---|
-| `MESH_LLM_PLUGIN_ENDPOINT` | Local IPC endpoint the plugin connects to |
-| `MESH_LLM_PLUGIN_TRANSPORT` | Transport kind, such as `unix` or `pipe` |
-| `MESH_LLM_PLUGIN_NAME` | Configured plugin name |
-| `MESH_LLM_PLUGIN_URL` | Optional `[[plugin]].url` value from config |
+| Variable                    | Meaning                                     |
+| --------------------------- | ------------------------------------------- |
+| `MESH_LLM_PLUGIN_ENDPOINT`  | Local IPC endpoint the plugin connects to   |
+| `MESH_LLM_PLUGIN_TRANSPORT` | Transport kind, such as `unix` or `pipe`    |
+| `MESH_LLM_PLUGIN_NAME`      | Configured plugin name                      |
+| `MESH_LLM_PLUGIN_URL`       | Optional `[[plugin]].url` value from config |
 
 Plugin-specific configuration should live in the plugin process or use generic
 plugin config fields. The host should not special-case behavior for a plugin by
@@ -114,13 +114,13 @@ empty `web_ui` block contributes no usable console surface.
 
 The host exposes exactly these web UI state names:
 
-| State | Meaning |
-|---|---|
-| `none` | The plugin does not declare a web UI projection. |
-| `ready` | The manifest and installed bundle are valid, and the host may mount it. |
-| `disabled` | The projection is installed and valid, but the persisted `web_ui_enabled` preference is off. |
-| `invalid` | The manifest or installed bundle failed validation, or the bundle root is missing. |
-| `plugin_not_running` | The plugin process is stopped, but installed metadata still carries the projection state. |
+| State                | Meaning                                                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------- |
+| `none`               | The plugin does not declare a web UI projection.                                             |
+| `ready`              | The manifest and installed bundle are valid, and the host may mount it.                      |
+| `disabled`           | The projection is installed and valid, but the persisted `web_ui_enabled` preference is off. |
+| `invalid`            | The manifest or installed bundle failed validation, or the bundle root is missing.           |
+| `plugin_not_running` | The plugin process is stopped, but installed metadata still carries the projection state.    |
 
 ### API And Console Surface
 
@@ -172,9 +172,18 @@ The console route is static TanStack routing, not dynamic route injection:
 
 - `/plugins/$pluginName/$pageId`
 
-Plugin routes do not become primary app tabs. The existing Configuration
-`Plugins` tab owns config-section projection, and only ready config sections in
-the `integrations` projection mount there.
+Plugin routes do not become a new primary `AppTab`. A ready plugin with one
+declared page receives a direct auxiliary navigation item labeled from its page
+manifest. When more than one plugin page is ready, the console groups those
+entries under the auxiliary `Plugins` menu to protect header space. Disabled,
+invalid, or stopped projections contribute no navigation item. The existing
+Configuration `Plugins` tab owns config-section projection, and only ready
+config sections in the `integrations` projection mount there.
+
+Plugin-owned settings declared in `config_schema` continue to render through
+the console's standard schema controls. A custom config-section bundle should
+add plugin-specific actions or context; it should not recreate a schema field
+with unstyled DOM controls or bypass the host-owned configuration save flow.
 
 ### Bundle Contract
 
@@ -251,7 +260,8 @@ This contract does not include:
 - marketplace or discovery flow for plugin UIs
 - RBAC specific to plugin web UIs
 - a generic plugin event bus
-- a schema-driven generic settings editor
+- a second schema-driven settings editor inside plugin bundle code (installed
+  plugin schemas continue to use the console's existing standard editor)
 - dynamic TanStack route mutation
 - disabling the plugin process when web UI projection is turned off
 
@@ -336,14 +346,14 @@ cool-plugin-1.1.0-aarch64-apple-darwin.tar.gz
 
 Supported target triples:
 
-| Platform | Target triple | Archive |
-|---|---|---|
-| macOS Apple Silicon | `aarch64-apple-darwin` | `.tar.gz` |
-| macOS Intel | `x86_64-apple-darwin` | `.tar.gz` |
-| Linux x86_64 | `x86_64-unknown-linux-gnu` | `.tar.gz` |
-| Linux ARM64 | `aarch64-unknown-linux-gnu` | `.tar.gz` |
-| Windows x86_64 | `x86_64-pc-windows-msvc` | `.zip` |
-| Windows ARM64 | `aarch64-pc-windows-msvc` | `.zip` |
+| Platform            | Target triple               | Archive   |
+| ------------------- | --------------------------- | --------- |
+| macOS Apple Silicon | `aarch64-apple-darwin`      | `.tar.gz` |
+| macOS Intel         | `x86_64-apple-darwin`       | `.tar.gz` |
+| Linux x86_64        | `x86_64-unknown-linux-gnu`  | `.tar.gz` |
+| Linux ARM64         | `aarch64-unknown-linux-gnu` | `.tar.gz` |
+| Windows x86_64      | `x86_64-pc-windows-msvc`    | `.zip`    |
+| Windows ARM64       | `aarch64-pc-windows-msvc`   | `.zip`    |
 
 Archive contents should be rooted under one directory named after the plugin:
 
@@ -400,13 +410,13 @@ overwritten unless `--force` is passed to the explicit installer.
 
 Current install targets:
 
-| Agent | Target |
-|---|---|
-| Goose | `~/.agents/skills` |
-| Codex | `~/.agents/skills` |
-| Pi | `~/.pi/agent/skills` |
-| OpenCode | `~/.config/opencode/skills` |
-| Claude Code | `~/.claude/skills` |
+| Agent       | Target                      |
+| ----------- | --------------------------- |
+| Goose       | `~/.agents/skills`          |
+| Codex       | `~/.agents/skills`          |
+| Pi          | `~/.pi/agent/skills`        |
+| OpenCode    | `~/.config/opencode/skills` |
+| Claude Code | `~/.claude/skills`          |
 
 Install selection should follow this order:
 
@@ -454,18 +464,24 @@ for installs and updates.
 The canonical catalog file is `plugins.jsonl`. Each line describes one plugin:
 
 ```json
-{"name":"cool-plugin","description":"Example plugin for mesh-llm.","github_url":"https://github.com/mesh-llm/cool-plugin","author_email":"dev@example.com","author_name":"Mesh LLM"}
+{
+  "name": "cool-plugin",
+  "description": "Example plugin for mesh-llm.",
+  "github_url": "https://github.com/mesh-llm/cool-plugin",
+  "author_email": "dev@example.com",
+  "author_name": "Mesh LLM"
+}
 ```
 
 Required fields:
 
-| Field | Meaning |
-|---|---|
-| `name` | Unique plugin name. This should match the plugin manifest ID and GitHub release asset prefix. |
-| `description` | Short human-readable plugin description. |
-| `github_url` | GitHub repository URL used for install and update resolution. |
-| `author_email` | Plugin author or maintainer email. |
-| `author_name` | Plugin author or maintainer display name. |
+| Field          | Meaning                                                                                       |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| `name`         | Unique plugin name. This should match the plugin manifest ID and GitHub release asset prefix. |
+| `description`  | Short human-readable plugin description.                                                      |
+| `github_url`   | GitHub repository URL used for install and update resolution.                                 |
+| `author_email` | Plugin author or maintainer email.                                                            |
+| `author_name`  | Plugin author or maintainer display name.                                                     |
 
 Catalog rules:
 
@@ -479,7 +495,13 @@ Catalog rules:
 The initial public catalog entry should be `blackboard`:
 
 ```json
-{"name":"blackboard","description":"Shared mesh blackboard for agent status, findings, questions, answers, and searchable coordination notes.","github_url":"https://github.com/mesh-llm/blackboard","author_email":"maintainers@meshllm.cloud","author_name":"Mesh LLM"}
+{
+  "name": "blackboard",
+  "description": "Shared mesh blackboard for agent status, findings, questions, answers, and searchable coordination notes.",
+  "github_url": "https://github.com/mesh-llm/blackboard",
+  "author_email": "maintainers@meshllm.cloud",
+  "author_name": "Mesh LLM"
+}
 ```
 
 The CLI may resolve a bare plugin name through the catalog:

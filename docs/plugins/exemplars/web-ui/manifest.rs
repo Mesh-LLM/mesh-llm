@@ -36,11 +36,11 @@ pub fn exemplar_plugin() -> SimplePlugin {
         web_ui: [web_ui()
             .bundle(web_ui_bundle("main", "bundle"))
             .page(
-                web_ui_page("overview", "Exemplar Overview", "overview", "register-mesh-plugin-ui.js")
+                web_ui_page("overview", "Exemplar Notes", "overview", "register-mesh-plugin-ui.js")
                     .bundle_id("main"),
             )
             .config_section(
-                web_ui_config_section("retention", "Exemplar Retention", "register-mesh-plugin-ui.js")
+                web_ui_config_section("page-actions", "Exemplar page", "register-mesh-plugin-ui.js")
                     .parent_tab("integrations")
                     .bundle_id("main"),
             ),

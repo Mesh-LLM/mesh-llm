@@ -676,6 +676,7 @@ function ConfigurationEditorPage({
       tomlSettings
     ]
   )
+  const pluginIntegrationMetadata = <PluginIntegrationsPanel metadataEnabled={liveMode && activeTab === 'plugins'} />
   const pluginSettingsContent = pluginsSettingsData?.settings.length ? (
     <DefaultsTab
       data={pluginsSettingsData}
@@ -702,14 +703,18 @@ function ConfigurationEditorPage({
       }
       summaryTitle="Plugin settings"
       summaryTitleId="plugins-summary-heading"
+      summarySupplement={pluginIntegrationMetadata}
       previewTip={
         <>Plugin manifests own these fields; update or reinstall the plugin when a setting is missing from this list.</>
       }
     />
   ) : (
-    <ConfigurationPlaceholderPanel title="Plugins" icon={Blocks}>
-      Plugin settings will appear here when an installed plugin publishes config schema metadata.
-    </ConfigurationPlaceholderPanel>
+    <div className="space-y-[14px]">
+      {pluginIntegrationMetadata}
+      <ConfigurationPlaceholderPanel title="Plugins" icon={Blocks}>
+        Plugin settings will appear here when an installed plugin publishes config schema metadata.
+      </ConfigurationPlaceholderPanel>
+    </div>
   )
 
   const tabs: ConfigurationTabItem[] = [
@@ -907,12 +912,7 @@ function ConfigurationEditorPage({
             label: 'Plugins',
             icon: Blocks,
             dirty: pluginsDirty,
-            content: (
-              <PluginIntegrationsPanel
-                metadataEnabled={liveMode && activeTab === 'plugins'}
-                settingsContent={pluginSettingsContent}
-              />
-            )
+            content: pluginSettingsContent
           } satisfies ConfigurationTabItem
         ]
       : []),

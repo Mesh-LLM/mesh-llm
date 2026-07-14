@@ -13,9 +13,12 @@ describe('plugin web UI exemplar contract', () => {
     expect(source).toContain('satisfies MeshPluginUiBundleModule')
     expect(source).toContain('registerMeshPluginUi(host)')
     expect(source).toContain('overview: mountOverviewPage')
-    expect(source).toContain('retention: mountRetentionSection')
+    expect(source).toContain('"page-actions": mountPageActionsSection')
     expect(source.match(/unmount\(\)/g)).toHaveLength(2)
-    expect(source).toContain('host.config.requestMutation')
+    expect(source).toContain('host.navigation.navigateTo')
+    expect(source).toContain('host.navigation.openPluginPage("overview")')
+    expect(source).toContain('host.config.visible.settings.retention_days')
+    expect(source).toContain('interactionStatus.setAttribute("role", "status")')
   })
 
   it('documents all lifecycle states while preserving non-UI capability samples', () => {

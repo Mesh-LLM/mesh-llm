@@ -41,7 +41,7 @@
     "pages": [
       {
         "id": "overview",
-        "label": "Exemplar Overview",
+        "label": "Exemplar Notes",
         "route": "overview",
         "bundle_id": "main",
         "entry_script": "register-mesh-plugin-ui.js"
@@ -49,8 +49,8 @@
     ],
     "config_sections": [
       {
-        "id": "retention",
-        "title": "Exemplar Retention",
+        "id": "page-actions",
+        "title": "Exemplar page",
         "entry_script": "register-mesh-plugin-ui.js",
         "parent_tab": "integrations",
         "bundle_id": "main"

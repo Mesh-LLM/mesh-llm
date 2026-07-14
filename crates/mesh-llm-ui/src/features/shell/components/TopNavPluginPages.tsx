@@ -8,6 +8,7 @@ export type TopNavPluginPageItem = {
   readonly pageId: string
   readonly label: string
   readonly href: string
+  readonly active?: boolean
 }
 
 type TopNavPluginPagesProps = {
@@ -21,6 +22,33 @@ function isPlainLeftClick(event: MouseEvent<HTMLAnchorElement>) {
 
 export function TopNavPluginPages({ items = [], onNavigate }: TopNavPluginPagesProps) {
   if (items.length === 0) return null
+
+  if (items.length === 1) {
+    const [item] = items
+    if (!item) return null
+
+    return (
+      <nav aria-label="Plugin pages" className="flex min-w-0 items-center">
+        <a
+          aria-current={item.active ? 'page' : undefined}
+          aria-label={item.label}
+          className={cn(
+            'inline-flex h-[var(--nav-action-size)] min-w-0 items-center gap-1.5 rounded-[var(--radius)] border px-2.5 text-[length:var(--density-type-caption)] font-medium',
+            item.active ? 'ui-control-primary' : 'ui-control-ghost'
+          )}
+          href={item.href}
+          onClick={(event) => {
+            if (!isPlainLeftClick(event)) return
+            event.preventDefault()
+            onNavigate?.(item)
+          }}
+        >
+          <Plug className="size-[var(--nav-icon-size)] shrink-0" aria-hidden="true" />
+          <span className="hidden max-w-48 truncate md:inline">{item.label}</span>
+        </a>
+      </nav>
+    )
+  }
 
   return (
     <HeaderHoverCard

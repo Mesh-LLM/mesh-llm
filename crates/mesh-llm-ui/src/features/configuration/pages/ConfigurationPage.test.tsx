@@ -744,6 +744,11 @@ describe('ConfigurationPage', () => {
     render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />, { dataMode: 'live' })
 
     expect(await screen.findByRole('heading', { name: 'blackboard' })).toBeInTheDocument()
+    const settingsBannerHeading = screen.getByRole('heading', { name: 'Plugin settings' })
+    const installedPluginsHeading = screen.getByRole('heading', { name: 'Installed plugins' })
+    expect(
+      settingsBannerHeading.compareDocumentPosition(installedPluginsHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
     expect(screen.getByText('Team scratchpad plugin')).toBeInTheDocument()
     expect(screen.getByText('Process enabled')).toBeInTheDocument()
     expect(screen.getByText('running')).toBeInTheDocument()
