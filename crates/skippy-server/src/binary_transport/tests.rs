@@ -2,6 +2,7 @@ use super::{
     binary_full_prefill_record_identities, decode_record_tokens_sideband,
     is_decode_frame_batch_candidate, native_mtp_enabled_from, prepare_binary_stage_connection,
     restore_prefill_decode_as_decode_message, token_sideband_or_fill,
+    warm_downstream_preconnect_enabled_from,
 };
 use std::{
     io,
@@ -61,6 +62,29 @@ fn native_mtp_enabled_flag_defaults_on_and_accepts_false_values() {
     assert!(!native_mtp_enabled_from(Some("0")));
     assert!(!native_mtp_enabled_from(Some("false")));
     assert!(!native_mtp_enabled_from(Some(" disabled ")));
+}
+
+#[test]
+fn warm_preconnect_is_opt_in() {
+    assert!(!warm_downstream_preconnect_enabled_from(None));
+    assert!(!warm_downstream_preconnect_enabled_from(Some("0")));
+    assert!(warm_downstream_preconnect_enabled_from(Some("true")));
+    assert!(warm_downstream_preconnect_enabled_from(Some(" ON ")));
+}
+
+#[test]
+fn warm_downstream_connection_is_consumed_before_connecting() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    let warm = std::sync::Arc::new(std::sync::Mutex::new(Some(server)));
+
+    let result = super::take_warm_or_connect_downstream(&prefix_cache_test_config(), &warm, 1)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(result.peer_addr().unwrap(), client.local_addr().unwrap());
+    assert!(warm.lock().unwrap().is_none());
 }
 
 #[test]
