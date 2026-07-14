@@ -13,7 +13,10 @@ use serde_json::{Value, json};
 use crate::{
     cli::LocalSingleArgs,
     model_identity::model_identity_for_path,
-    support::{ChildGuard, generate_run_id, retry, temp_config_path, temp_db_path},
+    support::{
+        ChildGuard, ensure_release_skippy_server_bin, generate_run_id, retry, temp_config_path,
+        temp_db_path,
+    },
 };
 
 #[derive(Deserialize)]
@@ -39,6 +42,7 @@ pub fn local_single(args: LocalSingleArgs) -> Result<()> {
     if args.layer_start >= args.layer_end {
         bail!("layer_start must be less than layer_end");
     }
+    ensure_release_skippy_server_bin(&args.stage_server_bin)?;
 
     let client = Client::builder()
         .timeout(Duration::from_secs(15))

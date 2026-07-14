@@ -32,7 +32,8 @@ pub use errors::{OpenAiError, OpenAiErrorKind, already_openai_error, map_upstrea
 pub use guardrails::{
     CompactingOpenAiBackend, CompactionConfig, CompactionDecision, CompactionOverride,
     CompactionReport, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle,
-    GuardrailTelemetrySink, MESH_COMPACT_FIELD, MESH_RESPOND_TOOL_NAME, StreamingGuardrailMode,
+    GuardrailTelemetrySink, MESH_COMPACT_FIELD, MESH_RESPOND_TOOL_NAME, RetryExhaustionMode,
+    StreamingGuardrailMode,
 };
 pub use hooks::{
     ChatHookAction, ChatHookOutcome, ChatMediaKind, ChatMediaRef, GenerationHookSignals,

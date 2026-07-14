@@ -32,7 +32,7 @@ use skippy_topology::{
 use crate::{
     cli::{DEFAULT_RUN_MAX_NEW_TOKENS, FocusedRuntimeArgs, FocusedRuntimeScenario, RunArgs},
     model_identity::model_identity_for_path,
-    support::{ChildGuard, parse_wire_dtype, retry},
+    support::{ChildGuard, ensure_release_skippy_server_bin, parse_wire_dtype, retry},
 };
 
 struct DistributedRunOutcome {
@@ -324,6 +324,7 @@ pub fn run_distributed(args: RunArgs) -> Result<()> {
 }
 
 fn run_distributed_collect(args: RunArgs) -> Result<DistributedRunOutcome> {
+    ensure_release_skippy_server_bin(&args.stage_server_bin)?;
     let run_started = Instant::now();
     let hosts = parse_hosts(&args.hosts)?;
     let ranges = parse_stage_ranges(&args.splits, args.layer_end)?;
@@ -1370,14 +1371,16 @@ fn prepare_local_stage(args: &RunArgs, stage: &StageAssignment) -> Result<()> {
             stage_remote_topology_path(stage).unwrap_or_else(|_| "<unknown>".to_string())
         )
     })?;
-    if args.rsync_model_artifacts
-        && let (Some(stage_model), Some(local_model)) = (
-            args.stage_model.as_ref(),
-            stage.local_materialized_model_path.as_ref(),
-        )
-    {
-        materialize_stage_model_on_coordinator(stage_model, stage, local_model)?;
+    if !args.rsync_model_artifacts {
+        return Ok(());
     }
+    let Some(stage_model) = args.stage_model.as_ref() else {
+        return Ok(());
+    };
+    let Some(local_model) = stage.local_materialized_model_path.as_ref() else {
+        return Ok(());
+    };
+    materialize_stage_model_on_coordinator(stage_model, stage, local_model)?;
     Ok(())
 }
 
