@@ -1207,6 +1207,7 @@ mod tests {
                 .to_string(),
             source_model_bytes: 1234,
             source_files: Vec::new(),
+            layer_weight_bytes: Vec::new(),
             layer_count,
             activation_width: 4096,
             tensor_count: 100,

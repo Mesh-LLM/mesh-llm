@@ -3844,6 +3844,7 @@ mod tests {
             source_model_sha256: "source".to_string(),
             source_model_bytes: u64::from(layer_count) * 1_000_000,
             source_files: Vec::new(),
+            layer_weight_bytes: Vec::new(),
             layer_count,
             activation_width: 2048,
             tensor_count: 100,

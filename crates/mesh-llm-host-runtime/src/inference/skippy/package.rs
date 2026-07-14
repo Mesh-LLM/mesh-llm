@@ -17,6 +17,7 @@ pub struct SkippyPackageIdentity {
     pub source_model_sha256: String,
     pub source_model_bytes: u64,
     pub source_files: Vec<SkippyPackageSourceFile>,
+    pub layer_weight_bytes: Vec<u64>,
     pub layer_count: u32,
     pub activation_width: u32,
     pub tensor_count: u64,
@@ -108,6 +109,7 @@ pub fn synthetic_direct_gguf_package(
         source_model_sha256,
         source_model_bytes,
         source_files,
+        layer_weight_bytes: Vec::new(),
         layer_count: compact.layer_count,
         activation_width: compact.embedding_size,
         tensor_count,
@@ -315,6 +317,7 @@ pub fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIde
     let source_model_bytes = info
         .source_model_bytes
         .unwrap_or_else(|| info.layers.iter().map(|l| l.artifact_bytes).sum::<u64>());
+    let layer_weight_bytes = layer_weight_bytes_from_info(&info);
 
     // For local paths inside an HF cache, convert to an exact hf:// ref so all
     // nodes resolve the same snapshot independently. HF cache dirs look like:
@@ -328,11 +331,43 @@ pub fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIde
         source_model_sha256: info.source_model_sha256,
         source_model_bytes,
         source_files: Vec::new(),
+        layer_weight_bytes,
         layer_count: info.layer_count,
         activation_width,
         tensor_count: info.layers.iter().map(|l| l.tensor_count as u64).sum(),
         generation: info.generation,
     })
+}
+
+fn layer_weight_bytes_from_info(info: &skippy_runtime::package::LayerPackageInfo) -> Vec<u64> {
+    let mut layers = info.layers.clone();
+    layers.sort_by_key(|layer| layer.layer_index);
+    if layers.len() != info.layer_count as usize
+        || layers
+            .iter()
+            .enumerate()
+            .any(|(index, layer)| layer.layer_index as usize != index)
+    {
+        return Vec::new();
+    }
+    let mut weights = layers
+        .into_iter()
+        .map(|layer| layer.tensor_bytes.max(layer.artifact_bytes))
+        .collect::<Vec<_>>();
+    let accounted = weights.iter().copied().sum::<u64>();
+    let unaccounted = info
+        .source_model_bytes
+        .unwrap_or_default()
+        .saturating_sub(accounted);
+    if let Some((first, rest)) = weights.split_first_mut() {
+        *first = first.saturating_add(unaccounted.div_ceil(2));
+        if let Some(last) = rest.last_mut() {
+            *last = last.saturating_add(unaccounted / 2);
+        } else {
+            *first = first.saturating_add(unaccounted / 2);
+        }
+    }
+    weights
 }
 
 /// Detect if a local path is inside an HF cache directory and convert to `hf://` ref.
@@ -520,5 +555,71 @@ mod tests {
 
         assert!(error.contains("missing activation_width"));
         assert!(error.contains("rebuild the package manifest"));
+    }
+
+    #[test]
+    fn package_layer_weights_include_shared_model_bytes_at_endpoints() {
+        let info = skippy_runtime::package::LayerPackageInfo {
+            package_dir: PathBuf::from("/models/package"),
+            manifest_sha256: "manifest".to_string(),
+            model_id: "org/model".to_string(),
+            source_model_path: "model.gguf".to_string(),
+            source_model_sha256: "source".to_string(),
+            source_model_bytes: Some(120),
+            layer_count: 2,
+            activation_width: Some(1024),
+            generation: None,
+            projectors: Vec::new(),
+            layers: vec![
+                skippy_runtime::package::LayerPackageLayerInfo {
+                    layer_index: 0,
+                    tensor_count: 1,
+                    tensor_bytes: 30,
+                    artifact_bytes: 30,
+                },
+                skippy_runtime::package::LayerPackageLayerInfo {
+                    layer_index: 1,
+                    tensor_count: 1,
+                    tensor_bytes: 40,
+                    artifact_bytes: 40,
+                },
+            ],
+        };
+
+        assert_eq!(layer_weight_bytes_from_info(&info), vec![55, 65]);
+    }
+
+    #[test]
+    fn package_layer_weights_require_contiguous_indices() {
+        let mut info = skippy_runtime::package::LayerPackageInfo {
+            package_dir: PathBuf::from("/models/package"),
+            manifest_sha256: "manifest".to_string(),
+            model_id: "org/model".to_string(),
+            source_model_path: "model.gguf".to_string(),
+            source_model_sha256: "source".to_string(),
+            source_model_bytes: Some(70),
+            layer_count: 2,
+            activation_width: Some(1024),
+            generation: None,
+            projectors: Vec::new(),
+            layers: vec![
+                skippy_runtime::package::LayerPackageLayerInfo {
+                    layer_index: 0,
+                    tensor_count: 1,
+                    tensor_bytes: 30,
+                    artifact_bytes: 30,
+                },
+                skippy_runtime::package::LayerPackageLayerInfo {
+                    layer_index: 2,
+                    tensor_count: 1,
+                    tensor_bytes: 40,
+                    artifact_bytes: 40,
+                },
+            ],
+        };
+
+        assert!(layer_weight_bytes_from_info(&info).is_empty());
+        info.layers[1].layer_index = 1;
+        assert_eq!(layer_weight_bytes_from_info(&info), vec![30, 40]);
     }
 }

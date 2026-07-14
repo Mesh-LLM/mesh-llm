@@ -18,6 +18,7 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) native_context_length: u32,
     pub(super) layer_count: u32,
     pub(super) model_weight_bytes: u64,
+    pub(super) layer_weight_bytes: Vec<u64>,
     pub(super) kv_bytes_per_token: u64,
     pub(super) context_length_override: Option<u32>,
     pub(super) parallel_lanes_override: Option<usize>,
@@ -74,6 +75,7 @@ pub(super) fn plan_split_topology(input: SplitTopologyPlanInput) -> Result<Split
         native_context_length: input.native_context_length,
         layer_count: input.layer_count,
         model_weight_bytes: input.model_weight_bytes,
+        layer_weight_bytes: input.layer_weight_bytes,
         kv_bytes_per_token: input.kv_bytes_per_token,
         minimum_nodes: input.minimum_nodes,
         nodes: input
@@ -222,6 +224,7 @@ fn runtime_slice_plan_input(
         native_context_length: resources.native_context_length,
         layer_count: package.layer_count,
         model_weight_bytes: package.source_model_bytes,
+        layer_weight_bytes: package_layer_weight_bytes(package),
         kv_bytes_per_token: resources.kv_bytes_per_token,
         context_length_override: resources.ctx_size_override,
         parallel_lanes_override: resources.parallel_override,
@@ -238,6 +241,13 @@ fn runtime_slice_plan_input(
             })
             .collect(),
     }
+}
+
+fn package_layer_weight_bytes(package: &skippy::SkippyPackageIdentity) -> Vec<u64> {
+    if package.layer_weight_bytes.len() == package.layer_count as usize {
+        return package.layer_weight_bytes.clone();
+    }
+    Vec::new()
 }
 
 fn map_runtime_slice_stages(
@@ -548,6 +558,7 @@ mod tests {
             source_model_sha256: "source".to_string(),
             source_model_bytes,
             source_files: Vec::new(),
+            layer_weight_bytes: Vec::new(),
             layer_count,
             activation_width: 896,
             tensor_count: 100,
@@ -633,6 +644,39 @@ mod tests {
         assert!(plan.slots > 0);
         assert_eq!(plan.stages.first().unwrap().layer_start, 0);
         assert_eq!(plan.stages.last().unwrap().layer_end, 30);
+    }
+
+    #[test]
+    fn resource_planner_uses_exact_package_layer_weights() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let participants = vec![participant(1, 12 * GIB), participant(2, 9 * GIB)];
+        let mut package = package(4, 18 * GIB);
+        package.layer_weight_bytes = vec![GIB / 8, GIB / 8, 9 * GIB, 8 * GIB];
+
+        let plan = plan_runtime_slice_topology_with_resources(
+            "topology-test",
+            "model-a",
+            &package,
+            &participants,
+            &[],
+            SplitTopologyResourceInputs {
+                native_context_length: 1,
+                kv_bytes_per_token: 1,
+                ctx_size_override: Some(1),
+                parallel_override: Some(1),
+            },
+        )
+        .expect("resource-aware topology with exact layer weights");
+
+        assert_eq!(
+            plan.stages
+                .iter()
+                .map(|stage| (stage.layer_start, stage.layer_end))
+                .collect::<Vec<_>>(),
+            vec![(0, 3), (3, 4)]
+        );
+        assert_eq!(plan.stages[0].parameter_bytes, 9 * GIB + GIB / 4);
+        assert_eq!(plan.stages[1].parameter_bytes, 8 * GIB);
     }
 
     #[test]
