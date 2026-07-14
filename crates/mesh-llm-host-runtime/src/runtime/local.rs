@@ -677,11 +677,13 @@ fn scan_layer_package_metadata(
     //
     // The package_ref looks like "hf://meshllm/Qwen3-layers@rev" which resolves
     // to a local cache directory.  Try to find shared/metadata.gguf there.
-    let package_ref = &package.package_ref;
-    let local_ref = skippy::resolve_hf_package_to_local(package_ref, 0, 0, false, false).ok()?;
-    let metadata_path = std::path::Path::new(&local_ref).join("shared/metadata.gguf");
-    if metadata_path.is_file() {
-        return models::gguf::scan_gguf_compact_meta(&metadata_path);
+    if let Ok(local_ref) =
+        skippy::resolve_hf_package_to_local(&package.package_ref, 0, 0, false, false)
+    {
+        let metadata_path = std::path::Path::new(&local_ref).join("shared/metadata.gguf");
+        if metadata_path.is_file() {
+            return models::gguf::scan_gguf_compact_meta(&metadata_path);
+        }
     }
     None
 }
@@ -2633,11 +2635,7 @@ fn split_missing_active_stage_nodes(
 ) -> Vec<iroh::EndpointId> {
     let mut missing = Vec::new();
     for stage in &active.stages {
-        if connected_node_ids
-            .iter()
-            .any(|node_id| *node_id == stage.node_id)
-            || missing.contains(&stage.node_id)
-        {
+        if connected_node_ids.contains(&stage.node_id) || missing.contains(&stage.node_id) {
             continue;
         }
         missing.push(stage.node_id);
@@ -4044,21 +4042,16 @@ mod tests {
     }
 
     #[test]
-    fn split_metadata_reads_cached_source_gguf_before_package_lookup() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let source_model_path = temp_dir.path().join("model.gguf");
-        write_fake_gguf_model(&source_model_path);
-        let package = skippy::SkippyPackageIdentity {
-            package_ref: "gguf:///models/model.gguf".to_string(),
-            source_model_path,
-            ..package(24)
-        };
+    fn split_metadata_reads_a_synthetic_direct_gguf_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let model_path = temp.path().join("model.gguf");
+        write_fake_gguf_model(&model_path);
+        let package = skippy::synthetic_direct_gguf_package("test/model", &model_path).unwrap();
 
-        let compact = scan_layer_package_metadata(&package)
-            .expect("cached direct GGUF should provide split planning metadata");
+        let metadata = scan_layer_package_metadata(&package).expect("direct GGUF metadata");
 
-        assert_eq!(compact.layer_count, 24);
-        assert_eq!(compact.context_length, 8192);
+        assert_eq!(metadata.context_length, 8192);
+        assert_eq!(metadata.embedding_size, 4096);
     }
 
     fn write_test_layer_package(dir: &Path, source_model_bytes: u64) {

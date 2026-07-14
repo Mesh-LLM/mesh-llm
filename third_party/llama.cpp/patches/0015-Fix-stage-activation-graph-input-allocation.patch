@@ -1,0 +1,106 @@
+From b33804b57ebe162aee32c543b7611f4b6ba615cf Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Wed, 15 Jul 2026 07:54:20 +1000
+Subject: [PATCH] Fix stage activation graph input allocation
+
+---
+ src/llama-graph.cpp | 39 +++++++++++++++++++++++++++------------
+ 1 file changed, 27 insertions(+), 12 deletions(-)
+
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index a75f0b75..6613747a 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -135,8 +135,8 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
+ bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
+     bool res = true;
+ 
+-    res &= (!params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
+-    res &= (!params.ubatch.embd)  || (embd   &&   embd->ne[1] == params.ubatch.n_tokens);
++    res &= (!params.ubatch.token) || (tokens && tokens->buffer && tokens->ne[0] == params.ubatch.n_tokens);
++    res &= (!params.ubatch.embd)  || (embd   && embd->buffer   && embd->ne[1] == params.ubatch.n_tokens);
+ 
+     return res;
+ }
+@@ -167,9 +167,9 @@ void llm_graph_input_embd_h::set_input(const llama_ubatch * ubatch) {
+ bool llm_graph_input_embd_h::can_reuse(const llm_graph_params & params) {
+     bool res = true;
+ 
+-    res &= (!params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
+-    res &= (!params.ubatch.embd)  || (embd   && embd->ne[1]   == params.ubatch.n_tokens);
+-    res &= (!params.ubatch.embd)  || (h      && h->ne[1]      == params.ubatch.n_tokens);
++    res &= (!params.ubatch.token) || (tokens && tokens->buffer && tokens->ne[0] == params.ubatch.n_tokens);
++    res &= (!params.ubatch.embd)  || (embd   && embd->buffer   && embd->ne[1] == params.ubatch.n_tokens);
++    res &= (!params.ubatch.embd)  || (h      && h->buffer      && h->ne[1] == params.ubatch.n_tokens);
+ 
+     return res;
+ }
+@@ -214,7 +214,9 @@ bool llm_graph_input_gemma3n_altup::can_reuse(const llm_graph_params & params) {
+ }
+ 
+ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
+-    if (ubatch->pos && pos) {
++    // A filtered stage can omit positional work entirely. In that case the
++    // scheduler leaves this otherwise declared graph input unallocated.
++    if (ubatch->pos && pos && pos->buffer) {
+         const int64_t n_tokens = ubatch->n_tokens;
+ 
+         if (ubatch->token && n_pos_per_embd == 4) {
+@@ -238,7 +240,7 @@ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
+ bool llm_graph_input_pos::can_reuse(const llm_graph_params & params) {
+     bool res = true;
+ 
+-    res &= pos->ne[0] == params.ubatch.n_tokens*n_pos_per_embd;
++    res &= pos && pos->buffer && pos->ne[0] == params.ubatch.n_tokens*n_pos_per_embd;
+ 
+     return res;
+ }
+@@ -591,9 +593,15 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
+ }
+ 
+ void llm_graph_input_attn_k::set_input(const llama_ubatch * ubatch) {
+-    mctx->set_input_k_idxs(self_k_idxs, ubatch);
++    // Filtered stages can omit their attention path, leaving these declared
++    // graph inputs unallocated by the scheduler.
++    if (self_k_idxs && self_k_idxs->buffer) {
++        mctx->set_input_k_idxs(self_k_idxs, ubatch);
++    }
+ 
+-    mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
++    if (self_kq_mask && self_kq_mask->buffer) {
++        mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
++    }
+ }
+ 
+ bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
+@@ -603,9 +611,10 @@ bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
+ 
+     bool res = true;
+ 
+-    res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
++    res &= self_k_idxs && self_k_idxs->buffer && self_k_idxs->ne[0] == params.ubatch.n_tokens;
+ 
+-    res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
++    res &= self_kq_mask && self_kq_mask->buffer &&
++        can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+ 
+     return res;
+ }
+@@ -2340,7 +2349,13 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+     assert(ggml_are_same_shape (inps[0], inps[1]));
+     assert(ggml_are_same_stride(inps[0], inps[1]));
+ 
+-    ggml_tensor * cur = ggml_build_forward_select(gf, inps.data(), inps.size(), ubatch.token ? 0 : 1);
++    // A mid-stage Skippy slice has no token embedding table, so both branches
++    // above refer to `inp->embd`. Feeding the same tensor through
++    // ggml_build_forward_select first visits it as an uncomputed branch and
++    // leaves its input buffer unallocated. It is the only valid input here.
++    ggml_tensor * cur = tok_embd
++        ? ggml_build_forward_select(gf, inps.data(), inps.size(), ubatch.token ? 0 : 1)
++        : inp->embd;
+ 
+     if (n_embd_inp != n_embd) {
+         cur = ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 0);
+-- 
+2.54.0 (Apple Git-157)
+

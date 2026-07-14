@@ -174,6 +174,8 @@ pub struct ChatCompletionResponse {
     pub model: String,
     pub choices: Vec<ChatCompletionChoice>,
     pub usage: Usage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timings: Option<BTreeMap<String, Value>>,
 }
 
 impl ChatCompletionResponse {
@@ -204,7 +206,13 @@ impl ChatCompletionResponse {
                 finish_reason: Some(finish_reason),
             }],
             usage,
+            timings: None,
         }
+    }
+
+    pub fn with_timings(mut self, timings: Option<BTreeMap<String, Value>>) -> Self {
+        self.timings = timings;
+        self
     }
 }
 

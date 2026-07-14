@@ -707,6 +707,7 @@ impl OpenAiBackend for StructuredGuardrailRecordingBackend {
                 finish_reason: Some(FinishReason::ToolCalls),
             }],
             usage: Usage::new(1, 1),
+            timings: None,
         })
     }
 
@@ -1086,6 +1087,15 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         matched_prefix_tokens: 0,
         suffix_prefill_tokens: 0,
         cache_hit_kind: None,
+        native_mtp_stats: NativeMtpStats {
+            drafted_tokens: 7,
+            accepted_tokens: 5,
+            rejected_tokens: 2,
+            verification_count: 7,
+            proposal_compute_us: 100,
+            verification_compute_us: 200,
+            ..NativeMtpStats::default()
+        },
         text: "Checked facts first.</think>Final answer.".to_string(),
         finish_reason: FinishReason::Stop,
         detokenize_ms: 0.0,
@@ -1102,6 +1112,9 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
 
     let message = &response.choices[0].message;
     assert_eq!(message.content.as_deref(), Some("Final answer."));
+    let timings = response.timings.as_ref().expect("native MTP timings");
+    assert_eq!(timings.get("draft_n"), Some(&json!(7)));
+    assert_eq!(timings.get("draft_n_accepted"), Some(&json!(5)));
     assert_eq!(
         message.reasoning_content.as_deref(),
         Some("Checked facts first.")

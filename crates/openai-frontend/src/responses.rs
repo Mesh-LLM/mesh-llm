@@ -1227,6 +1227,7 @@ mod tests {
                     finish_reason: Some(FinishReason::ToolCalls),
                 }],
                 usage: Usage::new(6, 3),
+                timings: None,
             })
         }
 

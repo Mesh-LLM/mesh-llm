@@ -1272,6 +1272,7 @@ struct GenerationCacheStats {
     matched_prefix_tokens: u32,
     suffix_prefill_tokens: u32,
     hit_kind: Option<&'static str>,
+    native_mtp_stats: NativeMtpStats,
 }
 
 impl Default for GenerationCacheStats {
@@ -1282,6 +1283,7 @@ impl Default for GenerationCacheStats {
             matched_prefix_tokens: 0,
             suffix_prefill_tokens: 0,
             hit_kind: None,
+            native_mtp_stats: NativeMtpStats::default(),
         }
     }
 }
@@ -1699,6 +1701,7 @@ fn chat_response_from_generated_text(
                 finish_reason: Some(finish_reason),
             }],
             usage: output.usage(),
+            timings: output.timings(),
         };
     }
 
@@ -1708,6 +1711,7 @@ fn chat_response_from_generated_text(
         output.usage(),
         output.finish_reason,
     )
+    .with_timings(output.timings())
 }
 
 fn parsed_chat_message_from_json(
@@ -2309,6 +2313,7 @@ where
             matched_prefix_tokens: cache_stats.matched_prefix_tokens,
             suffix_prefill_tokens: cache_stats.suffix_prefill_tokens,
             cache_hit_kind: cache_stats.hit_kind,
+            native_mtp_stats: cache_stats.native_mtp_stats,
             text: self.text,
             finish_reason: self.finish_reason,
             detokenize_ms: self.metrics.detokenize_ms,
@@ -2326,6 +2331,7 @@ struct GeneratedText {
     matched_prefix_tokens: u32,
     suffix_prefill_tokens: u32,
     cache_hit_kind: Option<&'static str>,
+    native_mtp_stats: NativeMtpStats,
     text: String,
     finish_reason: FinishReason,
     detokenize_ms: f64,
@@ -2337,6 +2343,34 @@ impl GeneratedText {
     fn usage(&self) -> Usage {
         Usage::new(self.prompt_tokens, self.completion_tokens)
             .with_cached_tokens(self.cached_prompt_tokens)
+    }
+
+    fn timings(&self) -> Option<BTreeMap<String, Value>> {
+        if !self.native_mtp_stats.enabled() {
+            return None;
+        }
+
+        let stats = self.native_mtp_stats;
+        Some(BTreeMap::from([
+            ("draft_n".to_string(), json!(stats.drafted_tokens)),
+            ("draft_n_accepted".to_string(), json!(stats.accepted_tokens)),
+            (
+                "native_mtp_rejected".to_string(),
+                json!(stats.rejected_tokens),
+            ),
+            (
+                "native_mtp_verifications".to_string(),
+                json!(stats.verification_count),
+            ),
+            (
+                "native_mtp_proposal_compute_us".to_string(),
+                json!(stats.proposal_compute_us),
+            ),
+            (
+                "native_mtp_verification_compute_us".to_string(),
+                json!(stats.verification_compute_us),
+            ),
+        ]))
     }
 }
 
