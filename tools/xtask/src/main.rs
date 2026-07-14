@@ -2287,6 +2287,7 @@ fn check_publish_catalog_sync(repo_root: &Path) -> DynResult<()> {
 
 fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     let release = fs::read_to_string(repo_root.join("RELEASE.md"))?;
+    let release_script = fs::read_to_string(repo_root.join("scripts/release.sh"))?;
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
     let pr_quality_workflow =
         fs::read_to_string(repo_root.join(".github/workflows/pr_quality.yml"))?;
@@ -2310,6 +2311,35 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         &release_workflow,
         "scripts/publish-crates.sh --dry-run --allow-dirty --sleep-seconds 0",
         "release workflow publish-chain dry-run",
+    )?;
+    let publish_job = workflow_job_section(&release_workflow, "publish")
+        .ok_or("release workflow: missing `publish` job for release tag staging check")?;
+    ensure_contains(
+        publish_job,
+        "git add --update",
+        "release workflow complete tracked release version staging",
+    )?;
+    ensure_contains_normalized(
+        publish_job,
+        "if ! git diff --quiet; then
+            echo \"Release preparation left unstaged tracked changes:\" >&2
+            git status --short >&2
+            exit 1
+          fi",
+        "release workflow unstaged tracked release change guard",
+    )?;
+    ensure_contains(
+        &release_script,
+        "git add --update",
+        "local release complete tracked release version staging",
+    )?;
+    ensure_contains_normalized(
+        &release_script,
+        "if ! git diff --quiet; then
+        git status --short >&2
+        die \"release preparation left unstaged tracked changes\"
+    fi",
+        "local release unstaged tracked release change guard",
     )?;
     ensure_contains_normalized(
         &release_workflow,

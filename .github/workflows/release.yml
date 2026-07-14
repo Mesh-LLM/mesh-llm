@@ -1419,8 +1419,16 @@ jobs:
           scripts/verify-sdk-console-assets.sh --sdk all
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock crates/*/Cargo.toml tools/*/Cargo.toml sdk/kotlin/build.gradle.kts Package.swift
+          # release-version.sh owns the complete tracked version surface. Stage
+          # all tracked release-preparation changes so this list cannot drift
+          # when another version-bearing file is added to the script.
+          git add --update
           git add -f sdk/node/console sdk/swift/Sources/MeshLLM/Resources/Console sdk/kotlin/src/main/resources/mesh-llm/console
+          if ! git diff --quiet; then
+            echo "Release preparation left unstaged tracked changes:" >&2
+            git status --short >&2
+            exit 1
+          fi
           if git diff --cached --quiet; then
             echo "Release source files already match $RELEASE_TAG"
           else
