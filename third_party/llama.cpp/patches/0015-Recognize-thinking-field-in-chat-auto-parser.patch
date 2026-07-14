@@ -1,0 +1,93 @@
+From 5cadd27893dc12af80a115884275e48c7396e8f8 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 14 Jul 2026 19:32:50 +1000
+Subject: [PATCH] Recognize thinking field in chat auto-parser
+
+---
+ common/chat-diff-analyzer.cpp   | 10 +++++++---
+ tests/test-chat-auto-parser.cpp | 21 +++++++++++++++++++++
+ 2 files changed, 28 insertions(+), 3 deletions(-)
+
+diff --git a/common/chat-diff-analyzer.cpp b/common/chat-diff-analyzer.cpp
+index b166ee5a..787264ca 100644
+--- a/common/chat-diff-analyzer.cpp
++++ b/common/chat-diff-analyzer.cpp
+@@ -454,7 +454,8 @@ void analyze_reasoning::compare_reasoning_presence() {
+     json assistant_with_reasoning = json{
+         { "role",              "assistant"                },
+         { "content",           ASSISTANT_MSG              },
+-        { "reasoning_content", THINKING_CONTENT           }
++        { "reasoning_content", THINKING_CONTENT           },
++        { "thinking",          THINKING_CONTENT           }
+     };
+ 
+     template_params params;
+@@ -587,13 +588,15 @@ void analyze_reasoning::compare_reasoning_scope() {
+     json assistant_reasoning_content = json{
+         { "role",              "assistant"      },
+         { "content",           ASSISTANT_MSG    },
+-        { "reasoning_content", THINKING_CONTENT }
++        { "reasoning_content", THINKING_CONTENT },
++        { "thinking",          THINKING_CONTENT }
+     };
+ 
+     json assistant_reasoning_tools = json{
+         { "role",              "assistant"                                                                  },
+         { "content",           nullptr                                                                      },
+         { "reasoning_content", THINKING_CONTENT                                                             },
++        { "thinking",          THINKING_CONTENT                                                             },
+         { "tool_calls",
+          json::array({ build_tool_call(FUN_FIRST, json{ { ARG_FIRST, "VVVV" }, { ARG_SECOND, "XXXX" } }) }) }
+     };
+@@ -662,7 +665,8 @@ analyze_content::analyze_content(const common_chat_template & tmpl, const analyz
+     json assistant_with_reasoning = json{
+         { "role",              "assistant"      },
+         { "content",           ""               },
+-        { "reasoning_content", THINKING_CONTENT }
++        { "reasoning_content", THINKING_CONTENT },
++        { "thinking",          THINKING_CONTENT }
+     };
+ 
+     template_params params_content_only;
+diff --git a/tests/test-chat-auto-parser.cpp b/tests/test-chat-auto-parser.cpp
+index 8e662c3e..b51df496 100644
+--- a/tests/test-chat-auto-parser.cpp
++++ b/tests/test-chat-auto-parser.cpp
+@@ -61,6 +61,7 @@ static void test_nemotron_lazy_tool_trigger(testing & t);
+ 
+ // CohereForAI template analysis tests
+ static void test_cohere_reasoning_detection(testing & t);
++static void test_thinking_alias_reasoning_detection(testing & t);
+ static void test_cohere_analysis(testing & t);
+ 
+ // SmolLM3 template analysis tests
+@@ -1410,6 +1411,26 @@ static common_chat_template load_cohere_template(testing & t) {
+ 
+ static void test_cohere_analysis(testing & t) {
+     t.test("Cohere reasoning detection", test_cohere_reasoning_detection);
++    t.test("thinking field reasoning detection", test_thinking_alias_reasoning_detection);
++}
++
++static void test_thinking_alias_reasoning_detection(testing & t) {
++    const std::string template_source = R"(
++{%- for message in messages %}
++{%- if message.role == 'user' %}<|USER|>{{ message.content }}
++{%- elif message.role == 'assistant' %}<|ASSISTANT|>{% if message.thinking %}<|START_THINKING|>{{ message.thinking }}<|END_THINKING|>{% endif %}<|START_RESPONSE|>{{ message.content }}<|END_RESPONSE|>
++{%- endif %}
++{%- endfor %}
++{%- if add_generation_prompt %}<|ASSISTANT|>{% endif %})";
++    common_chat_template tmpl(template_source, "", "");
++
++    struct autoparser analysis;
++    analysis.analyze_template(tmpl);
++
++    t.assert_equal("thinking alias should use tag-based reasoning", reasoning_mode::TAG_BASED,
++                   analysis.reasoning.mode);
++    t.assert_equal("thinking alias start marker", "<|START_THINKING|>", analysis.reasoning.start);
++    t.assert_equal("thinking alias end marker", "<|END_THINKING|>", analysis.reasoning.end);
+ }
+ 
+ static void test_cohere_reasoning_detection(testing & t) {
+-- 
+2.50.1 (Apple Git-155)
+
