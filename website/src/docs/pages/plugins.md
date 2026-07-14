@@ -20,8 +20,6 @@ The Mesh-LLM organization currently publishes five first-party plugin repositori
 | [`metrics`](https://github.com/Mesh-LLM/metrics) | Advertise metrics support for mesh-llm telemetry. Configure the OTLP destination in mesh-llm, not in the plugin. | `mesh-llm plugins install metrics` |
 | [`agents`](https://github.com/Mesh-LLM/agents) | Run mesh-native A2A agents and expose their tools through the mesh MCP endpoint. | `mesh-llm plugins install agents` |
 
-The catalog is intentionally conservative: repositories such as `hf-hub`, `hf-mesh-skippy-splitter`, `iroh-fabric`, `MeshChat`, and `desktop-app` are useful Mesh-LLM projects, but they are not plugin packages.
-
 The catalog can also contain community plugins. Search it before installing an unfamiliar integration:
 
 ```bash
