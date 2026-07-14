@@ -106,6 +106,10 @@ Optional future packs are intentionally not wired yet:
 
 Keep `sync`/`install` opt-in. Do not make normal `just build` or `cargo build`
 download external harnesses, datasets, or Docker images.
+`eval sync` checks out the fetched upstream ref directly, and `eval run` records
+the resolved harness SHA as `harness_commit` in `run.json`. Preserve both
+behaviors so benchmark evidence remains reproducible even when definitions use
+floating upstream refs.
 
 Terminal-Bench should be installed with `uv tool install --python 3.12
 terminal-bench`; Python 3.14 currently breaks the `tb` Typer CLI. Treat Docker
