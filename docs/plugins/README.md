@@ -91,19 +91,24 @@ Use the typed builders from `mesh_llm_plugin::manifest`:
 
 Rules for the declared bundle paths:
 
-- keep paths package-relative
-- declare exactly one non-empty bundle id and one bundle root for v1
+- keep paths package-relative and below the package root; do not use an empty
+  path or `.` as a bundle root
+- declare exactly one non-empty bundle id and one bundle root for v1 whenever
+  the block declares pages or config sections
 - set every page and config-section `bundle_id` to that declared bundle id
+- give every page and config section a non-empty id and display label/title
 - keep page `route` values as slugs, not paths or URLs; do not include `/`,
   `\`, protocol syntax, or traversal-style dot prefixes
-- keep page and config-section entry scripts inside that root
+- keep non-empty page and config-section entry scripts inside that root; the
+  installed package must contain each declared entry script
 - reject remote URL schemes, absolute paths, and traversal segments
 - treat `parent_tab = "integrations"` as the only supported parent-tab value for
   config sections, or omit `parent_tab`
 
 The manifest proto keeps the bundle field repeated as a forward-compatible wire
 shape. V1 validation intentionally permits only one bundle root so the host has
-one deterministic `asset_base_url` for page and config-section imports.
+one deterministic `asset_base_url` for page and config-section imports. An
+empty `web_ui` block contributes no usable console surface.
 
 ### State Matrix
 
@@ -1093,12 +1098,12 @@ The plugin system should also avoid:
 
 The following are intentionally left open for implementation design:
 
-- exact manifest schema
 - exact control protocol message shapes
 - exact stream framing format
 - capability provider selection when multiple plugins implement the same capability
 - whether promoted product routes are configured statically or negotiated dynamically
 - how auth and policy rules are expressed for plugin-defined HTTP bindings
+- how a future multi-bundle or isolated plugin UI version should be negotiated
 
 ## Architecture Baseline
 

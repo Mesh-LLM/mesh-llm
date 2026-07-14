@@ -20,6 +20,7 @@ Start by deciding what your plugin adds to the host:
 | `provides` | A stable capability contract that core or another plugin can consume | `capability("object-store.v1")` |
 | `mesh` | Plugin-specific peer-to-peer messages | `mesh::channel("notes.v1")` |
 | `events` | Mesh lifecycle events delivered by the host | `events::peer_up()`, `events::peer_down()` |
+| `web_ui` | Local console pages or a configuration section projected by the host | `web_ui`, `web_ui_bundle`, `web_ui_page`, `web_ui_config_section` |
 
 MCP and HTTP are host projections. A plugin does not need to implement an MCP server, HTTP server, or socket protocol itself.
 
@@ -192,6 +193,55 @@ The same manifest can be passed to `InternalRpcPluginBuilder::with_manifest` whe
 
 Prefer typed settings with useful descriptions, defaults, constraints, and explicit restart scope. Do not make users put plugin settings at the top level of `config.toml`.
 
+## Add a host-projected web UI
+
+Web UI is an additive, local package projection. The host serves validated
+bundle files from the installed plugin package on its own origin; it does not
+accept remote assets, iframe a plugin, or grant a generic event bus. Keep the
+plugin process lifecycle separate from its optional UI projection:
+
+```rust
+use mesh_llm_plugin::{
+    plugin_manifest, web_ui, web_ui_bundle, web_ui_config_section, web_ui_page,
+};
+
+let manifest = plugin_manifest! {
+    web_ui()
+        .bundle(web_ui_bundle("main", "bundle"))
+        .page(
+            web_ui_page("overview", "Overview", "overview", "register-mesh-plugin-ui.js")
+                .bundle_id("main"),
+        )
+        .config_section(
+            web_ui_config_section("settings", "Settings", "register-mesh-plugin-ui.js")
+                .parent_tab("integrations")
+                .bundle_id("main"),
+        ),
+};
+```
+
+For v1, declare one non-empty bundle id rooted in a directory below the package
+root. Every page and config section needs a non-empty id and label/title, must
+reference that bundle, and must name an existing non-empty entry script inside
+it. Page `route` is a slug, not a path or URL. `parent_tab` is either omitted or
+`"integrations"`.
+
+The bundle module exports `registerMeshPluginUi(host)` and returns page and
+optional config-section mount handlers. Each handler returns `{ unmount() {} }`
+and must release DOM content and subscriptions. Read current plugin settings
+from `host.config.visible.settings`; persist plugin-owned setting changes with
+`host.config.requestMutation(...)`, never by writing `config.toml` directly.
+
+Ready pages use the static host route
+`/plugins/<plugin-name>/<page-id>`. Config sections appear in **Configuration →
+Plugins → Integrations**. Operators can set `web_ui_enabled = false` or use the
+console toggle to hide that projection without affecting the plugin's other
+capabilities.
+
+The maintained [web UI exemplar](https://github.com/Mesh-LLM/mesh-llm/tree/main/docs/plugins/exemplars/web-ui)
+includes a matching author manifest, packaged metadata, config, typed bundle,
+and lifecycle-state reference. Use it as the release check for this contract.
+
 ## Package and release a plugin
 
 The installer expects a native GitHub Release archive. Each archive should contain one directory named after the plugin:
@@ -199,7 +249,10 @@ The installer expects a native GitHub Release archive. Each archive should conta
 ```text
 hello-plugin/
   plugin.toml
+  plugin-manifest.json
   hello-plugin
+  bundle/
+    register-mesh-plugin-ui.js
   README.md
   LICENSE
   skills/
@@ -207,7 +260,9 @@ hello-plugin/
       SKILL.md
 ```
 
-On Windows, the executable is `hello-plugin.exe`. The required files are `plugin.toml` and the executable; documentation, license files, and skills are recommended.
+On Windows, the executable is `hello-plugin.exe`. The required files are `plugin.toml` and the executable. A plugin that declares a web UI must also ship
+`plugin-manifest.json`, its declared bundle directory, and every declared entry
+script. Documentation, license files, and skills are recommended.
 
 Publish archives using the target triple in the filename:
 
@@ -236,13 +291,15 @@ Do not overwrite an existing user-owned skill unless the user explicitly asks fo
 At minimum, test the plugin with a running mesh-llm node and verify:
 
 1. The plugin connects and completes initialization.
-2. The manifest exposes the expected MCP, HTTP, inference, capability, channel, and event entries.
+2. The manifest exposes the expected MCP, HTTP, inference, capability, channel, event, and web UI entries.
 3. Invalid input returns a useful error without taking down the control session.
 4. Health still responds while a handler is running.
 5. Streaming and cancellation do not leak side streams.
 6. A stopped endpoint becomes unavailable without incorrectly disabling the plugin.
 7. The release archive extracts to the expected directory and runs on each target.
 8. A mixed-version host rejects incompatible protocol versions clearly and accepts the versions you support.
+9. If the plugin declares web UI, test ready, disabled, invalid/missing bundle,
+   and plugin-not-running states without losing non-UI capabilities.
 
 For plugin-specific runtime tests, use the repository's normal Rust test workflow. For a full host check, use the [testing playbook](/docs/pages/testing/).
 

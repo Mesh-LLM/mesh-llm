@@ -99,6 +99,7 @@ fn validate_web_ui_asset_root(
     let [bundle] = web_ui.bundles.as_slice() else {
         return Err("web UI v1 requires exactly one bundle root".to_string());
     };
+    validate_web_ui_metadata(web_ui, bundle)?;
     validate_web_ui_relative_path(&bundle.root_path)?;
     let relative_root = PathBuf::from(&bundle.root_path);
     let plugin_root = plugin_dir
@@ -123,10 +124,111 @@ fn validate_web_ui_asset_root(
             bundle.root_path
         ));
     }
+    validate_web_ui_entry_scripts(web_ui, &canonical_asset_root)?;
     Ok(relative_root)
 }
 
+fn validate_web_ui_metadata(
+    web_ui: &InstalledPluginWebUiMetadata,
+    bundle: &crate::store::InstalledPluginWebUiBundleMetadata,
+) -> std::result::Result<(), String> {
+    validate_web_ui_non_empty("web UI bundle id", &bundle.id)?;
+
+    for page in &web_ui.pages {
+        validate_web_ui_non_empty("web UI page id", &page.id)?;
+        validate_web_ui_non_empty("web UI page label", &page.label)?;
+        validate_web_ui_route_slug(&page.route)?;
+        validate_web_ui_non_empty("web UI page bundle_id", &page.bundle_id)?;
+        if page.bundle_id != bundle.id {
+            return Err(format!(
+                "web UI page bundle_id must reference declared web UI bundle '{}', got '{}'",
+                bundle.id, page.bundle_id
+            ));
+        }
+        validate_web_ui_relative_path(&page.entry_script)?;
+        if let Some(icon) = &page.icon {
+            validate_web_ui_relative_path(icon)?;
+        }
+    }
+
+    for section in &web_ui.config_sections {
+        validate_web_ui_non_empty("web UI config section id", &section.id)?;
+        validate_web_ui_non_empty("web UI config section title", &section.title)?;
+        validate_web_ui_non_empty("web UI config section bundle_id", &section.bundle_id)?;
+        if section.bundle_id != bundle.id {
+            return Err(format!(
+                "web UI config section bundle_id must reference declared web UI bundle '{}', got '{}'",
+                bundle.id, section.bundle_id
+            ));
+        }
+        validate_web_ui_relative_path(&section.entry_script)?;
+        if let Some(parent_tab) = &section.parent_tab
+            && parent_tab != "integrations"
+        {
+            return Err("web UI config section parent_tab must be `integrations`".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_web_ui_entry_scripts(
+    web_ui: &InstalledPluginWebUiMetadata,
+    asset_root: &Path,
+) -> std::result::Result<(), String> {
+    for entry_script in web_ui
+        .pages
+        .iter()
+        .map(|page| page.entry_script.as_str())
+        .chain(
+            web_ui
+                .config_sections
+                .iter()
+                .map(|section| section.entry_script.as_str()),
+        )
+    {
+        let path = asset_root.join(entry_script);
+        if !path.is_file() {
+            return Err(format!(
+                "web UI entry script '{entry_script}' is missing from the bundle root"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_web_ui_non_empty(field_name: &str, value: &str) -> std::result::Result<(), String> {
+    if value.trim().is_empty() {
+        return Err(format!("{field_name} must be non-empty"));
+    }
+    Ok(())
+}
+
+fn validate_web_ui_route_slug(value: &str) -> std::result::Result<(), String> {
+    validate_web_ui_non_empty("web UI page route", value)?;
+    if value.starts_with("http://")
+        || value.starts_with("https://")
+        || value.starts_with("//")
+        || value.contains("://")
+    {
+        return Err(format!(
+            "web UI page route must be a slug, got URL-like value '{value}'"
+        ));
+    }
+    if value.contains('/')
+        || value.contains('\\')
+        || value == "."
+        || value == ".."
+        || value.starts_with('.')
+    {
+        return Err(format!(
+            "web UI page route must be a slug without path syntax '{value}'"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_web_ui_relative_path(value: &str) -> std::result::Result<(), String> {
+    validate_web_ui_non_empty("web UI bundle path", value)?;
     if value.starts_with("http://") || value.starts_with("https://") || value.starts_with("//") {
         return Err(format!(
             "web UI bundle root must be a relative path, got remote URL '{value}'"
@@ -136,6 +238,14 @@ fn validate_web_ui_relative_path(value: &str) -> std::result::Result<(), String>
     if path.is_absolute() {
         return Err(format!(
             "web UI bundle root must be a relative path, got absolute path '{value}'"
+        ));
+    }
+    if path
+        .components()
+        .all(|component| matches!(component, Component::CurDir))
+    {
+        return Err(format!(
+            "web UI bundle path must name a file or directory below the package root, got '{value}'"
         ));
     }
     if path
@@ -576,6 +686,48 @@ mod tests {
         assert_eq!(
             web_ui.validation.status,
             InstalledPluginWebUiValidationStatus::Valid
+        );
+    }
+
+    #[test]
+    fn missing_web_ui_entry_script_records_invalid_ui_without_rejecting_plugin() {
+        let temp = TempDir::new().unwrap();
+        let install_dir = temp.path().join("installed");
+        let archive_path = temp.path().join("demo.tar.gz");
+        let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
+        let manifest = web_ui_manifest("web-ui");
+
+        write_tar_gz(
+            &archive_path,
+            "demo",
+            &[
+                ("plugin.toml", b"name = \"demo\""),
+                (executable_name.as_str(), b""),
+                (PACKAGED_MANIFEST_FILE, manifest.as_slice()),
+                ("web-ui/assets/main.js", b"console.log('main')"),
+            ],
+        )
+        .unwrap();
+
+        let extracted =
+            extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
+                .expect("missing web UI assets should not fail plugin installation");
+        let web_ui = extracted
+            .manifest
+            .and_then(|manifest| manifest.web_ui)
+            .expect("web UI metadata should be retained");
+
+        assert_eq!(web_ui.asset_root, None);
+        assert_eq!(
+            web_ui.validation.status,
+            InstalledPluginWebUiValidationStatus::Invalid
+        );
+        assert!(
+            web_ui
+                .validation
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("settings.js"))
         );
     }
 

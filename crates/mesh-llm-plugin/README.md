@@ -8,7 +8,14 @@ This crate includes:
 - the plugin protobuf schema at `proto/plugin.proto`
 - generated plugin protocol types exposed through `mesh_llm_plugin::proto`
 - typed helpers for plugin manifests, operations, resources, prompts, tasks,
-  mesh events, HTTP bindings, MCP projections, and side-stream I/O
+  mesh events, HTTP bindings, MCP projections, host-projected web UI bundles,
+  and side-stream I/O
+
+Plugins that declare web UI use the `web_ui`, `web_ui_bundle`, `web_ui_page`,
+and `web_ui_config_section` manifest builders. The v1 contract is local,
+same-origin, and projection-only; see
+[`docs/plugins/README.md`](../../docs/plugins/README.md) and its maintained
+[`web UI exemplar`](../../docs/plugins/exemplars/web-ui/README.md).
 
 Host-only orchestration, process lifecycle, plugin config loading, MCP bridge
 hosting, and built-in plugin wiring should remain in the host crate for now and

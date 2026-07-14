@@ -231,6 +231,8 @@ impl PackagedPluginWebUiPage {
         value: &proto::PluginWebUiPageManifest,
         expected_bundle_id: Option<&str>,
     ) -> Result<Self> {
+        validate_non_empty("web UI page id", &value.id)?;
+        validate_non_empty("web UI page label", &value.label)?;
         validate_route_slug("web UI page route", &value.route)?;
         validate_bundle_reference(
             "web UI page bundle_id",
@@ -265,6 +267,8 @@ impl PackagedPluginWebUiConfigSection {
         value: &proto::PluginWebUiConfigSectionManifest,
         expected_bundle_id: Option<&str>,
     ) -> Result<Self> {
+        validate_non_empty("web UI config section id", &value.id)?;
+        validate_non_empty("web UI config section title", &value.title)?;
         validate_bundle_reference(
             "web UI config section bundle_id",
             &value.bundle_id,
@@ -353,12 +357,19 @@ fn validate_route_slug(field_name: &str, value: &str) -> Result<()> {
 }
 
 fn validate_relative_path(field_name: &str, value: &str) -> Result<()> {
+    validate_non_empty(field_name, value)?;
     if has_remote_url_scheme(value) {
         bail!("{field_name} must be a relative path, got remote URL `{value}`");
     }
     let path = Path::new(value);
     if path.is_absolute() {
         bail!("{field_name} must be a relative path, got absolute path `{value}`");
+    }
+    if path
+        .components()
+        .all(|component| matches!(component, Component::CurDir))
+    {
+        bail!("{field_name} must name a file or directory below the package root");
     }
     if path
         .components()

@@ -700,14 +700,31 @@ Switches:
 - `--limit <LIMIT>`: max rows (default `20`).
 - `--port <PORT>`: target management/API port (default `3131`).
 
-### `plugin`
+### `plugins` (alias: `plugin`)
 
-Use this to inspect plugin status or run plugin compatibility shims.
+Use this to install, inspect, and manage native plugins. `plugin` remains an
+alias for scripts that used the older singular spelling.
 
 Subcommands:
 
-- `plugin list`: list auto-registered/configured plugins.
-- `plugin install <NAME>`: compatibility shim for older install workflows.
+- `plugins install <REFERENCE>`: install from a catalog name, GitHub
+  `owner/repository`, or GitHub URL.
+- `plugins update <NAME>`: install the latest compatible release for an
+  installed plugin.
+- `plugins enable <NAME>`: mark an installed plugin runnable by mesh-llm.
+- `plugins disable <NAME>`: keep an installed plugin on disk but prevent host
+  startup from launching it.
+- `plugins delete <NAME>`: remove the installed archive contents and local
+  metadata.
+- `plugins info <NAME>`: show source, version, target, path, and latest known
+  status for an installed or configured plugin.
+- `plugins search [QUERY]`: search the configured plugin catalog.
+- `plugins list`: list installed, auto-registered, and configured plugins.
+
+Plugin installation and enablement are separate from the optional web UI
+projection. A plugin that declares a web UI can be shown or hidden with its
+`web_ui_enabled` config field or the console toggle without changing its
+process state.
 
 
 ### `auth`

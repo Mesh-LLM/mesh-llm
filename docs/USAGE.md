@@ -733,6 +733,20 @@ name = "openai-endpoint"
 url = "http://localhost:8000/api/v1"
 ```
 
+Plugins that declare a host-projected web UI may independently disable that
+console projection while leaving the plugin process and endpoint behavior
+enabled:
+
+```toml
+[[plugin]]
+name = "example-plugin"
+enabled = true
+web_ui_enabled = false
+```
+
+`web_ui_enabled` is meaningful only for a plugin that declares a web UI. It
+does not install, start, stop, or disable the plugin process.
+
 If you are running the plugin binary yourself instead of using
 `mesh-llm plugins install`, set `command = "openai-endpoint"` in the same
 plugin block.

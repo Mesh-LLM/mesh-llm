@@ -43,13 +43,15 @@ The `[[plugin]]` array configures plugin instances as local processes or remote 
 [[plugin]]
 name    = "my-plugin"
 enabled = true
+web_ui_enabled = false # Optional: hide only a declared console projection
 command = "python3"
 args    = ["-m", "my_plugin"]
 
 [plugin.startup]
-timeout_secs   = 30
-restart_delay  = 2
-max_restarts   = 3
+connect_timeout_secs = 30
+init_timeout_secs    = 30
+optional             = false
+lazy_start           = false
 ```
 
 For network-based plugins, use a `url` instead of `command`/`args`:
@@ -64,6 +66,12 @@ url  = "http://gpu-box:8000/v1"
 
 | Field | Default | Description |
 |---|---|---|
-| `timeout_secs` | 30 | Seconds to wait for plugin ready signal |
-| `restart_delay` | 2 | Seconds between restart attempts |
-| `max_restarts` | 3 | Maximum restart attempts before giving up |
+| `connect_timeout_secs` | host default | Seconds to wait for the plugin control connection. |
+| `init_timeout_secs` | host default | Seconds to wait for initialization after connecting. |
+| `optional` | `false` | Keep mesh-llm starting and report the plugin inactive if it is unavailable. |
+| `lazy_start` | `false` | Start the plugin only when it is directly needed. |
+
+`web_ui_enabled` applies only when the plugin declares a web UI. It controls
+the console projection independently of `enabled`, which controls the plugin
+process. Set it to `false` to hide the UI without disabling the plugin's MCP,
+HTTP, inference, or capability contributions.

@@ -645,7 +645,7 @@ mesh-llm plugins install blackboard
 
 Once installed, it runs as a managed plugin process when mesh-llm starts. See the [plugins documentation](/docs/pages/plugins/#use-plugin-features) for configuration and usage.
 
-### `plugins` / `plugin`
+### `plugins` (alias: `plugin`)
 
 Use this to install, manage, and inspect plugins.
 
@@ -653,14 +653,19 @@ Both `mesh-llm plugins` and `mesh-llm plugin` work.
 
 Subcommands:
 
-- `plugins install <reference>`: install a plugin from the catalog by name or from a GitHub URL.
-- `plugins update <name>`: update an installed plugin.
-- `plugins enable <name>`: enable an installed plugin.
-- `plugins disable <name>`: disable an installed plugin.
-- `plugins delete <name>`: delete an installed plugin.
-- `plugins info <name>`: show plugin details.
+- `plugins install <reference>`: install from a catalog name, GitHub
+  `owner/repository`, or GitHub URL.
+- `plugins update <name>`: update an installed plugin to the latest compatible release.
+- `plugins enable <name>`: mark an installed plugin runnable by mesh-llm.
+- `plugins disable <name>`: keep the plugin on disk but prevent host startup from launching it.
+- `plugins delete <name>`: remove the extracted files and local metadata.
+- `plugins info <name>`: show source, version, target, path, and latest known status.
 - `plugins search [query]`: search the plugin catalog.
-- `plugins list`: list installed/configured plugins.
+- `plugins list`: list installed, auto-registered, and configured plugins.
+
+For plugins that declare a console projection, `web_ui_enabled` and the
+Configuration → Plugins toggle affect only that projection; they do not change
+the plugin process state.
 
 See [plugins documentation](/docs/pages/plugins/#use-plugin-features) for more detail.
 

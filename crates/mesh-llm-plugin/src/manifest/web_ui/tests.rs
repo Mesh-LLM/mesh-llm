@@ -14,6 +14,8 @@ fn manifest_with_bundle(root_path: &str) -> proto::PluginWebUiManifest {
 fn web_ui_packaging_rejects_remote_urls() {
     let manifest = proto::PluginWebUiManifest {
         pages: vec![proto::PluginWebUiPageManifest {
+            id: "home".into(),
+            label: "Home".into(),
             route: "https://example.test/plugin.js".into(),
             bundle_id: "main".into(),
             ..Default::default()
@@ -43,6 +45,8 @@ fn web_ui_packaging_rejects_absolute_paths() {
 fn web_ui_packaging_rejects_traversal_paths() {
     let manifest = proto::PluginWebUiManifest {
         config_sections: vec![proto::PluginWebUiConfigSectionManifest {
+            id: "settings".into(),
+            title: "Settings".into(),
             entry_script: "../escape.js".into(),
             bundle_id: "main".into(),
             ..Default::default()
@@ -84,10 +88,11 @@ fn web_ui_packaging_rejects_multiple_bundle_roots() {
 fn web_ui_packaging_rejects_invalid_config_parent_tab() {
     let manifest = proto::PluginWebUiManifest {
         config_sections: vec![proto::PluginWebUiConfigSectionManifest {
+            id: "settings".into(),
+            title: "Settings".into(),
             entry_script: "settings.js".into(),
             parent_tab: Some("advanced".into()),
             bundle_id: "main".into(),
-            ..Default::default()
         }],
         bundles: vec![proto::PluginWebUiBundleManifest {
             id: "main".into(),
@@ -142,6 +147,66 @@ fn web_ui_packaging_rejects_empty_bundle_id() {
     let error = PackagedPluginWebUi::try_from(&manifest).expect_err("empty bundle id should fail");
 
     assert!(error.to_string().contains("bundle id"), "{error}");
+}
+
+#[test]
+fn web_ui_packaging_rejects_empty_page_or_section_identity() {
+    let manifest = proto::PluginWebUiManifest {
+        pages: vec![proto::PluginWebUiPageManifest {
+            label: "Home".into(),
+            route: "home".into(),
+            bundle_id: "main".into(),
+            entry_script: "app.js".into(),
+            ..Default::default()
+        }],
+        bundles: vec![proto::PluginWebUiBundleManifest {
+            id: "main".into(),
+            root_path: "dist".into(),
+        }],
+        ..Default::default()
+    };
+
+    let error = PackagedPluginWebUi::try_from(&manifest).expect_err("empty page id should fail");
+
+    assert!(error.to_string().contains("page id"), "{error}");
+}
+
+#[test]
+fn web_ui_packaging_rejects_empty_or_package_root_paths() {
+    let empty_entry = proto::PluginWebUiManifest {
+        pages: vec![proto::PluginWebUiPageManifest {
+            id: "home".into(),
+            label: "Home".into(),
+            route: "home".into(),
+            bundle_id: "main".into(),
+            ..Default::default()
+        }],
+        bundles: vec![proto::PluginWebUiBundleManifest {
+            id: "main".into(),
+            root_path: "dist".into(),
+        }],
+        ..Default::default()
+    };
+    let root_package = proto::PluginWebUiManifest {
+        bundles: vec![proto::PluginWebUiBundleManifest {
+            id: "main".into(),
+            root_path: ".".into(),
+        }],
+        ..Default::default()
+    };
+
+    assert!(
+        PackagedPluginWebUi::try_from(&empty_entry)
+            .expect_err("empty entry script should fail")
+            .to_string()
+            .contains("entry_script")
+    );
+    assert!(
+        PackagedPluginWebUi::try_from(&root_package)
+            .expect_err("package root should not be an asset root")
+            .to_string()
+            .contains("below the package root")
+    );
 }
 
 #[test]
