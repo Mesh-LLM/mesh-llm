@@ -651,7 +651,7 @@ fn chat_runtime_feature_guard_allows_noop_parity_fields() {
 }
 
 #[test]
-fn chat_runtime_feature_guard_rejects_structured_output() {
+fn chat_runtime_feature_guard_allows_structured_output_for_guardrails() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}],
@@ -662,11 +662,7 @@ fn chat_runtime_feature_guard_rejects_structured_output() {
     }))
     .unwrap();
 
-    let error = ensure_chat_runtime_features_supported(&request).unwrap_err();
-    assert_eq!(
-        unsupported_code(error),
-        Some("unsupported_model_feature".to_string())
-    );
+    ensure_chat_runtime_features_supported(&request).unwrap();
 }
 
 #[derive(Default)]
@@ -778,6 +774,29 @@ async fn guarded_structured_output_is_not_rejected_by_runtime_feature_guard() {
         seen.response_format.is_none(),
         "guarded backend should clear backend-facing response_format"
     );
+}
+
+#[test]
+fn standalone_guardrail_modes_have_expected_policies() {
+    let metrics =
+        OpenAiGuardrailsConfig::for_standalone_mode(crate::cli::OpenAiGuardrailsCliMode::Metrics)
+            .status();
+    assert_eq!(metrics.mode, "metrics");
+    assert_eq!(metrics.retry_exhaustion, "pass_last_text");
+    assert_eq!(metrics.small_model_policy, "all");
+
+    let enforce =
+        OpenAiGuardrailsConfig::for_standalone_mode(crate::cli::OpenAiGuardrailsCliMode::Enforce)
+            .status();
+    assert_eq!(enforce.mode, "enforce");
+    assert_eq!(enforce.retry_exhaustion, "error");
+    assert_eq!(enforce.small_model_policy, "all");
+
+    let disabled =
+        OpenAiGuardrailsConfig::for_standalone_mode(crate::cli::OpenAiGuardrailsCliMode::Disabled)
+            .status();
+    assert_eq!(disabled.mode, "disabled");
+    assert_eq!(disabled.small_model_policy, "small_models_only");
 }
 
 #[tokio::test]
@@ -2227,7 +2246,7 @@ fn explicit_completion_request_values_override_request_defaults() {
 }
 
 #[test]
-fn request_defaults_do_not_make_structured_output_or_logprobs_executable() {
+fn request_defaults_do_not_make_logprobs_executable() {
     let mut request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}],

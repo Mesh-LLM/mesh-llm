@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use crate::telemetry::TelemetryLevel;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(about = "Llama staged-runtime server")]
@@ -192,6 +192,20 @@ pub struct ServeOpenAiArgs {
     pub telemetry_queue_capacity: usize,
     #[arg(long, value_enum, default_value_t = TelemetryLevel::Summary)]
     pub telemetry_level: TelemetryLevel,
+    #[arg(
+        long = "openai-guardrails",
+        value_enum,
+        default_value_t = OpenAiGuardrailsCliMode::Metrics,
+        help = "OpenAI compatibility guardrail mode for standalone serving: disabled, metrics, or enforce."
+    )]
+    pub openai_guardrails: OpenAiGuardrailsCliMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum OpenAiGuardrailsCliMode {
+    Disabled,
+    Metrics,
+    Enforce,
 }
 
 #[cfg(test)]
@@ -228,5 +242,24 @@ mod tests {
         assert_eq!(args.prefill_adaptive_start, 128);
         assert_eq!(args.prefill_adaptive_step, 128);
         assert_eq!(args.prefill_adaptive_max, 384);
+        assert_eq!(args.openai_guardrails, OpenAiGuardrailsCliMode::Metrics);
+    }
+
+    #[test]
+    fn serve_openai_accepts_explicit_guardrail_mode() {
+        let cli = Cli::try_parse_from([
+            "skippy-server",
+            "serve-openai",
+            "--config",
+            "stage.json",
+            "--openai-guardrails",
+            "enforce",
+        ])
+        .unwrap();
+
+        let Command::ServeOpenAi(args) = cli.command else {
+            panic!("expected serve-openai command");
+        };
+        assert_eq!(args.openai_guardrails, OpenAiGuardrailsCliMode::Enforce);
     }
 }

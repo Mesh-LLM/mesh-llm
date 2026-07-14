@@ -284,15 +284,6 @@ pub(super) fn ensure_chat_runtime_features_supported(
             "chat logprobs are parsed by openai-frontend but not yet implemented by skippy runtime",
         ));
     }
-    if request
-        .response_format
-        .as_ref()
-        .is_some_and(requires_structured_output)
-    {
-        return Err(OpenAiError::unsupported(
-            "structured output is parsed by openai-frontend but not yet implemented by skippy runtime",
-        ));
-    }
     Ok(())
 }
 
@@ -309,14 +300,6 @@ pub(super) fn ensure_completion_runtime_features_supported(
 
 pub(super) fn has_requested_tools(value: &Value) -> bool {
     !matches!(value, Value::Array(items) if items.is_empty())
-}
-
-pub(super) fn requires_structured_output(value: &Value) -> bool {
-    value
-        .as_object()
-        .and_then(|object| object.get("type"))
-        .and_then(Value::as_str)
-        .is_some_and(|format_type| format_type != "text")
 }
 
 pub(super) fn ensure_extra_generation_fields_absent(

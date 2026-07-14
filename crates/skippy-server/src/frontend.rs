@@ -29,7 +29,8 @@ use openai_frontend::{
     GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, MessageContent,
     MessageContentPart, ModelId, ModelObject, OpenAiBackend, OpenAiError, OpenAiErrorKind,
     OpenAiHookPolicy, OpenAiRequestContext, OpenAiResult, PrefillHookSignals, ReasoningEffort,
-    StreamingGuardrailMode, Usage, apply_chat_hook_outcome, chat_mesh_hooks_enabled,
+    RetryExhaustionMode, StreamingGuardrailMode, Usage, apply_chat_hook_outcome,
+    chat_mesh_hooks_enabled,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -62,7 +63,7 @@ use crate::{
         send_client_ready_hello_if_enabled, stage_output_activation_capacity,
         write_stage_message_conditioned,
     },
-    cli::ServeOpenAiArgs,
+    cli::{OpenAiGuardrailsCliMode, ServeOpenAiArgs},
     config::{load_json, validate_config},
     kv_integration::{KvStageIntegration, proactive_eviction_attrs, proactive_eviction_error_kind},
     runtime_state::{RuntimeSessionStats, RuntimeState, load_runtime},
@@ -186,7 +187,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let decode_batcher = DecodeBatcher::new(runtime.clone(), args.generation_concurrency);
     let decode_frame_batcher =
         DecodeFrameBatcher::new(runtime.clone(), args.generation_concurrency);
-    let backend = Arc::new(StageOpenAiBackend {
+    let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
         runtime,
         config,
         telemetry: telemetry.clone(),
@@ -212,6 +213,8 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         decode_batcher,
         decode_frame_batcher,
     });
+    let backend = OpenAiGuardrailsConfig::for_standalone_mode(args.openai_guardrails)
+        .wrap_backend_with_context_limit(backend, Some(ctx_size));
     let app: Router = instrumented_openai_router(backend, telemetry.clone());
 
     println!(
@@ -286,6 +289,37 @@ impl OpenAiGuardrailsConfig {
             target: OpenAiGuardrailsTarget::Skippy,
             policy: GuardrailPolicyHandle::default(),
             compaction: None,
+        }
+    }
+
+    pub fn compatibility_for_skippy() -> Self {
+        Self {
+            target: OpenAiGuardrailsTarget::Skippy,
+            policy: GuardrailPolicy {
+                mode: GuardrailMode::MetricsOnly,
+                apply_to_all_models: true,
+                retry_exhaustion_mode: RetryExhaustionMode::PassLastText,
+                ..GuardrailPolicy::default()
+            }
+            .into(),
+            compaction: None,
+        }
+    }
+
+    pub fn for_standalone_mode(mode: OpenAiGuardrailsCliMode) -> Self {
+        match mode {
+            OpenAiGuardrailsCliMode::Disabled => Self::disabled_for_skippy(),
+            OpenAiGuardrailsCliMode::Metrics => Self::compatibility_for_skippy(),
+            OpenAiGuardrailsCliMode::Enforce => Self {
+                target: OpenAiGuardrailsTarget::Skippy,
+                policy: GuardrailPolicy {
+                    mode: GuardrailMode::Enforce,
+                    apply_to_all_models: true,
+                    ..GuardrailPolicy::default()
+                }
+                .into(),
+                compaction: None,
+            },
         }
     }
 

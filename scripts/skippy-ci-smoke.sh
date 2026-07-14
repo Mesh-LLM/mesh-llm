@@ -644,12 +644,12 @@ openai_structured_status="$(
     -H 'content-type: application/json' \
     -d "$openai_structured_request"
 )"
-if [[ "$openai_structured_status" != "400" ]]; then
-  echo "expected structured-output request to return HTTP 400 until backend support lands, got ${openai_structured_status}" >&2
+if [[ "$openai_structured_status" != "200" ]]; then
+  echo "expected structured-output request to be accepted by the OpenAI compatibility layer, got ${openai_structured_status}" >&2
   cat "$openai_structured_response" >&2 || true
   exit 1
 fi
-assert_json "$openai_structured_response" '.error.code == "unsupported_model_feature"'
+assert_json "$openai_structured_response" '.choices[0].message.role == "assistant"'
 
 cleanup
 SERVER_PID=""
