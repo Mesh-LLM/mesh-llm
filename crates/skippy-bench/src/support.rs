@@ -1,6 +1,6 @@
 use std::{
     net::{SocketAddr, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -47,6 +47,18 @@ pub fn retry(timeout_secs: u64, mut action: impl FnMut() -> Result<()>) -> Resul
         thread::sleep(Duration::from_millis(500));
     }
     Err(last_error.unwrap_or_else(|| anyhow!("timed out")))
+}
+
+pub fn ensure_release_skippy_server_bin(path: &Path) -> Result<()> {
+    let path = path.to_string_lossy();
+    let debug_path = path.contains("target/debug/skippy-server")
+        || path.contains("target\\debug\\skippy-server");
+    if debug_path {
+        bail!(
+            "SkippyBench benchmark-managed skippy-server runs require a release binary; run `just release-build` and use --stage-server-bin target/release/skippy-server"
+        );
+    }
+    Ok(())
 }
 
 pub fn connect_ready(addr: SocketAddr, timeout_secs: u64) -> Result<TcpStream> {

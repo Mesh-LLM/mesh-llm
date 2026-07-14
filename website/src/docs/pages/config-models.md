@@ -7,16 +7,14 @@ description: Configuring models and plugins in ~/.mesh-llm/config.toml
 
 ## Models
 
-The `[[models]]` array configures which models mesh-llm serves. Each entry can set the same sub-configs as `[defaults]` plus a `name` and `source`.
+The `[[models]]` array configures which models mesh-llm serves. Each entry requires a `model` reference and can override the same sub-configs as `[defaults]`.
 
 ```toml
 [[models]]
-name          = "llama-3.1-8b"
-source        = "hf:meta-llama/Llama-3.1-8B-Instruct-GGUF"
+model         = "meta-llama/Llama-3.1-8B-Instruct-GGUF"
 
 [models.model_fit]
 ctx_size      = 8192
-gpu_layers    = -1           # -1 = all layers on GPU
 
 [models.throughput]
 parallel      = 4
@@ -26,21 +24,15 @@ max_tokens    = 2048
 temperature   = 0.7
 ```
 
-The `source` field supports:
-- `hf:org/model` — Hugging Face model ID
-- A local GGUF file path
-- A model reference or alias
-
-The optional `runtime` field sets a preferred runtime backend (`auto`, `cpu`, `cuda`, `vulkan`, `metal`, `sycl`, etc.).
+The `model` field accepts a catalog id, Hugging Face reference, URL, or local model path.
 
 ```toml
 [[models]]
-name    = "codellama-7b"
-source  = "hf:codellama/CodeLlama-7b-Instruct-GGUF"
-runtime = "cuda"
+model = "codellama/CodeLlama-7b-Instruct-GGUF"
 
 [models.hardware]
-gpu_layers = -1
+model_runtime = "cuda"
+gpu_layers = "auto"
 ```
 
 ## Plugins

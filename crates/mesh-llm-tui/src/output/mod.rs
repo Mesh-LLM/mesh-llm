@@ -4728,7 +4728,32 @@ fn join_token_char_count(token: &str) -> usize {
 }
 
 fn join_token_visible_slice(token: &str, scroll_offset: usize, width: usize) -> String {
-    token.chars().skip(scroll_offset).take(width).collect()
+    let token_len = join_token_char_count(token);
+    if width == 0 || token_len == 0 {
+        return String::new();
+    }
+
+    let hidden_left = scroll_offset > 0;
+    let hidden_right = scroll_offset.saturating_add(width) < token_len;
+    if !hidden_left && !hidden_right {
+        return token.to_string();
+    }
+    if width == 1 {
+        return "…".to_string();
+    }
+
+    let indicator_count = usize::from(hidden_left) + usize::from(hidden_right);
+    let visible_width = width.saturating_sub(indicator_count);
+    let mut visible = String::with_capacity(width);
+    if hidden_left {
+        visible.push('…');
+    }
+    let content_offset = scroll_offset.saturating_add(usize::from(hidden_left));
+    visible.extend(token.chars().skip(content_offset).take(visible_width));
+    if hidden_right {
+        visible.push('…');
+    }
+    visible
 }
 
 fn tui_join_token_copy_button_area(panel_area: Rect) -> Rect {
@@ -10967,6 +10992,25 @@ mod tests {
                 .scroll_offset,
             0
         );
+    }
+
+    #[test]
+    fn join_token_slice_indicates_hidden_content() {
+        let token = "abcdefghij";
+
+        assert_eq!(join_token_visible_slice(token, 0, 5), "abcd…");
+        assert_eq!(join_token_visible_slice(token, 2, 5), "…def…");
+        assert_eq!(join_token_visible_slice(token, 5, 5), "…ghij");
+        assert_eq!(join_token_visible_slice(token, 0, 10), token);
+    }
+
+    #[test]
+    fn join_token_slice_handles_narrow_widths() {
+        assert_eq!(join_token_visible_slice("", 0, 5), "");
+        assert_eq!(join_token_visible_slice("abcdef", 0, 0), "");
+        assert_eq!(join_token_visible_slice("abcdef", 0, 1), "…");
+        assert_eq!(join_token_visible_slice("abcdef", 2, 1), "…");
+        assert_eq!(join_token_visible_slice("abcdef", 5, 1), "…");
     }
 
     #[test]

@@ -16,48 +16,41 @@ batch                   = 0              # Batch size (0 = auto)
 ubatch                  = 0              # Micro-batch size (0 = auto)
 cache_type_k            = "f16"          # Key cache dtype
 cache_type_v            = "f16"          # Value cache dtype
-kv_offload              = true           # Offload KV cache to GPU
-no_kv_offload           = false          # Keep KV cache on CPU
-no_mmap                 = false          # Disable memory-mapped model loading
-mlock                   = false          # Lock model in RAM
-num_experts_per_token   = 0              # MoE: experts per token (0 = all)
-expert_count            = 0              # MoE: total expert count
-no_cont_batching        = false          # Disable continuous batching
-max_batched_tokens      = 0              # Max tokens per batch
-pooling_type            = ""             # Pooling type for embedding models
+kv_offload              = "auto"        # KV-cache offload policy
+prompt_cache            = "auto"        # Prompt-cache policy
+flash_attention         = "auto"        # Flash-attention policy
 
 [defaults.hardware]
-model_runtime = "cpu"                    # "cpu", "cuda", "vulkan", "metal", "sycl", etc.
+model_runtime = "auto"                   # "auto", "cpu", "cuda", "rocm", "vulkan", or "metal"
 device        = ""                       # Device ID (empty = auto)
-gpu_layers    = 0                        # Layers to offload to GPU (0 = auto)
+gpu_layers    = "auto"                   # Layers to offload (or an integer)
 main_gpu      = 0                        # Primary GPU index
 tensor_split  = ""                       # Comma-separated tensor split ratios
-no_mul_mat_q  = false                    # Disable mulmat quantization
-decode_only_q = false                    # Quantize only decode path
-check_tensors = ""                       # Tensor check mode
-temp_file     = ""                       # Temporary file path for offloading
+mmap          = "auto"                   # Memory-map model loading
+mlock         = false                    # Lock model pages in RAM
+warmup        = "auto"                   # Run model warmup when supported
 
 [defaults.throughput]
 parallel              = 1                # Parallel sequence count
-continuous_batching   = true             # Enable continuous batching
+continuous_batching   = "auto"          # Enable continuous batching
 threads               = 0                # Thread count (0 = auto)
-cpu_threads           = 0                # CPU thread count
-flash_attn            = false            # Enable flash attention
-no_flash_attn         = false            # Disable flash attention
-tensor_cores          = false            # Use tensor cores on NVIDIA GPUs
-no_kv_reuse           = false            # Disable KV cache reuse across requests
+threads_batch         = 0                # Batch thread count (0 = auto)
+tuning_profile        = "balanced"      # "throughput", "balanced", or "saver"
 
 [defaults.skippy]
-stage_model_package  = ""                # Path or repo for skippy stage model
-enable               = false             # Enable skippy stage serving
-activation_dtype     = "q8_0"            # Activation wire dtype
-num_stages           = 0                 # Number of stages (0 = auto)
-stage_plan           = ""                # Explicit stage plan path
+stage_model_path      = ""               # Path or repo for a stage model
+stage_role            = ""               # Stage role override
+stage_topology        = ""               # Stage topology override
+activation_wire_dtype = "auto"           # "auto", "f16", "f32", or "q8"
+binary_stage_transport = ""              # Binary stage transport override
+prefill_chunking      = "auto"           # Prefill chunking policy
+prefill_chunk_size    = 0                 # Fixed prefill chunk size (0 = auto)
 
 [defaults.speculative]
-draft_model          = ""                # Path or repo for draft model
-enable               = false             # Enable speculative decoding
-draft_parallel       = 1                 # Draft parallel sequences
+mode                 = "auto"            # "auto", "disabled", "draft", or "ngram"
+draft_model          = ""                # Path or repo for a draft model
+draft_max_tokens     = 0                 # Maximum draft-token window
+draft_min_tokens     = 0                 # Minimum draft-token window
 draft_gpu_layers     = 0                 # Draft GPU layers (0 = auto)
 draft_device         = ""                # Draft device override
 
@@ -74,13 +67,13 @@ stop          = []                       # Stop sequences
 typical_p     = 0.0                      # Typical sampling
 
 [defaults.multimodal]
-clip_model_path   = ""                   # Path to CLIP model for multimodal
-mmproj_path       = ""                   # Path to multimodal projection
-image_main_gpu    = 0                    # GPU for image processing
+mmproj            = ""                   # Path or reference to a multimodal projector
+mmproj_offload    = "auto"               # Projector offload policy
+image_min_tokens  = 0                     # Minimum image token budget
+image_max_tokens  = 0                     # Maximum image token budget
 
-[defaults.advanced]
-cont_batching_init_slots = 0             # Initial slot count for continuous batching
-hierarchical_slots        = false        # Enable hierarchical KV slot management
+[defaults.advanced.server]
+alias = ""                               # Optional model alias
 ```
 
 ## Sub-config reference

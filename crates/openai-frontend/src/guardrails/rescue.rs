@@ -452,6 +452,12 @@ fn classify_tool_call_value(
     parser_stage: GuardrailParserStage,
     finish_reason: Option<FinishReason>,
 ) -> ClassifiedGuardrailResponse {
+    if let Some(classified) =
+        classify_direct_structured_payload(prepared, value, parser_stage, finish_reason)
+    {
+        return classified;
+    }
+
     let allowed_real_tools = allowed_real_tool_names(prepared);
     let allowed_backend_tools = allowed_backend_tool_names(prepared);
     let raw_tool_calls = match raw_tool_calls_from_value(value) {
@@ -670,6 +676,37 @@ fn classify_tool_call_value(
         structured_payload: None,
         finish_reason: Some(FinishReason::ToolCalls),
     }
+}
+
+fn classify_direct_structured_payload(
+    prepared: &PreparedGuardrailRequest,
+    value: &Value,
+    parser_stage: GuardrailParserStage,
+    finish_reason: Option<FinishReason>,
+) -> Option<ClassifiedGuardrailResponse> {
+    if prepared.state.request_contract.has_real_tools() {
+        return None;
+    }
+    let spec = prepared.state.request_contract.structured_output_spec()?;
+    value.as_object()?;
+    let valid_payload = spec.validate_payload(value).is_ok();
+    Some(ClassifiedGuardrailResponse {
+        category: if valid_payload {
+            GuardrailResponseCategory::ValidSyntheticStructured
+        } else {
+            GuardrailResponseCategory::InvalidStructuredPayload
+        },
+        parser_stage,
+        visible_content: None,
+        tool_calls: None,
+        synthetic_text: None,
+        structured_payload: if valid_payload {
+            Some(value.clone())
+        } else {
+            None
+        },
+        finish_reason,
+    })
 }
 
 fn raw_tool_calls_from_value(value: &Value) -> Option<Vec<&Value>> {

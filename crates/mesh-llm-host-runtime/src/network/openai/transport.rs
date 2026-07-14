@@ -34,6 +34,8 @@ const MAX_OBJECT_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_OBJECT_UPLOAD_BODY_BYTES
 const MAX_HEADERS: usize = 64;
 const MAX_RESPONSE_BODY_PREVIEW_BYTES: usize = 4 * 1024;
 const MAX_ERROR_RESPONSE_BYTES: usize = 256 * 1024;
+const MAX_TRANSFORMED_RESPONSE_BODY_BYTES: usize = 8 * 1024 * 1024;
+const TRANSFORMED_RESPONSE_BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_TOKEN_MARGIN: u32 = 256;
 
 #[derive(Debug, Clone, Copy)]
@@ -198,6 +200,17 @@ struct ParsedResponseHeaders {
     content_length: Option<usize>,
     content_type: Option<String>,
 }
+
+#[derive(Clone, Copy)]
+struct ResponseBodyReadLimits {
+    max_body_bytes: usize,
+    idle_timeout: Duration,
+}
+
+const TRANSFORMED_RESPONSE_READ_LIMITS: ResponseBodyReadLimits = ResponseBodyReadLimits {
+    max_body_bytes: MAX_TRANSFORMED_RESPONSE_BODY_BYTES,
+    idle_timeout: TRANSFORMED_RESPONSE_BODY_IDLE_TIMEOUT,
+};
 
 #[derive(Debug, Default, Deserialize)]
 struct RequestMetadata {
@@ -1755,11 +1768,17 @@ async fn relay_translated_responses_json<R: AsyncRead + Unpin>(
         return relay_error_response(tcp_stream, reader, probe).await;
     }
     let mut buffered = probe.buffered;
-    reader.read_to_end(&mut buffered).await?;
-
     let parsed = try_parse_response_headers(&buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    let body = &buffered[parsed.header_end..];
+    let body_end = read_transformed_response_body(
+        reader,
+        &mut buffered,
+        parsed.header_end,
+        parsed.content_length,
+        TRANSFORMED_RESPONSE_READ_LIMITS,
+    )
+    .await?;
+    let body = &buffered[parsed.header_end..body_end];
     if let Some(result) = retryable_quality_result(body, retry_policy) {
         return Ok(result);
     }
@@ -1794,16 +1813,14 @@ async fn relay_normalized_chat_completion_json<R: AsyncRead + Unpin>(
     let mut buffered = probe.buffered;
     let parsed = try_parse_response_headers(&buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    let body_end = if let Some(content_length) = parsed.content_length {
-        let body_end = parsed.header_end + content_length;
-        while buffered.len() < body_end {
-            read_response_chunk(reader, &mut buffered).await?;
-        }
-        body_end
-    } else {
-        reader.read_to_end(&mut buffered).await?;
-        buffered.len()
-    };
+    let body_end = read_transformed_response_body(
+        reader,
+        &mut buffered,
+        parsed.header_end,
+        parsed.content_length,
+        TRANSFORMED_RESPONSE_READ_LIMITS,
+    )
+    .await?;
     let body = &buffered[parsed.header_end..body_end];
     let normalized_body =
         normalize_chat_completion_json_body(body).unwrap_or_else(|| body.to_vec());
@@ -1984,6 +2001,69 @@ async fn read_response_chunk<R: AsyncRead + Unpin>(
     }
     buf.extend_from_slice(&chunk[..read_result]);
     Ok(read_result)
+}
+
+async fn read_transformed_response_body<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    buffered: &mut Vec<u8>,
+    header_end: usize,
+    content_length: Option<usize>,
+    limits: ResponseBodyReadLimits,
+) -> Result<usize> {
+    if header_end > buffered.len() {
+        bail!("invalid HTTP response header boundary");
+    }
+    let buffered_body_bytes = buffered.len() - header_end;
+    if buffered_body_bytes > limits.max_body_bytes {
+        bail!(
+            "upstream success response body exceeds {} bytes",
+            limits.max_body_bytes
+        );
+    }
+
+    let expected_end = content_length
+        .map(|content_length| {
+            if content_length > limits.max_body_bytes {
+                bail!(
+                    "upstream success response Content-Length exceeds {} bytes",
+                    limits.max_body_bytes
+                );
+            }
+            header_end
+                .checked_add(content_length)
+                .ok_or_else(|| anyhow!("upstream success response Content-Length overflow"))
+        })
+        .transpose()?;
+
+    loop {
+        if let Some(expected_end) = expected_end
+            && buffered.len() >= expected_end
+        {
+            return Ok(expected_end);
+        }
+
+        let mut chunk = [0u8; 8192];
+        let read_result = tokio::time::timeout(limits.idle_timeout, reader.read(&mut chunk))
+            .await
+            .context("upstream success response body idle timeout")??;
+        if read_result == 0 {
+            return expected_end.map_or_else(
+                || Ok(buffered.len()),
+                |_| Err(anyhow!("unexpected EOF while reading HTTP response body")),
+            );
+        }
+        let next_body_bytes = buffered
+            .len()
+            .saturating_sub(header_end)
+            .saturating_add(read_result);
+        if next_body_bytes > limits.max_body_bytes {
+            bail!(
+                "upstream success response body exceeds {} bytes",
+                limits.max_body_bytes
+            );
+        }
+        buffered.extend_from_slice(&chunk[..read_result]);
+    }
 }
 
 async fn probe_http_response<R: AsyncRead + Unpin>(reader: &mut R) -> Result<ResponseProbe> {
@@ -6425,6 +6505,74 @@ mod tests {
             parsed["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
             "lookup_fixture_fact"
         );
+    }
+
+    #[tokio::test]
+    async fn transformed_response_rejects_oversized_content_length_before_reading() {
+        let (_writer, mut reader) = tokio::io::duplex(64);
+        let mut buffered = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+        let header_end = buffered.len();
+
+        let error = read_transformed_response_body(
+            &mut reader,
+            &mut buffered,
+            header_end,
+            Some(9),
+            ResponseBodyReadLimits {
+                max_body_bytes: 8,
+                idle_timeout: Duration::from_secs(1),
+            },
+        )
+        .await
+        .expect_err("oversized declared body must be rejected");
+
+        assert!(error.to_string().contains("Content-Length exceeds 8 bytes"));
+    }
+
+    #[tokio::test]
+    async fn transformed_response_rejects_oversized_unframed_body() {
+        let (mut writer, mut reader) = tokio::io::duplex(64);
+        writer.write_all(b"123456789").await.unwrap();
+        drop(writer);
+        let mut buffered = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+        let header_end = buffered.len();
+
+        let error = read_transformed_response_body(
+            &mut reader,
+            &mut buffered,
+            header_end,
+            None,
+            ResponseBodyReadLimits {
+                max_body_bytes: 8,
+                idle_timeout: Duration::from_secs(1),
+            },
+        )
+        .await
+        .expect_err("oversized unframed body must be rejected");
+
+        assert!(error.to_string().contains("body exceeds 8 bytes"));
+    }
+
+    #[tokio::test]
+    async fn transformed_response_body_read_has_idle_timeout() {
+        let (_writer, mut reader) = tokio::io::duplex(64);
+        let mut buffered = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+        let header_end = buffered.len();
+
+        let error = read_transformed_response_body(
+            &mut reader,
+            &mut buffered,
+            header_end,
+            None,
+            ResponseBodyReadLimits {
+                max_body_bytes: 8,
+                idle_timeout: Duration::from_millis(10),
+            },
+        )
+        .await
+        .expect_err("idle body read must time out");
+
+        assert!(is_timeout_error(&error), "unexpected error: {error:#}");
     }
 
     #[tokio::test]

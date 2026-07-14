@@ -7376,6 +7376,8 @@ version = "0.72.1"
 dependencies = [
  "anyhow",
  "clap",
+ "csv",
+ "dirs",
  "model-artifact",
  "model-hf",
  "model-ref",

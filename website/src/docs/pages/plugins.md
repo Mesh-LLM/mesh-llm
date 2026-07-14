@@ -4,87 +4,166 @@ title: Plugins
 
 # Plugins
 
-Plugins extend mesh-llm with features managed as separate processes. The plugin system handles lifecycle, IPC, and exposing plugin capabilities through MCP and HTTP.
+Plugins add capabilities to mesh-llm without putting every integration into the core runtime. A plugin is a native process managed by mesh-llm over a local control connection. The host owns lifecycle, MCP and HTTP exposure, routing, and policy; the plugin owns its feature logic and local state.
 
-## Install from the Catalog
+Use this page to install a plugin. If you are writing one, start with [Developing Plugins](/docs/pages/developing-plugins/).
 
-Search available plugins:
+## Official plugins
+
+The Mesh-LLM organization currently publishes five first-party plugin repositories. They are separate from the main `mesh-llm` repository and release native archives for supported platforms.
+
+| Plugin | Use it for | Install |
+| --- | --- | --- |
+| [`blackboard`](https://github.com/Mesh-LLM/blackboard) | Share short-lived status, findings, questions, and tips across a mesh. The plugin also ships a Blackboard Agent Skill. | `mesh-llm plugins install blackboard` |
+| [`openai-endpoint`](https://github.com/Mesh-LLM/openai-endpoint) | Add an already-running OpenAI-compatible server such as vLLM, TGI, Ollama, or Lemonade Server. | `mesh-llm plugins install openai-endpoint` |
+| [`flash-moe`](https://github.com/Mesh-LLM/flash-moe) | Attach a Flash-MoE inference endpoint, or let the plugin supervise a local Flash-MoE process. | `mesh-llm plugins install flash-moe` |
+| [`metrics`](https://github.com/Mesh-LLM/metrics) | Advertise metrics support for mesh-llm telemetry. Configure the OTLP destination in mesh-llm, not in the plugin. | `mesh-llm plugins install metrics` |
+| [`agents`](https://github.com/Mesh-LLM/agents) | Run mesh-native A2A agents and expose their tools through the mesh MCP endpoint. | `mesh-llm plugins install agents` |
+
+The catalog can also contain community plugins. Search it before installing an unfamiliar integration:
 
 ```bash
 mesh-llm plugins search
-mesh-llm plugins search blackboard
+mesh-llm plugins search database
 ```
 
-Install by name:
+Treat a catalog entry as a discovery aid: read the linked repository, check its release assets and permissions, and only then install it.
+
+## Install a plugin
+
+Install the latest compatible release for the current machine:
 
 ```bash
-mesh-llm plugins install blackboard
 mesh-llm plugins install openai-endpoint
-mesh-llm plugins install flash-moe
 ```
 
-Available Mesh-LLM organization plugins:
+You can also install directly from a GitHub repository. This is useful when a plugin is not yet in the catalog or when you want to pin a release:
 
-| Plugin | Description |
-|---|---|
-| `blackboard` | Shared mesh notes |
-| `openai-endpoint` | Connect external OpenAI-compatible backends (vLLM, TGI, Ollama, etc.) |
-| `flash-moe` | Flash-MoE SSD backend for MoE model serving |
+```bash
+mesh-llm plugins install Mesh-LLM/openai-endpoint
+mesh-llm plugins install Mesh-LLM/openai-endpoint@0.1.2
+```
 
-## Configure in `config.toml`
+Use the catalog name, such as `agents`, for catalog installs. Use the fully qualified `owner/repository` form, such as `Mesh-LLM/agents`, only when installing directly from GitHub.
 
-Add a `[[plugin]]` entry to `~/.mesh-llm/config.toml` for each plugin:
+The installer selects a native release archive using the plugin name, version, operating system, and CPU architecture. It does not download GPU-specific plugin variants. If a plugin does not publish an archive for your target, build it from its repository and configure the binary with `command`.
+
+After installing, inspect the recorded source, version, target, and path:
+
+```bash
+mesh-llm plugins list
+mesh-llm plugins info openai-endpoint
+```
+
+## Configure a plugin
+
+Add one `[[plugin]]` table to `~/.mesh-llm/config.toml`:
+
+```toml
+[[plugin]]
+name = "openai-endpoint"
+url = "http://127.0.0.1:8000/v1"
+```
+
+For plugins that do not need an endpoint, the name is usually enough:
 
 ```toml
 [[plugin]]
 name = "blackboard"
 
 [[plugin]]
-name = "openai-endpoint"
-url = "http://gpu-box:8000/v1"
+name = "metrics"
 
-[[plugin]]
-name = "flash-moe"
+[telemetry]
+enabled = true
+endpoint = "https://otel.example.com"
 ```
 
-Available fields:
+For Flash-MoE, see the [Flash-MoE repository](https://github.com/Mesh-LLM/flash-moe) for both existing-endpoint and managed-process examples. For agents, see the [agents repository](https://github.com/Mesh-LLM/agents) for agent definitions and runtime configuration.
 
-- `name` (required): plugin identifier.
-- `enabled` (optional, default `true`): whether the plugin starts on launch.
-- `command` (optional): path to the plugin binary.
-- `args` (optional): command-line arguments (string array).
-- `url` (optional): URL for endpoint-style plugins.
-- `[plugin.startup]` (optional):
-  - `connect_timeout_secs`: max seconds for the initial connection.
-  - `init_timeout_secs`: max seconds for initialization handshake.
-  - `optional`: if `true`, startup failure is non-fatal.
-  - `lazy_start`: if `true`, the plugin starts on first use instead of at launch.
+### Plugin fields
 
-## Manage Installed Plugins
+| Field | Meaning |
+| --- | --- |
+| `name` | Installed plugin identifier. Required. |
+| `enabled` | Start the plugin with mesh-llm. Defaults to `true`. |
+| `command` | Explicit executable path or command. Useful for locally built plugins. |
+| `args` | Arguments passed to the plugin process. |
+| `url` | Optional endpoint passed to the plugin as `MESH_LLM_PLUGIN_URL`. |
+| `settings` | Plugin-specific settings declared by the installed plugin. Use `[plugin.settings]` in TOML. |
+| `[plugin.startup]` | Startup and failure behavior. |
+
+Startup options include `connect_timeout_secs`, `init_timeout_secs`, `optional`, and `lazy_start`. Mark an integration `optional = true` when mesh-llm should continue starting if that plugin is unavailable. Use `lazy_start = true` for plugins that should start only when directly used.
+
+Plugin settings are validated against the schema exposed by the installed plugin. For example:
+
+```toml
+[[plugin]]
+name = "my-plugin"
+
+[plugin.settings]
+mode = "strict"
+retention_days = 14
+```
+
+## Plugin storage
+
+By default, mesh-llm stores plugin metadata under `~/.mesh-llm/plugins/` and extracted plugin files under `~/.mesh-llm/plugins/installed/<name>/`. The metadata record at `~/.mesh-llm/plugins/<name>/plugin-install.json` records the source, version, target, install path, enabled state, and packaged settings schema.
+
+Set `MESH_LLM_PLUGIN_DIR` to use a different store root. With that override, the corresponding paths are `<root>/<name>/plugin-install.json` and `<root>/installed/<name>/`. The extracted directory contains the plugin executable, documentation, and any bundled `skills/` directories. Use `mesh-llm plugins info <name>` to confirm the resolved install path before inspecting files manually.
+
+## Use plugin features
+
+The host aggregates plugin capabilities into the local console and MCP endpoint. Plugin-owned names are namespaced to prevent collisions:
+
+- Blackboard exposes tools such as `blackboard.feed` and `blackboard.post`, plus the `blackboard://snapshot` resource.
+- Agents exposes tools such as `agents.get_agents`, `agents.send_message`, and `agents.get_task`.
+- Endpoint plugins register inference services that mesh-llm can route to when their endpoint is healthy.
+
+Plugins may also ship Agent Skills. After installing a plugin that includes skills, run:
 
 ```bash
-mesh-llm plugins list                 # list installed plugins
-mesh-llm plugins info blackboard      # show plugin details
-mesh-llm plugins enable blackboard    # enable a disabled plugin
-mesh-llm plugins disable blackboard   # disable without deleting
-mesh-llm plugins update blackboard    # update to latest version
-mesh-llm plugins delete blackboard    # remove permanently
+mesh-llm skills install
 ```
 
-## Plugin Usage: Blackboard
+The supported agent launchers (`mesh-llm goose`, `mesh-llm pi`, `mesh-llm opencode`, and `mesh-llm claude`) install available plugin skills for that client before starting it.
 
-After installing the blackboard plugin, it runs as a managed process when mesh-llm starts. Interact through MCP tools and resources (available through the console's MCP endpoint):
+## Manage installed plugins
 
-- tool: `blackboard.feed`
-- tool: `blackboard.post`
-- resource: `blackboard://snapshot`
+```bash
+mesh-llm plugins update openai-endpoint
+mesh-llm plugins enable openai-endpoint
+mesh-llm plugins disable openai-endpoint
+mesh-llm plugins delete openai-endpoint
+```
 
-For detailed blackboard usage, see [github.com/mesh-llm/blackboard](https://github.com/mesh-llm/blackboard).
+Disabling keeps the extracted files and metadata on disk but prevents startup. Deleting removes the extracted files and local metadata. Restart mesh-llm after changing a plugin's configuration unless the plugin's own documentation says that it can be reloaded dynamically.
 
-## Deep Dives
+## Troubleshoot startup
+
+Start with the plugin state:
+
+```bash
+mesh-llm plugins info <name>
+```
+
+Then check the following:
+
+- `command` points to an executable that exists and can run on this machine.
+- `url` includes the correct `/v1` path for OpenAI-compatible endpoints.
+- The plugin is enabled and has a compatible release for the local target.
+- The endpoint is reachable from the mesh node, not only from your laptop.
+- A plugin with required settings is installed before those settings are added to `config.toml`.
+- An endpoint can be unhealthy while its plugin process is healthy; check the endpoint itself before reinstalling the plugin.
+
+For the protocol and host/plugin boundary, read [Plugin Architecture](/docs/pages/plugin-architecture/). For the author API and release contract, read [Developing Plugins](/docs/pages/developing-plugins/).
+
+## Further plugin documentation
 
 | Page | What it covers |
-|---|---|
-| [Plugin Architecture](/docs/pages/plugin-architecture/) | Design model, core principles, control session, streams, host vs plugin ownership |
-| [Developing Plugins](/docs/pages/developing-plugins/) | DSL guide, author experience, Rust example, internal RPC, streaming |
-| [Plugin Reference](/docs/pages/plugin-reference/) | External endpoints, MCP bindings, HTTP bindings, capabilities, mesh channels, control messages |
+| --- | --- |
+| [Plugin Architecture](/docs/pages/plugin-architecture/) | Control sessions, side streams, host projections, and ownership boundaries |
+| [Developing Plugins](/docs/pages/developing-plugins/) | Rust author API, manifests, packaging, skills, and testing |
+| [Plugin Reference](/docs/pages/plugin-reference/) | MCP, HTTP, inference, capabilities, mesh channels, and control messages |
+
+Useful next topics for this section are a plugin compatibility matrix by mesh-llm release, a configuration-schema guide with examples, a security and permissions guide for third-party binaries, and a release checklist for plugin authors.
