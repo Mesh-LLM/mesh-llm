@@ -456,13 +456,15 @@ fn shell_quote(raw: &str) -> String {
 mod tests {
     use super::*;
     use super::{
-        adapters::{speed_bench_command, terminal_bench_command},
+        adapters::{
+            mcp_atlas_command, speed_bench_command, swe_bench_pro_command, terminal_bench_command,
+        },
         doctor::preflight_eval_run,
         registry::{definition, selected_evals},
         run::{
             fill_client_rates, resolved_harness_commit, speed_bench_metrics,
             speed_bench_output_path, swe_bench_pro_metrics, swe_bench_pro_output_path,
-            terminal_bench_metrics, terminal_bench_output_path,
+            telemetry_or_unavailable, terminal_bench_metrics, terminal_bench_output_path,
         },
         sync::existing_repo_sync_steps,
     };
@@ -527,12 +529,24 @@ mod tests {
                 .secret_envs
                 .contains(&("SKIPPY_BENCH_API_KEY".to_string(), "test".to_string()))
         );
+        assert!(command.envs.contains(&(
+            "XDG_CACHE_HOME".to_string(),
+            root.join("speed-cache/xdg").display().to_string()
+        )));
+        assert!(
+            command
+                .envs
+                .contains(&("SKIPPY_BENCH_BASE_URL".to_string(), args.base_url.clone()))
+        );
         assert!(!command.display().contains("test"));
         assert!(
             command
                 .display()
                 .contains("SKIPPY_BENCH_API_KEY=<redacted>")
         );
+        let launcher = fs::read_to_string(run_dir.join("raw/speed-bench-auth.py")).unwrap();
+        assert!(launcher.contains("request_origin(url) == benchmark_origin"));
+        assert!(launcher.contains("headers.setdefault(\"Authorization\""));
         let _ = fs::remove_dir_all(run_dir);
     }
 
@@ -542,7 +556,7 @@ mod tests {
             eval: EvalId::TerminalBench,
             base_url: "http://127.0.0.1:9337/v1".to_string(),
             model: "tiny-local".to_string(),
-            api_key: "test".to_string(),
+            api_key: "terminal-secret-value".to_string(),
             cache_root: None,
             output_dir: None,
             timeout_secs: 30,
@@ -566,6 +580,52 @@ mod tests {
                 .envs
                 .contains(&("OPENAI_BASE_URL".to_string(), args.base_url))
         );
+        assert!(command.secret_envs.contains(&(
+            "OPENAI_API_KEY".to_string(),
+            "terminal-secret-value".to_string()
+        )));
+        assert!(!command.display().contains("terminal-secret-value"));
+    }
+
+    #[test]
+    fn generated_eval_scripts_do_not_persist_api_keys() {
+        let root = temp_run_dir("script-secrets-cache");
+        let run_dir = temp_run_dir("script-secrets-run");
+        fs::create_dir_all(run_dir.join("raw")).unwrap();
+
+        for eval in [EvalId::McpAtlas, EvalId::SweBenchPro] {
+            let args = eval_run_args(eval, "literal-secret");
+            let command = match eval {
+                EvalId::McpAtlas => mcp_atlas_command(&args, &root, &run_dir).unwrap(),
+                EvalId::SweBenchPro => swe_bench_pro_command(&args, &root, &run_dir).unwrap(),
+                _ => unreachable!(),
+            };
+            let script = fs::read_to_string(&command.args[0]).unwrap();
+
+            assert!(command.secret_envs.contains(&(
+                "SKIPPY_BENCH_API_KEY".to_string(),
+                "literal-secret".to_string()
+            )));
+            assert!(!command.display().contains("literal-secret"));
+            assert!(!script.contains("literal-secret"));
+            assert!(script.contains("SKIPPY_BENCH_API_KEY"));
+            assert!(!script.contains("--agent.model.api_key"));
+        }
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(run_dir);
+    }
+
+    #[test]
+    fn telemetry_failure_is_reported_as_unavailable() {
+        let telemetry = telemetry_or_unavailable(
+            "http://127.0.0.1:18080",
+            "run-id",
+            Err(anyhow::anyhow!("collector offline")),
+        );
+
+        assert_eq!(telemetry.status, "unavailable");
+        assert_eq!(telemetry.detail.as_deref(), Some("collector offline"));
     }
 
     #[test]
@@ -861,5 +921,23 @@ mod tests {
             std::process::id(),
             unix_millis().unwrap()
         ))
+    }
+
+    fn eval_run_args(eval: EvalId, api_key: &str) -> EvalRunArgs {
+        EvalRunArgs {
+            eval,
+            base_url: "http://127.0.0.1:9337/v1".to_string(),
+            model: "tiny-local".to_string(),
+            api_key: api_key.to_string(),
+            cache_root: None,
+            output_dir: None,
+            timeout_secs: 30,
+            harness_timeout_secs: None,
+            endpoint_concurrency: 1,
+            run_id: None,
+            metrics_http: "http://127.0.0.1:18080".to_string(),
+            metrics_run_id: None,
+            dry_run: true,
+        }
     }
 }

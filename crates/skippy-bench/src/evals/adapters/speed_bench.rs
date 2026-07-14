@@ -4,15 +4,27 @@ const AUTH_LAUNCHER: &str = r#"from __future__ import annotations
 import os
 import runpy
 import sys
+from urllib.parse import urlparse
 
 import requests
 
 original_request = requests.sessions.Session.request
 
+def request_origin(url):
+    if "://" not in url:
+        url = "http://" + url
+    parsed = urlparse(url)
+    default_port = 443 if parsed.scheme.lower() == "https" else 80
+    return (parsed.scheme.lower(), parsed.hostname, parsed.port or default_port)
+
+benchmark_origin = request_origin(os.environ["SKIPPY_BENCH_BASE_URL"])
+
 def authorized_request(self, method, url, **kwargs):
-    headers = dict(kwargs.pop("headers", {}) or {})
-    headers.setdefault("Authorization", f"Bearer {os.environ['SKIPPY_BENCH_API_KEY']}")
-    return original_request(self, method, url, headers=headers, **kwargs)
+    if request_origin(url) == benchmark_origin:
+        headers = dict(kwargs.get("headers", {}) or {})
+        headers.setdefault("Authorization", f"Bearer {os.environ['SKIPPY_BENCH_API_KEY']}")
+        kwargs["headers"] = headers
+    return original_request(self, method, url, **kwargs)
 
 requests.sessions.Session.request = authorized_request
 script = sys.argv.pop(1)
@@ -31,7 +43,7 @@ pub(in crate::evals) fn speed_bench_command(
     let script = harness.join("tools/server/bench/speed-bench/speed_bench.py");
     let launcher = run_dir.join("raw/speed-bench-auth.py");
     fs::write(&launcher, AUTH_LAUNCHER).with_context(|| format!("write {}", launcher.display()))?;
-    let cache_root = env::temp_dir().join("skippy-bench-speed-cache");
+    let cache_root = root.join("speed-cache");
     let command = CommandSpec::new("uv")
         .args([
             "run".to_string(),
@@ -67,6 +79,7 @@ pub(in crate::evals) fn speed_bench_command(
             cache_root.join("hf-datasets").display().to_string(),
         )
         .env("UV_CACHE_DIR", cache_root.join("uv").display().to_string())
+        .env("SKIPPY_BENCH_BASE_URL", args.base_url.clone())
         .secret_env("SKIPPY_BENCH_API_KEY", args.api_key.clone());
     Ok(command)
 }

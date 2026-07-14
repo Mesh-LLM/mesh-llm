@@ -79,13 +79,11 @@ pub(super) fn run_eval(args: EvalRunArgs) -> Result<()> {
         report.stdout_path = Some(stdout_path.display().to_string());
         report.stderr_path = Some(stderr_path.display().to_string());
         report.metrics = collect_metrics(definition, &run_dir, duration_ms);
-        if let Err(error) = collect_telemetry(&metrics_http, &metrics_run_id, &run_dir)
-            .map(|telemetry| report.telemetry = telemetry)
-        {
-            report.telemetry =
-                telemetry_report::unavailable(&metrics_http, &metrics_run_id, &error);
-            report.success = false;
-        }
+        report.telemetry = telemetry_or_unavailable(
+            &metrics_http,
+            &metrics_run_id,
+            collect_telemetry(&metrics_http, &metrics_run_id, &run_dir),
+        );
     }
 
     let report_path = run_dir.join("run.json");
@@ -213,6 +211,15 @@ fn collect_telemetry(
         metrics_run_id,
         &metrics_report_path(run_dir),
     )
+}
+
+pub(super) fn telemetry_or_unavailable(
+    metrics_http: &str,
+    metrics_run_id: &str,
+    result: Result<BenchTelemetry>,
+) -> BenchTelemetry {
+    result
+        .unwrap_or_else(|error| telemetry_report::unavailable(metrics_http, metrics_run_id, &error))
 }
 
 pub(super) fn speed_bench_metrics(run_dir: &Path) -> Result<EvalMetrics> {

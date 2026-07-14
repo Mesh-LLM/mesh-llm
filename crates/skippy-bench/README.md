@@ -221,9 +221,11 @@ run id. SkippyBench finalizes and fetches
 adds a `telemetry` block to `run.json`. When the target emits debug telemetry,
 SkippyBench derives TTFT/FTTT from the first request span to the first
 `stage.openai_decode_token` span, plus request and generation latency
-aggregates. If the target endpoint is not emitting the requested run id, or if
-debug token spans are disabled, the telemetry block records that status rather
-than filling misleading values.
+aggregates. A finalization or report-fetch failure marks telemetry unavailable
+without changing the native harness result in `report.success`. If the target
+endpoint is not emitting the requested run id, or if debug token spans are
+disabled, the telemetry block records that status rather than filling
+misleading values.
 
 Optional packs intentionally not wired yet:
 

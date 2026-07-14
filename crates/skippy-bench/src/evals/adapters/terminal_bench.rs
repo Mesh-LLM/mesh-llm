@@ -23,5 +23,5 @@ pub(in crate::evals) fn terminal_bench_command(args: &EvalRunArgs, run_dir: &Pat
             "--no-livestream".to_string(),
         ])
         .env("OPENAI_BASE_URL", args.base_url.clone())
-        .env("OPENAI_API_KEY", args.api_key.clone())
+        .secret_env("OPENAI_API_KEY", args.api_key.clone())
 }

@@ -153,8 +153,9 @@ path, not a Skippy dataset or harness rewrite.
 
 For TTFT/FTTT, use metrics-server correlation rather than harness-only timing.
 `skippy-bench eval run` and `skippy-bench chat-corpus` create/finalize a
-metrics-server run and fail if the metrics report cannot be exported. The
-target endpoint must be emitting OTLP for the same run id. Debug telemetry is
-required for per-token spans such as `stage.openai_decode_token`; without it,
-the JSON report will still include a telemetry block explaining why TTFT/FTTT
-was unavailable.
+metrics-server run. `eval run` keeps harness success independent from a
+finalization/export failure and records telemetry as unavailable; `chat-corpus`
+still fails when its metrics report cannot be exported. The target endpoint
+must be emitting OTLP for the same run id. Debug telemetry is required for
+per-token spans such as `stage.openai_decode_token`; without it, the JSON report
+will still include a telemetry block explaining why TTFT/FTTT was unavailable.
