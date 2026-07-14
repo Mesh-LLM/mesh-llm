@@ -1,0 +1,153 @@
+{
+  "plugin": "web-ui-exemplar",
+  "installed": true,
+  "runtime_status": "running",
+  "frontend_origin": "http://127.0.0.1:13131",
+  "frontend_delivery": "production UI embedded in mesh-llm console server",
+  "vite_dev_client_present": false,
+  "api_interception": false,
+  "color_scheme": "dark",
+  "web_ui_ready": true,
+  "browser_page_rendered": true,
+  "settings_persisted": 46,
+  "invalid_setting_status": 422,
+  "disabled_asset_status": 404,
+  "non_ui_capability_while_disabled": "available",
+  "asset_cache_control": "no-cache",
+  "browser_api_responses": [
+    {
+      "method": "GET",
+      "path": "/api/plugins/web-ui-exemplar/web-ui",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins/web-ui-exemplar/web-ui/config",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins/web-ui-exemplar/web-ui/assets/register-mesh-plugin-ui.js",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/models",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime/control-bootstrap",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime/config-schema",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime/config-control-state",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/runtime/control/get-config",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins/web-ui-exemplar/web-ui/config",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins/web-ui-exemplar/web-ui/assets/register-mesh-plugin-ui.js",
+      "status": 200
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/plugins/web-ui-exemplar/web-ui/config",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins/web-ui-exemplar/web-ui/config",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime/control-bootstrap",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/models",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime/config-schema",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime/config-control-state",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/runtime/control/get-config",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins/web-ui-exemplar/web-ui/config",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins/web-ui-exemplar/web-ui/assets/register-mesh-plugin-ui.js",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugins/web-ui-exemplar/web-ui",
+      "status": 200
+    }
+  ],
+  "diagnostics": {
+    "consoleErrors": [],
+    "pageErrors": []
+  }
+}

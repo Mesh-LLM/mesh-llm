@@ -13,6 +13,20 @@ type BrowserDiagnostics = {
   pageErrors: string[]
 }
 
+type BrowserApiResponse = {
+  method: string
+  path: string
+  status: number
+}
+
+const darkUiPreferences = {
+  theme: 'dark',
+  accent: 'blue',
+  density: 'normal',
+  panelStyle: 'soft',
+  panelStyleOverride: false
+}
+
 async function setWebUiEnabled(request: APIRequestContext, enabled: boolean) {
   const response = await request.patch(`${pluginApi}/web-ui/enabled`, { data: { enabled } })
   expect(response.status()).toBe(200)
@@ -49,15 +63,44 @@ function collectBrowserDiagnostics(page: Page): BrowserDiagnostics {
   return diagnostics
 }
 
+function collectBrowserApiResponses(page: Page): BrowserApiResponse[] {
+  const responses: BrowserApiResponse[] = []
+  page.on('response', (response) => {
+    const url = new URL(response.url())
+    if (!url.pathname.startsWith('/api/')) return
+    responses.push({
+      method: response.request().method(),
+      path: `${url.pathname}${url.search}`,
+      status: response.status()
+    })
+  })
+  return responses
+}
+
+async function expectBrowserApiResponse(responses: BrowserApiResponse[], path: string, status = 200) {
+  await expect.poll(() => responses.some((response) => response.path === path && response.status === status)).toBe(true)
+}
+
 test.describe('installed plugin web UI exemplar @plugin', () => {
   test.skip(!process.env.MESH_PLUGIN_E2E, 'requires the installed live exemplar started by its documented recipe')
   test.describe.configure({ mode: 'serial' })
+  test.use({ colorScheme: 'dark', viewport: { width: 1440, height: 1000 } })
 
   test('is installed, running, rendered, configurable, and independently disableable', async ({ page, request }) => {
     const diagnostics = collectBrowserDiagnostics(page)
+    const browserApiResponses = collectBrowserApiResponses(page)
     await mkdir(evidenceDirectory, { recursive: true })
 
+    await page.addInitScript((preferences) => {
+      window.localStorage.setItem('mesh-llm-ui-preview:preferences:v1', JSON.stringify(preferences))
+    }, darkUiPreferences)
+
     try {
+      const consoleResponse = await request.get('/')
+      expect(consoleResponse.status()).toBe(200)
+      const consoleHtml = await consoleResponse.text()
+      expect(consoleHtml).not.toContain('/@vite/client')
+
       await setWebUiEnabled(request, true)
       expect((await setRetentionDays(request, 30)).status()).toBe(200)
       await expectWebUiState(request, 'ready')
@@ -92,11 +135,14 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
       expect(invalidConfigResponse.status()).toBe(422)
 
       await page.goto(`/plugins/${pluginName}/overview`)
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
       await expect(page.getByRole('heading', { name: 'Exemplar Overview', level: 1 })).toBeVisible()
       const pluginHost = page.getByRole('region', { name: 'Exemplar Overview plugin host' })
       await expect(pluginHost.getByRole('heading', { name: 'Exemplar Overview', level: 2 })).toBeVisible()
       await expect(pluginHost).toContainText('exemplar.notes.v1 remains available')
       await expect(page.getByText('Plugin page mounted')).toBeAttached()
+      await expectBrowserApiResponse(browserApiResponses, `${pluginApi}/web-ui`)
+      await expectBrowserApiResponse(browserApiResponses, `${pluginApi}/web-ui/assets/register-mesh-plugin-ui.js`)
       await page.screenshot({
         path: `${evidenceDirectory}/01-plugin-page-ready.png`,
         fullPage: true,
@@ -104,6 +150,7 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
       })
 
       await page.goto('/configuration/plugins')
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
       await expect(page.getByRole('heading', { name: 'Configuration', level: 1 })).toBeVisible()
       await expect(page.getByRole('tab', { name: 'Plugins' })).toHaveAttribute('aria-selected', 'true')
       const pluginCard = page.getByRole('article', { name: pluginName })
@@ -146,6 +193,7 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
       expect(await toolWhileDisabled.json()).toEqual({ capability: 'exemplar.notes.v1', status: 'available' })
 
       await page.goto(`/plugins/${pluginName}/overview`)
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
       await expect(page.getByRole('heading', { name: 'Plugin web UI is disabled', level: 1 })).toBeVisible()
       await page.screenshot({
         path: `${evidenceDirectory}/03-plugin-ui-disabled-capability-alive.png`,
@@ -160,6 +208,11 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
             plugin: pluginName,
             installed: true,
             runtime_status: 'running',
+            frontend_origin: new URL(page.url()).origin,
+            frontend_delivery: 'production UI embedded in mesh-llm console server',
+            vite_dev_client_present: consoleHtml.includes('/@vite/client'),
+            api_interception: false,
+            color_scheme: await page.locator('html').getAttribute('data-theme'),
             web_ui_ready: true,
             browser_page_rendered: true,
             settings_persisted: 46,
@@ -167,6 +220,7 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
             disabled_asset_status: 404,
             non_ui_capability_while_disabled: 'available',
             asset_cache_control: 'no-cache',
+            browser_api_responses: browserApiResponses,
             diagnostics
           },
           null,
