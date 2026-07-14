@@ -142,9 +142,13 @@ the `web_ui_enabled` preference. The config endpoint returns the mounted
 plugin's visible settings and schema; its patch accepts only plugin-owned
 `settings` and optional `unset` keys. It rejects host-owned fields such as
 `enabled`, `web_ui_enabled`, `command`, `args`, `url`, and `startup`.
+Malformed mutations return HTTP 400; schema-invalid values return HTTP 422.
 
 Only a `ready` projection serves assets or imports bundle code. The host
 exposes `none`, `ready`, `disabled`, `invalid`, and `plugin_not_running` states.
+Assets are same-origin trusted modules and use `Cache-Control: no-cache`, so a
+reinstalled local package is revalidated instead of remaining stale under an
+immutable URL.
 Pages use the static console route `/plugins/:plugin/:pageId`; configuration
 sections mount only under the existing Integrations surface. See [Developing
 Plugins](/docs/pages/developing-plugins/) for the author contract and the

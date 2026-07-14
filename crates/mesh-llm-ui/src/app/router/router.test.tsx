@@ -42,7 +42,9 @@ const pluginBundleProbe = vi.hoisted(() => ({
 }))
 
 vi.mock('@/features/plugins/web-ui/bundle-loader', () => ({
-  importPluginUiBundle: pluginBundleProbe.importBundle
+  importPluginUiBundle: pluginBundleProbe.importBundle,
+  assertPluginUiRegistration: vi.fn(),
+  assertPluginUiMountHandle: vi.fn()
 }))
 
 vi.mock('@/features/reserves/pages/ReservesPage', () => ({

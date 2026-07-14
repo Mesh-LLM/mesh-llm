@@ -46,6 +46,19 @@ mesh-llm plugins install Mesh-LLM/openai-endpoint@0.1.2
 
 Use the catalog name, such as `agents`, for catalog installs. Use the fully qualified `owner/repository` form, such as `Mesh-LLM/agents`, only when installing directly from GitHub.
 
+Plugin authors can install a local release archive through the same validation
+boundary without publishing it first:
+
+```bash
+mesh-llm plugins install --archive ./my-plugin-0.1.0-local.tar.gz \
+  --name my-plugin --version 0.1.0
+```
+
+`--archive` accepts `.tar.gz` or `.zip`, requires `--name`, and conflicts with
+the positional catalog/GitHub reference. `--version` is optional and defaults
+to `dev`. Rebuild and reinstall local archives; `plugins update` is for GitHub
+release sources.
+
 The installer selects a native release archive using the plugin name, version, operating system, and CPU architecture. It does not download GPU-specific plugin variants. If a plugin does not publish an archive for your target, build it from its repository and configure the binary with `command`.
 
 After installing, inspect the recorded source, version, target, and path:

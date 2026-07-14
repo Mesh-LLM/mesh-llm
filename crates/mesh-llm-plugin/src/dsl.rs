@@ -80,6 +80,22 @@ impl DeclarativePluginBuilder {
         self
     }
 
+    pub fn config_item<T: Into<ManifestEntry>>(mut self, item: T) -> Self {
+        match item.into() {
+            ManifestEntry::ConfigSchema(schema) => self.manifest.push_item(schema),
+            _ => panic!("config entries must be plugin config schemas"),
+        }
+        self
+    }
+
+    pub fn web_ui_item<T: Into<ManifestEntry>>(mut self, item: T) -> Self {
+        match item.into() {
+            ManifestEntry::WebUi(web_ui) => self.manifest.push_item(web_ui),
+            _ => panic!("web_ui entries must be plugin web UI declarations"),
+        }
+        self
+    }
+
     pub fn mcp_item<T: Into<McpItem>>(mut self, item: T) -> Self {
         item.into().apply(&mut self);
         self

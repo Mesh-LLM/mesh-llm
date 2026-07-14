@@ -37,7 +37,10 @@ Plugin authors think in terms of the host surfaces they contribute to:
 - `http`
 - `inference`
 - `provides`
+- `config`
 - `web_ui`
+- `mesh`
+- `events`
 
 The host runtime still executes native service invocations internally, but the author-facing DSL is organized by the surface the plugin contributes to.
 
@@ -48,7 +51,10 @@ This means:
 - local HTTP routes live under `http`
 - attached or plugin-hosted inference backends live under `inference`
 - stable product capabilities live under `provides`
+- plugin settings schemas live under `config`
 - local console pages and configuration sections live under `web_ui`
+- plugin-specific peer messages and host lifecycle subscriptions live under
+  `mesh` and `events`
 
 There is no separate top-level `services` section in the preferred DSL.
 

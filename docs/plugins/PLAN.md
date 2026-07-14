@@ -51,6 +51,7 @@ Initial commands:
 
 ```bash
 mesh-llm plugins install <ref>
+mesh-llm plugins install --archive <path> --name <plugin> [--version <version>]
 mesh-llm plugins update <plugin>
 mesh-llm plugins enable <plugin>
 mesh-llm plugins disable <plugin>

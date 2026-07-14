@@ -1440,6 +1440,15 @@ mod tests {
                 plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>),
             ),
             provides: [capability("demo.v1")],
+            config: [config_schema("demo")],
+            web_ui: [
+                web_ui()
+                    .bundle(web_ui_bundle("main", "bundle"))
+                    .page(
+                        web_ui_page("overview", "Overview", "overview", "plugin-ui.js")
+                            .bundle_id("main"),
+                    ),
+            ],
             mesh: [mesh_channel("demo.v1")],
             events: [mesh_event_peer_up()],
             mcp: [
@@ -1468,6 +1477,8 @@ mod tests {
         let manifest = plugin.manifest().expect("manifest");
         assert_eq!(plugin.capabilities(), vec!["demo.v1"]);
         assert_eq!(manifest.capabilities, vec!["demo.v1"]);
+        assert_eq!(manifest.config_schema.as_ref().unwrap().plugin_name, "demo");
+        assert_eq!(manifest.web_ui.as_ref().unwrap().pages[0].id, "overview");
         assert_eq!(manifest.operations.len(), 2);
         assert_eq!(manifest.http_bindings.len(), 1);
         assert_eq!(manifest.endpoints.len(), 2);

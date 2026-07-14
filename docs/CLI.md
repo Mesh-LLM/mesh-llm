@@ -709,6 +709,9 @@ Subcommands:
 
 - `plugins install <REFERENCE>`: install from a catalog name, GitHub
   `owner/repository`, or GitHub URL.
+- `plugins install --archive <PATH> --name <NAME> [--version <VERSION>]`:
+  install a local `.tar.gz` or `.zip` release archive. `--name` is required;
+  `--version` defaults to `dev`. These flags conflict with `<REFERENCE>`.
 - `plugins update <NAME>`: install the latest compatible release for an
   installed plugin.
 - `plugins enable <NAME>`: mark an installed plugin runnable by mesh-llm.
@@ -720,6 +723,9 @@ Subcommands:
   status for an installed or configured plugin.
 - `plugins search [QUERY]`: search the configured plugin catalog.
 - `plugins list`: list installed, auto-registered, and configured plugins.
+
+Local archives are for authoring and validation. Rebuild and reinstall them;
+`plugins update` remains a GitHub release workflow.
 
 Plugin installation and enablement are separate from the optional web UI
 projection. A plugin that declares a web UI can be shown or hidden with its

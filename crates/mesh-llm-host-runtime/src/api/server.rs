@@ -174,6 +174,7 @@ pub(crate) fn is_console_index_route(path: &str) -> bool {
             | "/__meshviz-perf"
     ) || path.starts_with("/chat/")
         || path.starts_with("/configuration/")
+        || path.starts_with("/plugins/")
 }
 
 pub(crate) fn is_console_asset_route(path: &str) -> bool {

@@ -264,20 +264,20 @@ describe('DeveloperPlaygroundPage', () => {
     expect(screen.getByText(/shows the configuration app surface/i)).toBeInTheDocument()
 
     const stateControl = screen.getByRole('radiogroup', { name: /new configuration page state/i })
-    const enabledOption = within(stateControl).getByRole('radio', { name: /on/i })
-    expect(enabledOption).toHaveAttribute('aria-checked', 'false')
+    const disabledOption = within(stateControl).getByRole('radio', { name: /off/i })
+    expect(disabledOption).toHaveAttribute('aria-checked', 'false')
 
-    await user.click(enabledOption)
+    await user.click(disabledOption)
 
-    expect(enabledOption).toHaveAttribute('aria-checked', 'true')
-    expect(enabledOption).toHaveAttribute('data-selected-tone', 'accent')
+    expect(disabledOption).toHaveAttribute('aria-checked', 'true')
+    expect(disabledOption).toHaveAttribute('data-selected', 'true')
     expect(screen.getAllByText(/local override/i)).toHaveLength(2)
     expect(screen.getByRole('button', { name: /reset new configuration page/i })).toBeInTheDocument()
     expect(screen.getByText(/"global"/)).toBeInTheDocument()
 
     await waitFor(() => {
       expect(window.localStorage.getItem(PLAYGROUND_FEATURE_FLAGS_STORAGE_KEY)).toBe(
-        '{"global":{"newConfigurationPage":true}}'
+        '{"global":{"newConfigurationPage":false}}'
       )
     })
   })

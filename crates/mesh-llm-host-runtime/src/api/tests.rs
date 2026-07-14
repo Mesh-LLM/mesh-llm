@@ -4145,6 +4145,7 @@ fn headless_mode_disables_ui_routes_but_preserves_api() {
     assert!(is_ui_only_route("/chat"));
     assert!(is_ui_only_route("/configuration"));
     assert!(is_ui_only_route("/configuration/defaults"));
+    assert!(is_ui_only_route("/plugins/web-ui-exemplar/overview"));
 
     assert!(!is_ui_only_route("/api/status"));
     assert!(!is_ui_only_route("/api/events"));
@@ -4160,6 +4161,7 @@ fn headless_mode_returns_404_for_assets_and_dashboard_routes() {
     assert!(is_ui_only_route("/chat/some-room"));
     assert!(is_ui_only_route("/configuration/"));
     assert!(is_ui_only_route("/configuration/toml-review"));
+    assert!(is_ui_only_route("/plugins/web-ui-exemplar/overview"));
     assert!(is_ui_only_route("/assets/main.js"));
     assert!(is_ui_only_route("/assets/index-abc123.css"));
     assert!(is_ui_only_route("/favicon.ico"));

@@ -1,16 +1,14 @@
 use super::super::{
     MeshApi,
-    http::{respond_bytes_cached, respond_error, respond_json},
+    http::{respond_error, respond_json},
 };
-use crate::plugin::{PluginWebUiState, PluginWebUiStateKind, stapler};
-use mesh_llm_plugin_manager::{PluginStore, default_store_root};
-use serde::{Deserialize, Serialize};
+use crate::plugin::stapler;
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
-use std::path::{Component, Path};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use url::form_urlencoded;
+
+mod web_ui;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HttpBindingTransferMode {
@@ -38,7 +36,7 @@ enum PluginApiRoute<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PluginWebUiSubroute<'a> {
+pub(super) enum PluginWebUiSubroute<'a> {
     Metadata,
     Enabled,
     Config,
@@ -63,16 +61,16 @@ pub(super) async fn handle(
         PluginApiRoute::Tools(route_path) => handle_tools(stream, state, route_path).await,
         PluginApiRoute::ToolCall(route_path) => handle_call(stream, state, route_path, body).await,
         PluginApiRoute::WebUiMetadata(route_path) => {
-            handle_web_ui_metadata(stream, state, route_path).await
+            web_ui::handle_metadata(stream, state, route_path).await
         }
         PluginApiRoute::WebUiEnabled(route_path) => {
-            handle_web_ui_enabled(stream, state, route_path, body).await
+            web_ui::handle_enabled(stream, state, route_path, body).await
         }
         PluginApiRoute::WebUiAsset(route_path) => {
-            handle_web_ui_asset(stream, state, route_path).await
+            web_ui::handle_asset(stream, state, route_path).await
         }
         PluginApiRoute::WebUiConfig(route_path) => {
-            handle_web_ui_config(stream, state, method, route_path, body).await
+            web_ui::handle_config(stream, state, method, route_path, body).await
         }
         PluginApiRoute::StapledHttp => {
             handle_stapled_http(stream, state, method, path, path_only, body, raw_request).await
@@ -124,7 +122,7 @@ fn is_plugin_tool_call_route(path: &str) -> bool {
     is_plugin_route(path) && path.contains("/tools/")
 }
 
-fn parse_plugin_web_ui_route(path: &str) -> Option<(&str, PluginWebUiSubroute<'_>)> {
+pub(super) fn parse_plugin_web_ui_route(path: &str) -> Option<(&str, PluginWebUiSubroute<'_>)> {
     let rest = path.strip_prefix("/api/plugins/")?;
     let (plugin_name, suffix) = rest.split_once('/')?;
     if plugin_name.is_empty() {
@@ -297,320 +295,6 @@ async fn handle_call(
         respond_error(stream, 404, "Not found").await?;
     }
     Ok(())
-}
-
-async fn handle_web_ui_metadata(
-    stream: &mut TcpStream,
-    state: &MeshApi,
-    path: &str,
-) -> anyhow::Result<()> {
-    let Some((plugin_name, PluginWebUiSubroute::Metadata)) = parse_plugin_web_ui_route(path) else {
-        return respond_error(stream, 404, "Not found").await;
-    };
-    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-    match plugin_manager.web_ui_state(plugin_name).await {
-        Ok(web_ui) => respond_json(stream, 200, &web_ui).await?,
-        Err(error) => respond_error(stream, 404, &error.to_string()).await?,
-    }
-    Ok(())
-}
-
-#[derive(Debug, Deserialize)]
-struct WebUiEnabledRequest {
-    enabled: bool,
-}
-
-async fn handle_web_ui_enabled(
-    stream: &mut TcpStream,
-    state: &MeshApi,
-    path: &str,
-    body: &str,
-) -> anyhow::Result<()> {
-    let Some((plugin_name, PluginWebUiSubroute::Enabled)) = parse_plugin_web_ui_route(path) else {
-        return respond_error(stream, 404, "Not found").await;
-    };
-    let request: WebUiEnabledRequest = match serde_json::from_str(body) {
-        Ok(request) => request,
-        Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
-    };
-    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-    let current = match plugin_manager.web_ui_state(plugin_name).await {
-        Ok(web_ui) => web_ui,
-        Err(error) => return respond_error(stream, 404, &error.to_string()).await,
-    };
-    if !current.declared {
-        return respond_error(stream, 400, "Plugin does not declare a web UI").await;
-    }
-    if let Err(error) = state
-        .capture_node
-        .set_plugin_web_ui_enabled(plugin_name, request.enabled)
-        .await
-    {
-        return respond_error(stream, 500, &error.to_string()).await;
-    }
-    match plugin_manager
-        .set_web_ui_enabled(plugin_name, request.enabled)
-        .await
-    {
-        Ok(web_ui) => respond_json(stream, 200, &web_ui).await?,
-        Err(error) => respond_error(stream, 404, &error.to_string()).await?,
-    }
-    Ok(())
-}
-
-async fn handle_web_ui_asset(
-    stream: &mut TcpStream,
-    state: &MeshApi,
-    path: &str,
-) -> anyhow::Result<()> {
-    let Some((plugin_name, asset_path)) = parse_web_ui_asset_path(path) else {
-        respond_error(stream, 404, "Not found").await?;
-        return Ok(());
-    };
-    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-    let web_ui = match plugin_manager.web_ui_state(plugin_name).await {
-        Ok(web_ui) => web_ui,
-        Err(_) => {
-            respond_error(stream, 404, "Not found").await?;
-            return Ok(());
-        }
-    };
-    match web_ui.state {
-        PluginWebUiStateKind::Ready => {
-            serve_ready_web_ui_asset(stream, &plugin_manager, plugin_name, asset_path, &web_ui)
-                .await?
-        }
-        PluginWebUiStateKind::Invalid | PluginWebUiStateKind::PluginNotRunning => {
-            let reason = web_ui
-                .unavailable_reason
-                .as_deref()
-                .unwrap_or("plugin web UI is unavailable");
-            respond_error(stream, 409, reason).await?;
-        }
-        PluginWebUiStateKind::None | PluginWebUiStateKind::Disabled => {
-            respond_error(stream, 404, "Not found").await?;
-        }
-    }
-    Ok(())
-}
-
-async fn serve_ready_web_ui_asset(
-    stream: &mut TcpStream,
-    plugin_manager: &crate::plugin::PluginManager,
-    plugin_name: &str,
-    asset_path: &str,
-    web_ui: &PluginWebUiState,
-) -> anyhow::Result<()> {
-    if web_ui.asset_base_url.is_none() {
-        respond_error(stream, 409, "plugin web UI asset root is unavailable").await?;
-        return Ok(());
-    }
-    let Some(rel) = clean_web_ui_asset_path(asset_path) else {
-        respond_error(stream, 404, "Not found").await?;
-        return Ok(());
-    };
-    let Some(root) = plugin_manager.web_ui_asset_root(plugin_name).await? else {
-        respond_error(stream, 409, "plugin web UI asset root is unavailable").await?;
-        return Ok(());
-    };
-    let Some(full_path) = canonical_web_ui_asset_path(&root, &rel) else {
-        respond_error(stream, 404, "Not found").await?;
-        return Ok(());
-    };
-    match std::fs::read(&full_path) {
-        Ok(contents) => {
-            respond_bytes_cached(
-                stream,
-                200,
-                "OK",
-                mesh_llm_ui::content_type(&rel),
-                mesh_llm_ui::cache_control(&rel),
-                &contents,
-            )
-            .await?;
-        }
-        Err(_) => respond_error(stream, 404, "Not found").await?,
-    }
-    Ok(())
-}
-
-fn parse_web_ui_asset_path(path: &str) -> Option<(&str, &str)> {
-    match parse_plugin_web_ui_route(path)? {
-        (plugin_name, PluginWebUiSubroute::Asset(asset_path)) => Some((plugin_name, asset_path)),
-        _ => None,
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct WebUiConfigMutationRequest {
-    #[serde(default)]
-    plugin: Option<String>,
-    #[serde(default)]
-    settings: BTreeMap<String, Value>,
-    #[serde(default)]
-    unset: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct PluginWebUiConfigResponse {
-    plugin: String,
-    settings: BTreeMap<String, toml::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    schema: Option<Value>,
-}
-
-async fn handle_web_ui_config(
-    stream: &mut TcpStream,
-    state: &MeshApi,
-    method: &str,
-    path: &str,
-    body: &str,
-) -> anyhow::Result<()> {
-    let Some((plugin_name, PluginWebUiSubroute::Config)) = parse_plugin_web_ui_route(path) else {
-        return respond_error(stream, 404, "Not found").await;
-    };
-    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-    if let Err(error) = plugin_manager.web_ui_state(plugin_name).await {
-        return respond_error(stream, 404, &error.to_string()).await;
-    }
-
-    match method {
-        "GET" => {
-            let response = plugin_web_ui_config_response(state, plugin_name).await;
-            respond_json(stream, 200, &response).await
-        }
-        "PATCH" => {
-            let request = match parse_web_ui_config_mutation(plugin_name, body) {
-                Ok(request) => request,
-                Err(error) => return respond_error(stream, 400, &error).await,
-            };
-            match state
-                .capture_node
-                .patch_plugin_settings(plugin_name, request.0, request.1)
-                .await
-            {
-                Ok(settings) => {
-                    let response = PluginWebUiConfigResponse {
-                        plugin: plugin_name.to_string(),
-                        settings,
-                        schema: installed_plugin_config_schema_json(plugin_name),
-                    };
-                    respond_json(stream, 200, &response).await
-                }
-                Err(error) => respond_error(stream, 500, &error.to_string()).await,
-            }
-        }
-        _ => respond_error(stream, 405, "Method not allowed").await,
-    }
-}
-
-async fn plugin_web_ui_config_response(
-    state: &MeshApi,
-    plugin_name: &str,
-) -> PluginWebUiConfigResponse {
-    PluginWebUiConfigResponse {
-        plugin: plugin_name.to_string(),
-        settings: state.capture_node.plugin_settings(plugin_name).await,
-        schema: installed_plugin_config_schema_json(plugin_name),
-    }
-}
-
-fn parse_web_ui_config_mutation(
-    plugin_name: &str,
-    body: &str,
-) -> Result<(BTreeMap<String, toml::Value>, Vec<String>), String> {
-    let request: WebUiConfigMutationRequest =
-        serde_json::from_str(body).map_err(|_| "Invalid JSON body".to_string())?;
-    if let Some(request_plugin) = request.plugin.as_deref()
-        && request_plugin != plugin_name
-    {
-        return Err(format!(
-            "Config mutation plugin '{}' does not match mounted plugin '{}'",
-            request_plugin, plugin_name
-        ));
-    }
-
-    let mut settings = BTreeMap::new();
-    for (key, value) in request.settings {
-        validate_plugin_setting_key(&key)?;
-        if value.is_null() {
-            return Err(format!(
-                "Plugin setting '{key}' cannot be null; use unset instead"
-            ));
-        }
-        let value = toml::Value::try_from(value).map_err(|error| {
-            format!("Plugin setting '{key}' has unsupported value type: {error}")
-        })?;
-        settings.insert(key, value);
-    }
-    for key in &request.unset {
-        validate_plugin_setting_key(key)?;
-    }
-    Ok((settings, request.unset))
-}
-
-fn validate_plugin_setting_key(key: &str) -> Result<(), String> {
-    let trimmed = key.trim();
-    if trimmed.is_empty() {
-        return Err("Plugin setting key cannot be empty".into());
-    }
-    if matches!(
-        trimmed,
-        "enabled" | "web_ui_enabled" | "command" | "args" | "url" | "startup"
-    ) {
-        return Err(format!(
-            "Plugin setting key '{trimmed}' targets a host-owned field"
-        ));
-    }
-    if !trimmed
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
-    {
-        return Err(format!(
-            "Plugin setting key '{trimmed}' must contain only ASCII letters, numbers, '-' or '_'"
-        ));
-    }
-    Ok(())
-}
-
-fn installed_plugin_config_schema_json(plugin_name: &str) -> Option<Value> {
-    let root = default_store_root().ok()?;
-    let metadata = PluginStore::new(root).load_optional(plugin_name).ok()??;
-    let schema = metadata.manifest?.config_schema?;
-    serde_json::to_value(schema).ok()
-}
-
-fn clean_web_ui_asset_path(path: &str) -> Option<String> {
-    let decoded = urlencoding::decode(path).ok()?;
-    if decoded.contains("..") {
-        return None;
-    }
-    let rel = decoded.trim_start_matches('/');
-    if rel.is_empty() || rel.starts_with('.') || Path::new(rel).is_absolute() {
-        return None;
-    }
-    if Path::new(rel)
-        .components()
-        .any(|component| match component {
-            Component::Normal(name) => name.to_string_lossy().starts_with('.'),
-            Component::CurDir
-            | Component::ParentDir
-            | Component::RootDir
-            | Component::Prefix(_) => true,
-        })
-    {
-        return None;
-    }
-    Some(rel.to_string())
-}
-
-fn canonical_web_ui_asset_path(root: &Path, rel: &str) -> Option<std::path::PathBuf> {
-    let root = root.canonicalize().ok()?;
-    let full_path = root.join(rel).canonicalize().ok()?;
-    if !full_path.starts_with(&root) || !full_path.is_file() {
-        return None;
-    }
-    Some(full_path)
 }
 
 async fn handle_stapled_http(
@@ -1294,7 +978,7 @@ mod tests {
         .await;
         assert!(asset_response.starts_with("HTTP/1.1 200 OK"));
         assert!(asset_response.contains("Content-Type: text/javascript; charset=utf-8"));
-        assert!(asset_response.contains("Cache-Control: public, max-age=31536000, immutable"));
+        assert!(asset_response.contains("Cache-Control: no-cache"));
         assert_eq!(response_body(&asset_response), "export const ok = true;");
 
         let config_response = call_plugins_route(
@@ -1316,6 +1000,15 @@ mod tests {
             persisted_config.plugins[0].settings.get("retention_days"),
             Some(&toml::Value::Integer(14))
         );
+
+        let invalid_config_response = call_plugins_route(
+            &state,
+            "PATCH",
+            "/api/plugins/demo/web-ui/config",
+            r#"{"plugin":"demo","settings":{"retention_days":"invalid"}}"#,
+        )
+        .await;
+        assert!(invalid_config_response.starts_with("HTTP/1.1 422 Unprocessable Content"));
 
         let disable_response = call_plugins_route(
             &state,

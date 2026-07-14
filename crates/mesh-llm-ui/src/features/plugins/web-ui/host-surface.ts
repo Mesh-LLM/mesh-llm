@@ -51,10 +51,29 @@ function documentAppearance(): MeshPluginUiAppearance {
   }
 }
 
-function pluginScopedApiUrl(pluginName: string, path: string): string {
-  const pathSegments = path.split('/').filter(Boolean).map(encodeURIComponent).join('/')
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code <= 0x1f || code === 0x7f) return true
+  }
+  return false
+}
+
+export function pluginScopedApiUrl(pluginName: string, path: string): string {
+  if (path.includes('\\') || path.includes('#') || path.includes('://') || hasControlCharacter(path)) {
+    throw new TypeError('Plugin API path must be a relative path without a fragment or origin')
+  }
+  const queryIndex = path.indexOf('?')
+  const pathname = queryIndex === -1 ? path : path.slice(0, queryIndex)
+  const query = queryIndex === -1 ? '' : path.slice(queryIndex + 1)
+  const rawSegments = pathname.split('/').filter(Boolean)
+  if (rawSegments.some((segment) => segment === '.' || segment === '..')) {
+    throw new TypeError('Plugin API path cannot contain dot segments')
+  }
+  const pathSegments = rawSegments.map(encodeURIComponent).join('/')
   const suffix = pathSegments ? `/${pathSegments}` : ''
-  return `${env.managementApiUrl}/api/plugins/${encodeURIComponent(pluginName)}${suffix}`
+  const search = query ? `?${query}` : ''
+  return `${env.managementApiUrl}/api/plugins/${encodeURIComponent(pluginName)}${suffix}${search}`
 }
 
 function createPluginUiStateStore() {
@@ -98,6 +117,10 @@ export function createMeshPluginUiHost({
       fetchPlugin: (path, init) => fetch(pluginScopedApiUrl(pluginName, path), init),
       json: async (path, init) => {
         const response = await fetch(pluginScopedApiUrl(pluginName, path), init)
+        if (!response.ok) {
+          const detail = await response.text()
+          throw new Error(detail || `Plugin API request failed with HTTP ${response.status}`)
+        }
         return response.json()
       }
     },

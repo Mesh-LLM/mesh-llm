@@ -100,6 +100,8 @@ macro_rules! plugin {
         metadata: $metadata:expr_2021,
         $(startup_policy: $startup_policy:expr_2021,)?
         $(provides: [$($provide:expr_2021),* $(,)?],)?
+        $(config: [$($config:expr_2021),* $(,)?],)?
+        $(web_ui: [$($web_ui:expr_2021),* $(,)?],)?
         $(mesh: [$($mesh:expr_2021),* $(,)?],)?
         $(events: [$($event:expr_2021),* $(,)?],)?
         $(mcp: [$($mcp:expr_2021),* $(,)?],)?
@@ -117,6 +119,16 @@ macro_rules! plugin {
         $(
             $(
                 builder = builder.provide($provide);
+            )*
+        )?
+        $(
+            $(
+                builder = builder.config_item($config);
+            )*
+        )?
+        $(
+            $(
+                builder = builder.web_ui_item($web_ui);
             )*
         )?
         $(

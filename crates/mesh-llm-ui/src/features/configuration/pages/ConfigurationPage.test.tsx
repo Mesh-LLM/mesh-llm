@@ -86,7 +86,9 @@ vi.mock('@/features/plugins/api/plugin-web-ui', async (importOriginal) => {
 })
 
 vi.mock('@/features/plugins/web-ui/bundle-loader', () => ({
-  importPluginUiBundle: pluginQueryMocks.importBundle
+  importPluginUiBundle: pluginQueryMocks.importBundle,
+  assertPluginUiRegistration: vi.fn(),
+  assertPluginUiMountHandle: vi.fn()
 }))
 
 import {

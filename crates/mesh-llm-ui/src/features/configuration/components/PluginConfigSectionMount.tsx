@@ -4,7 +4,11 @@ import {
   usePluginWebUiConfigMutation,
   usePluginWebUiConfigQuery
 } from '@/features/plugins/api/plugin-web-ui'
-import { importPluginUiBundle } from '@/features/plugins/web-ui/bundle-loader'
+import {
+  assertPluginUiMountHandle,
+  assertPluginUiRegistration,
+  importPluginUiBundle
+} from '@/features/plugins/web-ui/bundle-loader'
 import type {
   MeshPluginUiConfigMountContext,
   MeshPluginUiMountHandle,
@@ -124,6 +128,7 @@ export function PluginConfigSectionMount({ pluginName, section, webUi }: PluginC
         showToast
       })
       const registration = await module.registerMeshPluginUi(host)
+      assertPluginUiRegistration(registration)
       const mount = registration.configSections?.[section.id]
       const element = mountRef.current
 
@@ -133,7 +138,9 @@ export function PluginConfigSectionMount({ pluginName, section, webUi }: PluginC
       }
 
       const context: MeshPluginUiConfigMountContext = { element, host, section }
-      cleanup = unmountOnce(await mount(context))
+      const handle = await mount(context)
+      assertPluginUiMountHandle(handle)
+      cleanup = unmountOnce(handle)
 
       if (cancelled) {
         cleanup()

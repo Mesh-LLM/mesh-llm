@@ -6,12 +6,12 @@ export type FeatureFlagGroup = {
 
 export const DEFAULT_FEATURE_FLAGS = {
   global: {
-    newConfigurationPage: false,
+    newConfigurationPage: true,
     newReservesPage: false
   },
   configuration: {
     signingAttestation: false,
-    integrations: false,
+    integrations: true,
     wakePolicyConfiguration: false
   },
   chat: {

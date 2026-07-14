@@ -655,6 +655,9 @@ Subcommands:
 
 - `plugins install <reference>`: install from a catalog name, GitHub
   `owner/repository`, or GitHub URL.
+- `plugins install --archive <PATH> --name <NAME> [--version <VERSION>]`:
+  install a local `.tar.gz` or `.zip` release archive. `--name` is required;
+  `--version` defaults to `dev`. These flags conflict with `<reference>`.
 - `plugins update <name>`: update an installed plugin to the latest compatible release.
 - `plugins enable <name>`: mark an installed plugin runnable by mesh-llm.
 - `plugins disable <name>`: keep the plugin on disk but prevent host startup from launching it.
@@ -666,6 +669,9 @@ Subcommands:
 For plugins that declare a console projection, `web_ui_enabled` and the
 Configuration → Plugins toggle affect only that projection; they do not change
 the plugin process state.
+
+Local archives are for authoring and validation. Rebuild and reinstall them;
+`plugins update` remains a GitHub release workflow.
 
 See [plugins documentation](/docs/pages/plugins/#use-plugin-features) for more detail.
 

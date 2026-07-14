@@ -31,6 +31,24 @@ Then confirm the current contract still matches the implementation:
 - the API stays under `/api/plugins/:plugin/web-ui`
 - plugin config mutations stay under `/api/plugins/:plugin/web-ui/config`
 
+## Create A Work Item
+
+Before proposing implementation, turn the request into a contract hypothesis:
+
+1. Name the author-visible behavior and the exact lifecycle states it changes.
+2. Locate the current manifest, package, config, runtime, API, UI, exemplar, and
+   CLI owners; record the observed baseline instead of assuming it.
+3. State whether the change is additive for older plugins and hosts. Ask for
+   explicit approval before any breaking protocol or package change.
+4. List the happy path, invalid package path, disabled projection path, stopped
+   process path, and non-UI continuity proof.
+5. Identify the exact exemplar and documentation updates that make a new author
+   able to reproduce the behavior without reading host source.
+
+The implementation hypothesis is incomplete until it includes rollback,
+package validation, config persistence, UI unmount behavior, CLI discoverability,
+and a docs-only reproduction command.
+
 ## Ownership Boundaries
 
 Keep the projection split clear:
@@ -85,6 +103,17 @@ The exemplar under `docs/plugins/exemplars/web-ui/` is the drift guard.
 - keep the persisted `retention_days` setting proof wired through
   `host.config.visible` and `host.config.requestMutation`
 - use the exemplar when adding tests, review notes, or recovery guidance
+- keep it buildable as a standalone crate, generate `plugin-manifest.json` from
+  its runtime manifest, install the local archive with
+  `plugins install --archive`, and run its browser-importable JavaScript bundle
+- keep `bundle/host-contract.d.ts` self-contained; public author examples must
+  not import private console source paths
+- initialize an owner identity before testing settings persistence; reserve
+  `auth init --no-passphrase` for isolated development and document the normal
+  protected/keychain alternative
+- when the exemplar uses `just mesh-client` with the branch's debug binary,
+  set `MESH_LLM_BIN=target/debug/mesh-llm` explicitly
+- prove its MCP status tool still responds after `web_ui_enabled` is toggled off
 
 ## Triage And Recovery
 
@@ -110,6 +139,28 @@ Keep compatibility additive:
 - keep backend and frontend DTO names synchronized
 - keep the route namespace stable under `/api/plugins/:plugin/web-ui`
 - do not claim sandboxing, remote assets, marketplace discovery, RBAC, or generic settings editing unless the contract has changed and the exemplar has been updated too
+
+## Validation And Evidence
+
+Run Cargo commands serially. At minimum validate the author and settings owners:
+
+```bash
+cargo test -p mesh-llm-plugin --lib
+cargo test -p mesh-llm-plugin-manager --lib
+cargo test -p mesh-llm-config --lib
+cargo test -p mesh-llm-host-runtime --lib
+```
+
+Run the UI typecheck, unit tests, build, the website build when public docs
+change, and finally `just test-all`. Confirm `just test-all` explicitly invokes
+the plugin, plugin-manager, config, CLI, command, host, and UI test owners; a
+dependency compiling is not evidence that its unit tests ran.
+
+For release handoff, have one reviewer build a fresh plugin from the published
+docs without reading `crates/**` or private UI source. They must install the
+archive, start it, mount a React-hosted page and Integrations config section,
+persist a setting, test a non-UI capability with projection disabled, and clean
+up every process/store/package artifact.
 
 ## Handoff
 

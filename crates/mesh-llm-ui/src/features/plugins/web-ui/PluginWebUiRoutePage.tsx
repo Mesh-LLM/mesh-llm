@@ -8,7 +8,11 @@ import {
   usePluginWebUiConfigQuery,
   usePluginWebUiQuery
 } from '@/features/plugins/api/plugin-web-ui'
-import { importPluginUiBundle } from '@/features/plugins/web-ui/bundle-loader'
+import {
+  assertPluginUiMountHandle,
+  assertPluginUiRegistration,
+  importPluginUiBundle
+} from '@/features/plugins/web-ui/bundle-loader'
 import { createMeshPluginUiHost } from '@/features/plugins/web-ui/host-surface'
 import type { PluginWebUiPageRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
 import type { MeshPluginUiMountHandle } from '@/features/plugins/web-ui/host-contract'
@@ -176,6 +180,7 @@ export function PluginWebUiRoutePage() {
         showToast: (toast) => setNotification(toast.description ? `${toast.title}: ${toast.description}` : toast.title)
       })
       const registration = await module.registerMeshPluginUi(host)
+      assertPluginUiRegistration(registration)
       const mountPage = registration.pages[eligibility.page.id]
       const element = mountRef.current
 
@@ -185,6 +190,7 @@ export function PluginWebUiRoutePage() {
       }
 
       const handle = await mountPage({ element, host, page: eligibility.page })
+      assertPluginUiMountHandle(handle)
       cleanup = unmountOnce(handle)
 
       if (cancelled) {

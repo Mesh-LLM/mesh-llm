@@ -139,6 +139,8 @@ Asset delivery is host-owned and same-origin. It serves only validated installed
 bundle assets and only when the projection is `ready`. Console mounts use the
 backend-provided `asset_base_url` from the web UI state; a ready state without
 that URL is treated as a host error and no bundle code is imported.
+Plugin assets are revalidated by the browser rather than cached as immutable,
+because local reinstall and same-version development builds may replace them.
 
 The config route is also host-owned and plugin-scoped. `GET` returns:
 
@@ -163,6 +165,8 @@ The config route is also host-owned and plugin-scoped. `GET` returns:
 The `plugin` field must match the mounted plugin when present. Mutations may
 only touch plugin-owned `settings` keys; host-owned fields such as `enabled`,
 `web_ui_enabled`, `command`, `args`, `url`, and `startup` are rejected.
+Malformed requests return `400`; schema-invalid setting values return `422`;
+successful mutations return the newly visible plugin config.
 
 The console route is static TanStack routing, not dynamic route injection:
 
@@ -181,11 +185,38 @@ handlers for pages and config sections.
 - `unmount()` must tear down DOM content and detach host subscriptions
 - read current plugin settings from `host.config.visible.settings`
 - config sections use `host.config.requestMutation(...)`, not direct file writes
+- configuration mutations require a local owner identity; initialize one with
+  `mesh-llm auth init --no-passphrase` for an unencrypted development identity
 - mutation errors reject the returned promise and are rendered by the host shell
 - user-visible notices can be emitted with `host.notifications.show(...)`
+- `host.network.fetchPlugin(path, init)` and `host.network.json(path, init)`
+  accept plugin-relative API paths such as `http/items?limit=2`; origins,
+  fragments, backslashes, and `.`/`..` path segments are rejected
+- `host.network.json(...)` rejects non-2xx responses; use `fetchPlugin(...)`
+  when the bundle needs to inspect a non-success status itself
+- registrations must return a `pages` object, optional `configSections` object,
+  and `{ unmount() }` from every mounted handler; malformed results surface as
+  host contract errors rather than failing later during cleanup
 - the host imports bundle code only after the projection is ready, enabled,
   available, has a same-origin `asset_base_url`, and the requested page or
   section exists
+- ship browser-importable JavaScript; the host does not transpile TypeScript,
+  JSX, CommonJS, or unresolved bare npm imports
+- use the exemplar's self-contained `bundle/host-contract.d.ts` for author
+  types; do not import private types from `crates/mesh-llm-ui`
+
+For a pre-release or local package, exercise the real installer without a
+GitHub release:
+
+```bash
+mesh-llm plugins install --archive ./cool-plugin-1.1.0-local.tar.gz \
+  --name cool-plugin --version 1.1.0
+```
+
+`--archive` accepts `.tar.gz` or `.zip`, requires `--name`, and conflicts with
+the positional catalog/GitHub reference. `--version` defaults to `dev`. Local
+installs are replaced by reinstalling a rebuilt archive; `plugins update`
+remains specific to GitHub release sources.
 
 ### Validation And Remediation
 
@@ -234,6 +265,9 @@ Plugin authors think in terms of the host surfaces they contribute to:
 - `http`
 - `inference`
 - `provides`
+- `mesh`
+- `events`
+- `web_ui`
 
 The host runtime still executes native service invocations internally, but the author-facing DSL is organized by the surface the plugin contributes to.
 
@@ -570,10 +604,12 @@ Conceptually, the manifest contains:
 
 - plugin identity and version
 - provided capabilities
+- plugin configuration schemas
+- host-projected web UI pages and configuration sections
 - MCP contributions
 - HTTP contributions
 - inference contributions
-- any mesh channel declarations the plugin needs
+- any mesh channel and event subscription declarations the plugin needs
 
 The manifest is the source of truth for host projections.
 
@@ -584,11 +620,13 @@ The primary design goal is very low boilerplate.
 The preferred DSL is surface-first:
 
 - `provides`
+- `config`
+- `web_ui`
+- `mesh`
+- `events`
 - `mcp`
 - `http`
 - `inference`
-- `mesh`
-- `events`
 
 Lifecycle hooks stay local to the plugin definition rather than becoming manifest items:
 
@@ -599,6 +637,11 @@ Lifecycle hooks stay local to the plugin definition rather than becoming manifes
 - `on_mesh_event`
 
 Each section is self-contained. If a plugin contributes something to a host surface, it is declared in the section for that surface.
+
+The `plugin!` macro is order-sensitive. Declare `metadata`, optional
+`startup_policy`, `provides`, `config`, `web_ui`, `mesh`, `events`, `mcp`,
+`http`, `inference`, then lifecycle hooks. Omitted sections do not need empty
+placeholders.
 
 Example:
 

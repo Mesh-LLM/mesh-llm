@@ -13,7 +13,7 @@ pub use catalog::{CatalogEntry, PluginCatalog};
 pub use github::{GitHubRelease, GitHubReleaseAsset, GitHubReleaseClient};
 pub use install::{
     InstallOutcome, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter,
-    install_plugin, update_plugin,
+    install_plugin, install_plugin_archive, update_plugin,
 };
 pub use mesh_llm_skills::{
     SkillAgent, SkillInstallAction, SkillInstallReport, SkillInstallStatus, SkillPackage,

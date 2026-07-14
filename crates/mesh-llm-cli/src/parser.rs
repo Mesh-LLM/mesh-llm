@@ -1003,10 +1003,20 @@ pub enum ConfigCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum PluginCommand {
-    /// Install a native plugin from the catalog or a GitHub repository.
+    /// Install a native plugin from the catalog, GitHub, or a local release archive.
     Install {
         /// Plugin catalog name, GitHub owner/repo, or GitHub URL.
-        reference: String,
+        #[arg(required_unless_present = "archive", conflicts_with = "archive")]
+        reference: Option<String>,
+        /// Install a local .tar.gz or .zip release archive. Requires --name.
+        #[arg(long, value_name = "PATH", requires = "name")]
+        archive: Option<PathBuf>,
+        /// Plugin name used to validate a local archive. Required with --archive.
+        #[arg(long, requires = "archive")]
+        name: Option<String>,
+        /// Version recorded for a local archive install. Defaults to dev.
+        #[arg(long, requires = "archive")]
+        version: Option<String>,
     },
     /// Update an installed native plugin.
     Update {
@@ -1995,6 +2005,55 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn plugins_install_accepts_local_archive_options() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "plugins",
+            "install",
+            "--archive",
+            "/tmp/demo.tar.gz",
+            "--name",
+            "demo",
+            "--version",
+            "0.1.0",
+        ]);
+
+        match cli.command.expect("plugins command") {
+            Command::Plugin {
+                command:
+                    PluginCommand::Install {
+                        reference: None,
+                        archive: Some(archive),
+                        name: Some(name),
+                        version: Some(version),
+                    },
+            } => {
+                assert_eq!(archive, PathBuf::from("/tmp/demo.tar.gz"));
+                assert_eq!(name, "demo");
+                assert_eq!(version, "0.1.0");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugins_install_rejects_reference_with_local_archive() {
+        let error = Cli::try_parse_from([
+            "mesh-llm",
+            "plugins",
+            "install",
+            "demo",
+            "--archive",
+            "/tmp/demo.tar.gz",
+            "--name",
+            "demo",
+        ])
+        .expect_err("reference and local archive must conflict");
+
+        assert!(error.to_string().contains("cannot be used with"));
     }
 
     #[test]
