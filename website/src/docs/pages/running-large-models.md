@@ -2,6 +2,8 @@
 
 Start with one working node first. After console chat works, use additional machines or catalog layer packages for larger models.
 
+If you are just trying Mesh for the first time, do not start here. Run the [Quickstart](/docs/pages/quickstart/) first.
+
 ## Add serving machines
 
 Run the same private mesh name on each machine:
@@ -40,4 +42,19 @@ Use layer packages when:
 - the catalog marks a package as available
 - the machines are on a low-latency network
 
-If you are just trying Mesh for the first time, do not start here. Run the [Quickstart](/docs/pages/quickstart/) first.
+## What a split does
+
+Mesh keeps the public request path in one place while Skippy runs contiguous layer ranges on the machines that have the required package artifacts and capacity.
+
+```mermaid
+flowchart LR
+  Request["OpenAI request<br/>http://localhost:9337/v1"] --> Driver["Stage 0<br/>driver + first layers"]
+  Driver -->|"activation transport"| Middle["Stage 1..N<br/>contiguous layer ranges"]
+  Middle --> Result["Tokens / response<br/>back through stage 0"]
+  Package["model-package.json<br/>GGUF fragments + checksums"] -.-> Driver
+  Package -.-> Middle
+  Ready["Readiness + topology<br/>published before routing"] -.-> Driver
+  Ready -.-> Middle
+```
+
+The [architecture hub](/docs/pages/architecture/) explains how Mesh routes requests into Skippy. See the [model package specification](/docs/pages/model-package-spec/) for the manifest schema, artifact checksums, and stage-selection rules. For package publishing and validation, see [Layer package repositories](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/LAYER_PACKAGE_REPOS.md).

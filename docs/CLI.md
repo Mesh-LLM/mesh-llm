@@ -167,7 +167,7 @@ Switches:
 
 - `--json`: machine-readable output.
 
-Runtime switches:
+### Common runtime options
 
 - `--join <TOKEN>`: join a specific mesh using an invite token (repeatable).
 - `--discover [NAME]`: discover a mesh and join it. With a name, joins the mesh matching that name. Without a name, behaves like `--auto`.
@@ -331,6 +331,7 @@ mesh-llm models download mlx-community/SmolLM-135M-8bit
 Switches:
 
 - `--draft`: also download the recommended draft model (if available).
+- `--direct`: download the exact Hugging Face GGUF file directly, bypassing catalog layer-package resolution.
 - `--json`: machine-readable output.
 
 ### `models package`
@@ -443,6 +444,9 @@ Switches:
 Use this to update mesh-llm and exit.
 
 Switches:
+- `--version <VERSION>`: install a specific release tag or version, for example `v0.60.0`.
+- `--flavor <FLAVOR>`: install or switch to a specific release bundle flavor (`cpu`, `cuda`, `rocm`, `vulkan`, or `metal`).
+- `--detect-flavor`: re-detect the best host backend flavor before selecting the release bundle. Cannot be combined with `--flavor`.
 - `--auto-update`: available on most commands; when set, mesh-llm checks for a newer bundled release before proceeding.
 
 

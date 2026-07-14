@@ -4503,6 +4503,22 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   color: var(--fg);
 }
 
+.docs-body .doc .mermaid {
+  margin: 24px 0;
+  overflow-x: auto;
+  padding: 16px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--bg);
+  text-align: center;
+}
+
+.docs-body .doc .mermaid svg {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+}
+
 .docs-body .doc .code-copy-frame {
   --docs-copy-button-space: 42px;
 }

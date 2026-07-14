@@ -24,7 +24,7 @@ export default [
     title: "Running Models",
     description: "Serve local models, use Hugging Face GGUFs, and scale across machines.",
     links: [
-      ["Run your first model", "/docs/pages/quickstart/#serve-a-model"],
+      ["Run your first model", "/docs/pages/quickstart/#3-start-one-private-node"],
       ["Choose a model", "/docs/pages/choose-a-model/"],
       ["Running large models", "/docs/pages/running-large-models/"],
       ["Console chat", "/docs/pages/console-chat/"],
@@ -39,6 +39,17 @@ export default [
       ["Streaming", "/docs/pages/openai-compatible-api/#streaming"],
       ["Tool calling", "/docs/pages/openai-compatible-api/#tool-calling"],
       ["Structured outputs", "/docs/pages/openai-compatible-api/#structured-outputs"]
+    ]
+  },
+  {
+    title: "SDKs",
+    description: "Embed mesh clients and local serving into Rust, Node.js, JVM/Android, and Swift apps.",
+    links: [
+      ["SDK overview", "/docs/pages/sdk/"],
+      ["Rust", "/docs/pages/sdk-rust/"],
+      ["Node.js & Electron", "/docs/pages/sdk-node/"],
+      ["Java / Kotlin / Android", "/docs/pages/sdk-kotlin/"],
+      ["Swift & Apple platforms", "/docs/pages/sdk-swift/"]
     ]
   },
   {
@@ -67,6 +78,18 @@ export default [
       ["Join the public mesh", "/docs/pages/public-mesh/"],
       ["Private meshes", "/docs/pages/private-meshes/"],
       ["Publish mesh", "/docs/pages/publish-mesh/"]
+    ]
+  },
+  {
+    title: "Architecture",
+    description: "Understand node roles, mesh routing, Skippy stages, model artifacts, and subsystem ownership.",
+    links: [
+      ["Architecture hub", "/docs/pages/architecture/"],
+      ["Mesh workflows", "/docs/pages/private-meshes/"],
+      ["Large-model splits", "/docs/pages/running-large-models/"],
+      ["Model package spec", "/docs/pages/model-package-spec/"],
+      ["Plugin architecture", "/docs/pages/plugin-architecture/"],
+      ["SDK embedding", "/docs/pages/sdk/"]
     ]
   },
   {

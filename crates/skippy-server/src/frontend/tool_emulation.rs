@@ -426,6 +426,32 @@ pub(super) fn parse_emulated_tool_calls(text: &str, allowed_names: &[String]) ->
     }
 }
 
+/// Return generated text that is safe to expose during partial emulated
+/// tool-call parsing.
+///
+/// Completed reasoning blocks are removed before marker detection. Once a
+/// marker is visible, its payload remains private until final parsing emits a
+/// structured call. Without a complete marker, only a trailing prefix that
+/// could still grow into `TOOL_CALL` is retained.
+pub(super) fn partial_emulation_text(text: &str) -> String {
+    let mut scannable = strip_think_blocks(text);
+    if let Some(marker_start) = scannable.find(TOOL_CALL_MARKER) {
+        return scannable[..marker_start].to_string();
+    }
+
+    let max_prefix_len = TOOL_CALL_MARKER.len().min(scannable.len());
+    for prefix_len in (1..=max_prefix_len).rev() {
+        let Some(suffix) = scannable.get(scannable.len() - prefix_len..) else {
+            continue;
+        };
+        if TOOL_CALL_MARKER.starts_with(suffix) {
+            scannable.truncate(scannable.len() - prefix_len);
+            return scannable;
+        }
+    }
+    scannable
+}
+
 /// Removes `<think>...</think>` spans so a reasoning model's scratchpad never
 /// triggers or hides a tool call. An unterminated `<think>` drops the rest.
 fn strip_think_blocks(text: &str) -> String {

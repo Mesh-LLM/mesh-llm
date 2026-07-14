@@ -183,10 +183,11 @@ Switches:
 
 - `--json`: machine-readable output.
 
-Runtime switches:
+### Common runtime options
 
 - `--join <TOKEN>`: join a specific mesh using an invite token (repeatable).
 - `--discover [NAME]`: discover a mesh via Nostr and join it. With a name, joins the mesh matching that name. Without a name, behaves like `--auto`.
+- `--mesh-discovery-mode <nostr|mdns>`: choose public Nostr or LAN mDNS discovery. mDNS is LAN-scoped and still requires an invite token for joining.
 - `--auto`: auto-join the best discovered mesh.
 - `--model <MODEL>`: model to serve (catalog id from `models recommended`, HF ref/URL, or path).
 - `--gguf <GGUF>`: serve a specific local GGUF file directly (repeatable).
@@ -217,11 +218,15 @@ Subcommands:
 
 - `recommended`
 - `installed`
+- `cleanup`
+- `prune`
 - `search`
 - `show`
 - `download`
+- `package`
 - `certify`
 - `updates`
+- `delete`
 
 ### `models recommended`
 
@@ -238,6 +243,29 @@ Run this when you want to see what’s already on your machine.
 Switches:
 
 - `--json`: machine-readable output.
+
+### `models cleanup`
+
+Preview or remove stale managed model-cache entries:
+
+```bash
+mesh-llm models cleanup
+mesh-llm models cleanup --unused-since 30d --yes
+```
+
+Use `--json` for machine-readable output. The default is a preview; `--yes`
+applies the removal.
+
+### `models prune`
+
+Preview or remove stale derived Skippy stage artifacts:
+
+```bash
+mesh-llm models prune
+mesh-llm models prune --yes
+```
+
+The default is a preview and active or pinned stage artifacts are preserved.
 
 ### `models search`
 
@@ -291,6 +319,21 @@ Switches:
 - `--direct`: download the exact HuggingFace GGUF file directly, bypassing catalog layer-package resolution.
 - `--json`: machine-readable output.
 
+### `models package`
+
+Plan or submit a Hugging Face Job that splits a source GGUF into a Skippy
+layer-package repository. The default is a dry run; `--confirm` is required to
+submit a spend-bearing job.
+
+```bash
+mesh-llm models package unsloth/Qwen3-8B-GGUF:Q4_K_M --dry-run
+mesh-llm models package unsloth/Qwen3-8B-GGUF:Q4_K_M --confirm --follow
+mesh-llm models package --status <JOB_ID>
+```
+
+Use `--help` for the full planning, status, logs, cancel, and publishing
+options.
+
 ### `models certify`
 
 Use this when you want a repeatable Skippy layer-package confidence report
@@ -336,6 +379,11 @@ Switches:
 - `--check`: check only; do not refresh cache.
 - `--json`: machine-readable output.
 
+### `models delete`
+
+Remove a managed model entry. Run `mesh-llm models delete --help` first to
+review the current confirmation and selection options.
+
 ### `download`
 
 Use this to quickly download by built-in catalog ID or shorthand.
@@ -361,6 +409,21 @@ Switches:
 - `--flavor <FLAVOR>`: install or switch to a specific release bundle flavor (`cpu`, `cuda`, `rocm`, `vulkan`, or `metal`).
 - `--detect-flavor`: re-detect the best host backend flavor before selecting the release bundle. Cannot be combined with `--flavor`.
 - `--auto-update`: available on most commands; when set, mesh-llm checks for a newer bundled release before proceeding.
+
+### `runtime`
+
+Inspect and manage installed native runtimes:
+
+```bash
+mesh-llm runtime list
+mesh-llm runtime install
+mesh-llm runtime install cuda13
+mesh-llm runtime remove <RUNTIME_ID>
+mesh-llm runtime prune --active-only
+```
+
+Use `--json` for machine-readable output. Runtime selection is constrained by
+the running Mesh version, platform, backend, and Skippy ABI.
 
 
 ### `gpus`
@@ -574,13 +637,13 @@ Use this to stop local `mesh-llm` instances tracked in the runtime root.
 
 ### `blackboard` (plugin)
 
-Shared mesh notes — post, search, and read notes across the mesh. Blackboard was moved from a built-in command to an [installable plugin](plugins.md#using-plugins):
+Shared mesh notes — post, search, and read notes across the mesh. Blackboard was moved from a built-in command to an [installable plugin](/docs/pages/plugins/#use-plugin-features):
 
 ```bash
 mesh-llm plugins install blackboard
 ```
 
-Once installed, it runs as a managed plugin process when mesh-llm starts. See the [plugins documentation](plugins.md#using-plugins) for configuration and usage.
+Once installed, it runs as a managed plugin process when mesh-llm starts. See the [plugins documentation](/docs/pages/plugins/#use-plugin-features) for configuration and usage.
 
 ### `plugins` / `plugin`
 
@@ -599,7 +662,7 @@ Subcommands:
 - `plugins search [query]`: search the plugin catalog.
 - `plugins list`: list installed/configured plugins.
 
-See [plugins documentation](plugins.md#using-plugins) for more detail.
+See [plugins documentation](/docs/pages/plugins/#use-plugin-features) for more detail.
 
 
 ### `auth`

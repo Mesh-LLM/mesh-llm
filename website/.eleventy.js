@@ -51,6 +51,9 @@ export default function(eleventyConfig) {
             console.debug("highlight.js error for lang=%s: %s", hl, e);
           }
         }
+        if (lang === "mermaid") {
+          return `<pre class="language-mermaid"><code class="language-mermaid">${md.utils.escapeHtml(str)}</code></pre>`;
+        }
         return `<pre><code>${md.utils.escapeHtml(str)}</code></pre>`;
       },
     });

@@ -1,6 +1,6 @@
 # Contributing Layer Packages
 
-Layer packages let Mesh place a model across multiple machines without every node downloading the full model. A package records the source model, quantization, layer artifacts, and validation metadata.
+Layer packages let Mesh place a model across multiple machines without every node downloading the full model. A package records the source model, quantization, layer artifacts, and validation metadata. See the [model package specification](/docs/pages/model-package-spec/) for the `model-package.json` contract.
 
 ## Local contribution flow
 

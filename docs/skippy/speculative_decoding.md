@@ -1,7 +1,8 @@
 # Speculative Decoding Outstanding Work
 
 This note tracks open work for n-gram speculative decoding. The broader usage
-guide and latest benchmark tables live in [`../SPECULATIVE_DECODING.md`](../SPECULATIVE_DECODING.md).
+guide lives in [`../USAGE.md`](../USAGE.md); benchmark evidence is maintained
+in the family result documents under this directory.
 
 ## Current State
 

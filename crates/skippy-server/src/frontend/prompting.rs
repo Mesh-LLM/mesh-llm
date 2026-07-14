@@ -139,9 +139,6 @@ impl StageOpenAiBackend {
         if tool_calls_requested(request)
             && !tool_emulation::template_supports_native_tool_calls(metadata)
         {
-            if !is_partial {
-                eprintln!("EMU_RAW_TEXT<<<{}>>>", text);
-            }
             return Ok(parse_emulated_chat_output(text, request, is_partial));
         }
 
@@ -291,13 +288,8 @@ pub(super) fn parse_emulated_chat_output(
     is_partial: bool,
 ) -> Option<ParsedChatMessage> {
     let allowed = request_allowed_tool_names(request);
-    let scan_text = if is_partial {
-        text.rsplit_once('\n')
-            .map(|(head, _)| head)
-            .unwrap_or_default()
-    } else {
-        text
-    };
+    let partial_scan = is_partial.then(|| tool_emulation::partial_emulation_text(text));
+    let scan_text = partial_scan.as_deref().unwrap_or(text);
     let parse = tool_emulation::parse_emulated_tool_calls(scan_text, &allowed);
     let tool_calls = if is_partial || parse.tool_calls.is_empty() {
         None

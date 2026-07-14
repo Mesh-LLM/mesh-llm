@@ -387,6 +387,52 @@ fn synthetic_structured_classifies_when_allowed() {
 }
 
 #[test]
+fn direct_structured_json_object_classifies_when_allowed() {
+    let engine = GuardrailEngine::new(enforce_policy());
+    let prepared = prepared_text_request(
+        &engine,
+        json!({
+            "model": "Qwen3-8B-Q4_K_M",
+            "messages": [{"role": "user", "content": "json"}],
+            "response_format": supported_json_schema_response_format()
+        }),
+    );
+    let response = response_with_content("Qwen3-8B-Q4_K_M", r#"{"answer":42}"#);
+
+    let classified = engine.classify_response(&prepared, &response);
+
+    assert_eq!(
+        classified.category,
+        GuardrailResponseCategory::ValidSyntheticStructured
+    );
+    assert_eq!(classified.parser_stage, GuardrailParserStage::JsonExact);
+    assert_eq!(classified.structured_payload, Some(json!({"answer": 42})));
+}
+
+#[test]
+fn fenced_direct_structured_json_object_classifies_when_allowed() {
+    let engine = GuardrailEngine::new(enforce_policy());
+    let prepared = prepared_text_request(
+        &engine,
+        json!({
+            "model": "Qwen3-8B-Q4_K_M",
+            "messages": [{"role": "user", "content": "json"}],
+            "response_format": supported_json_schema_response_format()
+        }),
+    );
+    let response = response_with_content("Qwen3-8B-Q4_K_M", "```json\n{\"answer\":42}\n```");
+
+    let classified = engine.classify_response(&prepared, &response);
+
+    assert_eq!(
+        classified.category,
+        GuardrailResponseCategory::ValidSyntheticStructured
+    );
+    assert_eq!(classified.parser_stage, GuardrailParserStage::JsonFenced);
+    assert_eq!(classified.structured_payload, Some(json!({"answer": 42})));
+}
+
+#[test]
 fn invalid_structured_payload_classifies_without_leaking_arguments() {
     let engine = GuardrailEngine::new(enforce_policy());
     let prepared = prepared_text_request(
@@ -990,6 +1036,40 @@ async fn valid_structured_payload_becomes_json_assistant_text() {
             }
         }]),
         None,
+    ))]));
+    let guarded = GuardedOpenAiBackend::new(
+        backend,
+        GuardrailPolicy {
+            mode: GuardrailMode::Enforce,
+            apply_to_all_models: true,
+            ..GuardrailPolicy::default()
+        },
+    );
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "Qwen3-8B-Q4_K_M",
+        "messages": [{"role": "user", "content": "json"}],
+        "response_format": supported_json_schema_response_format()
+    }))
+    .unwrap();
+
+    let response = guarded.chat_completion(request).await.unwrap();
+
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("{\"answer\":42}")
+    );
+    assert!(response.choices[0].message.tool_calls.is_none());
+    assert_eq!(
+        response.choices[0].finish_reason,
+        Some(crate::common::FinishReason::Stop)
+    );
+}
+
+#[tokio::test]
+async fn direct_structured_payload_becomes_json_assistant_text() {
+    let backend = Arc::new(SequencedBackend::new(vec![Ok(response_with_content(
+        "Qwen3-8B-Q4_K_M",
+        "```json\n{\"answer\":42}\n```",
     ))]));
     let guarded = GuardedOpenAiBackend::new(
         backend,

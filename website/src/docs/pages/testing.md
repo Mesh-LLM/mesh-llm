@@ -94,7 +94,7 @@ Run these manual checks after changes to `runtime/interactive.rs` or `cli/output
 
 For terminal restoration QA:
 
-- Resize during startup, after llama-server readiness, and while the dashboard has focus on different panels.
+- Resize during startup, after model/runtime readiness, and while the dashboard has focus on different panels.
 - Detach and reattach tmux/screen while the dashboard is active.
 - Click dashboard panels and use the mouse wheel in terminal, tmux, and screen.
 - Press `q` and `Ctrl+C`; the cursor should be visible and the shell prompt should not remain in raw mode.
@@ -105,12 +105,12 @@ For terminal restoration QA:
 ### 1. Solo (single node)
 
 ```bash
-mesh-llm serve --model Qwen2.5-3B --console
+mesh-llm serve --model Qwen2.5-3B --console 3131
 ```
 
 - API on `:9337`, console on `:3131`
 - Console: `host=true, peers=0`
-- llama-server has 1 RPC entry (self)
+- The local embedded runtime is the only serving entry.
 
 ### 1a. Headless mode (API-only, no embedded UI)
 
@@ -148,7 +148,7 @@ mesh-llm serve --model Qwen2.5-32B --join <TOKEN>
 ```
 
 - `--split` forces tensor split even when model fits on host
-- llama-server has 2 RPC entries
+- Both nodes participate in the distributed serving path.
 - Tensor split proportional to VRAM (e.g. `0.67,0.33`)
 - Draft model auto-detected and used
 
@@ -173,7 +173,7 @@ mesh-llm client --join <TOKEN> --port 9555
 
 ```bash
 # node A: seeds mesh with two models, serves 3B
-mesh-llm serve --model Qwen2.5-3B --model GLM-4.7-Flash --console
+mesh-llm serve --model Qwen2.5-3B --model GLM-4.7-Flash --console 3131
 # node B: joins, auto-assigned to GLM (needed, on disk)
 mesh-llm serve --join <TOKEN>
 ```
@@ -228,7 +228,7 @@ mesh-llm unload GLM-4.7-Flash-Q4_K_M
 
 ```bash
 # Running node
-mesh-llm serve --model Qwen2.5-0.5B-Instruct-Q4_K_M --console
+mesh-llm serve --model Qwen2.5-0.5B-Instruct-Q4_K_M --console 3131
 
 # Operator surface
 mesh-llm load Llama-3.2-1B-Instruct-Q4_K_M
@@ -312,7 +312,7 @@ mesh-llm serve --model Qwen2.5-3B --join <TOKEN> --port 8091
 ```
 
 - Joiner log: `⚡ API ready (bootstrap): http://localhost:8091`
-- BEFORE `rpc-server` or `llama-server` starts on joiner:
+- Before the full local model runtime becomes ready on the joiner:
   - `curl localhost:8091/v1/models` → lists mesh models
   - `curl localhost:8091/v1/chat/completions` → inference via tunnel to originator
 - Log: `⚡ Bootstrap proxy handing off to full API proxy`
@@ -408,7 +408,7 @@ curl localhost:3131/api/discover # Nostr meshes (current mesh marked by mesh_id)
 
 - Regossip after becoming host should NOT cause restart loops
 - Log should show "still host, no restart needed" on re-check
-- llama-server starts exactly once per election (not 5-9 times)
+- The local model runtime starts exactly once per election (not 5-9 times)
 - Heartbeat gossip doesn't re-discover dead peers (discover_peers=false)
 
 ## Control-Plane Protocol (Protobuf v1)
@@ -471,7 +471,7 @@ Two processes under the same user share `~/.mesh-llm/key` and appear as the same
 ### 14. Forced split on one machine
 
 ```bash
-mesh-llm serve --model Qwen2.5-3B --port 9337 --split --console
+mesh-llm serve --model Qwen2.5-3B --port 9337 --split --console 3131
 ```
 
 ```bash
@@ -479,7 +479,7 @@ mesh-llm serve --model Qwen2.5-3B --join <TOKEN> --port 9338 --split --max-vram 
 ```
 
 - Host starts solo, then re-elects with split when worker joins
-- Worker becomes rpc-server, proxies API to host
+- Worker joins the mesh and proxies assigned inference traffic to the serving path
 - Tensor split proportional to VRAM (e.g. `0.98,0.02`)
 - Kill worker → host detects via heartbeat (~60s), reverts to solo mode
 
@@ -503,8 +503,8 @@ mesh-llm client --join <TOKEN> --port 9338
 ```bash
 just bundle
 # scp, then on remote:
-codesign -s - ~/mesh-bundle/mesh-llm ~/mesh-bundle/rpc-server ~/mesh-bundle/llama-server
-xattr -cr ~/mesh-bundle/mesh-llm ~/mesh-bundle/rpc-server ~/mesh-bundle/llama-server
+codesign -s - ~/mesh-bundle/mesh-llm
+xattr -cr ~/mesh-bundle/mesh-llm
 ```
 
 Must codesign + xattr after every scp or macOS kills the binary (exit 137).
@@ -512,9 +512,9 @@ Must codesign + xattr after every scp or macOS kills the binary (exit 137).
 ## Cleanup
 
 ```bash
-pkill -f mesh-llm; pkill -f rpc-server; pkill -f llama-server
+pkill -f mesh-llm
 ```
 
 Prefer `mesh-llm stop` for tracked local instances. If the runtime is wedged,
-kill any remaining mesh-llm process and then verify no stale backend process is
-still bound to the test ports.
+kill any remaining mesh-llm process and then verify no stale process is still
+bound to the test ports.
