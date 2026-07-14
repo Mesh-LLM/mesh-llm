@@ -388,6 +388,41 @@ mod tests {
             Some("Model-�")
         );
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn synthetic_display_name_preserves_ill_formed_utf16_file_stems_lossily() {
+        use std::os::windows::ffi::OsStringExt;
+
+        let path = std::ffi::OsString::from_wide(&[
+            b'M' as u16,
+            b'o' as u16,
+            b'd' as u16,
+            b'e' as u16,
+            b'l' as u16,
+            b'-' as u16,
+            0xd800,
+            b'.' as u16,
+            b'g' as u16,
+            b'g' as u16,
+            b'u' as u16,
+            b'f' as u16,
+        ]);
+        let entry = InventoryScanEntry {
+            path: PathBuf::from(path),
+            size: 0,
+            model_key: format!("{SYNTHETIC_LOCAL_GGUF_PREFIX}hash"),
+            quantization_type: String::new(),
+            scans_metadata: false,
+            missing_cache_file: false,
+        };
+
+        assert_eq!(
+            synthetic_local_display_name(&entry).as_deref(),
+            Some("Model-�")
+        );
+    }
+
     struct EnvGuard {
         key: &'static str,
         previous: Option<std::ffi::OsString>,
