@@ -1,0 +1,40 @@
+From 8b6e87d60c31093ab15fd61f519badb480f3fcde Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Wed, 15 Jul 2026 22:57:04 +1000
+Subject: [PATCH] Keep tool template for tool result history
+
+---
+ common/chat.cpp | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/common/chat.cpp b/common/chat.cpp
+index 24d2a892..bb35495e 100644
+--- a/common/chat.cpp
++++ b/common/chat.cpp
+@@ -15,6 +15,7 @@
+ 
+ #include "nlohmann/json.hpp"
+ 
++#include <algorithm>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <ctime>
+@@ -2761,8 +2762,13 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
+                                                             const struct common_chat_templates_inputs & inputs) {
+     autoparser::generation_params params;
+     params.tools = common_chat_tools_to_json_oaicompat(inputs.tools);
+-    const auto & tmpl =
+-        params.tools.is_array() && tmpls->template_tool_use ? *tmpls->template_tool_use : *tmpls->template_default;
++    const bool history_uses_tools =
++        std::any_of(inputs.messages.begin(), inputs.messages.end(), [](const common_chat_msg & message) {
++            return message.role == "tool" || !message.tool_calls.empty();
++        });
++    const auto & tmpl = (params.tools.is_array() || history_uses_tools) && tmpls->template_tool_use ?
++                            *tmpls->template_tool_use :
++                            *tmpls->template_default;
+     const auto & src             = tmpl.source();
+     const auto & caps            = tmpl.original_caps();
+     std::vector<common_chat_msg>        trimmed_messages;
+-- 
+2.50.1 (Apple Git-155)
+

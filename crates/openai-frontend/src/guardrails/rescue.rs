@@ -179,6 +179,18 @@ fn rescue_from_text(
         }
     }
 
+    if let Some(value) = parse_arg_tag_tool_call_syntax(content) {
+        let classified = classify_tool_call_value(
+            prepared,
+            &value,
+            GuardrailParserStage::JsonSubstring,
+            finish_reason,
+        );
+        if classified.category != GuardrailResponseCategory::MalformedToolText {
+            return Some(classified.without_visible_content());
+        }
+    }
+
     if let Some(value) = parse_granite_tool_call_syntax(content) {
         let classified = classify_tool_call_value(
             prepared,
@@ -413,6 +425,44 @@ fn parse_granite_tool_call_syntax(content: &str) -> Option<Value> {
     let after_start = &content[start_index + start_tag.len()..];
     let end_index = after_start.find(end_tag)?;
     serde_json::from_str(after_start[..end_index].trim()).ok()
+}
+
+fn parse_arg_tag_tool_call_syntax(content: &str) -> Option<Value> {
+    let body = tagged_body(content, "<tool_call>", "</tool_call>")?;
+    let arguments_start = body.find("<arg_key>").unwrap_or(body.len());
+    let name = body[..arguments_start].trim();
+    if name.is_empty() || name.contains('<') {
+        return None;
+    }
+
+    let mut arguments = Map::new();
+    let mut remainder = &body[arguments_start..];
+    while !remainder.trim().is_empty() {
+        remainder = remainder.trim_start().strip_prefix("<arg_key>")?;
+        let key_end = remainder.find("</arg_key>")?;
+        let key = remainder[..key_end].trim();
+        if key.is_empty() {
+            return None;
+        }
+
+        remainder = remainder[key_end + "</arg_key>".len()..].trim_start();
+        remainder = remainder.strip_prefix("<arg_value>")?;
+        let value_end = remainder.find("</arg_value>")?;
+        let value = remainder[..value_end].trim();
+        let parsed_value = serde_json::from_str::<Value>(value)
+            .unwrap_or_else(|_| Value::String(value.to_string()));
+        arguments.insert(key.to_string(), parsed_value);
+        remainder = &remainder[value_end + "</arg_value>".len()..];
+    }
+
+    Some(json!({ "name": name, "arguments": Value::Object(arguments) }))
+}
+
+fn tagged_body<'a>(content: &'a str, start_tag: &str, end_tag: &str) -> Option<&'a str> {
+    let start_index = content.find(start_tag)?;
+    let after_start = &content[start_index + start_tag.len()..];
+    let end_index = after_start.find(end_tag)?;
+    Some(&after_start[..end_index])
 }
 
 fn first_balanced_object(content: &str) -> Option<String> {

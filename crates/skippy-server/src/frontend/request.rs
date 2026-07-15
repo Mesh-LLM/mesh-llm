@@ -257,11 +257,17 @@ pub(super) fn completion_sampling_config(
 }
 
 pub(super) fn chat_template_options(
-    _request: &ChatCompletionRequest,
+    request: &ChatCompletionRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> OpenAiResult<ChatTemplateOptions> {
+    let reasoning = openai_frontend::normalize_reasoning_template_options(
+        request.reasoning.as_ref(),
+        request.reasoning_effort,
+        &request.extra,
+    )?;
     Ok(ChatTemplateOptions {
         reasoning_format: Some(chat_reasoning_format(defaults.reasoning_format)),
+        enable_thinking: reasoning.enable_thinking,
         ..ChatTemplateOptions::default()
     })
 }

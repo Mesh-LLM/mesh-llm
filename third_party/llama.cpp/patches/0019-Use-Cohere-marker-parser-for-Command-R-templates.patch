@@ -1,0 +1,62 @@
+From abed356747f87792b1a451f88278a9c6f0873190 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Wed, 15 Jul 2026 22:48:35 +1000
+Subject: [PATCH] Use Cohere marker parser for Command-R templates
+
+---
+ common/chat.cpp | 19 +++++++++++--------
+ 1 file changed, 11 insertions(+), 8 deletions(-)
+
+diff --git a/common/chat.cpp b/common/chat.cpp
+index 4ed58a77..24d2a892 100644
+--- a/common/chat.cpp
++++ b/common/chat.cpp
+@@ -2146,12 +2146,13 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
+     return data;
+ }
+ 
+-// Cohere2 MoE (a.k.a. "North Code") parser.
++// Cohere2 marker-wrapped parser (North Code and Command-R dialects).
+ //
+ // The assistant turn is fully marker-wrapped:
+ //   <|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>
+ //     <|START_THINKING|>{reasoning}<|END_THINKING|>
+ //     then EITHER content:    <|START_TEXT|>{content}<|END_TEXT|>
++//                         or <|START_RESPONSE|>{content}<|END_RESPONSE|>
+ //          OR     tool calls: <|START_ACTION|>[
+ //                                 {"tool_call_id": "0", "tool_name": "f", "parameters": {...}}, ...
+ //                             ]<|END_ACTION|>
+@@ -2173,8 +2174,10 @@ static common_chat_params common_chat_params_init_cohere2moe(const common_chat_t
+     const std::string SYSTEM        = "<|SYSTEM_TOKEN|>";
+     const std::string THINK_START   = "<|START_THINKING|>";
+     const std::string THINK_END     = "<|END_THINKING|>";
+-    const std::string TEXT_START    = "<|START_TEXT|>";
+-    const std::string TEXT_END      = "<|END_TEXT|>";
++    const bool uses_response_markers = tmpl.source().find("<|START_TEXT|>") == std::string::npos &&
++                                       tmpl.source().find("<|START_RESPONSE|>") != std::string::npos;
++    const std::string TEXT_START    = uses_response_markers ? "<|START_RESPONSE|>" : "<|START_TEXT|>";
++    const std::string TEXT_END      = uses_response_markers ? "<|END_RESPONSE|>" : "<|END_TEXT|>";
+     const std::string ACTION_START  = "<|START_ACTION|>";
+     const std::string ACTION_END    = "<|END_ACTION|>";
+     const std::string RESULT_START  = "<|START_TOOL_RESULT|>";
+@@ -2694,12 +2697,12 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
+         return common_chat_params_init_kimi_k2(tmpl, params);
+     }
+ 
+-    // Cohere2 MoE / North Code - marker-wrapped format with <|START_TEXT|> content and
+-    // <|START_ACTION|> JSON tool calls. <|START_TEXT|> is unique to this template (the older
+-    // Command-R templates use <|START_RESPONSE|>).
+-    if (src.find("<|START_TEXT|>") != std::string::npos &&
++    // Cohere2 marker-wrapped formats use either <|START_TEXT|> (North Code) or
++    // <|START_RESPONSE|> (Command-R) content plus <|START_ACTION|> JSON tool calls.
++    if ((src.find("<|START_TEXT|>") != std::string::npos ||
++         src.find("<|START_RESPONSE|>") != std::string::npos) &&
+         src.find("<|START_ACTION|>") != std::string::npos) {
+-        LOG_DBG("Using specialized template: Cohere2 MoE\n");
++        LOG_DBG("Using specialized template: Cohere2 marker-wrapped\n");
+         return common_chat_params_init_cohere2moe(tmpl, params);
+     }
+ 
+-- 
+2.50.1 (Apple Git-155)
+
