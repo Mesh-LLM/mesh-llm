@@ -1,8 +1,9 @@
 use base64::Engine;
 use iroh::{Endpoint, EndpointAddr, SecretKey};
 use mesh_client::proto::node::{
-    ConfigApplyMode, NodeConfigSnapshot, NodeGpuConfig, NodeModelEntry, OwnerControlEnvelope,
-    OwnerControlErrorCode,
+    CompactModelMetadata, ConfigApplyMode, NodeConfigSnapshot, NodeGpuConfig, NodeModelEntry,
+    OwnerControlEnvelope, OwnerControlErrorCode, OwnerControlInventoryEntry,
+    OwnerControlRefreshInventory, OwnerControlRefreshInventoryDisposition,
 };
 use mesh_client::protocol::{
     ALPN_CONTROL_V1, MAX_CONTROL_FRAME_BYTES, NODE_PROTOCOL_GENERATION,
@@ -76,6 +77,19 @@ async fn make_client() -> mesh_client::MeshClient {
 
 async fn spawn_success_server(
     owner_keypair: &OwnerKeypair,
+) -> (Endpoint, String, TestServerState, oneshot::Receiver<()>) {
+    spawn_success_server_with_refresh_detail(owner_keypair, true).await
+}
+
+async fn spawn_snapshot_only_success_server(
+    owner_keypair: &OwnerKeypair,
+) -> (Endpoint, String, TestServerState, oneshot::Receiver<()>) {
+    spawn_success_server_with_refresh_detail(owner_keypair, false).await
+}
+
+async fn spawn_success_server_with_refresh_detail(
+    owner_keypair: &OwnerKeypair,
+    include_refresh_detail: bool,
 ) -> (Endpoint, String, TestServerState, oneshot::Receiver<()>) {
     let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
@@ -191,6 +205,20 @@ async fn spawn_success_server(
                     return;
                 }
                 if request.refresh_inventory.is_some() {
+                    let inventory = include_refresh_detail.then(|| OwnerControlRefreshInventory {
+                        entries: vec![OwnerControlInventoryEntry {
+                            canonical_model_ref: "hf://mesh/refresh-model-GGUF:Q4_K_M".to_string(),
+                            display_name: Some("refresh-model".to_string()),
+                            total_size_bytes: 4_096,
+                            metadata: Some(CompactModelMetadata {
+                                model_key: "hf://mesh/refresh-model-GGUF:Q4_K_M".to_string(),
+                                architecture: "llama".to_string(),
+                                quantization_type: "Q4_K_M".to_string(),
+                                ..Default::default()
+                            }),
+                        }],
+                        disposition: OwnerControlRefreshInventoryDisposition::Executed as i32,
+                    });
                     write_control_envelope(
                         &mut send,
                         OwnerControlEnvelope {
@@ -204,7 +232,7 @@ async fn spawn_success_server(
                                 apply_config: None,
                                 refresh_inventory: Some(mesh_client::proto::node::OwnerControlRefreshInventoryResponse {
                                     snapshot: Some(test_snapshot(endpoint_id.as_bytes(), 5, "refresh-model.gguf")),
-                                    inventory: None,
+                                    inventory,
                                 }),
                             }),
                             error: None,
@@ -448,6 +476,22 @@ async fn control_plane_client_apply_config_get_watch_refresh_and_close() {
         .expect("refresh_inventory should succeed");
     assert_eq!(refresh_snapshot.revision, 5);
 
+    let scan_result = control
+        .scan_refresh()
+        .await
+        .expect("scan_refresh should return typed inventory detail");
+    assert_eq!(scan_result.snapshot.revision, 5);
+    let inventory = scan_result.inventory.expect("new server inventory detail");
+    assert_eq!(
+        OwnerControlRefreshInventoryDisposition::try_from(inventory.disposition),
+        Ok(OwnerControlRefreshInventoryDisposition::Executed)
+    );
+    assert_eq!(inventory.entries.len(), 1);
+    assert_eq!(
+        inventory.entries[0].canonical_model_ref,
+        "hf://mesh/refresh-model-GGUF:Q4_K_M"
+    );
+
     let mut watch = control
         .watch_config(true)
         .await
@@ -471,6 +515,30 @@ async fn control_plane_client_apply_config_get_watch_refresh_and_close() {
             "applied-model.gguf"
         );
     }
+    control.close().await;
+    server.close().await;
+}
+
+#[tokio::test]
+async fn scan_refresh_accepts_snapshot_only_old_server_response() {
+    let owner_keypair = test_owner_keypair(0x11, 0x12);
+    let client = make_client().await;
+    let (server, token, _state, _watch_closed_rx) =
+        spawn_snapshot_only_success_server(&owner_keypair).await;
+    let control = owner_control_client(
+        client
+            .connect_control_plane(ControlPlaneBootstrapOptions::new().with_control_endpoint(token))
+            .await
+            .expect("control session should connect"),
+    );
+
+    let result = control
+        .scan_refresh()
+        .await
+        .expect("snapshot-only old-server response should remain successful");
+
+    assert_eq!(result.snapshot.revision, 5);
+    assert!(result.inventory.is_none());
     control.close().await;
     server.close().await;
 }

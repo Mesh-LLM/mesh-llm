@@ -79,6 +79,9 @@ async fn handle_post(
 ) -> anyhow::Result<()> {
     match path_only {
         "/api/runtime/control/get-config" => handle_control_get_config(stream, state, body).await,
+        "/api/runtime/control/scan-refresh" => {
+            handle_control_scan_refresh(stream, state, body).await
+        }
         "/api/runtime/control/refresh-inventory" => {
             handle_control_refresh_inventory(stream, state, body).await
         }
@@ -179,6 +182,54 @@ struct LocalControlSnapshotPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     hostname: Option<String>,
     config: crate::plugin::MeshConfig,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalControlScanRefreshPayload {
+    target_node_id: String,
+    disposition: Option<String>,
+    inventory: Option<Vec<LocalControlInventoryEntryPayload>>,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalControlInventoryEntryPayload {
+    canonical_model_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    total_size_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<LocalControlModelMetadataPayload>,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalControlModelMetadataPayload {
+    model_key: String,
+    context_length: u32,
+    vocab_size: u32,
+    embedding_size: u32,
+    head_count: u32,
+    layer_count: u32,
+    feed_forward_length: u32,
+    key_length: u32,
+    value_length: u32,
+    architecture: String,
+    tokenizer_model_name: String,
+    special_tokens: Vec<LocalControlSpecialTokenPayload>,
+    rope_scale: f32,
+    rope_freq_base: f32,
+    is_moe: bool,
+    expert_count: u32,
+    used_expert_count: u32,
+    quantization_type: String,
+    kv_head_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameter_size: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalControlSpecialTokenPayload {
+    name: String,
+    token_id: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -305,6 +356,37 @@ async fn handle_control_refresh_inventory(
                     &serde_json::json!({ "snapshot": local_control_snapshot_payload(snapshot) }),
                 )
                 .await,
+                Err(error) => respond_control_error(stream, control_error_from_client(error)).await,
+            }
+        }
+        Err(error) => respond_control_error(stream, error).await,
+    }
+}
+
+async fn handle_control_scan_refresh(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    body: &str,
+) -> anyhow::Result<()> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+    let request: ControlEndpointRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
+    };
+    let endpoint = match required_control_endpoint(request.endpoint) {
+        Ok(endpoint) => endpoint,
+        Err(error) => return respond_control_error(stream, error).await,
+    };
+    match connect_owner_control_client(state, &endpoint).await {
+        Ok(client) => {
+            let result = client.scan_refresh().await;
+            client.close().await;
+            match result {
+                Ok(response) => {
+                    respond_json(stream, 200, &local_control_scan_refresh_payload(response)).await
+                }
                 Err(error) => respond_control_error(stream, control_error_from_client(error)).await,
             }
         }
@@ -532,6 +614,88 @@ fn local_control_snapshot_payload(
         config_hash: hex::encode(snapshot.config_hash),
         hostname: snapshot.hostname,
         config,
+    }
+}
+
+fn local_control_scan_refresh_payload(
+    response: mesh_client::OwnerControlScanRefreshResult,
+) -> LocalControlScanRefreshPayload {
+    let target_node_id = hex::encode(&response.snapshot.node_id);
+    let (disposition, inventory) = match response.inventory {
+        Some(inventory) => (
+            Some(control_scan_disposition_label(inventory.disposition)),
+            Some(
+                inventory
+                    .entries
+                    .into_iter()
+                    .map(local_control_inventory_entry_payload)
+                    .collect(),
+            ),
+        ),
+        None => (None, None),
+    };
+    LocalControlScanRefreshPayload {
+        target_node_id,
+        disposition,
+        inventory,
+    }
+}
+
+fn control_scan_disposition_label(value: i32) -> String {
+    match mesh_client::proto::node::OwnerControlRefreshInventoryDisposition::try_from(value) {
+        Ok(mesh_client::proto::node::OwnerControlRefreshInventoryDisposition::Executed) => {
+            "executed"
+        }
+        Ok(mesh_client::proto::node::OwnerControlRefreshInventoryDisposition::Coalesced) => {
+            "coalesced"
+        }
+        _ => "unspecified",
+    }
+    .to_string()
+}
+
+fn local_control_inventory_entry_payload(
+    entry: mesh_client::proto::node::OwnerControlInventoryEntry,
+) -> LocalControlInventoryEntryPayload {
+    LocalControlInventoryEntryPayload {
+        canonical_model_ref: entry.canonical_model_ref,
+        display_name: entry.display_name,
+        total_size_bytes: entry.total_size_bytes,
+        metadata: entry.metadata.map(local_control_model_metadata_payload),
+    }
+}
+
+fn local_control_model_metadata_payload(
+    metadata: mesh_client::proto::node::CompactModelMetadata,
+) -> LocalControlModelMetadataPayload {
+    LocalControlModelMetadataPayload {
+        model_key: metadata.model_key,
+        context_length: metadata.context_length,
+        vocab_size: metadata.vocab_size,
+        embedding_size: metadata.embedding_size,
+        head_count: metadata.head_count,
+        layer_count: metadata.layer_count,
+        feed_forward_length: metadata.feed_forward_length,
+        key_length: metadata.key_length,
+        value_length: metadata.value_length,
+        architecture: metadata.architecture,
+        tokenizer_model_name: metadata.tokenizer_model_name,
+        special_tokens: metadata
+            .special_tokens
+            .into_iter()
+            .map(|token| LocalControlSpecialTokenPayload {
+                name: token.name,
+                token_id: token.token_id,
+            })
+            .collect(),
+        rope_scale: metadata.rope_scale,
+        rope_freq_base: metadata.rope_freq_base,
+        is_moe: metadata.is_moe,
+        expert_count: metadata.expert_count,
+        used_expert_count: metadata.used_expert_count,
+        quantization_type: metadata.quantization_type,
+        kv_head_count: metadata.kv_head_count,
+        parameter_size: metadata.parameter_size,
     }
 }
 
@@ -1080,7 +1244,8 @@ async fn handle_events(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Resul
 mod tests {
     use super::{
         GuardrailMode, RuntimeLoadRequestParseError, is_loopback_control_caller,
-        parse_guardrail_mode, parse_model_with_profile, parse_runtime_load_request,
+        local_control_scan_refresh_payload, parse_guardrail_mode, parse_model_with_profile,
+        parse_runtime_load_request,
     };
 
     #[test]
@@ -1153,5 +1318,66 @@ mod tests {
         let (model_ref, profile) = parse_model_with_profile("Qwen3-8B#low-ctx");
         assert_eq!(model_ref, "Qwen3-8B");
         assert_eq!(profile, "low-ctx");
+    }
+
+    #[test]
+    fn scan_refresh_payload_preserves_snapshot_only_compatibility() {
+        let payload =
+            local_control_scan_refresh_payload(mesh_client::OwnerControlScanRefreshResult {
+                snapshot: mesh_client::proto::node::OwnerControlConfigSnapshot {
+                    node_id: vec![0xab, 0xcd],
+                    ..Default::default()
+                },
+                inventory: None,
+            });
+
+        assert_eq!(
+            serde_json::to_value(payload).unwrap(),
+            serde_json::json!({
+                "target_node_id": "abcd",
+                "disposition": null,
+                "inventory": null,
+            })
+        );
+    }
+
+    #[test]
+    fn scan_refresh_payload_maps_sorted_inventory_and_metadata_explicitly() {
+        let payload =
+            local_control_scan_refresh_payload(mesh_client::OwnerControlScanRefreshResult {
+                snapshot: mesh_client::proto::node::OwnerControlConfigSnapshot {
+                    node_id: vec![1],
+                    ..Default::default()
+                },
+                inventory: Some(mesh_client::proto::node::OwnerControlRefreshInventory {
+                    entries: vec![mesh_client::proto::node::OwnerControlInventoryEntry {
+                        canonical_model_ref: "a/model".to_string(),
+                        display_name: Some("Model A".to_string()),
+                        total_size_bytes: 42,
+                        metadata: Some(mesh_client::proto::node::CompactModelMetadata {
+                            model_key: "a/model".to_string(),
+                            architecture: "llama".to_string(),
+                            special_tokens: vec![mesh_client::proto::node::SpecialToken {
+                                name: "bos".to_string(),
+                                token_id: 1,
+                            }],
+                            ..Default::default()
+                        }),
+                    }],
+                    disposition:
+                        mesh_client::proto::node::OwnerControlRefreshInventoryDisposition::Executed
+                            as i32,
+                }),
+            });
+
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(value["target_node_id"], "01");
+        assert_eq!(value["disposition"], "executed");
+        assert_eq!(value["inventory"][0]["canonical_model_ref"], "a/model");
+        assert_eq!(value["inventory"][0]["metadata"]["architecture"], "llama");
+        assert_eq!(
+            value["inventory"][0]["metadata"]["special_tokens"][0]["name"],
+            "bos"
+        );
     }
 }

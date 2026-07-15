@@ -16,7 +16,7 @@ pub use client::{
     ChatMessage, ChatRequest, ClientBuilder, ClientError, ClientTransport,
     ConfigTransportSelection, ControlPlaneBootstrapOptions, ControlPlaneClientError,
     ControlPlaneConnection, ControlPlaneNegotiationError, ControlPlaneRetryPolicy, InviteToken,
-    MeshClient, Model, OwnerControlClient, OwnerControlRemoteError, OwnerControlWatchEvent,
-    OwnerControlWatchStream, RequestId, ResponsesRequest, Status,
+    MeshClient, Model, OwnerControlClient, OwnerControlRemoteError, OwnerControlScanRefreshResult,
+    OwnerControlWatchEvent, OwnerControlWatchStream, RequestId, ResponsesRequest, Status,
 };
 pub use crypto::keys::OwnerKeypair;

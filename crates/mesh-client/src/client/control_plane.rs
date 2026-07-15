@@ -4,9 +4,9 @@ use crate::proto::node::{
     NodeConfigSnapshot, OwnerControlApplyConfigRequest, OwnerControlApplyConfigResponse,
     OwnerControlConfigSnapshot, OwnerControlConfigUpdate, OwnerControlEnvelope, OwnerControlError,
     OwnerControlErrorCode, OwnerControlGetConfigRequest, OwnerControlHandshake,
-    OwnerControlRefreshInventoryRequest, OwnerControlRequest, OwnerControlResponse,
-    OwnerControlWatchAccepted, OwnerControlWatchConfigRequest, OwnerControlWatchConfigResponse,
-    SignedNodeOwnership,
+    OwnerControlRefreshInventory, OwnerControlRefreshInventoryRequest, OwnerControlRequest,
+    OwnerControlResponse, OwnerControlWatchAccepted, OwnerControlWatchConfigRequest,
+    OwnerControlWatchConfigResponse, SignedNodeOwnership,
 };
 use crate::protocol::{
     ALPN_CONTROL_V1, ALPN_V1, NODE_PROTOCOL_GENERATION, decode_owner_control_envelope,
@@ -206,6 +206,16 @@ pub enum OwnerControlWatchEvent {
     Update(OwnerControlConfigUpdate),
 }
 
+/// Result of a completed owner-control inventory scan.
+///
+/// Older servers return only the refreshed config snapshot. In that compatibility
+/// case, `inventory` is `None` while the command itself still succeeds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OwnerControlScanRefreshResult {
+    pub snapshot: OwnerControlConfigSnapshot,
+    pub inventory: Option<OwnerControlRefreshInventory>,
+}
+
 impl MeshClient {
     /// Bootstrap config transport using the explicit owner-control endpoint policy.
     ///
@@ -364,6 +374,12 @@ impl OwnerControlClient {
     pub async fn refresh_inventory(
         &self,
     ) -> Result<OwnerControlConfigSnapshot, ControlPlaneClientError> {
+        self.scan_refresh().await.map(|result| result.snapshot)
+    }
+
+    pub async fn scan_refresh(
+        &self,
+    ) -> Result<OwnerControlScanRefreshResult, ControlPlaneClientError> {
         let response = self
             .send_unary_request(
                 std::time::Duration::from_secs(OWNER_CONTROL_INVENTORY_RESPONSE_TIMEOUT_SECS),
@@ -379,14 +395,20 @@ impl OwnerControlClient {
                 },
             )
             .await?;
-        response
-            .refresh_inventory
-            .and_then(|response| response.snapshot)
-            .ok_or_else(|| {
-                ControlPlaneClientError::Protocol(
-                    "owner-control refresh_inventory response missing snapshot payload".to_string(),
-                )
-            })
+        let response = response.refresh_inventory.ok_or_else(|| {
+            ControlPlaneClientError::Protocol(
+                "owner-control refresh_inventory response missing refresh payload".to_string(),
+            )
+        })?;
+        let snapshot = response.snapshot.ok_or_else(|| {
+            ControlPlaneClientError::Protocol(
+                "owner-control refresh_inventory response missing snapshot payload".to_string(),
+            )
+        })?;
+        Ok(OwnerControlScanRefreshResult {
+            snapshot,
+            inventory: response.inventory,
+        })
     }
 
     pub async fn watch_config(
