@@ -4298,7 +4298,6 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    #[path = "native_log.rs"]
     mod native_log;
 
     fn correctness_model() -> Option<PathBuf> {
