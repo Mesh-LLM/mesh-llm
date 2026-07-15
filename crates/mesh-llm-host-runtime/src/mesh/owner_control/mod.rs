@@ -1,0 +1,821 @@
+use super::*;
+
+pub(crate) fn endpoint_id_hex(id: EndpointId) -> String {
+    hex::encode(id.as_bytes())
+}
+
+pub(crate) fn new_plugin_message_id(source_peer_id: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{source_peer_id}:{nanos}:{}", rand::random::<u64>())
+}
+
+pub(crate) fn node_role_label(role: &NodeRole) -> String {
+    match role {
+        NodeRole::Worker => "worker".into(),
+        NodeRole::Host { .. } => "host".into(),
+        NodeRole::Client => "client".into(),
+    }
+}
+
+pub(crate) fn owner_control_error_envelope(
+    code: crate::proto::node::OwnerControlErrorCode,
+    request_id: Option<u64>,
+    current_revision: Option<u64>,
+    message: impl Into<String>,
+) -> crate::proto::node::OwnerControlEnvelope {
+    crate::proto::node::OwnerControlEnvelope {
+        r#gen: NODE_PROTOCOL_GENERATION,
+        handshake: None,
+        request: None,
+        response: None,
+        error: Some(crate::proto::node::OwnerControlError {
+            code: code as i32,
+            message: message.into(),
+            request_id,
+            current_revision,
+        }),
+    }
+}
+
+pub(crate) fn owner_control_rejection_envelope(
+    data: &[u8],
+    request_id: Option<u64>,
+    err: &ControlFrameError,
+) -> crate::proto::node::OwnerControlEnvelope {
+    let code = if matches!(err, ControlFrameError::MissingControlCommand) {
+        crate::proto::node::OwnerControlErrorCode::UnknownCommand
+    } else if serde_json::from_slice::<serde_json::Value>(data).is_ok() {
+        crate::proto::node::OwnerControlErrorCode::LegacyJsonUnsupported
+    } else {
+        crate::proto::node::OwnerControlErrorCode::BadRequest
+    };
+    owner_control_error_envelope(code, request_id, None, err.to_string())
+}
+
+impl Node {
+    pub(crate) async fn read_owner_control_handshake(
+        &self,
+        remote: EndpointId,
+        send: &mut iroh::endpoint::SendStream,
+        recv: &mut iroh::endpoint::RecvStream,
+    ) -> Result<Option<crate::proto::node::OwnerControlHandshake>> {
+        let handshake_bytes = match read_len_prefixed(recv).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::debug!(
+                    "control handshake read failed from {}: {error}",
+                    remote.fmt_short()
+                );
+                return Ok(None);
+            }
+        };
+
+        let handshake_envelope =
+            match crate::proto::node::OwnerControlEnvelope::decode(handshake_bytes.as_slice()) {
+                Ok(envelope) => envelope,
+                Err(error) => {
+                    let code =
+                        if serde_json::from_slice::<serde_json::Value>(&handshake_bytes).is_ok() {
+                            crate::proto::node::OwnerControlErrorCode::LegacyJsonUnsupported
+                        } else {
+                            crate::proto::node::OwnerControlErrorCode::InvalidHandshake
+                        };
+                    let _ = self
+                        .send_owner_control_terminal_envelope(
+                            send,
+                            owner_control_error_envelope(code, None, None, error.to_string()),
+                        )
+                        .await;
+                    return Ok(None);
+                }
+            };
+        if let Err(error) = handshake_envelope.validate_frame() {
+            let _ = self
+                .send_owner_control_terminal_envelope(
+                    send,
+                    owner_control_error_envelope(
+                        crate::proto::node::OwnerControlErrorCode::InvalidHandshake,
+                        None,
+                        None,
+                        error.to_string(),
+                    ),
+                )
+                .await;
+            return Ok(None);
+        }
+        let Some(handshake) = handshake_envelope.handshake else {
+            let _ = self
+                .send_owner_control_terminal_envelope(
+                    send,
+                    owner_control_error_envelope(
+                        crate::proto::node::OwnerControlErrorCode::InvalidHandshake,
+                        None,
+                        None,
+                        "first owner-control envelope must be a handshake",
+                    ),
+                )
+                .await;
+            return Ok(None);
+        };
+        Ok(Some(handshake))
+    }
+
+    pub(crate) async fn read_owner_control_request(
+        &self,
+        send: &mut iroh::endpoint::SendStream,
+        recv: &mut iroh::endpoint::RecvStream,
+    ) -> Result<Option<crate::proto::node::OwnerControlRequest>> {
+        let request_bytes = match read_len_prefixed(recv).await {
+            Ok(bytes) => bytes,
+            Err(_) => return Ok(None),
+        };
+        let envelope =
+            match crate::proto::node::OwnerControlEnvelope::decode(request_bytes.as_slice()) {
+                Ok(envelope) => envelope,
+                Err(error) => {
+                    let code =
+                        if serde_json::from_slice::<serde_json::Value>(&request_bytes).is_ok() {
+                            crate::proto::node::OwnerControlErrorCode::LegacyJsonUnsupported
+                        } else {
+                            crate::proto::node::OwnerControlErrorCode::BadRequest
+                        };
+                    let _ = self
+                        .send_owner_control_terminal_envelope(
+                            send,
+                            owner_control_error_envelope(code, None, None, error.to_string()),
+                        )
+                        .await;
+                    return Ok(None);
+                }
+            };
+        if let Err(error) = envelope.validate_frame() {
+            let request_id = envelope.request.as_ref().map(|request| request.request_id);
+            let _ = self
+                .send_owner_control_terminal_envelope(
+                    send,
+                    owner_control_rejection_envelope(&request_bytes, request_id, &error),
+                )
+                .await;
+            return Ok(None);
+        }
+        let Some(request) = envelope.request else {
+            let _ = self
+                .send_owner_control_terminal_envelope(
+                    send,
+                    owner_control_error_envelope(
+                        crate::proto::node::OwnerControlErrorCode::BadRequest,
+                        None,
+                        None,
+                        "owner-control envelope must contain a request after handshake",
+                    ),
+                )
+                .await;
+            return Ok(None);
+        };
+        Ok(Some(request))
+    }
+
+    pub(crate) async fn handle_control_stream(
+        &self,
+        remote: EndpointId,
+        send: &mut iroh::endpoint::SendStream,
+        recv: &mut iroh::endpoint::RecvStream,
+    ) -> Result<()> {
+        let Some(handshake) = self
+            .read_owner_control_handshake(remote, send, recv)
+            .await?
+        else {
+            return Ok(());
+        };
+
+        let local_owner = self.owner_summary.lock().await.clone();
+        let trust_store = self.trust_store.lock().await.clone();
+        if let Err(error) = crate::crypto::verify_control_plane_peer_ownership(
+            &local_owner,
+            handshake.ownership.as_ref(),
+            remote.as_bytes(),
+            &trust_store,
+            self.trust_policy,
+            current_time_unix_ms(),
+        ) {
+            let _ = self
+                .send_owner_control_terminal_envelope(
+                    send,
+                    self.owner_control_auth_error_envelope(&error),
+                )
+                .await;
+            return Ok(());
+        }
+
+        loop {
+            let Some(request) = self.read_owner_control_request(send, recv).await? else {
+                break;
+            };
+            let watch_request = request.watch_config.is_some();
+            self.handle_owner_control_request(remote, send, recv, request)
+                .await?;
+            if watch_request {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+impl Node {
+    pub(crate) fn owner_control_snapshot_from_state(
+        &self,
+        state: &crate::runtime::config_state::ConfigState,
+    ) -> crate::proto::node::OwnerControlConfigSnapshot {
+        crate::proto::node::OwnerControlConfigSnapshot {
+            node_id: self.endpoint.id().as_bytes().to_vec(),
+            revision: state.revision(),
+            config_hash: state.config_hash().to_vec(),
+            config: Some(crate::protocol::convert::mesh_config_to_proto(
+                state.config(),
+            )),
+            hostname: self.hostname.clone(),
+        }
+    }
+
+    pub(crate) fn owner_control_update_from_state(
+        &self,
+        state: &crate::runtime::config_state::ConfigState,
+    ) -> crate::proto::node::OwnerControlConfigUpdate {
+        crate::proto::node::OwnerControlConfigUpdate {
+            node_id: self.endpoint.id().as_bytes().to_vec(),
+            revision: state.revision(),
+            config_hash: state.config_hash().to_vec(),
+            config: Some(crate::protocol::convert::mesh_config_to_proto(
+                state.config(),
+            )),
+        }
+    }
+
+    pub(crate) async fn send_owner_control_envelope(
+        &self,
+        send: &mut iroh::endpoint::SendStream,
+        envelope: crate::proto::node::OwnerControlEnvelope,
+    ) -> anyhow::Result<()> {
+        write_len_prefixed(send, &envelope.encode_to_vec()).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn send_owner_control_terminal_envelope(
+        &self,
+        send: &mut iroh::endpoint::SendStream,
+        envelope: crate::proto::node::OwnerControlEnvelope,
+    ) -> anyhow::Result<()> {
+        self.send_owner_control_envelope(send, envelope).await?;
+        let _ = send.finish();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        Ok(())
+    }
+
+    pub(crate) async fn refresh_local_inventory_snapshot(
+        &self,
+    ) -> crate::models::LocalModelInventorySnapshot {
+        let collector = self.runtime_data_collector();
+        let snapshot = collector
+            .coalesce_local_inventory_scan(|| {
+                crate::models::scan_local_inventory_snapshot_with_progress(|_| {})
+            })
+            .await;
+        self.set_available_models(crate::models::scan_local_models())
+            .await;
+        snapshot
+    }
+
+    pub(crate) fn owner_control_auth_error_envelope(
+        &self,
+        err: &crate::crypto::ControlPlaneAuthError,
+    ) -> crate::proto::node::OwnerControlEnvelope {
+        let code = match err {
+            crate::crypto::ControlPlaneAuthError::MissingRemoteOwnerAttestation
+            | crate::crypto::ControlPlaneAuthError::RemoteOwnershipInvalid { .. } => {
+                crate::proto::node::OwnerControlErrorCode::InvalidHandshake
+            }
+            crate::crypto::ControlPlaneAuthError::TargetNodeMismatch { .. } => {
+                crate::proto::node::OwnerControlErrorCode::TargetNodeMismatch
+            }
+            crate::crypto::ControlPlaneAuthError::MissingLocalOwnerIdentity { .. }
+            | crate::crypto::ControlPlaneAuthError::RemoteOwnerMismatch { .. }
+            | crate::crypto::ControlPlaneAuthError::UnsupportedTrustPolicy { .. } => {
+                crate::proto::node::OwnerControlErrorCode::Unauthorized
+            }
+        };
+        owner_control_error_envelope(code, None, None, err.to_string())
+    }
+
+    pub(crate) fn verify_owner_control_request_ids(
+        &self,
+        remote: EndpointId,
+        requester_node_id: &[u8],
+        target_node_id: &[u8],
+        request_id: u64,
+    ) -> Result<(), Box<crate::proto::node::OwnerControlEnvelope>> {
+        if requester_node_id != remote.as_bytes() {
+            return Err(Box::new(owner_control_error_envelope(
+                crate::proto::node::OwnerControlErrorCode::BadRequest,
+                Some(request_id),
+                None,
+                "requester_node_id does not match connection identity",
+            )));
+        }
+        if let Err(err) =
+            verify_control_plane_target_node(target_node_id, self.endpoint.id().as_bytes())
+        {
+            return Err(Box::new(owner_control_error_envelope(
+                crate::proto::node::OwnerControlErrorCode::TargetNodeMismatch,
+                Some(request_id),
+                None,
+                err.to_string(),
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn send_owner_control_request_id_error(
+        &self,
+        send: &mut iroh::endpoint::SendStream,
+        verification: Result<(), Box<crate::proto::node::OwnerControlEnvelope>>,
+    ) -> Option<anyhow::Result<()>> {
+        match verification {
+            Ok(()) => None,
+            Err(envelope) => Some(self.send_owner_control_envelope(send, *envelope).await),
+        }
+    }
+
+    pub(crate) async fn current_owner_control_snapshot(
+        &self,
+    ) -> crate::proto::node::OwnerControlConfigSnapshot {
+        let state = self.config_state.lock().await;
+        self.owner_control_snapshot_from_state(&state)
+    }
+
+    pub(crate) async fn current_owner_control_update(
+        &self,
+    ) -> crate::proto::node::OwnerControlConfigUpdate {
+        let state = self.config_state.lock().await;
+        self.owner_control_update_from_state(&state)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn replace_config_state_for_test(
+        &self,
+        path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        let state = crate::runtime::config_state::ConfigState::load(path)?;
+        let revision = state.revision();
+        *self.config_state.lock().await = state;
+        let _ = self.config_revision_tx.send(revision);
+        Ok(())
+    }
+
+    pub(crate) fn owner_control_watch_response(
+        &self,
+        include_snapshot: bool,
+        snapshot: Option<crate::proto::node::OwnerControlConfigSnapshot>,
+        update: Option<crate::proto::node::OwnerControlConfigUpdate>,
+    ) -> crate::proto::node::OwnerControlWatchConfigResponse {
+        crate::proto::node::OwnerControlWatchConfigResponse {
+            accepted: (!include_snapshot && update.is_none()).then(|| {
+                crate::proto::node::OwnerControlWatchAccepted {
+                    target_node_id: self.endpoint.id().as_bytes().to_vec(),
+                }
+            }),
+            snapshot,
+            update,
+        }
+    }
+
+    pub(crate) fn owner_control_watch_envelope(
+        &self,
+        request_id: u64,
+        watch_response: crate::proto::node::OwnerControlWatchConfigResponse,
+    ) -> crate::proto::node::OwnerControlEnvelope {
+        crate::proto::node::OwnerControlEnvelope {
+            r#gen: NODE_PROTOCOL_GENERATION,
+            handshake: None,
+            request: None,
+            response: Some(crate::proto::node::OwnerControlResponse {
+                request_id,
+                get_config: None,
+                watch_config: Some(watch_response),
+                apply_config: None,
+                refresh_inventory: None,
+            }),
+            error: None,
+        }
+    }
+
+    pub(crate) async fn send_owner_control_watch_update(
+        &self,
+        send: &mut iroh::endpoint::SendStream,
+        request_id: u64,
+        update: crate::proto::node::OwnerControlConfigUpdate,
+    ) -> anyhow::Result<()> {
+        self.send_owner_control_envelope(
+            send,
+            self.owner_control_watch_envelope(
+                request_id,
+                self.owner_control_watch_response(false, None, Some(update)),
+            ),
+        )
+        .await
+    }
+
+    pub(crate) async fn handle_owner_control_get_config(
+        &self,
+        remote: EndpointId,
+        send: &mut iroh::endpoint::SendStream,
+        request_id: u64,
+        get: crate::proto::node::OwnerControlGetConfigRequest,
+    ) -> anyhow::Result<()> {
+        if let Some(result) = self
+            .send_owner_control_request_id_error(
+                send,
+                self.verify_owner_control_request_ids(
+                    remote,
+                    &get.requester_node_id,
+                    &get.target_node_id,
+                    request_id,
+                ),
+            )
+            .await
+        {
+            return result;
+        }
+        let snapshot = self.current_owner_control_snapshot().await;
+        self.send_owner_control_envelope(
+            send,
+            crate::proto::node::OwnerControlEnvelope {
+                r#gen: NODE_PROTOCOL_GENERATION,
+                handshake: None,
+                request: None,
+                response: Some(crate::proto::node::OwnerControlResponse {
+                    request_id,
+                    get_config: Some(crate::proto::node::OwnerControlGetConfigResponse {
+                        snapshot: Some(snapshot),
+                    }),
+                    watch_config: None,
+                    apply_config: None,
+                    refresh_inventory: None,
+                }),
+                error: None,
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn handle_owner_control_watch_config(
+        &self,
+        remote: EndpointId,
+        send: &mut iroh::endpoint::SendStream,
+        recv: &mut iroh::endpoint::RecvStream,
+        request_id: u64,
+        watch: crate::proto::node::OwnerControlWatchConfigRequest,
+    ) -> anyhow::Result<()> {
+        let mut rev_rx = self.config_revision_tx.subscribe();
+        if let Some(result) = self
+            .send_owner_control_request_id_error(
+                send,
+                self.verify_owner_control_request_ids(
+                    remote,
+                    &watch.requester_node_id,
+                    &watch.target_node_id,
+                    request_id,
+                ),
+            )
+            .await
+        {
+            return result;
+        }
+
+        self.send_owner_control_watch_start(send, request_id, watch.include_snapshot)
+            .await?;
+
+        self.stream_owner_control_watch_updates(send, recv, remote, request_id, &mut rev_rx)
+            .await;
+
+        Ok(())
+    }
+
+    pub(crate) async fn send_owner_control_watch_start(
+        &self,
+        send: &mut iroh::endpoint::SendStream,
+        request_id: u64,
+        include_snapshot: bool,
+    ) -> anyhow::Result<()> {
+        let watch_response = self.owner_control_watch_response(
+            include_snapshot,
+            if include_snapshot {
+                Some(self.current_owner_control_snapshot().await)
+            } else {
+                None
+            },
+            None,
+        );
+        self.send_owner_control_envelope(
+            send,
+            self.owner_control_watch_envelope(request_id, watch_response),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn stream_owner_control_watch_updates(
+        &self,
+        send: &mut iroh::endpoint::SendStream,
+        recv: &mut iroh::endpoint::RecvStream,
+        remote: EndpointId,
+        request_id: u64,
+        rev_rx: &mut tokio::sync::watch::Receiver<u64>,
+    ) {
+        loop {
+            tokio::select! {
+                changed = rev_rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    let update = self.current_owner_control_update().await;
+                    if self
+                        .send_owner_control_watch_update(send, request_id, update)
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                inbound = read_len_prefixed(recv) => {
+                    if inbound.is_ok() {
+                        tracing::debug!(
+                            "owner-control watch from {} sent unexpected extra frame; closing stream",
+                            remote.fmt_short()
+                        );
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn handle_owner_control_apply_config(
+        &self,
+        remote: EndpointId,
+        send: &mut iroh::endpoint::SendStream,
+        request_id: u64,
+        apply: crate::proto::node::OwnerControlApplyConfigRequest,
+    ) -> anyhow::Result<()> {
+        use crate::runtime::config_state::{ApplyResult, ConfigApplyMode};
+
+        if let Some(result) = self
+            .send_owner_control_request_id_error(
+                send,
+                self.verify_owner_control_request_ids(
+                    remote,
+                    &apply.requester_node_id,
+                    &apply.target_node_id,
+                    request_id,
+                ),
+            )
+            .await
+        {
+            return result;
+        }
+        let Some(config_snapshot) = apply.config.clone() else {
+            return self
+                .send_owner_control_envelope(
+                    send,
+                    owner_control_error_envelope(
+                        crate::proto::node::OwnerControlErrorCode::BadRequest,
+                        Some(request_id),
+                        None,
+                        "missing config payload",
+                    ),
+                )
+                .await;
+        };
+
+        let mesh_config =
+            match crate::protocol::convert::proto_config_to_mesh_strict(&config_snapshot) {
+                Ok(config) => config,
+                Err(error) => {
+                    return self
+                        .send_owner_control_envelope(
+                            send,
+                            owner_control_error_envelope(
+                                crate::proto::node::OwnerControlErrorCode::BadRequest,
+                                Some(request_id),
+                                None,
+                                error.to_string(),
+                            ),
+                        )
+                        .await;
+                }
+            };
+        let config_state = Arc::clone(&self.config_state);
+        let expected_revision = apply.expected_revision;
+        let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            preflight_pushed_config_for_current_node(&mesh_config)?;
+            let mut state = config_state.blocking_lock();
+            let result = state.apply(mesh_config, expected_revision);
+            let current_revision = state.revision();
+            let current_hash = *state.config_hash();
+            Ok((result, current_revision, current_hash))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("config apply task panicked: {e}"))?;
+
+        let (result, current_revision, current_hash) = match apply_result {
+            Ok(values) => values,
+            Err(error) => {
+                return self
+                    .send_owner_control_envelope(
+                        send,
+                        owner_control_error_envelope(
+                            crate::proto::node::OwnerControlErrorCode::BadRequest,
+                            Some(request_id),
+                            None,
+                            error.to_string(),
+                        ),
+                    )
+                    .await;
+            }
+        };
+
+        let envelope = match result {
+            ApplyResult::Applied {
+                revision,
+                hash,
+                apply_mode,
+                diagnostics,
+            } => {
+                if apply_mode == ConfigApplyMode::Staged {
+                    let _ = self.config_revision_tx.send(revision);
+                }
+                owner_control_response::apply_response_envelope(
+                    request_id,
+                    crate::proto::node::OwnerControlApplyConfigResponse {
+                        success: true,
+                        current_revision: revision,
+                        config_hash: hash.to_vec(),
+                        error: None,
+                        apply_mode: owner_control_response::proto_apply_mode(apply_mode),
+                        diagnostics: owner_control_response::config_diagnostics_to_proto(
+                            &diagnostics,
+                        ),
+                    },
+                )
+            }
+            ApplyResult::RevisionConflict { current_revision } => owner_control_error_envelope(
+                crate::proto::node::OwnerControlErrorCode::RevisionConflict,
+                Some(request_id),
+                Some(current_revision),
+                "revision conflict: expected_revision does not match current",
+            ),
+            ApplyResult::PersistedWithRevisionTrackingError {
+                revision,
+                hash,
+                error,
+                diagnostics,
+            } => {
+                let _ = self.config_revision_tx.send(revision);
+                owner_control_response::apply_response_envelope(
+                    request_id,
+                    crate::proto::node::OwnerControlApplyConfigResponse {
+                        success: false,
+                        current_revision: revision,
+                        config_hash: hash.to_vec(),
+                        error: Some(error),
+                        apply_mode: crate::proto::node::ConfigApplyMode::Staged as i32,
+                        diagnostics: owner_control_response::config_diagnostics_to_proto(
+                            &diagnostics,
+                        ),
+                    },
+                )
+            }
+            ApplyResult::ValidationError { error, diagnostics } => {
+                owner_control_response::apply_response_envelope(
+                    request_id,
+                    crate::proto::node::OwnerControlApplyConfigResponse {
+                        success: false,
+                        current_revision,
+                        config_hash: current_hash.to_vec(),
+                        error: Some(error),
+                        apply_mode: crate::proto::node::ConfigApplyMode::Unspecified as i32,
+                        diagnostics: owner_control_response::config_diagnostics_to_proto(
+                            &diagnostics,
+                        ),
+                    },
+                )
+            }
+            ApplyResult::PersistError(error) => owner_control_response::apply_response_envelope(
+                request_id,
+                crate::proto::node::OwnerControlApplyConfigResponse {
+                    success: false,
+                    current_revision,
+                    config_hash: current_hash.to_vec(),
+                    error: Some(error),
+                    apply_mode: crate::proto::node::ConfigApplyMode::Unspecified as i32,
+                    diagnostics: Vec::new(),
+                },
+            ),
+        };
+        self.send_owner_control_envelope(send, envelope).await
+    }
+
+    pub(crate) async fn handle_owner_control_refresh_inventory(
+        &self,
+        remote: EndpointId,
+        send: &mut iroh::endpoint::SendStream,
+        request_id: u64,
+        refresh: crate::proto::node::OwnerControlRefreshInventoryRequest,
+    ) -> anyhow::Result<()> {
+        if let Some(result) = self
+            .send_owner_control_request_id_error(
+                send,
+                self.verify_owner_control_request_ids(
+                    remote,
+                    &refresh.requester_node_id,
+                    &refresh.target_node_id,
+                    request_id,
+                ),
+            )
+            .await
+        {
+            return result;
+        }
+        let _ = self.refresh_local_inventory_snapshot().await;
+        let snapshot = self.current_owner_control_snapshot().await;
+        self.send_owner_control_envelope(
+            send,
+            crate::proto::node::OwnerControlEnvelope {
+                r#gen: NODE_PROTOCOL_GENERATION,
+                handshake: None,
+                request: None,
+                response: Some(crate::proto::node::OwnerControlResponse {
+                    request_id,
+                    get_config: None,
+                    watch_config: None,
+                    apply_config: None,
+                    refresh_inventory: Some(
+                        crate::proto::node::OwnerControlRefreshInventoryResponse {
+                            snapshot: Some(snapshot),
+                        },
+                    ),
+                }),
+                error: None,
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn handle_owner_control_request(
+        &self,
+        remote: EndpointId,
+        send: &mut iroh::endpoint::SendStream,
+        recv: &mut iroh::endpoint::RecvStream,
+        request: crate::proto::node::OwnerControlRequest,
+    ) -> anyhow::Result<()> {
+        let request_id = request.request_id;
+
+        if let Some(get) = request.get_config {
+            return self
+                .handle_owner_control_get_config(remote, send, request_id, get)
+                .await;
+        }
+
+        if let Some(watch) = request.watch_config {
+            return self
+                .handle_owner_control_watch_config(remote, send, recv, request_id, watch)
+                .await;
+        }
+
+        if let Some(apply) = request.apply_config {
+            return self
+                .handle_owner_control_apply_config(remote, send, request_id, apply)
+                .await;
+        }
+
+        if let Some(refresh) = request.refresh_inventory {
+            return self
+                .handle_owner_control_refresh_inventory(remote, send, request_id, refresh)
+                .await;
+        }
+
+        self.send_owner_control_envelope(
+            send,
+            owner_control_error_envelope(
+                crate::proto::node::OwnerControlErrorCode::UnknownCommand,
+                Some(request_id),
+                None,
+                "unknown owner-control command",
+            ),
+        )
+        .await
+    }
+}

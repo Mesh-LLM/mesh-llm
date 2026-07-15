@@ -6,7 +6,9 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use super::{Node, endpoint_id_hex};
 use crate::protocol::{STREAM_PLUGIN_MESH_STREAM, read_len_prefixed, write_len_prefixed};
 
-fn plugin_mesh_stream_error(message: impl Into<String>) -> crate::plugin::proto::ErrorResponse {
+pub(crate) fn plugin_mesh_stream_error(
+    message: impl Into<String>,
+) -> crate::plugin::proto::ErrorResponse {
     crate::plugin::proto::ErrorResponse {
         code: rmcp::model::ErrorCode::INTERNAL_ERROR.0,
         message: message.into(),
@@ -14,7 +16,7 @@ fn plugin_mesh_stream_error(message: impl Into<String>) -> crate::plugin::proto:
     }
 }
 
-fn open_stream_request_from_mesh_request(
+pub(crate) fn open_stream_request_from_mesh_request(
     request: &crate::plugin::proto::OpenMeshStreamRequest,
 ) -> crate::plugin::proto::OpenStreamRequest {
     crate::plugin::proto::OpenStreamRequest {
@@ -128,7 +130,7 @@ impl Node {
         }
     }
 
-    async fn connection_for_peer_hex(&self, peer_id: &str) -> Option<Connection> {
+    pub(crate) async fn connection_for_peer_hex(&self, peer_id: &str) -> Option<Connection> {
         let state = self.state.lock().await;
         state
             .connections
@@ -138,7 +140,7 @@ impl Node {
     }
 }
 
-async fn bridge_outbound_plugin_mesh_stream(
+pub(crate) async fn bridge_outbound_plugin_mesh_stream(
     listener: crate::plugin::LocalListener,
     conn: Connection,
     request: crate::plugin::proto::OpenMeshStreamRequest,
@@ -155,7 +157,7 @@ async fn bridge_outbound_plugin_mesh_stream(
     }
 }
 
-async fn bridge_quic_to_local_stream(
+pub(crate) async fn bridge_quic_to_local_stream(
     recv: RecvStream,
     local: crate::plugin::LocalStream,
 ) -> Result<()> {
@@ -173,7 +175,7 @@ async fn bridge_quic_to_local_stream(
     }
 }
 
-async fn bridge_local_stream_to_quic(
+pub(crate) async fn bridge_local_stream_to_quic(
     local: crate::plugin::LocalStream,
     send: SendStream,
 ) -> Result<()> {
@@ -191,7 +193,7 @@ async fn bridge_local_stream_to_quic(
     }
 }
 
-async fn bridge_local_stream_bidirectional(
+pub(crate) async fn bridge_local_stream_bidirectional(
     local: crate::plugin::LocalStream,
     send: SendStream,
     recv: RecvStream,
@@ -212,7 +214,7 @@ async fn bridge_local_stream_bidirectional(
     }
 }
 
-async fn copy_quic_to_local_write<S>(mut recv: RecvStream, stream: S) -> Result<()>
+pub(crate) async fn copy_quic_to_local_write<S>(mut recv: RecvStream, stream: S) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -222,7 +224,7 @@ where
     Ok(())
 }
 
-async fn copy_local_read_to_quic<S>(stream: S, mut send: SendStream) -> Result<()>
+pub(crate) async fn copy_local_read_to_quic<S>(stream: S, mut send: SendStream) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -232,7 +234,7 @@ where
     Ok(())
 }
 
-async fn bridge_stream_bidirectional<S>(
+pub(crate) async fn bridge_stream_bidirectional<S>(
     stream: S,
     mut send: SendStream,
     mut recv: RecvStream,

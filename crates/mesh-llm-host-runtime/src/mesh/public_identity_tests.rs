@@ -5,7 +5,7 @@ use std::fs;
 /// work correctly.  Uses the real ~/.mesh-llm/ directory (same approach as
 /// the rotate_keys tests) and restores originals afterward.
 #[test]
-fn public_to_private_transition_clears_identity() {
+pub(crate) fn public_to_private_transition_clears_identity() {
     let dir = dirs::home_dir().unwrap().join(".mesh-llm");
     fs::create_dir_all(&dir).ok();
 

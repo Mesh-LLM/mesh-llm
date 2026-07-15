@@ -14,13 +14,13 @@ pub(super) const DIRECT_PATH_REQUEST_COOLDOWN_SECS: u64 = 120;
 const DIRECT_PATH_REQUEST_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum DirectPathRepairReason {
+pub(crate) enum DirectPathRepairReason {
     RelaySelected,
     UnknownSelected,
 }
 
 impl DirectPathRepairReason {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::RelaySelected => "selected path is relay",
             Self::UnknownSelected => "selected path is unknown",
@@ -35,7 +35,7 @@ pub(super) struct DirectPathPeerHealth {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct DirectPathObservation {
+pub(crate) struct DirectPathObservation {
     pub(super) peer_id: EndpointId,
     pub(super) snapshot: heartbeat::RelayPathSnapshot,
     pub(super) has_direct_candidate: bool,
@@ -88,7 +88,7 @@ impl DirectPathMaintenanceController {
         None
     }
 
-    fn observe_peer(
+    pub(crate) fn observe_peer(
         &mut self,
         observation: DirectPathObservation,
         now: std::time::Instant,
@@ -144,7 +144,7 @@ pub(super) fn direct_path_repair_reason(
     }
 }
 
-fn endpoint_addr_has_direct_candidate(addr: &EndpointAddr) -> bool {
+pub(crate) fn endpoint_addr_has_direct_candidate(addr: &EndpointAddr) -> bool {
     addr.addrs
         .iter()
         .any(|candidate| matches!(candidate, TransportAddr::Ip(_)))
@@ -196,7 +196,7 @@ impl Node {
         });
     }
 
-    async fn direct_path_observations(&self) -> Vec<DirectPathObservation> {
+    pub(crate) async fn direct_path_observations(&self) -> Vec<DirectPathObservation> {
         let state = self.state.lock().await;
         state
             .peers
@@ -215,7 +215,7 @@ impl Node {
             .collect()
     }
 
-    async fn request_direct_path_from_peer(
+    pub(crate) async fn request_direct_path_from_peer(
         &self,
         peer_id: EndpointId,
         reason: DirectPathRepairReason,
@@ -240,7 +240,7 @@ impl Node {
         log_direct_path_request_result(peer_id, result)
     }
 
-    fn build_direct_path_request(
+    pub(crate) fn build_direct_path_request(
         &self,
         peer_id: EndpointId,
     ) -> Option<crate::proto::node::DirectPathRequest> {
@@ -259,7 +259,10 @@ impl Node {
         })
     }
 
-    async fn direct_path_request_connection(&self, peer_id: EndpointId) -> Option<Connection> {
+    pub(crate) async fn direct_path_request_connection(
+        &self,
+        peer_id: EndpointId,
+    ) -> Option<Connection> {
         let state = self.state.lock().await;
         state.connections.get(&peer_id).cloned()
     }
@@ -280,7 +283,7 @@ impl Node {
         });
     }
 
-    async fn handle_direct_path_request_stream(
+    pub(crate) async fn handle_direct_path_request_stream(
         &self,
         remote: EndpointId,
         mut recv: iroh::endpoint::RecvStream,
@@ -311,7 +314,7 @@ impl Node {
     }
 }
 
-async fn send_direct_path_request(
+pub(crate) async fn send_direct_path_request(
     conn: Connection,
     request: crate::proto::node::DirectPathRequest,
 ) -> Result<()> {
@@ -322,7 +325,7 @@ async fn send_direct_path_request(
     Ok(())
 }
 
-fn log_direct_path_request_result(
+pub(crate) fn log_direct_path_request_result(
     peer_id: EndpointId,
     result: Result<Result<()>, tokio::time::error::Elapsed>,
 ) -> bool {
@@ -347,7 +350,7 @@ fn log_direct_path_request_result(
 }
 
 impl Node {
-    async fn read_direct_path_request(
+    pub(crate) async fn read_direct_path_request(
         &self,
         remote: EndpointId,
         recv: &mut iroh::endpoint::RecvStream,
@@ -365,7 +368,7 @@ impl Node {
         Ok(frame)
     }
 
-    async fn direct_path_request_addr_for_peer(
+    pub(crate) async fn direct_path_request_addr_for_peer(
         &self,
         remote: EndpointId,
         requested: EndpointAddr,
@@ -375,7 +378,7 @@ impl Node {
         endpoint_addr_with_previously_advertised_direct_candidates(requested, &peer.addr)
     }
 
-    async fn record_direct_path_request(&self, remote: EndpointId) -> bool {
+    pub(crate) async fn record_direct_path_request(&self, remote: EndpointId) -> bool {
         let mut state = self.state.lock().await;
         let now = std::time::Instant::now();
         if state
@@ -392,7 +395,11 @@ impl Node {
         true
     }
 
-    async fn dial_direct_path_request_peer(&self, remote: EndpointId, addr: EndpointAddr) {
+    pub(crate) async fn dial_direct_path_request_peer(
+        &self,
+        remote: EndpointId,
+        addr: EndpointAddr,
+    ) {
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(DIRECT_PATH_REQUEST_TIMEOUT_SECS),
             connect_mesh(&self.endpoint, addr),
@@ -419,7 +426,11 @@ impl Node {
         }
     }
 
-    async fn install_direct_path_request_connection(&self, remote: EndpointId, conn: Connection) {
+    pub(crate) async fn install_direct_path_request_connection(
+        &self,
+        remote: EndpointId,
+        conn: Connection,
+    ) {
         self.capture_connection_event(ConnectionCaptureEvent {
             event: "peer_connection_opened",
             remote,

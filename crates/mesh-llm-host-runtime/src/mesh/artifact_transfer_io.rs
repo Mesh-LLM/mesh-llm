@@ -9,7 +9,7 @@ pub(super) struct PartialArtifactSelection {
     pub(super) offset: u64,
 }
 
-pub(super) struct PartialArtifactGuard {
+pub(crate) struct PartialArtifactGuard {
     path: PathBuf,
     cleanup_on_drop: bool,
 }
@@ -139,7 +139,7 @@ where
     Ok(())
 }
 
-fn largest_resumable_partial(
+pub(crate) fn largest_resumable_partial(
     destination: &Path,
     max_resume_size: u64,
 ) -> Result<Option<(PathBuf, u64)>> {
@@ -179,17 +179,17 @@ fn largest_resumable_partial(
     Ok(best)
 }
 
-fn is_partial_for_destination(path: &Path, prefix: &str) -> bool {
+pub(crate) fn is_partial_for_destination(path: &Path, prefix: &str) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.starts_with(prefix) && name.ends_with(".part"))
 }
 
-fn partial_file_prefix(destination: &Path) -> String {
+pub(crate) fn partial_file_prefix(destination: &Path) -> String {
     format!(".{}.", artifact_file_name(destination))
 }
 
-fn artifact_file_name(destination: &Path) -> String {
+pub(crate) fn artifact_file_name(destination: &Path) -> String {
     destination
         .file_name()
         .and_then(|name| name.to_str())
@@ -202,7 +202,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn append_artifact_transfer_body_resumes_existing_partial() {
+    pub(crate) async fn append_artifact_transfer_body_resumes_existing_partial() {
         let temp = tempfile::tempdir().unwrap();
         let partial = temp.path().join(".artifact.gguf.123.part");
         std::fs::write(&partial, b"layer").unwrap();
@@ -226,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_artifact_guard_removes_armed_partial_file() {
+    pub(crate) fn partial_artifact_guard_removes_armed_partial_file() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(".artifact.part");
         std::fs::write(&path, b"partial").unwrap();
@@ -239,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_artifact_guard_preserves_disarmed_installed_file() {
+    pub(crate) fn partial_artifact_guard_preserves_disarmed_installed_file() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(".artifact.part");
         std::fs::write(&path, b"partial").unwrap();
@@ -253,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_artifact_guard_can_preserve_partial_after_transfer_error() {
+    pub(crate) fn partial_artifact_guard_can_preserve_partial_after_transfer_error() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(".artifact.part");
         std::fs::write(&path, b"partial").unwrap();
@@ -266,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn select_partial_artifact_reuses_largest_valid_partial() {
+    pub(crate) fn select_partial_artifact_reuses_largest_valid_partial() {
         let temp = tempfile::tempdir().unwrap();
         let destination = temp.path().join("layer-000.gguf");
         let small = temp.path().join(".layer-000.gguf.small.part");
