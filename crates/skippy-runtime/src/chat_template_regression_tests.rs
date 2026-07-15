@@ -1,4 +1,7 @@
-use std::{env, path::PathBuf};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 use serde_json::Value;
 
@@ -7,7 +10,7 @@ use super::{
     RuntimeConfig, RuntimeLoadMode, StageModel, TensorRole,
 };
 
-fn open_model(model_path: &PathBuf) -> anyhow::Result<StageModel> {
+fn open_model(model_path: &Path) -> anyhow::Result<StageModel> {
     let info = ModelInfo::open(model_path)?;
     let layer_end = info
         .tensors()?
