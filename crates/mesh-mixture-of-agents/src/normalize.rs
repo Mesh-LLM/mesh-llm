@@ -840,7 +840,7 @@ mod tests {
     fn arg_tag_tool_call_uses_guardrail_rescue() {
         let raw = "<tool_call>tree<arg_key>path</arg_key><arg_value>tests</arg_value>\
                    <arg_key>depth</arg_key><arg_value>2</arg_value></tool_call>";
-        let out = normalize_worker_output(raw, "command-r", WorkerRole::Reducer, 100);
+        let out = normalize_worker_output(raw, "glm-4.7-flash", WorkerRole::Reducer, 100);
         assert_eq!(out.kind, OutputKind::ToolProposal);
         assert_eq!(out.tool_name.as_deref(), Some("tree"));
         let arguments = out.tool_arguments.expect("args");

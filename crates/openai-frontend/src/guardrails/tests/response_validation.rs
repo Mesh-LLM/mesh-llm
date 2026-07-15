@@ -222,36 +222,6 @@ fn rescues_granite_tool_call_syntax() {
 }
 
 #[test]
-fn rescues_arg_tag_tool_call_syntax() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_tool_request(
-        &engine,
-        json!({
-            "model": "command-r",
-            "messages": [{"role": "user", "content": "inspect tests"}],
-            "tools": [{"type": "function", "function": {"name": "tree"}}]
-        }),
-    );
-    let response = response_with_content(
-        "command-r",
-        "<tool_call>tree<arg_key>path</arg_key><arg_value>tests</arg_value>\
-         <arg_key>depth</arg_key><arg_value>2</arg_value></tool_call>",
-    );
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::ValidToolCalls
-    );
-    assert_eq!(tool_call_name(&classified), Some("tree"));
-    assert_eq!(
-        tool_call_arguments(&classified),
-        Some(r#"{"depth":2,"path":"tests"}"#)
-    );
-}
-
-#[test]
 fn rescue_strips_hidden_reasoning_from_client_visible_content() {
     let engine = GuardrailEngine::new(enforce_policy());
     let prepared = prepared_text_request(

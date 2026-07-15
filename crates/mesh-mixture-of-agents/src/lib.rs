@@ -1742,7 +1742,7 @@ mod response_builder_tests {
     }
 
     #[test]
-    fn goose_coding_prompt_keeps_workflow_tools_selected() {
+    fn coding_prompt_keeps_common_workflow_tools_selected() {
         let mut session = Session::new();
         session.ingest(
             &[serde_json::json!({

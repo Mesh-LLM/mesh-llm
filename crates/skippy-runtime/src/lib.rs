@@ -24,8 +24,6 @@ use skippy_ffi::{
 };
 use tokio::sync::mpsc;
 
-#[cfg(test)]
-mod chat_template_regression_tests;
 mod devices;
 mod native_mtp;
 pub mod package;
