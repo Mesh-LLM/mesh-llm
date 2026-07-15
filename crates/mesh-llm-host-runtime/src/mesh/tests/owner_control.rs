@@ -294,6 +294,52 @@ async fn control_plane_listener_accepts_only_control_alpn() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn stalled_owner_control_handshake_expires_deterministically() -> anyhow::Result<()> {
+    let owner_keypair = test_owner_keypair(0x8d, 0x8e);
+    let tmp = std::env::temp_dir().join(format!(
+        "mesh-llm-control-stalled-handshake-{}",
+        rand::random::<u64>()
+    ));
+    let (server, _secret_key, _config_path) =
+        start_owner_control_test_server(&owner_keypair, &tmp).await?;
+    let control_addr = Node::decode_invite_token(
+        &server
+            .control_endpoint()
+            .await
+            .expect("owner-control endpoint should be available"),
+    )?;
+    let client = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(SecretKey::generate())
+        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .relay_mode(iroh::endpoint::RelayMode::Disabled)
+        .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
+        .bind()
+        .await?;
+    let connection = client.connect(control_addr, ALPN_CONTROL_V1).await?;
+    let (mut send, mut recv) = connection.open_bi().await?;
+    send.write_all(&[0, 0]).await?;
+
+    let envelope = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        read_owner_control_envelope(&mut recv),
+    )
+    .await
+    .expect("server handshake deadline should expire")?;
+    let error = envelope
+        .error
+        .expect("stalled handshake should return a structured error");
+    assert_eq!(
+        crate::proto::node::OwnerControlErrorCode::try_from(error.code),
+        Ok(crate::proto::node::OwnerControlErrorCode::InvalidHandshake)
+    );
+    assert_eq!(error.message, "owner-control handshake timed out after 2s");
+
+    server.shutdown_control_listener().await;
+    std::fs::remove_dir_all(&tmp).ok();
+    Ok(())
+}
+
+#[tokio::test]
 async fn control_plane_endpoint_not_in_gossip_or_status() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
@@ -1231,5 +1277,46 @@ async fn failed_inventory_refresh_preserves_last_good_snapshot_and_advertisement
 
     server.shutdown_control_listener().await;
     std::fs::remove_dir_all(&tmp).ok();
+    Ok(())
+}
+
+#[tokio::test]
+async fn scan_timeout_releases_caller_while_reconciliation_finishes() -> Result<()> {
+    let server = Node::new_for_tests(super::NodeRole::Worker).await?;
+    server
+        .set_available_models(vec!["last-good-model".to_string()])
+        .await;
+    let next = crate::models::LocalModelInventorySnapshot {
+        model_names: std::collections::HashSet::from(["eventual-model".to_string()]),
+        ..Default::default()
+    };
+
+    let timed_out = tokio::time::timeout(
+        std::time::Duration::from_millis(20),
+        server.refresh_local_inventory_snapshot_with({
+            let next = next.clone();
+            move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                Ok(next)
+            }
+        }),
+    )
+    .await;
+    assert!(timed_out.is_err(), "slow scan should release its caller");
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if server.available_models().await == vec!["eventual-model".to_string()] {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("detached scan reconciliation should finish");
+    assert_eq!(
+        server.runtime_data_collector().local_inventory_snapshot(),
+        next
+    );
     Ok(())
 }

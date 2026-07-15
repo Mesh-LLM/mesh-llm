@@ -2,7 +2,7 @@ use super::*;
 
 mod commands;
 
-use commands::{OwnedNodeCommand, OwnedNodeCommandExecutionShape};
+use commands::{OwnedNodeCommand, OwnedNodeCommandDeadline, OwnedNodeCommandExecutionShape};
 
 const OWNER_CONTROL_SERVER_HANDSHAKE_TIMEOUT_SECS: u64 = 2;
 const OWNER_CONTROL_SERVER_REQUEST_TIMEOUT_SECS: u64 = 5;
@@ -78,6 +78,18 @@ fn bound_owner_control_envelope(
         request_id,
         None,
         "owner-control response exceeds the maximum frame size",
+    )
+}
+
+fn owner_control_command_timeout_envelope(
+    request_id: u64,
+    deadline: OwnedNodeCommandDeadline,
+) -> crate::proto::node::OwnerControlEnvelope {
+    owner_control_error_envelope(
+        crate::proto::node::OwnerControlErrorCode::ControlUnavailable,
+        Some(request_id),
+        None,
+        deadline.timeout_message(),
     )
 }
 
@@ -361,20 +373,25 @@ impl Node {
     where
         F: FnOnce() -> crate::runtime_data::InventoryScanResult + Send + 'static,
     {
-        let collector = self.runtime_data_collector();
-        let outcome = collector
-            .coalesce_local_inventory_scan_outcome(load)
-            .await
-            .map_err(|error| anyhow::anyhow!(error))?;
-        let mut models = outcome
-            .snapshot
-            .model_names
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        models.sort();
-        self.set_available_models(models).await;
-        Ok(outcome)
+        let node = self.clone();
+        tokio::spawn(async move {
+            let outcome = node
+                .runtime_data_collector()
+                .coalesce_local_inventory_scan_outcome(load)
+                .await
+                .map_err(|error| anyhow::anyhow!(error))?;
+            let mut models = outcome
+                .snapshot
+                .model_names
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            models.sort();
+            node.set_available_models(models).await;
+            Ok(outcome)
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("inventory reconciliation task failed: {error}"))?
     }
 
     pub(crate) fn owner_control_auth_error_envelope(
@@ -794,7 +811,8 @@ impl Node {
             return Ok(OwnedNodeCommandExecutionShape::Unary);
         };
         let execution_shape = command.execution_shape();
-        let _deadline = command.deadline();
+        let deadline = command.deadline();
+        let command_request_id = command.request_id();
         if let Some(result) = self
             .send_owner_control_request_id_error(
                 send,
@@ -811,31 +829,44 @@ impl Node {
             return Ok(execution_shape);
         }
 
-        match command {
-            OwnedNodeCommand::GetConfig {
-                request_id,
-                request,
-            } => {
-                self.handle_owner_control_get_config(send, request_id, request)
-                    .await?
+        let execution = async {
+            match command {
+                OwnedNodeCommand::GetConfig {
+                    request_id,
+                    request,
+                } => {
+                    self.handle_owner_control_get_config(send, request_id, request)
+                        .await?
+                }
+                OwnedNodeCommand::WatchConfig {
+                    request_id,
+                    request,
+                } => {
+                    self.handle_owner_control_watch_config(send, recv, remote, request_id, request)
+                        .await?
+                }
+                OwnedNodeCommand::ApplyConfig {
+                    request_id,
+                    request,
+                } => {
+                    self.handle_owner_control_apply_config(send, request_id, request)
+                        .await?
+                }
+                OwnedNodeCommand::ScanRefresh { request_id, .. } => {
+                    let envelope = commands::scan_refresh::execute(self, request_id).await;
+                    self.send_owner_control_envelope(send, envelope).await?;
+                }
             }
-            OwnedNodeCommand::WatchConfig {
-                request_id,
-                request,
-            } => {
-                self.handle_owner_control_watch_config(send, recv, remote, request_id, request)
-                    .await?
-            }
-            OwnedNodeCommand::ApplyConfig {
-                request_id,
-                request,
-            } => {
-                self.handle_owner_control_apply_config(send, request_id, request)
-                    .await?
-            }
-            OwnedNodeCommand::ScanRefresh { request_id, .. } => {
-                let envelope = commands::scan_refresh::execute(self, request_id).await;
-                self.send_owner_control_envelope(send, envelope).await?;
+            anyhow::Ok(())
+        };
+        match commands::await_command_deadline(deadline, execution).await {
+            Ok(result) => result?,
+            Err(expired) => {
+                self.send_owner_control_envelope(
+                    send,
+                    owner_control_command_timeout_envelope(command_request_id, expired),
+                )
+                .await?;
             }
         }
         Ok(execution_shape)

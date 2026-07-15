@@ -4,6 +4,7 @@ use crate::proto::node::{
     OwnerControlApplyConfigRequest, OwnerControlGetConfigRequest, OwnerControlRequest,
     OwnerControlWatchConfigRequest,
 };
+use std::future::Future;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,6 +18,40 @@ pub(crate) enum OwnedNodeCommandDeadline {
     Unary(Duration),
     Scan(Duration),
     Watch,
+}
+
+impl OwnedNodeCommandDeadline {
+    pub(crate) fn timeout_message(self) -> String {
+        match self {
+            Self::Unary(duration) => format!(
+                "owner-control unary command timed out after {}s",
+                duration.as_secs()
+            ),
+            Self::Scan(duration) => format!(
+                "owner-control inventory scan timed out after {}s",
+                duration.as_secs()
+            ),
+            Self::Watch => "owner-control watch commands do not have a unary deadline".to_string(),
+        }
+    }
+}
+
+pub(crate) async fn await_command_deadline<T, F>(
+    deadline: OwnedNodeCommandDeadline,
+    future: F,
+) -> Result<T, OwnedNodeCommandDeadline>
+where
+    F: Future<Output = T>,
+{
+    let duration = match deadline {
+        OwnedNodeCommandDeadline::Unary(duration) | OwnedNodeCommandDeadline::Scan(duration) => {
+            duration
+        }
+        OwnedNodeCommandDeadline::Watch => return Ok(future.await),
+    };
+    tokio::time::timeout(duration, future)
+        .await
+        .map_err(|_| deadline)
 }
 
 #[derive(Debug)]
@@ -143,6 +178,44 @@ mod tests {
             command.deadline(),
             OwnedNodeCommandDeadline::Scan(Duration::from_secs(30))
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn slow_scan_within_deadline_completes() {
+        let deadline = OwnedNodeCommandDeadline::Scan(Duration::from_secs(30));
+        let result = await_command_deadline(deadline, async {
+            tokio::time::sleep(Duration::from_secs(29)).await;
+            "complete"
+        })
+        .await;
+
+        assert_eq!(result, Ok("complete"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn scan_exceeding_deadline_is_cancelled_deterministically() {
+        let deadline = OwnedNodeCommandDeadline::Scan(Duration::from_secs(30));
+        let result = await_command_deadline(deadline, async {
+            tokio::time::sleep(Duration::from_secs(31)).await;
+        })
+        .await;
+
+        assert_eq!(result, Err(deadline));
+        assert_eq!(
+            deadline.timeout_message(),
+            "owner-control inventory scan timed out after 30s"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn accepted_watch_does_not_inherit_unary_deadline() {
+        let result = await_command_deadline(OwnedNodeCommandDeadline::Watch, async {
+            tokio::time::sleep(Duration::from_secs(31)).await;
+            "still-open"
+        })
+        .await;
+
+        assert_eq!(result, Ok("still-open"));
     }
 
     #[test]
