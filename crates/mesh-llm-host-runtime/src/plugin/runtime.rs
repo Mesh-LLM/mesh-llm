@@ -885,6 +885,7 @@ fn plugin_web_ui_asset_root(spec: &ExternalPluginSpec) -> Option<PathBuf> {
     spec.installed_metadata
         .as_ref()
         .and_then(mesh_llm_plugin_manager::InstalledPluginMetadata::web_ui_asset_root_path)
+        .filter(|path| path.is_dir())
 }
 
 #[cfg(test)]
@@ -892,7 +893,7 @@ mod tests {
     use super::*;
     use crate::runtime_data::{PluginDataKey, RuntimeDataCollector, RuntimeDataSource};
     use mesh_llm_plugin::MeshVisibility;
-    use mesh_llm_plugin_manager::{
+    use mesh_llm_plugin_manager::store::{
         InstalledPluginManifestMetadata, InstalledPluginMetadata,
         InstalledPluginWebUiBundleMetadata, InstalledPluginWebUiConfigSectionMetadata,
         InstalledPluginWebUiMetadata, InstalledPluginWebUiPageMetadata,
@@ -913,6 +914,9 @@ mod tests {
         validation_status: InstalledPluginWebUiValidationStatus,
         asset_root: Option<&str>,
     ) -> InstalledPluginMetadata {
+        if let Some(asset_root) = asset_root {
+            std::fs::create_dir_all(install_path.join(asset_root)).unwrap();
+        }
         InstalledPluginMetadata {
             name: "demo".into(),
             source_repository: "https://github.com/mesh-llm/demo".into(),
@@ -1045,9 +1049,22 @@ mod tests {
             .any(|(name, value)| name == OsStr::new(key) && value.is_none())
     }
 
+    #[cfg(unix)]
+    fn sleeping_test_command() -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 60"]);
+        command
+    }
+
+    #[cfg(windows)]
+    fn sleeping_test_command() -> Command {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "ping -n 61 127.0.0.1 >NUL"]);
+        command
+    }
+
     async fn mark_plugin_running(plugin: &ExternalPlugin, generation: u64) {
-        let child = Command::new("sleep")
-            .arg("60")
+        let child = sleeping_test_command()
             .kill_on_drop(true)
             .spawn()
             .expect("sleep process should start for runtime lifecycle test");

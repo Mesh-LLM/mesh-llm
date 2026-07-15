@@ -60,20 +60,32 @@ pub(super) async fn handle_enabled(
     if !current.declared {
         return respond_error(stream, 400, "Plugin does not declare a web UI").await;
     }
+    let web_ui = match plugin_manager
+        .set_web_ui_enabled(plugin_name, request.enabled)
+        .await
+    {
+        Ok(web_ui) => web_ui,
+        Err(error) => return respond_error(stream, 404, &error.to_string()).await,
+    };
     if let Err(error) = state
         .capture_node
         .set_plugin_web_ui_enabled(plugin_name, request.enabled)
         .await
     {
+        if let Err(rollback_error) = plugin_manager
+            .set_web_ui_enabled(plugin_name, current.enabled)
+            .await
+        {
+            return respond_error(
+                stream,
+                500,
+                &format!("{error}; failed to roll back runtime web UI state: {rollback_error}"),
+            )
+            .await;
+        }
         return respond_error(stream, 500, &error.to_string()).await;
     }
-    match plugin_manager
-        .set_web_ui_enabled(plugin_name, request.enabled)
-        .await
-    {
-        Ok(web_ui) => respond_json(stream, 200, &web_ui).await?,
-        Err(error) => respond_error(stream, 404, &error.to_string()).await?,
-    }
+    respond_json(stream, 200, &web_ui).await?;
     Ok(())
 }
 
@@ -131,11 +143,11 @@ async fn serve_ready_asset(
         respond_error(stream, 409, "plugin web UI asset root is unavailable").await?;
         return Ok(());
     };
-    let Some(full_path) = canonical_asset_path(&root, &rel) else {
+    let Some(full_path) = canonical_asset_path(&root, &rel).await else {
         respond_error(stream, 404, "Not found").await?;
         return Ok(());
     };
-    match std::fs::read(&full_path) {
+    match tokio::fs::read(&full_path).await {
         Ok(contents) => {
             respond_bytes_cached(
                 stream,
@@ -211,7 +223,7 @@ pub(super) async fn handle_config(
                     let response = PluginWebUiConfigResponse {
                         plugin: plugin_name.to_string(),
                         settings,
-                        schema: installed_config_schema_json(plugin_name),
+                        schema: installed_config_schema_json(plugin_name).await,
                     };
                     respond_json(stream, 200, &response).await
                 }
@@ -226,7 +238,7 @@ async fn config_response(state: &MeshApi, plugin_name: &str) -> PluginWebUiConfi
     PluginWebUiConfigResponse {
         plugin: plugin_name.to_string(),
         settings: state.capture_node.plugin_settings(plugin_name).await,
-        schema: installed_config_schema_json(plugin_name),
+        schema: installed_config_schema_json(plugin_name).await,
     }
 }
 
@@ -287,11 +299,17 @@ fn validate_setting_key(key: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn installed_config_schema_json(plugin_name: &str) -> Option<Value> {
-    let root = default_store_root().ok()?;
-    let metadata = PluginStore::new(root).load_optional(plugin_name).ok()??;
-    let schema = metadata.manifest?.config_schema?;
-    serde_json::to_value(schema).ok()
+async fn installed_config_schema_json(plugin_name: &str) -> Option<Value> {
+    let plugin_name = plugin_name.to_string();
+    tokio::task::spawn_blocking(move || {
+        let root = default_store_root().ok()?;
+        let metadata = PluginStore::new(root).load_optional(&plugin_name).ok()??;
+        let schema = metadata.manifest?.config_schema?;
+        serde_json::to_value(schema).ok()
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 fn clean_asset_path(path: &str) -> Option<String> {
@@ -318,10 +336,10 @@ fn clean_asset_path(path: &str) -> Option<String> {
     Some(rel.to_string())
 }
 
-fn canonical_asset_path(root: &Path, rel: &str) -> Option<std::path::PathBuf> {
-    let root = root.canonicalize().ok()?;
-    let full_path = root.join(rel).canonicalize().ok()?;
-    if !full_path.starts_with(&root) || !full_path.is_file() {
+async fn canonical_asset_path(root: &Path, rel: &str) -> Option<std::path::PathBuf> {
+    let root = tokio::fs::canonicalize(root).await.ok()?;
+    let full_path = tokio::fs::canonicalize(root.join(rel)).await.ok()?;
+    if !full_path.starts_with(&root) || !tokio::fs::metadata(&full_path).await.ok()?.is_file() {
         return None;
     }
     Some(full_path)

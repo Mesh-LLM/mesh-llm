@@ -279,7 +279,7 @@ mesh_bin := env("MESH_LLM_BIN", "target/release/mesh-llm")
 
 # Prints an invite token for other nodes to join.
 mesh-worker gguf=model:
-    {{ mesh_bin }} --model {{ gguf }}
+    "{{ mesh_bin }}" --model {{ gguf }}
 
 # Join an existing mesh and serve through the embedded runtime.
 mesh-join join="" port="9337" gguf=model split="":
@@ -292,7 +292,7 @@ mesh-join join="" port="9337" gguf=model split="":
     if [ -n "{{ split }}" ]; then
         ARGS="$ARGS --tensor-split {{ split }}"
     fi
-    exec {{ mesh_bin }} $ARGS
+    exec "{{ mesh_bin }}" $ARGS
 
 # Create a portable tarball with all binaries for deployment to another machine.
 bundle output="/tmp/mesh-llm-bundle.tar.gz":
@@ -301,7 +301,7 @@ bundle output="/tmp/mesh-llm-bundle.tar.gz":
     DIR=$(mktemp -d)
     BUNDLE="$DIR/mesh-bundle"
     mkdir -p "$BUNDLE"
-    cp {{ mesh_bin }} "$BUNDLE/"
+    cp "{{ mesh_bin }}" "$BUNDLE/"
     # Fix rpaths for portability
     for bin in "$BUNDLE/mesh-llm"; do
         [ -f "$bin" ] || continue
@@ -423,7 +423,10 @@ test-all:
     MESH_LLM_GPU_BENCH_RUST_ONLY=1 just with-lld cargo check -p mesh-llm-gpu-bench --features cuda,hip,intel
     echo ""
     echo "=== 3/10 Clippy ==="
-    mapfile -t clippy_crates < <(bash scripts/plan-clippy-batches.sh --all --bins 1 | jq -r '.[].crates[]')
+    clippy_crates=()
+    while IFS= read -r crate; do
+        clippy_crates+=("$crate")
+    done < <(bash scripts/plan-clippy-batches.sh --all --bins 1 | jq -r '.[].crates[]')
     for crate in "${clippy_crates[@]}"; do
         echo "--- $crate ---"
         just with-lld cargo clippy -p "$crate" --all-targets -- -D warnings
@@ -530,11 +533,11 @@ mesh-client join="" port="9337" console="3131" config="":
     if [[ -n "{{ config }}" ]]; then
         args+=(--config "{{ config }}")
     fi
-    {{ mesh_bin }} "${args[@]}"
+    "{{ mesh_bin }}" "${args[@]}"
 
 # Build and auto-join a mesh (discover via Nostr)
 auto: build
-    {{ mesh_bin }} --auto
+    "{{ mesh_bin }}" --auto
 
 # ── Utilities ──────────────────────────────────────────────────
 

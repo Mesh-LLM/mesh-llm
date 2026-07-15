@@ -39,8 +39,10 @@ export function TopNavPluginPages({ items = [], onNavigate }: TopNavPluginPagesP
           href={item.href}
           onClick={(event) => {
             if (!isPlainLeftClick(event)) return
-            event.preventDefault()
-            onNavigate?.(item)
+            if (onNavigate) {
+              event.preventDefault()
+              onNavigate(item)
+            }
           }}
         >
           <Plug className="size-[var(--nav-icon-size)] shrink-0" aria-hidden="true" />
@@ -80,8 +82,10 @@ export function TopNavPluginPages({ items = [], onNavigate }: TopNavPluginPagesP
             )}
             onClick={(event) => {
               if (!isPlainLeftClick(event)) return
-              event.preventDefault()
-              onNavigate?.(item)
+              if (onNavigate) {
+                event.preventDefault()
+                onNavigate(item)
+              }
             }}
           >
             <span className="font-medium">{item.label}</span>

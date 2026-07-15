@@ -64,6 +64,29 @@ fn web_ui_packaging_rejects_traversal_paths() {
 }
 
 #[test]
+fn web_ui_packaging_rejects_hidden_path_segments() {
+    let manifest = proto::PluginWebUiManifest {
+        pages: vec![proto::PluginWebUiPageManifest {
+            id: "home".into(),
+            label: "Home".into(),
+            route: "home".into(),
+            bundle_id: "main".into(),
+            entry_script: ".vite/app.js".into(),
+            ..Default::default()
+        }],
+        bundles: vec![proto::PluginWebUiBundleManifest {
+            id: "main".into(),
+            root_path: "dist".into(),
+        }],
+        ..Default::default()
+    };
+
+    let error = PackagedPluginWebUi::try_from(&manifest).expect_err("hidden path should fail");
+
+    assert!(error.to_string().contains("hidden path"), "{error}");
+}
+
+#[test]
 fn web_ui_packaging_rejects_multiple_bundle_roots() {
     let manifest = proto::PluginWebUiManifest {
         bundles: vec![

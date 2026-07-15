@@ -114,7 +114,7 @@ export function createMeshPluginUiHost({
     webUi,
     appearance: documentAppearance(),
     network: {
-      fetchPlugin: (path, init) => fetch(pluginScopedApiUrl(pluginName, path), init),
+      fetchPlugin: async (path, init) => fetch(pluginScopedApiUrl(pluginName, path), init),
       json: async (path, init) => {
         const response = await fetch(pluginScopedApiUrl(pluginName, path), init)
         if (!response.ok) {

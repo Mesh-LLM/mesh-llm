@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { StatusBanner } from '@/components/ui/StatusBanner'
 import {
   resolvePluginWebUiAssetUrl,
   usePluginWebUiConfigMutation,
@@ -166,32 +167,26 @@ export function PluginConfigSectionMount({ pluginName, section, webUi }: PluginC
       aria-labelledby={`${pluginName}-${section.id}-config-heading`}
       className="panel-shell rounded-[var(--radius-lg)] border border-border bg-panel"
     >
+      {mountStatus.kind === 'loading' ? <StatusBanner>Loading plugin config section...</StatusBanner> : null}
+      {mountStatus.kind === 'error' ? (
+        <StatusBanner role="alert" tone="bad">
+          {mountStatus.message}
+        </StatusBanner>
+      ) : null}
+      {mutationStatus.kind !== 'idle' ? (
+        <StatusBanner
+          role={mutationStatus.kind === 'error' ? 'alert' : 'status'}
+          tone={mutationStatus.kind === 'error' ? 'bad' : 'muted'}
+        >
+          {mutationStatus.kind === 'pending' ? 'Saving plugin settings...' : mutationStatus.message}
+        </StatusBanner>
+      ) : null}
       <header className="border-b border-border-soft px-4 py-3">
         <div className="type-label text-fg-faint">Plugin config section</div>
         <h4 className="type-panel-title mt-1 text-foreground" id={`${pluginName}-${section.id}-config-heading`}>
           {section.title}
         </h4>
       </header>
-      {mountStatus.kind === 'loading' ? (
-        <div className="type-caption border-b border-border-soft px-4 py-2 text-fg-faint">
-          Loading plugin config section...
-        </div>
-      ) : null}
-      {mountStatus.kind === 'error' ? (
-        <div className="type-caption border-b border-border-soft px-4 py-2 text-bad" role="alert">
-          {mountStatus.message}
-        </div>
-      ) : null}
-      {mutationStatus.kind !== 'idle' ? (
-        <div
-          className={`type-caption border-b border-border-soft px-4 py-2 ${
-            mutationStatus.kind === 'error' ? 'text-bad' : 'text-fg-dim'
-          }`}
-          role={mutationStatus.kind === 'error' ? 'alert' : 'status'}
-        >
-          {mutationStatus.kind === 'pending' ? 'Saving plugin settings...' : mutationStatus.message}
-        </div>
-      ) : null}
       <section ref={mountRef} className="min-h-[72px] p-4" aria-label={`${section.title} plugin config host`} />
       {mountStatus.kind === 'mounted' ? (
         <div className="sr-only" aria-live="polite">

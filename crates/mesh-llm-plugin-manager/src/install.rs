@@ -421,15 +421,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn install_plugin_schema_roundtrip() {
-        let temp = TempDir::new().unwrap();
-        let install_root = temp.path().join("installed");
-        let store_root = temp.path().join("store");
-        let archive_path = temp.path().join("demo.tar.gz");
-        let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
-        let packaged_manifest = serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
+    fn packaged_manifest_fixture() -> Vec<u8> {
+        serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
             config_schema: Some(InstalledPluginConfigSchema {
                 plugin_name: "demo".to_string(),
                 schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,
@@ -569,7 +562,35 @@ mod tests {
                 },
             }),
         })
-        .unwrap();
+        .unwrap()
+    }
+
+    fn assert_installed_web_ui(store: &PluginStore) {
+        let loaded = store.load("demo").unwrap();
+        let web_ui = loaded
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.web_ui.as_ref())
+            .expect("stored web UI metadata");
+        assert_eq!(web_ui.asset_root.as_deref(), Some(Path::new("web-ui")));
+        assert_eq!(
+            web_ui.validation.status,
+            InstalledPluginWebUiValidationStatus::Valid
+        );
+        assert_eq!(
+            loaded.web_ui_asset_root_path(),
+            Some(loaded.install_path.join("web-ui"))
+        );
+    }
+
+    #[test]
+    fn install_plugin_schema_roundtrip() {
+        let temp = TempDir::new().unwrap();
+        let install_root = temp.path().join("installed");
+        let store_root = temp.path().join("store");
+        let archive_path = temp.path().join("demo.tar.gz");
+        let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
+        let packaged_manifest = packaged_manifest_fixture();
         write_tar_gz(
             &archive_path,
             "demo",
@@ -653,21 +674,7 @@ mod tests {
                 .and_then(|behavior| behavior.text_format),
             Some(InstalledPluginTextFormat::Url)
         );
-        let loaded = store.load("demo").unwrap();
-        let web_ui = loaded
-            .manifest
-            .as_ref()
-            .and_then(|manifest| manifest.web_ui.as_ref())
-            .expect("stored web UI metadata");
-        assert_eq!(web_ui.asset_root.as_deref(), Some(Path::new("web-ui")));
-        assert_eq!(
-            web_ui.validation.status,
-            InstalledPluginWebUiValidationStatus::Valid
-        );
-        assert_eq!(
-            loaded.web_ui_asset_root_path(),
-            Some(loaded.install_path.join("web-ui"))
-        );
+        assert_installed_web_ui(&store);
     }
 
     #[test]

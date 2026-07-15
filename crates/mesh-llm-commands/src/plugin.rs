@@ -1,9 +1,10 @@
 use std::io::Write;
 
 use anyhow::{Result, bail};
+use mesh_llm_plugin_manager::install::install_plugin_archive;
 use mesh_llm_plugin_manager::{
     PluginCatalog, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter, PluginStore,
-    default_store_root, install_plugin, install_plugin_archive, update_plugin,
+    default_store_root, install_plugin, update_plugin,
 };
 use reqwest::Client;
 

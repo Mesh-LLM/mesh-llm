@@ -1,9 +1,13 @@
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-const EXEMPLAR_ROOT = resolve(process.cwd(), '../../docs/plugins/exemplars/web-ui')
+const EXEMPLAR_ROOT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../../../../docs/plugins/exemplars/web-ui'
+)
 
 describe('plugin web UI exemplar contract', () => {
   it('keeps the sample bundle tied to the typed host registration contract', () => {

@@ -13,7 +13,7 @@ pub use catalog::{CatalogEntry, PluginCatalog};
 pub use github::{GitHubRelease, GitHubReleaseAsset, GitHubReleaseClient};
 pub use install::{
     InstallOutcome, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter,
-    install_plugin, install_plugin_archive, update_plugin,
+    install_plugin, update_plugin,
 };
 pub use mesh_llm_skills::{
     SkillAgent, SkillInstallAction, SkillInstallReport, SkillInstallStatus, SkillPackage,
@@ -31,10 +31,6 @@ pub use store::{
     InstalledPluginObjectProperty, InstalledPluginOptionsSource,
     InstalledPluginPresentationMetadata, InstalledPluginRestartScope, InstalledPluginSettingSchema,
     InstalledPluginTextFormat, InstalledPluginValueKind, InstalledPluginValueSchema,
-    InstalledPluginVisibility, InstalledPluginWebUiBundleMetadata,
-    InstalledPluginWebUiConfigSectionMetadata, InstalledPluginWebUiMetadata,
-    InstalledPluginWebUiPageMetadata, InstalledPluginWebUiValidation,
-    InstalledPluginWebUiValidationStatus, PluginStore, SUPPORTED_PLUGIN_SCHEMA_VERSION,
-    default_store_root,
+    InstalledPluginVisibility, PluginStore, SUPPORTED_PLUGIN_SCHEMA_VERSION, default_store_root,
 };
 pub use target::{ArchiveExt, PluginTarget, UnsupportedTarget};

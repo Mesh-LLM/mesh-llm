@@ -175,6 +175,9 @@ fn validate_web_ui_entry_scripts(
     web_ui: &InstalledPluginWebUiMetadata,
     asset_root: &Path,
 ) -> std::result::Result<(), String> {
+    let canonical_root = asset_root
+        .canonicalize()
+        .map_err(|error| format!("resolve web UI bundle root: {error}"))?;
     for entry_script in web_ui
         .pages
         .iter()
@@ -187,7 +190,15 @@ fn validate_web_ui_entry_scripts(
         )
     {
         let path = asset_root.join(entry_script);
-        if !path.is_file() {
+        let canonical_path = path.canonicalize().map_err(|_| {
+            format!("web UI entry script '{entry_script}' is missing from the bundle root")
+        })?;
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(format!(
+                "web UI entry script '{entry_script}' escapes the bundle root"
+            ));
+        }
+        if !canonical_path.is_file() {
             return Err(format!(
                 "web UI entry script '{entry_script}' is missing from the bundle root"
             ));
@@ -860,6 +871,46 @@ mod tests {
         let extracted =
             extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
                 .expect("symlink escape should be recorded as web UI invalidity");
+        let web_ui = extracted
+            .manifest
+            .and_then(|manifest| manifest.web_ui)
+            .unwrap();
+
+        assert_eq!(
+            web_ui.validation.status,
+            InstalledPluginWebUiValidationStatus::Invalid
+        );
+        assert!(web_ui.validation.reason.unwrap().contains("escapes"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_escape_web_ui_entry_script_records_invalid_ui() {
+        let temp = TempDir::new().unwrap();
+        let install_dir = temp.path().join("installed");
+        let archive_path = temp.path().join("demo.tar.gz");
+        let outside_script = temp.path().join("outside.js");
+        fs::write(&outside_script, "export const outside = true;").unwrap();
+        let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
+        let manifest = web_ui_manifest("web-ui");
+
+        write_tar_gz_with_symlink(SymlinkArchive {
+            archive_path: &archive_path,
+            plugin_name: "demo",
+            link_path: "web-ui/assets/main.js",
+            link_target: &outside_script,
+            files: &[
+                ("plugin.toml", b"name = \"demo\""),
+                (executable_name.as_str(), b""),
+                (PACKAGED_MANIFEST_FILE, manifest.as_slice()),
+                ("web-ui/assets/settings.js", b"export {};"),
+            ],
+        })
+        .unwrap();
+
+        let extracted =
+            extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
+                .expect("entry-script symlink escape should mark only the web UI invalid");
         let web_ui = extracted
             .manifest
             .and_then(|manifest| manifest.web_ui)

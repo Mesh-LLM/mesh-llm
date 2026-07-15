@@ -148,7 +148,7 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
       pageId: item.pageId,
       label: item.label,
       href: hrefWithBasePath(`/plugins/${encodeURIComponent(item.pluginName)}/${encodeURIComponent(item.pageId)}`),
-      active: pathname === `/plugins/${encodeURIComponent(item.pluginName)}/${encodeURIComponent(item.pageId)}`
+      active: pathname === `/plugins/${item.pluginName}/${item.pageId}`
     }))
   }, [liveMode, pathname, pluginSummariesQuery.data])
 

@@ -101,28 +101,20 @@ export type MeshPluginUiConfigMountContext = {
   readonly section: PluginWebUiConfigSection
 }
 
+export type MeshPluginUiRegistration = {
+    readonly pages: Readonly<Record<string, (context: {
+      readonly element: HTMLElement
+      readonly host: MeshPluginUiHost
+      readonly page: PluginWebUiPage
+    }) => MeshPluginUiMountHandle | Promise<MeshPluginUiMountHandle>>>
+    readonly configSections?: Readonly<Record<string, (context: {
+      readonly element: HTMLElement
+      readonly host: MeshPluginUiHost
+      readonly section: PluginWebUiConfigSection
+    }) => MeshPluginUiMountHandle | Promise<MeshPluginUiMountHandle>>>
+}
+
 export type MeshPluginUiBundleModule = {
-  readonly registerMeshPluginUi: (host: MeshPluginUiHost) => {
-    readonly pages: Readonly<Record<string, (context: {
-      readonly element: HTMLElement
-      readonly host: MeshPluginUiHost
-      readonly page: PluginWebUiPage
-    }) => MeshPluginUiMountHandle | Promise<MeshPluginUiMountHandle>>>
-    readonly configSections?: Readonly<Record<string, (context: {
-      readonly element: HTMLElement
-      readonly host: MeshPluginUiHost
-      readonly section: PluginWebUiConfigSection
-    }) => MeshPluginUiMountHandle | Promise<MeshPluginUiMountHandle>>>
-  } | Promise<{
-    readonly pages: Readonly<Record<string, (context: {
-      readonly element: HTMLElement
-      readonly host: MeshPluginUiHost
-      readonly page: PluginWebUiPage
-    }) => MeshPluginUiMountHandle | Promise<MeshPluginUiMountHandle>>>
-    readonly configSections?: Readonly<Record<string, (context: {
-      readonly element: HTMLElement
-      readonly host: MeshPluginUiHost
-      readonly section: PluginWebUiConfigSection
-    }) => MeshPluginUiMountHandle | Promise<MeshPluginUiMountHandle>>>
-  }>
+  readonly registerMeshPluginUi: (host: MeshPluginUiHost) =>
+    MeshPluginUiRegistration | Promise<MeshPluginUiRegistration>
 }

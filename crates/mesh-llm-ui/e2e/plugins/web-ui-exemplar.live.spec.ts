@@ -1,11 +1,13 @@
 import { mkdir, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 
 const pluginName = 'web-ui-exemplar'
 const pluginApi = `/api/plugins/${pluginName}`
 const evidenceDirectory = resolve(
-  process.env.MESH_PLUGIN_EVIDENCE_DIR ?? '../../../target/plugin-web-ui-evidence/playwright'
+  process.env.MESH_PLUGIN_EVIDENCE_DIR ??
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../../../target/plugin-web-ui-evidence/playwright')
 )
 
 type BrowserDiagnostics = {

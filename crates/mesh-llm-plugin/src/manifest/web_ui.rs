@@ -377,6 +377,12 @@ fn validate_relative_path(field_name: &str, value: &str) -> Result<()> {
     {
         bail!("{field_name} must not contain traversal segments `{value}`");
     }
+    if path.components().any(|component| match component {
+        Component::Normal(name) => name.to_string_lossy().starts_with('.'),
+        _ => false,
+    }) {
+        bail!("{field_name} must not contain hidden path segments `{value}`");
+    }
     Ok(())
 }
 

@@ -170,6 +170,7 @@ pub(crate) fn is_console_index_route(path: &str) -> bool {
             | "/chat/"
             | "/configuration"
             | "/configuration/"
+            | "/plugins"
             | "/__playground"
             | "/__meshviz-perf"
     ) || path.starts_with("/chat/")
