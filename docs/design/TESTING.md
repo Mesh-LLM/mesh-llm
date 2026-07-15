@@ -756,10 +756,14 @@ cached and a worker does not:
 
 ### 13. Mixed-version owner-control coexistence
 
-Owner-control QA needs to prove two things at the same time:
+Owner-control QA needs to prove three things at the same time:
 
 1. Public-mesh join and routed inference still work across released/current binaries.
 2. Explicit endpoint bootstrap and `mesh-llm-control/1` work for current nodes while released peers continue to coexist on the public mesh plane for join, gossip, routing, and inference. Config and inventory mutation stay on owner-control only.
+3. A current same-owner requester can run the public `runtime scan-refresh`
+   command against exactly one current remote target and receive the sorted,
+   metadata-bearing result. Released targets are not expected to return the new
+   private response field.
 
 Use the dedicated harness for the full mixed-version pass:
 
@@ -791,15 +795,15 @@ scripts/qa-control-plane-mixed-version.sh \
   --config-only
 ```
 
-The harness writes a timestamped run directory containing logs, status payloads, owner-control bootstrap evidence, owner-control get-config evidence, and a markdown/json summary.
+The harness writes a timestamped run directory containing logs, status payloads, owner-control bootstrap evidence, owner-control get-config and scan-refresh evidence, and a markdown/json summary.
 It also writes `manifest.json`, `commands.jsonl`, `results.jsonl`, `versions/*.txt`, and grouped `status/`, `models/`, `chat/`, and `control/` payloads so a reviewer can audit which binaries, commands, and local endpoints produced the evidence.
 Use `--print-plan` when CI or review automation needs to validate the planned checks without starting mesh processes or writing evidence; planned check names match the `name` values emitted to `results.jsonl`.
 
 Expected checks:
 
 - Public mode: both binaries must bring up `/api/status`, list at least one model from `/v1/models`, and complete a routed chat request against the public mesh.
-- Loopback mode: the harness runs both mixed-version directions (`current -> released` and `released -> current`) on a private local mesh, waits for peers to appear on both nodes, then runs `mesh-llm runtime bootstrap --json` plus `mesh-llm runtime get-config --json` against the current-version node's explicit endpoint.
-- Config-only mode: the harness skips public probes, runs the same loopback coexistence checks, then executes the compatibility tests that prove new clients require explicit endpoints, use `mesh-llm-control/1`, and reject legacy frames on the owner-control ALPN.
+- Loopback mode: the harness runs both mixed-version directions (`current -> released` and `released -> current`) on a private local mesh, waits for peers to appear on both nodes, then runs `mesh-llm runtime bootstrap --json` plus `mesh-llm runtime get-config --json` against the current-version node's explicit endpoint. When two current same-owner nodes are available, it also records `runtime scan-refresh --json` against the explicitly bootstrapped remote target.
+- Config-only mode: the harness skips public probes, runs the same loopback coexistence checks, then executes the compatibility tests that prove new clients require explicit endpoints, use `mesh-llm-control/1`, reject legacy frames on the owner-control ALPN, and accept a legacy snapshot-only refresh response without claiming rich inventory support.
 - The current-version bootstrap payload must keep `requires_explicit_remote_endpoint=true` and expose an endpoint token when owner-control is enabled.
 - If the bootstrap payload reports `enabled=false`, the harness records a `PREREQ` result showing that a signed same-owner keystore is required before runtime owner-control requests can be proven on that machine.
 
@@ -808,11 +812,49 @@ Manual spot checks if the harness fails:
 ```bash
 mesh-llm runtime bootstrap --port 3131 --json
 mesh-llm runtime get-config --port 3131 --endpoint '<control-endpoint>' --json
+mesh-llm runtime scan-refresh --port 3131 --endpoint '<control-endpoint>' --json
 curl -s localhost:3131/api/runtime/control-bootstrap | jq .
 curl -s -X POST localhost:3131/api/runtime/control/get-config \
   -H 'Content-Type: application/json' \
   -d '{"endpoint":"<control-endpoint>"}' | jq .
+curl -s -X POST localhost:3131/api/runtime/control/scan-refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"endpoint":"<control-endpoint>"}' | jq .
 ```
+
+For a manual current/current scan-refresh check:
+
+1. Start two current nodes with owner-control enabled and signed by the same
+   owner. Obtain the target's endpoint from the target node's loopback
+   `runtime bootstrap --json` output and transfer it to the requester out of
+   band. Do not derive it from public status or a peer ID.
+2. From the requester, run `runtime scan-refresh --endpoint <token> --json`.
+   Assert `target_node_id` is the target, `disposition` is `executed` or
+   `coalesced`, inventory entries are strictly sorted by
+   `canonical_model_ref`, sizes are present, and any compact metadata remains
+   attached to the matching entry.
+3. Start two concurrent scans. Assert one may report `executed` and the joined
+   caller reports `coalesced`, both payloads contain the same entries, and the
+   target performs only one loader scan.
+4. Retry from a requester signed by a different owner and with a request bound
+   to the wrong target ID. Assert structured `unauthorized` and
+   `target_node_mismatch` failures respectively, with no inventory mutation.
+5. Exercise the hidden `runtime refresh-inventory` or
+   `POST /api/runtime/control/refresh-inventory` compatibility alias and assert
+   its snapshot-only response shape is unchanged. Separately decode a frozen
+   snapshot-only wire response with the new client and assert success with
+   `inventory = null` / no disposition.
+6. Force a scan loader error and assert all joined callers fail while the last
+   good runtime inventory and model advertisement remain unchanged.
+7. Inspect logs, `/api/status`, peer state, and public gossip evidence. Endpoint
+   tokens and raw inventory command results must not appear there; only the
+   existing successful available-model projection may change.
+
+Transport-focused evidence must also cover rejection of outbound and inbound
+frames over 8 MiB, 2-second open/handshake/write deadlines, 5-second unary and
+watch-accept deadlines, the 30-second scan deadline, non-zero request IDs after
+wraparound, and the 32-worker per-connection ceiling. An accepted watch must
+remain open rather than inherit a unary timeout.
 
 Failure interpretation:
 
@@ -828,6 +870,14 @@ Config-only result interpretation:
 - `config-missing-endpoint-required`: executable proof that config bootstrap without an explicit owner-control endpoint is rejected when cargo-backed protocol tests run.
 - `config-new-client-owner-control`: executable proof that new clients prefer `mesh-llm-control/1` when cargo-backed protocol tests run.
 - `config-control-rejects-legacy-frames`: executable proof that owner-control does not silently accept legacy frames on the wrong ALPN when cargo-backed protocol tests run.
+- `config-current-scan-refresh`: a same-owner current requester used an
+  explicit current target endpoint and received a sorted private inventory
+  response.
+- `config-current-scan-refresh-wrong-owner`: a requester with a different owner was
+  rejected without changing target inventory state.
+- `config-owner-control-client-hardening`: the new client accepted a frozen
+  snapshot-only response and passed its timeout, framing, and request lifecycle
+  tests; public released/current coexistence is recorded independently.
 - `PREREQ config-cargo-tests`: cargo-backed protocol tests were skipped or cargo was unavailable.
 - `PREREQ config-runtime-bootstrap`: runtime owner-control requests could not be proven because the local node did not expose a signed owner-control endpoint.
 

@@ -1,7 +1,8 @@
 # mesh-llm Message Protocol
 
-Use this reference for control-plane communication between mesh-llm nodes over
-the `meshllm.node.v1` protobuf schema on QUIC ALPN `mesh-llm/1`.
+Use this reference for public mesh communication over the `meshllm.node.v1`
+protobuf schema on QUIC ALPN `mesh-llm/1` and for the separate private
+owner-control lane on `mesh-llm-control/1`.
 
 ## ALPN
 
@@ -38,9 +39,125 @@ All protobuf control-plane streams use the same framing:
 [1 byte stream type][4 bytes LE length][N bytes protobuf body]
 ```
 
-Maximum frame size: 8 MiB (`MAX_CONTROL_FRAME_BYTES`). Frames exceeding this limit are rejected.
+Maximum frame size: 8 MiB (`MAX_CONTROL_FRAME_BYTES`). Frames exceeding this
+limit are rejected before allocation on read and before a prefix or body is
+written on send.
 
 Config and inventory mutation are exclusive to `mesh-llm-control/1`. The former mesh-plane config stream IDs `0x0b` and `0x0c` remain reserved for wire compatibility bookkeeping, but `mesh-llm/1` no longer dispatches protobuf request/response handlers for them. Skippy layer-package artifact transfer is not a mesh-owned schema. Gossip advertises `skippy-stage/2` feature support through `PeerAnnouncement.subprotocols`; mesh stream `0x0d` opens the advertised subprotocol, and the request/response schema plus artifact byte framing remain owned by `skippy-protocol`.
+
+## Private owner-control (`mesh-llm-control/1`)
+
+Owned-node commands use a separate QUIC ALPN and do not consume a public mesh
+stream type. Each bidirectional owner-control stream carries 4-byte
+little-endian length-prefixed `OwnerControlEnvelope` messages: a handshake,
+then exactly one typed request and its response. The same 8 MiB inbound and
+outbound limit applies.
+
+The client must receive an explicit owner-control endpoint token out of band.
+Control endpoints are never derived from peer IDs, gossip, Nostr, route tables,
+or `/api/status`. QUIC authenticates the explicitly pinned target endpoint;
+the handshake contains signed ownership bound to the requester's live QUIC
+endpoint identity. The server verifies same-owner authorization before decoding
+and dispatching a command, then verifies the common requester and target node
+IDs for every typed request.
+
+The request and response oneofs are the owned-node command registry. Current
+request tags are:
+
+| Tag | Protobuf operation | Execution shape |
+|---:|---|---|
+| 2 | `get_config` | unary |
+| 3 | `watch_config` | accepted stream |
+| 4 | `apply_config` | unary |
+| 5 | `refresh_inventory` | unary scan |
+
+`scan-refresh` is the operator-facing CLI/API name for the existing wire
+operation `refresh_inventory = 5`; tag 5 is not renamed or renumbered. The
+server converts the oneof into an exhaustive typed `OwnedNodeCommand` and uses
+one authenticated dispatcher for requester binding, target binding, request
+ID, execution shape, deadline policy, and bounded response handling. There are
+no opaque command names or JSON payloads on this ALPN.
+
+### Inventory refresh response compatibility
+
+`OwnerControlRefreshInventoryResponse.snapshot = 1` remains the legacy result.
+Current servers add `inventory = 2`, containing:
+
+```proto
+message OwnerControlRefreshInventory {
+  repeated OwnerControlInventoryEntry entries = 1;
+  OwnerControlRefreshInventoryDisposition disposition = 2;
+}
+
+message OwnerControlInventoryEntry {
+  string canonical_model_ref = 1;
+  optional string display_name = 2;
+  uint64 total_size_bytes = 3;
+  CompactModelMetadata metadata = 4;
+}
+```
+
+Entries are strictly sorted by `canonical_model_ref`. Metadata is optional and
+retains the compact GGUF-derived fields needed by future private management
+clients. `EXECUTED` means the caller led the scan; `COALESCED` means it joined
+an in-flight scan. All successful joiners receive the same inventory snapshot.
+The successful scan snapshot is also the sole source used to update the node's
+available-model projection; there is no second disk scan.
+
+Old clients ignore tag 2 and continue reading tag 1. New clients accept an old
+server's snapshot-only response as a successful, compatibility-limited result
+without inventing inventory or disposition data. Released peers are not
+assumed to understand the new response field. A failed scan reports one
+structured error to all waiters and preserves the last good runtime snapshot
+and advertised availability.
+
+Rich inventory entries are private command output. They are not persisted as a
+raw response in `PeerInfo`, public gossip, runtime status, or `/api/status`, and
+endpoint tokens are not advertised. Existing public model-availability fields
+remain a separate projection of a successful local scan.
+
+### Bounds and deadlines
+
+- Client connect: 8 seconds; stream open: 2 seconds; handshake write: 2
+  seconds; request write: 2 seconds.
+- Get/apply unary response: 5 seconds; inventory response: 30 seconds; watch
+  acceptance: 5 seconds. An accepted watch has no unary response deadline.
+- Server handshake read: 2 seconds; request read: 5 seconds.
+- At most 32 owner-control stream workers are active per connection. The
+  permit is acquired before spawning request work.
+- Request IDs never use zero, including after `u64` wraparound.
+- A response that would exceed 8 MiB is replaced with the existing
+  `CONTROL_UNAVAILABLE` error before transport write.
+
+### Adding future owned-node commands
+
+Start/stop inference, model load/unload, configuration additions beyond the
+current typed get/watch/apply operations, and long-running operation queries
+are design targets only. Those future operations are **not shipped** by the
+owner-control command surface described here.
+
+Every future command addition must include all of the following:
+
+1. Additive typed protobuf request and response oneof variants with new tags;
+   never repurpose an existing field or add an opaque command/payload registry.
+2. A new exhaustive typed decoder/dispatcher arm and a small command executor
+   under `mesh/owner_control/commands/`.
+3. Shared requester identity, single target identity, non-zero request ID,
+   same-owner authorization, execution shape, deadline, frame-limit, and
+   structured-error policy.
+4. Defined idempotency behavior. Long-running or mutating operations must also
+   define progress, cancellation, disconnect, timeout, and process-restart
+   semantics before implementation.
+5. Explicit old-peer behavior, normally a structured unsupported-command
+   result; never a silent public-mesh fallback or compatibility claim for an
+   older binary.
+6. Typed client support plus loopback-only REST and CLI facades, including any
+   required compatibility alias.
+7. A privacy review covering logs, public gossip, runtime status, endpoint
+   tokens, command inputs, and command results.
+8. Unit/compatibility tests and two-node evidence for success, wrong-owner and
+   wrong-target rejection, bounds/deadlines, failure preservation, and public
+   mixed-version join/routing coexistence.
 
 ## Protocol Generation
 

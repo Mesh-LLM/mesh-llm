@@ -850,12 +850,30 @@ Mesh-wide rebalancing and distributed load/unload come later.
 
 ## Owner-control plane
 
-Owner-control is the operator lane for config and inventory actions. It does **not** replace the public mesh plane used for join, gossip, routing, or inference. Config and inventory mutation are exclusive to `mesh-llm-control/1`; the old mesh-plane config stream IDs are reserved but no longer carry protobuf request/response handling.
+Owner-control is the private operator lane for commands directed at exactly one
+owner-attested node. It does **not** replace the public mesh plane used for
+join, gossip, routing, or inference. Config and inventory mutation are
+exclusive to `mesh-llm-control/1`; the old mesh-plane config stream IDs are
+reserved but no longer carry protobuf request/response handling.
+
+`scan-refresh` is the first public owned-node command. It asks the explicitly
+targeted remote node to rescan its managed model inventory, republishes the
+model names from that exact scan, and returns the refreshed inventory to the
+requester. The compatible protobuf operation remains named
+`refresh_inventory` on the wire.
 
 ### Bootstrap contract
 
-- New control clients need an explicit owner-control endpoint token.
-- Read the local bootstrap policy from `GET /api/runtime/control-bootstrap` or `mesh-llm runtime bootstrap --json`.
+- New control clients need an explicit owner-control endpoint token. The token
+  identifies and cryptographically pins one target; it is not inferred from a
+  peer ID, public gossip, Nostr, routing state, or `/api/status`.
+- Read a target node's local bootstrap policy from
+  `GET /api/runtime/control-bootstrap` or
+  `mesh-llm runtime bootstrap --json` on that node, then transfer the endpoint
+  token to the controlling node out of band.
+- The controlling node must have a valid owner key for the same owner. The
+  target verifies requester ownership against the actual QUIC connection
+  identity before dispatching a command.
 - If no explicit endpoint is supplied, the current client contract returns `ControlEndpointRequired`.
 - If an explicit endpoint is configured and fails, the client stays on owner-control and reports a structured failure. It does **not** silently fall back to mesh-plane config streams.
 
@@ -883,7 +901,8 @@ Run owner-control requests through the local management API using an explicit en
 
 ```bash
 mesh-llm runtime get-config --port 3131 --endpoint '<control-endpoint>' --json
-mesh-llm runtime refresh-inventory --port 3131 --endpoint '<control-endpoint>' --json
+mesh-llm runtime scan-refresh --port 3131 --endpoint '<control-endpoint>'
+mesh-llm runtime scan-refresh --port 3131 --endpoint '<control-endpoint>' --json
 mesh-llm runtime apply-config \
   --port 3131 \
   --endpoint '<control-endpoint>' \
@@ -899,6 +918,11 @@ curl -s -X POST localhost:3131/api/runtime/control/get-config \
   -H 'Content-Type: application/json' \
   -d '{"endpoint":"<control-endpoint>"}' | jq .
 
+curl -s -X POST localhost:3131/api/runtime/control/scan-refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"endpoint":"<control-endpoint>"}' | jq .
+
+# Compatibility alias: retains the legacy snapshot-only response shape.
 curl -s -X POST localhost:3131/api/runtime/control/refresh-inventory \
   -H 'Content-Type: application/json' \
   -d '{"endpoint":"<control-endpoint>"}' | jq .
@@ -911,6 +935,53 @@ curl -s -X POST localhost:3131/api/runtime/control/apply-config \
     "config":{"version":1}
   }' | jq .
 ```
+
+The local REST facade is loopback-only. The public CLI spelling is
+`runtime scan-refresh`; the old `runtime refresh-inventory` spelling remains a
+hidden compatibility alias and continues to return the legacy config snapshot.
+Neither facade discovers a target implicitly: both require `--endpoint` (or
+the REST `endpoint` field).
+
+### Scan-refresh result
+
+The JSON response contains `target_node_id`, `disposition`, and `inventory`.
+Inventory entries are sorted by `canonical_model_ref` and contain an optional
+`display_name`, `total_size_bytes`, and optional compact model metadata. The
+metadata includes the canonical model key plus GGUF-derived architecture,
+quantization, tokenizer, dimensions, RoPE, special-token, and MoE fields when
+known. `--json` prints this response unchanged; human output summarizes the
+disposition, target, model count, total bytes, and sorted model references.
+
+`disposition` is `executed` when this request performed the scan and
+`coalesced` when it joined an already-running scan. Joined callers receive the
+same successful inventory payload. A new client talking to an older
+owner-control server may receive only the legacy wire snapshot; the command
+still succeeds, but the REST fields `disposition` and `inventory` are `null`
+and human output labels the result `compatibility-limited`. This does not mean
+released nodes support the richer response fields.
+
+Scan failures are returned to all joined callers and preserve the last good
+inventory and model advertisements. Rich inventory results stay on the private
+owner-control response path: they are not copied wholesale into peer state,
+public gossip, runtime status, or `/api/status`. Endpoint tokens and raw command
+results must not be logged or advertised. The node continues to publish only
+its existing availability projection from a successful scan.
+
+### Owner-control limits
+
+- Inbound and outbound protobuf frames are limited to 8 MiB. An oversized
+  generated response becomes `ControlUnavailable` before any oversized body is
+  written.
+- Client connect, stream-open, handshake, and request-write waits are bounded
+  at 8 seconds, 2 seconds, 2 seconds, and 2 seconds respectively.
+- Get/apply unary responses have a 5-second bound; inventory scans have a
+  30-second bound. Watch acceptance has a 5-second bound, after which an
+  accepted watch remains streaming without a unary deadline.
+- The server bounds handshake and request reads at 2 and 5 seconds and admits
+  at most 32 concurrent owner-control stream workers per connection.
+- Request IDs are non-zero. Authentication, requester binding, target binding,
+  request validation, deadline selection, and response-size enforcement occur
+  in the common dispatcher path.
 
 ### Failure modes
 
