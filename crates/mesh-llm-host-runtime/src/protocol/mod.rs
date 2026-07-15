@@ -58,7 +58,6 @@ pub(crate) enum ControlProtocol {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ControlFrameError {
-    #[cfg(test)]
     OversizeFrame {
         size: usize,
     },
@@ -94,6 +93,11 @@ pub(crate) enum ControlFrameError {
     InvalidOwnerControlErrorCode {
         got: i32,
     },
+    InvalidInventoryDisposition {
+        got: i32,
+    },
+    MissingInventoryModelRef,
+    InvalidInventoryOrder,
     #[cfg(test)]
     DecodeError(String),
     #[cfg(test)]
@@ -107,7 +111,6 @@ pub(crate) enum ControlFrameError {
 impl std::fmt::Display for ControlFrameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(test)]
             ControlFrameError::OversizeFrame { size } => write!(
                 f,
                 "control frame too large: {} bytes (max {})",
@@ -173,6 +176,16 @@ impl std::fmt::Display for ControlFrameError {
             ControlFrameError::InvalidOwnerControlErrorCode { got } => {
                 write!(f, "invalid owner control error code: {got}")
             }
+            ControlFrameError::InvalidInventoryDisposition { got } => {
+                write!(f, "invalid inventory scan disposition: {got}")
+            }
+            ControlFrameError::MissingInventoryModelRef => {
+                write!(f, "inventory entry requires a canonical model ref")
+            }
+            ControlFrameError::InvalidInventoryOrder => write!(
+                f,
+                "inventory entries must be strictly sorted by canonical model ref"
+            ),
             #[cfg(test)]
             ControlFrameError::DecodeError(msg) => write!(f, "protobuf decode error: {}", msg),
             #[cfg(test)]
@@ -515,7 +528,39 @@ impl ValidateControlFrame for crate::proto::node::OwnerControlRefreshInventoryRe
         self.snapshot
             .as_ref()
             .ok_or(ControlFrameError::MissingConfig)?
-            .validate_frame()
+            .validate_frame()?;
+        if let Some(inventory) = &self.inventory {
+            inventory.validate_frame()?;
+        }
+        Ok(())
+    }
+}
+
+impl ValidateControlFrame for crate::proto::node::OwnerControlRefreshInventory {
+    fn validate_frame(&self) -> Result<(), ControlFrameError> {
+        use crate::proto::node::OwnerControlRefreshInventoryDisposition;
+
+        if !matches!(
+            OwnerControlRefreshInventoryDisposition::try_from(self.disposition),
+            Ok(OwnerControlRefreshInventoryDisposition::Executed)
+                | Ok(OwnerControlRefreshInventoryDisposition::Coalesced)
+        ) {
+            return Err(ControlFrameError::InvalidInventoryDisposition {
+                got: self.disposition,
+            });
+        }
+        let mut previous = None;
+        for entry in &self.entries {
+            let canonical = entry.canonical_model_ref.trim();
+            if canonical.is_empty() {
+                return Err(ControlFrameError::MissingInventoryModelRef);
+            }
+            if previous.is_some_and(|value| value >= canonical) {
+                return Err(ControlFrameError::InvalidInventoryOrder);
+            }
+            previous = Some(canonical);
+        }
+        Ok(())
     }
 }
 
@@ -611,8 +656,16 @@ pub(crate) async fn write_len_prefixed(
     send: &mut iroh::endpoint::SendStream,
     body: &[u8],
 ) -> Result<()> {
+    ensure_control_frame_size(body)?;
     send.write_all(&(body.len() as u32).to_le_bytes()).await?;
     send.write_all(body).await?;
+    Ok(())
+}
+
+pub(crate) fn ensure_control_frame_size(body: &[u8]) -> Result<(), ControlFrameError> {
+    if body.len() > MAX_CONTROL_FRAME_BYTES {
+        return Err(ControlFrameError::OversizeFrame { size: body.len() });
+    }
     Ok(())
 }
 

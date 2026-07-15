@@ -562,6 +562,25 @@ message OwnerControlRefreshInventoryRequest {
 
 message OwnerControlRefreshInventoryResponse {
   OwnerControlConfigSnapshot snapshot = 1;
+  OwnerControlRefreshInventory inventory = 2;
+}
+
+message OwnerControlRefreshInventory {
+  repeated OwnerControlInventoryEntry entries = 1;
+  OwnerControlRefreshInventoryDisposition disposition = 2;
+}
+
+message OwnerControlInventoryEntry {
+  string canonical_model_ref = 1;
+  optional string display_name = 2;
+  uint64 total_size_bytes = 3;
+  CompactModelMetadata metadata = 4;
+}
+
+enum OwnerControlRefreshInventoryDisposition {
+  OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_UNSPECIFIED = 0;
+  OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_EXECUTED = 1;
+  OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_COALESCED = 2;
 }
 
 message OwnerControlConfigSnapshot {

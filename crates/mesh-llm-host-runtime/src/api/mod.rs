@@ -701,6 +701,7 @@ impl MeshApi {
                 crate::models::scan_local_inventory_snapshot_with_progress(|_| {})
             })
             .await
+            .unwrap_or_else(|_| runtime_data_collector.local_inventory_snapshot())
     }
 
     async fn mesh_models(&self) -> Vec<MeshModelPayload> {

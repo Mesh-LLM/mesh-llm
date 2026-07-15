@@ -24,6 +24,12 @@ const DEFAULT_NODE_CERT_LIFETIME_SECS: u64 = 7 * 24 * 60 * 60;
 const NODE_OWNERSHIP_VERSION: u32 = 1;
 const SIGNING_DOMAIN_TAG: &[u8] = b"mesh-llm-node-ownership-v1:";
 const OWNER_CONTROL_CONNECT_TIMEOUT_SECS: u64 = 8;
+const OWNER_CONTROL_OPEN_TIMEOUT_SECS: u64 = 2;
+const OWNER_CONTROL_HANDSHAKE_TIMEOUT_SECS: u64 = 2;
+const OWNER_CONTROL_REQUEST_WRITE_TIMEOUT_SECS: u64 = 2;
+const OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS: u64 = 5;
+const OWNER_CONTROL_INVENTORY_RESPONSE_TIMEOUT_SECS: u64 = 30;
+const OWNER_CONTROL_WATCH_ACCEPT_TIMEOUT_SECS: u64 = 5;
 
 fn owner_control_client_bind_addr() -> std::net::SocketAddr {
     std::net::SocketAddr::from(([0, 0, 0, 0], 0))
@@ -190,6 +196,7 @@ pub struct OwnerControlWatchStream {
     send: iroh::endpoint::SendStream,
     recv: iroh::endpoint::RecvStream,
     request_id: u64,
+    pending: Option<OwnerControlWatchEvent>,
     closed: bool,
 }
 
@@ -301,8 +308,9 @@ impl OwnerControlClient {
 
     pub async fn get_config(&self) -> Result<OwnerControlConfigSnapshot, ControlPlaneClientError> {
         let response = self
-            .send_unary_request(|request_id, requester_node_id, target_node_id| {
-                OwnerControlRequest {
+            .send_unary_request(
+                std::time::Duration::from_secs(OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS),
+                |request_id, requester_node_id, target_node_id| OwnerControlRequest {
                     request_id,
                     get_config: Some(OwnerControlGetConfigRequest {
                         requester_node_id,
@@ -311,8 +319,8 @@ impl OwnerControlClient {
                     watch_config: None,
                     apply_config: None,
                     refresh_inventory: None,
-                }
-            })
+                },
+            )
             .await?;
         response
             .get_config
@@ -330,8 +338,9 @@ impl OwnerControlClient {
         config: NodeConfigSnapshot,
     ) -> Result<OwnerControlApplyConfigResponse, ControlPlaneClientError> {
         let response = self
-            .send_unary_request(|request_id, requester_node_id, target_node_id| {
-                OwnerControlRequest {
+            .send_unary_request(
+                std::time::Duration::from_secs(OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS),
+                |request_id, requester_node_id, target_node_id| OwnerControlRequest {
                     request_id,
                     get_config: None,
                     watch_config: None,
@@ -342,8 +351,8 @@ impl OwnerControlClient {
                         config: Some(config),
                     }),
                     refresh_inventory: None,
-                }
-            })
+                },
+            )
             .await?;
         response.apply_config.ok_or_else(|| {
             ControlPlaneClientError::Protocol(
@@ -356,8 +365,9 @@ impl OwnerControlClient {
         &self,
     ) -> Result<OwnerControlConfigSnapshot, ControlPlaneClientError> {
         let response = self
-            .send_unary_request(|request_id, requester_node_id, target_node_id| {
-                OwnerControlRequest {
+            .send_unary_request(
+                std::time::Duration::from_secs(OWNER_CONTROL_INVENTORY_RESPONSE_TIMEOUT_SECS),
+                |request_id, requester_node_id, target_node_id| OwnerControlRequest {
                     request_id,
                     get_config: None,
                     watch_config: None,
@@ -366,8 +376,8 @@ impl OwnerControlClient {
                         requester_node_id,
                         target_node_id,
                     }),
-                }
-            })
+                },
+            )
             .await?;
         response
             .refresh_inventory
@@ -383,7 +393,7 @@ impl OwnerControlClient {
         &self,
         include_snapshot: bool,
     ) -> Result<OwnerControlWatchStream, ControlPlaneClientError> {
-        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let request_id = self.next_request_id();
         let (mut send, recv) = self.open_authenticated_stream().await?;
         let envelope = OwnerControlEnvelope {
             r#gen: NODE_PROTOCOL_GENERATION,
@@ -402,25 +412,37 @@ impl OwnerControlClient {
             response: None,
             error: None,
         };
-        write_len_prefixed(&mut send, &envelope.encode_to_vec())
-            .await
-            .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))?;
-        Ok(OwnerControlWatchStream {
+        write_owner_control_request(&mut send, &envelope).await?;
+        let mut stream = OwnerControlWatchStream {
             send,
             recv,
             request_id,
+            pending: None,
             closed: false,
-        })
+        };
+        let accepted = tokio::time::timeout(
+            std::time::Duration::from_secs(OWNER_CONTROL_WATCH_ACCEPT_TIMEOUT_SECS),
+            stream.next(),
+        )
+        .await
+        .map_err(|_| {
+            ControlPlaneClientError::Transport(format!(
+                "owner-control watch accept timed out after {OWNER_CONTROL_WATCH_ACCEPT_TIMEOUT_SECS}s"
+            ))
+        })??;
+        stream.pending = Some(accepted);
+        Ok(stream)
     }
 
     async fn send_unary_request<F>(
         &self,
+        response_timeout: std::time::Duration,
         build_request: F,
     ) -> Result<OwnerControlResponse, ControlPlaneClientError>
     where
         F: FnOnce(u64, Vec<u8>, Vec<u8>) -> OwnerControlRequest,
     {
-        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let request_id = self.next_request_id();
         let (mut send, mut recv) = self.open_authenticated_stream().await?;
         let envelope = OwnerControlEnvelope {
             r#gen: NODE_PROTOCOL_GENERATION,
@@ -433,23 +455,39 @@ impl OwnerControlClient {
             response: None,
             error: None,
         };
-        write_len_prefixed(&mut send, &envelope.encode_to_vec())
-            .await
-            .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))?;
-        let envelope = read_owner_control_message(&mut recv).await?;
+        write_owner_control_request(&mut send, &envelope).await?;
+        let envelope =
+            tokio::time::timeout(response_timeout, read_owner_control_message(&mut recv))
+                .await
+                .map_err(|_| {
+                    ControlPlaneClientError::Transport(format!(
+                        "owner-control unary response timed out after {}s",
+                        response_timeout.as_secs()
+                    ))
+                })??;
         let _ = send.finish();
         decode_response_envelope(request_id, envelope)
+    }
+
+    fn next_request_id(&self) -> u64 {
+        next_nonzero_request_id(&self.next_request_id)
     }
 
     async fn open_authenticated_stream(
         &self,
     ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream), ControlPlaneClientError>
     {
-        let (mut send, recv) = self
-            .connection
-            .open_bi()
-            .await
-            .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))?;
+        let (mut send, recv) = tokio::time::timeout(
+            std::time::Duration::from_secs(OWNER_CONTROL_OPEN_TIMEOUT_SECS),
+            self.connection.open_bi(),
+        )
+        .await
+        .map_err(|_| {
+            ControlPlaneClientError::Transport(format!(
+                "owner-control stream open timed out after {OWNER_CONTROL_OPEN_TIMEOUT_SECS}s"
+            ))
+        })?
+        .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))?;
         let handshake = OwnerControlEnvelope {
             r#gen: NODE_PROTOCOL_GENERATION,
             handshake: Some(OwnerControlHandshake {
@@ -462,11 +500,36 @@ impl OwnerControlClient {
             response: None,
             error: None,
         };
-        write_len_prefixed(&mut send, &handshake.encode_to_vec())
-            .await
-            .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(OWNER_CONTROL_HANDSHAKE_TIMEOUT_SECS),
+            write_len_prefixed(&mut send, &handshake.encode_to_vec()),
+        )
+        .await
+        .map_err(|_| {
+            ControlPlaneClientError::Transport(format!(
+                "owner-control handshake timed out after {OWNER_CONTROL_HANDSHAKE_TIMEOUT_SECS}s"
+            ))
+        })?
+        .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))?;
         Ok((send, recv))
     }
+}
+
+async fn write_owner_control_request(
+    send: &mut iroh::endpoint::SendStream,
+    envelope: &OwnerControlEnvelope,
+) -> Result<(), ControlPlaneClientError> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(OWNER_CONTROL_REQUEST_WRITE_TIMEOUT_SECS),
+        write_len_prefixed(send, &envelope.encode_to_vec()),
+    )
+    .await
+    .map_err(|_| {
+        ControlPlaneClientError::Transport(format!(
+            "owner-control request write timed out after {OWNER_CONTROL_REQUEST_WRITE_TIMEOUT_SECS}s"
+        ))
+    })?
+    .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))
 }
 
 impl OwnerControlWatchStream {
@@ -475,6 +538,9 @@ impl OwnerControlWatchStream {
     }
 
     pub async fn next(&mut self) -> Result<OwnerControlWatchEvent, ControlPlaneClientError> {
+        if let Some(event) = self.pending.take() {
+            return Ok(event);
+        }
         let envelope = read_owner_control_message(&mut self.recv).await?;
         let response = decode_response_envelope(self.request_id, envelope)?;
         let watch = response.watch_config.ok_or_else(|| {
@@ -498,6 +564,15 @@ impl OwnerControlWatchStream {
 
     pub async fn cancel(&mut self) -> Result<(), ControlPlaneClientError> {
         self.close().await
+    }
+}
+
+fn next_nonzero_request_id(counter: &AtomicU64) -> u64 {
+    loop {
+        let request_id = counter.fetch_add(1, Ordering::Relaxed);
+        if request_id != 0 {
+            return request_id;
+        }
     }
 }
 
@@ -565,19 +640,96 @@ async fn configured_endpoint_connect_error(
     error: iroh::endpoint::ConnectError,
 ) -> ControlPlaneClientError {
     let message = error.to_string();
-    let legacy_mesh_reachable = legacy_mesh_probe(endpoint, control_addr).await;
-    let (code, rendered) = if legacy_mesh_reachable || is_alpn_mismatch_message(&message) {
-        (
-            OwnerControlErrorCode::ControlUnsupported,
-            format!("remote endpoint did not negotiate mesh-llm-control/1: {message}"),
-        )
+    let disposition = connect_error_probe_disposition(&error);
+    let legacy_mesh_reachable = match disposition {
+        ConnectProbeDisposition::ProbeLegacyMesh => legacy_mesh_probe(endpoint, control_addr).await,
+        ConnectProbeDisposition::SkipUnavailable => false,
+        ConnectProbeDisposition::Unsupported => true,
+    };
+    let (code, rendered) = if legacy_mesh_reachable {
+        control_unsupported_message(&message)
     } else {
-        (
-            OwnerControlErrorCode::ControlUnavailable,
-            format!("remote owner-control endpoint is unavailable or unreachable: {message}"),
-        )
+        control_unavailable_message(&message)
     };
     ControlPlaneClientError::Negotiation(options.configured_endpoint_failure(code, rendered))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConnectProbeDisposition {
+    SkipUnavailable,
+    ProbeLegacyMesh,
+    Unsupported,
+}
+
+fn connect_error_probe_disposition(
+    error: &iroh::endpoint::ConnectError,
+) -> ConnectProbeDisposition {
+    match error {
+        iroh::endpoint::ConnectError::Connect { source, .. } => match source {
+            iroh::endpoint::ConnectWithOptsError::SelfConnect { .. }
+            | iroh::endpoint::ConnectWithOptsError::NoAddress { .. }
+            | iroh::endpoint::ConnectWithOptsError::Noq { .. }
+            | iroh::endpoint::ConnectWithOptsError::InternalConsistencyError { .. }
+            | iroh::endpoint::ConnectWithOptsError::LocallyRejected { .. }
+            | iroh::endpoint::ConnectWithOptsError::EndpointClosed { .. } => {
+                ConnectProbeDisposition::SkipUnavailable
+            }
+            _ => fallback_probe_disposition(&source.to_string()),
+        },
+        iroh::endpoint::ConnectError::Connecting { source, .. } => match source {
+            iroh::endpoint::ConnectingError::ConnectionError { source, .. } => {
+                connection_error_probe_disposition(&source.to_string())
+            }
+            iroh::endpoint::ConnectingError::HandshakeFailure { source, .. } => match source {
+                iroh::endpoint::AuthenticationError::NoAlpn { .. } => {
+                    ConnectProbeDisposition::Unsupported
+                }
+                iroh::endpoint::AuthenticationError::RemoteId { .. } => {
+                    ConnectProbeDisposition::SkipUnavailable
+                }
+                _ => fallback_probe_disposition(&source.to_string()),
+            },
+            iroh::endpoint::ConnectingError::InternalConsistencyError { .. }
+            | iroh::endpoint::ConnectingError::LocallyRejected { .. } => {
+                ConnectProbeDisposition::SkipUnavailable
+            }
+            _ => fallback_probe_disposition(&source.to_string()),
+        },
+        iroh::endpoint::ConnectError::Connection { source, .. } => {
+            connection_error_probe_disposition(&source.to_string())
+        }
+        _ => fallback_probe_disposition(&error.to_string()),
+    }
+}
+
+fn connection_error_probe_disposition(message: &str) -> ConnectProbeDisposition {
+    if is_alpn_mismatch_message(message) {
+        ConnectProbeDisposition::Unsupported
+    } else {
+        ConnectProbeDisposition::SkipUnavailable
+    }
+}
+
+fn fallback_probe_disposition(message: &str) -> ConnectProbeDisposition {
+    if is_alpn_mismatch_message(message) {
+        ConnectProbeDisposition::ProbeLegacyMesh
+    } else {
+        ConnectProbeDisposition::SkipUnavailable
+    }
+}
+
+fn control_unsupported_message(message: &str) -> (OwnerControlErrorCode, String) {
+    (
+        OwnerControlErrorCode::ControlUnsupported,
+        format!("remote endpoint did not negotiate mesh-llm-control/1: {message}"),
+    )
+}
+
+fn control_unavailable_message(message: &str) -> (OwnerControlErrorCode, String) {
+    (
+        OwnerControlErrorCode::ControlUnavailable,
+        format!("remote owner-control endpoint is unavailable or unreachable: {message}"),
+    )
 }
 
 async fn legacy_mesh_probe(_endpoint: &Endpoint, control_addr: EndpointAddr) -> bool {
@@ -621,9 +773,9 @@ fn relay_mode_from_endpoint_addr(addr: &EndpointAddr) -> iroh::endpoint::RelayMo
 
 fn is_alpn_mismatch_message(message: &str) -> bool {
     let lowered = message.to_ascii_lowercase();
-    lowered.contains("alpn")
-        || lowered.contains("application protocol")
+    lowered.contains("alpn mismatch")
         || lowered.contains("no application protocol")
+        || lowered.contains("application protocol selected")
 }
 
 fn decode_endpoint_addr_token(invite_token: &str) -> anyhow::Result<EndpointAddr> {
@@ -766,5 +918,32 @@ mod tests {
             relay_mode_from_endpoint_addr(&addr),
             iroh::endpoint::RelayMode::Disabled
         ));
+    }
+
+    #[test]
+    fn request_id_generator_skips_zero_after_wraparound() {
+        let counter = AtomicU64::new(u64::MAX);
+
+        assert_eq!(next_nonzero_request_id(&counter), u64::MAX);
+        assert_eq!(next_nonzero_request_id(&counter), 1);
+    }
+
+    #[test]
+    fn connect_error_fallback_is_narrow_to_alpn_negotiation() {
+        assert!(is_alpn_mismatch_message("no application protocol selected"));
+        assert!(is_alpn_mismatch_message("ALPN mismatch"));
+        assert!(!is_alpn_mismatch_message("connection refused"));
+        assert!(!is_alpn_mismatch_message("endpoint is closed"));
+        assert!(!is_alpn_mismatch_message(
+            "ALPN configuration is unavailable locally"
+        ));
+        assert_eq!(
+            fallback_probe_disposition("connection refused"),
+            ConnectProbeDisposition::SkipUnavailable
+        );
+        assert_eq!(
+            fallback_probe_disposition("no application protocol selected"),
+            ConnectProbeDisposition::ProbeLegacyMesh
+        );
     }
 }

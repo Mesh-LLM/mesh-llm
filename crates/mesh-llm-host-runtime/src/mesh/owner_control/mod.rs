@@ -1,5 +1,8 @@
 use super::*;
 
+const OWNER_CONTROL_SERVER_HANDSHAKE_TIMEOUT_SECS: u64 = 2;
+const OWNER_CONTROL_SERVER_REQUEST_TIMEOUT_SECS: u64 = 5;
+
 pub(crate) fn endpoint_id_hex(id: EndpointId) -> String {
     hex::encode(id.as_bytes())
 }
@@ -62,9 +65,30 @@ impl Node {
         send: &mut iroh::endpoint::SendStream,
         recv: &mut iroh::endpoint::RecvStream,
     ) -> Result<Option<crate::proto::node::OwnerControlHandshake>> {
-        let handshake_bytes = match read_len_prefixed(recv).await {
-            Ok(bytes) => bytes,
-            Err(error) => {
+        let handshake_bytes = match tokio::time::timeout(
+            std::time::Duration::from_secs(OWNER_CONTROL_SERVER_HANDSHAKE_TIMEOUT_SECS),
+            read_len_prefixed(recv),
+        )
+        .await
+        {
+            Err(_) => {
+                let _ = self
+                    .send_owner_control_terminal_envelope(
+                        send,
+                        owner_control_error_envelope(
+                            crate::proto::node::OwnerControlErrorCode::InvalidHandshake,
+                            None,
+                            None,
+                            format!(
+                                "owner-control handshake timed out after {OWNER_CONTROL_SERVER_HANDSHAKE_TIMEOUT_SECS}s"
+                            ),
+                        ),
+                    )
+                    .await;
+                return Ok(None);
+            }
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(error)) => {
                 tracing::debug!(
                     "control handshake read failed from {}: {error}",
                     remote.fmt_short()
@@ -128,9 +152,30 @@ impl Node {
         send: &mut iroh::endpoint::SendStream,
         recv: &mut iroh::endpoint::RecvStream,
     ) -> Result<Option<crate::proto::node::OwnerControlRequest>> {
-        let request_bytes = match read_len_prefixed(recv).await {
-            Ok(bytes) => bytes,
-            Err(_) => return Ok(None),
+        let request_bytes = match tokio::time::timeout(
+            std::time::Duration::from_secs(OWNER_CONTROL_SERVER_REQUEST_TIMEOUT_SECS),
+            read_len_prefixed(recv),
+        )
+        .await
+        {
+            Err(_) => {
+                let _ = self
+                    .send_owner_control_terminal_envelope(
+                        send,
+                        owner_control_error_envelope(
+                            crate::proto::node::OwnerControlErrorCode::BadRequest,
+                            None,
+                            None,
+                            format!(
+                                "owner-control request timed out after {OWNER_CONTROL_SERVER_REQUEST_TIMEOUT_SECS}s"
+                            ),
+                        ),
+                    )
+                    .await;
+                return Ok(None);
+            }
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(_)) => return Ok(None),
         };
         let envelope =
             match crate::proto::node::OwnerControlEnvelope::decode(request_bytes.as_slice()) {
@@ -276,16 +321,36 @@ impl Node {
 
     pub(crate) async fn refresh_local_inventory_snapshot(
         &self,
-    ) -> crate::models::LocalModelInventorySnapshot {
+    ) -> anyhow::Result<crate::runtime_data::InventoryScanOutcome> {
+        self.refresh_local_inventory_snapshot_with(|| {
+            Ok(crate::models::scan_local_inventory_snapshot_with_progress(
+                |_| {},
+            ))
+        })
+        .await
+    }
+
+    pub(crate) async fn refresh_local_inventory_snapshot_with<F>(
+        &self,
+        load: F,
+    ) -> anyhow::Result<crate::runtime_data::InventoryScanOutcome>
+    where
+        F: FnOnce() -> crate::runtime_data::InventoryScanResult + Send + 'static,
+    {
         let collector = self.runtime_data_collector();
-        let snapshot = collector
-            .coalesce_local_inventory_scan(|| {
-                crate::models::scan_local_inventory_snapshot_with_progress(|_| {})
-            })
-            .await;
-        self.set_available_models(crate::models::scan_local_models())
-            .await;
-        snapshot
+        let outcome = collector
+            .coalesce_local_inventory_scan_outcome(load)
+            .await
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let mut models = outcome
+            .snapshot
+            .model_names
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        models.sort();
+        self.set_available_models(models).await;
+        Ok(outcome)
     }
 
     pub(crate) fn owner_control_auth_error_envelope(
@@ -749,7 +814,19 @@ impl Node {
         {
             return result;
         }
-        let _ = self.refresh_local_inventory_snapshot().await;
+        if let Err(error) = self.refresh_local_inventory_snapshot().await {
+            return self
+                .send_owner_control_envelope(
+                    send,
+                    owner_control_error_envelope(
+                        crate::proto::node::OwnerControlErrorCode::ControlUnavailable,
+                        Some(request_id),
+                        None,
+                        error.to_string(),
+                    ),
+                )
+                .await;
+        }
         let snapshot = self.current_owner_control_snapshot().await;
         self.send_owner_control_envelope(
             send,
@@ -765,6 +842,7 @@ impl Node {
                     refresh_inventory: Some(
                         crate::proto::node::OwnerControlRefreshInventoryResponse {
                             snapshot: Some(snapshot),
+                            inventory: None,
                         },
                     ),
                 }),

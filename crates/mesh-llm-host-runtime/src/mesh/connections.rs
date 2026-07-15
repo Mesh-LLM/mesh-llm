@@ -27,6 +27,14 @@ pub(crate) struct AcceptedMeshStream {
     pub(crate) stream_type: u8,
 }
 
+pub(crate) const MAX_CONTROL_STREAM_WORK_PER_CONNECTION: usize = 32;
+
+pub(crate) fn control_stream_semaphore() -> Arc<tokio::sync::Semaphore> {
+    Arc::new(tokio::sync::Semaphore::new(
+        MAX_CONTROL_STREAM_WORK_PER_CONNECTION,
+    ))
+}
+
 pub(crate) enum ClosedConnectionRecovery {
     Reconnect(EndpointAddr),
     RemovePeer,
@@ -805,7 +813,12 @@ impl Node {
         );
         let conn = accepting.await?;
         let remote = conn.remote_id();
+        let permits = control_stream_semaphore();
         loop {
+            let permit = match permits.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => break,
+            };
             let (mut send, mut recv) = match conn.accept_bi().await {
                 Ok(streams) => streams,
                 Err(error) => {
@@ -818,6 +831,7 @@ impl Node {
             };
             let node = self.clone();
             tokio::spawn(Box::pin(async move {
+                let _permit = permit;
                 if let Err(error) = node
                     .handle_control_stream(remote, &mut send, &mut recv)
                     .await

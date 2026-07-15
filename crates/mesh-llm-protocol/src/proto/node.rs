@@ -691,6 +691,26 @@ pub struct OwnerControlRefreshInventoryRequest {
 pub struct OwnerControlRefreshInventoryResponse {
     #[prost(message, optional, tag = "1")]
     pub snapshot: ::core::option::Option<OwnerControlConfigSnapshot>,
+    #[prost(message, optional, tag = "2")]
+    pub inventory: ::core::option::Option<OwnerControlRefreshInventory>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlRefreshInventory {
+    #[prost(message, repeated, tag = "1")]
+    pub entries: ::prost::alloc::vec::Vec<OwnerControlInventoryEntry>,
+    #[prost(enumeration = "OwnerControlRefreshInventoryDisposition", tag = "2")]
+    pub disposition: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlInventoryEntry {
+    #[prost(string, tag = "1")]
+    pub canonical_model_ref: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "2")]
+    pub display_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, tag = "3")]
+    pub total_size_bytes: u64,
+    #[prost(message, optional, tag = "4")]
+    pub metadata: ::core::option::Option<CompactModelMetadata>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlConfigSnapshot {
@@ -1213,6 +1233,35 @@ impl OwnerControlErrorCode {
             "OWNER_CONTROL_ERROR_CODE_LEGACY_JSON_UNSUPPORTED" => Some(Self::LegacyJsonUnsupported),
             "OWNER_CONTROL_ERROR_CODE_INVALID_HANDSHAKE" => Some(Self::InvalidHandshake),
             "OWNER_CONTROL_ERROR_CODE_TARGET_NODE_MISMATCH" => Some(Self::TargetNodeMismatch),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum OwnerControlRefreshInventoryDisposition {
+    Unspecified = 0,
+    Executed = 1,
+    Coalesced = 2,
+}
+impl OwnerControlRefreshInventoryDisposition {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_UNSPECIFIED",
+            Self::Executed => "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_EXECUTED",
+            Self::Coalesced => "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_COALESCED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_UNSPECIFIED" => Some(Self::Unspecified),
+            "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_EXECUTED" => Some(Self::Executed),
+            "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_COALESCED" => Some(Self::Coalesced),
             _ => None,
         }
     }

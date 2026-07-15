@@ -5,8 +5,8 @@ use mesh_client::proto::node::{
     OwnerControlErrorCode,
 };
 use mesh_client::protocol::{
-    ALPN_CONTROL_V1, NODE_PROTOCOL_GENERATION, decode_owner_control_envelope, read_len_prefixed,
-    write_len_prefixed,
+    ALPN_CONTROL_V1, MAX_CONTROL_FRAME_BYTES, NODE_PROTOCOL_GENERATION,
+    decode_owner_control_envelope, read_len_prefixed, write_len_prefixed,
 };
 use mesh_client::{
     ClientBuilder, ControlPlaneBootstrapOptions, ControlPlaneClientError, ControlPlaneConnection,
@@ -204,6 +204,7 @@ async fn spawn_success_server(
                                 apply_config: None,
                                 refresh_inventory: Some(mesh_client::proto::node::OwnerControlRefreshInventoryResponse {
                                     snapshot: Some(test_snapshot(endpoint_id.as_bytes(), 5, "refresh-model.gguf")),
+                                    inventory: None,
                                 }),
                             }),
                             error: None,
@@ -348,6 +349,32 @@ async fn spawn_control_unsupported_server() -> (Endpoint, String) {
     (endpoint, token)
 }
 
+async fn spawn_stalled_response_server() -> (Endpoint, String) {
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(SecretKey::generate())
+        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .relay_mode(iroh::endpoint::RelayMode::Disabled)
+        .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .unwrap()
+        .bind()
+        .await
+        .unwrap();
+    let token = control_endpoint_token(&endpoint.addr());
+    let server_endpoint = endpoint.clone();
+    tokio::spawn(async move {
+        let incoming = server_endpoint
+            .accept()
+            .await
+            .expect("server should accept connection");
+        let connection = incoming.await.expect("server connection should complete");
+        let (_send, mut recv) = connection.accept_bi().await.expect("stream should open");
+        let _ = read_control_envelope(&mut recv).await;
+        let _ = read_control_envelope(&mut recv).await;
+        std::future::pending::<()>().await;
+    });
+    (endpoint, token)
+}
+
 async fn read_control_envelope(recv: &mut iroh::endpoint::RecvStream) -> OwnerControlEnvelope {
     let bytes = read_len_prefixed(recv)
         .await
@@ -475,6 +502,122 @@ async fn control_plane_client_watch_without_snapshot_returns_accepted() {
         .await
         .expect("server should observe watch close")
         .expect("watch close signal should succeed");
+    control.close().await;
+    server.close().await;
+}
+
+#[tokio::test]
+async fn control_plane_client_watch_stream_has_no_unary_deadline_after_acceptance() {
+    let client = make_client().await;
+    let owner_keypair = test_owner_keypair(0x11, 0x12);
+    let (server, token, _state, _watch_closed_rx) = spawn_success_server(&owner_keypair).await;
+    let control = owner_control_client(
+        client
+            .connect_control_plane(ControlPlaneBootstrapOptions::new().with_control_endpoint(token))
+            .await
+            .expect("connection should use owner-control ALPN"),
+    );
+
+    let mut watch = control
+        .watch_config(false)
+        .await
+        .expect("watch_config should wait for accepted event");
+    match watch
+        .next()
+        .await
+        .expect("pending accepted event should be returned")
+    {
+        OwnerControlWatchEvent::Accepted(accepted) => assert_eq!(accepted.target_node_id.len(), 32),
+        _ => panic!("expected accepted event"),
+    }
+    let later = tokio::time::timeout(std::time::Duration::from_millis(150), watch.next()).await;
+    assert!(
+        later.is_err(),
+        "accepted watch streams must remain open instead of inheriting unary deadlines"
+    );
+
+    watch.close().await.expect("watch close should succeed");
+    control.close().await;
+    server.close().await;
+}
+
+#[tokio::test]
+async fn oversized_outbound_control_frame_emits_no_prefix_or_body() {
+    let server = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(SecretKey::generate())
+        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .relay_mode(iroh::endpoint::RelayMode::Disabled)
+        .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .unwrap()
+        .bind()
+        .await
+        .unwrap();
+    let server_endpoint = server.clone();
+    let accepted = tokio::spawn(async move {
+        let incoming = server_endpoint
+            .accept()
+            .await
+            .expect("connection should arrive");
+        let connection = incoming.await.expect("connection should negotiate");
+        connection.accept_bi().await.expect("stream should arrive")
+    });
+    let client = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(SecretKey::generate())
+        .relay_mode(iroh::endpoint::RelayMode::Disabled)
+        .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .unwrap()
+        .bind()
+        .await
+        .unwrap();
+    let connection = client
+        .connect(server.addr(), ALPN_CONTROL_V1)
+        .await
+        .expect("client should connect");
+    let (mut send, _recv) = connection.open_bi().await.expect("stream should open");
+    let oversized = vec![0u8; MAX_CONTROL_FRAME_BYTES + 1];
+
+    let error = write_len_prefixed(&mut send, &oversized)
+        .await
+        .expect_err("oversized write should fail");
+    assert!(error.to_string().contains("control frame too large"));
+    send.finish().expect("empty stream should finish");
+
+    let (_server_send, mut server_recv) = accepted.await.expect("server task should join");
+    let received = server_recv
+        .read_to_end(4)
+        .await
+        .expect("empty stream should read");
+    assert!(
+        received.is_empty(),
+        "no length prefix or body may be emitted"
+    );
+
+    client.close().await;
+    server.close().await;
+}
+
+#[tokio::test]
+async fn stalled_unary_response_returns_deterministic_timeout() {
+    let client = make_client().await;
+    let (server, token) = spawn_stalled_response_server().await;
+    let control = owner_control_client(
+        client
+            .connect_control_plane(ControlPlaneBootstrapOptions::new().with_control_endpoint(token))
+            .await
+            .expect("connection should use owner-control ALPN"),
+    );
+
+    let error = control
+        .get_config()
+        .await
+        .expect_err("stalled response should time out");
+    match error {
+        ControlPlaneClientError::Transport(message) => {
+            assert_eq!(message, "owner-control unary response timed out after 5s");
+        }
+        other => panic!("expected transport timeout, got {other:?}"),
+    }
+
     control.close().await;
     server.close().await;
 }

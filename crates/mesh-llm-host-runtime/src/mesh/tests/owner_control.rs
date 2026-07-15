@@ -1160,3 +1160,49 @@ async fn control_plane_refresh_inventory() -> Result<()> {
     std::fs::remove_dir_all(&tmp).ok();
     Ok(())
 }
+
+#[tokio::test]
+#[serial]
+async fn failed_inventory_refresh_preserves_last_good_snapshot_and_advertisement() -> Result<()> {
+    let owner_keypair = test_owner_keypair(0x99, 0x9a);
+    let tmp = std::env::temp_dir().join(format!(
+        "mesh-llm-control-refresh-failure-{}",
+        rand::random::<u64>()
+    ));
+    let (server, _secret_key, _config_path) =
+        start_owner_control_test_server(&owner_keypair, &tmp).await?;
+    let seeded = crate::models::LocalModelInventorySnapshot {
+        model_names: std::collections::HashSet::from(["last-good-model".to_string()]),
+        ..Default::default()
+    };
+    server
+        .runtime_data_collector()
+        .coalesce_local_inventory_scan({
+            let seeded = seeded.clone();
+            move || seeded
+        })
+        .await?;
+    server
+        .set_available_models(vec!["last-good-model".to_string()])
+        .await;
+
+    let error = server
+        .refresh_local_inventory_snapshot_with(|| {
+            Err(crate::runtime_data::InventoryScanError::LoaderFailed(
+                "forced failure".to_string(),
+            ))
+        })
+        .await
+        .expect_err("forced scan failure should reach the caller");
+
+    assert!(error.to_string().contains("forced failure"));
+    assert_eq!(server.runtime_data_collector().local_inventory_snapshot(), seeded);
+    assert_eq!(
+        server.available_models().await,
+        vec!["last-good-model".to_string()]
+    );
+
+    server.shutdown_control_listener().await;
+    std::fs::remove_dir_all(&tmp).ok();
+    Ok(())
+}

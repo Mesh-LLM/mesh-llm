@@ -16,6 +16,40 @@ use tokio::sync::{mpsc, watch};
 
 mod direct_path;
 
+#[tokio::test]
+async fn owner_control_stream_work_is_bounded_per_connection() {
+    let permits = control_stream_semaphore();
+    let mut held = Vec::new();
+    for _ in 0..MAX_CONTROL_STREAM_WORK_PER_CONNECTION {
+        held.push(
+            permits
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("semaphore should remain open"),
+        );
+    }
+
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(25),
+            permits.clone().acquire_owned(),
+        )
+        .await
+        .is_err(),
+        "the thirty-third stream must wait for capacity"
+    );
+
+    held.pop();
+    let _unblocked_permit = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        permits.acquire_owned(),
+    )
+    .await
+    .expect("released capacity should unblock the next stream")
+    .expect("semaphore should remain open");
+}
+
 #[test]
 fn quic_bind_addr_uses_explicit_port_on_all_platforms() {
     assert_eq!(
