@@ -1,10 +1,9 @@
-use super::{PluginConfigEntry, PluginStartupConfig, PluginSummary, PluginWebUiPreference, proto};
+use super::{PluginSummary, PluginWebUiPreference, proto};
 use mesh_llm_plugin_manager::store::{
     InstalledPluginWebUiMetadata, InstalledPluginWebUiValidationStatus,
 };
 use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, default_store_root};
 use serde::Serialize;
-use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct PluginWebUiState {
@@ -176,17 +175,7 @@ fn plugin_web_ui_preference(
     web_ui_enabled: Option<bool>,
     declares_web_ui: bool,
 ) -> PluginWebUiPreference {
-    PluginConfigEntry {
-        name: String::new(),
-        enabled: None,
-        web_ui_enabled,
-        command: None,
-        args: Vec::new(),
-        url: None,
-        settings: BTreeMap::new(),
-        startup: PluginStartupConfig::default(),
-    }
-    .web_ui_preference(declares_web_ui)
+    PluginWebUiPreference::resolve(web_ui_enabled, declares_web_ui)
 }
 
 #[derive(Clone, Debug)]
@@ -275,7 +264,7 @@ fn plugin_web_ui_declaration_from_installed(
 fn plugin_web_ui_declaration_from_proto(
     web_ui: &proto::PluginWebUiManifest,
 ) -> PluginWebUiDeclaration {
-    let overview = PluginWebUiManifestOverview {
+    PluginWebUiDeclaration {
         pages: web_ui
             .pages
             .iter()
@@ -286,10 +275,6 @@ fn plugin_web_ui_declaration_from_proto(
             .iter()
             .map(plugin_web_ui_config_section_from_proto)
             .collect(),
-    };
-    PluginWebUiDeclaration {
-        pages: overview.pages,
-        config_sections: overview.config_sections,
         asset_base_url: None,
         invalid_reason: Some("web UI bundle metadata is unavailable".into()),
     }

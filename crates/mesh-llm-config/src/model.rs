@@ -1260,13 +1260,19 @@ pub enum PluginWebUiPreference {
     Disabled,
 }
 
+impl PluginWebUiPreference {
+    pub const fn resolve(web_ui_enabled: Option<bool>, declares_web_ui: bool) -> Self {
+        match (declares_web_ui, web_ui_enabled) {
+            (false, _) => Self::None,
+            (true, Some(false)) => Self::Disabled,
+            (true, Some(true) | None) => Self::Enabled,
+        }
+    }
+}
+
 impl PluginConfigEntry {
     pub const fn web_ui_preference(&self, declares_web_ui: bool) -> PluginWebUiPreference {
-        match (declares_web_ui, self.web_ui_enabled) {
-            (false, _) => PluginWebUiPreference::None,
-            (true, Some(false)) => PluginWebUiPreference::Disabled,
-            (true, Some(true) | None) => PluginWebUiPreference::Enabled,
-        }
+        PluginWebUiPreference::resolve(self.web_ui_enabled, declares_web_ui)
     }
 }
 
