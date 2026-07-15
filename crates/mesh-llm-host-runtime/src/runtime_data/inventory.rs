@@ -42,7 +42,6 @@ pub(crate) struct InventoryScanOutcome {
     pub(crate) disposition: InventoryScanDisposition,
 }
 
-#[allow(dead_code, reason = "consumed by the typed command dispatcher")]
 pub(crate) fn sorted_inventory_entries(
     snapshot: &LocalModelInventorySnapshot,
 ) -> Vec<crate::proto::node::OwnerControlInventoryEntry> {

@@ -18,8 +18,10 @@ mod subscriptions;
 pub(crate) use self::api_views::{collect_views, mesh_models, status_payload};
 pub(crate) use self::collector::RuntimeDataCollector;
 #[cfg(test)]
-pub(crate) use self::inventory::{InventoryScanDisposition, InventoryScanError};
-pub(crate) use self::inventory::{InventoryScanOutcome, InventoryScanResult};
+pub(crate) use self::inventory::InventoryScanError;
+pub(crate) use self::inventory::{
+    InventoryScanDisposition, InventoryScanOutcome, InventoryScanResult, sorted_inventory_entries,
+};
 #[cfg(test)]
 pub(crate) use self::metrics::RuntimeLlamaMetricSample;
 pub(crate) use self::metrics::{

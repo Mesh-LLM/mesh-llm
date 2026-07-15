@@ -1119,11 +1119,15 @@ async fn control_plane_refresh_inventory() -> Result<()> {
 
     write_len_prefixed(&mut refresh_send, &refresh_request(30).encode_to_vec()).await?;
     let first = read_owner_control_envelope(&mut refresh_recv).await?;
-    let first_snapshot = first
+    let first_refresh = first
         .response
         .expect("refresh should return a response")
         .refresh_inventory
-        .expect("refresh should return refresh_inventory")
+        .expect("refresh should return refresh_inventory");
+    let first_inventory = first_refresh
+        .inventory
+        .expect("refresh should include inventory detail");
+    let first_snapshot = first_refresh
         .snapshot
         .expect("refresh should include a config snapshot");
     assert_eq!(first_snapshot.node_id, server.id().as_bytes().to_vec());
@@ -1135,6 +1139,26 @@ async fn control_plane_refresh_inventory() -> Result<()> {
     );
     let inventory_snapshot = server.runtime_data_collector().local_inventory_snapshot();
     assert!(inventory_snapshot.model_names.contains(&expected_model_ref));
+    let mut expected_refs = inventory_snapshot
+        .model_names
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    expected_refs.sort();
+    assert_eq!(
+        first_inventory
+            .entries
+            .iter()
+            .map(|entry| entry.canonical_model_ref.clone())
+            .collect::<Vec<_>>(),
+        expected_refs
+    );
+    assert_eq!(
+        crate::proto::node::OwnerControlRefreshInventoryDisposition::try_from(
+            first_inventory.disposition
+        ),
+        Ok(crate::proto::node::OwnerControlRefreshInventoryDisposition::Executed)
+    );
 
     write_len_prefixed(&mut refresh_send, &refresh_request(31).encode_to_vec()).await?;
     let second = read_owner_control_envelope(&mut refresh_recv).await?;
@@ -1196,7 +1220,10 @@ async fn failed_inventory_refresh_preserves_last_good_snapshot_and_advertisement
         .expect_err("forced scan failure should reach the caller");
 
     assert!(error.to_string().contains("forced failure"));
-    assert_eq!(server.runtime_data_collector().local_inventory_snapshot(), seeded);
+    assert_eq!(
+        server.runtime_data_collector().local_inventory_snapshot(),
+        seeded
+    );
     assert_eq!(
         server.available_models().await,
         vec!["last-good-model".to_string()]

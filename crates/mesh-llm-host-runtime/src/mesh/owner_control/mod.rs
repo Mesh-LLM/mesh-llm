@@ -1,5 +1,9 @@
 use super::*;
 
+mod commands;
+
+use commands::{OwnedNodeCommand, OwnedNodeCommandExecutionShape};
+
 const OWNER_CONTROL_SERVER_HANDSHAKE_TIMEOUT_SECS: u64 = 2;
 const OWNER_CONTROL_SERVER_REQUEST_TIMEOUT_SECS: u64 = 5;
 
@@ -56,6 +60,25 @@ pub(crate) fn owner_control_rejection_envelope(
         crate::proto::node::OwnerControlErrorCode::BadRequest
     };
     owner_control_error_envelope(code, request_id, None, err.to_string())
+}
+
+fn bound_owner_control_envelope(
+    envelope: crate::proto::node::OwnerControlEnvelope,
+) -> crate::proto::node::OwnerControlEnvelope {
+    if ensure_control_frame_size(&envelope.encode_to_vec()).is_ok() {
+        return envelope;
+    }
+    let request_id = envelope
+        .response
+        .as_ref()
+        .map(|response| response.request_id)
+        .or_else(|| envelope.error.as_ref().and_then(|error| error.request_id));
+    owner_control_error_envelope(
+        crate::proto::node::OwnerControlErrorCode::ControlUnavailable,
+        request_id,
+        None,
+        "owner-control response exceeds the maximum frame size",
+    )
 }
 
 impl Node {
@@ -259,10 +282,10 @@ impl Node {
             let Some(request) = self.read_owner_control_request(send, recv).await? else {
                 break;
             };
-            let watch_request = request.watch_config.is_some();
-            self.handle_owner_control_request(remote, send, recv, request)
+            let execution_shape = self
+                .handle_owner_control_request(remote, send, recv, request)
                 .await?;
-            if watch_request {
+            if execution_shape == OwnedNodeCommandExecutionShape::Watch {
                 break;
             }
         }
@@ -304,6 +327,7 @@ impl Node {
         send: &mut iroh::endpoint::SendStream,
         envelope: crate::proto::node::OwnerControlEnvelope,
     ) -> anyhow::Result<()> {
+        let envelope = bound_owner_control_envelope(envelope);
         write_len_prefixed(send, &envelope.encode_to_vec()).await?;
         Ok(())
     }
@@ -494,25 +518,10 @@ impl Node {
 
     pub(crate) async fn handle_owner_control_get_config(
         &self,
-        remote: EndpointId,
         send: &mut iroh::endpoint::SendStream,
         request_id: u64,
-        get: crate::proto::node::OwnerControlGetConfigRequest,
+        _get: crate::proto::node::OwnerControlGetConfigRequest,
     ) -> anyhow::Result<()> {
-        if let Some(result) = self
-            .send_owner_control_request_id_error(
-                send,
-                self.verify_owner_control_request_ids(
-                    remote,
-                    &get.requester_node_id,
-                    &get.target_node_id,
-                    request_id,
-                ),
-            )
-            .await
-        {
-            return result;
-        }
         let snapshot = self.current_owner_control_snapshot().await;
         self.send_owner_control_envelope(
             send,
@@ -537,28 +546,13 @@ impl Node {
 
     pub(crate) async fn handle_owner_control_watch_config(
         &self,
-        remote: EndpointId,
         send: &mut iroh::endpoint::SendStream,
         recv: &mut iroh::endpoint::RecvStream,
+        remote: EndpointId,
         request_id: u64,
         watch: crate::proto::node::OwnerControlWatchConfigRequest,
     ) -> anyhow::Result<()> {
         let mut rev_rx = self.config_revision_tx.subscribe();
-        if let Some(result) = self
-            .send_owner_control_request_id_error(
-                send,
-                self.verify_owner_control_request_ids(
-                    remote,
-                    &watch.requester_node_id,
-                    &watch.target_node_id,
-                    request_id,
-                ),
-            )
-            .await
-        {
-            return result;
-        }
-
         self.send_owner_control_watch_start(send, request_id, watch.include_snapshot)
             .await?;
 
@@ -630,27 +624,12 @@ impl Node {
 
     pub(crate) async fn handle_owner_control_apply_config(
         &self,
-        remote: EndpointId,
         send: &mut iroh::endpoint::SendStream,
         request_id: u64,
         apply: crate::proto::node::OwnerControlApplyConfigRequest,
     ) -> anyhow::Result<()> {
         use crate::runtime::config_state::{ApplyResult, ConfigApplyMode};
 
-        if let Some(result) = self
-            .send_owner_control_request_id_error(
-                send,
-                self.verify_owner_control_request_ids(
-                    remote,
-                    &apply.requester_node_id,
-                    &apply.target_node_id,
-                    request_id,
-                ),
-            )
-            .await
-        {
-            return result;
-        }
         let Some(config_snapshot) = apply.config.clone() else {
             return self
                 .send_owner_control_envelope(
@@ -793,107 +772,72 @@ impl Node {
         self.send_owner_control_envelope(send, envelope).await
     }
 
-    pub(crate) async fn handle_owner_control_refresh_inventory(
-        &self,
-        remote: EndpointId,
-        send: &mut iroh::endpoint::SendStream,
-        request_id: u64,
-        refresh: crate::proto::node::OwnerControlRefreshInventoryRequest,
-    ) -> anyhow::Result<()> {
-        if let Some(result) = self
-            .send_owner_control_request_id_error(
-                send,
-                self.verify_owner_control_request_ids(
-                    remote,
-                    &refresh.requester_node_id,
-                    &refresh.target_node_id,
-                    request_id,
-                ),
-            )
-            .await
-        {
-            return result;
-        }
-        if let Err(error) = self.refresh_local_inventory_snapshot().await {
-            return self
-                .send_owner_control_envelope(
-                    send,
-                    owner_control_error_envelope(
-                        crate::proto::node::OwnerControlErrorCode::ControlUnavailable,
-                        Some(request_id),
-                        None,
-                        error.to_string(),
-                    ),
-                )
-                .await;
-        }
-        let snapshot = self.current_owner_control_snapshot().await;
-        self.send_owner_control_envelope(
-            send,
-            crate::proto::node::OwnerControlEnvelope {
-                r#gen: NODE_PROTOCOL_GENERATION,
-                handshake: None,
-                request: None,
-                response: Some(crate::proto::node::OwnerControlResponse {
-                    request_id,
-                    get_config: None,
-                    watch_config: None,
-                    apply_config: None,
-                    refresh_inventory: Some(
-                        crate::proto::node::OwnerControlRefreshInventoryResponse {
-                            snapshot: Some(snapshot),
-                            inventory: None,
-                        },
-                    ),
-                }),
-                error: None,
-            },
-        )
-        .await
-    }
-
     pub(crate) async fn handle_owner_control_request(
         &self,
         remote: EndpointId,
         send: &mut iroh::endpoint::SendStream,
         recv: &mut iroh::endpoint::RecvStream,
         request: crate::proto::node::OwnerControlRequest,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<OwnedNodeCommandExecutionShape> {
         let request_id = request.request_id;
-
-        if let Some(get) = request.get_config {
-            return self
-                .handle_owner_control_get_config(remote, send, request_id, get)
-                .await;
+        let Some(command) = OwnedNodeCommand::decode(request) else {
+            self.send_owner_control_envelope(
+                send,
+                owner_control_error_envelope(
+                    crate::proto::node::OwnerControlErrorCode::UnknownCommand,
+                    Some(request_id),
+                    None,
+                    "unknown owner-control command",
+                ),
+            )
+            .await?;
+            return Ok(OwnedNodeCommandExecutionShape::Unary);
+        };
+        let execution_shape = command.execution_shape();
+        let _deadline = command.deadline();
+        if let Some(result) = self
+            .send_owner_control_request_id_error(
+                send,
+                self.verify_owner_control_request_ids(
+                    remote,
+                    command.requester_node_id(),
+                    command.target_node_id(),
+                    command.request_id(),
+                ),
+            )
+            .await
+        {
+            result?;
+            return Ok(execution_shape);
         }
 
-        if let Some(watch) = request.watch_config {
-            return self
-                .handle_owner_control_watch_config(remote, send, recv, request_id, watch)
-                .await;
+        match command {
+            OwnedNodeCommand::GetConfig {
+                request_id,
+                request,
+            } => {
+                self.handle_owner_control_get_config(send, request_id, request)
+                    .await?
+            }
+            OwnedNodeCommand::WatchConfig {
+                request_id,
+                request,
+            } => {
+                self.handle_owner_control_watch_config(send, recv, remote, request_id, request)
+                    .await?
+            }
+            OwnedNodeCommand::ApplyConfig {
+                request_id,
+                request,
+            } => {
+                self.handle_owner_control_apply_config(send, request_id, request)
+                    .await?
+            }
+            OwnedNodeCommand::ScanRefresh { request_id, .. } => {
+                let envelope = commands::scan_refresh::execute(self, request_id).await;
+                self.send_owner_control_envelope(send, envelope).await?;
+            }
         }
-
-        if let Some(apply) = request.apply_config {
-            return self
-                .handle_owner_control_apply_config(remote, send, request_id, apply)
-                .await;
-        }
-
-        if let Some(refresh) = request.refresh_inventory {
-            return self
-                .handle_owner_control_refresh_inventory(remote, send, request_id, refresh)
-                .await;
-        }
-
-        self.send_owner_control_envelope(
-            send,
-            owner_control_error_envelope(
-                crate::proto::node::OwnerControlErrorCode::UnknownCommand,
-                Some(request_id),
-                None,
-                "unknown owner-control command",
-            ),
-        )
-        .await
+        Ok(execution_shape)
     }
 }
