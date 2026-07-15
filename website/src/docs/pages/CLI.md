@@ -412,7 +412,8 @@ Switches:
 
 ### `runtime`
 
-Inspect and manage installed native runtimes:
+Inspect and manage installed native runtimes, or run supported owner-control
+operations against an explicitly targeted node:
 
 ```bash
 mesh-llm runtime list
@@ -420,10 +421,53 @@ mesh-llm runtime install
 mesh-llm runtime install cuda13
 mesh-llm runtime remove <RUNTIME_ID>
 mesh-llm runtime prune --active-only
+mesh-llm runtime scan-refresh --endpoint '<control-endpoint>'
+mesh-llm runtime scan-refresh --endpoint '<control-endpoint>' --json
 ```
 
 Use `--json` for machine-readable output. Runtime selection is constrained by
 the running Mesh version, platform, backend, and Skippy ABI.
+
+#### `runtime scan-refresh`
+
+Use this to ask exactly one remote, owner-attested node to rescan its managed
+model inventory. It uses the private `mesh-llm-control/1` lane; it does not
+change public mesh join, gossip, routing, or inference behavior.
+
+The target node must expose owner-control and the requester must use an owner
+key for the same owner. On the target node, read the endpoint token locally:
+
+```bash
+mesh-llm runtime bootstrap --port 3131 --json
+```
+
+Transfer that token to the controlling node out of band, then run:
+
+```bash
+mesh-llm runtime scan-refresh \
+  --port 3131 \
+  --endpoint '<control-endpoint>'
+```
+
+Switches:
+
+- `--endpoint <TOKEN>`: required token that identifies and pins one target
+  node. Mesh does not infer it from a peer ID, public gossip, discovery, or
+  status output.
+- `--port <PORT>`: management API port on the controlling node (default
+  `3131`). The CLI sends the request through this local, loopback-only API.
+- `--json`: print the API response unchanged.
+
+Human output includes the execution disposition, target node, model count,
+total bytes, and sorted canonical model references. JSON output includes
+`target_node_id`, `disposition`, and `inventory`. A disposition of `executed`
+means this request ran the scan; `coalesced` means it joined an in-progress
+scan and received the same result.
+
+The older hidden `runtime refresh-inventory` spelling remains available for
+compatibility and returns its legacy snapshot-only shape. New clients also
+accept snapshot-only responses from older owner-control servers without
+claiming that detailed inventory metadata was returned.
 
 
 ### `gpus`
