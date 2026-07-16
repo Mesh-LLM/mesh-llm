@@ -7,9 +7,13 @@ Releases are normally cut by running the **Release** workflow
 `workflow_dispatch` with the version input (for example `v0.31.0`). The
 dispatched workflow bumps versions, generates and patches the SwiftPM
 manifest, packages SDK console assets, creates and pushes the release tag,
-builds all platform bundles, and publishes the GitHub release. Dispatch inputs
-include `skip_gpu_bundles` and `canary` (dry-run: build and smoke everything
-without publishing).
+builds all platform bundles, and publishes the GitHub release. After a complete
+non-canary release succeeds, it dispatches `Mesh-LLM/mesh-agent-images` to
+package the verified release archives, publish the native package release
+assets, and publish the supported GHCR image matrix. Dispatch inputs include
+`skip_gpu_bundles` and `canary` (dry-run: build and smoke everything without
+publishing). Releases that intentionally skip GPU bundles do not dispatch the
+full packaging matrix.
 
 The sections below document the underlying steps. They matter when releasing
 manually via a tag push, debugging the workflow, or validating bundles
@@ -22,6 +26,10 @@ locally.
 - `cmake` and a native compiler installed
 - Node/npm installed for the UI build
 - `gh` CLI authenticated if publishing manually
+- `MESH_AGENT_IMAGES_DISPATCH_TOKEN` configured as a fine-grained repository
+  token or GitHub App token with Contents write access to
+  `Mesh-LLM/mesh-agent-images`, which is the permission required to create a
+  repository dispatch event
 
 ## Release Attestation Signing Keys
 
@@ -167,7 +175,12 @@ Verify:
 
 ## Publish
 
-Push a `v*` tag to run `.github/workflows/release.yml`.
+Push a `v*` tag to run `.github/workflows/release.yml`. The upstream release
+workflow owns release archive production, but it does not publish OCI images.
+`Mesh-LLM/mesh-agent-images` is the canonical GHCR producer and starts only
+after the GitHub release and its complete archive set have published
+successfully. The upstream `docker.yml` workflow performs Dockerfile validation
+only and is not a distribution channel.
 
 On non-prerelease tags, the release workflow also publishes the Rust SDK crate
 chain to crates.io in dependency order:

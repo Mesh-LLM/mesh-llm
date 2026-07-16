@@ -1445,6 +1445,45 @@ jobs:
           overwrite_files: true
           files: release-artifacts/*
 
+  dispatch_packaging_release:
+    name: Dispatch package and image publishing
+    needs: [metadata, publish]
+    if: ${{ needs.publish.result == 'success' && needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Dispatch verified release to mesh-agent-images
+        env:
+          GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ -n "${GH_TOKEN:-}" ]] || {
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN is required for cross-repository packaging" >&2
+            exit 1
+          }
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg ref "$RELEASE_TAG" \
+            --arg version "$RELEASE_VERSION" \
+            '{
+              event_type: "mesh-llm-release",
+              client_payload: {
+                repository: $repository,
+                ref: $ref,
+                version: $version,
+                dry_run: false,
+                publish_images: true,
+                publish_release_assets: true
+              }
+            }' |
+            gh api \
+              --method POST \
+              repos/Mesh-LLM/mesh-agent-images/dispatches \
+              --input -
+
   publish_crates_preflight:
     name: Preflight crates.io packages
     needs: [metadata, publish]
