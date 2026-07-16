@@ -56,6 +56,23 @@ identity/admission policy. For an untrusted network or controlled membership,
 stop and discuss the owner identity and trust-policy options in
 <https://meshllm.cloud/MESHES.md> before enrolling nodes.
 
+### Pick the shortest path for the goal
+
+This is a conditional runbook, not a linear script. Once you know the goal from
+section 1, follow only the sections it needs instead of walking all eleven:
+
+| Goal | Sections to follow |
+| --- | --- |
+| Local chat or coding agent on one machine you already have | 2 (install check), 3 (survey — filtered), 9 (harness), 11 (report). Skip 4–7. |
+| Prove a two-node mesh works | 2, 3, 4, 5, 6, 11 |
+| Several independent models across machines | 2, 3, 4, 5, 6, 7, 11 |
+| One large model split across machines (advanced) | 2, 3, 4, 5, 6, 7 (split shape) + `docs/SKIPPY_SPLITS.md`, 11 |
+| Persistent service after a foreground test proves out | Prove the goal first, then revisit service setup in 2 |
+
+Diagnostics (section 8) and the journal (section 10) apply throughout. When a
+single-machine harness is the whole goal, do not build enrollment blocks,
+topology tables, or split doctors the user did not ask for.
+
 ### 1. Ask what the user is building
 
 Begin with a short Q&A. Ask only what is not already known, and allow the user
@@ -237,6 +254,22 @@ may contain only metadata, one multipart shard, or a few layer-package files.
 Prefer exact entries returned by `mesh-llm models installed --json`, inspect
 their reported path and total size, and use `models show` for fit/capabilities.
 Prefer complete cached models before proposing any large download.
+
+`models installed --json` currently enumerates individual layer-package and
+split-shard files as separate entries (tracked as a bug: mesh should group
+these under one package ref). On a machine with cached Skippy packages this can
+be dozens of rows that are not independently runnable. Filter before you show
+anything to the user:
+
+- Exclude split fragments and package internals: refs ending in `-layers` (or
+  containing `/layers/` or `/shared/`), and any `layer-*.gguf`, `shared/*.gguf`,
+  `metadata.gguf`, or `skippy-shard-*` path. These are only relevant when the
+  goal is a split (section 7 and `docs/SKIPPY_SPLITS.md`).
+- Keep complete, independently loadable GGUFs.
+- For a coding-agent goal, rank the survivors by advertised `tool_use` support,
+  then by fit, and confirm capability with `models show`.
+- Present at most three candidates with size, capability evidence, and fit.
+  Never paste the raw installed list back to the user.
 
 If remote inventory is unavailable and the initial goal is only to create a
 mesh, select a small starter model from the current catalog or local inventory.
@@ -601,11 +634,11 @@ not complete, and give the smallest next diagnostic action.
 
 ## Real-world failure references
 
-These reports inform the checks above and may help when symptoms match:
+The operational lessons from reported failures are already folded into the
+checks above — binary/CLI mismatch (sections 2 and 8), clipped invite tokens
+(section 4), split workers stuck in standby (section 7), read-only download
+paths and load-versus-inference crashes (section 8), and mDNS fallback caveats
+(section 8). Follow those checks rather than reading issue history mid-session.
 
-- [Outdated binary missing setup/config commands](https://github.com/Mesh-LLM/mesh-llm/issues/961)
-- [Invite token clipped in terminal output](https://github.com/Mesh-LLM/mesh-llm/issues/964)
-- [Split coordinator ready while a worker stage is never activated](https://github.com/Mesh-LLM/mesh-llm/issues/951)
-- [Model download resolving to a read-only path](https://github.com/Mesh-LLM/mesh-llm/issues/980)
-- [First inference crashes despite successful model load on an unsupported ROCm target](https://github.com/Mesh-LLM/mesh-llm/issues/966)
-- [Detailed newcomer feedback on install, mDNS, model choice, and split ergonomics](https://github.com/Mesh-LLM/mesh-llm/discussions/978)
+Maintainers tracking the underlying reports can find them in the project issue
+tracker; they are provenance for the checks, not runbook steps for the assistant.
