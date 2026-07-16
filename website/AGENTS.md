@@ -13,13 +13,13 @@ Project-specific instructions and references for AI agents working on the Mesh L
 
 - `website/` is the maintained source tree for the public static site.
 - `docs/` at the mesh-llm repo root is mixed by path: generated website output lives alongside authored project Markdown docs.
-- Generated website artifact paths are `../docs/index.html`, `../docs/CNAME`, `../docs/install.sh`, `../docs/install.ps1`, `../docs/mesh-llm-logo.svg`, `../docs/funding.json`, `../docs/.well-known/`, `../docs/assets/`, `../docs/catalog/`, `../docs/docs/`, and `../docs/pagefind/`.
+- Generated website artifact paths are `../docs/index.html`, `../docs/CNAME`, `../docs/install.sh`, `../docs/install.ps1`, `../docs/setup-mesh`, `../docs/mesh-llm-logo.svg`, `../docs/funding.json`, `../docs/.well-known/`, `../docs/assets/`, `../docs/catalog/`, `../docs/docs/`, and `../docs/pagefind/`.
 - Authored project docs such as `../docs/MESHES.md`, `../docs/design/**`, `../docs/plugins/**`, and `../docs/specs/**` remain source and should be edited in place.
 - Do not hand-edit generated website artifact paths; edit `src/**` and rebuild.
 - Production build order is Tailwind CSS -> Eleventy -> Pagefind.
 - `npm run build` writes Tailwind output to `src/assets/site.generated.css`, runs Eleventy with output `../docs`, then indexes `../docs` with Pagefind.
 - From the mesh-llm repo root, use `just website-build` for production output, `just website-dev` for the local dev server, and `just website-clean` to remove generated website output while preserving authored docs.
-- Eleventy passthrough copies `src/CNAME`, `src/funding.json`, `src/.well-known/`, `src/assets/`, `src/mesh-llm-logo.svg`, and repo-root `../install.sh` / `../install.ps1` into the generated `docs/` tree.
+- Eleventy passthrough copies `src/CNAME`, `src/funding.json`, `src/.well-known/`, `src/assets/`, `src/mesh-llm-logo.svg`, and repo-root `../install.sh` / `../install.ps1` (plus `../install.md` published as `setup-mesh`) into the generated `docs/` tree.
 - `src/assets/site.generated.css`, `node_modules/`, Eleventy caches, and browser/test artifacts are generated/local artifacts, not source.
 
 ## Design System Reference
