@@ -409,25 +409,16 @@ mesh-llm models show '<exact-model-ref>' --json
 
 Do not equate parameter count with resident bytes. Compare the exact artifact
 or package size with advertised usable capacity and leave meaningful headroom.
-Prefer catalog entries and certified families over arbitrary large GGUFs.
+Prefer catalog entries and certified families over arbitrary large GGUFs. Do
+not hard-code a recommendation from memory figures; catalog contents, quants,
+certification, context needs, and runtime support change. Show live
+search/show evidence and let the user choose.
 
-Useful planning examples, not fixed recommendations:
-
-- For a 128 GB Apple Silicon machine plus a 64 GB Apple Silicon machine, first
-  consider a strong model that fits the larger node and a smaller, faster or
-  differently capable model on the smaller node. Consider a split only when an
-  exact layer package is clearly too large for 128 GB but comfortably below the
-  mesh's combined usable capacity after overhead.
-- For a machine above 256 GB plus a 128 GB Apple Silicon machine on a fast LAN,
-  it can be reasonable to evaluate a much larger package-backed split model.
-  This remains an advanced plan: inspect the package, certify it, and let the
-  split doctor validate actual peer eligibility before downloading hundreds of
-  gigabytes.
-
-Do not hard-code a model recommendation from these memory figures. Catalog
-contents, quants, package certification, context requirements, and runtime
-support change. Show the live search/show evidence and ask the user which plan
-to enact.
+As a rough shape: a strong model on the larger node plus a smaller, faster one
+on the smaller node is usually the best first test. Reserve a split for when a
+layer package is clearly too large for any single node but comfortably below
+combined usable capacity after overhead, on a fast, stable link — and let the
+split doctor validate peer eligibility before downloading hundreds of gigabytes.
 
 For independent models, the main node can add a model to its active serving
 runtime with the supported local lifecycle command:
@@ -441,9 +432,31 @@ it serves, either use approved SSH or give the user a new exact foreground
 command that restarts it with `serve --join ... --model ...`. Do not imply that
 the coordinator can install or launch arbitrary models remotely.
 
-For a split, read <https://meshllm.cloud/SKIPPY_SPLITS.md>, ensure every serving node requests
-the same layer-package model with `--split`, and restart the relevant nodes with
-the generated exact commands. Then run:
+For a split, read <https://meshllm.cloud/SKIPPY_SPLITS.md>. A layer-package model
+too large for any single node auto-splits once a second eligible node joins;
+`--split` only forces a split of a model that would otherwise fit. Every node
+must request the same package ref. Before downloading, clear three preflight
+items unique to splits:
+
+- **Inbound reachability on each worker.** The coordinator opens stage-control
+  and activation connections *into* each worker, separate from gossip. A worker
+  whose host firewall blocks inbound to `mesh-llm` will gossip, show healthy
+  RTT, and answer chat, yet never receive a stage
+  (`stage_control_unreachable`). On macOS, allow `mesh-llm` for incoming
+  connections (System Settings → Network → Firewall → Options) and disable
+  stealth mode; a managed/MDM Mac needs the GUI or an MDM policy, not the CLI.
+- **Coordinator decode headroom.** The planner budgets weights plus KV but
+  reserves no margin for decode-time command buffers, so a node packed to its
+  advertised capacity can load and then fail on the first token with an
+  out-of-memory decode error. Lower `--ctx-size` (respect the model's minimum
+  context) to shrink KV, and cap the coordinator with `--max-vram` to push
+  layers onto other nodes.
+- **A fast, stable link, brought up together.** Activations cross the network
+  every token and the lane handshake aborts on a transient short read. Prefer a
+  wired or stable LAN, and start the coordinator and workers close together —
+  widely staggered stage readiness can wedge the handshake.
+
+Restart the relevant nodes with the generated exact commands, then run:
 
 ```sh
 mesh-llm doctor split --model-ref '<exact-layer-package-ref>' --port 3131 --json
@@ -493,7 +506,22 @@ Classify before changing anything:
   caches as a first response.
 - **Split failure:** use `doctor split`, stage/runtime status, exact package ref,
   peer latency, and a diagnostic bundle. Fall back to independent models when
-  the split cannot be proven healthy.
+  the split cannot be proven healthy. Common signatures and responses:
+  - `stage_control_unreachable` while the peer is connected: the coordinator
+    cannot reach a worker's stage-control. Check the worker's inbound
+    firewall/stealth allowance for `mesh-llm`, not just that it is a peer.
+  - `claim failed: timeout waiting for stage control response`: slow/jittery
+    link. Restart both nodes together and retry.
+  - `persistent downstream lane did not become ready`: the stage-to-stage lane
+    handshake hit a short read (network hiccup or widely staggered readiness).
+    Bring the nodes up together on a stable link.
+  - Decode-time OOM (e.g. `kIOGPUCommandBufferCallbackErrorOutOfMemory`,
+    `llama_decode ret=-3`) after the model reports ready: the stage was packed
+    with no decode headroom. Lower `--ctx-size` and/or `--max-vram` so fewer
+    layers land on it. A dying stage withdraws the whole split, so apply
+    headroom on every node.
+  - `split_capacity_shortfall ... below minimum valid context`: `--ctx-size` is
+    under the model's floor; raise it to the reported minimum.
 
 If the cause is remote-only, offer two choices: the user pastes the relevant
 remote output, or the user authorizes SSH to the named machine. With SSH
