@@ -1,10 +1,12 @@
 use anyhow::Result;
 use mesh_llm_host_runtime::command_support::models::{
-    find_model_path, find_remote_catalog_model_exact, huggingface_identity_for_path,
-    installed_model_capabilities, installed_model_display_name, installed_model_huggingface_ref,
-    layered_package_layer_count_for_path, layered_package_total_bytes_for_path,
-    load_model_usage_record_for_path, remote_catalog_model_ref, scan_installed_models,
+    find_model_path, find_remote_catalog_model_exact, huggingface_hub_cache_dir,
+    huggingface_identity_for_path, installed_model_capabilities, installed_model_display_name,
+    installed_model_huggingface_ref, layered_package_layer_count_for_path,
+    layered_package_total_bytes_for_path, load_model_usage_record_for_path,
+    remote_catalog_model_ref, scan_installed_models_in,
 };
+use std::path::Path;
 
 use super::formatters::{InstalledRow, models_formatter};
 
@@ -12,8 +14,8 @@ fn installed_layer_package_count(name: &str, detected_count: Option<usize>) -> O
     detected_count.or_else(|| name.ends_with("-layers").then_some(0))
 }
 
-fn build_installed_rows() -> Vec<InstalledRow> {
-    scan_installed_models()
+fn build_installed_rows(cache_root: &Path) -> Vec<InstalledRow> {
+    scan_installed_models_in(cache_root)
         .into_iter()
         .map(|name| {
             let path = find_model_path(&name);
@@ -74,15 +76,13 @@ fn build_installed_rows() -> Vec<InstalledRow> {
 
 pub(super) fn run_model_installed(json_output: bool) -> Result<()> {
     let formatter = models_formatter(json_output);
-    let rows = build_installed_rows();
+    let rows = build_installed_rows(&huggingface_hub_cache_dir());
     formatter.render_installed(&rows)
 }
 
 #[cfg(test)]
 mod tests {
     use super::build_installed_rows;
-    use serial_test::serial;
-    use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -91,16 +91,6 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("mesh-llm-{prefix}-{stamp}"))
-    }
-
-    fn restore_env(key: &str, previous: Option<OsString>) {
-        if let Some(value) = previous {
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            unsafe { std::env::set_var(key, value) };
-        } else {
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            unsafe { std::env::remove_var(key) };
-        }
     }
 
     fn create_cache_repo_file(
@@ -126,12 +116,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn installed_rows_keep_layered_package_ref_and_safe_commands() {
-        let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
-        let prev_hf_home = std::env::var_os("HF_HOME");
-        let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
-
         let temp = unique_temp_dir("installed-layered-row");
         create_cache_repo_file(
             &temp,
@@ -155,14 +140,7 @@ mod tests {
             9,
         );
 
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var("HF_HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
-
-        let rows = build_installed_rows();
+        let rows = build_installed_rows(&temp);
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
         assert_eq!(row.model_ref, "meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers");
@@ -175,18 +153,10 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&temp);
-        restore_env("HF_HUB_CACHE", prev_hub_cache);
-        restore_env("HF_HOME", prev_hf_home);
-        restore_env("XDG_CACHE_HOME", prev_xdg);
     }
 
     #[test]
-    #[serial]
     fn installed_rows_keep_partial_layered_package_grouped() {
-        let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
-        let prev_hf_home = std::env::var_os("HF_HOME");
-        let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
-
         let temp = unique_temp_dir("installed-partial-layered-row");
         let metadata = create_cache_repo_file(
             &temp,
@@ -196,14 +166,7 @@ mod tests {
             6,
         );
 
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var("HF_HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
-
-        let rows = build_installed_rows();
+        let rows = build_installed_rows(&temp);
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
         assert_eq!(row.path, metadata);
@@ -217,8 +180,5 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&temp);
-        restore_env("HF_HUB_CACHE", prev_hub_cache);
-        restore_env("HF_HOME", prev_hf_home);
-        restore_env("XDG_CACHE_HOME", prev_xdg);
     }
 }
