@@ -9,6 +9,10 @@ The intended result is a private mesh containing this machine and one or more
 additional machines, followed by a practical model plan and an optional local
 agent-harness configuration.
 
+The current version of this runbook is always available at
+<https://meshllm.cloud/setup-mesh>. If you lose it mid-session, re-fetch that
+URL rather than relying on memory.
+
 ## Instructions for the assistant
 
 Work interactively. Explain each material choice, ask before installing,
@@ -40,17 +44,17 @@ Treat the installed CLI as the authority for its version. Run relevant
 the concepts, but do not assume that a newer document describes an older
 installed binary:
 
-- [Mesh workflows](docs/MESHES.md)
-- [Skippy split serving](docs/SKIPPY_SPLITS.md)
-- [Agent harnesses](docs/AGENTS.md)
-- [Configuration](website/src/docs/pages/config-reference.md)
+- [Mesh workflows](https://meshllm.cloud/MESHES.md)
+- [Skippy split serving](https://meshllm.cloud/SKIPPY_SPLITS.md)
+- [Agent harnesses](https://meshllm.cloud/docs/agents/)
+- [Configuration](https://meshllm.cloud/docs/config-reference/)
 
 Do not make a mesh public unless the user explicitly asks. Do not post an
 invite token, credentials, host inventory, or private paths to a public service.
 An ordinary private invite is connectivity material, not a strong
 identity/admission policy. For an untrusted network or controlled membership,
-stop and discuss the owner identity and trust-policy options in `docs/MESHES.md`
-before enrolling nodes.
+stop and discuss the owner identity and trust-policy options in
+<https://meshllm.cloud/MESHES.md> before enrolling nodes.
 
 ### 1. Ask what the user is building
 
@@ -437,7 +441,7 @@ it serves, either use approved SSH or give the user a new exact foreground
 command that restarts it with `serve --join ... --model ...`. Do not imply that
 the coordinator can install or launch arbitrary models remotely.
 
-For a split, read `docs/SKIPPY_SPLITS.md`, ensure every serving node requests
+For a split, read <https://meshllm.cloud/SKIPPY_SPLITS.md>, ensure every serving node requests
 the same layer-package model with `--split`, and restart the relevant nodes with
 the generated exact commands. Then run:
 
