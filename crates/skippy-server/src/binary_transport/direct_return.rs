@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io,
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -287,6 +287,58 @@ impl PredictionReturnSinks {
     }
 }
 
+/// Read timeout for the return-sink ready handshake. `recv_ready` is a blocking
+/// `read_exact`; without this a stalled downstream connection hangs the open
+/// forever, which mid-generation blocks the request from ever falling back to
+/// the upstream reply. Kept short so a genuinely stalled peer fails fast to the
+/// fallback; cleared afterwards so the sink's normal reads stay blocking.
+///
+/// This is a *single bounded deadline*, not a retry budget: the sink is opened
+/// on the generation hot path, and `connect_downstream_socket` already bounds
+/// the connect itself, so wrapping this in an outer retry only compounds the
+/// worst-case stall (see PR #1011 review).
+const RETURN_SINK_READY_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Connect to `return_addr`, complete the ready handshake, and send the
+/// prediction-return open message. Single bounded attempt — on failure the
+/// caller falls back to the upstream reply path.
+fn open_return_sink_once(
+    return_addr: SocketAddr,
+    source_ip: Option<IpAddr>,
+    request_id: u64,
+    session_id: u64,
+    wire_dtype: WireActivationDType,
+    not_ready_context: &'static str,
+) -> Result<TcpStream> {
+    let mut stream = connect_downstream_socket(return_addr, source_ip, Duration::from_secs(2))
+        .map_err(|error| anyhow!(error))?;
+    stream.set_nodelay(true).ok();
+    send_client_ready_hello_if_enabled(&mut stream)
+        .context("send prediction return client ready hello")?;
+    // Bound the ready handshake read. `recv_ready` is a blocking `read_exact`;
+    // without a timeout a stalled downstream connection hangs the return-sink
+    // open forever, blocking generation from falling back to the upstream reply.
+    // A single short deadline (no outer retry) fails fast to that fallback.
+    // Both the set and the clear are propagated: if the set fails, `recv_ready`
+    // would be unbounded (defeating the fix); if the clear fails, the handshake
+    // timeout would leak into the sink's later reads.
+    stream
+        .set_read_timeout(Some(RETURN_SINK_READY_READ_TIMEOUT))
+        .context("set prediction return ready read timeout")?;
+    let ready = recv_ready(&mut stream).context(not_ready_context);
+    stream
+        .set_read_timeout(None)
+        .context("clear prediction return ready read timeout")?;
+    ready?;
+    write_stage_message(
+        &mut stream,
+        &prediction_return_open_message(request_id, session_id),
+        wire_dtype,
+    )
+    .context("open prediction return stream")?;
+    Ok(stream)
+}
+
 pub(crate) fn open_prediction_return_stream(
     config: &StageConfig,
     topology: Option<&StageTopology>,
@@ -298,34 +350,15 @@ pub(crate) fn open_prediction_return_stream(
     let endpoint = driver_stage_endpoint(config, topology)?;
     let return_addr = resolve_downstream_endpoint(endpoint)?;
     let source_ip = downstream_source_ip(config)?;
-    let attempts = 1;
-    let mut last_error = None;
-    for _ in 0..attempts {
-        match connect_downstream_socket(return_addr, source_ip, Duration::from_secs(2)) {
-            Ok(mut stream) => {
-                stream.set_nodelay(true).ok();
-                send_client_ready_hello_if_enabled(&mut stream)
-                    .context("send prediction return client ready hello")?;
-                recv_ready(&mut stream).context("prediction return sink did not become ready")?;
-                write_stage_message(
-                    &mut stream,
-                    &prediction_return_open_message(request_id, session_id),
-                    wire_dtype,
-                )
-                .context("open direct prediction return stream")?;
-                return Ok(stream);
-            }
-            Err(error) => {
-                last_error = Some(anyhow!(error));
-                std::thread::sleep(Duration::from_millis(500));
-            }
-        }
-    }
-    Err(last_error
-        .unwrap_or_else(|| anyhow!("timed out"))
-        .context(format!(
-            "connect direct prediction return sink at {endpoint}"
-        )))
+    open_return_sink_once(
+        return_addr,
+        source_ip,
+        request_id,
+        session_id,
+        wire_dtype,
+        "prediction return sink did not become ready",
+    )
+    .with_context(|| format!("connect direct prediction return sink at {endpoint}"))
 }
 
 pub(crate) fn open_downstream_prediction_return_stream(
@@ -341,19 +374,15 @@ pub(crate) fn open_downstream_prediction_return_stream(
     let endpoint = strip_tcp_prefix(&downstream.endpoint);
     let return_addr = resolve_downstream_endpoint(endpoint)?;
     let source_ip = downstream_source_ip(config)?;
-    let mut stream = connect_downstream_socket(return_addr, source_ip, Duration::from_secs(2))
-        .with_context(|| format!("connect downstream prediction return sink at {endpoint}"))?;
-    stream.set_nodelay(true).ok();
-    send_client_ready_hello_if_enabled(&mut stream)
-        .context("send downstream prediction return client ready hello")?;
-    recv_ready(&mut stream).context("downstream prediction return sink did not become ready")?;
-    write_stage_message(
-        &mut stream,
-        &prediction_return_open_message(request_id, session_id),
+    open_return_sink_once(
+        return_addr,
+        source_ip,
+        request_id,
+        session_id,
         wire_dtype,
+        "downstream prediction return sink did not become ready",
     )
-    .context("open downstream prediction return stream")?;
-    Ok(stream)
+    .with_context(|| format!("connect downstream prediction return sink at {endpoint}"))
 }
 
 pub(crate) fn send_direct_prediction_return(
