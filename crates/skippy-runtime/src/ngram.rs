@@ -16,13 +16,15 @@ pub fn simple_draft(
     if ngram_size == 0 || max_draft_tokens == 0 || history.len() < 2 {
         return Ok(Vec::new());
     }
+    let output_limit = max_draft_tokens;
+    let search_draft_tokens = max_draft_tokens.max(ngram_size);
     let ngram_size = u16::try_from(ngram_size).context("ngram size exceeds llama.cpp limit")?;
-    let max_draft_tokens =
-        u16::try_from(max_draft_tokens).context("N-gram draft limit exceeds llama.cpp limit")?;
+    let search_draft_tokens = u16::try_from(search_draft_tokens)
+        .context("N-gram draft search limit exceeds llama.cpp limit")?;
     let (sampled_token, token_ids) = history
         .split_last()
         .expect("history length is checked above");
-    let mut output_tokens = vec![0_i32; usize::from(max_draft_tokens)];
+    let mut output_tokens = vec![0_i32; usize::from(search_draft_tokens)];
     let mut output_token_count = 0_usize;
     let mut error = ptr::null_mut();
     let status = unsafe {
@@ -31,7 +33,7 @@ pub fn simple_draft(
             token_ids.len(),
             *sampled_token,
             ngram_size,
-            max_draft_tokens,
+            search_draft_tokens,
             output_tokens.as_mut_ptr(),
             output_tokens.len(),
             &mut output_token_count,
@@ -42,7 +44,7 @@ pub fn simple_draft(
     if output_token_count > output_tokens.len() {
         bail!("llama.cpp N-gram proposer exceeded its requested draft limit");
     }
-    output_tokens.truncate(output_token_count);
+    output_tokens.truncate(output_token_count.min(output_limit));
     Ok(output_tokens)
 }
 
@@ -159,6 +161,15 @@ mod tests {
         let history = [1, 2, 3, 4, 9, 2, 3, 4];
 
         assert_eq!(simple_draft(&history, 2, 2).unwrap(), vec![9, 2]);
+    }
+
+    #[test]
+    fn draft_output_budget_is_independent_from_match_length() {
+        let history = [
+            99, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18, 77, 1, 2, 3, 4, 5, 6, 7, 8,
+        ];
+
+        assert_eq!(simple_draft(&history, 8, 2).unwrap(), vec![11, 12]);
     }
 
     #[test]

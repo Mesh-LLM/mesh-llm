@@ -479,6 +479,26 @@ mod tests {
     }
 
     #[test]
+    fn match_length_does_not_starve_a_short_adaptive_extension() {
+        let mut options = options();
+        options.ngram_size = 8;
+        options.ngram_max_proposal_tokens = 10;
+        let provider = CompositeProposalProvider::from_options(options);
+        let context = [
+            99, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18, 77, 1, 2, 3, 4, 5, 6, 7, 8,
+        ];
+
+        let proposal = provider
+            .propose_with_ngram_extension(&[11], &context, 10, 2, None)
+            .unwrap();
+
+        assert_eq!(proposal.tokens(), &[11, 12, 13]);
+        assert_eq!(proposal.native_mtp_token_count(), 1);
+        assert_eq!(proposal.ngram_token_count(), 2);
+        assert!(proposal.ngram_mtp_prefix_agreed());
+    }
+
+    #[test]
     fn mtp_only_provider_preserves_native_proposals() {
         let mut options = options();
         options.ngram_hybrid = false;
