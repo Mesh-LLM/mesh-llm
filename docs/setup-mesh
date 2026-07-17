@@ -56,23 +56,6 @@ identity/admission policy. For an untrusted network or controlled membership,
 stop and discuss the owner identity and trust-policy options in
 <https://meshllm.cloud/MESHES.md> before enrolling nodes.
 
-### Pick the shortest path for the goal
-
-This is a conditional runbook, not a linear script. Once you know the goal from
-section 1, follow only the sections it needs instead of walking all eleven:
-
-| Goal | Sections to follow |
-| --- | --- |
-| Local chat or coding agent on one machine you already have | 2 (install check), 3 (survey — filtered), 9 (harness), 11 (report). Skip 4–7. |
-| Prove a two-node mesh works | 2, 3, 4, 5, 6, 11 |
-| Several independent models across machines | 2, 3, 4, 5, 6, 7, 11 |
-| One large model split across machines (advanced) | 2, 3, 4, 5, 6, 7 (split shape) + `docs/SKIPPY_SPLITS.md`, 11 |
-| Persistent service after a foreground test proves out | Prove the goal first, then revisit service setup in 2 |
-
-Diagnostics (section 8) and the journal (section 10) apply throughout. When a
-single-machine harness is the whole goal, do not build enrollment blocks,
-topology tables, or split doctors the user did not ask for.
-
 ### 1. Ask what the user is building
 
 Begin with a short Q&A. Ask only what is not already known, and allow the user
@@ -97,6 +80,23 @@ Default to one additional node, a private mesh, foreground processes, and
 preflighted final models. Use a small starter model only when the additional
 machine cannot be inventoried before mesh creation. Do not require an agent on
 the other machine.
+
+### Pick the shortest path for the goal
+
+This is a conditional runbook, not a linear script. Once you know the goal from
+section 1, follow only the sections it needs instead of walking all eleven:
+
+| Goal | Sections to follow |
+| --- | --- |
+| Local chat or coding agent on one machine you already have | 2 (install check), 3 (survey — filtered), 9 (harness), 11 (report). Skip 4–7. |
+| Prove a two-node mesh works | 2, 3, 4, 5, 6, 11 |
+| Several independent models across machines | 2, 3, 4, 5, 6, 7, 11 |
+| One large model split across machines (advanced) | 2, 3, 4, 5, 6, 7 (split shape) + `docs/SKIPPY_SPLITS.md`, 11 |
+| Persistent service after a foreground test proves out | Prove the goal first, then revisit service setup in 2 |
+
+Diagnostics (section 8) and the journal (section 10) apply throughout. When a
+single-machine harness is the whole goal, do not build enrollment blocks,
+topology tables, or split doctors the user did not ask for.
 
 ### 2. Establish the installed release
 
@@ -168,10 +168,11 @@ Windows x64 PowerShell:
 irm https://meshllm.cloud/install.ps1 | iex
 ```
 
-The installer normally runs `mesh-llm setup` when interactive. Afterwards,
-open a new shell if necessary and verify `mesh-llm --version` and
-`mesh-llm --help`. Do not recommend Homebrew unless its current availability
-has been independently verified.
+The `curl ... | bash` invocation pipes stdin, so the installer cannot auto-run
+the interactive setup step; it prints the setup command instead. Afterwards, open
+a new shell if necessary and verify `mesh-llm --version` and `mesh-llm --help`.
+Do not recommend Homebrew unless its current availability has been independently
+verified.
 
 If an installed release is behind, explain the difference and ask before
 running:
@@ -329,8 +330,8 @@ For macOS or Linux:
 
 ```sh
 set -eu
-curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --no-setup
-MESH="$HOME/.local/bin/mesh-llm"
+command -v mesh-llm || curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --no-setup
+MESH="$(command -v mesh-llm)"
 "$MESH" setup --yes --no-service
 "$MESH" doctor --json
 exec "$MESH" serve --join '<complete-invite-token>' \
@@ -340,11 +341,14 @@ exec "$MESH" serve --join '<complete-invite-token>' \
 For Windows x64 PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://meshllm.cloud/install.ps1))) -NoSetup
-$Mesh = Join-Path $env:LOCALAPPDATA 'mesh-llm\bin\mesh-llm.exe'
-& $Mesh setup --yes --no-service
-& $Mesh doctor --json
-& $Mesh serve --join '<complete-invite-token>' `
+$Mesh = Get-Command mesh-llm.exe -ErrorAction SilentlyContinue
+if (-not $Mesh) {
+  & ([scriptblock]::Create((irm https://meshllm.cloud/install.ps1))) -NoSetup
+}
+$MESHPATH = (Get-Command mesh-llm.exe -ErrorAction Stop).Source
+& $MESHPATH setup --yes --no-service
+& $MESHPATH doctor --json
+& $MESHPATH serve --join '<complete-invite-token>' `
   --model '<exact-cached-model-ref>' --name '<node-name>' --log-format json
 ```
 
@@ -474,9 +478,31 @@ it serves, either use approved SSH or give the user a new exact foreground
 command that restarts it with `serve --join ... --model ...`. Do not imply that
 the coordinator can install or launch arbitrary models remotely.
 
-For a split, read <https://meshllm.cloud/SKIPPY_SPLITS.md>, ensure every serving node requests
-the same layer-package model with `--split`, and restart the relevant nodes with
-the generated exact commands. Then run:
+For a split, read <https://meshllm.cloud/SKIPPY_SPLITS.md>. A layer-package model
+too large for any single node auto-splits once a second eligible node joins;
+`--split` only forces a split of a model that would otherwise fit. Every node
+must request the same package ref. Before downloading, clear three preflight
+items unique to splits:
+
+- **Inbound reachability on each worker.** The coordinator opens stage-control
+  and activation connections *into* each worker, separate from gossip. A worker
+  whose host firewall blocks inbound to `mesh-llm` will gossip, show healthy
+  RTT, and answer chat, yet never receive a stage
+  (`stage_control_unreachable`). On macOS, allow `mesh-llm` for incoming
+  connections (System Settings → Network → Firewall → Options) and disable
+  stealth mode; a managed/MDM Mac needs the GUI or an MDM policy, not the CLI.
+- **Coordinator decode headroom.** The planner budgets weights plus KV but
+  reserves no margin for decode-time command buffers, so a node packed to its
+  advertised capacity can load and then fail on the first token with an
+  out-of-memory decode error. Lower `--ctx-size` (respect the model's minimum
+  context) to shrink KV, and cap the coordinator with `--max-vram` to push
+  layers onto other nodes.
+- **A fast, stable link, brought up together.** Activations cross the network
+  every token and the lane handshake aborts on a transient short read. Prefer a
+  wired or stable LAN, and start the coordinator and workers close together —
+  widely staggered stage readiness can wedge the handshake.
+
+Restart the relevant nodes with the generated exact commands, then run:
 
 ```sh
 mesh-llm doctor split --model-ref '<exact-layer-package-ref>' --port 3131 --json
@@ -513,9 +539,11 @@ Classify before changing anything:
   identified multi-interface/bridge-address problem. Do not switch to mDNS as
   a generic fix; it may require local mDNS services such as Avahi and still
   requires the invite.
-- **Node joins as standby:** this is expected after the enrollment block. It
-  advertises capacity but serves no new model until demand/local inventory can
-  promote it or it is restarted with an explicit model.
+- **Node joins as standby:** expected only when the enrollment block omitted
+  `--model` (i.e. inventory was unavailable or the user explicitly requested
+  standby capacity). If `--model` was provided, standby status means the model
+  failed to start — investigate model availability, capacity, and `doctor`
+  output on the remote node.
 - **Model absent:** distinguish downloading, resolving, loading, insufficient
   capacity, and unsupported backend. Check local inventory and exact model ref.
 - **Reported ready but inference crashes or hangs:** inspect the foreground
@@ -526,7 +554,22 @@ Classify before changing anything:
   caches as a first response.
 - **Split failure:** use `doctor split`, stage/runtime status, exact package ref,
   peer latency, and a diagnostic bundle. Fall back to independent models when
-  the split cannot be proven healthy.
+  the split cannot be proven healthy. Common signatures and responses:
+  - `stage_control_unreachable` while the peer is connected: the coordinator
+    cannot reach a worker's stage-control. Check the worker's inbound
+    firewall/stealth allowance for `mesh-llm`, not just that it is a peer.
+  - `claim failed: timeout waiting for stage control response`: slow/jittery
+    link. Restart both nodes together and retry.
+  - `persistent downstream lane did not become ready`: the stage-to-stage lane
+    handshake hit a short read (network hiccup or widely staggered readiness).
+    Bring the nodes up together on a stable link.
+  - Decode-time OOM (e.g. `kIOGPUCommandBufferCallbackErrorOutOfMemory`,
+    `llama_decode ret=-3`) after the model reports ready: the stage was packed
+    with no decode headroom. Lower `--ctx-size` and/or `--max-vram` so fewer
+    layers land on it. A dying stage withdraws the whole split, so apply
+    headroom on every node.
+  - `split_capacity_shortfall ... below minimum valid context`: `--ctx-size` is
+    under the model's floor; raise it to the reported minimum.
 
 If the cause is remote-only, offer two choices: the user pastes the relevant
 remote output, or the user authorizes SSH to the named machine. With SSH
@@ -634,11 +677,11 @@ not complete, and give the smallest next diagnostic action.
 
 ## Real-world failure references
 
-The operational lessons from reported failures are already folded into the
-checks above — binary/CLI mismatch (sections 2 and 8), clipped invite tokens
-(section 4), split workers stuck in standby (section 7), read-only download
-paths and load-versus-inference crashes (section 8), and mDNS fallback caveats
-(section 8). Follow those checks rather than reading issue history mid-session.
+These reports inform the checks above and may help when symptoms match:
 
-Maintainers tracking the underlying reports can find them in the project issue
-tracker; they are provenance for the checks, not runbook steps for the assistant.
+- [Outdated binary missing setup/config commands](https://github.com/Mesh-LLM/mesh-llm/issues/961)
+- [Invite token clipped in terminal output](https://github.com/Mesh-LLM/mesh-llm/issues/964)
+- [Split coordinator ready while a worker stage is never activated](https://github.com/Mesh-LLM/mesh-llm/issues/951)
+- [Model download resolving to a read-only path](https://github.com/Mesh-LLM/mesh-llm/issues/980)
+- [First inference crashes despite successful model load on an unsupported ROCm target](https://github.com/Mesh-LLM/mesh-llm/issues/966)
+- [Detailed newcomer feedback on install, mDNS, model choice, and split ergonomics](https://github.com/Mesh-LLM/mesh-llm/discussions/978)

@@ -81,6 +81,23 @@ preflighted final models. Use a small starter model only when the additional
 machine cannot be inventoried before mesh creation. Do not require an agent on
 the other machine.
 
+### Pick the shortest path for the goal
+
+This is a conditional runbook, not a linear script. Once you know the goal from
+section 1, follow only the sections it needs instead of walking all eleven:
+
+| Goal | Sections to follow |
+| --- | --- |
+| Local chat or coding agent on one machine you already have | 2 (install check), 3 (survey — filtered), 9 (harness), 11 (report). Skip 4–7. |
+| Prove a two-node mesh works | 2, 3, 4, 5, 6, 11 |
+| Several independent models across machines | 2, 3, 4, 5, 6, 7, 11 |
+| One large model split across machines (advanced) | 2, 3, 4, 5, 6, 7 (split shape) + `docs/SKIPPY_SPLITS.md`, 11 |
+| Persistent service after a foreground test proves out | Prove the goal first, then revisit service setup in 2 |
+
+Diagnostics (section 8) and the journal (section 10) apply throughout. When a
+single-machine harness is the whole goal, do not build enrollment blocks,
+topology tables, or split doctors the user did not ask for.
+
 ### 2. Establish the installed release
 
 On this main machine, inspect without changing anything:
@@ -151,10 +168,11 @@ Windows x64 PowerShell:
 irm https://meshllm.cloud/install.ps1 | iex
 ```
 
-The installer normally runs `mesh-llm setup` when interactive. Afterwards,
-open a new shell if necessary and verify `mesh-llm --version` and
-`mesh-llm --help`. Do not recommend Homebrew unless its current availability
-has been independently verified.
+The `curl ... | bash` invocation pipes stdin, so the installer cannot auto-run
+the interactive setup step; it prints the setup command instead. Afterwards, open
+a new shell if necessary and verify `mesh-llm --version` and `mesh-llm --help`.
+Do not recommend Homebrew unless its current availability has been independently
+verified.
 
 If an installed release is behind, explain the difference and ask before
 running:
@@ -238,6 +256,22 @@ Prefer exact entries returned by `mesh-llm models installed --json`, inspect
 their reported path and total size, and use `models show` for fit/capabilities.
 Prefer complete cached models before proposing any large download.
 
+`models installed --json` currently enumerates individual layer-package and
+split-shard files as separate entries (tracked as a bug: mesh should group
+these under one package ref). On a machine with cached Skippy packages this can
+be dozens of rows that are not independently runnable. Filter before you show
+anything to the user:
+
+- Exclude split fragments and package internals: refs ending in `-layers` (or
+  containing `/layers/` or `/shared/`), and any `layer-*.gguf`, `shared/*.gguf`,
+  `metadata.gguf`, or `skippy-shard-*` path. These are only relevant when the
+  goal is a split (section 7 and `docs/SKIPPY_SPLITS.md`).
+- Keep complete, independently loadable GGUFs.
+- For a coding-agent goal, rank the survivors by advertised `tool_use` support,
+  then by fit, and confirm capability with `models show`.
+- Present at most three candidates with size, capability evidence, and fit.
+  Never paste the raw installed list back to the user.
+
 If remote inventory is unavailable and the initial goal is only to create a
 mesh, select a small starter model from the current catalog or local inventory.
 Prefer a well-supported model that is a small fraction of local capacity and
@@ -296,8 +330,8 @@ For macOS or Linux:
 
 ```sh
 set -eu
-curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --no-setup
-MESH="$HOME/.local/bin/mesh-llm"
+command -v mesh-llm || curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --no-setup
+MESH="$(command -v mesh-llm)"
 "$MESH" setup --yes --no-service
 "$MESH" doctor --json
 exec "$MESH" serve --join '<complete-invite-token>' \
@@ -307,11 +341,14 @@ exec "$MESH" serve --join '<complete-invite-token>' \
 For Windows x64 PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://meshllm.cloud/install.ps1))) -NoSetup
-$Mesh = Join-Path $env:LOCALAPPDATA 'mesh-llm\bin\mesh-llm.exe'
-& $Mesh setup --yes --no-service
-& $Mesh doctor --json
-& $Mesh serve --join '<complete-invite-token>' `
+$Mesh = Get-Command mesh-llm.exe -ErrorAction SilentlyContinue
+if (-not $Mesh) {
+  & ([scriptblock]::Create((irm https://meshllm.cloud/install.ps1))) -NoSetup
+}
+$MESHPATH = (Get-Command mesh-llm.exe -ErrorAction Stop).Source
+& $MESHPATH setup --yes --no-service
+& $MESHPATH doctor --json
+& $MESHPATH serve --join '<complete-invite-token>' `
   --model '<exact-cached-model-ref>' --name '<node-name>' --log-format json
 ```
 
@@ -409,16 +446,25 @@ mesh-llm models show '<exact-model-ref>' --json
 
 Do not equate parameter count with resident bytes. Compare the exact artifact
 or package size with advertised usable capacity and leave meaningful headroom.
-Prefer catalog entries and certified families over arbitrary large GGUFs. Do
-not hard-code a recommendation from memory figures; catalog contents, quants,
-certification, context needs, and runtime support change. Show live
-search/show evidence and let the user choose.
+Prefer catalog entries and certified families over arbitrary large GGUFs.
 
-As a rough shape: a strong model on the larger node plus a smaller, faster one
-on the smaller node is usually the best first test. Reserve a split for when a
-layer package is clearly too large for any single node but comfortably below
-combined usable capacity after overhead, on a fast, stable link — and let the
-split doctor validate peer eligibility before downloading hundreds of gigabytes.
+Useful planning examples, not fixed recommendations:
+
+- For a 128 GB Apple Silicon machine plus a 64 GB Apple Silicon machine, first
+  consider a strong model that fits the larger node and a smaller, faster or
+  differently capable model on the smaller node. Consider a split only when an
+  exact layer package is clearly too large for 128 GB but comfortably below the
+  mesh's combined usable capacity after overhead.
+- For a machine above 256 GB plus a 128 GB Apple Silicon machine on a fast LAN,
+  it can be reasonable to evaluate a much larger package-backed split model.
+  This remains an advanced plan: inspect the package, certify it, and let the
+  split doctor validate actual peer eligibility before downloading hundreds of
+  gigabytes.
+
+Do not hard-code a model recommendation from these memory figures. Catalog
+contents, quants, package certification, context requirements, and runtime
+support change. Show the live search/show evidence and ask the user which plan
+to enact.
 
 For independent models, the main node can add a model to its active serving
 runtime with the supported local lifecycle command:
@@ -493,9 +539,11 @@ Classify before changing anything:
   identified multi-interface/bridge-address problem. Do not switch to mDNS as
   a generic fix; it may require local mDNS services such as Avahi and still
   requires the invite.
-- **Node joins as standby:** this is expected after the enrollment block. It
-  advertises capacity but serves no new model until demand/local inventory can
-  promote it or it is restarted with an explicit model.
+- **Node joins as standby:** expected only when the enrollment block omitted
+  `--model` (i.e. inventory was unavailable or the user explicitly requested
+  standby capacity). If `--model` was provided, standby status means the model
+  failed to start — investigate model availability, capacity, and `doctor`
+  output on the remote node.
 - **Model absent:** distinguish downloading, resolving, loading, insufficient
   capacity, and unsupported backend. Check local inventory and exact model ref.
 - **Reported ready but inference crashes or hangs:** inspect the foreground
