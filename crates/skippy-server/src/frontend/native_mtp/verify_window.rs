@@ -199,15 +199,19 @@ impl StageOpenAiBackend {
             && native_mtp_verify_decision.accepted_proposal_tokens == proposal_tokens.len()
             && committed_positions == consumed_positions
             && !reached_stop;
-        if let Some(expected_free_target) = proposal_buffer
-            .as_ref()
-            .and_then(|buffer| buffer.expected_free_target(proposal_tokens.len()))
+        if let Some((profile_width, pipeline_continues)) =
+            proposal_buffer.as_ref().and_then(|buffer| {
+                prospective_pipeline_observation(
+                    buffer,
+                    adaptive_verify_window.width(buffer.remaining_len()),
+                    verify_window_scheduler.depth(),
+                    native_mtp_verify_decision.accepted_proposal_tokens,
+                    &verify.reply.predicted_tokens,
+                )
+            })
         {
-            let pipeline_continues = fully_accepted_window
-                && verify.reply.predicted_tokens.get(proposal_tokens.len())
-                    == Some(&expected_free_target);
             verify_window_scheduler.observe_pipeline_profile(
-                proposal_tokens.len(),
+                profile_width,
                 pipeline_continues,
                 verify.stats.stage0_compute_ms,
                 verify.stats.downstream_wait_ms,
@@ -483,9 +487,32 @@ fn next_native_mtp_draft(
         .flatten()
 }
 
+fn prospective_pipeline_observation(
+    buffer: &BufferedCompositeProposal,
+    adaptive_verify_width: usize,
+    pipeline_depth: usize,
+    accepted_proposal_tokens: usize,
+    predicted_tokens: &[i32],
+) -> Option<(usize, bool)> {
+    if buffer.accepted_tokens() > 0 {
+        return None;
+    }
+    let width = buffer
+        .proposal()
+        .parallel_verify_width(adaptive_verify_width, pipeline_depth)?;
+    let expected_free_target = buffer.expected_free_target(width)?;
+    let continues = accepted_proposal_tokens >= width
+        && predicted_tokens.get(width) == Some(&expected_free_target);
+    Some((width, continues))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{native_mtp_verify_window_inputs, next_native_mtp_draft};
+    use super::{
+        BufferedCompositeProposal, native_mtp_verify_window_inputs, next_native_mtp_draft,
+        prospective_pipeline_observation,
+    };
+    use crate::frontend::NativeMtpHybridProposal;
     use skippy_protocol::binary::StageNativeMtpDraft;
 
     #[test]
@@ -520,5 +547,47 @@ mod tests {
 
         assert_eq!(draft.tokens, vec![11]);
         assert_eq!(draft.proposal_compute_us, 12);
+    }
+
+    #[test]
+    fn full_sync_window_profiles_the_narrower_parallel_width() {
+        let buffer = BufferedCompositeProposal::new(NativeMtpHybridProposal::from_parts(
+            vec![9, 1, 2, 3],
+            1,
+            true,
+        ));
+
+        assert_eq!(
+            prospective_pipeline_observation(&buffer, 4, 2, 4, &[9, 1, 2, 3, 4]),
+            Some((2, true))
+        );
+    }
+
+    #[test]
+    fn later_sync_rejection_preserves_valid_parallel_prefix_evidence() {
+        let buffer = BufferedCompositeProposal::new(NativeMtpHybridProposal::from_parts(
+            vec![9, 1, 2, 3],
+            1,
+            true,
+        ));
+
+        assert_eq!(
+            prospective_pipeline_observation(&buffer, 4, 2, 3, &[9, 1, 2, 99, 4]),
+            Some((2, true))
+        );
+    }
+
+    #[test]
+    fn mismatched_parallel_free_target_records_no_continuation() {
+        let buffer = BufferedCompositeProposal::new(NativeMtpHybridProposal::from_parts(
+            vec![9, 1, 2, 3],
+            1,
+            true,
+        ));
+
+        assert_eq!(
+            prospective_pipeline_observation(&buffer, 4, 2, 2, &[9, 1, 99, 3, 4]),
+            Some((2, false))
+        );
     }
 }
