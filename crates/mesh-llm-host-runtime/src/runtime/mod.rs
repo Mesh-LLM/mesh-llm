@@ -3564,10 +3564,39 @@ pub(crate) async fn run_cli(
 pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) -> Result<()> {
     initialize_embedded_runtime_entrypoint()?;
 
+    // Embedded/SDK serving must bootstrap the native runtime exactly like the
+    // shipped binary does before dispatch. Without this, an SDK consumer that
+    // upgrades the `mesh-llm-sdk` dependency links a new Skippy ABI / release
+    // version but never loads or auto-installs the matching native runtime, so
+    // serving fails later at the Skippy FFI load. Honor the embedded config so
+    // a configured `[runtime.native_runtime]` override still applies. See
+    // https://github.com/Mesh-LLM/mesh-llm/issues/1016.
+    bootstrap_embedded_native_runtime(&options, |config_path| async move {
+        crate::initialize_host_runtime_with_config(config_path.as_deref()).await
+    })
+    .await?;
+
     let surface = options.runtime_surface();
     let control_rx = options.control_rx.take();
     let options = options_from_embedded_options(options);
     run_runtime_cli(options, Some(surface), None, control_rx).await
+}
+
+/// Run the native-runtime bootstrap for the embedded/SDK serving path, deriving
+/// the config path from the embedded options so a configured
+/// `[runtime.native_runtime]` override is honored.
+///
+/// The initializer is injected so the ordering/config-path contract can be
+/// exercised in tests without standing up a full runtime.
+async fn bootstrap_embedded_native_runtime<Init, Fut>(
+    options: &EmbeddedRuntimeOptions,
+    initialize: Init,
+) -> Result<()>
+where
+    Init: FnOnce(Option<PathBuf>) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    initialize(options.config_path.clone()).await
 }
 
 fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOptions {
@@ -3705,6 +3734,109 @@ async fn run_runtime_cli(
 fn apply_runtime_config_options(options: &mut RuntimeOptions, config: &plugin::MeshConfig) {
     options.debug |= config.runtime.debug;
     options.listen_all |= config.runtime.listen_all;
+}
+
+#[cfg(test)]
+fn embedded_runtime_options_for_test(config_path: Option<PathBuf>) -> EmbeddedRuntimeOptions {
+    EmbeddedRuntimeOptions {
+        mode: EmbeddedRuntimeMode::Serve,
+        models: Vec::new(),
+        join: Vec::new(),
+        auto: false,
+        api_port: 9337,
+        console_port: 3131,
+        mesh_name: None,
+        max_vram_gb: None,
+        publish: false,
+        discovery_mode: EmbeddedRuntimeDiscoveryMode::Nostr,
+        relay: Vec::new(),
+        relay_auth: Vec::new(),
+        disable_iroh_relays: false,
+        nostr_relay: Vec::new(),
+        region: None,
+        node_name: None,
+        bind_ip: None,
+        bind_port: None,
+        listen_all: false,
+        enumerate_host: false,
+        owner_key: None,
+        owner_required: false,
+        node_label: None,
+        trust_policy: None,
+        trust_owner: Vec::new(),
+        mesh_requirements: crate::plugin::MeshRequirementsConfig::default(),
+        config_path,
+        log_format: LogFormat::default(),
+        headless: false,
+        control_rx: None,
+    }
+}
+
+#[cfg(test)]
+mod embedded_native_runtime_bootstrap_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn bootstrap_forwards_config_path_and_awaits_initializer() {
+        let config_path = PathBuf::from("/tmp/custom-mesh-llm-config.toml");
+        let options = embedded_runtime_options_for_test(Some(config_path.clone()));
+        let observed = Arc::new(Mutex::new(None::<Option<PathBuf>>));
+
+        let observed_for_init = Arc::clone(&observed);
+        bootstrap_embedded_native_runtime(&options, move |path| {
+            let observed_for_init = Arc::clone(&observed_for_init);
+            async move {
+                *observed_for_init.lock().unwrap() = Some(path);
+                Ok(())
+            }
+        })
+        .await
+        .expect("bootstrap should succeed when the initializer succeeds");
+
+        assert_eq!(
+            observed.lock().unwrap().clone(),
+            Some(Some(config_path)),
+            "embedded bootstrap must forward the embedded config path to the initializer"
+        );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_forwards_absent_config_path() {
+        let options = embedded_runtime_options_for_test(None);
+        let observed = Arc::new(Mutex::new(None::<Option<PathBuf>>));
+
+        let observed_for_init = Arc::clone(&observed);
+        bootstrap_embedded_native_runtime(&options, move |path| {
+            let observed_for_init = Arc::clone(&observed_for_init);
+            async move {
+                *observed_for_init.lock().unwrap() = Some(path);
+                Ok(())
+            }
+        })
+        .await
+        .expect("bootstrap should succeed when the initializer succeeds");
+
+        assert_eq!(observed.lock().unwrap().clone(), Some(None));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_propagates_initializer_failure() {
+        let options = embedded_runtime_options_for_test(None);
+
+        let error = bootstrap_embedded_native_runtime(&options, |_| async {
+            anyhow::bail!("no compatible native runtime installed or installable")
+        })
+        .await
+        .expect_err("embedded serving must fail startup when the native runtime bootstrap fails");
+
+        assert!(
+            error
+                .to_string()
+                .contains("no compatible native runtime installed or installable"),
+            "{error:?}"
+        );
+    }
 }
 
 #[cfg(test)]
