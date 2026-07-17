@@ -1,7 +1,7 @@
-From ada486848915f97f353a231beee7154d19ea3397 Mon Sep 17 00:00:00 2001
+From 4e961a921cfe7a5977ac781e8dfbfcdb04a7e725 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 10/14] Add MTP execution support and sampling cleanup
+Subject: [PATCH 10/16] Add MTP execution support and sampling cleanup
 
 Squashes GLM MTP graph support, batched stage execution, native MTP sidecar support, batched MTP verification drafts, sampling and detokenization parity, unused ABI removal, MTP layer-count and sidecar fixes, VerifySpan copy avoidance, greedy sampling fast path, GLM chat fallback, and GLM DSA IndexShare support.
 ---
@@ -296,10 +296,10 @@ index a6bd7fd9..cfb4a8fa 100644
  
  #ifdef __cplusplus
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index a93f5e42..0dcac6a3 100644
+index c0bfd7db..9ab7be4b 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1943,9 +1943,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
+@@ -1989,9 +1989,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
  
                  const uint32_t n_embd  = hparams.n_embd_out();
                  float * embd_nextn_out = embd_nextn.data + offset*n_embd;
@@ -324,7 +324,7 @@ index a93f5e42..0dcac6a3 100644
          }
  
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 3dd404a8..b3cddaa0 100644
+index fb804ffd..a75f0b75 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -2957,6 +2957,8 @@ ggml_tensor * llm_graph_context::build_attn(
@@ -337,10 +337,10 @@ index 3dd404a8..b3cddaa0 100644
      ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 8507228e..d7b215dc 100644
+index 474daf17..5b83c0c0 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -2178,6 +2178,14 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2190,6 +2190,14 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          }
                      }
  
@@ -705,7 +705,7 @@ index d1b261b4..180fb082 100644
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/src/models/deepseek32.cpp b/src/models/deepseek32.cpp
-index 9a20e2ce..2cc13491 100644
+index 32262e68..ecec31fb 100644
 --- a/src/models/deepseek32.cpp
 +++ b/src/models/deepseek32.cpp
 @@ -202,6 +202,8 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
@@ -734,7 +734,7 @@ index 9a20e2ce..2cc13491 100644
                  ggml_tensor * indexer_q = ggml_mul_mat(ctx0, model.layers[il].indexer_attn_q_b, qr);
                  cb(indexer_q, "indexer_q", il);
  
-@@ -343,6 +352,11 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+@@ -350,6 +359,11 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                  uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
                  top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
                  cb(top_k, "top_k", il);
@@ -783,7 +783,7 @@ index 32fe6def..10bf235f 100644
  }
 -
 diff --git a/src/models/models.h b/src/models/models.h
-index 7a52e7bc..b40f9811 100644
+index a86ae05a..e9a7c0c2 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
 @@ -1068,6 +1068,10 @@ struct llama_model_deepseek2 : public llama_model_base {
@@ -797,7 +797,7 @@ index 7a52e7bc..b40f9811 100644
      std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
  };
  
-@@ -1217,6 +1221,7 @@ struct llama_model_glm_dsa : public llama_model_base {
+@@ -1218,6 +1222,7 @@ struct llama_model_glm_dsa : public llama_model_base {
      void load_arch_tensors(llama_model_loader & ml) override;
  
      using graph = llama_model_deepseek2::graph;

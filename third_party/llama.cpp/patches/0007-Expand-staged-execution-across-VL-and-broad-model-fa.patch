@@ -1,7 +1,7 @@
-From 363f25da46dfc63359e49714f2f88aa4aa961ae1 Mon Sep 17 00:00:00 2001
+From 021062e62500f50ae968e376d4e45c71cbe60307 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 07/14] Expand staged execution across VL and broad model
+Subject: [PATCH 07/16] Expand staged execution across VL and broad model
  families
 
 Squashes RWKV7 activation sideband support, Phi2, Granite, Hunyuan Dense/MoE, PhiMoE, tied-output handling, Qwen35/Hunyuan-VL, broad llama-family coverage, BitNet and StarCoder fixes, and DeepSeek OCR/Qwen3-VL-MoE support.
@@ -84,10 +84,10 @@ index 84169398..1c6d2c9f 100644
  struct skippy_session;
  struct skippy_model_info;
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 5edfc85a..a93f5e42 100644
+index eed041ee..c0bfd7db 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2306,6 +2306,10 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
+@@ -2352,6 +2352,10 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
      return static_cast<llm_graph_result *>(gf_res_reserve.get());
  }
  
@@ -111,7 +111,7 @@ index bf91daa8..42442879 100644
      // returns the result of ggml_backend_sched_graph_compute_async execution
      ggml_status graph_compute(ggml_cgraph * gf, bool batched);
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 8f52e360..65b13ca2 100644
+index f2618710..03873edb 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -23,6 +23,7 @@
@@ -180,7 +180,7 @@ index 8f52e360..65b13ca2 100644
          const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
          for (size_t il = 0; il < embeddings_layer_inp.size(); ++il) {
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 32406ff2..039b69b8 100644
+index 33d57061..d9e241a1 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -43,12 +43,21 @@ struct skippy_activation_tokens {
@@ -205,7 +205,7 @@ index 32406ff2..039b69b8 100644
  
  // certain models (typically multi-modal) can produce different types of graphs
  enum llm_graph_type {
-@@ -180,6 +189,21 @@ public:
+@@ -184,6 +193,21 @@ public:
      ggml_tensor * tokens = nullptr; // I32 [n_batch]
  };
  
@@ -227,7 +227,7 @@ index 32406ff2..039b69b8 100644
  class llm_graph_input_pos : public llm_graph_input_i {
  public:
      llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
-@@ -830,6 +854,7 @@ public:
+@@ -834,6 +858,7 @@ public:
      ggml_tensor * get_embd()        const { return t_embd; }
      ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }
      ggml_tensor * get_h_nextn()     const { return t_h_nextn; }
@@ -235,7 +235,7 @@ index 32406ff2..039b69b8 100644
  
      ggml_tensor * get_layer_inp(int il) const { return t_layer_inp[il]; }
  
-@@ -865,6 +890,7 @@ public:
+@@ -869,6 +894,7 @@ public:
      ggml_tensor * t_embd        = nullptr;
      ggml_tensor * t_embd_pooled = nullptr;
      ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
@@ -305,10 +305,10 @@ index d889c99d..d85aa85d 100644
  enum llama_fver {
      GGUF_FILE_VERSION_V1 = 1,
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 4ea21038..8507228e 100644
+index 3c65b60e..474daf17 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -2745,7 +2745,8 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
+@@ -2758,7 +2758,8 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
          int flags) {
      const int64_t n_embd_qkv = n_embd_q_ + n_embd_k_ + n_embd_v_;
      layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", bid), {n_embd_, n_embd_qkv}, TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);

@@ -1,7 +1,7 @@
-From f26ee1ab5bbd50cada52d1239925642d1cfe20ca Mon Sep 17 00:00:00 2001
+From c1d935460e27f2522207cd248b0cb95ab10d2b79 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 08/14] Add external decode, media prefill, and newer family
+Subject: [PATCH 08/16] Add external decode, media prefill, and newer family
  support
 
 Squashes tensor filtering accounting fixes, recurrent KV page export handling, external decode filtering, staged external media prefill, tensor element counts, activation-frame batch padding and position sideband, plus Gemma3n, Llama4, and Mistral4 slices.
@@ -98,7 +98,7 @@ index 1c6d2c9f..f1ff7852 100644
          struct skippy_session * session,
          llama_token token_id,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 65b13ca2..3dd404a8 100644
+index 03873edb..fb804ffd 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -24,6 +24,7 @@
@@ -255,7 +255,7 @@ index 65b13ca2..3dd404a8 100644
          const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
          for (size_t il = 0; il < embeddings_layer_inp.size(); ++il) {
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 039b69b8..b9f7b6c9 100644
+index d9e241a1..2e0d9c3b 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -49,6 +49,13 @@ struct skippy_activation_rwkv7_v_first {
@@ -282,7 +282,7 @@ index 039b69b8..b9f7b6c9 100644
  
  // certain models (typically multi-modal) can produce different types of graphs
  enum llm_graph_type {
-@@ -204,6 +214,22 @@ private:
+@@ -208,6 +218,22 @@ private:
      int64_t n_embd;
  };
  
@@ -305,7 +305,7 @@ index 039b69b8..b9f7b6c9 100644
  class llm_graph_input_pos : public llm_graph_input_i {
  public:
      llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
-@@ -855,6 +881,7 @@ public:
+@@ -859,6 +885,7 @@ public:
      ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }
      ggml_tensor * get_h_nextn()     const { return t_h_nextn; }
      ggml_tensor * get_skippy_rwkv7_v_first() const { return t_skippy_rwkv7_v_first; }
@@ -313,7 +313,7 @@ index 039b69b8..b9f7b6c9 100644
  
      ggml_tensor * get_layer_inp(int il) const { return t_layer_inp[il]; }
  
-@@ -891,6 +918,7 @@ public:
+@@ -895,6 +922,7 @@ public:
      ggml_tensor * t_embd_pooled = nullptr;
      ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
      ggml_tensor * t_skippy_rwkv7_v_first = nullptr;

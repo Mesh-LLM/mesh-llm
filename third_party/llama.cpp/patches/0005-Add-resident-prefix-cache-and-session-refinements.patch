@@ -1,7 +1,7 @@
-From c8215d3d3b513aa2b575b40cd47ac7877abdc1dd Mon Sep 17 00:00:00 2001
+From 6ef5b5c66a88af43d7f4d853a848ce638d0db170 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 05/14] Add resident prefix cache and session refinements
+Subject: [PATCH 05/16] Add resident prefix cache and session refinements
 
 Squashes resident prefix cache support, exact-prefix state restoration, borrowed prefix sessions, lazy generation signals, single-token allocation avoidance, server-like thread defaults, prefix cache borrowing, lane preservation, and recurrent-state remapping.
 ---

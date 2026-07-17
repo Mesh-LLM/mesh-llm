@@ -1,7 +1,7 @@
-From 5cadd27893dc12af80a115884275e48c7396e8f8 Mon Sep 17 00:00:00 2001
+From 4a64533c4fc75234c0d7aaf9a453a90ee43f25fa Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 14 Jul 2026 19:32:50 +1000
-Subject: [PATCH] Recognize thinking field in chat auto-parser
+Subject: [PATCH 16/16] Recognize thinking field in chat auto-parser
 
 ---
  common/chat-diff-analyzer.cpp   | 10 +++++++---
@@ -9,10 +9,10 @@ Subject: [PATCH] Recognize thinking field in chat auto-parser
  2 files changed, 28 insertions(+), 3 deletions(-)
 
 diff --git a/common/chat-diff-analyzer.cpp b/common/chat-diff-analyzer.cpp
-index b166ee5a..787264ca 100644
+index 127278df..bc9abb70 100644
 --- a/common/chat-diff-analyzer.cpp
 +++ b/common/chat-diff-analyzer.cpp
-@@ -454,7 +454,8 @@ void analyze_reasoning::compare_reasoning_presence() {
+@@ -456,7 +456,8 @@ void analyze_reasoning::compare_reasoning_presence() {
      json assistant_with_reasoning = json{
          { "role",              "assistant"                },
          { "content",           ASSISTANT_MSG              },
@@ -22,7 +22,7 @@ index b166ee5a..787264ca 100644
      };
  
      template_params params;
-@@ -587,13 +588,15 @@ void analyze_reasoning::compare_reasoning_scope() {
+@@ -589,13 +590,15 @@ void analyze_reasoning::compare_reasoning_scope() {
      json assistant_reasoning_content = json{
          { "role",              "assistant"      },
          { "content",           ASSISTANT_MSG    },
@@ -39,7 +39,7 @@ index b166ee5a..787264ca 100644
          { "tool_calls",
           json::array({ build_tool_call(FUN_FIRST, json{ { ARG_FIRST, "VVVV" }, { ARG_SECOND, "XXXX" } }) }) }
      };
-@@ -662,7 +665,8 @@ analyze_content::analyze_content(const common_chat_template & tmpl, const analyz
+@@ -664,7 +667,8 @@ analyze_content::analyze_content(const common_chat_template & tmpl, const analyz
      json assistant_with_reasoning = json{
          { "role",              "assistant"      },
          { "content",           ""               },
@@ -50,7 +50,7 @@ index b166ee5a..787264ca 100644
  
      template_params params_content_only;
 diff --git a/tests/test-chat-auto-parser.cpp b/tests/test-chat-auto-parser.cpp
-index 8e662c3e..b51df496 100644
+index 2d854509..312038a3 100644
 --- a/tests/test-chat-auto-parser.cpp
 +++ b/tests/test-chat-auto-parser.cpp
 @@ -61,6 +61,7 @@ static void test_nemotron_lazy_tool_trigger(testing & t);
@@ -89,5 +89,5 @@ index 8e662c3e..b51df496 100644
  
  static void test_cohere_reasoning_detection(testing & t) {
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

@@ -1,7 +1,7 @@
-From 8875e2ff2c0e697c8dc78783d803468e6de043b9 Mon Sep 17 00:00:00 2001
+From defe90c1c6d5152169107ee18cfa76303528f330 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 3 Jul 2026 15:03:17 -0400
-Subject: [PATCH 14/14] Add non-frame native MTP decode ABI
+Subject: [PATCH 14/16] Add non-frame native MTP decode ABI
 
 ---
  include/skippy.h        |  9 +++++++++

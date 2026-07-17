@@ -1,7 +1,7 @@
-From 774c69d06b369118b7e73b31f799247523234a18 Mon Sep 17 00:00:00 2001
+From ce280251dfacfcf0f99307690fa0f0114665f572 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 02/14] Add early staged model-family and chat support
+Subject: [PATCH 02/16] Add early staged model-family and chat support
 
 Squashes the first Qwen MoE staged-runtime support, native KV page basics, session reset, token EOG exposure, batched token verification, chat-template ABI, and the first wider model-family support pass.
 ---
@@ -319,7 +319,7 @@ index 7ab93d35..23a46e0f 100644
          const char * path,
          struct skippy_model_info ** out_info,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 36faacbd..d3a03342 100644
+index 660dee46..cca99a8f 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -22,6 +22,7 @@
@@ -414,7 +414,7 @@ index 36faacbd..d3a03342 100644
      const int64_t n_rs = mctx->get_recr()->get_n_rs();
  
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index c03fb1ce..32406ff2 100644
+index a7986a87..33d57061 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -38,9 +38,17 @@ struct skippy_graph_filter {
@@ -435,7 +435,7 @@ index c03fb1ce..32406ff2 100644
  
  // certain models (typically multi-modal) can produce different types of graphs
  enum llm_graph_type {
-@@ -160,6 +168,18 @@ public:
+@@ -164,6 +172,18 @@ public:
      const int64_t n_embd = 0;
  };
  
@@ -929,10 +929,10 @@ index f4310743..4e43bfbc 100644
          if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
              const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 7dea38c8..4ea21038 100644
+index 4c10e412..3c65b60e 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -1381,13 +1381,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1393,13 +1393,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
              }
  
              // MoE expert weight scales (per-expert, shape {n_expert})
@@ -1428,7 +1428,7 @@ index b4326c5f..c4e951a1 100644
      cb(cur, "result_norm", -1);
      res->t_embd = cur;
 diff --git a/src/models/minimax-m2.cpp b/src/models/minimax-m2.cpp
-index b25435e4..522e6fce 100644
+index 86a8ae2b..fe667d54 100644
 --- a/src/models/minimax-m2.cpp
 +++ b/src/models/minimax-m2.cpp
 @@ -53,13 +53,18 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
@@ -1450,10 +1450,10 @@ index b25435e4..522e6fce 100644
  
 -    for (int il = 0; il < n_layer; ++il) {
 +    for (int il = il_start; il < il_end; ++il) {
-         ggml_tensor * inpSA = inpL;
+         res->t_layer_inp[il] = inpL;
  
-         cur = inpL;
-@@ -112,7 +117,7 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
+         ggml_tensor * inpSA = inpL;
+@@ -114,7 +119,7 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
          }
  
@@ -1462,7 +1462,7 @@ index b25435e4..522e6fce 100644
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -150,6 +155,13 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
+@@ -152,6 +157,13 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
  
      cur = inpL;
  
