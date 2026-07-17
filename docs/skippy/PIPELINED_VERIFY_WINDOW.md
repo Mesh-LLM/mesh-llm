@@ -135,10 +135,23 @@ This is the native-MTP parity path. It is not decode parallelism by itself.
 
 ## Pipelined Composite Mode
 
-Concurrency is enabled only when a package-selected composite strategy sets
-`verify_window_pipeline_depth > 1`. A deeper composite proposal is partitioned
-into FIFO windows. The target's free-advance candidate is reserved as the next
-window's optimistic current token, preventing duplicate KV positions.
+`verify_window_pipeline_depth > 1` is a maximum rather than a command to keep
+that many windows in flight. The request-local scheduler first measures full
+acceptance, stage-zero compute time, and downstream wait by verify width. It
+admits a dependent window only after enough observations show that expected
+downstream overlap exceeds the cost of stale work. Otherwise the same composite
+proposal uses one synchronous batched VerifyWindow. A deeper admitted proposal
+is partitioned into FIFO windows. The target's free-advance candidate is
+reserved as the next window's optimistic current token, preventing duplicate
+KV positions.
+
+Profiles are independent by verify width and retain only recent observations.
+An observation counts as a continuation only when the verified window and its
+free target both match the buffered candidate. Admission compares expected
+downstream overlap with the larger of local-compute or downstream stale-work
+cost, including a safety margin. This lets WAN or downstream-heavy topologies
+use configured depth while a stage-zero-heavy split remains on the profitable
+synchronous batched path.
 
 ```mermaid
 sequenceDiagram
@@ -374,8 +387,13 @@ telemetry supplies per-window and per-stage detail.
 | Did anchors agree? | `native_mtp_hybrid_ngram_mtp_prefix_agreements`, `native_mtp_hybrid_ngram_mtp_prefix_disagreements` |
 | Were tails useful? | `native_mtp_hybrid_accepted_tail_tokens`, `native_mtp_hybrid_ngram_tail_rejections`, `native_mtp_hybrid_ngram_sidecar_backoffs` |
 | Was it pipelined? | `verify_window_depth`, `verify_window_opened`, `verify_window_max_in_flight`, `verify_window_stale_discarded` |
+| Why was depth used or suppressed? | `verify_window_policy_observed_windows`, `verify_window_policy_continuation_windows`, `verify_window_policy_profitable_widths`, `verify_window_policy_permit_checks`, `verify_window_policy_permits`, `verify_window_policy_suppressed` |
 | Where was time spent? | `verify_window_downstream_wait_ms`, `verify_window_forward_write_ms`, `verify_window_stage0_compute_ms`, `verify_window_verify_elapsed_ms` |
 
 A useful hybrid run needs more than an increased `draft_n`: it needs accepted
 tail tokens, high anchor agreement, bounded stale-window work, and completion
 throughput higher than the native-MTP control.
+
+Pipeline-policy telemetry contains only bounded numeric counts and stage timing;
+it does not include prompts, completions, token IDs, paths, endpoints, or node
+identifiers. Debug OTLP export remains explicitly configured by the operator.

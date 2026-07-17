@@ -335,6 +335,10 @@ impl BufferedCompositeProposal {
         self.remaining_tokens.iter().copied().take(width).collect()
     }
 
+    pub(in crate::frontend) fn expected_free_target(&self, width: usize) -> Option<i32> {
+        self.remaining_tokens.get(width).copied()
+    }
+
     pub(in crate::frontend) fn remaining_len(&self) -> usize {
         self.remaining_tokens.len()
     }
@@ -721,6 +725,19 @@ mod tests {
 
         assert!(buffer.is_empty());
         assert_eq!(buffer.accepted_tokens(), 3);
+    }
+
+    #[test]
+    fn buffer_exposes_only_a_real_dependent_free_target() {
+        let buffer = BufferedCompositeProposal::new(NativeMtpHybridProposal::from_parts(
+            vec![9, 1, 2],
+            1,
+            true,
+        ));
+
+        assert_eq!(buffer.expected_free_target(1), Some(1));
+        assert_eq!(buffer.expected_free_target(2), Some(2));
+        assert_eq!(buffer.expected_free_target(3), None);
     }
 
     #[test]

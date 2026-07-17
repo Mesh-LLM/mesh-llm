@@ -901,6 +901,7 @@ impl StageOpenAiBackend {
                     && pipelined.is_none()
                     && pipelined_windows.is_empty()
                     && native_mtp_reject_cooldown_remaining == 0
+                    && verify_window_scheduler.has_profitable_pipeline_width()
                 {
                     let pending = request
                         .native_mtp_enabled
@@ -936,21 +937,29 @@ impl StageOpenAiBackend {
                             ),
                             cached_ngram_proposer.as_mut(),
                         )?;
-                    if let Some(parallel_verify_width) = proposal.parallel_verify_width(
+                    match proposal.parallel_verify_width(
                         adaptive_verify_window.width(proposal.tokens().len()),
                         verify_window_scheduler.depth(),
                     ) {
-                        pipeline_seed = Some((
-                            proposal,
-                            if native_mtp_tokens.is_empty() {
-                                None
-                            } else {
-                                native_mtp_origin
-                            },
-                            parallel_verify_width,
-                        ));
-                    } else if let Some(pending) = pending {
-                        native_mtp.restore_pending_draft(pending);
+                        Some(parallel_verify_width)
+                            if verify_window_scheduler
+                                .permit_pipeline_width(parallel_verify_width) =>
+                        {
+                            pipeline_seed = Some((
+                                proposal,
+                                if native_mtp_tokens.is_empty() {
+                                    None
+                                } else {
+                                    native_mtp_origin
+                                },
+                                parallel_verify_width,
+                            ));
+                        }
+                        _ => {
+                            if let Some(pending) = pending {
+                                native_mtp.restore_pending_draft(pending);
+                            }
+                        }
                     }
                 }
                 if native_mtp_verify_windows_enabled
@@ -1111,6 +1120,14 @@ impl StageOpenAiBackend {
                                         == Some(&expected)
                                 });
                             let pipeline_continues = fully_accepted_window && free_target_matches;
+                            if window.expected_free_target.is_some() {
+                                verify_window_scheduler.observe_pipeline_profile(
+                                    window.proposal_tokens.len(),
+                                    pipeline_continues,
+                                    verify.stats.stage0_compute_ms,
+                                    verify.stats.downstream_wait_ms,
+                                );
+                            }
                             let accepted_candidate_tokens = native_mtp_verify_decision
                                 .accepted_proposal_tokens
                                 + usize::from(
@@ -1988,6 +2005,7 @@ impl StageOpenAiBackend {
             cache_stats.predicted_ms = decode_timer.elapsed_ms();
             native_mtp_stats.insert_attrs(&mut decode_attrs);
             native_mtp_counters.insert_summary_attrs(&mut decode_attrs, native_mtp_options);
+            verify_window_scheduler.insert_policy_telemetry_attrs(&mut decode_attrs);
             self.emit_openai_summary("stage.openai_decode", decode_timer, decode_attrs);
             Ok(())
         })();

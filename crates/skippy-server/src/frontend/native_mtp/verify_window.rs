@@ -199,6 +199,20 @@ impl StageOpenAiBackend {
             && native_mtp_verify_decision.accepted_proposal_tokens == proposal_tokens.len()
             && committed_positions == consumed_positions
             && !reached_stop;
+        if let Some(expected_free_target) = proposal_buffer
+            .as_ref()
+            .and_then(|buffer| buffer.expected_free_target(proposal_tokens.len()))
+        {
+            let pipeline_continues = fully_accepted_window
+                && verify.reply.predicted_tokens.get(proposal_tokens.len())
+                    == Some(&expected_free_target);
+            verify_window_scheduler.observe_pipeline_profile(
+                proposal_tokens.len(),
+                pipeline_continues,
+                verify.stats.stage0_compute_ms,
+                verify.stats.downstream_wait_ms,
+            );
+        }
         let native_mtp_prefix_rejected = proposal_buffer.as_ref().is_some_and(|buffer| {
             buffer.native_mtp_prefix_rejected_after(
                 native_mtp_verify_decision.accepted_proposal_tokens,
