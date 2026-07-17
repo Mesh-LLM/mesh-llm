@@ -24,7 +24,7 @@
     "file": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
     "url": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
     "size": "2.0GB",
-    "description": "Meta Llama 3.2, goose default, good tool calling",
+    "description": "Meta Llama 3.2, fast general chat; small size struggles with complex agent harnesses",
     "draft": "Llama-3.2-1B-Instruct-Q4_K_M",
     "extra_files": [],
     "mmproj": null
@@ -44,7 +44,7 @@
     "file": "gemma-4-E4B-it-Q4_K_M.gguf",
     "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
     "size": "4.6GB",
-    "description": "Gemma 4 E4B instruction model, strong mini-class default",
+    "description": "Gemma 4 E4B instruction model, non-reasoning, strong mini-class agent default (good tool calling)",
     "draft": null,
     "extra_files": [],
     "mmproj": {
@@ -77,7 +77,7 @@
     "file": "Hermes-2-Pro-Mistral-7B-Q4_K_M.gguf",
     "url": "https://huggingface.co/bartowski/Hermes-2-Pro-Mistral-7B-GGUF/resolve/main/Hermes-2-Pro-Mistral-7B-Q4_K_M.gguf",
     "size": "4.4GB",
-    "description": "Goose default, strong tool calling for agents",
+    "description": "Hermes 2 Pro, tool-call tuned; reliable for simple agent loops, weaker on large multi-tool harnesses",
     "draft": null,
     "extra_files": [],
     "mmproj": null
