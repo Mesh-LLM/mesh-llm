@@ -1,6 +1,44 @@
 use super::*;
 use crate::mesh::node::default_plugin_event_source;
 
+const PLUGIN_FRAME_PREFIX_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const PLUGIN_FRAME_BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const PLUGIN_CHANNEL_FRAME_MAX_BYTES: usize = 10_000_000;
+const PLUGIN_BULK_FRAME_MAX_BYTES: usize = 64_000_000;
+
+pub(crate) async fn read_plugin_frame_bytes<R>(reader: &mut R, max_len: usize) -> Result<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut len_buf = [0u8; 4];
+    tokio::time::timeout(
+        PLUGIN_FRAME_PREFIX_READ_TIMEOUT,
+        tokio::io::AsyncReadExt::read_exact(reader, &mut len_buf),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "timeout reading plugin frame prefix after {PLUGIN_FRAME_PREFIX_READ_TIMEOUT:?}"
+        )
+    })?
+    .context("read plugin frame prefix")?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    anyhow::ensure!(len <= max_len, "Plugin frame too large");
+    let mut buf = vec![0u8; len];
+    tokio::time::timeout(
+        PLUGIN_FRAME_BODY_READ_TIMEOUT,
+        tokio::io::AsyncReadExt::read_exact(reader, &mut buf),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "timeout reading plugin frame body after {PLUGIN_FRAME_BODY_READ_TIMEOUT:?}"
+        )
+    })?
+    .context("read plugin frame body")?;
+    Ok(buf)
+}
+
 impl Node {
     pub(crate) async fn forward_plugin_event(
         &self,
@@ -201,20 +239,41 @@ impl Node {
         Ok(())
     }
 
+    pub(crate) async fn forward_targeted_plugin_frame(
+        &self,
+        target_peer_id: &str,
+        stream_type: u8,
+        data: Vec<u8>,
+    ) {
+        let target = target_peer_id.to_string();
+        let node = self.clone();
+        tokio::spawn(async move {
+            let result = async {
+                let conn = node
+                    .connection_for_peer_hex(&target)
+                    .await
+                    .with_context(|| format!("target peer {target} is not routable"))?;
+                let (mut send, _recv) = conn.open_bi().await?;
+                send.write_all(&[stream_type]).await?;
+                send.write_all(&(data.len() as u32).to_le_bytes()).await?;
+                send.write_all(&data).await?;
+                send.finish()?;
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            if let Err(error) = result {
+                tracing::debug!("Failed to forward targeted plugin frame: {error}");
+            }
+        });
+    }
+
     pub(crate) async fn handle_plugin_channel_stream(
         &self,
         _remote: EndpointId,
         mut send: iroh::endpoint::SendStream,
         mut recv: iroh::endpoint::RecvStream,
     ) -> Result<()> {
-        let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf).await?;
-        let len = u32::from_le_bytes(len_buf) as usize;
-        if len > 10_000_000 {
-            anyhow::bail!("Plugin channel frame too large");
-        }
-        let mut buf = vec![0u8; len];
-        recv.read_exact(&mut buf).await?;
+        let buf = read_plugin_frame_bytes(&mut recv, PLUGIN_CHANNEL_FRAME_MAX_BYTES).await?;
         send.finish()?;
 
         let frame = crate::plugin::proto::MeshChannelFrame::decode(buf.as_slice())?;
@@ -244,38 +303,18 @@ impl Node {
             }
         }
 
-        // Targeted messages: forward only to the specific target peer if we
-        // have a direct connection.  Do NOT flood-broadcast targeted messages
-        // to all connections — that causes O(N²) amplification across the mesh.
+        // Targeted messages: forward only toward the specific target peer.
+        // Do NOT flood-broadcast targeted messages to all connections — that
+        // causes O(N²) amplification across the mesh.
         // Untargeted broadcasts: deliver locally only.  The originator already
         // sent to all their direct connections.
         if !message.target_peer_id.is_empty() && message.target_peer_id != local_peer_id {
-            // Look up connection to the target peer by hex ID
-            let target_conn = {
-                let state = self.state.lock().await;
-                state
-                    .connections
-                    .iter()
-                    .find(|(id, _)| endpoint_id_hex(**id) == message.target_peer_id)
-                    .map(|(id, conn)| (*id, conn.clone()))
-            };
-            if let Some((_target_id, conn)) = target_conn {
-                let data = frame.encode_to_vec();
-                tokio::spawn(async move {
-                    let result = async {
-                        let (mut send, _recv) = conn.open_bi().await?;
-                        send.write_all(&[STREAM_PLUGIN_CHANNEL]).await?;
-                        send.write_all(&(data.len() as u32).to_le_bytes()).await?;
-                        send.write_all(&data).await?;
-                        send.finish()?;
-                        Ok::<_, anyhow::Error>(())
-                    }
-                    .await;
-                    if let Err(e) = result {
-                        tracing::debug!("Failed to forward targeted plugin frame: {e}");
-                    }
-                });
-            }
+            self.forward_targeted_plugin_frame(
+                &message.target_peer_id,
+                STREAM_PLUGIN_CHANNEL,
+                frame.encode_to_vec(),
+            )
+            .await;
         }
 
         Ok(())
@@ -287,14 +326,7 @@ impl Node {
         mut send: iroh::endpoint::SendStream,
         mut recv: iroh::endpoint::RecvStream,
     ) -> Result<()> {
-        let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf).await?;
-        let len = u32::from_le_bytes(len_buf) as usize;
-        if len > 64_000_000 {
-            anyhow::bail!("Plugin bulk frame too large");
-        }
-        let mut buf = vec![0u8; len];
-        recv.read_exact(&mut buf).await?;
+        let buf = read_plugin_frame_bytes(&mut recv, PLUGIN_BULK_FRAME_MAX_BYTES).await?;
         send.finish()?;
 
         let frame = crate::plugin::proto::MeshBulkFrame::decode(buf.as_slice())?;
@@ -324,35 +356,16 @@ impl Node {
             }
         }
 
-        // Same policy as channel frames: targeted → forward to target only,
+        // Same policy as channel frames: targeted -> forward to target only,
         // broadcast → deliver locally only (originator already sent to their
         // direct connections).
         if !message.target_peer_id.is_empty() && message.target_peer_id != local_peer_id {
-            let target_conn = {
-                let state = self.state.lock().await;
-                state
-                    .connections
-                    .iter()
-                    .find(|(id, _)| endpoint_id_hex(**id) == message.target_peer_id)
-                    .map(|(id, conn)| (*id, conn.clone()))
-            };
-            if let Some((_target_id, conn)) = target_conn {
-                let data = frame.encode_to_vec();
-                tokio::spawn(async move {
-                    let result = async {
-                        let (mut send, _recv) = conn.open_bi().await?;
-                        send.write_all(&[STREAM_PLUGIN_BULK_TRANSFER]).await?;
-                        send.write_all(&(data.len() as u32).to_le_bytes()).await?;
-                        send.write_all(&data).await?;
-                        send.finish()?;
-                        Ok::<_, anyhow::Error>(())
-                    }
-                    .await;
-                    if let Err(e) = result {
-                        tracing::debug!("Failed to forward targeted plugin bulk frame: {e}");
-                    }
-                });
-            }
+            self.forward_targeted_plugin_frame(
+                &message.target_peer_id,
+                STREAM_PLUGIN_BULK_TRANSFER,
+                frame.encode_to_vec(),
+            )
+            .await;
         }
 
         Ok(())

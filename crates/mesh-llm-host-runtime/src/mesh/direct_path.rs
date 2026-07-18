@@ -431,6 +431,46 @@ impl Node {
         remote: EndpointId,
         conn: Connection,
     ) {
+        let (existing, pending) = {
+            let state = self.state.lock().await;
+            (
+                state.connections.get(&remote).cloned(),
+                state.pending_connections.contains_key(&remote),
+            )
+        };
+        if pending {
+            conn.close(0u32.into(), b"direct-path-pending-handshake");
+            return;
+        }
+        let expected_stable_id = existing.as_ref().map(Connection::stable_id);
+
+        if let Err(error) = self
+            .initiate_gossip_inner(conn.clone(), remote, false)
+            .await
+        {
+            conn.close(0u32.into(), b"direct-path-gossip-failed");
+            tracing::debug!(
+                peer = %remote.fmt_short(),
+                error = %error,
+                "Direct path request gossip after reverse dial failed"
+            );
+            return;
+        }
+
+        {
+            let mut state = self.state.lock().await;
+            if state.pending_connections.contains_key(&remote) {
+                drop(state);
+                conn.close(0u32.into(), b"direct-path-raced-pending");
+                return;
+            }
+            if state.connections.get(&remote).map(Connection::stable_id) != expected_stable_id {
+                drop(state);
+                conn.close(0u32.into(), b"direct-path-raced");
+                return;
+            }
+            state.connections.insert(remote, conn.clone());
+        }
         self.capture_connection_event(ConnectionCaptureEvent {
             event: "peer_connection_opened",
             remote,
@@ -443,21 +483,13 @@ impl Node {
             reason: Some("reverse_dial"),
         });
         self.capture_selected_connection_path(remote, &conn, "direct_path_request_path");
-        {
-            let mut state = self.state.lock().await;
-            state.connections.insert(remote, conn.clone());
-        }
         let node = self.clone();
         let conn_for_dispatch = conn.clone();
         tokio::spawn(async move {
             node.dispatch_streams(conn_for_dispatch, remote).await;
         });
-        if let Err(error) = self.initiate_gossip_inner(conn, remote, false).await {
-            tracing::debug!(
-                peer = %remote.fmt_short(),
-                error = %error,
-                "Direct path request gossip after reverse dial failed"
-            );
+        if let Some(existing) = existing {
+            existing.close(0u32.into(), b"direct-path-replaced");
         }
     }
 }

@@ -163,71 +163,6 @@ pub(crate) fn is_global_ipv4_candidate(ip: Ipv4Addr) -> bool {
         || a >= 240)
 }
 
-pub(crate) fn build_stun_binding_request() -> [u8; 20] {
-    let mut req = [0u8; 20];
-    req[1] = 0x01;
-    req[4] = 0x21;
-    req[5] = 0x12;
-    req[6] = 0xA4;
-    req[7] = 0x42;
-    rand::fill(&mut req[8..20]);
-    req
-}
-
-pub(crate) async fn resolve_stun_server(server: &str) -> Option<std::net::SocketAddr> {
-    let mut addrs = tokio::net::lookup_host(server).await.ok()?;
-    addrs.next()
-}
-
-pub(crate) fn parse_stun_mapped_ipv4(
-    attr_type: u16,
-    value: &[u8],
-    magic: &[u8],
-    advertised_port: u16,
-) -> Option<std::net::SocketAddr> {
-    use std::net::SocketAddrV4;
-
-    if value.len() < 8 || value[1] != 0x01 {
-        return None;
-    }
-    let ip = match attr_type {
-        0x0020 => Ipv4Addr::new(
-            value[4] ^ magic[0],
-            value[5] ^ magic[1],
-            value[6] ^ magic[2],
-            value[7] ^ magic[3],
-        ),
-        0x0001 => Ipv4Addr::new(value[4], value[5], value[6], value[7]),
-        _ => return None,
-    };
-    Some(std::net::SocketAddr::V4(SocketAddrV4::new(
-        ip,
-        advertised_port,
-    )))
-}
-
-pub(crate) fn parse_stun_public_addr(
-    response: &[u8],
-    len: usize,
-    magic: &[u8],
-    advertised_port: u16,
-) -> Option<std::net::SocketAddr> {
-    let mut i = 20;
-    while i + 4 <= len {
-        let attr_type = u16::from_be_bytes([response[i], response[i + 1]]);
-        let attr_len = u16::from_be_bytes([response[i + 2], response[i + 3]]) as usize;
-        if i + 4 + attr_len > len {
-            break;
-        }
-        let value = &response[i + 4..i + 4 + attr_len];
-        if let Some(addr) = parse_stun_mapped_ipv4(attr_type, value, magic, advertised_port) {
-            return Some(addr);
-        }
-        i += (4 + (attr_len + 3)) & !3;
-    }
-    None
-}
-
 pub(crate) fn endpoint_addr_has_public_ipv4(addr: &EndpointAddr) -> bool {
     addr.addrs.iter().any(|candidate| match candidate {
         TransportAddr::Ip(socket) => is_public_ipv4_candidate(socket),
@@ -317,16 +252,20 @@ mod relay_policy_tests {
 pub(crate) fn relay_map_from_urls(
     urls: &[String],
     auths: &std::collections::HashMap<String, String>,
-) -> iroh::RelayMap {
+) -> Result<iroh::RelayMap> {
     let configs = urls.iter().map(|url| {
-        let parsed = url.parse().expect("invalid relay URL");
+        let parsed = url
+            .parse()
+            .with_context(|| format!("invalid relay URL `{url}`"))?;
         let cfg = iroh::RelayConfig::new(parsed, None);
-        match auths.get(url) {
+        Ok(match auths.get(url) {
             Some(token) => cfg.with_auth_token(token.clone()),
             None => cfg,
-        }
+        })
     });
-    iroh::RelayMap::from_iter(configs)
+    configs
+        .collect::<Result<Vec<_>>>()
+        .map(iroh::RelayMap::from_iter)
 }
 
 #[cfg(test)]
@@ -342,7 +281,7 @@ mod relay_map_tests {
     #[test]
     pub(crate) fn builds_map_without_auth_when_empty() {
         let urls = vec!["https://r1.example/".to_string()];
-        let map = relay_map_from_urls(&urls, &HashMap::new());
+        let map = relay_map_from_urls(&urls, &HashMap::new()).expect("relay map should build");
         let cfgs = configs(&map);
         assert_eq!(cfgs.len(), 1);
         assert!(
@@ -356,7 +295,7 @@ mod relay_map_tests {
         let urls = vec!["https://gated.example/".to_string()];
         let mut auths = HashMap::new();
         auths.insert("https://gated.example/".to_string(), "nip98-bearer".into());
-        let map = relay_map_from_urls(&urls, &auths);
+        let map = relay_map_from_urls(&urls, &auths).expect("relay map should build");
         let cfgs = configs(&map);
         assert_eq!(cfgs.len(), 1);
         assert_eq!(cfgs[0].auth_token.as_deref(), Some("nip98-bearer"));
@@ -372,7 +311,7 @@ mod relay_map_tests {
         let mut auths = HashMap::new();
         auths.insert("https://gated.example/".to_string(), "bearer-xyz".into());
 
-        let map = relay_map_from_urls(&urls, &auths);
+        let map = relay_map_from_urls(&urls, &auths).expect("relay map should build");
         let by_url: HashMap<String, Option<String>> = configs(&map)
             .into_iter()
             .map(|cfg| (cfg.url.to_string(), cfg.auth_token.clone()))
@@ -398,6 +337,18 @@ mod relay_map_tests {
             public.1.is_none(),
             "public relay must register without a token, got {:?}",
             public.1
+        );
+    }
+
+    #[test]
+    pub(crate) fn invalid_relay_url_returns_contextual_error() {
+        let urls = vec!["not a relay url".to_string()];
+
+        let error = relay_map_from_urls(&urls, &HashMap::new()).expect_err("invalid URL must fail");
+
+        assert!(
+            format!("{error:#}").contains("invalid relay URL `not a relay url`"),
+            "error should identify the invalid relay URL, got {error:#}"
         );
     }
 }
@@ -465,10 +416,9 @@ mod gated_relay_e2e_tests {
     ) -> Endpoint {
         Endpoint::builder(presets::Minimal)
             .secret_key(SecretKey::generate())
-            .relay_mode(RelayMode::Custom(relay_map_from_urls(
-                relay_urls,
-                relay_auths,
-            )))
+            .relay_mode(RelayMode::Custom(
+                relay_map_from_urls(relay_urls, relay_auths).expect("relay map should build"),
+            ))
             .ca_tls_config(CaTlsConfig::insecure_skip_verify())
             .bind()
             .await
@@ -998,25 +948,46 @@ impl Node {
         remote: EndpointId,
         new_conn: Connection,
     ) {
-        {
-            let mut state = self.state.lock().await;
-            state.connections.insert(remote, new_conn.clone());
-        }
+        let owner = match self.reserve_pending_connection(remote).await {
+            PendingConnectionReservation::Owner(owner) => owner,
+            PendingConnectionReservation::Waiter(waiter) => {
+                new_conn.close(0u32.into(), b"recovered-connection-raced");
+                let _ = self.await_pending_connection(waiter).await;
+                return;
+            }
+        };
         if self
             .recovered_connection_gossip_ok(remote, new_conn.clone())
             .await
         {
+            {
+                let mut state = self.state.lock().await;
+                state.connections.insert(remote, new_conn.clone());
+            }
             let node = self.clone();
             tokio::spawn(async move {
                 node.dispatch_streams(new_conn, remote).await;
             });
+            self.finish_pending_connection(owner, PendingConnectionOutcome::Admitted)
+                .await;
         } else {
-            tracing::info!(
-                "Reconnect gossip to {} failed — peer is dead, removing",
-                remote.fmt_short()
-            );
-            self.remove_peer(remote).await;
+            new_conn.close(0u32.into(), b"recovered-gossip-failed");
+            self.finish_pending_connection(
+                owner,
+                PendingConnectionOutcome::Failed("recovered connection gossip failed".to_string()),
+            )
+            .await;
+            self.remove_peer_after_recovered_gossip_failure(remote)
+                .await;
         }
+    }
+
+    pub(crate) async fn remove_peer_after_recovered_gossip_failure(&self, remote: EndpointId) {
+        tracing::info!(
+            "Reconnect gossip to {} failed — peer is dead, removing",
+            remote.fmt_short()
+        );
+        self.remove_peer(remote).await;
     }
 
     pub(crate) async fn recovered_connection_gossip_ok(
@@ -1327,6 +1298,10 @@ impl Node {
             "👋 Peer {} announced clean shutdown",
             leaving_id.fmt_short()
         ));
+        self.cleanup_peer_leaving(leaving_id).await;
+    }
+
+    pub(crate) async fn cleanup_peer_leaving(&self, leaving_id: EndpointId) {
         let mut state = self.state.lock().await;
         state
             .dead_peers
@@ -1425,52 +1400,296 @@ impl Node {
     }
 }
 impl Node {
-    pub(crate) async fn connect_to_peer(&self, addr: EndpointAddr) -> Result<()> {
-        let peer_id = addr.id;
+    pub(crate) async fn remove_connection_if_stable_id(
+        &self,
+        peer_id: EndpointId,
+        conn: &Connection,
+    ) -> Option<Connection> {
+        let stable_id = conn.stable_id();
+        let mut state = self.state.lock().await;
+        if state
+            .connections
+            .get(&peer_id)
+            .is_some_and(|current| current.stable_id() == stable_id)
+        {
+            state.connections.remove(&peer_id)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) async fn reserve_pending_connection(
+        &self,
+        peer_id: EndpointId,
+    ) -> PendingConnectionReservation {
+        let mut state = self.state.lock().await;
+        if let Some(pending) = state
+            .pending_connection_is_active(peer_id)
+            .then(|| state.pending_connections.get(&peer_id))
+            .flatten()
+        {
+            return PendingConnectionReservation::Waiter(pending.waiter(peer_id));
+        }
+
+        let attempt_id = PendingConnectionAttemptId(state.next_pending_connection_attempt);
+        state.next_pending_connection_attempt =
+            state.next_pending_connection_attempt.wrapping_add(1);
+        let (outcome_tx, outcome_rx) = watch::channel(None);
+        state.pending_connections.insert(
+            peer_id,
+            PendingConnectionHandshake {
+                attempt_id,
+                outcome_rx,
+            },
+        );
+        PendingConnectionReservation::Owner(PendingConnectionAttemptOwner {
+            peer_id,
+            attempt_id,
+            outcome_tx,
+        })
+    }
+
+    pub(crate) async fn finish_pending_connection(
+        &self,
+        owner: PendingConnectionAttemptOwner,
+        outcome: PendingConnectionOutcome,
+    ) {
+        owner.outcome_tx.send_replace(Some(outcome));
+        let mut state = self.state.lock().await;
+        if state
+            .pending_connections
+            .get(&owner.peer_id)
+            .is_some_and(|pending| pending.attempt_id == owner.attempt_id)
+        {
+            state.pending_connections.remove(&owner.peer_id);
+        }
+    }
+
+    pub(crate) async fn remove_pending_connection_if_attempt(
+        &self,
+        peer_id: EndpointId,
+        attempt_id: PendingConnectionAttemptId,
+    ) {
+        let mut state = self.state.lock().await;
+        if state
+            .pending_connections
+            .get(&peer_id)
+            .is_some_and(|pending| pending.attempt_id == attempt_id)
+        {
+            state.pending_connections.remove(&peer_id);
+        }
+    }
+
+    pub(crate) async fn await_pending_connection(
+        &self,
+        mut waiter: PendingConnectionWaiter,
+    ) -> Result<()> {
+        loop {
+            let outcome = waiter.outcome_rx.borrow().clone();
+            if let Some(outcome) = outcome {
+                return outcome.into_result(waiter.peer_id);
+            }
+            if waiter.outcome_rx.changed().await.is_err() {
+                self.remove_pending_connection_if_attempt(waiter.peer_id, waiter.attempt_id)
+                    .await;
+                anyhow::bail!(
+                    "connection attempt to {} ended without a terminal result",
+                    waiter.peer_id.fmt_short()
+                )
+            }
+        }
+    }
+
+    async fn close_connection_after_failed_gossip(
+        &self,
+        peer_id: EndpointId,
+        conn: &Connection,
+        reason: &'static [u8],
+    ) {
+        let removed = self.remove_connection_if_stable_id(peer_id, conn).await;
+        if let Some(removed_conn) = removed {
+            removed_conn.close(0u32.into(), reason);
+        } else {
+            conn.close(0u32.into(), reason);
+        }
+    }
+
+    pub(crate) async fn complete_cached_connection_gossip(
+        &self,
+        peer_id: EndpointId,
+        conn: Connection,
+        discover_peers: bool,
+    ) -> Result<()> {
+        let result = if discover_peers {
+            self.initiate_gossip(conn.clone(), peer_id).await
+        } else {
+            self.initiate_gossip_inner(conn.clone(), peer_id, false)
+                .await
+        };
+        if let Err(error) = result {
+            self.close_connection_after_failed_gossip(peer_id, &conn, b"cached-gossip-failed")
+                .await;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn complete_cached_connection_gossip_single_flight(
+        &self,
+        peer_id: EndpointId,
+        conn: Connection,
+        discover_peers: bool,
+    ) -> Result<()> {
+        match self.reserve_pending_connection(peer_id).await {
+            PendingConnectionReservation::Owner(owner) => {
+                let result = self
+                    .complete_cached_connection_gossip(peer_id, conn, discover_peers)
+                    .await;
+                let outcome = match &result {
+                    Ok(()) => PendingConnectionOutcome::Admitted,
+                    Err(error) => PendingConnectionOutcome::Failed(error.to_string()),
+                };
+                self.finish_pending_connection(owner, outcome).await;
+                result
+            }
+            PendingConnectionReservation::Waiter(waiter) => {
+                self.await_pending_connection(waiter).await
+            }
+        }
+    }
+
+    async fn use_cached_connection_if_ready(&self, peer_id: EndpointId) -> Result<bool> {
+        let cached_conn = {
+            let state = self.state.lock().await;
+            match state.connections.get(&peer_id).cloned() {
+                Some(_) if state.peers.get(&peer_id).is_some_and(PeerInfo::is_admitted) => {
+                    return Ok(true);
+                }
+                Some(conn) => Some(conn),
+                None => None,
+            }
+        };
+
+        let Some(conn) = cached_conn else {
+            return Ok(false);
+        };
+
+        self.complete_cached_connection_gossip_single_flight(peer_id, conn, true)
+            .await?;
+        self.schedule_selected_path_recheck(peer_id);
+        Ok(true)
+    }
+
+    async fn outbound_connection_preflight_complete(&self, peer_id: EndpointId) -> Result<bool> {
         if peer_id == self.endpoint.id() {
-            return Ok(());
+            return Ok(true);
+        }
+
+        if self.use_cached_connection_if_ready(peer_id).await? {
+            return Ok(true);
         }
 
         {
             let state = self.state.lock().await;
-            if state.connections.contains_key(&peer_id) {
-                return Ok(());
-            }
             if state
                 .dead_peers
                 .get(&peer_id)
                 .is_some_and(|t| t.elapsed() < DEAD_PEER_TTL)
             {
                 tracing::debug!("Skipping connection to dead peer {}", peer_id.fmt_short());
-                return Ok(());
+                return Ok(true);
             }
         }
 
+        Ok(false)
+    }
+
+    async fn reserve_outbound_pending_connection(
+        &self,
+        peer_id: EndpointId,
+    ) -> Result<Option<PendingConnectionAttemptOwner>> {
+        match self.reserve_pending_connection(peer_id).await {
+            PendingConnectionReservation::Owner(owner) => Ok(Some(owner)),
+            PendingConnectionReservation::Waiter(waiter) => {
+                self.await_pending_connection(waiter).await?;
+                self.schedule_selected_path_recheck(peer_id);
+                Ok(None)
+            }
+        }
+    }
+
+    async fn open_outbound_pending_connection(
+        &self,
+        addr: EndpointAddr,
+        owner: PendingConnectionAttemptOwner,
+    ) -> Result<(Connection, PendingConnectionAttemptOwner)> {
+        let peer_id = addr.id;
         tracing::info!("Connecting to peer {}...", peer_id.fmt_short());
         let conn = match tokio::time::timeout(
             PEER_CONNECT_AND_GOSSIP_TIMEOUT,
-            connect_mesh(&self.endpoint, addr.clone()),
+            connect_mesh(&self.endpoint, addr),
         )
         .await
         {
             Ok(Ok(c)) => c,
             Ok(Err(e)) => {
-                anyhow::bail!("Failed to connect to {}: {e}", peer_id.fmt_short());
+                let error = anyhow::anyhow!("Failed to connect to {}: {e}", peer_id.fmt_short());
+                self.finish_pending_connection(
+                    owner,
+                    PendingConnectionOutcome::Failed(error.to_string()),
+                )
+                .await;
+                return Err(error);
             }
             Err(_) => {
-                anyhow::bail!(
+                let error = anyhow::anyhow!(
                     "Timeout connecting to {} ({}s)",
                     peer_id.fmt_short(),
                     PEER_CONNECT_AND_GOSSIP_TIMEOUT.as_secs()
                 );
+                self.finish_pending_connection(
+                    owner,
+                    PendingConnectionOutcome::Failed(error.to_string()),
+                )
+                .await;
+                return Err(error);
             }
         };
 
-        // Store connection and start dispatcher for inbound streams from this peer
+        Ok((conn, owner))
+    }
+
+    async fn complete_outbound_pending_gossip(
+        &self,
+        peer_id: EndpointId,
+        conn: &Connection,
+        owner: PendingConnectionAttemptOwner,
+    ) -> Result<PendingConnectionAttemptOwner> {
+        if let Err(error) = self.initiate_gossip(conn.clone(), peer_id).await {
+            conn.close(0u32.into(), b"connect-peer-gossip-failed");
+            self.finish_pending_connection(
+                owner,
+                PendingConnectionOutcome::Failed(error.to_string()),
+            )
+            .await;
+            return Err(error);
+        }
+
+        Ok(owner)
+    }
+
+    async fn publish_admitted_outbound_connection(
+        &self,
+        peer_id: EndpointId,
+        conn: Connection,
+        owner: PendingConnectionAttemptOwner,
+    ) {
         {
             let mut state = self.state.lock().await;
+            state.dead_peers.remove(&peer_id);
             state.connections.insert(peer_id, conn.clone());
         }
+
         let node_for_dispatch = self.clone();
         let conn_for_dispatch = conn.clone();
         tokio::spawn(async move {
@@ -1479,14 +1698,31 @@ impl Node {
                 .await;
         });
 
-        // Gossip exchange to learn peer's role/VRAM and announce ourselves
-        self.initiate_gossip(conn.clone(), peer_id).await?;
-
         // Schedule a delayed RTT recheck: the first gossip often goes via relay
         // (high RTT) because direct holepunch hasn't completed yet. After a few
         // seconds the direct path is usually ready, so re-check path info to get
         // the real RTT and potentially trigger a re-election for split mode.
         self.schedule_selected_path_recheck(peer_id);
+        self.finish_pending_connection(owner, PendingConnectionOutcome::Admitted)
+            .await;
+    }
+
+    pub(crate) async fn connect_to_peer(&self, addr: EndpointAddr) -> Result<()> {
+        let peer_id = addr.id;
+        if self.outbound_connection_preflight_complete(peer_id).await? {
+            return Ok(());
+        }
+
+        let Some(owner) = self.reserve_outbound_pending_connection(peer_id).await? else {
+            return Ok(());
+        };
+        let (conn, owner) = self.open_outbound_pending_connection(addr, owner).await?;
+        let owner = self
+            .complete_outbound_pending_gossip(peer_id, &conn, owner)
+            .await?;
+        self.publish_admitted_outbound_connection(peer_id, conn, owner)
+            .await;
+
         Ok(())
     }
 

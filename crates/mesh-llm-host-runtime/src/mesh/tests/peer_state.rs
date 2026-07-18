@@ -1041,6 +1041,73 @@ fn proto_ann_to_local_treats_missing_default_capability_provenance_as_unknown() 
 }
 
 #[test]
+fn infer_remote_served_descriptors_marks_exactly_one_primary_for_duplicate_names() {
+    let serving_models = vec![
+        "Qwen3-8B-Q4_K_M".to_string(),
+        "Qwen3-8B-Q4_K_M".to_string(),
+        "Llama-3.2-3B-Q4_K_M".to_string(),
+    ];
+
+    let descriptors = infer_remote_served_descriptors(
+        "Qwen3-8B-Q4_K_M",
+        &serving_models,
+        Some("Qwen/Qwen3-8B-GGUF@revabc/Qwen3-8B-Q4_K_M.gguf"),
+    );
+
+    assert_eq!(descriptors.len(), serving_models.len());
+    assert_eq!(
+        descriptors
+            .iter()
+            .filter(|descriptor| descriptor.identity.is_primary)
+            .count(),
+        1
+    );
+    assert!(descriptors[0].identity.is_primary);
+    assert!(!descriptors[1].identity.is_primary);
+}
+
+#[test]
+fn infer_remote_served_descriptors_falls_back_to_first_primary_when_name_absent() {
+    let serving_models = vec![
+        "Qwen3-8B-Q4_K_M".to_string(),
+        "Llama-3.2-3B-Q4_K_M".to_string(),
+    ];
+
+    let descriptors = infer_remote_served_descriptors(
+        "Missing-Primary-Q4_K_M",
+        &serving_models,
+        Some("Qwen/Qwen3-8B-GGUF@revabc/Qwen3-8B-Q4_K_M.gguf"),
+    );
+
+    assert_eq!(
+        descriptors
+            .iter()
+            .filter(|descriptor| descriptor.identity.is_primary)
+            .count(),
+        1
+    );
+    assert!(descriptors[0].identity.is_primary);
+    assert!(!descriptors[1].identity.is_primary);
+}
+
+#[test]
+fn public_model_id_from_identity_preserves_huggingface_revision() {
+    let identity = ServedModelIdentity {
+        model_name: "Qwen3-8B-Q4_K_M".to_string(),
+        source_kind: ModelSourceKind::HuggingFace,
+        repository: Some("Qwen/Qwen3-8B-GGUF".to_string()),
+        revision: Some("revabc".to_string()),
+        artifact: Some("Qwen3-8B-Q4_K_M.gguf".to_string()),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        public_model_id_from_identity(&identity).as_deref(),
+        Some("Qwen/Qwen3-8B-GGUF@revabc:Q4_K_M")
+    );
+}
+
+#[test]
 fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xaa; 32]).public());
     let peer_id_bytes = peer_id.as_bytes().to_vec();

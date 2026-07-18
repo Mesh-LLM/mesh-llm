@@ -3,9 +3,12 @@ use super::*;
 mod commands;
 
 use commands::{OwnedNodeCommand, OwnedNodeCommandDeadline, OwnedNodeCommandExecutionShape};
+use std::future::Future;
 
 const OWNER_CONTROL_SERVER_HANDSHAKE_TIMEOUT_SECS: u64 = 2;
 const OWNER_CONTROL_SERVER_REQUEST_TIMEOUT_SECS: u64 = 5;
+const OWNER_CONTROL_SERVER_RESPONSE_WRITE_TIMEOUT_SECS: u64 = 2;
+const OWNER_CONTROL_STREAM_RESET_ERROR_CODE: u32 = 0;
 
 pub(crate) fn endpoint_id_hex(id: EndpointId) -> String {
     hex::encode(id.as_bytes())
@@ -91,6 +94,49 @@ fn owner_control_command_timeout_envelope(
         None,
         deadline.timeout_message(),
     )
+}
+
+async fn await_owner_control_response_write<F>(future: F) -> anyhow::Result<()>
+where
+    F: Future<Output = anyhow::Result<()>>,
+{
+    tokio::time::timeout(
+        std::time::Duration::from_secs(OWNER_CONTROL_SERVER_RESPONSE_WRITE_TIMEOUT_SECS),
+        future,
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "owner-control response write timed out after {OWNER_CONTROL_SERVER_RESPONSE_WRITE_TIMEOUT_SECS}s"
+        )
+    })?
+}
+
+async fn await_owner_control_terminal_completion<F, E, T>(future: F) -> anyhow::Result<()>
+where
+    F: Future<Output = Result<Option<T>, E>>,
+    E: std::fmt::Display,
+    T: std::fmt::Display,
+{
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(OWNER_CONTROL_SERVER_RESPONSE_WRITE_TIMEOUT_SECS),
+        future,
+    )
+    .await
+    {
+        Ok(Ok(None)) => Ok(()),
+        Ok(Ok(Some(error_code))) => {
+            anyhow::bail!("owner-control terminal stream stopped by peer with code {error_code}")
+        }
+        Ok(Err(error)) => anyhow::bail!("owner-control terminal stream completion failed: {error}"),
+        Err(_) => anyhow::bail!(
+            "owner-control terminal stream completion timed out after {OWNER_CONTROL_SERVER_RESPONSE_WRITE_TIMEOUT_SECS}s"
+        ),
+    }
+}
+
+fn reset_owner_control_send_stream(send: &mut iroh::endpoint::SendStream) {
+    let _ = send.reset(OWNER_CONTROL_STREAM_RESET_ERROR_CODE.into());
 }
 
 impl Node {
@@ -340,7 +386,13 @@ impl Node {
         envelope: crate::proto::node::OwnerControlEnvelope,
     ) -> anyhow::Result<()> {
         let envelope = bound_owner_control_envelope(envelope);
-        write_len_prefixed(send, &envelope.encode_to_vec()).await?;
+        let bytes = envelope.encode_to_vec();
+        if let Err(error) =
+            await_owner_control_response_write(write_len_prefixed(send, &bytes)).await
+        {
+            reset_owner_control_send_stream(send);
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -350,8 +402,14 @@ impl Node {
         envelope: crate::proto::node::OwnerControlEnvelope,
     ) -> anyhow::Result<()> {
         self.send_owner_control_envelope(send, envelope).await?;
-        let _ = send.finish();
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if let Err(error) = send.finish() {
+            reset_owner_control_send_stream(send);
+            anyhow::bail!("owner-control terminal stream finish failed: {error}");
+        }
+        if let Err(error) = await_owner_control_terminal_completion(send.stopped()).await {
+            reset_owner_control_send_stream(send);
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -870,5 +928,51 @@ impl Node {
             }
         }
         Ok(execution_shape)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn response_write_timeout_is_bounded() {
+        let result = await_owner_control_response_write(std::future::pending()).await;
+
+        assert_eq!(
+            result
+                .expect_err("pending write should time out")
+                .to_string(),
+            "owner-control response write timed out after 2s"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn terminal_completion_timeout_is_bounded() {
+        let result = await_owner_control_terminal_completion(std::future::pending::<
+            Result<Option<u32>, anyhow::Error>,
+        >())
+        .await;
+
+        assert_eq!(
+            result
+                .expect_err("pending terminal completion should time out")
+                .to_string(),
+            "owner-control terminal stream completion timed out after 2s"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_completion_reports_peer_stop_code() {
+        let result =
+            await_owner_control_terminal_completion(async { Ok::<_, anyhow::Error>(Some(7u32)) })
+                .await;
+
+        assert_eq!(
+            result
+                .expect_err("peer stop code should be surfaced")
+                .to_string(),
+            "owner-control terminal stream stopped by peer with code 7"
+        );
     }
 }

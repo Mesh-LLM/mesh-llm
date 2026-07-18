@@ -459,7 +459,7 @@ async fn artifact_transfer_stream_rejects_public_mesh_without_opt_in() -> Result
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn artifact_transfer_body_read_has_idle_timeout() {
     let (_writer, mut reader) = tokio::io::duplex(8);
     let mut buffer = [0u8; 4];
@@ -477,6 +477,216 @@ async fn artifact_transfer_body_read_has_idle_timeout() {
             .to_string()
             .contains("artifact transfer body read idle timeout")
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn artifact_transfer_body_write_has_idle_timeout() {
+    let (mut writer, _reader) = tokio::io::duplex(1);
+    let bytes = [1u8; 1024];
+
+    let error =
+        write_artifact_transfer_chunk(&mut writer, &bytes, std::time::Duration::from_millis(10))
+            .await
+            .expect_err("stalled body write must time out");
+
+    assert!(
+        error
+            .to_string()
+            .contains("artifact transfer body write idle timeout")
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn stage_stream_type_read_has_timeout() {
+    let (_writer, mut reader) = tokio::io::duplex(1);
+
+    let error = read_stage_stream_type(&mut reader)
+        .await
+        .expect_err("stalled stage stream type read must time out");
+
+    assert!(
+        error
+            .to_string()
+            .contains("timeout reading skippy stage stream type")
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn local_stage_control_response_wait_has_timeout() {
+    let (_response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+    let error =
+        wait_local_stage_control_response(response_rx, std::time::Duration::from_millis(10))
+            .await
+            .expect_err("stalled local stage control response must time out");
+
+    assert!(
+        error
+            .to_string()
+            .contains("timeout waiting for local stage control response")
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn plugin_frame_prefix_and_body_reads_have_timeouts() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let (_prefix_writer, mut prefix_reader) = tokio::io::duplex(1);
+    let prefix_error = read_plugin_frame_bytes(&mut prefix_reader, 1024)
+        .await
+        .expect_err("stalled prefix read must time out");
+    assert!(
+        prefix_error
+            .to_string()
+            .contains("timeout reading plugin frame prefix")
+    );
+
+    let (mut body_writer, mut body_reader) = tokio::io::duplex(8);
+    body_writer.write_all(&4u32.to_le_bytes()).await.unwrap();
+    let body_error = read_plugin_frame_bytes(&mut body_reader, 1024)
+        .await
+        .expect_err("stalled body read must time out");
+    assert!(
+        body_error
+            .to_string()
+            .contains("timeout reading plugin frame body")
+    );
+}
+
+#[tokio::test]
+async fn stage_transport_bridge_reservation_rejects_duplicate_request() -> Result<()> {
+    let node = make_test_node(super::NodeRole::Worker).await?;
+    let peer_id = make_test_endpoint_id(0x93);
+
+    let first = node
+        .ensure_stage_transport_bridge(peer_id, "topology-race", "run-race", "stage-race")
+        .await?;
+    assert!(first.starts_with("127.0.0.1:"));
+    let key = stage_runtime_status_key("topology-race", "run-race", "stage-race");
+    assert!(node.stage_transport_bridge_is_running(&key).await);
+
+    let duplicate = node
+        .ensure_stage_transport_bridge(peer_id, "topology-race", "run-race", "stage-race")
+        .await
+        .expect_err("duplicate bridge setup must be rejected");
+    assert!(duplicate.to_string().contains("already exists"));
+
+    node.stop_stage_transport_bridge("topology-race", "run-race", "stage-race")
+        .await;
+
+    let recreated = node
+        .ensure_stage_transport_bridge(peer_id, "topology-race", "run-race", "stage-race")
+        .await?;
+    assert!(recreated.starts_with("127.0.0.1:"));
+    node.stop_stage_transport_bridge("topology-race", "run-race", "stage-race")
+        .await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stage_transport_bridge_reserved_state_rejects_duplicate_request() -> Result<()> {
+    let node = make_test_node(super::NodeRole::Worker).await?;
+    let peer_id = make_test_endpoint_id(0x94);
+    let key = stage_runtime_status_key("topology-reserved", "run-reserved", "stage-reserved");
+    let owner = node
+        .reserve_stage_transport_bridge_for_test(key.clone())
+        .await;
+
+    let duplicate = node
+        .ensure_stage_transport_bridge(
+            peer_id,
+            "topology-reserved",
+            "run-reserved",
+            "stage-reserved",
+        )
+        .await
+        .expect_err("reserved bridge setup must reject duplicates before an accept task exists");
+
+    assert!(duplicate.to_string().contains("already exists"));
+    assert!(
+        node.stage_transport_bridge_owner_matches(&key, &owner)
+            .await
+    );
+    node.clear_stage_transport_bridge_for_test(&key).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stage_transport_bridge_publish_aborts_handle_when_reservation_was_stopped() -> Result<()> {
+    struct AbortNotice(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl Drop for AbortNotice {
+        fn drop(&mut self) {
+            if let Some(tx) = self.0.take() {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    let node = make_test_node(super::NodeRole::Worker).await?;
+    let key = stage_runtime_status_key("topology-stop", "run-stop", "stage-stop");
+    let owner = node
+        .reserve_stage_transport_bridge_for_test(key.clone())
+        .await;
+    node.stop_stage_transport_bridge("topology-stop", "run-stop", "stage-stop")
+        .await;
+    let (abort_tx, abort_rx) = tokio::sync::oneshot::channel();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let _notice = AbortNotice(Some(abort_tx));
+        let _ = started_tx.send(());
+        std::future::pending::<()>().await;
+    });
+    tokio::time::timeout(std::time::Duration::from_millis(250), started_rx)
+        .await
+        .expect("test accept-loop handle must start before publishing")
+        .expect("test accept-loop handle must report startup");
+
+    let published = node
+        .publish_stage_transport_bridge(key.clone(), owner, handle)
+        .await;
+
+    assert!(!published);
+    tokio::time::timeout(std::time::Duration::from_millis(250), abort_rx)
+        .await
+        .expect("cancelled reservation must abort the escaped accept-loop handle")
+        .expect("abort notice sender must be dropped by task cancellation");
+    assert!(!node.stage_transport_bridge_exists(&key).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn stage_transport_bridge_cleanup_removes_only_owning_reservation() -> Result<()> {
+    let node = make_test_node(super::NodeRole::Worker).await?;
+    let key = stage_runtime_status_key("topology-cleanup", "run-cleanup", "stage-cleanup");
+    let stale_owner = node
+        .reserve_stage_transport_bridge_for_test(key.clone())
+        .await;
+    let current_owner = node
+        .reserve_stage_transport_bridge_for_test(stage_runtime_status_key(
+            "topology-cleanup",
+            "run-cleanup",
+            "stage-current",
+        ))
+        .await;
+    node.insert_reserved_stage_transport_bridge_for_test(key.clone(), current_owner.clone())
+        .await;
+
+    let stale_cleanup = node
+        .remove_stage_transport_bridge_if_owner(&key, &stale_owner)
+        .await;
+
+    assert!(stale_cleanup.is_none());
+    assert!(
+        node.stage_transport_bridge_owner_matches(&key, &current_owner)
+            .await
+    );
+    let current_cleanup = node
+        .remove_stage_transport_bridge_if_owner(&key, &current_owner)
+        .await;
+    assert!(current_cleanup.is_some());
+    assert!(!node.stage_transport_bridge_exists(&key).await);
+    Ok(())
 }
 
 #[test]

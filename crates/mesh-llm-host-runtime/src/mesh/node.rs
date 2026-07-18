@@ -30,52 +30,6 @@ pub struct RouteEntry {
     pub vram_gb: f64,
 }
 
-/// Discover our public IP via STUN, then pair it with the given port.
-/// We can't send STUN from the bound port (iroh owns it), but we only need
-/// the public IP — the port is known from --bind-port + router forwarding.
-pub(crate) async fn stun_public_addr(advertised_port: u16) -> Option<std::net::SocketAddr> {
-    let stun_servers = [
-        "stun.l.google.com:19302",
-        "stun.cloudflare.com:3478",
-        "stun.stunprotocol.org:3478",
-    ];
-
-    // Bind to ephemeral port — we only care about the IP, not the mapped port.
-    let sock = tokio::net::UdpSocket::bind("0.0.0.0:0").await.ok()?;
-
-    for server in &stun_servers {
-        if let Some(addr) = probe_stun_server(&sock, server, advertised_port).await {
-            tracing::info!("STUN discovered public address: {addr}");
-            return Some(addr);
-        }
-    }
-
-    tracing::warn!("STUN: could not discover public address");
-    None
-}
-
-pub(crate) async fn probe_stun_server(
-    sock: &tokio::net::UdpSocket,
-    server: &str,
-    advertised_port: u16,
-) -> Option<std::net::SocketAddr> {
-    let req = build_stun_binding_request();
-    let dest = resolve_stun_server(server).await?;
-    sock.send_to(&req, dest).await.ok()?;
-
-    let mut buf = [0u8; 256];
-    let (len, _) =
-        tokio::time::timeout(std::time::Duration::from_secs(2), sock.recv_from(&mut buf))
-            .await
-            .ok()?
-            .ok()?;
-    if len < 20 {
-        return None;
-    }
-
-    parse_stun_public_addr(&buf, len, &req[4..8], advertised_port)
-}
-
 pub(crate) async fn startup_secret_key(role: &NodeRole) -> Result<SecretKey> {
     if matches!(role, NodeRole::Client) || std::env::var("MESH_LLM_EPHEMERAL_KEY").is_ok() {
         let key = SecretKey::generate();
@@ -121,11 +75,14 @@ pub(crate) fn startup_transport_config() -> iroh::endpoint::QuicTransportConfig 
         .build()
 }
 
-pub(crate) fn relay_mode_for_startup(relay: RelayConfig<'_>) -> iroh::endpoint::RelayMode {
+pub(crate) fn relay_mode_for_startup(relay: RelayConfig<'_>) -> Result<iroh::endpoint::RelayMode> {
     let urls = effective_relay_urls(relay.policy, relay.urls);
     if relay.policy.uses_relay() {
         tracing::info!("Relay: {:?}", urls);
-        iroh::endpoint::RelayMode::Custom(relay_map_from_urls(&urls, relay.auths))
+        Ok(iroh::endpoint::RelayMode::Custom(relay_map_from_urls(
+            &urls,
+            relay.auths,
+        )?))
     } else {
         let reason = match relay.policy {
             RelayPolicy::ExplicitlyDisabled => "disabled by embedded config",
@@ -133,7 +90,7 @@ pub(crate) fn relay_mode_for_startup(relay: RelayConfig<'_>) -> iroh::endpoint::
             RelayPolicy::DefaultPublic => unreachable!("default public uses relays"),
         };
         tracing::info!("Relay: {reason}");
-        iroh::endpoint::RelayMode::Disabled
+        Ok(iroh::endpoint::RelayMode::Disabled)
     }
 }
 
@@ -149,7 +106,7 @@ pub(crate) async fn bind_mesh_endpoint(
             skippy_protocol::STAGE_ALPN_V2.to_vec(),
         ])
         .transport_config(startup_transport_config())
-        .relay_mode(relay_mode_for_startup(relay));
+        .relay_mode(relay_mode_for_startup(relay)?);
 
     if let Some(addr) = quic_bind_addr(quic_bind) {
         tracing::info!("Binding QUIC to {addr}");
@@ -301,18 +258,18 @@ pub(crate) fn init_owner_runtime(
 pub(crate) fn configure_control_relay(
     mut builder: iroh::endpoint::Builder,
     relay: Option<RelayConfig<'_>>,
-) -> iroh::endpoint::Builder {
+) -> Result<iroh::endpoint::Builder> {
     if let Some(relay) = relay.filter(|relay| relay.policy.uses_relay()) {
         let urls = effective_relay_urls(relay.policy, relay.urls);
         tracing::info!("Owner-control relay: {:?}", urls);
         builder = builder.relay_mode(iroh::endpoint::RelayMode::Custom(relay_map_from_urls(
             &urls,
             relay.auths,
-        )));
+        )?));
     } else {
         builder = builder.relay_mode(iroh::endpoint::RelayMode::Disabled);
     }
-    builder
+    Ok(builder)
 }
 
 pub(crate) fn default_plugin_event_source(endpoint_id: EndpointId, source_peer_id: &mut String) {
@@ -345,9 +302,9 @@ pub struct Node {
     /// Mesh-wide demand map — merged from gossip + local API requests.
     /// This is the single source of truth for "what does the mesh want?"
     pub(crate) model_demand: Arc<std::sync::Mutex<HashMap<String, ModelDemand>>>,
+    pub(crate) requirement_mesh_state: Arc<Mutex<Option<RequirementAwareMeshState>>>,
     pub(crate) mesh_id: Arc<Mutex<Option<String>>>,
     pub(crate) mesh_policy_hash: Arc<Mutex<Option<String>>>,
-    pub(crate) genesis_policy: Arc<Mutex<Option<crate::MeshGenesisPolicy>>>,
     pub(crate) signed_genesis_policy: Arc<Mutex<Option<crate::SignedMeshGenesisPolicy>>>,
     pub(crate) bootstrap_token: Arc<Mutex<Option<crate::SignedBootstrapToken>>>,
     /// Addresses we have been asked to join (from invite tokens), retained so
@@ -383,7 +340,7 @@ pub struct Node {
             >,
         >,
     >,
-    pub(crate) stage_transport_bridges: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    pub(crate) stage_transport_bridges: Arc<Mutex<HashMap<String, StageTransportBridge>>>,
     pub(crate) stage_transport_aliases: Arc<Mutex<HashMap<String, String>>>,
     pub(crate) stage_topologies: Arc<Mutex<StageTopologyState>>,
     pub(crate) plugin_manager: Arc<Mutex<Option<crate::plugin::PluginManager>>>,
@@ -406,6 +363,15 @@ pub struct Node {
     pub gpu_compute_tflops_fp16: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RequirementAwareMeshState {
+    pub(crate) mesh_id: String,
+    pub(crate) policy_hash: String,
+    pub(crate) policy: crate::MeshGenesisPolicy,
+    pub(crate) signed_policy: Option<crate::SignedMeshGenesisPolicy>,
+    pub(crate) bootstrap_token: Option<crate::SignedBootstrapToken>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -810,8 +776,8 @@ impl Node {
         stage_id: &str,
     ) {
         let key = stage_runtime_status_key(topology_id, run_id, stage_id);
-        if let Some(handle) = self.stage_transport_bridges.lock().await.remove(&key) {
-            handle.abort();
+        if let Some(bridge) = self.stage_transport_bridges.lock().await.remove(&key) {
+            bridge.abort();
         }
     }
 
@@ -1009,6 +975,8 @@ impl Node {
             state: Arc::new(Mutex::new(MeshState {
                 peers: HashMap::new(),
                 connections: HashMap::new(),
+                pending_connections: HashMap::new(),
+                next_pending_connection_attempt: 1,
                 remote_tunnel_maps: HashMap::new(),
                 dead_peers: HashMap::new(),
                 peer_down_rejections: HashMap::new(),
@@ -1031,9 +999,9 @@ impl Node {
             requested_models: Arc::new(Mutex::new(Vec::new())),
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            requirement_mesh_state: Arc::new(Mutex::new(None)),
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
-            genesis_policy: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
@@ -1172,6 +1140,8 @@ impl Node {
             state: Arc::new(Mutex::new(MeshState {
                 peers: HashMap::new(),
                 connections: HashMap::new(),
+                pending_connections: HashMap::new(),
+                next_pending_connection_attempt: 1,
                 remote_tunnel_maps: HashMap::new(),
                 dead_peers: HashMap::new(),
                 peer_down_rejections: HashMap::new(),
@@ -1194,9 +1164,9 @@ impl Node {
             requested_models: Arc::new(Mutex::new(Vec::new())),
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            requirement_mesh_state: Arc::new(Mutex::new(None)),
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
-            genesis_policy: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
@@ -1267,7 +1237,7 @@ impl Node {
             .secret_key(secret_key)
             .alpns(vec![ALPN_CONTROL_V1.to_vec()])
             .bind_addr(bind_addr.unwrap_or_else(default_control_bind_addr))?;
-        builder = configure_control_relay(builder, relay);
+        builder = configure_control_relay(builder, relay)?;
         let endpoint = builder.bind().await?;
         if relay.is_some_and(|relay| relay.policy.uses_relay()) {
             wait_for_endpoint_online(
@@ -1317,7 +1287,7 @@ impl Node {
                     .await,
             )
             .await;
-        if self.mesh_id.lock().await.is_some() {
+        if self.mesh_id().await.is_some() {
             let _ = plugin_manager
                 .broadcast_mesh_event(
                     self.build_mesh_event(
@@ -1763,6 +1733,9 @@ impl Node {
     }
 
     pub async fn mesh_id(&self) -> Option<String> {
+        if let Some(state) = self.requirement_mesh_state.lock().await.clone() {
+            return Some(state.mesh_id);
+        }
         self.mesh_id.lock().await.clone()
     }
 
@@ -1783,13 +1756,13 @@ impl Node {
     /// Set the mesh identity. If None was set, adopts the given ID (from gossip).
     /// If already set, ignores (originator's ID wins).
     pub async fn set_mesh_id(&self, id: String) {
-        if let Some(policy_hash) = self.mesh_policy_hash.lock().await.clone()
-            && policy_hash != id
+        if let Some(state) = self.requirement_mesh_state.lock().await.clone()
+            && state.mesh_id != id
         {
             tracing::warn!(
                 "ignoring conflicting mesh ID '{}' for requirement-aware mesh {}",
                 id,
-                policy_hash
+                state.mesh_id
             );
             return;
         }
@@ -1808,9 +1781,9 @@ impl Node {
 
     /// Set mesh ID unconditionally (for originator).
     pub async fn set_mesh_id_force(&self, id: String) {
-        if let Some(policy_hash) = self.mesh_policy_hash.lock().await.clone() {
+        if let Some(state) = self.requirement_mesh_state.lock().await.clone() {
             assert_eq!(
-                policy_hash, id,
+                state.mesh_id, id,
                 "requirement-aware mesh state must keep mesh ID aligned with policy hash"
             );
         }
@@ -1873,7 +1846,9 @@ impl Node {
         drop(my_requested);
 
         let mut demand = self.model_demand.lock().unwrap();
-        demand.retain(|model, d| pinned.contains(model) || (now - d.last_active) < DEMAND_TTL_SECS);
+        demand.retain(|model, d| {
+            pinned.contains(model) || now.saturating_sub(d.last_active) < DEMAND_TTL_SECS
+        });
     }
 
     /// Get active demand entries (within TTL or pinned by a live node).
@@ -1896,7 +1871,9 @@ impl Node {
 
         demand
             .into_iter()
-            .filter(|(model, d)| pinned.contains(model) || (now - d.last_active) < DEMAND_TTL_SECS)
+            .filter(|(model, d)| {
+                pinned.contains(model) || now.saturating_sub(d.last_active) < DEMAND_TTL_SECS
+            })
             .collect()
     }
 

@@ -9,8 +9,22 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot};
+
+const PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const PLUGIN_ENVELOPE_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT: Duration =
+    Duration::from_secs(super::REQUEST_TIMEOUT_SECS);
+
+fn plugin_mesh_stream_error(message: impl Into<String>) -> super::proto::ErrorResponse {
+    super::proto::ErrorResponse {
+        code: ErrorCode::INTERNAL_ERROR.0,
+        message: message.into(),
+        data_json: String::new(),
+    }
+}
 
 pub(crate) enum LocalStream {
     #[cfg(unix)]
@@ -276,6 +290,18 @@ impl LocalStream {
         }
         Ok(())
     }
+
+    async fn read_exact_timeout(
+        &mut self,
+        bytes: &mut [u8],
+        timeout: Duration,
+        label: &str,
+    ) -> Result<()> {
+        tokio::time::timeout(timeout, self.read_exact(bytes))
+            .await
+            .map_err(|_| anyhow!("timeout reading plugin frame {label} after {timeout:?}"))??;
+        Ok(())
+    }
 }
 
 pub(crate) async fn bind_local_listener(instance_id: &str, name: &str) -> Result<LocalListener> {
@@ -365,13 +391,47 @@ pub(crate) async fn write_envelope(
 
 pub(crate) async fn read_envelope(stream: &mut LocalStream) -> Result<super::proto::Envelope> {
     let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await?;
+    stream
+        .read_exact_timeout(&mut len_buf, PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT, "prefix")
+        .await?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > 16 * 1024 * 1024 {
         bail!("Plugin frame too large");
     }
     let mut body = vec![0u8; len];
-    stream.read_exact(&mut body).await?;
+    stream
+        .read_exact_timeout(&mut body, PLUGIN_ENVELOPE_BODY_READ_TIMEOUT, "body")
+        .await?;
+    Ok(prost::Message::decode(body.as_slice())?)
+}
+
+#[cfg(test)]
+pub(crate) async fn read_envelope_from_reader<R>(stream: &mut R) -> Result<super::proto::Envelope>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut len_buf = [0u8; 4];
+    tokio::time::timeout(
+        PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT,
+        AsyncReadExt::read_exact(stream, &mut len_buf),
+    )
+    .await
+    .map_err(|_| {
+        anyhow!("timeout reading plugin frame prefix after {PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT:?}")
+    })??;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    if len > 16 * 1024 * 1024 {
+        bail!("Plugin frame too large");
+    }
+    let mut body = vec![0u8; len];
+    tokio::time::timeout(
+        PLUGIN_ENVELOPE_BODY_READ_TIMEOUT,
+        AsyncReadExt::read_exact(stream, &mut body),
+    )
+    .await
+    .map_err(|_| {
+        anyhow!("timeout reading plugin frame body after {PLUGIN_ENVELOPE_BODY_READ_TIMEOUT:?}")
+    })??;
     Ok(prost::Message::decode(body.as_slice())?)
 }
 
@@ -436,17 +496,18 @@ fn forward_plugin_mesh_stream_request(
             .await
             .is_ok()
         {
-            response_rx.await.map_err(|_| super::proto::ErrorResponse {
-                code: ErrorCode::INTERNAL_ERROR.0,
-                message: "Mesh stream broker dropped the response".into(),
-                data_json: String::new(),
-            })
+            match tokio::time::timeout(PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT, response_rx).await {
+                Ok(response) => response.map_err(|_| {
+                    plugin_mesh_stream_error("Mesh stream broker dropped the response")
+                }),
+                Err(_) => Err(plugin_mesh_stream_error(format!(
+                    "Mesh stream broker response timed out after {PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT:?}"
+                ))),
+            }
         } else {
-            Err(super::proto::ErrorResponse {
-                code: ErrorCode::INTERNAL_ERROR.0,
-                message: "Mesh stream broker is unavailable".into(),
-                data_json: String::new(),
-            })
+            Err(plugin_mesh_stream_error(
+                "Mesh stream broker is unavailable",
+            ))
         };
 
         let payload = match response {
@@ -523,5 +584,80 @@ mod tests {
         assert_eq!(&reply, b"world");
 
         accept_task.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn read_envelope_prefix_and_body_have_timeouts() {
+        let (_prefix_writer, mut prefix_reader) = tokio::io::duplex(1);
+        let prefix_error = read_envelope_from_reader(&mut prefix_reader)
+            .await
+            .expect_err("stalled prefix read must time out");
+        assert!(
+            prefix_error
+                .to_string()
+                .contains("timeout reading plugin frame prefix")
+        );
+
+        let (mut body_writer, mut body_reader) = tokio::io::duplex(8);
+        body_writer.write_all(&4u32.to_le_bytes()).await.unwrap();
+        let body_error = read_envelope_from_reader(&mut body_reader)
+            .await
+            .expect_err("stalled body read must time out");
+        assert!(
+            body_error
+                .to_string()
+                .contains("timeout reading plugin frame body")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn forward_plugin_mesh_stream_request_times_out_when_broker_stalls() {
+        let (mesh_tx, mut mesh_rx) = mpsc::channel(1);
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(1);
+        let request = super::proto::OpenMeshStreamRequest {
+            stream_id: "stream-test".into(),
+            target_peer_id: "peer-test".into(),
+            channel: "channel-test".into(),
+            plugin_id: "plugin-test".into(),
+            purpose: proto::StreamPurpose::HttpResponseBody as i32,
+            mode: proto::StreamMode::RawBytes as i32,
+            bidirectional: true,
+            content_type: Some("application/octet-stream".into()),
+            correlation_id: None,
+            metadata_json: None,
+            expected_bytes: None,
+            idle_timeout_ms: None,
+        };
+
+        forward_plugin_mesh_stream_request("demo-plugin".into(), 7, request, mesh_tx, outbound_tx);
+
+        let event = mesh_rx
+            .recv()
+            .await
+            .expect("mesh broker should receive the stream request");
+        let PluginMeshEvent::OpenStream {
+            response_tx: _response_tx,
+            ..
+        } = event
+        else {
+            panic!("expected mesh stream request event");
+        };
+
+        tokio::time::advance(PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT + Duration::from_secs(1)).await;
+
+        let envelope = outbound_rx
+            .recv()
+            .await
+            .expect("timed out broker wait should still publish a response");
+
+        let Some(super::proto::envelope::Payload::ErrorResponse(error)) = envelope.payload else {
+            panic!("expected timeout to map to an error response");
+        };
+        assert_eq!(error.code, ErrorCode::INTERNAL_ERROR.0);
+        assert!(
+            error
+                .message
+                .contains("Mesh stream broker response timed out")
+        );
     }
 }

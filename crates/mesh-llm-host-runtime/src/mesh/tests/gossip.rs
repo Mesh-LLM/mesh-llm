@@ -582,6 +582,87 @@ pub(crate) async fn direct_add_peer_rejects_below_version_floor() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+pub(crate) async fn inbound_gossip_rejection_preserves_dead_peer_state() -> Result<()> {
+    // Given: a host that still considers the direct sender dead, and a direct
+    // gossip payload whose sender announcement fails admission.
+    let host = Node::new_for_tests(NodeRole::Worker).await?;
+    let policy = crate::MeshGenesisPolicy::new(
+        "test-owner",
+        current_time_unix_ms(),
+        crate::MeshRequirements::default(),
+    )
+    .expect("test policy should be valid");
+    let mesh_id = policy.policy_derived_mesh_id().expect("mesh id");
+    let policy_hash = policy.canonical_hash_hex().expect("policy hash");
+    host.set_active_mesh_policy_for_tests(policy).await;
+
+    let sender_id = test_endpoint_id(0x58);
+    host.state
+        .lock()
+        .await
+        .dead_peers
+        .insert(sender_id, std::time::Instant::now());
+
+    let mut sender_announcement = test_announcement(None);
+    sender_announcement.addr = EndpointAddr {
+        id: sender_id,
+        addrs: Default::default(),
+    };
+    sender_announcement.role = NodeRole::Client;
+    sender_announcement.version = Some(crate::VERSION.to_string());
+    sender_announcement.mesh_id = Some(mesh_id);
+    sender_announcement.mesh_policy_hash = Some(policy_hash);
+    let announcements = [(sender_announcement.addr.clone(), sender_announcement)];
+
+    // When: the same production phase used by `handle_gossip_stream` processes
+    // the rejected direct announcement.
+    host.validate_and_capture_inbound_gossip(
+        ControlProtocol::ProtoV1,
+        &announcements,
+        AnnouncedPeerContext::direct(sender_id, Some(NODE_PROTOCOL_GENERATION)),
+    )
+    .await
+    .expect_err("rejected gossip must fail admission");
+
+    // Then: admission rejection is recorded, but liveness recovery has not
+    // cleared the sender from dead_peers.
+    let state = host.state.lock().await;
+    assert!(
+        state.dead_peers.contains_key(&sender_id),
+        "rejected inbound gossip must not clear dead-peer state"
+    );
+    assert!(
+        state.requirement_rejected_peers.contains(&sender_id),
+        "rejected inbound gossip should still be tracked as an admission rejection"
+    );
+    assert!(
+        !state.peers.contains_key(&sender_id),
+        "rejected inbound gossip must not admit the sender"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+pub(crate) async fn future_demand_timestamps_are_active_without_underflow() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let now = now_secs();
+    node.merge_remote_demand(&HashMap::from([(
+        "future-demand".to_string(),
+        ModelDemand {
+            last_active: now + DEMAND_TTL_SECS + 60,
+            request_count: 3,
+        },
+    )]));
+
+    let active = node.active_demand().await;
+    assert!(active.contains_key("future-demand"));
+
+    node.gc_demand().await;
+    assert!(node.get_demand().contains_key("future-demand"));
+}
+
 /// Regression test for the `--auto` startup wedge: when a transitive
 /// gossip payload includes peers that would be rejected at ingest
 /// (version-floor or idle-transitive-client), `maybe_connect_discovered_peer`

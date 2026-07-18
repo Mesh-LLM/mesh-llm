@@ -248,6 +248,10 @@ pub(crate) const ARTIFACT_TRANSFER_OPEN_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(30);
 pub(crate) const ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(30);
+pub(crate) const STAGE_STREAM_TYPE_READ_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(10);
+pub(crate) const LOCAL_STAGE_CONTROL_RESPONSE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(30);
 pub(crate) const ARTIFACT_TRANSFER_BUFFER_BYTES: usize = 1024 * 1024;
 pub(crate) const ARTIFACT_TRANSFER_INVALID_OFFSET_ERROR: &str = "invalid transfer offset";
 
@@ -286,6 +290,39 @@ pub(crate) async fn write_artifact_transfer_response(
         let _ = send.finish();
     }
     Ok(())
+}
+
+pub(crate) async fn read_stage_stream_type<R>(reader: &mut R) -> Result<u8>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut type_buf = [0u8; 1];
+    tokio::time::timeout(
+        STAGE_STREAM_TYPE_READ_TIMEOUT,
+        tokio::io::AsyncReadExt::read_exact(reader, &mut type_buf),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "timeout reading skippy stage stream type after {STAGE_STREAM_TYPE_READ_TIMEOUT:?}"
+        )
+    })?
+    .context("read skippy stage stream type")?;
+    Ok(type_buf[0])
+}
+
+pub(crate) async fn wait_local_stage_control_response(
+    response: tokio::sync::oneshot::Receiver<
+        anyhow::Result<crate::inference::skippy::StageControlResponse>,
+    >,
+    timeout: std::time::Duration,
+) -> Result<crate::inference::skippy::StageControlResponse> {
+    tokio::time::timeout(timeout, response)
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("timeout waiting for local stage control response after {timeout:?}")
+        })?
+        .map_err(|_| anyhow::anyhow!("stage control response dropped"))?
 }
 
 pub(crate) fn artifact_transfer_allowed_by_topology(
@@ -786,9 +823,8 @@ impl Node {
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
-        match resp_rx
-            .await
-            .map_err(|_| anyhow::anyhow!("stage control response dropped"))??
+        match wait_local_stage_control_response(resp_rx, LOCAL_STAGE_CONTROL_RESPONSE_TIMEOUT)
+            .await?
         {
             crate::inference::skippy::StageControlResponse::Status(statuses) => Ok(statuses),
             crate::inference::skippy::StageControlResponse::Ready(_) => {
@@ -817,9 +853,9 @@ impl Node {
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
-        let response = resp_rx
-            .await
-            .map_err(|_| anyhow::anyhow!("stage control response dropped"))??;
+        let response =
+            wait_local_stage_control_response(resp_rx, LOCAL_STAGE_CONTROL_RESPONSE_TIMEOUT)
+                .await?;
         match &response {
             crate::inference::skippy::StageControlResponse::Ready(ready) => {
                 self.record_stage_status(Some(self.endpoint.id()), ready.status.clone())
@@ -964,15 +1000,31 @@ impl Node {
         let run_id = run_id.into();
         let stage_id = stage_id.into();
         let key = stage_runtime_status_key(&topology_id, &run_id, &stage_id);
-        if self.stage_transport_bridges.lock().await.contains_key(&key) {
-            anyhow::bail!(
-                "stage transport bridge already exists for {topology_id}/{run_id}/{stage_id}"
-            );
-        }
+        let label = StageTransportBridgeLabel::new(&topology_id, &run_id, &stage_id);
+        let owner = self
+            .reserve_stage_transport_bridge(key.clone(), &label)
+            .await?;
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let bind_addr = listener.local_addr()?.to_string();
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(error) => {
+                self.remove_stage_transport_bridge_if_owner(&key, &owner)
+                    .await;
+                return Err(error.into());
+            }
+        };
+        let bind_addr = match listener.local_addr() {
+            Ok(addr) => addr.to_string(),
+            Err(error) => {
+                self.remove_stage_transport_bridge_if_owner(&key, &owner)
+                    .await;
+                return Err(error.into());
+            }
+        };
         let node = self.clone();
+        let cleanup_node = self.clone();
+        let cleanup_key = key.clone();
+        let cleanup_owner = owner.clone();
         let topology_for_task = topology_id.clone();
         let run_for_task = run_id.clone();
         let stage_for_task = stage_id.clone();
@@ -1004,12 +1056,17 @@ impl Node {
                     }
                 });
             }
+            cleanup_node
+                .remove_stage_transport_bridge_if_owner(&cleanup_key, &cleanup_owner)
+                .await;
         });
-        self.stage_transport_bridges
-            .lock()
+        if self
+            .publish_stage_transport_bridge(key, owner, handle)
             .await
-            .insert(key, handle);
-        Ok(bind_addr)
+        {
+            return Ok(bind_addr);
+        }
+        Err(label.cancelled_error())
     }
 
     pub(crate) async fn register_stage_transport_alias(
@@ -1150,13 +1207,19 @@ impl Node {
             StageBiAccept::Continue => return StageStreamAccept::Continue,
             StageBiAccept::Closed => return StageStreamAccept::Closed,
         };
-        let mut type_buf = [0u8; 1];
-        if recv.read_exact(&mut type_buf).await.is_err() {
-            return StageStreamAccept::Continue;
-        }
+        let stream_type = match read_stage_stream_type(&mut recv).await {
+            Ok(stream_type) => stream_type,
+            Err(error) => {
+                tracing::debug!(
+                    "skippy stage stream from {} did not provide stream type: {error}",
+                    remote.fmt_short()
+                );
+                return StageStreamAccept::Continue;
+            }
+        };
         if let Some(rejection) = stage_transport_path_rejection(
             conn,
-            type_buf[0],
+            stream_type,
             self.peer_stage_path_fallback(remote).await,
         ) {
             tracing::warn!(
@@ -1167,6 +1230,6 @@ impl Node {
             drop((send, recv));
             return StageStreamAccept::Continue;
         }
-        StageStreamAccept::Dispatch((send, recv), type_buf[0])
+        StageStreamAccept::Dispatch((send, recv), stream_type)
     }
 }

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tokio::io::{AsyncRead, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct PartialArtifactSelection {
@@ -93,6 +93,23 @@ where
         "artifact transfer ended before expected byte count"
     );
     Ok(read)
+}
+
+pub(super) async fn write_artifact_transfer_chunk<W>(
+    writer: &mut W,
+    bytes: &[u8],
+    idle_timeout: std::time::Duration,
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    tokio::time::timeout(idle_timeout, writer.write_all(bytes))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("artifact transfer body write idle timeout after {idle_timeout:?}")
+        })?
+        .context("write artifact transfer bytes")?;
+    Ok(())
 }
 
 pub(super) async fn append_artifact_transfer_body<R>(
@@ -223,6 +240,26 @@ mod tests {
         .unwrap();
 
         assert_eq!(std::fs::read(partial).unwrap(), b"layer000");
+    }
+
+    #[tokio::test(start_paused = true)]
+    pub(crate) async fn write_artifact_transfer_chunk_has_idle_timeout() {
+        let (mut writer, _reader) = tokio::io::duplex(1);
+        let bytes = [1u8; 1024];
+
+        let error = write_artifact_transfer_chunk(
+            &mut writer,
+            &bytes,
+            std::time::Duration::from_millis(10),
+        )
+        .await
+        .expect_err("stalled body write must time out");
+
+        assert!(
+            error
+                .to_string()
+                .contains("artifact transfer body write idle timeout")
+        );
     }
 
     #[test]

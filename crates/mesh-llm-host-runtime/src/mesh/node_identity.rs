@@ -1,4 +1,5 @@
 use super::*;
+use crate::mesh::node::RequirementAwareMeshState;
 
 pub(crate) fn direct_admission_attestation_hash(
     release_attestation: Option<&crate::ReleaseBuildAttestation>,
@@ -76,7 +77,7 @@ impl Node {
         nostr_pubkey: Option<&str>,
     ) -> Result<String> {
         if self.local_mesh_requirements.is_unrestricted() {
-            let mesh_id = generate_mesh_id(name, nostr_pubkey);
+            let mesh_id = generate_mesh_id(name, nostr_pubkey)?;
             self.set_mesh_id_force(mesh_id.clone()).await;
             return Ok(mesh_id);
         }
@@ -114,25 +115,25 @@ impl Node {
             self.quic_bind.ip,
             self.relay_policy.uses_raw_stun(),
         );
-        let mesh_id = self.mesh_id.lock().await.clone();
-        let policy_hash = self.mesh_policy_hash.lock().await.clone();
-        let policy = self.genesis_policy.lock().await.clone();
-        let signed_policy_guard = self.signed_genesis_policy.lock().await.clone();
-        let cached_token = self.bootstrap_token.lock().await.clone();
+        let requirement_state = self.requirement_mesh_state.lock().await.clone();
+        let cached_token = requirement_state
+            .as_ref()
+            .and_then(|state| state.bootstrap_token.clone());
 
-        if let (Some(mesh_id), Some(policy_hash), Some(policy)) = (mesh_id, policy_hash, policy) {
+        if let Some(state) = requirement_state {
             return self
                 .requirement_aware_invite_token(
                     &addr,
-                    mesh_id,
-                    policy_hash,
-                    policy,
-                    signed_policy_guard,
+                    state.mesh_id,
+                    state.policy_hash,
+                    state.policy,
+                    state.signed_policy,
                     cached_token,
                 )
                 .await;
         }
 
+        let cached_token = self.bootstrap_token.lock().await.clone();
         if let Some(token) = self.valid_cached_bootstrap_token(cached_token).await {
             return encode_signed_bootstrap_token(&token);
         }
@@ -208,10 +209,16 @@ impl Node {
         let owner = self.requirement_origin_owner(policy, signed_policy)?;
         match sign_requirement_bootstrap_token(addr, policy, signed_policy, owner) {
             Ok((signed_policy, token)) => {
-                *self.signed_genesis_policy.lock().await = Some(signed_policy);
-                *self.bootstrap_token.lock().await = Some(token.clone());
                 debug_assert_eq!(mesh_id, token.mesh_id);
                 debug_assert_eq!(policy_hash, token.policy_hash);
+                self.publish_requirement_mesh_state(RequirementAwareMeshState {
+                    mesh_id: mesh_id.to_string(),
+                    policy_hash: policy_hash.to_string(),
+                    policy: policy.clone(),
+                    signed_policy: Some(signed_policy),
+                    bootstrap_token: Some(token.clone()),
+                })
+                .await;
                 Some(encode_signed_bootstrap_token(&token))
             }
             Err(error) => {
@@ -219,7 +226,7 @@ impl Node {
                     error = %error,
                     "failed to sign requirement-aware bootstrap token; refusing to emit legacy invite token"
                 );
-                Some(String::new())
+                None
             }
         }
     }
@@ -232,7 +239,13 @@ impl Node {
             if token.verify_at(current_time_unix_ms()).is_ok() {
                 return Some(token);
             }
-            *self.bootstrap_token.lock().await = None;
+            let mut requirement_state = self.requirement_mesh_state.lock().await;
+            if let Some(mut state) = requirement_state.clone() {
+                state.bootstrap_token = None;
+                *requirement_state = Some(state);
+            } else {
+                *self.bootstrap_token.lock().await = None;
+            }
         }
         None
     }
@@ -361,7 +374,7 @@ impl Node {
             kind: kind as i32,
             peer,
             local_peer_id: endpoint_id_hex(self.endpoint.id()),
-            mesh_id: self.mesh_id.lock().await.clone().unwrap_or_default(),
+            mesh_id: self.mesh_id().await.unwrap_or_default(),
             detail_json,
         }
     }

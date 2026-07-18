@@ -76,21 +76,27 @@ struct EnvVarGuard {
 impl EnvVarGuard {
     fn set(key: &'static str, value: &std::path::Path) -> Self {
         let previous = std::env::var_os(key);
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: mesh tests that use this guard are annotated `#[serial]`, so
+        // the process environment key is mutated only while that serial test
+        // owns the guard.
         unsafe { std::env::set_var(key, value) };
         Self { key, previous }
     }
 
     fn set_str(key: &'static str, value: &str) -> Self {
         let previous = std::env::var_os(key);
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: mesh tests that use this guard are annotated `#[serial]`, so
+        // the process environment key is mutated only while that serial test
+        // owns the guard.
         unsafe { std::env::set_var(key, value) };
         Self { key, previous }
     }
 
     fn unset(key: &'static str) -> Self {
         let previous = std::env::var_os(key);
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: mesh tests that use this guard are annotated `#[serial]`, so
+        // the process environment key is mutated only while that serial test
+        // owns the guard.
         unsafe { std::env::remove_var(key) };
         Self { key, previous }
     }
@@ -99,10 +105,12 @@ impl EnvVarGuard {
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         if let Some(value) = self.previous.take() {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: restoration runs during drop in the same `#[serial]` mesh
+            // test that performed the mutation.
             unsafe { std::env::set_var(self.key, value) };
         } else {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: restoration runs during drop in the same `#[serial]` mesh
+            // test that performed the mutation.
             unsafe { std::env::remove_var(self.key) };
         }
     }

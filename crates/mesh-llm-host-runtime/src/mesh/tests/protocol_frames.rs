@@ -258,18 +258,21 @@ fn peer_down_confirmed_when_stale_and_no_connection() {
     );
 }
 
-/// Transitive peer updates should refresh last_seen so the peer doesn't
+/// Transitive peer updates should refresh last_mentioned so the peer doesn't
 /// get pruned while a bridge peer keeps mentioning it.
-#[test]
-fn transitive_peer_update_refreshes_last_mentioned() {
+#[tokio::test]
+async fn transitive_peer_update_refreshes_last_mentioned() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xC0; 32]).public());
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
     let mut peer = make_test_peer_info(peer_id);
 
-    // Simulate: peer was added long ago, both timestamps past the prune cutoff.
     let old_time =
         std::time::Instant::now() - std::time::Duration::from_secs(PEER_STALE_SECS * 2 + 60);
     peer.last_seen = old_time;
     peer.last_mentioned = old_time;
+    node.insert_test_peer(peer).await;
 
     let addr = EndpointAddr {
         id: peer_id,
@@ -318,27 +321,24 @@ fn transitive_peer_update_refreshes_last_mentioned() {
         latency_observer_id: None,
     };
 
-    apply_transitive_ann(&mut peer, &addr, &ann, make_test_endpoint_id(0xee));
+    node.update_transitive_peer(peer_id, &addr, &ann, make_test_endpoint_id(0xee))
+        .await;
+    let peer = node
+        .state
+        .lock()
+        .await
+        .peers
+        .get(&peer_id)
+        .cloned()
+        .expect("transitive peer must remain in production state");
 
-    // Before refreshing last_mentioned, verify the peer WOULD be pruned.
-    let prune_cutoff_pre =
-        std::time::Instant::now() - std::time::Duration::from_secs(PEER_STALE_SECS * 2);
-    assert!(
-        peer.last_seen < prune_cutoff_pre && peer.last_mentioned < prune_cutoff_pre,
-        "peer must be pruneable before last_mentioned refresh"
-    );
-
-    // Simulate update_transitive_peer refreshing last_mentioned (not last_seen).
-    peer.last_mentioned = std::time::Instant::now();
-
-    // last_mentioned is fresh, last_seen stays stale.
     assert!(
         peer.last_mentioned.elapsed().as_secs() < 1,
-        "last_mentioned must be refreshed after transitive gossip update"
+        "update_transitive_peer must refresh last_mentioned after transitive gossip"
     );
     assert!(
         peer.last_seen == old_time,
-        "last_seen must NOT be refreshed by transitive gossip"
+        "update_transitive_peer must not refresh direct last_seen"
     );
 
     // Peer survives prune check because last_mentioned is fresh.
@@ -422,32 +422,27 @@ fn proto_v1_control_frames_reject_legacy_json_and_wrong_gen() {
         let mut frame = vec![stream_type];
         frame.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
         frame.extend_from_slice(json_bytes);
-        // Each stream uses its own message type for decode; we test gossip and route
-        // request specifically since those carry gen validation too.
-        if stream_type == STREAM_GOSSIP {
-            let err = decode_control_frame::<GossipFrame>(stream_type, &frame).expect_err(
-                &format!("JSON must be rejected on stream {:#04x}", stream_type),
-            );
-            assert!(
-                matches!(err, ControlFrameError::DecodeError(_)),
-                "stream {:#04x}: expected DecodeError for JSON, got {:?}",
-                stream_type,
-                err
-            );
-        } else if stream_type == STREAM_ROUTE_REQUEST {
-            let err = decode_control_frame::<RouteTableRequest>(stream_type, &frame).expect_err(
-                &format!("JSON must be rejected on stream {:#04x}", stream_type),
-            );
-            assert!(
-                matches!(err, ControlFrameError::DecodeError(_)),
-                "stream {:#04x}: expected DecodeError for JSON, got {:?}",
-                stream_type,
-                err
-            );
-        }
-        // STREAM_TUNNEL_MAP, STREAM_PEER_DOWN, STREAM_PEER_LEAVING: JSON fails prost
-        // decode which returns DecodeError — verified via the decode_control_frame
-        // path used in the existing per-stream tests.
+        let err = match stream_type {
+            STREAM_GOSSIP => decode_control_frame::<GossipFrame>(stream_type, &frame).unwrap_err(),
+            STREAM_TUNNEL_MAP => {
+                decode_control_frame::<crate::proto::node::TunnelMap>(stream_type, &frame)
+                    .unwrap_err()
+            }
+            STREAM_ROUTE_REQUEST => {
+                decode_control_frame::<RouteTableRequest>(stream_type, &frame).unwrap_err()
+            }
+            STREAM_PEER_DOWN => decode_control_frame::<PeerDown>(stream_type, &frame).unwrap_err(),
+            STREAM_PEER_LEAVING => {
+                decode_control_frame::<PeerLeaving>(stream_type, &frame).unwrap_err()
+            }
+            _ => unreachable!("all stream types in this table are migrated control frames"),
+        };
+        assert!(
+            matches!(err, ControlFrameError::DecodeError(_)),
+            "stream {:#04x}: expected DecodeError for JSON, got {:?}",
+            stream_type,
+            err
+        );
     }
 
     // All migrated streams must also reject gen=0 and gen=99 where gen is checked
@@ -767,139 +762,77 @@ fn canonical_demand_model_ref_uses_loaded_catalog_without_refreshing() {
     );
 }
 
-/// Verifies that dead-peer cleanup prevents re-admission within the TTL window:
-/// after a peer is cleaned up and added to dead_peers, the entry blocks connection
-/// attempts until it expires (after [`DEAD_PEER_TTL`]). A subsequent PeerLeaving
-/// from the same peer is rejected as forged (peer_id no longer in peers set).
-#[test]
-fn dead_peer_cleanup_prevents_readmission() {
-    use crate::proto::node::PeerLeaving;
-
+/// Verifies that clean shutdown cleanup removes the peer and gates reconnects
+/// through the same dead-peer state used by production connection admission.
+#[tokio::test]
+async fn dead_peer_cleanup_prevents_readmission() {
     let peer_key = SecretKey::from_bytes(&[0xE0; 32]);
     let peer_id = EndpointId::from(peer_key.public());
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
 
-    // Simulate state: peer is admitted
-    let mut peers: HashMap<EndpointId, PeerInfo> = HashMap::new();
-    let mut connections: HashSet<EndpointId> = HashSet::new();
-    let mut dead_peers: HashMap<EndpointId, std::time::Instant> = HashMap::new();
-
-    peers.insert(peer_id, make_test_peer_info(peer_id));
-    connections.insert(peer_id);
+    node.insert_test_peer(make_test_peer_info(peer_id)).await;
 
     assert!(
-        is_peer_admitted(&peers, &peer_id),
+        is_peer_admitted(&node.state.lock().await.peers, &peer_id),
         "peer must start admitted"
     );
 
-    // Receive valid PeerLeaving from the peer
-    let leaving = PeerLeaving {
-        peer_id: peer_id.as_bytes().to_vec(),
-        r#gen: NODE_PROTOCOL_GENERATION,
-    };
-    let encoded = encode_control_frame(STREAM_PEER_LEAVING, &leaving);
-    let decoded: PeerLeaving =
-        decode_control_frame(STREAM_PEER_LEAVING, &encoded).expect("valid PeerLeaving must decode");
+    node.cleanup_peer_leaving(peer_id).await;
+    let state = node.state.lock().await;
 
-    let accepted_id =
-        resolve_peer_leaving(peer_id, &decoded).expect("self PeerLeaving must be accepted");
-
-    // Clean up — as the handler does
-    peers.remove(&accepted_id);
-    connections.remove(&accepted_id);
-    dead_peers.insert(accepted_id, std::time::Instant::now());
-
-    // Peer is now gone and in dead_peers
     assert!(
-        !is_peer_admitted(&peers, &peer_id),
+        !is_peer_admitted(&state.peers, &peer_id),
         "peer must be removed after PeerLeaving"
     );
     assert!(
-        !connections.contains(&peer_id),
+        !state.connections.contains_key(&peer_id),
         "connection must be removed after PeerLeaving"
     );
     assert!(
-        dead_peers.contains_key(&peer_id),
+        state.dead_peers.contains_key(&peer_id),
         "peer must be in dead_peers after cleanup"
     );
-
-    // Verify dead_peers blocks re-admission (simulates the check in connect_to_peer)
     assert!(
-        dead_peers
+        state
+            .dead_peers
             .get(&peer_id)
             .is_some_and(|t| t.elapsed() < super::DEAD_PEER_TTL),
         "dead_peers TTL check prevents re-connection to recently cleaned-up peer"
-    );
-
-    // A new gossip attempt from the same peer should be blocked by dead_peers
-    // (In the real handler, add_peer clears dead_peers only on accepted inbound gossip,
-    // not on arbitrary peer attempts; dead_peers prevents outbound reconnects.)
-    // Test the invariant that after cleanup, the peer is NOT in the live peers set.
-    assert!(
-        !is_peer_admitted(&peers, &peer_id),
-        "dead peer must not appear as admitted after dead_peers eviction"
-    );
-
-    // Second PeerLeaving for the same peer is now harmless (peer already removed)
-    // resolve_peer_leaving still succeeds structurally but cleanup is idempotent
-    let leaving2 = PeerLeaving {
-        peer_id: peer_id.as_bytes().to_vec(),
-        r#gen: NODE_PROTOCOL_GENERATION,
-    };
-    let encoded2 = encode_control_frame(STREAM_PEER_LEAVING, &leaving2);
-    let decoded2: PeerLeaving = decode_control_frame(STREAM_PEER_LEAVING, &encoded2)
-        .expect("second PeerLeaving decodes structurally");
-    let id2 = resolve_peer_leaving(peer_id, &decoded2)
-        .expect("second PeerLeaving resolves (peer_id matches remote)");
-    // Idempotent remove: already gone, nothing changes
-    peers.remove(&id2);
-    connections.remove(&id2);
-    assert!(
-        !is_peer_admitted(&peers, &peer_id),
-        "idempotent remove must not re-insert peer"
-    );
-    assert!(
-        dead_peers.contains_key(&peer_id),
-        "dead_peers must still contain peer after idempotent removal"
     );
 }
 
 /// Verifies that dead_peers entries expire after DEAD_PEER_TTL and no longer
 /// block transitive re-learning or outbound reconnection.
-#[test]
-fn dead_peer_ttl_expires() {
+#[tokio::test]
+async fn dead_peer_ttl_expires() {
     let peer_key = SecretKey::from_bytes(&[0xF0; 32]);
     let peer_id = EndpointId::from(peer_key.public());
+    let fresh_peer_id = EndpointId::from(SecretKey::from_bytes(&[0xF1; 32]).public());
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
 
-    let mut dead_peers: HashMap<EndpointId, std::time::Instant> = HashMap::new();
-
-    // Insert with a timestamp far enough in the past to be expired.
-    // Use checked_sub to avoid panic on very fresh monotonic clocks.
     let expired_age = super::DEAD_PEER_TTL + std::time::Duration::from_secs(1);
     let expired_at = std::time::Instant::now()
         .checked_sub(expired_age)
         .expect("monotonic clock too fresh to test TTL expiry");
-    dead_peers.insert(peer_id, expired_at);
+    {
+        let mut state = node.state.lock().await;
+        state.dead_peers.insert(peer_id, expired_at);
+        state.dead_peers.insert(fresh_peer_id, std::time::Instant::now());
+    }
 
-    // The TTL check used in connect_to_peer / update_transitive_peer should NOT block
-    assert!(
-        dead_peers
-            .get(&peer_id)
-            .is_none_or(|t| t.elapsed() >= super::DEAD_PEER_TTL),
-        "expired dead_peers entry must not block reconnection"
-    );
+    let expired = node.retain_live_heartbeat_state().await;
+    let state = node.state.lock().await;
 
-    // The GC retain used in the heartbeat loop should remove it
-    dead_peers.retain(|_, ts| ts.elapsed() < super::DEAD_PEER_TTL);
+    assert_eq!(expired, vec![peer_id]);
+    assert!(!state.dead_peers.contains_key(&peer_id));
     assert!(
-        dead_peers.is_empty(),
-        "expired dead_peers entry must be removed by GC"
-    );
-
-    // A fresh entry should still block
-    dead_peers.insert(peer_id, std::time::Instant::now());
-    assert!(
-        dead_peers
-            .get(&peer_id)
+        state
+            .dead_peers
+            .get(&fresh_peer_id)
             .is_some_and(|t| t.elapsed() < super::DEAD_PEER_TTL),
         "fresh dead_peers entry must block reconnection"
     );
@@ -969,53 +902,37 @@ fn non_scope_tunnel_streams_pass_through_without_proto_validation() {
 
 /// Proves the behavioral contract introduced in the reconnect fix:
 /// if gossip fails after a relay-level reconnect, the peer must be removed from
-/// state.peers rather than left as a zombie. Tests the pure state-transition logic
-/// by simulating: admitted peer → connection drop → gossip probe fails → removal.
-#[test]
-fn reconnect_gossip_failure_removes_zombie_peer() {
+/// state.peers rather than left as a zombie.
+#[tokio::test]
+async fn reconnect_gossip_failure_removes_zombie_peer() {
     let peer_key = SecretKey::from_bytes(&[0xF0; 32]);
     let peer_id = EndpointId::from(peer_key.public());
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
 
-    let mut peers: HashMap<EndpointId, PeerInfo> = HashMap::new();
-    let mut connections: HashSet<EndpointId> = HashSet::new();
-
-    peers.insert(peer_id, make_test_peer_info(peer_id));
-    connections.insert(peer_id);
+    node.insert_test_peer(make_test_peer_info(peer_id)).await;
 
     assert!(
-        is_peer_admitted(&peers, &peer_id),
+        is_peer_admitted(&node.state.lock().await.peers, &peer_id),
         "peer must start admitted"
     );
 
-    let gossip_ok = false;
-
-    if gossip_ok {
-    } else {
-        peers.remove(&peer_id);
-        connections.remove(&peer_id);
-    }
+    node.remove_peer_after_recovered_gossip_failure(peer_id).await;
 
     assert!(
-        !is_peer_admitted(&peers, &peer_id),
+        !is_peer_admitted(&node.state.lock().await.peers, &peer_id),
         "zombie peer must be removed when reconnect gossip fails (relay-connected but process dead)"
-    );
-    assert!(
-        !connections.contains(&peer_id),
-        "zombie connection must be removed when reconnect gossip fails"
     );
 
     let peer_key2 = SecretKey::from_bytes(&[0xF1; 32]);
     let peer_id2 = EndpointId::from(peer_key2.public());
-    let mut peers2: HashMap<EndpointId, PeerInfo> = HashMap::new();
-    peers2.insert(peer_id2, make_test_peer_info(peer_id2));
+    node.insert_test_peer(make_test_peer_info(peer_id2)).await;
 
-    let gossip_ok2 = true;
-    if !gossip_ok2 {
-        peers2.remove(&peer_id2);
-    }
+    node.recover_heartbeat_peer(peer_id2, &mut HashMap::new()).await;
 
     assert!(
-        is_peer_admitted(&peers2, &peer_id2),
+        is_peer_admitted(&node.state.lock().await.peers, &peer_id2),
         "peer must remain admitted when reconnect gossip succeeds"
     );
 }

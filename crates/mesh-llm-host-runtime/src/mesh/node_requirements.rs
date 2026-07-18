@@ -1,5 +1,6 @@
 use super::*;
 use crate::mesh::identity_persistence::mesh_genesis_policy_path;
+use crate::mesh::node::RequirementAwareMeshState;
 
 pub(crate) fn preflight_pushed_config_for_current_node(
     config: &crate::plugin::MeshConfig,
@@ -74,15 +75,27 @@ impl Node {
                 "requirement-aware meshes require an owner identity so the genesis policy and bootstrap token can be signed"
             )
         })?;
-        if let Ok(serialized) = std::fs::read(mesh_genesis_policy_path())
-            && let Ok(existing) =
-                serde_json::from_slice::<crate::SignedMeshGenesisPolicy>(&serialized)
-            && existing.verify().is_ok()
-            && existing.policy.origin_owner_id == owner.owner_id()
-            && existing.policy.requirements == self.local_mesh_requirements
-            && existing.origin_sign_public_key == owner.verifying_key().as_bytes().to_vec()
-        {
-            return Ok(existing);
+        let path = mesh_genesis_policy_path();
+        match std::fs::read(&path) {
+            Ok(serialized) => {
+                let existing =
+                    serde_json::from_slice::<crate::SignedMeshGenesisPolicy>(&serialized)
+                        .with_context(|| format!("parse {}", path.display()))?;
+                existing
+                    .verify()
+                    .map_err(|reason| anyhow::anyhow!("verify mesh genesis policy: {reason:?}"))?;
+                if existing.policy.origin_owner_id != owner.owner_id()
+                    || existing.policy.requirements != self.local_mesh_requirements
+                    || existing.origin_sign_public_key != owner.verifying_key().as_bytes().to_vec()
+                {
+                    anyhow::bail!(
+                        "persisted mesh genesis policy does not match local owner or requirements"
+                    );
+                }
+                return Ok(existing);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
         }
 
         let signed = crate::SignedMeshGenesisPolicy::sign(
@@ -96,7 +109,6 @@ impl Node {
         )
         .map_err(|reason| anyhow::anyhow!("failed to sign mesh genesis policy: {reason:?}"))?;
         let bytes = serde_json::to_vec_pretty(&signed).context("serialize mesh genesis policy")?;
-        let path = mesh_genesis_policy_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create {}", parent.display()))?;
@@ -106,13 +118,11 @@ impl Node {
     }
 
     pub(crate) async fn active_mesh_policy_state(&self) -> Option<ActiveMeshPolicyState> {
-        let mesh_id = self.mesh_id.lock().await.clone()?;
-        let policy_hash = self.mesh_policy_hash.lock().await.clone()?;
-        let policy = self.genesis_policy.lock().await.clone()?;
+        let state = self.requirement_mesh_state.lock().await.clone()?;
         Some(ActiveMeshPolicyState {
-            mesh_id,
-            policy_hash,
-            policy,
+            mesh_id: state.mesh_id,
+            policy_hash: state.policy_hash,
+            policy: state.policy,
         })
     }
 
@@ -206,9 +216,14 @@ impl Node {
         let mesh_id = policy
             .policy_derived_mesh_id()
             .expect("policy-derived mesh id should serialize");
-        *self.mesh_id.lock().await = Some(mesh_id);
-        *self.mesh_policy_hash.lock().await = Some(policy_hash.clone());
-        *self.genesis_policy.lock().await = Some(policy.clone());
+        self.publish_requirement_mesh_state(RequirementAwareMeshState {
+            mesh_id: mesh_id.clone(),
+            policy_hash: policy_hash.clone(),
+            policy: policy.clone(),
+            signed_policy: None,
+            bootstrap_token: None,
+        })
+        .await;
         MeshRequirementPolicySummary {
             policy_hash,
             requirements: policy.requirements,
@@ -234,12 +249,28 @@ impl Node {
                 mesh_id
             );
         }
-        *self.mesh_policy_hash.lock().await = Some(policy_hash);
-        *self.genesis_policy.lock().await = Some(policy);
-        *self.signed_genesis_policy.lock().await = signed_policy;
-        *self.bootstrap_token.lock().await = bootstrap_token;
-        self.set_mesh_id_force(mesh_id).await;
+        let state = RequirementAwareMeshState {
+            mesh_id: mesh_id.clone(),
+            policy_hash: policy_hash.clone(),
+            policy: policy.clone(),
+            signed_policy: signed_policy.clone(),
+            bootstrap_token: bootstrap_token.clone(),
+        };
+        self.publish_requirement_mesh_state(state).await;
         Ok(())
+    }
+
+    pub(crate) async fn publish_requirement_mesh_state(&self, state: RequirementAwareMeshState) {
+        let previous_mesh_id = self.mesh_id().await;
+        *self.requirement_mesh_state.lock().await = Some(state);
+        if previous_mesh_id.is_none() {
+            self.emit_plugin_mesh_event(
+                crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
+                None,
+                String::new(),
+            )
+            .await;
+        }
     }
 
     pub(crate) async fn validate_bootstrap_token(
@@ -287,7 +318,11 @@ impl Node {
             if signed_policy.policy.canonical_hash_hex()? != active_policy.policy_hash {
                 return Err(MeshRequirementRejectReason::MeshPolicyMismatch);
             }
-            *self.signed_genesis_policy.lock().await = Some(signed_policy.clone());
+            let mut requirement_state = self.requirement_mesh_state.lock().await;
+            if let Some(mut state) = requirement_state.clone() {
+                state.signed_policy = Some(signed_policy.clone());
+                *requirement_state = Some(state);
+            }
         }
         Ok(())
     }

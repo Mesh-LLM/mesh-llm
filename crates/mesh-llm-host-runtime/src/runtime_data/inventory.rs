@@ -8,7 +8,7 @@ pub(crate) type InventoryScanResult = Result<LocalModelInventorySnapshot, Invent
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum InventoryScanError {
-    #[allow(dead_code)]
+    #[cfg(test)]
     LoaderFailed(String),
     TaskPanicked(String),
     TaskCancelled,
@@ -17,6 +17,7 @@ pub(crate) enum InventoryScanError {
 impl fmt::Display for InventoryScanError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(test)]
             Self::LoaderFailed(message) => {
                 write!(formatter, "local inventory scan failed: {message}")
             }

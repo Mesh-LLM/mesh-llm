@@ -7,6 +7,8 @@ use crate::proto::node::{
 use std::future::Future;
 use std::time::Duration;
 
+pub(crate) const OWNER_CONTROL_SCAN_DEADLINE_SECS: u64 = 30;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OwnedNodeCommandExecutionShape {
     Unary,
@@ -142,7 +144,9 @@ impl OwnedNodeCommand {
             Self::GetConfig { .. } | Self::ApplyConfig { .. } => {
                 OwnedNodeCommandDeadline::Unary(Duration::from_secs(5))
             }
-            Self::ScanRefresh { .. } => OwnedNodeCommandDeadline::Scan(Duration::from_secs(30)),
+            Self::ScanRefresh { .. } => OwnedNodeCommandDeadline::Scan(Duration::from_secs(
+                OWNER_CONTROL_SCAN_DEADLINE_SECS,
+            )),
             Self::WatchConfig { .. } => OwnedNodeCommandDeadline::Watch,
         }
     }

@@ -40,6 +40,7 @@ use crate::protocol::*;
 
 use self::artifact_transfer_io::{
     PartialArtifactGuard, append_artifact_transfer_body, select_partial_artifact,
+    write_artifact_transfer_chunk,
 };
 
 #[cfg(test)]
@@ -104,6 +105,8 @@ pub mod requirements;
 mod stage_artifacts;
 mod stage_proto;
 mod stage_transport;
+mod stage_transport_bridge;
+mod stun;
 
 use connections::*;
 use node_identity::*;
@@ -112,28 +115,41 @@ use owner_control::*;
 use peer_state::*;
 #[allow(unused_imports)]
 use plugin_mesh::*;
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "sibling mesh modules import this parent prelude with `super::*`"
+)]
 use stage_artifacts::*;
 use stage_transport::*;
+use stun::*;
 
 pub use connections::{QuicBindSelection, RelayConfig, RelayPolicy, detect_primary_lan_ipv4};
 pub use gossip::backfill_legacy_descriptors;
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "public compatibility re-export for existing mesh identity callers"
+)]
 pub use identity_persistence::{
     clear_public_identity, default_node_key_path, generate_mesh_id, load_last_mesh_id,
     load_node_key_from_path, mark_was_public, save_last_mesh_id, save_node_key_to_path,
     was_previously_public,
 };
 pub(crate) use node::{LocalRequestMetricsSampler, PeerDownReport, peer_down_endpoint_id};
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "public compatibility re-export for existing mesh node callers"
+)]
 pub use node::{
     LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_vram_bytes_capped,
 };
 pub(crate) use peer_state::{
     ControlListenerLifecycle, DEAD_PEER_TTL, MeshState, PEER_DOWN_REPORTER_COOLDOWN_SECS,
-    PEER_STALE_SECS, resolve_peer_leaving,
+    PEER_STALE_SECS, public_model_id_from_identity, resolve_peer_leaving,
 };
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "public compatibility re-export for existing mesh state callers"
+)]
 pub use peer_state::{
     DisplayLatency, DisplayLatencySource, MeshCatalogEntry, NodeRole, OwnerRuntimeConfig,
     PeerAnnouncement, PeerInfo, PropagatedLatencyObservation,
@@ -144,16 +160,23 @@ pub(crate) use stage_transport::{
     HttpCaptureEvent, MeshBiStream, PeerLifecycleCaptureEvent, SelectedPathObservation,
     StageTopologyState,
 };
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "public compatibility re-export for existing split-stage routing callers"
+)]
 pub use stage_transport::{InflightRequestGuard, SplitStagePathRejection, SplitStagePathSnapshot};
 pub use stage_transport::{
     StageAssignment, StageEndpoint, StageRuntimeStatus, StageTopologyInstance, TunnelChannels,
 };
+pub(crate) use stage_transport_bridge::{StageTransportBridge, StageTransportBridgeLabel};
 
 #[allow(unused_imports)]
 use gossip::{apply_transitive_ann, peer_meaningfully_changed};
 pub(crate) use heartbeat::resolve_peer_down;
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "sibling mesh modules import this parent prelude with `super::*`"
+)]
 use heartbeat::{HeartbeatFailurePolicy, heartbeat_failure_policy_for_peer};
 use heartbeat::{PeerDownReportDisposition, peer_down_report_disposition};
 use stage_proto::*;

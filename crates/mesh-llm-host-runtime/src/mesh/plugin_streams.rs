@@ -1,10 +1,17 @@
 use anyhow::{Context, Result};
+use iroh::EndpointId;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use prost::Message;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
-use super::{Node, endpoint_id_hex};
+use super::Node;
 use crate::protocol::{STREAM_PLUGIN_MESH_STREAM, read_len_prefixed, write_len_prefixed};
+
+pub(crate) fn endpoint_id_from_hex(peer_id: &str) -> Option<EndpointId> {
+    let bytes = hex::decode(peer_id).ok()?;
+    let bytes: [u8; 32] = bytes.as_slice().try_into().ok()?;
+    EndpointId::from_bytes(&bytes).ok()
+}
 
 pub(crate) fn plugin_mesh_stream_error(
     message: impl Into<String>,
@@ -58,8 +65,9 @@ impl Node {
         }
 
         request.plugin_id = plugin_id;
-        let Some(conn) = self.connection_for_peer_hex(&request.target_peer_id).await else {
-            return Err(plugin_mesh_stream_error("target peer is not connected"));
+        let conn = match self.connection_for_peer_hex(&request.target_peer_id).await {
+            Some(conn) => conn,
+            None => return Err(plugin_mesh_stream_error("target peer is not routable")),
         };
         let listener = match crate::plugin::bind_local_listener(
             &crate::plugin::make_instance_id(),
@@ -131,12 +139,8 @@ impl Node {
     }
 
     pub(crate) async fn connection_for_peer_hex(&self, peer_id: &str) -> Option<Connection> {
-        let state = self.state.lock().await;
-        state
-            .connections
-            .iter()
-            .find(|(id, _)| endpoint_id_hex(**id) == peer_id)
-            .map(|(_, conn)| conn.clone())
+        let peer_id = endpoint_id_from_hex(peer_id)?;
+        self.connection_to_peer(peer_id).await.ok()
     }
 }
 
@@ -255,4 +259,19 @@ where
     };
     tokio::try_join!(to_mesh, from_mesh)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_id_from_hex_accepts_target_peer_ids() {
+        let peer_id = EndpointId::from(iroh::SecretKey::from_bytes(&[0x42; 32]).public());
+        let encoded = hex::encode(peer_id.as_bytes());
+
+        assert_eq!(endpoint_id_from_hex(&encoded), Some(peer_id));
+        assert_eq!(endpoint_id_from_hex("not-hex"), None);
+        assert_eq!(endpoint_id_from_hex(&hex::encode([0u8; 16])), None);
+    }
 }

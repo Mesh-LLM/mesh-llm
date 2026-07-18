@@ -32,6 +32,17 @@ pub(crate) struct AnnouncedPeerContext {
     direct_peer_requirements_validated: bool,
 }
 
+impl AnnouncedPeerContext {
+    const fn direct(remote: EndpointId, negotiated_protocol_generation: Option<u32>) -> Self {
+        Self {
+            remote,
+            rtt_ms: None,
+            negotiated_protocol_generation,
+            direct_peer_requirements_validated: true,
+        }
+    }
+}
+
 pub(crate) struct JoinProbeCandidate {
     token: String,
     mesh_name: Option<String>,
@@ -362,6 +373,91 @@ pub(super) fn apply_transitive_ann(
 }
 
 impl Node {
+    async fn validate_direct_announcement_before_payload_apply(
+        &self,
+        their_announcements: &[(EndpointAddr, PeerAnnouncement)],
+        context: AnnouncedPeerContext,
+    ) -> Result<()> {
+        let direct_announcement = their_announcements
+            .iter()
+            .find_map(|(addr, ann)| (addr.id == context.remote).then_some(ann))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "gossip payload from {} omitted its direct announcement",
+                    context.remote.fmt_short()
+                )
+            })?;
+        if let Err(reason) = self
+            .validate_direct_peer_requirements(
+                context.remote,
+                direct_announcement,
+                context.negotiated_protocol_generation,
+            )
+            .await
+        {
+            self.record_mesh_requirement_rejection(
+                super::requirements::MeshRequirementRejectionSource::Gossip,
+                Some(context.remote),
+                reason.clone(),
+            )
+            .await;
+            self.state
+                .lock()
+                .await
+                .requirement_rejected_peers
+                .insert(context.remote);
+            anyhow::bail!(
+                "peer {} rejected by mesh requirements: {}",
+                context.remote.fmt_short(),
+                reason.code()
+            );
+        }
+        Ok(())
+    }
+
+    async fn validate_and_capture_inbound_gossip(
+        &self,
+        protocol: ControlProtocol,
+        their_announcements: &[(EndpointAddr, PeerAnnouncement)],
+        context: AnnouncedPeerContext,
+    ) -> Result<()> {
+        self.validate_direct_announcement_before_payload_apply(their_announcements, context)
+            .await?;
+
+        let (recovered_from_dead, prior_state) = {
+            let mut state = self.state.lock().await;
+            let recovered_from_dead = state.dead_peers.remove(&context.remote).is_some();
+            let prior_state = state
+                .peers
+                .get(&context.remote)
+                .map(|peer| {
+                    if peer.last_seen >= peer.last_mentioned {
+                        "direct"
+                    } else {
+                        "transitive"
+                    }
+                })
+                .unwrap_or("unknown")
+                .to_string();
+            if recovered_from_dead {
+                super::emit_mesh_info(format!(
+                    "🔄 Dead peer {} is gossiping — clearing dead status",
+                    context.remote.fmt_short()
+                ));
+            }
+            (recovered_from_dead, prior_state)
+        };
+        self.capture_gossip_inbound(context.remote, protocol, their_announcements.len());
+        self.capture_direct_proof_of_life(
+            context.remote,
+            protocol,
+            their_announcements.len(),
+            recovered_from_dead,
+            &prior_state,
+        );
+        Ok(())
+    }
+
     pub(crate) async fn apply_announced_peer(
         &self,
         peer_id: EndpointId,
@@ -374,9 +470,6 @@ impl Node {
             return Ok(());
         }
         if peer_id == remote {
-            if let Some(ref their_id) = ann.mesh_id {
-                self.set_mesh_id(their_id.clone()).await;
-            }
             if !context.direct_peer_requirements_validated
                 && let Err(reason) = self
                     .validate_direct_peer_requirements(
@@ -402,6 +495,9 @@ impl Node {
                     remote.fmt_short(),
                     reason.code()
                 );
+            }
+            if let Some(ref their_id) = ann.mesh_id {
+                self.set_mesh_id(their_id.clone()).await;
             }
             self.merge_remote_demand(&ann.model_demand);
             self.add_peer_after_direct_requirements_validated(remote, addr.clone(), ann)
@@ -441,6 +537,14 @@ impl Node {
             negotiated_protocol_generation,
             direct_peer_requirements_validated,
         };
+        if !direct_peer_requirements_validated {
+            self.validate_direct_announcement_before_payload_apply(their_announcements, context)
+                .await?;
+        }
+        let context = AnnouncedPeerContext {
+            direct_peer_requirements_validated: true,
+            ..context
+        };
         for (addr, ann) in their_announcements {
             self.apply_announced_peer(addr.id, addr, ann, context)
                 .await?;
@@ -457,13 +561,22 @@ impl Node {
         let Some(conn) = conn else {
             return;
         };
+        self.refresh_gossip_path_rtt_for_connection(remote, &conn, ceiling_rtt_ms)
+            .await;
+    }
+
+    pub(crate) async fn refresh_gossip_path_rtt_for_connection(
+        &self,
+        remote: EndpointId,
+        conn: &Connection,
+        ceiling_rtt_ms: Option<u32>,
+    ) {
         let capture_source = if ceiling_rtt_ms.is_some() {
             "gossip_round_trip_path"
         } else {
             "inbound_gossip_path"
         };
-        let Some(observation) =
-            self.capture_selected_connection_path(remote, &conn, capture_source)
+        let Some(observation) = self.capture_selected_connection_path(remote, conn, capture_source)
         else {
             return;
         };
@@ -588,7 +701,10 @@ impl Node {
         peer_id: EndpointId,
         use_connections: bool,
     ) -> bool {
-        let state = self.state.lock().await;
+        let mut state = self.state.lock().await;
+        if state.pending_connection_is_active(peer_id) {
+            return true;
+        }
         if use_connections {
             state.connections.contains_key(&peer_id)
         } else {
@@ -878,9 +994,21 @@ impl Node {
         let advertised_model_throughput = self
             .routing_metrics
             .advertisable_model_throughput(&hosted_models);
-        let mesh_id = self.mesh_id.lock().await.clone();
-        let mesh_policy_hash = self.mesh_policy_hash.lock().await.clone();
         let release_attestation = self.release_attestation.lock().await.clone();
+        let (mesh_id, mesh_policy_hash, signed_genesis_policy) =
+            if let Some(state) = self.requirement_mesh_state.lock().await.clone() {
+                (
+                    Some(state.mesh_id),
+                    Some(state.policy_hash),
+                    state.signed_policy,
+                )
+            } else {
+                (
+                    self.mesh_id.lock().await.clone(),
+                    self.mesh_policy_hash.lock().await.clone(),
+                    self.signed_genesis_policy.lock().await.clone(),
+                )
+            };
         let direct_admission_proof = match (mesh_id.as_deref(), mesh_policy_hash.as_deref()) {
             (Some(mesh_id), Some(policy_hash)) => self.build_self_direct_admission_proof(
                 mesh_id,
@@ -902,7 +1030,7 @@ impl Node {
             model_demand: self.get_demand(),
             mesh_id,
             mesh_policy_hash,
-            signed_genesis_policy: self.signed_genesis_policy.lock().await.clone(),
+            signed_genesis_policy,
             release_attestation,
             direct_admission_proof,
             available_model_metadata: Vec::new(),
@@ -1066,7 +1194,12 @@ impl Node {
         {
             Ok(Ok((their_announcements, rtt_ms))) => {
                 self.apply_gossip_announcements(remote, rtt_ms, &their_announcements, true)
-                    .await
+                    .await?;
+                if !self.state.lock().await.connections.contains_key(&remote) {
+                    self.refresh_gossip_path_rtt_for_connection(remote, &conn, Some(rtt_ms))
+                        .await;
+                }
+                Ok(())
             }
             Ok(Err(e)) => Err(e),
             Err(_) => anyhow::bail!(
@@ -1178,8 +1311,8 @@ impl Node {
             return Ok(None);
         }
 
-        let state = self.state.lock().await;
-        if state.connections.contains_key(&addr.id) {
+        let mut state = self.state.lock().await;
+        if state.connections.contains_key(&addr.id) || state.pending_connection_is_active(addr.id) {
             return Ok(None);
         }
         if state
@@ -1296,7 +1429,12 @@ impl Node {
     ) -> Result<()> {
         let (their_announcements, rtt_ms) = self.gossip_round_trip(&conn, remote).await?;
         self.apply_gossip_announcements(remote, rtt_ms, &their_announcements, discover_peers)
-            .await
+            .await?;
+        if !self.state.lock().await.connections.contains_key(&remote) {
+            self.refresh_gossip_path_rtt_for_connection(remote, &conn, Some(rtt_ms))
+                .await;
+        }
+        Ok(())
     }
 
     pub(crate) async fn gossip_round_trip(
@@ -1359,80 +1497,14 @@ impl Node {
     ) -> Result<()> {
         tracing::info!("Inbound gossip from {}", remote.fmt_short());
 
-        let (recovered_from_dead, prior_state) = {
-            let mut state = self.state.lock().await;
-            let recovered_from_dead = state.dead_peers.remove(&remote).is_some();
-            let prior_state = state
-                .peers
-                .get(&remote)
-                .map(|peer| {
-                    if peer.last_seen >= peer.last_mentioned {
-                        "direct"
-                    } else {
-                        "transitive"
-                    }
-                })
-                .unwrap_or("unknown")
-                .to_string();
-            if recovered_from_dead {
-                super::emit_mesh_info(format!(
-                    "🔄 Dead peer {} is gossiping — clearing dead status",
-                    remote.fmt_short()
-                ));
-            }
-            (recovered_from_dead, prior_state)
-        };
-
         let buf = read_len_prefixed(&mut recv).await?;
         let their_announcements = decode_gossip_payload(protocol, remote, &buf)?;
-        self.capture_gossip_inbound(remote, protocol, their_announcements.len());
-        self.capture_direct_proof_of_life(
-            remote,
-            protocol,
-            their_announcements.len(),
-            recovered_from_dead,
-            &prior_state,
-        );
-
-        let direct_announcement = their_announcements
-            .iter()
-            .find_map(|(addr, ann)| (addr.id == remote).then_some(ann))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "gossip payload from {} omitted its direct announcement",
-                    remote.fmt_short()
-                )
-            })?;
-
         let negotiated_protocol_generation = match protocol {
             ControlProtocol::ProtoV1 => Some(NODE_PROTOCOL_GENERATION),
         };
-
-        if let Err(reason) = self
-            .validate_direct_peer_requirements(
-                remote,
-                direct_announcement,
-                negotiated_protocol_generation,
-            )
-            .await
-        {
-            self.record_mesh_requirement_rejection(
-                super::requirements::MeshRequirementRejectionSource::Gossip,
-                Some(remote),
-                reason.clone(),
-            )
-            .await;
-            self.state
-                .lock()
-                .await
-                .requirement_rejected_peers
-                .insert(remote);
-            anyhow::bail!(
-                "peer {} rejected by mesh requirements: {}",
-                remote.fmt_short(),
-                reason.code()
-            );
-        }
+        let context = AnnouncedPeerContext::direct(remote, negotiated_protocol_generation);
+        self.validate_and_capture_inbound_gossip(protocol, &their_announcements, context)
+            .await?;
 
         let our_announcements = self.collect_announcements().await;
         write_gossip_payload(&mut send, protocol, &our_announcements, self.endpoint.id()).await?;

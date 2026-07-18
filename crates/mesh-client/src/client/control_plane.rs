@@ -28,7 +28,9 @@ const OWNER_CONTROL_OPEN_TIMEOUT_SECS: u64 = 2;
 const OWNER_CONTROL_HANDSHAKE_TIMEOUT_SECS: u64 = 2;
 const OWNER_CONTROL_REQUEST_WRITE_TIMEOUT_SECS: u64 = 2;
 const OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS: u64 = 5;
-const OWNER_CONTROL_INVENTORY_RESPONSE_TIMEOUT_SECS: u64 = 30;
+const OWNER_CONTROL_SERVER_SCAN_DEADLINE_SECS_FOR_CLIENT_MARGIN: u64 = 30;
+const OWNER_CONTROL_INVENTORY_RESPONSE_TIMEOUT_SECS: u64 =
+    OWNER_CONTROL_SERVER_SCAN_DEADLINE_SECS_FOR_CLIENT_MARGIN + 5;
 const OWNER_CONTROL_WATCH_ACCEPT_TIMEOUT_SECS: u64 = 5;
 
 fn owner_control_client_bind_addr() -> std::net::SocketAddr {
@@ -948,6 +950,21 @@ mod tests {
 
         assert_eq!(next_nonzero_request_id(&counter), u64::MAX);
         assert_eq!(next_nonzero_request_id(&counter), 1);
+    }
+
+    #[test]
+    fn inventory_response_timeout_exceeds_server_scan_deadline() {
+        const {
+            assert!(
+                OWNER_CONTROL_INVENTORY_RESPONSE_TIMEOUT_SECS
+                    > OWNER_CONTROL_SERVER_SCAN_DEADLINE_SECS_FOR_CLIENT_MARGIN
+            );
+        }
+        assert_eq!(
+            OWNER_CONTROL_INVENTORY_RESPONSE_TIMEOUT_SECS
+                - OWNER_CONTROL_SERVER_SCAN_DEADLINE_SECS_FOR_CLIENT_MARGIN,
+            5
+        );
     }
 
     #[test]

@@ -131,9 +131,8 @@ impl Node {
                     resp: resp_tx,
                 })
                 .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
-                resp_rx
+                wait_local_stage_control_response(resp_rx, LOCAL_STAGE_CONTROL_RESPONSE_TIMEOUT)
                     .await
-                    .map_err(|_| anyhow::anyhow!("stage control response dropped"))?
             }
             None => Ok(stage_control_unavailable_response(request)),
         }
@@ -789,9 +788,12 @@ impl Node {
                 .await
                 .context("read artifact for transfer")?;
             anyhow::ensure!(read > 0, "artifact file ended before expected byte count");
-            send.write_all(&buffer[..read])
-                .await
-                .context("write artifact transfer bytes")?;
+            write_artifact_transfer_chunk(
+                &mut send,
+                &buffer[..read],
+                ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT,
+            )
+            .await?;
             remaining -= read as u64;
         }
         let _ = send.finish();

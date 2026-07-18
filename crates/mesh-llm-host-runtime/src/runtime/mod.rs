@@ -3282,12 +3282,12 @@ fn emit_private_mesh_name_warning(options: &RuntimeOptions) {
     });
 }
 
-fn handle_public_identity_transition(options: &RuntimeOptions) {
+fn handle_public_identity_transition(options: &RuntimeOptions) -> Result<()> {
     let is_public = options.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
         && (options.auto || options.publish || options.discover.is_some());
     if is_public {
-        mesh::mark_was_public();
-        return;
+        mesh::mark_was_public()?;
+        return Ok(());
     }
 
     if mesh::was_previously_public() {
@@ -3295,8 +3295,9 @@ fn handle_public_identity_transition(options: &RuntimeOptions) {
             message: "Previous run was public — rotating identity for private mesh".to_string(),
             context: None,
         });
-        mesh::clear_public_identity();
+        mesh::clear_public_identity()?;
     }
+    Ok(())
 }
 
 async fn maybe_discover_join_candidates(
@@ -3674,7 +3675,7 @@ async fn run_runtime_cli(
     // If the previous run was public (--auto or --publish) but this run is
     // private, clear the stored identity so the private mesh gets a fresh key
     // that isn't associated with the old public listing.
-    handle_public_identity_transition(&options);
+    handle_public_identity_transition(&options)?;
 
     let mut auto_join_candidates: Vec<(String, Option<String>)> = Vec::new();
     maybe_discover_join_candidates(&mut options, has_startup_models, &mut auto_join_candidates)
@@ -6365,7 +6366,9 @@ async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, node: &mesh::N
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         if let Some(id) = save_node.mesh_id().await {
             record_first_joined_mesh_ts(&save_node).await;
-            mesh::save_last_mesh_id(&id);
+            if let Err(error) = mesh::save_last_mesh_id(&id) {
+                tracing::warn!(error = %error, "failed to save last mesh ID");
+            }
             tracing::info!("Mesh ID: {id}");
         }
     });
@@ -6437,7 +6440,7 @@ async fn run_auto_start_new_mesh(options: &RuntimeOptions, node: &mesh::Node) ->
         )
         .await?;
     record_first_joined_mesh_ts(node).await;
-    mesh::save_last_mesh_id(&mesh_id);
+    mesh::save_last_mesh_id(&mesh_id)?;
     tracing::info!("Mesh ID: {mesh_id}");
     let _ = emit_event(OutputEvent::InviteToken {
         token: node.invite_token().await,

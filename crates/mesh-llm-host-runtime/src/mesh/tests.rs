@@ -1,4 +1,5 @@
 include!("tests/connections.rs");
+include!("tests/admission/helpers.rs");
 include!("tests/protocol_compat.rs");
 include!("tests/owner_control.rs");
 include!("tests/stage_transport.rs");

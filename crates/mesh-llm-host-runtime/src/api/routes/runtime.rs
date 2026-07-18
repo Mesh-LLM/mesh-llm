@@ -15,7 +15,7 @@ use crate::crypto::{
 use crate::plugin::validate_config_diagnostics_with_installed_plugin_schemas;
 use mesh_client::{
     ClientBuilder, ControlPlaneBootstrapOptions, ControlPlaneClientError, ControlPlaneConnection,
-    InviteToken, OwnerControlRemoteError,
+    InviteToken, OwnerControlRemoteError, client::control_plane::OwnerControlScanRefreshResult,
 };
 use mesh_llm_config::{
     ConfigConditionValue, ConfigControlAvailabilitySource, ConfigDisabledWritePolicy,
@@ -618,7 +618,7 @@ fn local_control_snapshot_payload(
 }
 
 fn local_control_scan_refresh_payload(
-    response: mesh_client::OwnerControlScanRefreshResult,
+    response: OwnerControlScanRefreshResult,
 ) -> LocalControlScanRefreshPayload {
     let target_node_id = hex::encode(&response.snapshot.node_id);
     let (disposition, inventory) = match response.inventory {
@@ -1247,6 +1247,7 @@ mod tests {
         local_control_scan_refresh_payload, parse_guardrail_mode, parse_model_with_profile,
         parse_runtime_load_request,
     };
+    use mesh_client::client::control_plane::OwnerControlScanRefreshResult;
 
     #[test]
     fn loopback_control_caller_accepts_localhost_only() {
@@ -1322,14 +1323,13 @@ mod tests {
 
     #[test]
     fn scan_refresh_payload_preserves_snapshot_only_compatibility() {
-        let payload =
-            local_control_scan_refresh_payload(mesh_client::OwnerControlScanRefreshResult {
-                snapshot: mesh_client::proto::node::OwnerControlConfigSnapshot {
-                    node_id: vec![0xab, 0xcd],
-                    ..Default::default()
-                },
-                inventory: None,
-            });
+        let payload = local_control_scan_refresh_payload(OwnerControlScanRefreshResult {
+            snapshot: mesh_client::proto::node::OwnerControlConfigSnapshot {
+                node_id: vec![0xab, 0xcd],
+                ..Default::default()
+            },
+            inventory: None,
+        });
 
         assert_eq!(
             serde_json::to_value(payload).unwrap(),
@@ -1343,32 +1343,31 @@ mod tests {
 
     #[test]
     fn scan_refresh_payload_maps_sorted_inventory_and_metadata_explicitly() {
-        let payload =
-            local_control_scan_refresh_payload(mesh_client::OwnerControlScanRefreshResult {
-                snapshot: mesh_client::proto::node::OwnerControlConfigSnapshot {
-                    node_id: vec![1],
-                    ..Default::default()
-                },
-                inventory: Some(mesh_client::proto::node::OwnerControlRefreshInventory {
-                    entries: vec![mesh_client::proto::node::OwnerControlInventoryEntry {
-                        canonical_model_ref: "a/model".to_string(),
-                        display_name: Some("Model A".to_string()),
-                        total_size_bytes: 42,
-                        metadata: Some(mesh_client::proto::node::CompactModelMetadata {
-                            model_key: "a/model".to_string(),
-                            architecture: "llama".to_string(),
-                            special_tokens: vec![mesh_client::proto::node::SpecialToken {
-                                name: "bos".to_string(),
-                                token_id: 1,
-                            }],
-                            ..Default::default()
-                        }),
-                    }],
-                    disposition:
-                        mesh_client::proto::node::OwnerControlRefreshInventoryDisposition::Executed
-                            as i32,
-                }),
-            });
+        let payload = local_control_scan_refresh_payload(OwnerControlScanRefreshResult {
+            snapshot: mesh_client::proto::node::OwnerControlConfigSnapshot {
+                node_id: vec![1],
+                ..Default::default()
+            },
+            inventory: Some(mesh_client::proto::node::OwnerControlRefreshInventory {
+                entries: vec![mesh_client::proto::node::OwnerControlInventoryEntry {
+                    canonical_model_ref: "a/model".to_string(),
+                    display_name: Some("Model A".to_string()),
+                    total_size_bytes: 42,
+                    metadata: Some(mesh_client::proto::node::CompactModelMetadata {
+                        model_key: "a/model".to_string(),
+                        architecture: "llama".to_string(),
+                        special_tokens: vec![mesh_client::proto::node::SpecialToken {
+                            name: "bos".to_string(),
+                            token_id: 1,
+                        }],
+                        ..Default::default()
+                    }),
+                }],
+                disposition:
+                    mesh_client::proto::node::OwnerControlRefreshInventoryDisposition::Executed
+                        as i32,
+            }),
+        });
 
         let value = serde_json::to_value(payload).unwrap();
         assert_eq!(value["target_node_id"], "01");

@@ -6,11 +6,15 @@ pub(crate) fn infer_remote_served_descriptors(
     model_source: Option<&str>,
 ) -> Vec<ServedModelDescriptor> {
     let primary = model_source.and_then(identity_from_model_source);
+    let primary_index = serving_models
+        .iter()
+        .position(|model_name| model_name == primary_model_name)
+        .unwrap_or(0);
     serving_models
         .iter()
         .enumerate()
         .map(|(idx, model_name)| {
-            let identity = if idx == 0 || model_name == primary_model_name {
+            let identity = if idx == primary_index {
                 let mut identity = primary
                     .clone()
                     .unwrap_or_else(|| unknown_identity(model_name));
@@ -154,6 +158,10 @@ pub(crate) fn local_gguf_identity_from_source(source: &str) -> ServedModelIdenti
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "kept for model-path identity reconstruction callers"
+)]
 pub(crate) fn identity_from_model_path(
     model_name: &str,
     path: &std::path::Path,
@@ -192,37 +200,6 @@ pub(crate) fn identity_from_model_path(
     }
 
     None
-}
-
-#[allow(dead_code)]
-pub(crate) fn descriptor_from_model_path(
-    model_name: &str,
-    path: &std::path::Path,
-    is_primary: bool,
-) -> Option<ServedModelDescriptor> {
-    let mut identity = identity_from_model_path(model_name, path)?;
-    identity.is_primary = is_primary;
-    Some(descriptor_from_identity(model_name, identity))
-}
-
-#[allow(dead_code)]
-pub(crate) fn descriptor_from_identity(
-    model_name: &str,
-    mut identity: ServedModelIdentity,
-) -> ServedModelDescriptor {
-    identity.model_name = model_name.to_string();
-    let path = crate::models::find_model_path(model_name);
-    let topology = crate::models::infer_local_model_topology(&path);
-    let mut capabilities =
-        crate::models::capabilities::infer_local_model_capabilities(model_name, &path);
-    capabilities.moe = false;
-    ServedModelDescriptor {
-        identity,
-        capabilities_known: true,
-        capabilities,
-        topology,
-        metadata: crate::models::served_model_metadata_for_path(model_name, &path),
-    }
 }
 
 pub(crate) fn parse_hf_ref_parts(input: &str) -> Option<(String, Option<String>, String)> {
@@ -753,7 +730,7 @@ pub(crate) fn public_model_id_from_identity(identity: &ServedModelIdentity) -> O
                     .as_deref()
                     .and_then(model_ref::quant_selector_from_gguf_file)
                     .or_else(|| identity.artifact.clone());
-                model_ref::format_model_ref(repo, None, selector.as_deref())
+                model_ref::format_model_ref(repo, identity.revision.as_deref(), selector.as_deref())
             })
             .or_else(|| {
                 identity
@@ -794,6 +771,8 @@ pub(crate) const PEER_DOWN_REPORTER_COOLDOWN_SECS: u64 = 600; // 10 minutes
 pub(crate) struct MeshState {
     pub(crate) peers: HashMap<EndpointId, PeerInfo>,
     pub(crate) connections: HashMap<EndpointId, Connection>,
+    pub(crate) pending_connections: HashMap<EndpointId, PendingConnectionHandshake>,
+    pub(crate) next_pending_connection_attempt: u64,
     /// Remote peers' tunnel maps: peer_endpoint_id → { target_endpoint_id → tunnel_port_on_that_peer }
     pub(crate) remote_tunnel_maps: HashMap<EndpointId, HashMap<EndpointId, u16>>,
     /// Peers confirmed dead — don't reconnect from gossip discovery.
@@ -819,9 +798,82 @@ pub(crate) struct MeshState {
     pub(crate) recent_mesh_rejections: VecDeque<MeshRequirementRejectionEvent>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PendingConnectionAttemptId(pub(crate) u64);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PendingConnectionOutcome {
+    Admitted,
+    Failed(String),
+}
+
+impl PendingConnectionOutcome {
+    pub(crate) fn into_result(self, peer_id: EndpointId) -> Result<()> {
+        match self {
+            Self::Admitted => Ok(()),
+            Self::Failed(message) => {
+                anyhow::bail!(
+                    "connection attempt to {} failed: {message}",
+                    peer_id.fmt_short()
+                )
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PendingConnectionHandshake {
+    pub(crate) attempt_id: PendingConnectionAttemptId,
+    pub(crate) outcome_rx: watch::Receiver<Option<PendingConnectionOutcome>>,
+}
+
+impl PendingConnectionHandshake {
+    pub(crate) fn waiter(&self, peer_id: EndpointId) -> PendingConnectionWaiter {
+        PendingConnectionWaiter {
+            peer_id,
+            attempt_id: self.attempt_id,
+            outcome_rx: self.outcome_rx.clone(),
+        }
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.outcome_rx.has_changed().is_ok()
+    }
+}
+
+pub(crate) struct PendingConnectionAttemptOwner {
+    pub(crate) peer_id: EndpointId,
+    pub(crate) attempt_id: PendingConnectionAttemptId,
+    pub(crate) outcome_tx: watch::Sender<Option<PendingConnectionOutcome>>,
+}
+
+pub(crate) struct PendingConnectionWaiter {
+    pub(crate) peer_id: EndpointId,
+    pub(crate) attempt_id: PendingConnectionAttemptId,
+    pub(crate) outcome_rx: watch::Receiver<Option<PendingConnectionOutcome>>,
+}
+
+pub(crate) enum PendingConnectionReservation {
+    Owner(PendingConnectionAttemptOwner),
+    Waiter(PendingConnectionWaiter),
+}
+
+impl MeshState {
+    pub(crate) fn pending_connection_is_active(&mut self, peer_id: EndpointId) -> bool {
+        let Some(pending) = self.pending_connections.get(&peer_id) else {
+            return false;
+        };
+        if pending.is_active() {
+            return true;
+        }
+        self.pending_connections.remove(&peer_id);
+        false
+    }
+}
+
 /// Returns `true` if the given peer has completed gossip validation and is
-/// a full mesh member. Unadmitted peers are in `state.connections` but not
-/// in `state.peers` — they are quarantined until gossip succeeds.
+/// a full mesh member. Inbound unadmitted peers may be in `state.connections`
+/// before `state.peers` — they are quarantined until gossip succeeds.
 #[cfg(test)]
 pub(crate) fn is_peer_admitted(peers: &HashMap<EndpointId, PeerInfo>, id: &EndpointId) -> bool {
     peers.get(id).is_some_and(PeerInfo::is_admitted)
@@ -1109,7 +1161,7 @@ impl Node {
             }
         }
 
-        let mesh_id = self.mesh_id.lock().await.clone();
+        let mesh_id = self.mesh_id().await;
         RoutingTable { hosts, mesh_id }
     }
 
@@ -1131,22 +1183,102 @@ impl Node {
     pub(crate) async fn connection_to_peer(&self, peer_id: EndpointId) -> Result<Connection> {
         let state = self.state.lock().await;
         match state.connections.get(&peer_id).cloned() {
-            Some(conn) => Ok(conn),
+            Some(conn) if state.peers.get(&peer_id).is_some_and(PeerInfo::is_admitted) => Ok(conn),
+            Some(conn) => {
+                drop(state);
+                if let Err(error) = self
+                    .complete_cached_connection_gossip_single_flight(peer_id, conn, false)
+                    .await
+                {
+                    anyhow::bail!(
+                        "Failed to complete gossip with {} before opening mesh stream: {error}",
+                        peer_id.fmt_short()
+                    );
+                }
+                let state = self.state.lock().await;
+                state
+                    .connections
+                    .get(&peer_id)
+                    .cloned()
+                    .filter(|_| state.peers.get(&peer_id).is_some_and(PeerInfo::is_admitted))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No admitted connection for {} after gossip",
+                            peer_id.fmt_short()
+                        )
+                    })
+            }
             None => {
                 let addr = state.peers.get(&peer_id).map(|p| p.addr.clone());
                 drop(state);
                 let Some(addr) = addr else {
                     anyhow::bail!("No connection or address for {}", peer_id.fmt_short());
                 };
-                let conn = tokio::time::timeout(
+                let owner = match self.reserve_pending_connection(peer_id).await {
+                    PendingConnectionReservation::Owner(owner) => owner,
+                    PendingConnectionReservation::Waiter(waiter) => {
+                        self.await_pending_connection(waiter).await?;
+                        let state = self.state.lock().await;
+                        return state
+                            .connections
+                            .get(&peer_id)
+                            .cloned()
+                            .filter(|_| {
+                                state.peers.get(&peer_id).is_some_and(PeerInfo::is_admitted)
+                            })
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "No admitted connection for {} after pending handshake",
+                                    peer_id.fmt_short()
+                                )
+                            });
+                    }
+                };
+                let conn = match tokio::time::timeout(
                     std::time::Duration::from_secs(10),
                     connect_mesh(&self.endpoint, addr),
                 )
                 .await
-                .map_err(|_| anyhow::anyhow!("Timeout connecting to {}", peer_id.fmt_short()))?
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to connect to {}: {e}", peer_id.fmt_short())
-                })?;
+                {
+                    Ok(Ok(conn)) => conn,
+                    Ok(Err(error)) => {
+                        let error = anyhow::anyhow!(
+                            "Failed to connect to {}: {error}",
+                            peer_id.fmt_short()
+                        );
+                        self.finish_pending_connection(
+                            owner,
+                            PendingConnectionOutcome::Failed(error.to_string()),
+                        )
+                        .await;
+                        return Err(error);
+                    }
+                    Err(_) => {
+                        let error =
+                            anyhow::anyhow!("Timeout connecting to {}", peer_id.fmt_short());
+                        self.finish_pending_connection(
+                            owner,
+                            PendingConnectionOutcome::Failed(error.to_string()),
+                        )
+                        .await;
+                        return Err(error);
+                    }
+                };
+                if let Err(error) = self
+                    .initiate_gossip_inner(conn.clone(), peer_id, false)
+                    .await
+                {
+                    conn.close(0u32.into(), b"on-demand-gossip-failed");
+                    self.finish_pending_connection(
+                        owner,
+                        PendingConnectionOutcome::Failed(error.to_string()),
+                    )
+                    .await;
+                    anyhow::bail!(
+                        "Failed to complete gossip with {} before opening mesh stream: {error}",
+                        peer_id.fmt_short()
+                    );
+                }
                 self.state
                     .lock()
                     .await
@@ -1159,16 +1291,8 @@ impl Node {
                         .dispatch_streams(conn_for_dispatch, peer_id)
                         .await;
                 });
-                if let Err(error) = self
-                    .initiate_gossip_inner(conn.clone(), peer_id, false)
-                    .await
-                {
-                    self.state.lock().await.connections.remove(&peer_id);
-                    anyhow::bail!(
-                        "Failed to complete gossip with {} before opening mesh stream: {error}",
-                        peer_id.fmt_short()
-                    );
-                }
+                self.finish_pending_connection(owner, PendingConnectionOutcome::Admitted)
+                    .await;
                 Ok(conn)
             }
         }

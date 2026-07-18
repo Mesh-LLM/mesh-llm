@@ -3,37 +3,45 @@ use super::*;
 /// Generate a mesh ID for a new mesh.
 /// Named meshes: `sha256("mesh-llm:" + name + ":" + nostr_pubkey)` — deterministic, unique per creator.
 /// Unnamed meshes: random UUID, persisted to `~/.mesh-llm/mesh-id`.
-pub fn generate_mesh_id(name: Option<&str>, nostr_pubkey: Option<&str>) -> String {
+pub fn generate_mesh_id(name: Option<&str>, nostr_pubkey: Option<&str>) -> Result<String> {
     if let Some(name) = name {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        "mesh-llm:".hash(&mut hasher);
-        name.hash(&mut hasher);
-        if let Some(pk) = nostr_pubkey {
-            pk.hash(&mut hasher);
-        }
-        format!("{:016x}", hasher.finish())
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(b"mesh-llm:");
+        hasher.update(name.as_bytes());
+        hasher.update(b":");
+        hasher.update(nostr_pubkey.unwrap_or_default().as_bytes());
+        Ok(hex::encode(hasher.finalize()))
     } else {
-        // Try to load persisted mesh-id
-        let path = mesh_id_path();
-        if let Ok(id) = std::fs::read_to_string(&path) {
+        generate_random_mesh_id_at(&mesh_id_path())
+    }
+}
+
+fn random_mesh_id() -> String {
+    format!(
+        "{:016x}{:016x}",
+        rand::random::<u64>(),
+        rand::random::<u64>()
+    )
+}
+
+pub(crate) fn generate_random_mesh_id_at(path: &std::path::Path) -> Result<String> {
+    match std::fs::read_to_string(path) {
+        Ok(id) => {
             let id = id.trim().to_string();
             if !id.is_empty() {
-                return id;
+                return Ok(id);
             }
         }
-        // Generate new random ID and persist
-        let id = format!(
-            "{:016x}{:016x}",
-            rand::random::<u64>(),
-            rand::random::<u64>()
-        );
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(&path, &id);
-        id
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
     }
+    let id = random_mesh_id();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    std::fs::write(path, &id).with_context(|| format!("write {}", path.display()))?;
+    Ok(id)
 }
 
 pub(crate) fn mesh_id_path() -> std::path::PathBuf {
@@ -51,15 +59,16 @@ pub(crate) fn mesh_genesis_policy_path() -> std::path::PathBuf {
 }
 
 /// Save the mesh ID of the last mesh we successfully joined.
-pub fn save_last_mesh_id(mesh_id: &str) {
+pub fn save_last_mesh_id(mesh_id: &str) -> Result<()> {
     let path = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".mesh-llm")
         .join("last-mesh");
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-    let _ = std::fs::write(&path, mesh_id);
+    std::fs::write(&path, mesh_id).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
 }
 
 /// Load the mesh ID of the last mesh we successfully joined.
@@ -85,30 +94,24 @@ pub(crate) fn was_public_path() -> std::path::PathBuf {
         .join("was-public")
 }
 
-pub(crate) fn clear_public_identity_file(path: &std::path::Path) -> bool {
+pub(crate) fn clear_public_identity_file(path: &std::path::Path) -> Result<()> {
     if !path.exists() {
-        return true;
+        return Ok(());
     }
-    match std::fs::remove_file(path) {
-        Ok(()) => {
-            tracing::info!("Cleared {}", path.display());
-            true
-        }
-        Err(_) => {
-            tracing::warn!("Failed to clear {}", path.display());
-            false
-        }
-    }
+    std::fs::remove_file(path).with_context(|| format!("remove {}", path.display()))?;
+    tracing::info!("Cleared {}", path.display());
+    Ok(())
 }
 
 /// Record that this node was started in public mode (--auto / --publish / --mesh-name).
 /// Called at startup so we can detect a public→private transition next time.
-pub fn mark_was_public() {
+pub fn mark_was_public() -> Result<()> {
     let path = was_public_path();
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-    let _ = std::fs::write(&path, "1");
+    std::fs::write(&path, "1").with_context(|| format!("write {}", path.display()))?;
+    Ok(())
 }
 
 /// Returns true if the previous run was public (marker file exists).
@@ -119,20 +122,17 @@ pub fn was_previously_public() -> bool {
 /// Clear identity files (key, nostr.nsec, mesh-id, last-mesh, was-public) so the
 /// next start gets a completely fresh identity. Called when transitioning from
 /// public → private to avoid reusing a publicly-known identity in a private mesh.
-pub fn clear_public_identity() {
+pub fn clear_public_identity() -> Result<()> {
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let dir = home.join(".mesh-llm");
-    let mut ok = true;
     for name in &["key", "nostr.nsec", "mesh-id", "last-mesh"] {
-        ok &= clear_public_identity_file(&dir.join(name));
+        clear_public_identity_file(&dir.join(name))?;
     }
-    // Only remove the marker after identity files are gone, so a failed
-    // cleanup is retried on the next private start.
     let marker = dir.join("was-public");
-    if ok {
-        let _ = std::fs::remove_file(&marker);
-    } else {
-        tracing::warn!("Keeping was-public marker — will retry cleanup next start");
+    match std::fs::remove_file(&marker) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("remove {}", marker.display())),
     }
 }
 
