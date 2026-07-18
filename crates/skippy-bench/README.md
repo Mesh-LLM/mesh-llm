@@ -143,6 +143,10 @@ fails before launching the native harness.
 `~/.cache/mesh-llm/skippy-bench/harnesses/` by default. Use `--cache-root` to
 override that location. Use `--dry-run` with `sync` or `run` to inspect the
 commands without cloning, pulling Docker images, or launching a benchmark.
+For an existing harness clone, `sync` fetches the configured upstream ref and
+checks out the fetched commit directly, so a stale local branch cannot leave the
+cache behind upstream. Each run records that resolved commit in
+`run.json` as `harness_commit` for reproducible benchmark evidence.
 Before launching native harness traffic, `eval run` enforces the same required
 tool checks as `eval doctor`, including Docker container-start readiness for
 Docker-backed evals.
@@ -194,10 +198,13 @@ local-model path. Set `SWE_BENCH_PRO_USE_LOCAL_DOCKER=0` when running the full
 harness in a different environment such as Modal.
 
 Every `eval run` writes `run.json` under the run directory with command status,
-raw artifact paths, wall-clock duration, and normalized metrics where the
-harness exposes them. `speed-bench` records request counts, latency,
+the resolved harness commit, raw artifact paths, wall-clock duration, and
+normalized metrics where the harness exposes them. `speed-bench` records request counts, latency,
 prompt/completion/total token counts, prompt and completion tok/s, and draft
-acceptance rate when the server returns llama.cpp-compatible `timings`.
+acceptance rate when the server returns llama.cpp-compatible `timings`. Because
+the upstream SPEED-Bench script does not expose an authorization argument,
+SkippyBench launches it through a small adapter that adds the bearer token from
+`--api-key` without modifying the upstream harness.
 SWE-Bench Pro records OpenAI usage tokens and client-side tok/s when the
 upstream flow produces them.
 Terminal-Bench records pass rate, resolved/unresolved task counts, token totals
@@ -214,9 +221,11 @@ run id. SkippyBench finalizes and fetches
 adds a `telemetry` block to `run.json`. When the target emits debug telemetry,
 SkippyBench derives TTFT/FTTT from the first request span to the first
 `stage.openai_decode_token` span, plus request and generation latency
-aggregates. If the target endpoint is not emitting the requested run id, or if
-debug token spans are disabled, the telemetry block records that status rather
-than filling misleading values.
+aggregates. A finalization or report-fetch failure marks telemetry unavailable
+without changing the native harness result in `report.success`. If the target
+endpoint is not emitting the requested run id, or if debug token spans are
+disabled, the telemetry block records that status rather than filling
+misleading values.
 
 Optional packs intentionally not wired yet:
 

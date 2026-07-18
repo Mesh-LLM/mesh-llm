@@ -4,6 +4,7 @@ import type { ModelsResponse, StatusPayload } from '@/lib/api/types'
 import type { ConfigurationHarnessData } from '@/features/app-tabs/types'
 import { useStatusQuery } from '@/features/network/api/use-status-query'
 import { useModelsQuery } from '@/features/network/api/use-models-query'
+import { pluginKeys } from '@/lib/query/query-keys'
 import {
   adaptStatusToConfiguration,
   applyRuntimeControlConfig,
@@ -86,7 +87,10 @@ export function useConfigQuery(options?: { enabled?: boolean }): ConfigQueryResu
             snapshot: applied.snapshot
           }
         })
-        void queryClient.invalidateQueries({ queryKey: CONFIG_CONTROL_QUERY_KEY })
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: CONFIG_CONTROL_QUERY_KEY }),
+          queryClient.invalidateQueries({ queryKey: pluginKeys.all })
+        ])
       }
       return applied.response
     },

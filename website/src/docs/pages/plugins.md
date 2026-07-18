@@ -46,6 +46,19 @@ mesh-llm plugins install Mesh-LLM/openai-endpoint@0.1.2
 
 Use the catalog name, such as `agents`, for catalog installs. Use the fully qualified `owner/repository` form, such as `Mesh-LLM/agents`, only when installing directly from GitHub.
 
+Plugin authors can install a local release archive through the same validation
+boundary without publishing it first:
+
+```bash
+mesh-llm plugins install --archive ./my-plugin-0.1.0-local.tar.gz \
+  --name my-plugin --version 0.1.0
+```
+
+`--archive` accepts `.tar.gz` or `.zip`, requires `--name`, and conflicts with
+the positional catalog/GitHub reference. `--version` is optional and defaults
+to `dev`. Rebuild and reinstall local archives; `plugins update` is for GitHub
+release sources.
+
 The installer selects a native release archive using the plugin name, version, operating system, and CPU architecture. It does not download GPU-specific plugin variants. If a plugin does not publish an archive for your target, build it from its repository and configure the binary with `command`.
 
 After installing, inspect the recorded source, version, target, and path:
@@ -87,6 +100,7 @@ For Flash-MoE, see the [Flash-MoE repository](https://github.com/Mesh-LLM/flash-
 | --- | --- |
 | `name` | Installed plugin identifier. Required. |
 | `enabled` | Start the plugin with mesh-llm. Defaults to `true`. |
+| `web_ui_enabled` | Show a declared plugin web UI in the console. Defaults to `true` when omitted; it does not start or stop the plugin process. |
 | `command` | Explicit executable path or command. Useful for locally built plugins. |
 | `args` | Arguments passed to the plugin process. |
 | `url` | Optional endpoint passed to the plugin as `MESH_LLM_PLUGIN_URL`. |
@@ -105,6 +119,25 @@ name = "my-plugin"
 mode = "strict"
 retention_days = 14
 ```
+
+### Plugin web UI
+
+Some plugins declare local, host-projected console pages or a configuration
+section. Their process lifecycle and UI projection are independent. To hide a
+declared UI while retaining the plugin's MCP, HTTP, and endpoint capabilities:
+
+```toml
+[[plugin]]
+name = "example-plugin"
+enabled = true
+web_ui_enabled = false
+```
+
+You can also change this preference in the console's **Configuration →
+Plugins** tab. The toggle persists only `web_ui_enabled`; it does not install,
+start, stop, or disable the plugin. A ready plugin page is available at the
+static console path `/plugins/<plugin-name>/<page-id>`. Invalid or missing UI
+assets leave the plugin process and non-UI capabilities available.
 
 ## Plugin storage
 
@@ -165,5 +198,6 @@ For the protocol and host/plugin boundary, read [Plugin Architecture](/docs/page
 | [Plugin Architecture](/docs/pages/plugin-architecture/) | Control sessions, side streams, host projections, and ownership boundaries |
 | [Developing Plugins](/docs/pages/developing-plugins/) | Rust author API, manifests, packaging, skills, and testing |
 | [Plugin Reference](/docs/pages/plugin-reference/) | MCP, HTTP, inference, capabilities, mesh channels, and control messages |
+| [Plugin Web UI exemplar](https://github.com/Mesh-LLM/mesh-llm/tree/main/docs/plugins/exemplars/web-ui) | A maintained manifest, package, config, bundle, and lifecycle reference |
 
 Useful next topics for this section are a plugin compatibility matrix by mesh-llm release, a configuration-schema guide with examples, a security and permissions guide for third-party binaries, and a release checklist for plugin authors.

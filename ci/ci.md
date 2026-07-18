@@ -116,8 +116,8 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
     subgraph MainRelease["non-PR workflows"]
         MainCI["ci.yml\npush main / dispatch"]
         WebsiteDeploy["website-pages.yml\nActions Pages deploy\nPublic Website environment"]
-        DockerPublish["docker.yml\ntag / dispatch publish"]
-        Release["release.yml\nrelease artifacts + publish gates"]
+        DockerValidate["docker.yml\nmanual client Dockerfile validation"]
+        Release["release.yml\nrelease artifacts + packaging dispatch"]
         FlyConsole["fly-deploy-console.yml\nmanual Fly console deploy"]
     end
 
@@ -190,9 +190,10 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   artifact cleanup. Cleanup-only workflow edits do not fan out into
   Rust/build/smoke jobs.
 - Docker image validation and publishing are intentionally not part of pull
-  request CI; non-PR workflows (`ci.yml`, `website-pages.yml`, `docker.yml`,
-  `release.yml`) own main, dispatch, tag, website deployment, and release-grade
-  publishing behavior.
+  request CI. `docker.yml` is a manual, non-publishing client Dockerfile
+  validation workflow. `release.yml` owns release archives and dispatches the
+  completed full release to `Mesh-LLM/mesh-agent-images`, which is the sole
+  GHCR publisher.
 - `fly-deploy-console.yml` is a manual (`workflow_dispatch`) deploy of the
   `mesh-llm-console` Fly app. It builds the image on Fly's remote builders from
   `fly/Dockerfile` and authenticates with the app-scoped `FLY_API_TOKEN` repo

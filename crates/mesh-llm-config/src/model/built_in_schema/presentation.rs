@@ -732,6 +732,15 @@ fn model_and_plugin_presentation(rendered: &str) -> Option<SettingPresentation> 
             )
             .hint("toggle"),
         ),
+        "plugin.<plugin-name>.web_ui_enabled" => Some(
+            sp(
+                "Web UI projection",
+                "Show or hide the plugin's declared web UI without disabling the plugin process.",
+                PLUGIN_HOST_CATEGORY,
+                15,
+            )
+            .hint("toggle"),
+        ),
         "plugin.<plugin-name>.url" => Some(
             sp(
                 "Base URL",

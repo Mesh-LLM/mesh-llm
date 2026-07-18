@@ -132,6 +132,12 @@ unload or replan.
   downstream streams open for the lifetime of that lane. `Stop` resets the
   logical session on a lane and leaves the TCP stream open. A failed lane is
   retired and replaced.
+- Set `SKIPPY_BINARY_WARM_PRECONNECT=1` to establish one downstream binary
+  connection while a stage runtime loads and replenish it after use. This is
+  opt-in and leaves the normal on-demand connection path unchanged.
+- Set `SKIPPY_DECODE_BATCH_COLLECTION_US` to an opt-in collection window for
+  cross-request decode batching. The default is zero added wait; configured
+  values are capped at 10,000 microseconds and ignored for single-lane runtimes.
 - `--openai-prefill-chunk-policy` selects fixed, scheduled, or adaptive stage0
   prefill chunking without changing the default fixed
   `--openai-prefill-chunk-size`. Passing `--openai-prefill-chunk-schedule`

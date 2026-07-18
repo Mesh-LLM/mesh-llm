@@ -4298,6 +4298,8 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    mod native_log;
+
     fn correctness_model() -> Option<PathBuf> {
         env::var_os("SKIPPY_CORRECTNESS_MODEL").map(PathBuf::from)
     }
@@ -5025,107 +5027,6 @@ mod tests {
             aggregator
                 .process_line("tokenizer.ggml.tokens arr[str,248320] = [\"!\", ...]")
                 .is_empty()
-        );
-    }
-
-    #[test]
-    fn write_native_log_respects_forwarding_flag() {
-        let _native_log_guard = native_log_test_guard();
-
-        struct ResetNativeLogForwarding;
-
-        impl Drop for ResetNativeLogForwarding {
-            fn drop(&mut self) {
-                unregister_filtered_native_logs();
-                set_filtered_native_logs_enabled(false);
-            }
-        }
-
-        let _reset = ResetNativeLogForwarding;
-        unregister_filtered_native_logs();
-        let mut rx = register_filtered_native_logs();
-
-        let line =
-            CString::new("init_tokenizer: initializing tokenizer for type 2\n").expect("cstring");
-
-        set_filtered_native_logs_enabled(false);
-        unsafe { write_native_log(0, line.as_ptr(), ptr::null_mut()) };
-        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
-
-        set_filtered_native_logs_enabled(true);
-        unsafe { write_native_log(0, line.as_ptr(), ptr::null_mut()) };
-        assert_eq!(
-            rx.blocking_recv(),
-            Some(NativeLogEvent {
-                message: "init_tokenizer: initializing tokenizer for type 2".to_string(),
-                category: "tokenizer",
-                params: Vec::new(),
-            })
-        );
-    }
-
-    #[test]
-    fn native_log_note_forwards_when_forwarding_enabled() {
-        let _native_log_guard = native_log_test_guard();
-
-        struct ResetNativeLogForwarding;
-
-        impl Drop for ResetNativeLogForwarding {
-            fn drop(&mut self) {
-                unregister_filtered_native_logs();
-                set_filtered_native_logs_enabled(false);
-            }
-        }
-
-        let _reset = ResetNativeLogForwarding;
-        unregister_filtered_native_logs();
-        let mut rx = register_filtered_native_logs();
-        set_filtered_native_logs_enabled(true);
-
-        write_native_log_note("skippy_model_open begin\nwith context");
-
-        assert_eq!(
-            rx.blocking_recv(),
-            Some(NativeLogEvent {
-                message: "mesh-llm: skippy_model_open begin with context".to_string(),
-                category: "model",
-                params: Vec::new(),
-            })
-        );
-    }
-
-    #[test]
-    fn register_filtered_native_logs_replaces_receiver_cleanly() {
-        let _native_log_guard = native_log_test_guard();
-
-        struct ResetNativeLogForwarding;
-
-        impl Drop for ResetNativeLogForwarding {
-            fn drop(&mut self) {
-                unregister_filtered_native_logs();
-                set_filtered_native_logs_enabled(false);
-            }
-        }
-
-        let _reset = ResetNativeLogForwarding;
-        unregister_filtered_native_logs();
-        set_filtered_native_logs_enabled(true);
-
-        let first = register_filtered_native_logs();
-        drop(first);
-        let mut second = register_filtered_native_logs();
-
-        let line =
-            CString::new("init_tokenizer: initializing tokenizer for type 2\n").expect("cstring");
-        unsafe { write_native_log(0, line.as_ptr(), ptr::null_mut()) };
-
-        assert_eq!(
-            second.blocking_recv(),
-            Some(NativeLogEvent {
-                message: "init_tokenizer: initializing tokenizer for type 2".to_string(),
-                category: "tokenizer",
-                params: Vec::new(),
-            })
         );
     }
 

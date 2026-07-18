@@ -1482,7 +1482,9 @@ impl StageOpenAiBackend {
                 json!(decode_downstream_wait_ms),
             );
             speculative_stats.insert_attrs(&mut decode_attrs);
-            native_mtp.stats().insert_attrs(&mut decode_attrs);
+            let native_mtp_stats = native_mtp.stats();
+            cache_stats.native_mtp_stats = native_mtp_stats;
+            native_mtp_stats.insert_attrs(&mut decode_attrs);
             native_mtp_counters.insert_summary_attrs(&mut decode_attrs, native_mtp_options);
             self.emit_openai_summary("stage.openai_decode", decode_timer, decode_attrs);
             Ok(())

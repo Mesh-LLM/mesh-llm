@@ -126,6 +126,7 @@ mod tests {
             install_path,
             enabled: true,
             manifest: None,
+
             last_protocol_version: None,
             last_status: None,
             last_error: None,

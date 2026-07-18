@@ -47,6 +47,7 @@ pub(crate) mod direct_return;
 pub(crate) mod forwarding;
 mod kv_eviction;
 mod options;
+mod preconnect;
 mod socket;
 mod wire;
 
@@ -61,6 +62,7 @@ use self::kv_eviction::{
     evict_binary_resident_prefix_for_decode,
 };
 pub use self::options::{BinaryStageOptions, EmbeddedOpenAiStageOptions, parse_wire_dtype};
+use self::preconnect::spawn_downstream_preconnector;
 use self::socket::*;
 pub use self::wire::WireCondition;
 pub(crate) use self::wire::write_stage_message_conditioned;
@@ -211,6 +213,10 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         telemetry_level,
     );
     telemetry.emit("stage.binary_server_start", lifecycle_attrs(&config));
+    let warm_downstream = Arc::new(Mutex::new(None));
+    if warm_downstream_preconnect_enabled() {
+        spawn_downstream_preconnector(config.clone(), warm_downstream.clone(), shutdown.clone());
+    }
     let runtime = load_runtime(&config)?.context("binary stage server requires model_path")?;
     let decode_frame_batcher = DecodeFrameBatcher::new(runtime.clone(), max_inflight);
     if max_inflight > 0 {
@@ -325,6 +331,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         let decode_frame_batcher = decode_frame_batcher.clone();
         let kv = kv.clone();
         let telemetry = telemetry.clone();
+        let warm_downstream = warm_downstream.clone();
         let prediction_returns = prediction_returns.clone();
         let prediction_return_sinks = prediction_return_sinks.clone();
         thread::spawn(move || {
@@ -353,8 +360,11 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                     }
                     return prediction_return_sinks.insert_opened_sink(first_message, upstream);
                 }
-                let downstream =
-                    connect_binary_downstream(&config, downstream_connect_timeout_secs)?;
+                let downstream = take_warm_or_connect_downstream(
+                    &config,
+                    &warm_downstream,
+                    downstream_connect_timeout_secs,
+                )?;
                 handle_binary_connection(
                     &config,
                     topology.as_ref(),
@@ -389,6 +399,67 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         });
     }
     Ok(())
+}
+
+fn warm_downstream_preconnect_enabled() -> bool {
+    warm_downstream_preconnect_enabled_from(
+        env::var("SKIPPY_BINARY_WARM_PRECONNECT").ok().as_deref(),
+    )
+}
+
+fn warm_downstream_preconnect_enabled_from(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn take_warm_or_connect_downstream(
+    config: &StageConfig,
+    warm_downstream: &Arc<Mutex<Option<TcpStream>>>,
+    timeout_secs: u64,
+) -> Result<Option<TcpStream>> {
+    if config.downstream.is_none() {
+        return Ok(None);
+    }
+    let warm = warm_downstream
+        .lock()
+        .map_err(|_| anyhow!("warm downstream lock poisoned"))?
+        .take();
+    match warm {
+        Some(stream) if warm_downstream_is_healthy(&stream)? => Ok(Some(stream)),
+        Some(_) | None => connect_binary_downstream(config, timeout_secs),
+    }
+}
+
+fn warm_downstream_is_healthy(stream: &TcpStream) -> Result<bool> {
+    let previous_timeout = stream
+        .read_timeout()
+        .context("read warm downstream timeout")?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(1)))
+        .context("set warm downstream health-check timeout")?;
+    let mut byte = [0_u8; 1];
+    let peek_result = stream.peek(&mut byte);
+    stream
+        .set_read_timeout(previous_timeout)
+        .context("restore warm downstream timeout")?;
+
+    Ok(match peek_result {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ) =>
+        {
+            true
+        }
+        Err(_) => false,
+    })
 }
 
 fn prepare_binary_stage_connection(stream: &TcpStream) -> Result<()> {

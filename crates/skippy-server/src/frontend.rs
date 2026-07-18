@@ -936,6 +936,17 @@ struct PrefillTransportEstimate {
     observations: u64,
 }
 
+/// Read timeout for the lane ready handshake. `recv_ready` is a blocking
+/// `read_exact`; without this a stalled/half-dead downstream connection hangs
+/// lane creation forever (observed as a lane stuck in "waiting ready" that
+/// never completes and never errors). A single bounded deadline turns the stall
+/// into an error instead. `connect_binary_downstream` already bounds the TCP
+/// connect, so this handshake read is the only remaining unbounded wait — no
+/// outer retry, which would only multiply the worst-case stall (see PR #1011
+/// review). Applied only to the handshake read, then cleared so the persistent
+/// lane's generation reads stay blocking.
+const LANE_READY_READ_TIMEOUT: Duration = Duration::from_secs(20);
+
 impl PersistentStageLanePool {
     const PREFILL_TRANSPORT_EWMA_ALPHA: f64 = 0.25;
 
@@ -1137,21 +1148,18 @@ impl PersistentStageLanePool {
     fn connect_lane(&self) -> Result<PersistentStageLane> {
         let lane_id = self.next_lane_id.fetch_add(1, Ordering::Relaxed);
         let timer = PhaseTimer::start();
-        let mut stream = connect_binary_downstream(&self.config, self.timeout_secs)?
-            .ok_or_else(|| anyhow!("embedded stage0 has no downstream"))?;
-        let local_addr = stream.local_addr().ok();
-        let peer_addr = stream.peer_addr().ok();
-        eprintln!(
-            "openai downstream lane waiting ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
-            self.config.stage_id
-        );
-        send_client_ready_hello_if_enabled(&mut stream)
-            .context("send persistent downstream lane client ready hello")?;
-        recv_ready(&mut stream).context("persistent downstream lane did not become ready")?;
-        eprintln!(
-            "openai downstream lane received ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
-            self.config.stage_id
-        );
+        // Single bounded attempt. `connect_binary_downstream` already retries
+        // the TCP connect internally (its own attempt budget), and the ready
+        // handshake read below is bounded by `LANE_READY_READ_TIMEOUT`. An extra
+        // outer retry here only multiplies the worst-case stall — a dead peer
+        // would burn (connect budget × outer attempts) before failing (see PR
+        // #1011 review). Bring-up wants a single, predictable deadline.
+        let stream = self.connect_lane_once(lane_id).inspect_err(|error| {
+            eprintln!(
+                "openai downstream lane handshake failed: stage_id={} lane_id={lane_id}: {error:#}",
+                self.config.stage_id,
+            );
+        })?;
         let mut attrs = lifecycle_attrs(&self.config);
         attrs.insert(
             "llama_stage.openai_downstream_lane_id".to_string(),
@@ -1175,6 +1183,47 @@ impl PersistentStageLanePool {
             id: lane_id,
             stream,
         })
+    }
+
+    /// Perform a single connect + ready-handshake attempt for one lane.
+    ///
+    /// Returns the connected, ready `TcpStream` on success. Callers retry this
+    /// with a backoff so a transient short read on `recv_ready` does not fail
+    /// lane creation outright.
+    fn connect_lane_once(&self, lane_id: u64) -> Result<TcpStream> {
+        let mut stream = connect_binary_downstream(&self.config, self.timeout_secs)?
+            .ok_or_else(|| anyhow!("embedded stage0 has no downstream"))?;
+        let local_addr = stream.local_addr().ok();
+        let peer_addr = stream.peer_addr().ok();
+        eprintln!(
+            "openai downstream lane waiting ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
+            self.config.stage_id
+        );
+        send_client_ready_hello_if_enabled(&mut stream)
+            .context("send persistent downstream lane client ready hello")?;
+        // Bound the ready handshake read. `recv_ready` is a blocking
+        // `read_exact`; without a timeout a stalled or half-dead downstream
+        // connection hangs lane creation forever (observed as a lane stuck in
+        // "waiting ready" that never completes and never errors). A single
+        // bounded read timeout turns the stall into an error. Both the set and
+        // the clear are propagated: if the set fails, `recv_ready` would be
+        // unbounded (defeating the fix); if the clear fails, the handshake
+        // timeout would leak into the persistent lane's later generation reads
+        // and truncate long generations.
+        stream
+            .set_read_timeout(Some(LANE_READY_READ_TIMEOUT))
+            .context("set persistent downstream lane ready read timeout")?;
+        let ready =
+            recv_ready(&mut stream).context("persistent downstream lane did not become ready");
+        stream
+            .set_read_timeout(None)
+            .context("clear persistent downstream lane ready read timeout")?;
+        ready?;
+        eprintln!(
+            "openai downstream lane received ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
+            self.config.stage_id
+        );
+        Ok(stream)
     }
 }
 
@@ -1272,6 +1321,7 @@ struct GenerationCacheStats {
     matched_prefix_tokens: u32,
     suffix_prefill_tokens: u32,
     hit_kind: Option<&'static str>,
+    native_mtp_stats: NativeMtpStats,
 }
 
 impl Default for GenerationCacheStats {
@@ -1282,6 +1332,7 @@ impl Default for GenerationCacheStats {
             matched_prefix_tokens: 0,
             suffix_prefill_tokens: 0,
             hit_kind: None,
+            native_mtp_stats: NativeMtpStats::default(),
         }
     }
 }
@@ -1699,6 +1750,7 @@ fn chat_response_from_generated_text(
                 finish_reason: Some(finish_reason),
             }],
             usage: output.usage(),
+            timings: output.timings(),
         };
     }
 
@@ -1708,6 +1760,7 @@ fn chat_response_from_generated_text(
         output.usage(),
         output.finish_reason,
     )
+    .with_timings(output.timings())
 }
 
 fn parsed_chat_message_from_json(
@@ -2309,6 +2362,7 @@ where
             matched_prefix_tokens: cache_stats.matched_prefix_tokens,
             suffix_prefill_tokens: cache_stats.suffix_prefill_tokens,
             cache_hit_kind: cache_stats.hit_kind,
+            native_mtp_stats: cache_stats.native_mtp_stats,
             text: self.text,
             finish_reason: self.finish_reason,
             detokenize_ms: self.metrics.detokenize_ms,
@@ -2326,6 +2380,7 @@ struct GeneratedText {
     matched_prefix_tokens: u32,
     suffix_prefill_tokens: u32,
     cache_hit_kind: Option<&'static str>,
+    native_mtp_stats: NativeMtpStats,
     text: String,
     finish_reason: FinishReason,
     detokenize_ms: f64,
@@ -2337,6 +2392,34 @@ impl GeneratedText {
     fn usage(&self) -> Usage {
         Usage::new(self.prompt_tokens, self.completion_tokens)
             .with_cached_tokens(self.cached_prompt_tokens)
+    }
+
+    fn timings(&self) -> Option<BTreeMap<String, Value>> {
+        if !self.native_mtp_stats.enabled() {
+            return None;
+        }
+
+        let stats = self.native_mtp_stats;
+        Some(BTreeMap::from([
+            ("draft_n".to_string(), json!(stats.drafted_tokens)),
+            ("draft_n_accepted".to_string(), json!(stats.accepted_tokens)),
+            (
+                "native_mtp_rejected".to_string(),
+                json!(stats.rejected_tokens),
+            ),
+            (
+                "native_mtp_verifications".to_string(),
+                json!(stats.verification_count),
+            ),
+            (
+                "native_mtp_proposal_compute_us".to_string(),
+                json!(stats.proposal_compute_us),
+            ),
+            (
+                "native_mtp_verification_compute_us".to_string(),
+                json!(stats.verification_compute_us),
+            ),
+        ]))
     }
 }
 

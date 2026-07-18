@@ -7,6 +7,18 @@ pub(crate) mod stapler;
 mod startup;
 mod support;
 mod transport;
+mod web_ui;
+
+pub use self::web_ui::{
+    PluginWebUiConfigSectionOverview, PluginWebUiManifestOverview, PluginWebUiPageOverview,
+    PluginWebUiState, PluginWebUiStateKind,
+};
+pub(crate) use self::web_ui::{PluginWebUiStateInput, derive_plugin_web_ui_state};
+use self::web_ui::{
+    inactive_web_ui_state, installed_plugin_metadata, plugin_web_ui_manifest_overview_from_proto,
+};
+#[cfg(test)]
+use self::web_ui::{installed_metadata_with_web_ui, projected_existing_web_ui_state};
 
 use crate::runtime_data::{
     PluginDataKey, PluginEndpointKey, RuntimeDataCollector, RuntimeDataSource,
@@ -44,9 +56,9 @@ pub use self::config::{
     ConfigEditor, ConfigStore, GpuAssignment, GpuConfig, LocalServingNodeConfig, MeshConfig,
     MeshRequirementsConfig, ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor,
     ModelRuntimeKind, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PluginHostMode,
-    PluginStartupConfig, ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig,
-    bundled_cli_plugin_spec, config_path, config_to_toml, load_config, parse_config_toml,
-    resolve_plugins, validate_config_file,
+    PluginStartupConfig, PluginWebUiPreference, ResolvedPlugins, TelemetryConfig,
+    TelemetryMetricsConfig, bundled_cli_plugin_spec, config_path, config_to_toml, load_config,
+    parse_config_toml, resolve_plugins, validate_config_file,
 };
 #[cfg(test)]
 pub(crate) use self::config::{
@@ -71,6 +83,8 @@ pub(crate) use self::transport::{
 };
 #[cfg(test)]
 use mesh_llm_plugin::MeshVisibility;
+#[cfg(test)]
+use mesh_llm_plugin_manager::store::InstalledPluginWebUiValidationStatus;
 use tokio::sync::oneshot;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
@@ -157,6 +171,8 @@ pub struct PluginSummary {
     pub tools: Vec<ToolSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest: Option<PluginManifestOverview>,
+    #[serde(default)]
+    pub web_ui: PluginWebUiState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub startup: Option<PluginStartupSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -176,6 +192,8 @@ pub struct PluginManifestOverview {
     pub mesh_event_subscriptions: usize,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub capabilities: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_ui: Option<PluginWebUiManifestOverview>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -439,6 +457,7 @@ impl PluginManager {
         spec: &ExternalPluginSpec,
         error: &anyhow::Error,
     ) -> PluginSummary {
+        let error_message = error.to_string();
         tracing::warn!(
             plugin = %spec.name,
             command = %spec.command,
@@ -458,8 +477,16 @@ impl PluginManager {
             args: spec.args.clone(),
             tools: Vec::new(),
             manifest: None,
+            web_ui: derive_plugin_web_ui_state(PluginWebUiStateInput {
+                plugin_name: &spec.name,
+                live_manifest: None,
+                installed_metadata: spec.installed_metadata.as_ref(),
+                web_ui_enabled: spec.web_ui_enabled,
+                runtime_available: false,
+                runtime_unavailable_reason: Some(&error_message),
+            }),
             startup: Some(spec.startup.summary()),
-            error: Some(error.to_string()),
+            error: Some(error_message),
         }
     }
 
@@ -490,6 +517,28 @@ impl PluginManager {
                     .iter()
                     .map(|name| (*name).to_string())
                     .collect(),
+                test_endpoints: Arc::new(Mutex::new(Vec::new())),
+                test_inference_endpoints: Arc::new(Mutex::new(Vec::new())),
+                test_manifests: Arc::new(Mutex::new(BTreeMap::new())),
+                test_stream_handlers: Arc::new(Mutex::new(BTreeMap::new())),
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_summaries(summaries: Vec<PluginSummary>) -> Self {
+        Self {
+            inner: Arc::new(PluginManagerInner {
+                plugins: BTreeMap::new(),
+                inactive: summaries
+                    .into_iter()
+                    .map(|summary| (summary.name.clone(), summary))
+                    .collect(),
+                endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
+                runtime_data: RuntimeDataCollector::new(),
+                rpc_bridge: Arc::new(Mutex::new(None)),
+                shutting_down: AtomicBool::new(false),
+                bridged_plugins: BTreeSet::new(),
                 test_endpoints: Arc::new(Mutex::new(Vec::new())),
                 test_inference_endpoints: Arc::new(Mutex::new(Vec::new())),
                 test_manifests: Arc::new(Mutex::new(BTreeMap::new())),
@@ -556,7 +605,7 @@ impl PluginManager {
                 let mut summaries = manifests
                     .into_iter()
                     .map(|(name, manifest)| PluginSummary {
-                        name,
+                        name: name.clone(),
                         kind: "bridge".into(),
                         enabled: true,
                         status: "running".into(),
@@ -567,6 +616,14 @@ impl PluginManager {
                         args: Vec::new(),
                         tools: Vec::new(),
                         manifest: Some(plugin_manifest_overview(&manifest)),
+                        web_ui: derive_plugin_web_ui_state(PluginWebUiStateInput {
+                            plugin_name: &name,
+                            live_manifest: Some(&manifest),
+                            installed_metadata: None,
+                            web_ui_enabled: None,
+                            runtime_available: true,
+                            runtime_unavailable_reason: None,
+                        }),
                         startup: None,
                         error: None,
                     })
@@ -588,6 +645,62 @@ impl PluginManager {
         summaries.extend(self.inner.inactive.values().cloned());
         summaries.sort_by(|a, b| a.name.cmp(&b.name));
         summaries
+    }
+
+    pub async fn web_ui_state(&self, name: &str) -> Result<PluginWebUiState> {
+        Ok(self.plugin_summary(name).await?.web_ui)
+    }
+
+    pub async fn set_web_ui_enabled(&self, name: &str, enabled: bool) -> Result<PluginWebUiState> {
+        if let Some(plugin) = self.inner.plugins.get(name) {
+            return Ok(plugin.set_web_ui_enabled(enabled).await);
+        }
+
+        if let Some(summary) = self.inner.inactive.get(name) {
+            let web_ui = inactive_web_ui_state(summary, Some(enabled));
+            let mut updated = summary.clone();
+            updated.web_ui = web_ui.clone();
+            self.publish_plugin_summary(&updated);
+            return Ok(web_ui);
+        }
+
+        #[cfg(test)]
+        if self.is_test_bridge_enabled(name) {
+            let summary = self.plugin_summary(name).await?;
+            let web_ui = projected_existing_web_ui_state(&summary, Some(enabled));
+            let mut updated = summary;
+            updated.web_ui = web_ui.clone();
+            self.publish_plugin_summary(&updated);
+            return Ok(web_ui);
+        }
+
+        anyhow::bail!("Unknown plugin '{name}'")
+    }
+
+    pub async fn web_ui_asset_root(&self, name: &str) -> Result<Option<std::path::PathBuf>> {
+        if let Some(plugin) = self.inner.plugins.get(name) {
+            return Ok(plugin.web_ui_asset_root());
+        }
+        if self.inner.inactive.contains_key(name) || self.is_test_bridge_enabled(name) {
+            return Ok(installed_plugin_metadata(name).and_then(|metadata| {
+                metadata
+                    .web_ui_asset_root_path()
+                    .filter(|asset_root| asset_root.is_dir())
+            }));
+        }
+        anyhow::bail!("Unknown plugin '{name}'")
+    }
+
+    async fn plugin_summary(&self, name: &str) -> Result<PluginSummary> {
+        #[cfg(test)]
+        if self.is_test_bridge_enabled(name) {
+            let _ = self.publish_test_bridge_snapshot(name).await;
+        }
+        self.list()
+            .await
+            .into_iter()
+            .find(|summary| summary.name == name)
+            .with_context(|| format!("Unknown plugin '{name}'"))
     }
 
     pub async fn shutdown(&self) {
@@ -656,6 +769,14 @@ impl PluginManager {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: Some(plugin_manifest_overview(&manifest)),
+            web_ui: derive_plugin_web_ui_state(PluginWebUiStateInput {
+                plugin_name,
+                live_manifest: Some(&manifest),
+                installed_metadata: None,
+                web_ui_enabled: None,
+                runtime_available: true,
+                runtime_unavailable_reason: None,
+            }),
             startup: None,
             error: None,
         };
@@ -1479,6 +1600,7 @@ pub(crate) async fn connect_test_side_stream(
 }
 
 pub(crate) fn plugin_manifest_overview(manifest: &proto::PluginManifest) -> PluginManifestOverview {
+    let web_ui = plugin_web_ui_manifest_overview_from_proto(manifest.web_ui.as_ref());
     PluginManifestOverview {
         operations: manifest.operations.len(),
         resources: manifest.resources.len(),
@@ -1490,6 +1612,7 @@ pub(crate) fn plugin_manifest_overview(manifest: &proto::PluginManifest) -> Plug
         mesh_channels: manifest.mesh_channels.len(),
         mesh_event_subscriptions: manifest.mesh_event_subscriptions.len(),
         capabilities: manifest.capabilities.clone(),
+        web_ui,
     }
 }
 
@@ -1916,6 +2039,44 @@ mod tests {
         }
     }
 
+    fn web_ui_manifest() -> proto::PluginWebUiManifest {
+        proto::PluginWebUiManifest {
+            pages: vec![proto::PluginWebUiPageManifest {
+                id: "home".into(),
+                label: "Home".into(),
+                icon: Some("icons/home.svg".into()),
+                route: "index.html".into(),
+                bundle_id: "main".into(),
+                entry_script: "assets/app.js".into(),
+            }],
+            config_sections: vec![proto::PluginWebUiConfigSectionManifest {
+                id: "settings".into(),
+                title: "Settings".into(),
+                entry_script: "assets/settings.js".into(),
+                parent_tab: Some("integrations".into()),
+                bundle_id: "main".into(),
+            }],
+            bundles: vec![proto::PluginWebUiBundleManifest {
+                id: "main".into(),
+                root_path: "web".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn plugin_manifest_overview_includes_web_ui_declaration() {
+        let manifest = proto::PluginManifest {
+            web_ui: Some(web_ui_manifest()),
+            ..proto::PluginManifest::default()
+        };
+
+        let overview = plugin_manifest_overview(&manifest);
+
+        let web_ui = overview.web_ui.expect("web UI overview should be present");
+        assert_eq!(web_ui.pages[0].id, "home");
+        assert_eq!(web_ui.config_sections[0].id, "settings");
+    }
+
     async fn spawn_fake_models_server(
         responses: Vec<(&'static str, &'static str)>,
     ) -> (String, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
@@ -1954,6 +2115,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "demo".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: Some("mesh-llm-plugin-demo".into()),
                 args: vec!["--stdio".into()],
                 url: None,
@@ -1978,6 +2140,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "metrics".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: Some("mesh-llm-plugin-metrics".into()),
                 args: Vec::new(),
                 url: None,
@@ -2012,6 +2175,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "missing-optional".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: None,
                 args: Vec::new(),
                 url: None,
@@ -2060,6 +2224,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: BLOBSTORE_PLUGIN_ID.into(),
                 enabled: Some(false),
+                web_ui_enabled: None,
                 command: None,
                 args: Vec::new(),
                 url: None,
@@ -2080,6 +2245,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "endpoint-plugin".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: Some("endpoint-plugin".into()),
                 args: Vec::new(),
                 url: Some("http://gpu-box:8000/v1".into()),
@@ -2105,6 +2271,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "endpoint-plugin".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: Some("/opt/plugins/endpoint-plugin".into()),
                 args: vec!["--verbose".into()],
                 url: None,
@@ -2129,6 +2296,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "endpoint-plugin".into(),
                 enabled: Some(false),
+                web_ui_enabled: None,
                 command: None,
                 args: Vec::new(),
                 url: Some("http://gpu-box:8000/v1".into()),
@@ -2163,6 +2331,7 @@ mod tests {
             plugins: vec![PluginConfigEntry {
                 name: "demo".into(),
                 enabled: Some(true),
+                web_ui_enabled: None,
                 command: Some("/tmp/demo".into()),
                 args: vec!["--flag".into()],
                 url: None,
@@ -2189,6 +2358,8 @@ mod tests {
                 url: None,
                 env: BTreeMap::new(),
                 startup: PluginStartupOptions::default(),
+                web_ui_enabled: None,
+                installed_metadata: None,
             }],
             inactive: Vec::new(),
         };
@@ -2207,6 +2378,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
+        let specs = ResolvedPlugins {
+            externals: vec![ExternalPluginSpec {
+                name: "demo".into(),
+                command: "mesh-llm-definitely-missing-plugin-binary".into(),
+                args: Vec::new(),
+                url: None,
+                env: BTreeMap::new(),
+                startup: PluginStartupOptions::default(),
+                web_ui_enabled: None,
+                installed_metadata: Some(installed_metadata_with_web_ui(
+                    InstalledPluginWebUiValidationStatus::Valid,
+                    Some("web"),
+                )),
+            }],
+            inactive: Vec::new(),
+        };
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+
+        let manager = PluginManager::start(&specs, private_host_mode(), mesh_tx)
+            .await
+            .expect("broken plugin should not stop manager startup");
+        let summaries = manager.list().await;
+        manager.shutdown().await;
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "demo");
+        assert_eq!(summaries[0].status, "error");
+        assert_eq!(
+            summaries[0].web_ui.state,
+            PluginWebUiStateKind::PluginNotRunning
+        );
+        assert_eq!(summaries[0].web_ui.pages.len(), 1);
+        assert_eq!(summaries[0].web_ui.config_sections.len(), 1);
+    }
+
+    #[tokio::test]
     async fn lazy_start_plugin_does_not_block_manager_startup() {
         let specs = ResolvedPlugins {
             externals: vec![ExternalPluginSpec {
@@ -2220,6 +2428,8 @@ mod tests {
                     lazy_start: true,
                     ..PluginStartupOptions::default()
                 },
+                web_ui_enabled: None,
+                installed_metadata: None,
             }],
             inactive: Vec::new(),
         };
@@ -2296,6 +2506,7 @@ mod tests {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: None,
+            web_ui: PluginWebUiState::default(),
             startup: None,
             error: None,
         }

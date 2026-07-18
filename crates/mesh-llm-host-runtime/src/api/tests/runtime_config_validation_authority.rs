@@ -206,6 +206,7 @@ fn install_blackboard_schema(plugin_dir: &std::path::Path) {
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
                 config_schema: Some(blackboard_schema()),
+                web_ui: None,
             }),
             last_protocol_version: Some(1),
             last_status: Some("installed".to_string()),

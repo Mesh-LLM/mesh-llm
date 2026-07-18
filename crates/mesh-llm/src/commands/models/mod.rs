@@ -1,6 +1,7 @@
 mod formatters;
 mod formatters_console;
 mod formatters_json;
+mod installed;
 
 use anyhow::{Result, anyhow, bail};
 use formatters::DownloadStats;
@@ -14,10 +15,9 @@ use mesh_llm_host_runtime::command_support::models::{
     DownloadTransferStats, ModelCleanupPlan, ModelCleanupResult, SearchArtifactFilter,
     SearchProgress, SearchSort, ShowVariantsProgress, delete,
     download_model_ref_with_progress_details, download_model_ref_with_progress_details_direct,
-    find_remote_catalog_model_exact, installed_model_capabilities,
-    load_model_usage_record_for_path, model_usage_cache_dir, plan_model_cleanup, remote_catalog,
-    remote_catalog_model_ref, scan_installed_models, search_catalog_models, search_huggingface,
-    show_exact_model, show_model_variants_with_progress,
+    find_remote_catalog_model_exact, model_usage_cache_dir, plan_model_cleanup, remote_catalog,
+    remote_catalog_model_ref, search_catalog_models, search_huggingface, show_exact_model,
+    show_model_variants_with_progress,
 };
 use mesh_llm_tui::terminal_progress::{DeterminateProgressLine, clear_stderr_line, start_spinner};
 use serde_json::json;
@@ -26,9 +26,10 @@ use std::time::Duration;
 use std::time::Instant;
 
 use formatters::{
-    DownloadRenderInput, InstalledRow, catalog_model_is_mlx, format_installed_size,
-    format_relative_timestamp, model_kind_code, models_formatter, search_formatter,
+    DownloadRenderInput, catalog_model_is_mlx, format_installed_size, format_relative_timestamp,
+    model_kind_code, models_formatter, search_formatter,
 };
+use installed::run_model_installed;
 
 pub async fn run_model_search(
     query: &[String],
@@ -139,68 +140,6 @@ pub fn run_model_recommended(json_output: bool) -> Result<()> {
     remote_catalog::ensure_catalog()?;
     let models = remote_catalog::loaded_models()?;
     formatter.render_recommended(&models)
-}
-
-fn build_installed_rows() -> Vec<InstalledRow> {
-    scan_installed_models()
-        .into_iter()
-        .map(|name| {
-            let path = mesh_llm_host_runtime::command_support::models::find_model_path(&name);
-            let display_name = mesh_llm_host_runtime::command_support::models::installed_model_display_name(&name);
-            let catalog_model = find_remote_catalog_model_exact(&name);
-            let layer_count = mesh_llm_host_runtime::command_support::models::layered_package_layer_count_for_path(&path);
-            let model_ref = if layer_count.is_some() {
-                name.clone()
-            } else if let Some(model) = catalog_model.as_ref() {
-                remote_catalog_model_ref(model)
-            } else if let Some(identity) = mesh_llm_host_runtime::command_support::models::huggingface_identity_for_path(&path) {
-                mesh_llm_host_runtime::command_support::models::installed_model_huggingface_ref(&identity)
-            } else {
-                name.clone()
-            };
-            let show_command = layer_count
-                .is_none()
-                .then(|| format!("mesh-llm models show {model_ref}"));
-            let download_command = layer_count
-                .is_none()
-                .then(|| format!("mesh-llm models download {model_ref}"));
-            let delete_command = format!("mesh-llm models delete {model_ref}");
-            let size =
-                if let Some(bytes) = mesh_llm_host_runtime::command_support::models::layered_package_total_bytes_for_path(&path) {
-                    Some(bytes)
-                } else if path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("gguf"))
-                {
-                    Some(mesh_llm_host_runtime::command_support::models::election::total_model_bytes(&path))
-                } else {
-                    std::fs::metadata(&path).map(|meta| meta.len()).ok()
-                };
-            let capabilities = installed_model_capabilities(&name);
-            let usage = load_model_usage_record_for_path(&path);
-            InstalledRow {
-                name: display_name,
-                model_ref,
-                show_command,
-                download_command,
-                delete_command,
-                path,
-                size,
-                layer_count,
-                catalog_model,
-                capabilities,
-                managed_by_mesh: usage.as_ref().is_some_and(|record| record.mesh_managed),
-                last_used_at: usage.map(|record| record.last_used_at),
-            }
-        })
-        .collect()
-}
-
-pub fn run_model_installed(json_output: bool) -> Result<()> {
-    let formatter = models_formatter(json_output);
-    let rows = build_installed_rows();
-    formatter.render_installed(&rows)
 }
 
 pub async fn run_model_certify(
@@ -867,52 +806,11 @@ fn map_search_sort(sort: ModelSearchSort) -> SearchSort {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_delete_preview_model, build_installed_rows, parse_cleanup_age,
-        resolve_download_layer_package_ref, validate_model_certify_options,
+        build_delete_preview_model, parse_cleanup_age, resolve_download_layer_package_ref,
+        validate_model_certify_options,
     };
     use serial_test::serial;
-    use std::ffi::OsString;
-    use std::path::{Path, PathBuf};
-
-    fn unique_temp_dir(prefix: &str) -> PathBuf {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("mesh-llm-{prefix}-{stamp}"))
-    }
-
-    fn restore_env(key: &str, previous: Option<OsString>) {
-        if let Some(value) = previous {
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            unsafe { std::env::set_var(key, value) };
-        } else {
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            unsafe { std::env::remove_var(key) };
-        }
-    }
-
-    fn create_cache_repo_file(
-        root: &Path,
-        repo_id: &str,
-        revision: &str,
-        relative_file: &str,
-        size_bytes: usize,
-    ) -> PathBuf {
-        let repo_dir = root.join(format!("models--{}", repo_id.replace('/', "--")));
-        let refs_dir = repo_dir.join("refs");
-        let snapshot_dir = repo_dir.join("snapshots").join(revision);
-        std::fs::create_dir_all(&refs_dir).unwrap();
-        std::fs::create_dir_all(
-            snapshot_dir.join(Path::new(relative_file).parent().unwrap_or(Path::new(""))),
-        )
-        .unwrap();
-        std::fs::write(refs_dir.join("main"), revision).unwrap();
-
-        let path = snapshot_dir.join(relative_file);
-        std::fs::write(&path, vec![0u8; size_bytes]).unwrap();
-        path
-    }
+    use std::path::PathBuf;
 
     #[test]
     fn cleanup_age_parser_accepts_common_units() {
@@ -1002,61 +900,6 @@ mod tests {
             resolve_download_layer_package_ref("plain-local-model"),
             None
         );
-    }
-
-    #[test]
-    #[serial]
-    fn installed_rows_keep_layered_package_ref_and_safe_commands() {
-        let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
-        let prev_hf_home = std::env::var_os("HF_HOME");
-        let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
-
-        let temp = unique_temp_dir("installed-layered-row");
-        create_cache_repo_file(
-            &temp,
-            "meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers",
-            "abcdef1234567890",
-            "shared/embeddings.gguf",
-            6,
-        );
-        create_cache_repo_file(
-            &temp,
-            "meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers",
-            "abcdef1234567890",
-            "layers/layer-000.gguf",
-            9,
-        );
-        create_cache_repo_file(
-            &temp,
-            "meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers",
-            "abcdef1234567890",
-            "layers/layer-001.gguf",
-            9,
-        );
-
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var("HF_HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
-
-        let rows = build_installed_rows();
-        assert_eq!(rows.len(), 1);
-        let row = &rows[0];
-        assert_eq!(row.model_ref, "meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers");
-        assert_eq!(row.layer_count, Some(2));
-        assert_eq!(row.show_command, None);
-        assert_eq!(row.download_command, None);
-        assert_eq!(
-            row.delete_command,
-            "mesh-llm models delete meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers"
-        );
-
-        let _ = std::fs::remove_dir_all(&temp);
-        restore_env("HF_HUB_CACHE", prev_hub_cache);
-        restore_env("HF_HOME", prev_hf_home);
-        restore_env("XDG_CACHE_HOME", prev_xdg);
     }
 
     #[test]

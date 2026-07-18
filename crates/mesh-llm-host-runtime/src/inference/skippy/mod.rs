@@ -3,6 +3,7 @@
 mod certification;
 mod deployment;
 mod family_policy;
+mod hash_cache;
 mod hooks;
 mod kv_cache;
 mod materialization;
@@ -1207,6 +1208,7 @@ mod tests {
                 .to_string(),
             source_model_bytes: 1234,
             source_files: Vec::new(),
+            layer_weight_bytes: Vec::new(),
             layer_count,
             activation_width: 4096,
             tensor_count: 100,

@@ -1,7 +1,7 @@
-From 47644eabc90e1e5cd2dc2264327084935531d7d0 Mon Sep 17 00:00:00 2001
+From 9543737c2487088776b078eaa94fbd8266870403 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 3 Jul 2026 12:18:37 -0400
-Subject: [PATCH 13/14] Add external MTP draft sidecar attachment
+Subject: [PATCH 13/16] Add external MTP draft sidecar attachment
 
 ---
  include/skippy.h        |  6 ++++

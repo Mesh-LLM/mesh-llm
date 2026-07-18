@@ -275,11 +275,11 @@ download-model:
 
 # ── QUIC Mesh ──────────────────────────────────────────────────
 
-mesh_bin := "target/release/mesh-llm"
+mesh_bin := env("MESH_LLM_BIN", "target/release/mesh-llm")
 
 # Prints an invite token for other nodes to join.
 mesh-worker gguf=model:
-    {{ mesh_bin }} --model {{ gguf }}
+    "{{ mesh_bin }}" --model {{ gguf }}
 
 # Join an existing mesh and serve through the embedded runtime.
 mesh-join join="" port="9337" gguf=model split="":
@@ -292,7 +292,7 @@ mesh-join join="" port="9337" gguf=model split="":
     if [ -n "{{ split }}" ]; then
         ARGS="$ARGS --tensor-split {{ split }}"
     fi
-    exec {{ mesh_bin }} $ARGS
+    exec "{{ mesh_bin }}" $ARGS
 
 # Create a portable tarball with all binaries for deployment to another machine.
 bundle output="/tmp/mesh-llm-bundle.tar.gz":
@@ -301,7 +301,7 @@ bundle output="/tmp/mesh-llm-bundle.tar.gz":
     DIR=$(mktemp -d)
     BUNDLE="$DIR/mesh-bundle"
     mkdir -p "$BUNDLE"
-    cp {{ mesh_bin }} "$BUNDLE/"
+    cp "{{ mesh_bin }}" "$BUNDLE/"
     # Fix rpaths for portability
     for bin in "$BUNDLE/mesh-llm"; do
         [ -f "$bin" ] || continue
@@ -386,7 +386,7 @@ ui-test:
 
 # ── Full Validation Gate ───────────────────────────────────────
 
-# Run all checks: repo consistency, Rust tests, fmt, clippy, ESLint, Prettier, E2E smoke.
+# Run all checks: repo consistency, Rust tests, author exemplars, fmt, clippy, UI/docs builds, and E2E smoke.
 test-all:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -412,25 +412,41 @@ test-all:
     echo ""
 
     # Each UI step runs in a subshell so cd doesn't leak between steps.
-    echo "=== 1/8 Repo consistency ==="
+    echo "=== 1/10 Repo consistency ==="
     just with-lld cargo run -p xtask -- repo-consistency ci-crate-lists
+    just with-lld cargo run -p xtask -- repo-consistency publish-crates
     echo ""
-    echo "=== 2/8 Rust format check ==="
+    echo "=== 2/10 Rust format check ==="
     just with-lld cargo fmt --all -- --check
     echo ""
     echo "=== GPU bench Rust feature check ==="
     MESH_LLM_GPU_BENCH_RUST_ONLY=1 just with-lld cargo check -p mesh-llm-gpu-bench --features cuda,hip,intel
     echo ""
-    echo "=== 3/8 Clippy ==="
-    mapfile -t clippy_crates < <(bash scripts/plan-clippy-batches.sh --all --bins 1 | jq -r '.[].crates[]')
+    echo "=== 3/10 Clippy ==="
+    clippy_crates=()
+    while IFS= read -r crate; do
+        clippy_crates+=("$crate")
+    done < <(bash scripts/plan-clippy-batches.sh --all --bins 1 | jq -r '.[].crates[]')
     for crate in "${clippy_crates[@]}"; do
         echo "--- $crate ---"
         just with-lld cargo clippy -p "$crate" --all-targets -- -D warnings
     done
     echo ""
-    echo "=== 4/8 Rust tests ==="
+    echo "=== 4/10 Rust tests ==="
+    echo "--- mesh-llm-plugin lib ---"
+    just with-lld cargo test -p mesh-llm-plugin --lib
+    echo "--- mesh-llm-plugin-manager lib ---"
+    just with-lld cargo test -p mesh-llm-plugin-manager --lib
+    echo "--- mesh-llm-config lib ---"
+    just with-lld cargo test -p mesh-llm-config --lib
+    echo "--- mesh-llm-cli lib ---"
+    just with-lld cargo test -p mesh-llm-cli --lib
+    echo "--- mesh-llm-commands lib ---"
+    just with-lld cargo test -p mesh-llm-commands --lib
     echo "--- mesh-llm-host-runtime lib ---"
     just with-lld cargo test -p mesh-llm-host-runtime --lib
+    echo "--- mesh-llm-console-server lib ---"
+    just with-lld cargo test -p mesh-llm-console-server --lib
     echo "--- mesh-llm ---"
     just with-lld cargo test -p mesh-llm
     echo "--- mesh-llm-protocol ---"
@@ -440,17 +456,27 @@ test-all:
     echo "--- skippy-runtime lib ---"
     just with-lld cargo test -p skippy-runtime --lib
     echo ""
-    echo "=== 5/8 ESLint + Prettier ==="
+    echo "=== 5/10 Plugin author exemplar ==="
+    just with-lld cargo run --quiet --manifest-path docs/plugins/exemplars/web-ui/Cargo.toml -- --print-package-manifest > target/web-ui-exemplar-manifest.json
+    diff -u <(jq -S . docs/plugins/exemplars/web-ui/plugin.package.json) <(jq -S . target/web-ui-exemplar-manifest.json)
+    node --check docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.js
+    (cd "{{ ui_dir }}" && pnpm exec tsc --ignoreConfig --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --lib ES2022,DOM ../../docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.ts)
+    echo ""
+    echo "=== 6/10 ESLint + Prettier ==="
     (cd "{{ ui_dir }}" && pnpm run lint)
     echo ""
-    echo "=== 6/8 UI type check (tsc) ==="
+    echo "=== 7/10 UI type check (tsc) ==="
     (cd "{{ ui_dir }}" && pnpm run typecheck)
     echo ""
-    echo "=== 7/8 UI unit tests (vitest) ==="
+    echo "=== 8/10 UI unit tests (vitest) ==="
     (cd "{{ ui_dir }}" && pnpm test)
     echo ""
-    echo "=== 8/8 E2E smoke tests (Playwright) ==="
-    if curl -sf http://127.0.0.1:3131/health >/dev/null 2>&1; then
+    echo "=== 9/10 UI and website production builds ==="
+    (cd "{{ ui_dir }}" && pnpm run build)
+    (cd "{{ website_dir }}" && npm run build)
+    echo ""
+    echo "=== 10/10 E2E smoke tests (Playwright) ==="
+    if curl -sf http://127.0.0.1:3131/api/status >/dev/null 2>&1; then
         (cd "{{ ui_dir }}" && pnpm run test:e2e)
     else
         echo "No server on port 3131 — starting UI dev server with public mesh..."
@@ -476,17 +502,19 @@ test-all:
         }
 
         if [ "$READY" = true ]; then
-            (cd "{{ ui_dir }}" && PLAYWRIGHT_PORT=5173 pnpm run test:e2e e2e/smoke/home.spec.ts e2e/smoke/topnav-responsive.spec.ts)
-            E2E_EXIT=$?
+            if (cd "{{ ui_dir }}" && PLAYWRIGHT_PORT=5173 pnpm run test:e2e e2e/smoke/home.spec.ts e2e/smoke/topnav-responsive.spec.ts); then
+                E2E_EXIT=0
+            else
+                E2E_EXIT=$?
+            fi
             cleanup_dev
             echo "Stopped UI dev server."
 
             exit $E2E_EXIT
         else
             cleanup_dev
-            echo "WARNING: UI dev server didn't start in time — skipping E2E tests."
-            echo "Run E2E manually:"
-            echo "  cd {{ ui_dir }} && pnpm run test:e2e"
+            echo "ERROR: UI dev server didn't start in time; E2E validation did not run."
+            exit 1
         fi
     fi
     echo ""
@@ -495,12 +523,21 @@ test-all:
 # Start a lite client — no GPU, no model, just a local HTTP proxy to the mesh host.
 
 # Only needs the mesh-llm binary (no llama.cpp binaries or model).
-mesh-client join="" port="9337":
-    {{ mesh_bin }} --client --port {{ port }} --join {{ join }}
+mesh-client join="" port="9337" console="3131" config="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(client --port "{{ port }}" --console "{{ console }}")
+    if [[ -n "{{ join }}" ]]; then
+        args+=(--join "{{ join }}")
+    fi
+    if [[ -n "{{ config }}" ]]; then
+        args+=(--config "{{ config }}")
+    fi
+    "{{ mesh_bin }}" "${args[@]}"
 
 # Build and auto-join a mesh (discover via Nostr)
 auto: build
-    {{ mesh_bin }} --auto
+    "{{ mesh_bin }}" --auto
 
 # ── Utilities ──────────────────────────────────────────────────
 

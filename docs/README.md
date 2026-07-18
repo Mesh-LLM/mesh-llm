@@ -45,7 +45,7 @@ Use [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md) for Skippy split-serving workflows.
 | [design/NATIVE_RUNTIMES.md](design/NATIVE_RUNTIMES.md) | Native runtime artifact packaging, exact version matching, resolver behavior, and SDK/autoupdater ownership |
 | [design/NODE_OWNER_IDENTITY.md](design/NODE_OWNER_IDENTITY.md) | Owner identity, trust policy, and how owner trust stays separate from release attestation |
 | [design/EMITTER_HOOKS.md](design/EMITTER_HOOKS.md) | Inventory of hook, callback, and emitter surfaces plus readiness ownership. |
-| [plugins/](plugins/) | Plugin architecture and implementation planning |
+| [plugins/](plugins/) | Plugin architecture, web UI projection contract, exemplars, and implementation planning |
 | [plans/](plans/) | Narrow implementation plans that are not yet general design docs |
 | [specs/](specs/) | Focused behavior specs for individual features |
 | [design/OPENAI_GUARDRAILS.md](design/OPENAI_GUARDRAILS.md) | OpenAI guardrail rollout defaults, v1 limits, telemetry privacy, and evidence scaffolding |

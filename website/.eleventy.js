@@ -38,6 +38,7 @@ export default function(eleventyConfig) {
   eleventyConfig.addPassthroughCopy("src/assets");
   eleventyConfig.addPassthroughCopy({ "../install.sh": "install.sh" });
   eleventyConfig.addPassthroughCopy({ "../install.ps1": "install.ps1" });
+  eleventyConfig.addPassthroughCopy({ "../install.md": "setup-mesh" });
 
   eleventyConfig.amendLibrary("md", (md) => {
     md.set({

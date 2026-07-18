@@ -186,6 +186,35 @@ message PluginManifest {
   repeated MeshChannelManifest mesh_channels = 9;
   repeated MeshEventSubscriptionManifest mesh_event_subscriptions = 10;
   optional PluginConfigSchemaManifest config_schema = 11;
+  optional PluginWebUiManifest web_ui = 12;
+}
+
+message PluginWebUiManifest {
+  repeated PluginWebUiPageManifest pages = 1;
+  repeated PluginWebUiConfigSectionManifest config_sections = 2;
+  repeated PluginWebUiBundleManifest bundles = 3;
+}
+
+message PluginWebUiPageManifest {
+  string id = 1;
+  string label = 2;
+  optional string icon = 3;
+  string route = 4;
+  string bundle_id = 5;
+  string entry_script = 6;
+}
+
+message PluginWebUiConfigSectionManifest {
+  string id = 1;
+  string title = 2;
+  string entry_script = 3;
+  optional string parent_tab = 4;
+  string bundle_id = 5;
+}
+
+message PluginWebUiBundleManifest {
+  string id = 1;
+  string root_path = 2;
 }
 
 message PluginConfigSchemaManifest {

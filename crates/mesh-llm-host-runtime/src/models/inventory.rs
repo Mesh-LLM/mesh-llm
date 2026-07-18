@@ -8,11 +8,18 @@ use super::local::{
 };
 use hf_hub::{RepoType, RepoTypeModel};
 
+/// Prefix of synthetic model refs produced by `model-hf` for local GGUF files
+/// that cannot be mapped back to a Hugging Face repo/file identity.
+const SYNTHETIC_LOCAL_GGUF_PREFIX: &str = "local-gguf/";
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LocalModelInventorySnapshot {
     pub model_names: HashSet<String>,
     pub size_by_name: HashMap<String, u64>,
     pub metadata_by_name: HashMap<String, crate::proto::node::CompactModelMetadata>,
+    /// Human-readable labels (GGUF file stems) for synthetic `local-gguf/...`
+    /// keys, which would otherwise leak into user-facing display names.
+    pub display_name_by_name: HashMap<String, String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -53,6 +60,15 @@ struct InventoryScanEntry {
     quantization_type: String,
     scans_metadata: bool,
     missing_cache_file: bool,
+}
+
+fn synthetic_local_display_name(entry: &InventoryScanEntry) -> Option<String> {
+    entry
+        .model_key
+        .starts_with(SYNTHETIC_LOCAL_GGUF_PREFIX)
+        .then(|| entry.path.file_stem())
+        .flatten()
+        .map(|stem| stem.to_string_lossy().into_owned())
 }
 
 impl CachedCompactModelMetadata {
@@ -317,6 +333,12 @@ where
     let mut snapshot = LocalModelInventorySnapshot::default();
     for entry in entries {
         snapshot.model_names.insert(entry.model_key.clone());
+        if let Some(display_name) = synthetic_local_display_name(&entry) {
+            snapshot
+                .display_name_by_name
+                .entry(entry.model_key.clone())
+                .or_insert(display_name);
+        }
         snapshot
             .size_by_name
             .entry(entry.model_key.clone())
@@ -346,6 +368,60 @@ where
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[cfg(unix)]
+    #[test]
+    fn synthetic_display_name_preserves_non_utf8_file_stems_lossily() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let entry = InventoryScanEntry {
+            path: PathBuf::from(std::ffi::OsString::from_vec(b"Model-\xff.gguf".to_vec())),
+            size: 0,
+            model_key: format!("{SYNTHETIC_LOCAL_GGUF_PREFIX}hash"),
+            quantization_type: String::new(),
+            scans_metadata: false,
+            missing_cache_file: false,
+        };
+
+        assert_eq!(
+            synthetic_local_display_name(&entry).as_deref(),
+            Some("Model-�")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn synthetic_display_name_preserves_ill_formed_utf16_file_stems_lossily() {
+        use std::os::windows::ffi::OsStringExt;
+
+        let path = std::ffi::OsString::from_wide(&[
+            b'M' as u16,
+            b'o' as u16,
+            b'd' as u16,
+            b'e' as u16,
+            b'l' as u16,
+            b'-' as u16,
+            0xd800,
+            b'.' as u16,
+            b'g' as u16,
+            b'g' as u16,
+            b'u' as u16,
+            b'f' as u16,
+        ]);
+        let entry = InventoryScanEntry {
+            path: PathBuf::from(path),
+            size: 0,
+            model_key: format!("{SYNTHETIC_LOCAL_GGUF_PREFIX}hash"),
+            quantization_type: String::new(),
+            scans_metadata: false,
+            missing_cache_file: false,
+        };
+
+        assert_eq!(
+            synthetic_local_display_name(&entry).as_deref(),
+            Some("Model-�")
+        );
+    }
 
     struct EnvGuard {
         key: &'static str,

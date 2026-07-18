@@ -720,7 +720,9 @@ impl StageOpenAiBackend {
                     stats,
                 );
             }
-            native_mtp.stats().insert_attrs(&mut attrs);
+            let native_mtp_stats = native_mtp.stats();
+            cache_stats.native_mtp_stats = native_mtp_stats;
+            native_mtp_stats.insert_attrs(&mut attrs);
             self.emit_openai_summary("stage.openai_decode", decode_timer, attrs);
             Ok(())
         })();

@@ -1,6 +1,6 @@
-use super::PluginSummary;
 use super::config::{ExternalPluginSpec, PluginConfigEntry};
 use super::startup::PluginStartupOptions;
+use super::{PluginSummary, PluginWebUiState, derive_plugin_web_ui_state};
 use anyhow::{Context, Result, bail};
 use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, default_store_root};
 use std::collections::BTreeMap;
@@ -9,6 +9,41 @@ use std::path::{Path, PathBuf};
 pub(crate) enum ConfiguredExternalPlugin {
     Active(ExternalPluginSpec),
     Inactive(PluginSummary),
+}
+
+pub(crate) fn configured_disabled_installed_plugin_summary(
+    entry: &PluginConfigEntry,
+) -> Option<PluginSummary> {
+    let metadata = installed_plugin_metadata_for_name(&entry.name)
+        .ok()
+        .flatten()?;
+    metadata
+        .manifest
+        .as_ref()
+        .and_then(|manifest| manifest.web_ui.as_ref())?;
+    Some(PluginSummary {
+        name: entry.name.clone(),
+        kind: "installed".to_string(),
+        enabled: false,
+        status: "disabled".to_string(),
+        pid: None,
+        version: Some(metadata.installed_version.clone()),
+        capabilities: Vec::new(),
+        command: Some(installed_plugin_command(&metadata).display().to_string()),
+        args: entry.args.clone(),
+        tools: Vec::new(),
+        manifest: None,
+        web_ui: derive_plugin_web_ui_state(super::PluginWebUiStateInput {
+            plugin_name: &entry.name,
+            live_manifest: None,
+            installed_metadata: Some(&metadata),
+            web_ui_enabled: entry.web_ui_enabled,
+            runtime_available: false,
+            runtime_unavailable_reason: Some("plugin process is disabled"),
+        }),
+        startup: None,
+        error: None,
+    })
 }
 
 pub(crate) fn configured_external_plugin_spec(
@@ -42,6 +77,10 @@ pub(crate) fn configured_external_plugin_spec(
         url: entry.url.clone(),
         env: BTreeMap::new(),
         startup,
+        web_ui_enabled: entry.web_ui_enabled,
+        installed_metadata: installed_plugin_metadata_for_name(&entry.name)
+            .ok()
+            .flatten(),
     }))
 }
 
@@ -106,6 +145,11 @@ fn installed_plugin_command_for_name(name: &str) -> Result<String> {
     Ok(command.display().to_string())
 }
 
+fn installed_plugin_metadata_for_name(name: &str) -> Result<Option<InstalledPluginMetadata>> {
+    let root = default_store_root().context("Cannot determine plugin install root")?;
+    PluginStore::new(root).load_optional(name)
+}
+
 fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSpec {
     ExternalPluginSpec {
         name: metadata.name.clone(),
@@ -114,6 +158,8 @@ fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSp
         url: None,
         env: BTreeMap::new(),
         startup: PluginStartupOptions::default(),
+        web_ui_enabled: None,
+        installed_metadata: Some(metadata.clone()),
     }
 }
 
@@ -134,6 +180,14 @@ fn optional_configured_plugin_summary(
         args: entry.args.clone(),
         tools: Vec::new(),
         manifest: None,
+        web_ui: derive_plugin_web_ui_state(super::PluginWebUiStateInput {
+            plugin_name: &entry.name,
+            live_manifest: None,
+            installed_metadata: None,
+            web_ui_enabled: entry.web_ui_enabled,
+            runtime_available: false,
+            runtime_unavailable_reason: Some("optional plugin is not loaded"),
+        }),
         startup: Some(startup.summary()),
         error: Some(format!("optional plugin not loaded: {error}")),
     }
@@ -174,6 +228,7 @@ fn installed_store_error_summary(error: anyhow::Error) -> PluginSummary {
         args: Vec::new(),
         tools: Vec::new(),
         manifest: None,
+        web_ui: PluginWebUiState::default(),
         startup: None,
         error: Some(error.to_string()),
     }
@@ -196,6 +251,14 @@ fn installed_plugin_summary(
         args: Vec::new(),
         tools: Vec::new(),
         manifest: None,
+        web_ui: derive_plugin_web_ui_state(super::PluginWebUiStateInput {
+            plugin_name: &metadata.name,
+            live_manifest: None,
+            installed_metadata: Some(metadata),
+            web_ui_enabled: None,
+            runtime_available: false,
+            runtime_unavailable_reason: Some("plugin process is not running"),
+        }),
         startup: None,
         error,
     }

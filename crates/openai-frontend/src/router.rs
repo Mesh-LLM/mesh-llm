@@ -644,6 +644,7 @@ mod tests {
                         finish_reason: Some(FinishReason::ToolCalls),
                     }],
                     usage: Usage::new(3, 2),
+                    timings: None,
                 });
             }
             Ok(ChatCompletionResponse::new(

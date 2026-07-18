@@ -55,6 +55,9 @@ struct CatalogTargetIndex {
     canonical_ref_by_model_name: HashMap<String, String>,
     model_name_by_ref: HashMap<String, String>,
     display_name_by_ref: HashMap<String, String>,
+    /// Filename-derived labels for synthetic `local-gguf/...` refs from the
+    /// local inventory, used when no catalog display name exists.
+    local_display_name_by_ref: HashMap<String, String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,7 +87,7 @@ impl MeshApi {
     }
 
     pub(crate) async fn model_target_lookup(&self) -> ModelTargetLookup {
-        let (node, local_interests) = {
+        let (node, local_interests, local_display_names) = {
             let inner = self.inner.lock().await;
             (
                 inner.node.clone(),
@@ -93,6 +96,10 @@ impl MeshApi {
                     .values()
                     .cloned()
                     .collect::<Vec<LocalModelInterest>>(),
+                inner
+                    .runtime_data_collector
+                    .local_inventory_snapshot()
+                    .display_name_by_name,
             )
         };
 
@@ -107,6 +114,7 @@ impl MeshApi {
 
         build_model_target_lookup(ModelTargetSource {
             local_interests,
+            local_display_names,
             node_explicit_model_interests,
             peers,
             catalog,
@@ -122,6 +130,7 @@ impl MeshApi {
 
 struct ModelTargetSource {
     local_interests: Vec<LocalModelInterest>,
+    local_display_names: HashMap<String, String>,
     node_explicit_model_interests: Vec<String>,
     peers: Vec<mesh::PeerInfo>,
     catalog: Vec<mesh::MeshCatalogEntry>,
@@ -134,7 +143,8 @@ struct ModelTargetSource {
 }
 
 fn build_model_target_lookup(source: ModelTargetSource) -> ModelTargetLookup {
-    let index = build_catalog_target_index(&source.catalog);
+    let mut index = build_catalog_target_index(&source.catalog);
+    index.local_display_name_by_ref = source.local_display_names;
     let serving_count_by_ref =
         collect_serving_counts(&source.my_hosted_models, &source.peers, &index);
     let mut targets = HashMap::<ModelTargetKey, ModelTargetAccumulator>::new();
@@ -455,11 +465,17 @@ fn loaded_catalog_display_name(model_name: &str) -> String {
 }
 
 fn display_name_for_model_ref(model_ref: &str, index: &CatalogTargetIndex) -> String {
+    if let Some(display_name) = index.display_name_by_ref.get(model_ref) {
+        return display_name.clone();
+    }
+    if let Some(display_name) = crate::models::loaded_remote_catalog_display_name(model_ref) {
+        return display_name;
+    }
     index
-        .display_name_by_ref
+        .local_display_name_by_ref
         .get(model_ref)
         .cloned()
-        .unwrap_or_else(|| crate::models::installed_model_display_name(model_ref))
+        .unwrap_or_else(|| model_ref.to_string())
 }
 
 fn model_name_for_model_ref(model_ref: &str, index: &CatalogTargetIndex) -> Option<String> {
@@ -552,6 +568,59 @@ mod tests {
             serving_node_count: 0,
             requested: false,
         }
+    }
+
+    #[test]
+    fn display_name_falls_back_to_local_inventory_label_for_synthetic_refs() {
+        let synthetic_ref = "local-gguf/sha256-66243256b95c5f7c";
+        let lookup = build_model_target_lookup(ModelTargetSource {
+            local_interests: vec![LocalModelInterest {
+                model_ref: synthetic_ref.to_string(),
+                submission_source: None,
+                created_at_unix: 1,
+                updated_at_unix: 1,
+            }],
+            local_display_names: HashMap::from([(
+                synthetic_ref.to_string(),
+                "MyModel-7B-Q4_K_M".to_string(),
+            )]),
+            node_explicit_model_interests: Vec::new(),
+            peers: Vec::new(),
+            catalog: Vec::new(),
+            active_demand: HashMap::new(),
+            requested_models: Vec::new(),
+            my_hosted_models: Vec::new(),
+            local_role: mesh::NodeRole::Worker,
+            local_vram_bytes: 0,
+            now: 1,
+        });
+
+        assert_eq!(
+            lookup.by_model_ref[synthetic_ref].display_name,
+            "MyModel-7B-Q4_K_M"
+        );
+
+        // Catalog display names still win when present.
+        let index = CatalogTargetIndex {
+            display_name_by_ref: HashMap::from([(
+                synthetic_ref.to_string(),
+                "Catalog Name".to_string(),
+            )]),
+            local_display_name_by_ref: HashMap::from([(
+                synthetic_ref.to_string(),
+                "MyModel-7B-Q4_K_M".to_string(),
+            )]),
+            ..CatalogTargetIndex::default()
+        };
+        assert_eq!(
+            display_name_for_model_ref(synthetic_ref, &index),
+            "Catalog Name"
+        );
+        // Refs with no label anywhere fall back to the ref itself.
+        assert_eq!(
+            display_name_for_model_ref("unknown/ref", &index),
+            "unknown/ref"
+        );
     }
 
     #[test]

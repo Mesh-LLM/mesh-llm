@@ -26,6 +26,20 @@ const featureFlagMocks = vi.hoisted(() => ({
   signingAttestationEnabled: false,
   wakePolicyConfigurationEnabled: false
 }))
+const pluginQueryMocks = vi.hoisted(() => ({
+  summaries: [] as import('@/lib/api/plugin-types').PluginSummaryRaw[],
+  toggle: vi.fn(),
+  importBundle: vi.fn(),
+  register: vi.fn(),
+  mountConfig: vi.fn(),
+  unmountConfig: vi.fn(),
+  visibleConfig: {
+    plugin: 'blackboard',
+    settings: { endpoint_url: 'https://blackboard.local/v1', retention_days: 30 },
+    schema: { plugin_name: 'blackboard' }
+  },
+  mutateConfig: vi.fn()
+}))
 
 vi.mock('@tanstack/react-router', () => ({
   useBlocker: mockUseBlocker
@@ -45,12 +59,46 @@ vi.mock('@/lib/feature-flags', async (importOriginal) => {
   }
 })
 
+vi.mock('@/features/plugins/api/plugin-web-ui', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/plugins/api/plugin-web-ui')>()
+
+  return {
+    ...actual,
+    usePluginSummariesQuery: vi.fn(() => ({
+      data: pluginQueryMocks.summaries,
+      isError: false,
+      isPending: false
+    })),
+    useSetPluginWebUiEnabledMutation: vi.fn(() => ({
+      isPending: false,
+      mutate: pluginQueryMocks.toggle
+    })),
+    usePluginWebUiConfigQuery: vi.fn((pluginName: string) => ({
+      data: { ...pluginQueryMocks.visibleConfig, plugin: pluginName },
+      isError: false,
+      isPending: false
+    })),
+    usePluginWebUiConfigMutation: vi.fn((pluginName: string) => ({
+      isPending: false,
+      mutateAsync: (request: unknown) => pluginQueryMocks.mutateConfig(pluginName, request)
+    }))
+  }
+})
+
+vi.mock('@/features/plugins/web-ui/bundle-loader', () => ({
+  importPluginUiBundle: pluginQueryMocks.importBundle,
+  assertPluginUiRegistration: vi.fn(),
+  assertPluginUiMountHandle: vi.fn()
+}))
+
 import {
   ConfigurationFixturePage as ConfigurationPage,
   ConfigurationPage as LiveConfigurationPage
 } from '@/features/configuration/pages/ConfigurationPage'
 import { CONFIGURATION_HARNESS } from '@/features/app-tabs/data'
 import type { DataMode } from '@/lib/data-mode/data-mode-context'
+import type { MeshPluginUiConfigMountContext, MeshPluginUiMountHandle } from '@/features/plugins/web-ui/host-contract'
+import type { PluginSummaryRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
 
 function TestProviders({ children, dataMode = 'harness' }: { children: ReactNode; dataMode?: DataMode }) {
   return (
@@ -185,6 +233,93 @@ function integrationsOnlyConfigurationData(): ConfigurationHarnessData {
   return { ...data, integrations: plugins }
 }
 
+type PluginSummaryOptions = {
+  readonly description?: string
+  readonly enabled?: boolean
+  readonly status?: string
+}
+
+function pluginSummary(name: string, webUi: PluginWebUiStateRaw, options: PluginSummaryOptions = {}): PluginSummaryRaw {
+  return {
+    name,
+    kind: 'bridge',
+    enabled: options.enabled ?? true,
+    status: options.status ?? 'running',
+    description: options.description,
+    capabilities: [],
+    args: [],
+    tools: [],
+    web_ui: webUi
+  }
+}
+
+function readyPluginWebUi(
+  section: { readonly parent_tab?: string } = { parent_tab: 'integrations' }
+): PluginWebUiStateRaw {
+  return {
+    state: 'ready',
+    declared: true,
+    enabled: true,
+    available: true,
+    pages: [
+      {
+        id: 'dashboard',
+        label: 'Dashboard',
+        route: 'dashboard',
+        bundle_id: 'main',
+        entry_script: 'dashboard.js'
+      }
+    ],
+    config_sections: [
+      {
+        id: 'settings',
+        title: 'Settings',
+        entry_script: 'settings.js',
+        parent_tab: section.parent_tab,
+        bundle_id: 'main'
+      }
+    ],
+    asset_base_url: '/api/plugins/blackboard/web-ui/assets/'
+  }
+}
+
+function disabledPluginWebUi(): PluginWebUiStateRaw {
+  return {
+    ...readyPluginWebUi(),
+    state: 'disabled',
+    enabled: false,
+    available: false,
+    unavailable_reason: 'web UI disabled by configuration'
+  }
+}
+
+function invalidPluginWebUi(): PluginWebUiStateRaw {
+  return {
+    ...readyPluginWebUi(),
+    state: 'invalid',
+    available: false,
+    unavailable_reason: 'bundle missing'
+  }
+}
+
+function pluginNotRunningWebUi(): PluginWebUiStateRaw {
+  return {
+    ...readyPluginWebUi(),
+    state: 'plugin_not_running',
+    available: false,
+    unavailable_reason: 'plugin process unavailable'
+  }
+}
+
+function nonePluginWebUi(): PluginWebUiStateRaw {
+  return {
+    state: 'none',
+    declared: false,
+    enabled: false,
+    available: false
+  }
+}
+
 describe('ConfigurationPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -192,6 +327,39 @@ describe('ConfigurationPage', () => {
     featureFlagMocks.integrationsEnabled = false
     featureFlagMocks.signingAttestationEnabled = false
     featureFlagMocks.wakePolicyConfigurationEnabled = false
+    pluginQueryMocks.summaries = []
+    pluginQueryMocks.visibleConfig = {
+      plugin: 'blackboard',
+      settings: { endpoint_url: 'https://blackboard.local/v1', retention_days: 30 },
+      schema: { plugin_name: 'blackboard' }
+    }
+    pluginQueryMocks.mutateConfig.mockResolvedValue(pluginQueryMocks.visibleConfig)
+    pluginQueryMocks.importBundle.mockResolvedValue({ registerMeshPluginUi: pluginQueryMocks.register })
+    pluginQueryMocks.register.mockReturnValue({ configSections: { settings: pluginQueryMocks.mountConfig } })
+    pluginQueryMocks.mountConfig.mockImplementation(
+      ({ element, host, section }: MeshPluginUiConfigMountContext): MeshPluginUiMountHandle => {
+        const node = document.createElement('div')
+        node.textContent = `Mounted ${host.plugin.name} ${section.id}`
+        const setting = document.createElement('output')
+        setting.textContent = String(host.config.visible.settings.endpoint_url)
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.textContent = 'Save retention'
+        button.addEventListener('click', () => {
+          void host.config.requestMutation({
+            plugin: host.plugin.name,
+            settings: { retention_days: 45 }
+          })
+        })
+        element.append(node, setting, button)
+        return {
+          unmount: () => {
+            pluginQueryMocks.unmountConfig()
+            node.remove()
+          }
+        }
+      }
+    )
     mockUseBlocker.mockImplementation(
       ({ shouldBlockFn }: { shouldBlockFn: (transition: typeof defaultBlockerTransition) => boolean }) =>
         shouldBlockFn(defaultBlockerTransition) ? blockedBlocker : idleBlocker
@@ -543,6 +711,173 @@ describe('ConfigurationPage', () => {
     expect(pluginsTab).not.toHaveAttribute('data-tab-dirty')
     expect(saveButton).toBeDisabled()
 
+    useConfigQuerySpy.mockRestore()
+  })
+
+  it('projects ready plugin web UI metadata, toggle, config section, and schema settings into Plugins', async () => {
+    const user = userEvent.setup()
+    const config = pluginOnlyMeshConfig()
+    featureFlagMocks.integrationsEnabled = true
+    pluginQueryMocks.summaries = [
+      pluginSummary('blackboard', readyPluginWebUi(), { description: 'Team scratchpad plugin' })
+    ]
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: pluginOnlyConfigurationData(config),
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: {
+          ...liveControlConfigData(),
+          schema: PLUGIN_ONLY_SCHEMA,
+          snapshot: { revision: 7, config }
+        },
+        isError: false,
+        isFetching: false,
+        isPending: false
+      } as never,
+      applyDefaults: vi.fn()
+    })
+
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />, { dataMode: 'live' })
+
+    expect(await screen.findByRole('heading', { name: 'blackboard' })).toBeInTheDocument()
+    const settingsBannerHeading = screen.getByRole('heading', { name: 'Plugin settings' })
+    const installedPluginsHeading = screen.getByRole('heading', { name: 'Installed plugins' })
+    expect(
+      settingsBannerHeading.compareDocumentPosition(installedPluginsHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(screen.getByText('Team scratchpad plugin')).toBeInTheDocument()
+    expect(screen.getByText('Process enabled')).toBeInTheDocument()
+    expect(screen.getByText('running')).toBeInTheDocument()
+    expect(screen.getByText('Web UI ready')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
+    expect(await screen.findByText('Mounted blackboard settings')).toBeInTheDocument()
+    expect(screen.getByText('https://blackboard.local/v1')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Endpoint URL' })).toHaveValue('https://blackboard.local/v1')
+
+    const toggle = screen.getByRole('switch', { name: 'blackboard web UI projection' })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+    await user.click(toggle)
+
+    expect(pluginQueryMocks.toggle).toHaveBeenCalledWith(false)
+    await user.click(screen.getByRole('button', { name: 'Save retention' }))
+    await waitFor(() =>
+      expect(pluginQueryMocks.mutateConfig).toHaveBeenCalledWith('blackboard', {
+        plugin: 'blackboard',
+        settings: { retention_days: 45 }
+      })
+    )
+    expect(await screen.findByText('Plugin settings saved.')).toBeInTheDocument()
+    expect(pluginQueryMocks.importBundle).toHaveBeenCalledWith(
+      'http://localhost:3000/api/plugins/blackboard/web-ui/assets/settings.js'
+    )
+    expect(pluginQueryMocks.mountConfig).toHaveBeenCalledTimes(1)
+
+    useConfigQuerySpy.mockRestore()
+  })
+
+  it('keeps failure and nondeclaring plugin web UI states visible without mounting config sections', async () => {
+    const config = pluginOnlyMeshConfig()
+    featureFlagMocks.integrationsEnabled = true
+    pluginQueryMocks.summaries = [
+      pluginSummary('disabled-ui', disabledPluginWebUi()),
+      pluginSummary('invalid-ui', invalidPluginWebUi()),
+      pluginSummary('stopped-ui', pluginNotRunningWebUi()),
+      pluginSummary('legacy-plugin', nonePluginWebUi()),
+      pluginSummary('other-parent', readyPluginWebUi({ parent_tab: 'advanced' }))
+    ]
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: pluginOnlyConfigurationData(config),
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: {
+          ...liveControlConfigData(),
+          schema: PLUGIN_ONLY_SCHEMA,
+          snapshot: { revision: 7, config }
+        },
+        isError: false,
+        isFetching: false,
+        isPending: false
+      } as never,
+      applyDefaults: vi.fn()
+    })
+
+    render(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />, { dataMode: 'live' })
+
+    for (const name of ['disabled-ui', 'invalid-ui', 'stopped-ui', 'legacy-plugin', 'other-parent']) {
+      expect(screen.getByRole('heading', { name })).toBeInTheDocument()
+    }
+    expect(screen.getByText('web UI disabled by configuration')).toBeInTheDocument()
+    expect(screen.getByText('bundle missing')).toBeInTheDocument()
+    expect(screen.getByText('plugin process unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Web UI not declared')).toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'legacy-plugin web UI projection' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Mounted disabled-ui settings')).not.toBeInTheDocument()
+    expect(screen.queryByText('Mounted other-parent settings')).not.toBeInTheDocument()
+    expect(pluginQueryMocks.importBundle).not.toHaveBeenCalled()
+
+    useConfigQuerySpy.mockRestore()
+  })
+
+  it('unmounts plugin config sections on disable, tab change, and teardown', async () => {
+    const user = userEvent.setup()
+    const config = pluginOnlyMeshConfig()
+    featureFlagMocks.integrationsEnabled = true
+    pluginQueryMocks.summaries = [pluginSummary('blackboard', readyPluginWebUi())]
+    const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
+      data: pluginOnlyConfigurationData(config),
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      statusQuery: { refetch: vi.fn() } as never,
+      modelsQuery: { refetch: vi.fn() } as never,
+      controlConfigQuery: {
+        data: {
+          ...liveControlConfigData(),
+          schema: PLUGIN_ONLY_SCHEMA,
+          snapshot: { revision: 7, config }
+        },
+        isError: false,
+        isFetching: false,
+        isPending: false
+      } as never,
+      applyDefaults: vi.fn()
+    })
+    const { rerender, unmount } = render(
+      <LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />,
+      {
+        dataMode: 'live'
+      }
+    )
+
+    expect(await screen.findByText('Mounted blackboard settings')).toBeInTheDocument()
+
+    pluginQueryMocks.summaries = [pluginSummary('blackboard', disabledPluginWebUi())]
+    rerender(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />)
+
+    await waitFor(() => expect(screen.queryByText('Mounted blackboard settings')).not.toBeInTheDocument())
+    expect(pluginQueryMocks.unmountConfig).toHaveBeenCalledTimes(1)
+
+    pluginQueryMocks.summaries = [pluginSummary('blackboard', readyPluginWebUi())]
+    rerender(<LiveConfigurationPage enableNavigationBlocker={false} initialTab="plugins" />)
+    expect(await screen.findByText('Mounted blackboard settings')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Models' }))
+    await waitFor(() => expect(pluginQueryMocks.unmountConfig).toHaveBeenCalledTimes(2))
+
+    await user.click(screen.getByRole('tab', { name: 'Plugins' }))
+    expect(await screen.findByText('Mounted blackboard settings')).toBeInTheDocument()
+    unmount()
+
+    expect(pluginQueryMocks.unmountConfig).toHaveBeenCalledTimes(3)
     useConfigQuerySpy.mockRestore()
   })
 

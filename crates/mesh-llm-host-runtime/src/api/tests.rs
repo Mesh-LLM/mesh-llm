@@ -2709,6 +2709,43 @@ async fn management_mcp_endpoint_initializes_streamable_http_session() {
 }
 
 #[tokio::test]
+async fn management_mcp_endpoint_rejects_cross_origin_browser_requests() {
+    let state = build_test_mesh_api().await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let response = send_management_request(
+        addr,
+        "POST /mcp HTTP/1.1\r\n\
+         Host: localhost\r\n\
+         Origin: https://attacker.example\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: 2\r\n\r\n{}"
+            .to_string(),
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn management_mcp_endpoint_rejects_dns_rebinding_host_headers() {
+    let state = build_test_mesh_api().await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let response = send_management_request(
+        addr,
+        "POST /mcp HTTP/1.1\r\n\
+         Host: attacker.example\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: 2\r\n\r\n{}"
+            .to_string(),
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn runtime_data_sse_bridge_delivers_initial_and_incremental_updates() {
     let state = build_test_mesh_api().await;
     let (addr, handle) = spawn_management_test_server(state.clone()).await;
@@ -4145,6 +4182,7 @@ fn headless_mode_disables_ui_routes_but_preserves_api() {
     assert!(is_ui_only_route("/chat"));
     assert!(is_ui_only_route("/configuration"));
     assert!(is_ui_only_route("/configuration/defaults"));
+    assert!(is_ui_only_route("/plugins/web-ui-exemplar/overview"));
 
     assert!(!is_ui_only_route("/api/status"));
     assert!(!is_ui_only_route("/api/events"));
@@ -4160,6 +4198,7 @@ fn headless_mode_returns_404_for_assets_and_dashboard_routes() {
     assert!(is_ui_only_route("/chat/some-room"));
     assert!(is_ui_only_route("/configuration/"));
     assert!(is_ui_only_route("/configuration/toml-review"));
+    assert!(is_ui_only_route("/plugins/web-ui-exemplar/overview"));
     assert!(is_ui_only_route("/assets/main.js"));
     assert!(is_ui_only_route("/assets/index-abc123.css"));
     assert!(is_ui_only_route("/favicon.ico"));

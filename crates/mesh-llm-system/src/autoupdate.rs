@@ -9,6 +9,12 @@ use std::path::{Path, PathBuf};
 use crate::backend;
 use crate::release_target::ReleaseTarget;
 
+mod release_integrity;
+
+use release_integrity::{
+    ReleaseAsset, github_release_asset_sha256, release_asset, verify_release_asset_bytes,
+};
+
 const DEFAULT_RELEASE_REPO: &str = "Mesh-LLM/mesh-llm";
 #[cfg(not(windows))]
 const INSTALL_SCRIPT_URL: &str =
@@ -35,7 +41,7 @@ enum PostInstallAction {
 struct ReleaseInfo {
     tag: String,
     version: String,
-    assets: Vec<String>,
+    assets: Vec<ReleaseAsset>,
 }
 
 struct UpdateTarget {
@@ -93,7 +99,7 @@ pub async fn check_for_update(current_version: &str) {
             })
         });
         match bundle_asset {
-            Some(ref asset) if release.assets.iter().any(|a| a == asset) => {
+            Some(ref asset) if release.assets.iter().any(|a| &a.name == asset) => {
                 eprintln!(
                     "✨ New version: v{current_version} -> v{}. Run 'mesh-llm update'.",
                     release.version
@@ -460,7 +466,7 @@ fn resolve_release_asset_name(
             release
                 .assets
                 .iter()
-                .any(|candidate| candidate == asset_name)
+                .any(|candidate| candidate.name == *asset_name)
         })
 }
 
@@ -769,7 +775,11 @@ fn release_info_from_json(body: &serde_json::Value) -> Option<ReleaseInfo> {
         .map(|items| {
             items
                 .iter()
-                .filter_map(|item| item["name"].as_str().map(str::to_string))
+                .filter_map(|item| {
+                    let name = item["name"].as_str()?.to_string();
+                    let sha256 = github_release_asset_sha256(item)?;
+                    Some(ReleaseAsset { name, sha256 })
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -880,7 +890,14 @@ async fn install_latest_bundle(
         .with_context(|| format!("Failed to create update workspace {}", workspace.display()))?;
 
     let result = async {
-        download_url(&release_asset_url(&release.tag, asset_name), &archive).await?;
+        let asset = release_asset(release, asset_name)
+            .with_context(|| format!("Release asset metadata missing for {asset_name}"))?;
+        download_url(
+            &release_asset_url(&release.tag, asset_name),
+            &archive,
+            &asset.sha256,
+        )
+        .await?;
         extract_bundle_archive(&archive, &extracted)?;
         let staged_files = collect_bundle_files(&extracted, expected_flavor)?;
         verify_staged_mesh_binary_version(&extracted, &release.version)?;
@@ -910,10 +927,14 @@ async fn install_native_runtime_after_update(
     release: &ReleaseInfo,
     workspace: &Path,
 ) {
+    let Some(asset) = release_asset(release, "native-runtimes.json") else {
+        return;
+    };
     let manifest_path = workspace.join("native-runtimes.json");
     match download_optional_url(
         &release_asset_url(&release.tag, "native-runtimes.json"),
         &manifest_path,
+        &asset.sha256,
     )
     .await
     {
@@ -960,7 +981,7 @@ async fn install_native_runtime_after_update(
 ) {
 }
 
-async fn download_optional_url(url: &str, path: &Path) -> Result<bool> {
+async fn download_optional_url(url: &str, path: &Path, expected_sha256: &str) -> Result<bool> {
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
@@ -979,12 +1000,14 @@ async fn download_optional_url(url: &str, path: &Path) -> Result<bool> {
         .bytes()
         .await
         .with_context(|| format!("Read optional release asset body from {url}"))?;
+    verify_release_asset_bytes(&bytes, expected_sha256)
+        .with_context(|| format!("Verify optional release asset {url}"))?;
     std::fs::write(path, &bytes)
         .with_context(|| format!("Write optional release asset {}", path.display()))?;
     Ok(true)
 }
 
-async fn download_url(url: &str, path: &Path) -> Result<()> {
+async fn download_url(url: &str, path: &Path, expected_sha256: &str) -> Result<()> {
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()
@@ -1000,6 +1023,8 @@ async fn download_url(url: &str, path: &Path) -> Result<()> {
         .bytes()
         .await
         .with_context(|| format!("Read release asset body from {url}"))?;
+    verify_release_asset_bytes(&bytes, expected_sha256)
+        .with_context(|| format!("Verify release asset {url}"))?;
     std::fs::write(path, &bytes)
         .with_context(|| format!("Write release asset {}", path.display()))?;
     Ok(())
@@ -1517,6 +1542,13 @@ mod tests {
         path
     }
 
+    fn test_release_asset(name: impl Into<String>) -> ReleaseAsset {
+        ReleaseAsset {
+            name: name.into(),
+            sha256: "a".repeat(64),
+        }
+    }
+
     #[test]
     fn test_version_newer() {
         assert!(version_newer("0.33.1", "0.33.0"));
@@ -1657,7 +1689,9 @@ mod tests {
         let release = ReleaseInfo {
             tag: "v0.60.0".to_string(),
             version: "0.60.0".to_string(),
-            assets: vec!["mesh-llm-v0.60.0-x86_64-pc-windows-msvc.zip".to_string()],
+            assets: vec![test_release_asset(
+                "mesh-llm-v0.60.0-x86_64-pc-windows-msvc.zip",
+            )],
         };
         assert!(release_has_any_platform_asset(
             &release, "windows", "x86_64"
@@ -1686,7 +1720,7 @@ mod tests {
         let published_release = ReleaseInfo {
             tag: "v0.60.0".to_string(),
             version: "0.60.0".to_string(),
-            assets: vec![stable_asset],
+            assets: vec![test_release_asset(stable_asset)],
         };
         assert!(release_has_any_platform_asset(
             &published_release,
@@ -1725,8 +1759,8 @@ mod tests {
             tag: "v0.60.0".to_string(),
             version: "0.60.0".to_string(),
             assets: vec![
-                "mesh-llm-aarch64-unknown-linux-gnu.tar.gz".to_string(),
-                "mesh-llm-v0.60.0-aarch64-unknown-linux-gnu.tar.gz".to_string(),
+                test_release_asset("mesh-llm-aarch64-unknown-linux-gnu.tar.gz"),
+                test_release_asset("mesh-llm-v0.60.0-aarch64-unknown-linux-gnu.tar.gz"),
             ],
         };
 
@@ -1745,7 +1779,9 @@ mod tests {
         let release = ReleaseInfo {
             tag: "v0.60.0".to_string(),
             version: "0.60.0".to_string(),
-            assets: vec!["mesh-llm-v0.60.0-aarch64-unknown-linux-gnu.tar.gz".to_string()],
+            assets: vec![test_release_asset(
+                "mesh-llm-v0.60.0-aarch64-unknown-linux-gnu.tar.gz",
+            )],
         };
 
         assert_eq!(
@@ -1764,8 +1800,8 @@ mod tests {
             tag: "v0.60.0".to_string(),
             version: "0.60.0".to_string(),
             assets: vec![
-                "mesh-llm-aarch64-unknown-linux-gnu.tar.gz".to_string(),
-                "mesh-llm-v0.60.0-aarch64-unknown-linux-gnu.tar.gz".to_string(),
+                test_release_asset("mesh-llm-aarch64-unknown-linux-gnu.tar.gz"),
+                test_release_asset("mesh-llm-v0.60.0-aarch64-unknown-linux-gnu.tar.gz"),
             ],
         };
 
@@ -1784,7 +1820,9 @@ mod tests {
         let release = ReleaseInfo {
             tag: "v0.60.0".to_string(),
             version: "0.60.0".to_string(),
-            assets: vec!["mesh-llm-aarch64-unknown-linux-gnu.tar.gz".to_string()],
+            assets: vec![test_release_asset(
+                "mesh-llm-aarch64-unknown-linux-gnu.tar.gz",
+            )],
         };
 
         assert_eq!(

@@ -3,8 +3,9 @@ use super::plugin_manifest_overview;
 use super::support::{plugin_error, serialize_params, summarize_capabilities};
 use super::transport::{LocalListener, LocalStream, bind_local_listener, connection_loop};
 use super::{
-    PROTOCOL_VERSION, PluginMeshEvent, PluginRpcBridge, PluginSummary, REQUEST_TIMEOUT_SECS,
-    ToolCallResult, ToolSummary, proto,
+    PROTOCOL_VERSION, PluginMeshEvent, PluginRpcBridge, PluginSummary, PluginWebUiState,
+    PluginWebUiStateInput, REQUEST_TIMEOUT_SECS, ToolCallResult, ToolSummary,
+    derive_plugin_web_ui_state, proto,
 };
 use crate::runtime_data::RuntimeDataProducer;
 use anyhow::{Context, Result, bail};
@@ -12,6 +13,7 @@ use mesh_llm_plugin::{MeshVisibility, STARTUP_DISABLED_ERROR_CODE};
 use rmcp::model::{InitializeRequestParams, ServerInfo};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::process::{Child, Command};
@@ -19,6 +21,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 pub(crate) struct ExternalPlugin {
     spec: ExternalPluginSpec,
+    web_ui_enabled: Arc<Mutex<Option<bool>>>,
     instance_id: String,
     host_mode: PluginHostMode,
     summary: Arc<Mutex<PluginSummary>>,
@@ -53,6 +56,7 @@ impl ExternalPlugin {
     ) -> Result<Self> {
         let plugin = Self {
             spec: spec.clone(),
+            web_ui_enabled: Arc::new(Mutex::new(spec.web_ui_enabled)),
             instance_id,
             host_mode,
             summary: Arc::new(Mutex::new(PluginSummary {
@@ -67,6 +71,7 @@ impl ExternalPlugin {
                 args: spec.args.clone(),
                 tools: Vec::new(),
                 manifest: None,
+                web_ui: PluginWebUiState::default(),
                 startup: Some(spec.startup.summary()),
                 error: None,
             })),
@@ -99,13 +104,27 @@ impl ExternalPlugin {
 
     pub(crate) async fn summary(&self) -> PluginSummary {
         let mut summary = self.summary.lock().await.clone();
-        summary.manifest = self
-            .manifest
-            .lock()
-            .await
-            .as_ref()
-            .map(plugin_manifest_overview);
+        let manifest = self.manifest.lock().await.clone();
+        summary.manifest = manifest.as_ref().map(plugin_manifest_overview);
+        summary.web_ui = derive_plugin_web_ui_state(PluginWebUiStateInput {
+            plugin_name: &self.spec.name,
+            live_manifest: manifest.as_ref(),
+            installed_metadata: self.spec.installed_metadata.as_ref(),
+            web_ui_enabled: *self.web_ui_enabled.lock().await,
+            runtime_available: summary.status == "running",
+            runtime_unavailable_reason: summary.error.as_deref(),
+        });
         summary
+    }
+
+    pub(crate) async fn set_web_ui_enabled(&self, enabled: bool) -> PluginWebUiState {
+        *self.web_ui_enabled.lock().await = Some(enabled);
+        self.publish_summary().await;
+        self.summary().await.web_ui
+    }
+
+    pub(crate) fn web_ui_asset_root(&self) -> Option<PathBuf> {
+        plugin_web_ui_asset_root(&self.spec)
     }
 
     async fn publish_summary(&self) {
@@ -157,6 +176,10 @@ impl ExternalPlugin {
         }
         for (key, value) in &self.spec.env {
             child.env(key, value);
+        }
+        child.env_remove("MESH_LLM_PLUGIN_WEB_UI_DIR");
+        if let Some(asset_root) = plugin_web_ui_asset_root(&self.spec) {
+            child.env("MESH_LLM_PLUGIN_WEB_UI_DIR", asset_root);
         }
         child.stdin(std::process::Stdio::null());
         child.stdout(std::process::Stdio::null());
@@ -488,6 +511,8 @@ impl ExternalPlugin {
         summary.capabilities.clear();
         summary.tools.clear();
         summary.error = None;
+        drop(summary);
+        self.publish_summary().await;
     }
 
     pub(crate) async fn call_tool(
@@ -853,5 +878,352 @@ fn proto_mesh_visibility(mesh_visibility: MeshVisibility) -> i32 {
     match mesh_visibility {
         MeshVisibility::Private => proto::MeshVisibility::Private as i32,
         MeshVisibility::Public => proto::MeshVisibility::Public as i32,
+    }
+}
+
+fn plugin_web_ui_asset_root(spec: &ExternalPluginSpec) -> Option<PathBuf> {
+    spec.installed_metadata
+        .as_ref()
+        .and_then(mesh_llm_plugin_manager::InstalledPluginMetadata::web_ui_asset_root_path)
+        .filter(|path| path.is_dir())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime_data::{PluginDataKey, RuntimeDataCollector, RuntimeDataSource};
+    use mesh_llm_plugin::MeshVisibility;
+    use mesh_llm_plugin_manager::store::{
+        InstalledPluginManifestMetadata, InstalledPluginMetadata,
+        InstalledPluginWebUiBundleMetadata, InstalledPluginWebUiConfigSectionMetadata,
+        InstalledPluginWebUiMetadata, InstalledPluginWebUiPageMetadata,
+        InstalledPluginWebUiValidation, InstalledPluginWebUiValidationStatus,
+    };
+    use std::collections::BTreeMap;
+    use std::ffi::OsStr;
+    use tempfile::TempDir;
+
+    fn test_host_mode() -> PluginHostMode {
+        PluginHostMode {
+            mesh_visibility: MeshVisibility::Private,
+        }
+    }
+
+    fn installed_metadata_with_web_ui(
+        install_path: PathBuf,
+        validation_status: InstalledPluginWebUiValidationStatus,
+        asset_root: Option<&str>,
+    ) -> InstalledPluginMetadata {
+        if let Some(asset_root) = asset_root {
+            std::fs::create_dir_all(install_path.join(asset_root)).unwrap();
+        }
+        InstalledPluginMetadata {
+            name: "demo".into(),
+            source_repository: "https://github.com/mesh-llm/demo".into(),
+            installed_version: "v1.0.0".into(),
+            target_triple: "test-target".into(),
+            downloaded_asset_name: "demo.tar.gz".into(),
+            install_path,
+            enabled: true,
+            manifest: Some(InstalledPluginManifestMetadata {
+                config_schema: None,
+                web_ui: Some(InstalledPluginWebUiMetadata {
+                    pages: vec![InstalledPluginWebUiPageMetadata {
+                        id: "home".into(),
+                        label: "Home".into(),
+                        icon: Some("icons/home.svg".into()),
+                        route: "index.html".into(),
+                        bundle_id: "main".into(),
+                        entry_script: "assets/app.js".into(),
+                    }],
+                    config_sections: vec![InstalledPluginWebUiConfigSectionMetadata {
+                        id: "settings".into(),
+                        title: "Settings".into(),
+                        entry_script: "assets/settings.js".into(),
+                        parent_tab: Some("integrations".into()),
+                        bundle_id: "main".into(),
+                    }],
+                    bundles: vec![InstalledPluginWebUiBundleMetadata {
+                        id: "main".into(),
+                        root_path: "web".into(),
+                    }],
+                    asset_root: asset_root.map(PathBuf::from),
+                    validation: InstalledPluginWebUiValidation {
+                        status: validation_status,
+                        reason: Some("bundle failed validation".into()),
+                    },
+                }),
+            }),
+            last_protocol_version: Some(1),
+            last_status: Some("running".into()),
+            last_error: None,
+        }
+    }
+
+    fn plugin_spec(
+        temp_dir: &TempDir,
+        web_ui_enabled: Option<bool>,
+        validation_status: InstalledPluginWebUiValidationStatus,
+        asset_root: Option<&str>,
+    ) -> ExternalPluginSpec {
+        ExternalPluginSpec {
+            name: "demo".into(),
+            command: "mesh-llm-plugin-demo".into(),
+            args: Vec::new(),
+            url: None,
+            env: BTreeMap::new(),
+            startup: Default::default(),
+            web_ui_enabled,
+            installed_metadata: Some(installed_metadata_with_web_ui(
+                temp_dir.path().to_path_buf(),
+                validation_status,
+                asset_root,
+            )),
+        }
+    }
+
+    fn plugin_for_spec(spec: ExternalPluginSpec) -> ExternalPlugin {
+        plugin_for_spec_with_runtime_data(spec).0
+    }
+
+    fn plugin_for_spec_with_runtime_data(
+        spec: ExternalPluginSpec,
+    ) -> (ExternalPlugin, RuntimeDataCollector) {
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+        let runtime_data = RuntimeDataCollector::new();
+        let plugin_name = spec.name.clone();
+        let web_ui_enabled = spec.web_ui_enabled;
+        let plugin = ExternalPlugin {
+            summary: Arc::new(Mutex::new(PluginSummary {
+                name: spec.name.clone(),
+                kind: "external".into(),
+                enabled: true,
+                status: "starting".into(),
+                pid: None,
+                version: None,
+                capabilities: Vec::new(),
+                command: Some(spec.command.clone()),
+                args: spec.args.clone(),
+                tools: Vec::new(),
+                manifest: None,
+                web_ui: PluginWebUiState::default(),
+                startup: Some(spec.startup.summary()),
+                error: None,
+            })),
+            spec,
+            web_ui_enabled: Arc::new(Mutex::new(web_ui_enabled)),
+            instance_id: "test-instance".into(),
+            host_mode: test_host_mode(),
+            server_info: Arc::new(Mutex::new(None)),
+            manifest: Arc::new(Mutex::new(None)),
+            runtime: Arc::new(Mutex::new(None)),
+            mesh_tx,
+            rpc_bridge: Arc::new(Mutex::new(None)),
+            runtime_data_producer: runtime_data.producer(RuntimeDataSource {
+                scope: "test",
+                plugin_data_key: Some(PluginDataKey {
+                    plugin_name,
+                    data_key: "summary".into(),
+                }),
+                plugin_endpoint_key: None,
+            }),
+            restart_lock: Arc::new(Mutex::new(())),
+            next_request_id: AtomicU64::new(1),
+            next_generation: AtomicU64::new(1),
+        };
+        (plugin, runtime_data)
+    }
+
+    fn command_env_value(command: &Command, key: &str) -> Option<String> {
+        command
+            .as_std()
+            .get_envs()
+            .find(|(name, _value)| *name == OsStr::new(key))
+            .and_then(|(_name, value)| value.map(|value| value.to_string_lossy().into_owned()))
+    }
+
+    fn command_env_is_removed(command: &Command, key: &str) -> bool {
+        command
+            .as_std()
+            .get_envs()
+            .any(|(name, value)| name == OsStr::new(key) && value.is_none())
+    }
+
+    #[cfg(unix)]
+    fn sleeping_test_command() -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 60"]);
+        command
+    }
+
+    #[cfg(windows)]
+    fn sleeping_test_command() -> Command {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "ping -n 61 127.0.0.1 >NUL"]);
+        command
+    }
+
+    async fn mark_plugin_running(plugin: &ExternalPlugin, generation: u64) {
+        let child = sleeping_test_command()
+            .kill_on_drop(true)
+            .spawn()
+            .expect("sleep process should start for runtime lifecycle test");
+        let pid = child.id();
+        let (outbound_tx, _outbound_rx) = mpsc::channel(1);
+        *plugin.runtime.lock().await = Some(PluginRuntime {
+            generation,
+            _child: child,
+            outbound_tx,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        });
+        let mut summary = plugin.summary.lock().await;
+        summary.status = "running".into();
+        summary.pid = pid;
+        summary.version = Some("v1.0.0".into());
+        summary.capabilities = vec!["operation:echo".into()];
+        summary.error = None;
+    }
+
+    #[test]
+    fn child_env_includes_valid_package_web_ui_asset_root() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let asset_root = temp_dir.path().join("web");
+        std::fs::create_dir(&asset_root).expect("asset root should be created");
+        let plugin = plugin_for_spec(plugin_spec(
+            &temp_dir,
+            None,
+            InstalledPluginWebUiValidationStatus::Valid,
+            Some("web"),
+        ));
+
+        let command = plugin.configured_child_command("endpoint", "unix");
+
+        assert_eq!(
+            command_env_value(&command, "MESH_LLM_PLUGIN_WEB_UI_DIR"),
+            Some(asset_root.display().to_string())
+        );
+    }
+
+    #[test]
+    fn child_env_removes_web_ui_dir_without_valid_asset_root() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let plugin = plugin_for_spec(plugin_spec(
+            &temp_dir,
+            None,
+            InstalledPluginWebUiValidationStatus::Invalid,
+            Some("web"),
+        ));
+
+        let command = plugin.configured_child_command("endpoint", "unix");
+
+        assert!(command_env_is_removed(
+            &command,
+            "MESH_LLM_PLUGIN_WEB_UI_DIR"
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_web_ui_assets_do_not_clear_running_plugin_capabilities() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let plugin = plugin_for_spec(plugin_spec(
+            &temp_dir,
+            None,
+            InstalledPluginWebUiValidationStatus::Invalid,
+            Some("web"),
+        ));
+        mark_plugin_running(&plugin, 1).await;
+
+        let summary = plugin.summary().await;
+
+        assert_eq!(summary.status, "running");
+        assert_eq!(summary.capabilities, vec!["operation:echo".to_string()]);
+        assert_eq!(
+            summary.web_ui.state,
+            super::super::PluginWebUiStateKind::Invalid
+        );
+        assert!(summary.web_ui.declared);
+        assert!(summary.web_ui.enabled);
+    }
+
+    #[tokio::test]
+    async fn disabled_web_ui_preference_does_not_stop_running_plugin() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let plugin = plugin_for_spec(plugin_spec(
+            &temp_dir,
+            Some(false),
+            InstalledPluginWebUiValidationStatus::Valid,
+            Some("web"),
+        ));
+        mark_plugin_running(&plugin, 7).await;
+
+        let summary = plugin.summary().await;
+        let runtime_generation = plugin
+            .runtime
+            .lock()
+            .await
+            .as_ref()
+            .map(|runtime| runtime.generation);
+
+        assert_eq!(summary.status, "running");
+        assert_eq!(runtime_generation, Some(7));
+        assert!(summary.pid.is_some());
+        assert_eq!(
+            summary.web_ui.state,
+            super::super::PluginWebUiStateKind::Disabled
+        );
+        assert!(!summary.web_ui.available);
+    }
+
+    #[tokio::test]
+    async fn stopped_plugin_keeps_web_ui_metadata_as_plugin_not_running() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let plugin = plugin_for_spec(plugin_spec(
+            &temp_dir,
+            None,
+            InstalledPluginWebUiValidationStatus::Valid,
+            Some("web"),
+        ));
+        mark_plugin_running(&plugin, 11).await;
+
+        plugin.shutdown().await;
+        let summary = plugin.summary().await;
+
+        assert_eq!(summary.status, "stopped");
+        assert!(summary.pid.is_none());
+        assert!(summary.web_ui.declared);
+        assert_eq!(
+            summary.web_ui.state,
+            super::super::PluginWebUiStateKind::PluginNotRunning
+        );
+        assert_eq!(summary.web_ui.pages.len(), 1);
+        assert_eq!(summary.web_ui.config_sections.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stopped_plugin_publishes_plugin_not_running_to_runtime_data() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let (plugin, runtime_data) = plugin_for_spec_with_runtime_data(plugin_spec(
+            &temp_dir,
+            None,
+            InstalledPluginWebUiValidationStatus::Valid,
+            Some("web"),
+        ));
+        mark_plugin_running(&plugin, 17).await;
+        plugin.publish_summary().await;
+
+        plugin.shutdown().await;
+        let summary = runtime_data
+            .plugins_snapshot()
+            .plugins
+            .into_iter()
+            .find(|summary| summary.name == "demo")
+            .expect("stopped summary should remain visible");
+
+        assert_eq!(summary.status, "stopped");
+        assert_eq!(
+            summary.web_ui.state,
+            super::super::PluginWebUiStateKind::PluginNotRunning
+        );
+        assert_eq!(summary.web_ui.pages.len(), 1);
     }
 }

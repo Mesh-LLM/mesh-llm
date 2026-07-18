@@ -243,6 +243,7 @@ mod tests {
             model_names: HashSet::from(["Example-Model".to_string()]),
             size_by_name: HashMap::from([("Example-Model".to_string(), 8_000_000_000)]),
             metadata_by_name: HashMap::new(),
+            display_name_by_name: HashMap::new(),
         };
         let snapshot = collector.build_model_view(ModelViewInput {
             peers: vec![],

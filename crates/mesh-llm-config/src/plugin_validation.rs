@@ -484,7 +484,14 @@ fn plugin_misplaced_key_diagnostics(raw_toml: Option<&str>) -> Vec<ConfigDiagnos
     };
 
     let allowed_top_level = BTreeSet::from([
-        "name", "enabled", "command", "args", "url", "startup", "settings",
+        "name",
+        "enabled",
+        "web_ui_enabled",
+        "command",
+        "args",
+        "url",
+        "startup",
+        "settings",
     ]);
     let allowed_startup = BTreeSet::from([
         "connect_timeout_secs",
@@ -603,6 +610,7 @@ fn render_number(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PluginWebUiPreference;
 
     fn schema() -> PluginConfigSchema {
         PluginConfigSchema {
@@ -687,6 +695,68 @@ unknown = true
             diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.code == ConfigDiagnosticCode::UnknownField)
+        );
+    }
+
+    #[test]
+    fn plugin_web_ui_enabled_is_host_owned_and_not_a_custom_setting() {
+        let raw = r#"
+[[plugin]]
+name = "blackboard"
+web_ui_enabled = false
+
+[plugin.settings]
+retention_days = 14
+"#;
+        let config: crate::MeshConfig = toml::from_str(raw).unwrap();
+
+        let diagnostics = validate_plugin_entries_strict(&config.plugins, Some(raw), |_| {
+            PluginSchemaAvailability::Available(schema())
+        });
+
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == ConfigDiagnosticCode::MisplacedField)
+        );
+    }
+
+    #[test]
+    fn plugin_web_ui_preference_resolves_declared_absent_and_explicit_choices() {
+        let absent = crate::PluginConfigEntry {
+            name: "blackboard".to_string(),
+            enabled: Some(false),
+            web_ui_enabled: None,
+            command: None,
+            args: Vec::new(),
+            url: None,
+            settings: BTreeMap::new(),
+            startup: Default::default(),
+        };
+        let disabled = crate::PluginConfigEntry {
+            web_ui_enabled: Some(false),
+            ..absent.clone()
+        };
+        let enabled = crate::PluginConfigEntry {
+            web_ui_enabled: Some(true),
+            ..absent.clone()
+        };
+
+        assert_eq!(
+            absent.web_ui_preference(true),
+            PluginWebUiPreference::Enabled
+        );
+        assert_eq!(
+            disabled.web_ui_preference(true),
+            PluginWebUiPreference::Disabled
+        );
+        assert_eq!(
+            enabled.web_ui_preference(true),
+            PluginWebUiPreference::Enabled
+        );
+        assert_eq!(
+            disabled.web_ui_preference(false),
+            PluginWebUiPreference::None
         );
     }
 

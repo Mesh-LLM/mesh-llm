@@ -18,6 +18,7 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { HeaderHoverCard } from '@/features/shell/components/HeaderHoverCard'
+import { TopNavPluginPages, type TopNavPluginPageItem } from '@/features/shell/components/TopNavPluginPages'
 import { CopyInstructionRow } from '@/components/ui/CopyInstructionRow'
 import type { LinkItem, TopNavJoinCommand, Theme, AppTab } from '@/features/app-tabs/types'
 import { cn } from '@/lib/cn'
@@ -44,6 +45,8 @@ type TopNavProps = {
   apiAccessLinks?: LinkItem[]
   joinCommands?: TopNavJoinCommand[]
   joinLinks?: LinkItem[]
+  pluginNavItems?: readonly TopNavPluginPageItem[]
+  onPluginPageChange?: (item: TopNavPluginPageItem) => void
 }
 
 export type ApiTargetLiveness = 'checking' | 'live' | 'unavailable'
@@ -738,6 +741,7 @@ export function TopNav(props: TopNavProps) {
         onTabChange={props.onTabChange}
         className="order-none w-auto min-w-0 pb-0 md:order-none md:w-auto md:pb-0"
       />
+      <TopNavPluginPages items={props.pluginNavItems} onNavigate={props.onPluginPageChange} />
       <div className="hidden flex-1 md:block" />
       <ApiStatusChip
         apiUrl={props.apiUrl}

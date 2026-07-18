@@ -105,6 +105,9 @@ fn tool_call_candidates(content: &str) -> Vec<Value> {
     if let Some(value) = parse_qwen_xml_syntax(content) {
         candidates.push(value);
     }
+    if let Some(value) = parse_arg_tag_tool_call_syntax(content) {
+        candidates.push(value);
+    }
     if let Some(value) = parse_granite_tool_call_syntax(content) {
         candidates.push(value);
     }
@@ -278,6 +281,44 @@ fn parse_granite_tool_call_syntax(content: &str) -> Option<Value> {
     serde_json::from_str(after_start[..end_index].trim()).ok()
 }
 
+fn parse_arg_tag_tool_call_syntax(content: &str) -> Option<Value> {
+    let body = tagged_body(content, "<tool_call>", "</tool_call>")?;
+    let arguments_start = body.find("<arg_key>").unwrap_or(body.len());
+    let name = body[..arguments_start].trim();
+    if name.is_empty() || name.contains('<') {
+        return None;
+    }
+
+    let mut arguments = Map::new();
+    let mut remainder = &body[arguments_start..];
+    while !remainder.trim().is_empty() {
+        remainder = remainder.trim_start().strip_prefix("<arg_key>")?;
+        let key_end = remainder.find("</arg_key>")?;
+        let key = remainder[..key_end].trim();
+        if key.is_empty() {
+            return None;
+        }
+
+        remainder = remainder[key_end + "</arg_key>".len()..].trim_start();
+        remainder = remainder.strip_prefix("<arg_value>")?;
+        let value_end = remainder.find("</arg_value>")?;
+        let value = remainder[..value_end].trim();
+        let parsed_value = serde_json::from_str::<Value>(value)
+            .unwrap_or_else(|_| Value::String(value.to_string()));
+        arguments.insert(key.to_string(), parsed_value);
+        remainder = &remainder[value_end + "</arg_value>".len()..];
+    }
+
+    Some(json!({ "name": name, "arguments": Value::Object(arguments) }))
+}
+
+fn tagged_body<'a>(content: &'a str, start_tag: &str, end_tag: &str) -> Option<&'a str> {
+    let start_index = content.find(start_tag)?;
+    let after_start = &content[start_index + start_tag.len()..];
+    let end_index = after_start.find(end_tag)?;
+    Some(&after_start[..end_index])
+}
+
 fn first_balanced_object(content: &str) -> Option<String> {
     let start = content.find('{')?;
     let end = balanced_substring_end(content.as_bytes(), start, b'{', b'}')?;
@@ -361,6 +402,20 @@ mod tests {
 
         assert_eq!(calls[0].name, "read_file");
         assert_eq!(calls[0].arguments["path"], "README.md");
+    }
+
+    #[test]
+    fn rescues_arg_tag_tool_call() {
+        let calls = rescue_tool_call_from_text(
+            "<tool_call>tree<arg_key>path</arg_key><arg_value>tests</arg_value>\
+             <arg_key>depth</arg_key><arg_value>2</arg_value></tool_call>",
+            &["tree".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(calls[0].name, "tree");
+        assert_eq!(calls[0].arguments["path"], "tests");
+        assert_eq!(calls[0].arguments["depth"], 2);
     }
 
     #[test]

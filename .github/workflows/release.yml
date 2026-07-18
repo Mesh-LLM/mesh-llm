@@ -1419,8 +1419,16 @@ jobs:
           scripts/verify-sdk-console-assets.sh --sdk all
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock crates/*/Cargo.toml tools/*/Cargo.toml sdk/kotlin/build.gradle.kts Package.swift
+          # release-version.sh owns the complete tracked version surface. Stage
+          # all tracked release-preparation changes so this list cannot drift
+          # when another version-bearing file is added to the script.
+          git add --update
           git add -f sdk/node/console sdk/swift/Sources/MeshLLM/Resources/Console sdk/kotlin/src/main/resources/mesh-llm/console
+          if ! git diff --quiet; then
+            echo "Release preparation left unstaged tracked changes:" >&2
+            git status --short >&2
+            exit 1
+          fi
           if git diff --cached --quiet; then
             echo "Release source files already match $RELEASE_TAG"
           else
@@ -1436,6 +1444,45 @@ jobs:
           prerelease: ${{ needs.metadata.outputs.prerelease }}
           overwrite_files: true
           files: release-artifacts/*
+
+  dispatch_packaging_release:
+    name: Dispatch package and image publishing
+    needs: [metadata, publish]
+    if: ${{ needs.publish.result == 'success' && needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Dispatch verified release to mesh-agent-images
+        env:
+          GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ -n "${GH_TOKEN:-}" ]] || {
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN is required for cross-repository packaging" >&2
+            exit 1
+          }
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg ref "$RELEASE_TAG" \
+            --arg version "$RELEASE_VERSION" \
+            '{
+              event_type: "mesh-llm-release",
+              client_payload: {
+                repository: $repository,
+                ref: $ref,
+                version: $version,
+                dry_run: false,
+                publish_images: true,
+                publish_release_assets: true
+              }
+            }' |
+            gh api \
+              --method POST \
+              repos/Mesh-LLM/mesh-agent-images/dispatches \
+              --input -
 
   publish_crates_preflight:
     name: Preflight crates.io packages

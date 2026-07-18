@@ -405,6 +405,7 @@ mod tests {
                         },
                     ],
                 }),
+                web_ui: None,
             }),
             last_protocol_version: None,
             last_status: None,

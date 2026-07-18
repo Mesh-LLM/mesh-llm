@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use anyhow::{Result, bail};
+use mesh_llm_plugin_manager::install::install_plugin_archive;
 use mesh_llm_plugin_manager::{
     PluginCatalog, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter, PluginStore,
     default_store_root, install_plugin, update_plugin,
@@ -38,7 +39,20 @@ pub async fn run_plugin_command(
     runtime_rows: Option<&PluginListRows>,
 ) -> Result<bool> {
     match command {
-        PluginCommand::Install { reference } => install(reference).await?,
+        PluginCommand::Install {
+            reference,
+            archive,
+            name,
+            version,
+        } => {
+            install(
+                reference.as_deref(),
+                archive.as_deref(),
+                name.as_deref(),
+                version.as_deref().unwrap_or("dev"),
+            )
+            .await?
+        }
         PluginCommand::Update { name } => update(name).await?,
         PluginCommand::Enable { name } => set_enabled(name, true)?,
         PluginCommand::Disable { name } => set_enabled(name, false)?,
@@ -55,10 +69,21 @@ pub async fn run_plugin_command(
     Ok(true)
 }
 
-async fn install(reference: &str) -> Result<()> {
+async fn install(
+    reference: Option<&str>,
+    archive: Option<&std::path::Path>,
+    name: Option<&str>,
+    version: &str,
+) -> Result<()> {
     let options = PluginInstallOptions::from_env()?;
     let mut progress = CliPluginProgress::default();
-    let outcome = install_plugin(reference, &options, &mut progress).await?;
+    let outcome = match (reference, archive, name) {
+        (Some(reference), None, None) => install_plugin(reference, &options, &mut progress).await?,
+        (None, Some(archive), Some(name)) => {
+            install_plugin_archive(name, version, archive, &options, &mut progress)?
+        }
+        _ => bail!("provide either a plugin reference or --archive with --name"),
+    };
     progress.finish();
     if outcome.changed {
         eprintln!(

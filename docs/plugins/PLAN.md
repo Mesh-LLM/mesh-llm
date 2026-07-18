@@ -41,8 +41,9 @@ The manager crate should own:
 - enabling, disabling, and deleting installed plugins
 - startup compatibility metadata used by the host to diagnose load failures
 
-`mesh-llm-host-runtime` should own the CLI command shape, human output, JSON
-output where supported, and host startup integration.
+`mesh-llm-cli` owns command parsing and `mesh-llm-commands` owns user-facing
+plugin command handlers and human output. `mesh-llm-host-runtime` owns startup
+integration and runtime plugin state.
 
 ### CLI Surface
 
@@ -50,6 +51,7 @@ Initial commands:
 
 ```bash
 mesh-llm plugins install <ref>
+mesh-llm plugins install --archive <path> --name <plugin> [--version <version>]
 mesh-llm plugins update <plugin>
 mesh-llm plugins enable <plugin>
 mesh-llm plugins disable <plugin>

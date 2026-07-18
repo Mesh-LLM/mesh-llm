@@ -1000,6 +1000,7 @@ mod tests {
                 enabled: true,
                 manifest: Some(InstalledPluginManifestMetadata {
                     config_schema: None,
+                    web_ui: None,
                 }),
                 last_protocol_version: None,
                 last_status: None,
@@ -1241,6 +1242,7 @@ mod tests {
                             }),
                         }],
                     }),
+                    web_ui: None,
                 }),
                 last_protocol_version: None,
                 last_status: None,
@@ -1292,6 +1294,7 @@ mod tests {
                     allow_unvalidated_config: false,
                     settings,
                 }),
+                web_ui: None,
             }),
             last_protocol_version: None,
             last_status: None,

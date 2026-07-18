@@ -373,6 +373,7 @@ mod tests {
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
                 config_schema: schema,
+                web_ui: None,
             }),
             last_protocol_version: Some(1),
             last_status: Some("installed".to_string()),

@@ -5,6 +5,7 @@ import { resolveHarnessTopNavData, resolveLiveTopNavData } from '@/app/layout/sh
 import { ChatSessionProvider } from '@/features/chat/api/chat-session'
 import { Footer } from '@/features/shell/components/Footer'
 import { TopNav } from '@/features/shell/components/TopNav'
+import type { TopNavPluginPageItem } from '@/features/shell/components/TopNavPluginPages'
 import { PreferencesPanel } from '@/features/shell/components/PreferencesPanel'
 import {
   getEnabledConfigurationTabIds,
@@ -13,6 +14,11 @@ import {
 } from '@/features/configuration/components/configuration-tab-ids'
 import { DEFAULT_DEVELOPER_PLAYGROUND_TAB } from '@/features/developer/playground/developer-playground-tabs'
 import { useStatusQuery } from '@/features/network/api/use-status-query'
+import {
+  adaptPluginSummariesToWebUiEntries,
+  buildPluginWebUiNavItems,
+  usePluginSummariesQuery
+} from '@/features/plugins/api/plugin-web-ui'
 import { useUIPreferences } from '@/features/shell/hooks/useUiPreferences'
 import { SHELL_HARNESS } from '@/features/app-tabs/data'
 import { env, hrefWithBasePath, stripBasePath } from '@/lib/env'
@@ -24,6 +30,7 @@ function pathToTab(pathname: string): AppTab | null {
   if (pathname.startsWith('/chat')) return 'chat'
   if (pathname.startsWith('/reserves')) return 'reserves'
   if (pathname.startsWith('/configuration')) return 'configuration'
+  if (pathname.startsWith('/plugins/')) return null
   if (env.isDevelopment && pathname.startsWith('/__playground')) return null
   return 'network'
 }
@@ -62,6 +69,7 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
   const { mode } = useDataMode()
   const liveMode = mode === 'live'
   const statusQuery = useStatusQuery({ enabled: liveMode })
+  const pluginSummariesQuery = usePluginSummariesQuery({ enabled: liveMode })
   const { theme, accent, density, panelStyle, setTheme, setAccent, setDensity, setPanelStyle } = useUIPreferences()
   const newConfigurationPageEnabled = useBooleanFeatureFlag('global/newConfigurationPage')
   const newReservesPageEnabled = useBooleanFeatureFlag('global/newReservesPage')
@@ -133,6 +141,27 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
     [newConfigurationPageEnabled, newReservesPageEnabled]
   )
 
+  const pluginNavItems = useMemo<readonly TopNavPluginPageItem[]>(() => {
+    if (!liveMode || !Array.isArray(pluginSummariesQuery.data)) return []
+    return buildPluginWebUiNavItems(adaptPluginSummariesToWebUiEntries(pluginSummariesQuery.data)).map((item) => ({
+      pluginName: item.pluginName,
+      pageId: item.pageId,
+      label: item.label,
+      href: hrefWithBasePath(`/plugins/${encodeURIComponent(item.pluginName)}/${encodeURIComponent(item.pageId)}`),
+      active: pathname === `/plugins/${item.pluginName}/${item.pageId}`
+    }))
+  }, [liveMode, pathname, pluginSummariesQuery.data])
+
+  const onPluginPageChange = useCallback(
+    (item: TopNavPluginPageItem) => {
+      void router.navigate({
+        to: '/plugins/$pluginName/$pageId',
+        params: { pluginName: item.pluginName, pageId: item.pageId }
+      })
+    },
+    [router]
+  )
+
   return (
     <>
       <HeadContent />
@@ -153,6 +182,8 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
           apiAccessLinks={topNavData.topNavApiAccessLinks}
           joinCommands={topNavData.topNavJoinCommands}
           joinLinks={topNavData.topNavJoinLinks}
+          pluginNavItems={pluginNavItems}
+          onPluginPageChange={onPluginPageChange}
           showDeveloperPlayground={showDevelopmentNavControls}
           onOpenDeveloperPlayground={showDevelopmentNavControls ? onOpenDeveloperPlayground : undefined}
           onOpenIdentity={onOpenIdentity}

@@ -334,6 +334,67 @@ describe('TopNav', () => {
     expect(onTabChange).toHaveBeenCalledWith('configuration')
   })
 
+  it('renders a single auxiliary plugin page as a direct navigation item', async () => {
+    const user = userEvent.setup()
+    const onPluginPageChange = vi.fn()
+
+    renderTopNav({
+      onPluginPageChange,
+      pluginNavItems: [
+        {
+          pluginName: 'blackboard',
+          pageId: 'dashboard',
+          label: 'Blackboard dashboard',
+          href: '/plugins/blackboard/dashboard',
+          active: true
+        }
+      ]
+    })
+
+    expect(screen.getByRole('link', { name: 'Network' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Chat' })).toBeInTheDocument()
+
+    const pluginLink = screen.getByRole('link', { name: 'Blackboard dashboard' })
+    expect(pluginLink).toHaveAttribute('href', '/plugins/blackboard/dashboard')
+    expect(pluginLink).toHaveAttribute('aria-current', 'page')
+
+    await user.click(pluginLink)
+
+    expect(onPluginPageChange).toHaveBeenCalledWith({
+      pluginName: 'blackboard',
+      pageId: 'dashboard',
+      label: 'Blackboard dashboard',
+      href: '/plugins/blackboard/dashboard',
+      active: true
+    })
+  })
+
+  it('groups multiple plugin pages in the auxiliary navigation menu', async () => {
+    const user = userEvent.setup()
+
+    renderTopNav({
+      pluginNavItems: [
+        {
+          pluginName: 'blackboard',
+          pageId: 'dashboard',
+          label: 'Blackboard dashboard',
+          href: '/plugins/blackboard/dashboard'
+        },
+        {
+          pluginName: 'notes',
+          pageId: 'notes',
+          label: 'Notes',
+          href: '/plugins/notes/notes'
+        }
+      ]
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Plugin pages' }))
+
+    expect(await screen.findByRole('link', { name: /Blackboard dashboard/ })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Notes/ })).toBeInTheDocument()
+  })
+
   it('selects auto, dark, and light from the nav theme menu', async () => {
     const user = userEvent.setup()
     const onThemeChange = vi.fn()

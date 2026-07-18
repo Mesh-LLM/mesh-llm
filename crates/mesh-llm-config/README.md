@@ -142,6 +142,7 @@ store.update(|config| {
     config.enable_builtin_plugin("telemetry")?;
     config.upsert_plugin("endpoint-plugin")?
         .enabled(true)
+        .web_ui_enabled(Some(false))
         .url("http://localhost:8000/v1")
         .connect_timeout_secs(75)
         .init_timeout_secs(90)
@@ -151,6 +152,10 @@ store.update(|config| {
     Ok(())
 })?;
 ```
+
+`web_ui_enabled` controls only a plugin-declared console projection. It is
+independent from `.enabled(true)`, which controls whether the plugin process is
+started.
 
 ### Validate imported TOML
 

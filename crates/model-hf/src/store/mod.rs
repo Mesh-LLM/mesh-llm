@@ -13,7 +13,7 @@ pub use local::{
     huggingface_identity_for_path, huggingface_repo_folder_name, huggingface_snapshot_path,
     layered_package_layer_count_for_path, layered_package_total_bytes_for_path, mesh_llm_cache_dir,
     model_metadata_cache_dir, model_ref_for_path, scan_hf_cache_fast, scan_hf_cache_info,
-    scan_installed_models, scan_local_models,
+    scan_installed_models, scan_installed_models_in, scan_local_models,
 };
 pub use usage::{
     ModelCleanupPlan, ModelCleanupResult, ModelUsageRecord, execute_model_cleanup,

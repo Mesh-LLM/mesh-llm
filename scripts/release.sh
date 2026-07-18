@@ -211,32 +211,15 @@ push_release_source_commit() {
 
     scripts/release-version.sh "$version"
 
-    if git diff --quiet; then
+    git add --update
+    if ! git diff --quiet; then
+        git status --short >&2
+        die "release preparation left unstaged tracked changes"
+    fi
+
+    if git diff --cached --quiet; then
         echo "Release source files already match $version; no commit needed."
     else
-        git add \
-            Cargo.toml \
-            Cargo.lock \
-            crates/*/Cargo.toml \
-            tools/*/Cargo.toml \
-            crates/mesh-llm-config/src/model/built_in_schema.rs \
-            crates/mesh-llm-config/src/model/built_in_schema/presentation.rs \
-            crates/mesh-llm-native-runtime/README.md \
-            crates/mesh-llm-sdk/README.md \
-            crates/mesh-llm-ui/package.json \
-            crates/mesh-llm-ui/package-lock.json \
-            docs/SDK.md \
-            docs/design/NATIVE_RUNTIMES.md \
-            docs/sdk/node.md \
-            docs/sdk/rust.md \
-            docs/sdk/swift.md \
-            sdk/kotlin/README.md \
-            sdk/kotlin/build.gradle.kts \
-            sdk/kotlin/example/example-jvm/build.gradle.kts \
-            sdk/node/package.json \
-            sdk/swift/README.md \
-            sdk/swift/scripts/generate-swift-bindings.sh \
-            website/src/docs/pages/CLI.md
         git commit -m "$tag: prepare release source"
     fi
 

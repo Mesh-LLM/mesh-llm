@@ -1352,6 +1352,7 @@ fn response_with_content_with_usage(
             finish_reason: Some(crate::common::FinishReason::Stop),
         }],
         usage,
+        timings: None,
     }
 }
 
@@ -1386,6 +1387,7 @@ fn response_with_tool_calls_with_usage(
             finish_reason: Some(crate::common::FinishReason::ToolCalls),
         }],
         usage,
+        timings: None,
     }
 }
 

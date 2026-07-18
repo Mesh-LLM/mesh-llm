@@ -10,6 +10,7 @@ Plugin-specific documentation:
 
 - [Flash-MoE](flash-moe.md) - external OpenAI-compatible backend adapter for single-node SSD expert streaming
 - [Telemetry](telemetry.md) - OTLP metrics-only runtime telemetry and external metrics plugin notes
+- [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift
 
 The main goals are:
 
@@ -57,16 +58,212 @@ The `stapler` is the host projection layer that turns plugin manifests into expo
 When `mesh-llm` launches an external plugin, it provides the host connection
 details through environment variables:
 
-| Variable | Meaning |
-|---|---|
-| `MESH_LLM_PLUGIN_ENDPOINT` | Local IPC endpoint the plugin connects to |
-| `MESH_LLM_PLUGIN_TRANSPORT` | Transport kind, such as `unix` or `pipe` |
-| `MESH_LLM_PLUGIN_NAME` | Configured plugin name |
-| `MESH_LLM_PLUGIN_URL` | Optional `[[plugin]].url` value from config |
+| Variable                    | Meaning                                     |
+| --------------------------- | ------------------------------------------- |
+| `MESH_LLM_PLUGIN_ENDPOINT`  | Local IPC endpoint the plugin connects to   |
+| `MESH_LLM_PLUGIN_TRANSPORT` | Transport kind, such as `unix` or `pipe`    |
+| `MESH_LLM_PLUGIN_NAME`      | Configured plugin name                      |
+| `MESH_LLM_PLUGIN_URL`       | Optional `[[plugin]].url` value from config |
 
 Plugin-specific configuration should live in the plugin process or use generic
 plugin config fields. The host should not special-case behavior for a plugin by
 repository or package name.
+
+## Plugin Web UI Projection Contract
+
+For the maintained source-owned sample, start with
+[`docs/plugins/exemplars/web-ui/`](exemplars/web-ui/README.md). The manifest,
+bundle, config, and lifecycle fixtures there are part of the contract, and the
+tests read them directly so the docs and implementation stay aligned.
+
+### Manifest Fields
+
+The manifest's `web_ui` block is additive. It declares the local bundle roots,
+page entries, and optional configuration-section entries that the host may
+project.
+
+Use the typed builders from `mesh_llm_plugin::manifest`:
+
+- `web_ui`
+- `web_ui_page`
+- `web_ui_config_section`
+- `web_ui_bundle`
+
+Rules for the declared bundle paths:
+
+- keep paths package-relative and below the package root; do not use an empty
+  path or `.` as a bundle root
+- declare exactly one non-empty bundle id and one bundle root for v1 whenever
+  the block declares pages or config sections
+- set every page and config-section `bundle_id` to that declared bundle id
+- give every page and config section a non-empty id and display label/title
+- keep page `route` values as slugs, not paths or URLs; do not include `/`,
+  `\`, protocol syntax, or traversal-style dot prefixes
+- keep non-empty page and config-section entry scripts inside that root; the
+  installed package must contain each declared entry script
+- reject remote URL schemes, absolute paths, and traversal segments
+- treat `parent_tab = "integrations"` as the only supported parent-tab value for
+  config sections, or omit `parent_tab`
+
+The manifest proto keeps the bundle field repeated as a forward-compatible wire
+shape. V1 validation intentionally permits only one bundle root so the host has
+one deterministic `asset_base_url` for page and config-section imports. An
+empty `web_ui` block contributes no usable console surface.
+
+### State Matrix
+
+The host exposes exactly these web UI state names:
+
+| State                | Meaning                                                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------- |
+| `none`               | The plugin does not declare a web UI projection.                                             |
+| `ready`              | The manifest and installed bundle are valid, and the host may mount it.                      |
+| `disabled`           | The projection is installed and valid, but the persisted `web_ui_enabled` preference is off. |
+| `invalid`            | The manifest or installed bundle failed validation, or the bundle root is missing.           |
+| `plugin_not_running` | The plugin process is stopped, but installed metadata still carries the projection state.    |
+
+### API And Console Surface
+
+The web UI API uses the existing plugin namespace and these exact routes:
+
+- `GET /api/plugins/:plugin/web-ui`
+- `PATCH /api/plugins/:plugin/web-ui/enabled`
+- `GET /api/plugins/:plugin/web-ui/config`
+- `PATCH /api/plugins/:plugin/web-ui/config`
+- `GET /api/plugins/:plugin/web-ui/assets/*asset`
+
+The toggle route changes only the persisted `web_ui_enabled` projection
+preference. It does not start, stop, or disable the plugin process.
+
+Asset delivery is host-owned and same-origin. It serves only validated installed
+bundle assets and only when the projection is `ready`. Console mounts use the
+backend-provided `asset_base_url` from the web UI state; a ready state without
+that URL is treated as a host error and no bundle code is imported.
+Plugin assets are revalidated by the browser rather than cached as immutable,
+because local reinstall and same-version development builds may replace them.
+
+The config route is also host-owned and plugin-scoped. `GET` returns:
+
+```json
+{
+  "plugin": "example",
+  "settings": { "retention_days": 30 },
+  "schema": { "plugin_name": "example" }
+}
+```
+
+`PATCH` accepts a settings-only mutation:
+
+```json
+{
+  "plugin": "example",
+  "settings": { "retention_days": 45 },
+  "unset": ["old_setting"]
+}
+```
+
+The `plugin` field must match the mounted plugin when present. Mutations may
+only touch plugin-owned `settings` keys; host-owned fields such as `enabled`,
+`web_ui_enabled`, `command`, `args`, `url`, and `startup` are rejected.
+Malformed requests return `400`; schema-invalid setting values return `422`;
+successful mutations return the newly visible plugin config.
+
+The console route is static TanStack routing, not dynamic route injection:
+
+- `/plugins/$pluginName/$pageId`
+
+Plugin routes do not become a new primary `AppTab`. A ready plugin with one
+declared page receives a direct auxiliary navigation item labeled from its page
+manifest. When more than one plugin page is ready, the console groups those
+entries under the auxiliary `Plugins` menu to protect header space. Disabled,
+invalid, or stopped projections contribute no navigation item. The existing
+Configuration `Plugins` tab owns config-section projection, and only ready
+config sections in the `integrations` projection mount there.
+
+Plugin-owned settings declared in `config_schema` continue to render through
+the console's standard schema controls. A custom config-section bundle should
+add plugin-specific actions or context; it should not recreate a schema field
+with unstyled DOM controls or bypass the host-owned configuration save flow.
+
+### Bundle Contract
+
+Typed author bundles export `registerMeshPluginUi(host)` and return mount
+handlers for pages and config sections.
+
+- each mount handler returns an object with `unmount()`
+- `unmount()` must tear down DOM content and detach host subscriptions
+- read current plugin settings from `host.config.visible.settings`
+- config sections use `host.config.requestMutation(...)`, not direct file writes
+- configuration mutations require a local owner identity; initialize one with
+  `mesh-llm auth init --no-passphrase` for an unencrypted development identity
+- mutation errors reject the returned promise and are rendered by the host shell
+- user-visible notices can be emitted with `host.notifications.show(...)`
+- `host.network.fetchPlugin(path, init)` and `host.network.json(path, init)`
+  accept plugin-relative API paths such as `http/items?limit=2`; origins,
+  fragments, backslashes, and `.`/`..` path segments are rejected
+- `host.network.json(...)` rejects non-2xx responses; use `fetchPlugin(...)`
+  when the bundle needs to inspect a non-success status itself
+- registrations must return a `pages` object, optional `configSections` object,
+  and `{ unmount() }` from every mounted handler; malformed results surface as
+  host contract errors rather than failing later during cleanup
+- the host imports bundle code only after the projection is ready, enabled,
+  available, has a same-origin `asset_base_url`, and the requested page or
+  section exists
+- ship browser-importable JavaScript; the host does not transpile TypeScript,
+  JSX, CommonJS, or unresolved bare npm imports
+- use the exemplar's self-contained `bundle/host-contract.d.ts` for author
+  types; do not import private types from `crates/mesh-llm-ui`
+
+For a pre-release or local package, exercise the real installer without a
+GitHub release:
+
+```bash
+mesh-llm plugins install --archive ./cool-plugin-1.1.0-local.tar.gz \
+  --name cool-plugin --version 1.1.0
+```
+
+`--archive` accepts `.tar.gz` or `.zip`, requires `--name`, and conflicts with
+the positional catalog/GitHub reference. `--version` defaults to `dev`. Local
+installs are replaced by reinstalling a rebuilt archive; `plugins update`
+remains specific to GitHub release sources.
+
+### Validation And Remediation
+
+If the projection is `invalid` or assets are missing:
+
+1. Check the packaged bundle root and the entry script paths in the manifest.
+2. Remove remote URLs, absolute paths, and traversal segments.
+3. Keep the bundle rooted under one directory and split files inside that root.
+4. Confirm config sections either omit `parent_tab` or use `integrations`.
+5. Reinstall or update the plugin package, then reload mesh-llm so the
+   installed metadata is revalidated.
+
+Invalid or missing web UI assets do not stop the plugin process or its
+non-UI capabilities.
+
+### Compatibility Guarantees
+
+The web UI contract is additive and projection-only.
+
+- older nodes can ignore unknown manifest fields
+- `web_ui_enabled` stays independent from the plugin process `enabled` flag
+- invalid, disabled, missing, and stopped web UIs remain visible in summary and
+  API state
+- disabling projection does not disable the plugin process
+
+### Non-Goals
+
+This contract does not include:
+
+- iframe or sandbox isolation
+- remote UI assets
+- marketplace or discovery flow for plugin UIs
+- RBAC specific to plugin web UIs
+- a generic plugin event bus
+- a second schema-driven settings editor inside plugin bundle code (installed
+  plugin schemas continue to use the console's existing standard editor)
+- dynamic TanStack route mutation
+- disabling the plugin process when web UI projection is turned off
 
 ## High-Level Model
 
@@ -78,6 +275,9 @@ Plugin authors think in terms of the host surfaces they contribute to:
 - `http`
 - `inference`
 - `provides`
+- `mesh`
+- `events`
+- `web_ui`
 
 The host runtime still executes native service invocations internally, but the author-facing DSL is organized by the surface the plugin contributes to.
 
@@ -146,14 +346,14 @@ cool-plugin-1.1.0-aarch64-apple-darwin.tar.gz
 
 Supported target triples:
 
-| Platform | Target triple | Archive |
-|---|---|---|
-| macOS Apple Silicon | `aarch64-apple-darwin` | `.tar.gz` |
-| macOS Intel | `x86_64-apple-darwin` | `.tar.gz` |
-| Linux x86_64 | `x86_64-unknown-linux-gnu` | `.tar.gz` |
-| Linux ARM64 | `aarch64-unknown-linux-gnu` | `.tar.gz` |
-| Windows x86_64 | `x86_64-pc-windows-msvc` | `.zip` |
-| Windows ARM64 | `aarch64-pc-windows-msvc` | `.zip` |
+| Platform            | Target triple               | Archive   |
+| ------------------- | --------------------------- | --------- |
+| macOS Apple Silicon | `aarch64-apple-darwin`      | `.tar.gz` |
+| macOS Intel         | `x86_64-apple-darwin`       | `.tar.gz` |
+| Linux x86_64        | `x86_64-unknown-linux-gnu`  | `.tar.gz` |
+| Linux ARM64         | `aarch64-unknown-linux-gnu` | `.tar.gz` |
+| Windows x86_64      | `x86_64-pc-windows-msvc`    | `.zip`    |
+| Windows ARM64       | `aarch64-pc-windows-msvc`   | `.zip`    |
 
 Archive contents should be rooted under one directory named after the plugin:
 
@@ -210,13 +410,13 @@ overwritten unless `--force` is passed to the explicit installer.
 
 Current install targets:
 
-| Agent | Target |
-|---|---|
-| Goose | `~/.agents/skills` |
-| Codex | `~/.agents/skills` |
-| Pi | `~/.pi/agent/skills` |
-| OpenCode | `~/.config/opencode/skills` |
-| Claude Code | `~/.claude/skills` |
+| Agent       | Target                      |
+| ----------- | --------------------------- |
+| Goose       | `~/.agents/skills`          |
+| Codex       | `~/.agents/skills`          |
+| Pi          | `~/.pi/agent/skills`        |
+| OpenCode    | `~/.config/opencode/skills` |
+| Claude Code | `~/.claude/skills`          |
 
 Install selection should follow this order:
 
@@ -264,18 +464,24 @@ for installs and updates.
 The canonical catalog file is `plugins.jsonl`. Each line describes one plugin:
 
 ```json
-{"name":"cool-plugin","description":"Example plugin for mesh-llm.","github_url":"https://github.com/mesh-llm/cool-plugin","author_email":"dev@example.com","author_name":"Mesh LLM"}
+{
+  "name": "cool-plugin",
+  "description": "Example plugin for mesh-llm.",
+  "github_url": "https://github.com/mesh-llm/cool-plugin",
+  "author_email": "dev@example.com",
+  "author_name": "Mesh LLM"
+}
 ```
 
 Required fields:
 
-| Field | Meaning |
-|---|---|
-| `name` | Unique plugin name. This should match the plugin manifest ID and GitHub release asset prefix. |
-| `description` | Short human-readable plugin description. |
-| `github_url` | GitHub repository URL used for install and update resolution. |
-| `author_email` | Plugin author or maintainer email. |
-| `author_name` | Plugin author or maintainer display name. |
+| Field          | Meaning                                                                                       |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| `name`         | Unique plugin name. This should match the plugin manifest ID and GitHub release asset prefix. |
+| `description`  | Short human-readable plugin description.                                                      |
+| `github_url`   | GitHub repository URL used for install and update resolution.                                 |
+| `author_email` | Plugin author or maintainer email.                                                            |
+| `author_name`  | Plugin author or maintainer display name.                                                     |
 
 Catalog rules:
 
@@ -289,7 +495,13 @@ Catalog rules:
 The initial public catalog entry should be `blackboard`:
 
 ```json
-{"name":"blackboard","description":"Shared mesh blackboard for agent status, findings, questions, answers, and searchable coordination notes.","github_url":"https://github.com/mesh-llm/blackboard","author_email":"maintainers@meshllm.cloud","author_name":"Mesh LLM"}
+{
+  "name": "blackboard",
+  "description": "Shared mesh blackboard for agent status, findings, questions, answers, and searchable coordination notes.",
+  "github_url": "https://github.com/mesh-llm/blackboard",
+  "author_email": "maintainers@meshllm.cloud",
+  "author_name": "Mesh LLM"
+}
 ```
 
 The CLI may resolve a bare plugin name through the catalog:
@@ -414,10 +626,12 @@ Conceptually, the manifest contains:
 
 - plugin identity and version
 - provided capabilities
+- plugin configuration schemas
+- host-projected web UI pages and configuration sections
 - MCP contributions
 - HTTP contributions
 - inference contributions
-- any mesh channel declarations the plugin needs
+- any mesh channel and event subscription declarations the plugin needs
 
 The manifest is the source of truth for host projections.
 
@@ -428,11 +642,13 @@ The primary design goal is very low boilerplate.
 The preferred DSL is surface-first:
 
 - `provides`
+- `config`
+- `web_ui`
+- `mesh`
+- `events`
 - `mcp`
 - `http`
 - `inference`
-- `mesh`
-- `events`
 
 Lifecycle hooks stay local to the plugin definition rather than becoming manifest items:
 
@@ -443,6 +659,11 @@ Lifecycle hooks stay local to the plugin definition rather than becoming manifes
 - `on_mesh_event`
 
 Each section is self-contained. If a plugin contributes something to a host surface, it is declared in the section for that surface.
+
+The `plugin!` macro is order-sensitive. Declare `metadata`, optional
+`startup_policy`, `provides`, `config`, `web_ui`, `mesh`, `events`, `mcp`,
+`http`, `inference`, then lifecycle hooks. Omitted sections do not need empty
+placeholders.
 
 Example:
 
@@ -942,12 +1163,12 @@ The plugin system should also avoid:
 
 The following are intentionally left open for implementation design:
 
-- exact manifest schema
 - exact control protocol message shapes
 - exact stream framing format
 - capability provider selection when multiple plugins implement the same capability
 - whether promoted product routes are configured statically or negotiated dynamically
 - how auth and policy rules are expressed for plugin-defined HTTP bindings
+- how a future multi-bundle or isolated plugin UI version should be negotiated
 
 ## Architecture Baseline
 

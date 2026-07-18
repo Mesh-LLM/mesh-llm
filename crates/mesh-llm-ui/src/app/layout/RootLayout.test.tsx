@@ -1,7 +1,10 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
+import { QueryClient } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppProviders } from '@/app/providers/AppProviders'
 import { RootLayout } from '@/app/layout/RootLayout'
+import type { PluginSummaryRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
+import { pluginKeys } from '@/lib/query/query-keys'
 
 const routerState = vi.hoisted(() => ({ pathname: '/' }))
 const navigateSpy = vi.hoisted(() => vi.fn())
@@ -67,9 +70,9 @@ vi.mock('@/lib/feature-flags', async (importOriginal) => {
   }
 })
 
-function renderRootLayout(initialDataMode: 'harness' | 'live') {
+function renderRootLayout(initialDataMode: 'harness' | 'live', queryClient?: QueryClient) {
   render(
-    <AppProviders initialDataMode={initialDataMode} persistDataMode={false}>
+    <AppProviders initialDataMode={initialDataMode} persistDataMode={false} queryClient={queryClient}>
       <RootLayout />
     </AppProviders>
   )
@@ -85,6 +88,10 @@ describe('RootLayout', () => {
     footerSpy.mockReset()
     useStatusQuerySpy.mockReturnValue({ data: undefined })
     vi.stubGlobal('EventSource', EventSourceStub)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse([]))
+    )
   })
 
   it('does not start the live status stream in harness mode', () => {
@@ -95,7 +102,7 @@ describe('RootLayout', () => {
   })
 
   it('starts the shared live status stream in live mode', () => {
-    renderRootLayout('live')
+    renderRootLayout('live', new QueryClient())
 
     expect(useStatusStreamSpy).toHaveBeenCalledWith({ enabled: true })
   })
@@ -219,4 +226,107 @@ describe('RootLayout', () => {
       })
     )
   })
+
+  it('does not mark plugin routes as a primary app tab', () => {
+    routerState.pathname = '/plugins/blackboard/dashboard'
+
+    renderRootLayout('harness')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        tab: null
+      })
+    )
+  })
+
+  it('passes only ready plugin pages into the auxiliary nav', async () => {
+    const readyWebUi = pluginWebUi('ready')
+    const disabledWebUi = pluginWebUi('disabled')
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(pluginKeys.list(), [
+      pluginSummary('blackboard', readyWebUi),
+      pluginSummary('offline', disabledWebUi)
+    ])
+    useStatusQuerySpy.mockReturnValue({
+      data: {
+        node_id: 'node-1',
+        node_state: 'serving',
+        model_name: 'Qwen-Test',
+        peers: [],
+        models: [],
+        my_vram_gb: 24,
+        api_port: 3131,
+        gpus: [],
+        serving_models: [],
+        hostname: 'mesh.local',
+        token: 'invite-token-123',
+        version: '0.99.0'
+      }
+    })
+
+    renderRootLayout('live', queryClient)
+
+    await waitFor(() =>
+      expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({
+          pluginNavItems: [
+            {
+              pluginName: 'blackboard',
+              pageId: 'dashboard',
+              label: 'Blackboard dashboard',
+              href: '/plugins/blackboard/dashboard',
+              active: false
+            }
+          ]
+        })
+      )
+    )
+  })
 })
+
+function pluginWebUi(state: PluginWebUiStateRaw['state']): PluginWebUiStateRaw {
+  if (state === 'ready') {
+    return {
+      state: 'ready',
+      declared: true,
+      enabled: true,
+      available: true,
+      pages: [
+        {
+          id: 'dashboard',
+          label: 'Blackboard dashboard',
+          route: 'dashboard',
+          bundle_id: 'main',
+          entry_script: 'dashboard.js'
+        }
+      ],
+      config_sections: [],
+      asset_base_url: '/api/plugins/blackboard/web-ui/assets/'
+    }
+  }
+
+  return {
+    state,
+    declared: state !== 'none',
+    enabled: state !== 'disabled',
+    available: false,
+    unavailable_reason: 'not eligible'
+  }
+}
+
+function pluginSummary(name: string, webUi: PluginWebUiStateRaw): PluginSummaryRaw {
+  return {
+    name,
+    kind: 'bridge',
+    enabled: true,
+    status: 'running',
+    web_ui: webUi
+  }
+}
+
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' }
+  })
+}

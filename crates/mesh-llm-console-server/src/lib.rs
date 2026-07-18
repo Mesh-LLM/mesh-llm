@@ -125,6 +125,7 @@ fn is_index_route(path: &str) -> bool {
             | "/__meshviz-perf"
     ) || path.starts_with("/chat/")
         || path.starts_with("/configuration/")
+        || path.starts_with("/plugins/")
 }
 
 fn is_static_asset_route(path: &str) -> bool {
@@ -294,6 +295,7 @@ mod tests {
             "/configuration",
             "/configuration/defaults",
             "/configuration/local-deployment",
+            "/plugins/web-ui-exemplar/overview",
             "/reserves",
             "/chat/thread",
         ] {

@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod native_runtime_events;
 
@@ -34,6 +34,14 @@ use native_runtime_events::skippy_native_model_open_event_reporter;
 
 const SPLIT_PARTICIPANT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SPLIT_PARTICIPANT_STABLE_FOR: Duration = Duration::from_secs(2);
+/// Grace period before withdrawing a split whose only remaining recovery path is
+/// full teardown. A transient stage-peer blip (e.g. a Wi-Fi jitter spike that
+/// briefly drops the peer from gossip) otherwise tears the whole split down on
+/// the first health tick and forces a manual restart. Holding the topology for
+/// ~2 health ticks lets a peer that comes right back keep serving. A genuinely
+/// dead peer still withdraws once the grace elapses. Only delays withdrawal; it
+/// never withdraws more eagerly than before.
+const SPLIT_STAGE_LOSS_WITHDRAW_GRACE: Duration = Duration::from_secs(75);
 pub(super) const SPLIT_DEFAULT_MIN_PARTICIPANTS: usize = 2;
 const SPLIT_INITIAL_SHUTDOWN_GENERATION: u64 = 1;
 const SPLIT_COORDINATOR_LEASE_SECS: u64 = 4 * 60 * 60;
@@ -665,21 +673,25 @@ pub(super) async fn start_runtime_local_model(
 fn scan_layer_package_metadata(
     package: &skippy::SkippyPackageIdentity,
 ) -> Option<models::gguf::GgufCompactMeta> {
+    // Runtime-slice packages point straight at a cached GGUF. Resolve it
+    // before attempting the layer-package-only shared metadata lookup.
+    if package.source_model_path.is_file() {
+        return models::gguf::scan_gguf_compact_meta(&package.source_model_path);
+    }
+
     // The source_model_path in a layer package identity points to the original
     // GGUF.  But for HF layer packages the source model is not downloaded
     // locally.  Instead, look for the shared metadata file in the package dir.
     //
     // The package_ref looks like "hf://meshllm/Qwen3-layers@rev" which resolves
     // to a local cache directory.  Try to find shared/metadata.gguf there.
-    let package_ref = &package.package_ref;
-    let local_ref = skippy::resolve_hf_package_to_local(package_ref, 0, 0, false, false).ok()?;
-    let metadata_path = std::path::Path::new(&local_ref).join("shared/metadata.gguf");
-    if metadata_path.is_file() {
-        return models::gguf::scan_gguf_compact_meta(&metadata_path);
-    }
-    // Fallback: try scanning the source model directly (works for local packages).
-    if package.source_model_path.is_file() {
-        return models::gguf::scan_gguf_compact_meta(&package.source_model_path);
+    if let Ok(local_ref) =
+        skippy::resolve_hf_package_to_local(&package.package_ref, 0, 0, false, false)
+    {
+        let metadata_path = std::path::Path::new(&local_ref).join("shared/metadata.gguf");
+        if metadata_path.is_file() {
+            return models::gguf::scan_gguf_compact_meta(&metadata_path);
+        }
     }
     None
 }
@@ -830,6 +842,7 @@ pub(super) async fn start_runtime_split_model(
         skippy_telemetry: spec.skippy_telemetry.clone(),
         survey_telemetry: spec.survey_telemetry.clone(),
         event_tx: coordinator_tx,
+        stage_loss_first_seen: None,
     }));
 
     Ok(SplitRuntimeStart::Started(Box::new(loaded)))
@@ -1892,6 +1905,11 @@ struct SplitTopologyCoordinator {
     skippy_telemetry: skippy::SkippyTelemetryOptions,
     survey_telemetry: survey::SurveyTelemetry,
     event_tx: tokio::sync::mpsc::Sender<SplitCoordinatorEvent>,
+    /// When the active split first entered a withdraw-only loss state (no
+    /// replacement split or local fallback available). Used to hold the topology
+    /// through a transient stage-peer blip before withdrawing. `None` whenever
+    /// the split is healthy or has a viable recovery path.
+    stage_loss_first_seen: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1906,6 +1924,30 @@ enum SplitLossRecoveryDecision {
     ReplacementSplit,
     LocalFallback,
     Withdraw,
+}
+
+/// Whether to defer a withdraw-only loss (hold the topology through a transient
+/// stage-peer blip) or withdraw now because the grace period has elapsed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SplitWithdrawGraceAction {
+    Defer,
+    Withdraw,
+}
+
+/// Decide whether a withdraw-only loss should be deferred or acted on, given
+/// when the loss was first observed and how long the grace period is.
+///
+/// Pure so the grace policy is unit-testable without a live coordinator. If the
+/// loss was first seen at least `grace` ago, withdraw; otherwise defer.
+fn split_withdraw_grace_action(
+    first_seen: Option<Instant>,
+    now: Instant,
+    grace: Duration,
+) -> SplitWithdrawGraceAction {
+    match first_seen {
+        Some(seen) if now.duration_since(seen) >= grace => SplitWithdrawGraceAction::Withdraw,
+        _ => SplitWithdrawGraceAction::Defer,
+    }
 }
 
 fn spawn_split_topology_coordinator(
@@ -1972,23 +2014,40 @@ impl SplitTopologyCoordinator {
                 .map(|gpu| gpu.allocatable_vram_bytes()),
         )
         .await;
+        let connected_node_ids = split_connected_node_ids(&self.node).await;
         self.node
             .refresh_stage_runtime_statuses(Duration::from_secs(2))
             .await;
         let runtime_statuses = self.node.stage_runtime_statuses().await;
         let missing_stage_nodes =
-            split_missing_active_stage_nodes(&self.active, &snapshot.participants);
+            split_missing_active_stage_nodes(&self.active, &connected_node_ids);
         let unavailable_stage_nodes = split_unavailable_active_stage_nodes(
             &self.active,
-            &snapshot.participants,
+            &connected_node_ids,
             &runtime_statuses,
         );
-        let candidate = self.replan_candidate(reason, &snapshot, &unavailable_stage_nodes);
+        let pending_eligibility_nodes = split_active_stage_nodes_pending_eligibility(
+            &self.active,
+            &connected_node_ids,
+            &snapshot.participants,
+            &unavailable_stage_nodes,
+        );
+        let candidate = if pending_eligibility_nodes.is_empty() {
+            self.replan_candidate(reason, &snapshot, &unavailable_stage_nodes)
+        } else {
+            tracing::debug!(
+                model_ref = self.model_ref,
+                reason,
+                stage_nodes = ?split_node_labels(&pending_eligibility_nodes),
+                "split topology replan deferred while active stage peer eligibility settles"
+            );
+            None
+        };
 
         if let Some(should_continue) = self
             .handle_loss_recovery(
                 reason,
-                &snapshot.participants,
+                &connected_node_ids,
                 &missing_stage_nodes,
                 &unavailable_stage_nodes,
                 candidate.as_ref(),
@@ -2058,18 +2117,23 @@ impl SplitTopologyCoordinator {
     async fn handle_loss_recovery(
         &mut self,
         reason: &'static str,
-        current_participants: &[SplitParticipant],
+        connected_node_ids: &[iroh::EndpointId],
         missing_stage_nodes: &[iroh::EndpointId],
         unavailable_stage_nodes: &[iroh::EndpointId],
         candidate: Option<&SplitTopologyGeneration>,
     ) -> Option<bool> {
         let decision = split_loss_recovery_decision(
             &self.active,
-            current_participants,
+            connected_node_ids,
             unavailable_stage_nodes,
             candidate,
             self.local_model_fits(),
         );
+        // Any non-withdraw outcome means the split is healthy or has a viable
+        // recovery path, so reset the withdraw grace timer.
+        if !matches!(decision, SplitLossRecoveryDecision::Withdraw) {
+            self.stage_loss_first_seen = None;
+        }
         match decision {
             SplitLossRecoveryDecision::NoActiveStageLoss => None,
             SplitLossRecoveryDecision::ReplacementSplit => {
@@ -2092,10 +2156,46 @@ impl SplitTopologyCoordinator {
                 )
                 .await,
             ),
-            SplitLossRecoveryDecision::Withdraw => Some(
-                self.handle_withdraw_loss(reason, missing_stage_nodes, unavailable_stage_nodes)
-                    .await,
-            ),
+            SplitLossRecoveryDecision::Withdraw => {
+                // Hold the topology through a transient stage-peer blip. Start
+                // the grace timer on first observed withdraw-only loss and defer
+                // (keep serving) until it elapses; a peer that returns clears
+                // the timer via the reset above. Only a sustained loss withdraws.
+                let now = Instant::now();
+                if self.stage_loss_first_seen.is_none() {
+                    self.stage_loss_first_seen = Some(now);
+                }
+                match split_withdraw_grace_action(
+                    self.stage_loss_first_seen,
+                    now,
+                    SPLIT_STAGE_LOSS_WITHDRAW_GRACE,
+                ) {
+                    SplitWithdrawGraceAction::Defer => {
+                        tracing::warn!(
+                            model_ref = self.model_ref,
+                            reason,
+                            topology_id = self.active.topology_id,
+                            generation = self.active.generation,
+                            missing_stage_nodes = ?split_node_labels(missing_stage_nodes),
+                            unavailable_stage_nodes = ?split_node_labels(unavailable_stage_nodes),
+                            grace_secs = SPLIT_STAGE_LOSS_WITHDRAW_GRACE.as_secs(),
+                            "split topology lost an active stage peer; holding topology through grace period before withdrawing"
+                        );
+                        Some(true)
+                    }
+                    SplitWithdrawGraceAction::Withdraw => {
+                        self.stage_loss_first_seen = None;
+                        Some(
+                            self.handle_withdraw_loss(
+                                reason,
+                                missing_stage_nodes,
+                                unavailable_stage_nodes,
+                            )
+                            .await,
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -2479,7 +2579,7 @@ fn split_replan_decision_with_reason(
     active: &SplitTopologyGeneration,
     candidate: &SplitTopologyGeneration,
 ) -> (SplitReplanDecision, &'static str) {
-    if split_active_stage_participant_missing(active, &candidate.participants) {
+    if split_active_stage_node_missing_from_participants(active, &candidate.participants) {
         return (
             SplitReplanDecision::Candidate,
             "active_stage_participant_missing",
@@ -2506,12 +2606,12 @@ fn split_replan_decision_with_reason(
 
 fn split_loss_recovery_decision(
     active: &SplitTopologyGeneration,
-    current_participants: &[SplitParticipant],
+    connected_node_ids: &[iroh::EndpointId],
     unavailable_stage_nodes: &[iroh::EndpointId],
     candidate: Option<&SplitTopologyGeneration>,
     local_model_fits: bool,
 ) -> SplitLossRecoveryDecision {
-    if !split_active_stage_participant_missing(active, current_participants)
+    if split_missing_active_stage_nodes(active, connected_node_ids).is_empty()
         && unavailable_stage_nodes.is_empty()
     {
         return SplitLossRecoveryDecision::NoActiveStageLoss;
@@ -2597,24 +2697,24 @@ fn split_stages_meet_minimum(stages: &[RuntimeSliceStagePlan]) -> bool {
     stages.len() >= SPLIT_DEFAULT_MIN_PARTICIPANTS
 }
 
-fn split_active_stage_participant_missing(
+fn split_active_stage_node_missing_from_participants(
     active: &SplitTopologyGeneration,
-    current_participants: &[SplitParticipant],
+    participants: &[SplitParticipant],
 ) -> bool {
-    !split_missing_active_stage_nodes(active, current_participants).is_empty()
+    active.stages.iter().any(|stage| {
+        participants
+            .iter()
+            .all(|participant| participant.node_id != stage.node_id)
+    })
 }
 
 fn split_missing_active_stage_nodes(
     active: &SplitTopologyGeneration,
-    current_participants: &[SplitParticipant],
+    connected_node_ids: &[iroh::EndpointId],
 ) -> Vec<iroh::EndpointId> {
     let mut missing = Vec::new();
     for stage in &active.stages {
-        if current_participants
-            .iter()
-            .any(|participant| participant.node_id == stage.node_id)
-            || missing.contains(&stage.node_id)
-        {
+        if connected_node_ids.contains(&stage.node_id) || missing.contains(&stage.node_id) {
             continue;
         }
         missing.push(stage.node_id);
@@ -2624,10 +2724,10 @@ fn split_missing_active_stage_nodes(
 
 fn split_unavailable_active_stage_nodes(
     active: &SplitTopologyGeneration,
-    current_participants: &[SplitParticipant],
+    connected_node_ids: &[iroh::EndpointId],
     runtime_statuses: &[mesh::StageRuntimeStatus],
 ) -> Vec<iroh::EndpointId> {
-    let mut unavailable = split_missing_active_stage_nodes(active, current_participants);
+    let mut unavailable = split_missing_active_stage_nodes(active, connected_node_ids);
     for status in runtime_statuses {
         if !matches!(
             status.state,
@@ -2651,6 +2751,34 @@ fn split_unavailable_active_stage_nodes(
         }
     }
     unavailable
+}
+
+fn split_active_stage_nodes_pending_eligibility(
+    active: &SplitTopologyGeneration,
+    connected_node_ids: &[iroh::EndpointId],
+    eligible_participants: &[SplitParticipant],
+    unavailable_stage_nodes: &[iroh::EndpointId],
+) -> Vec<iroh::EndpointId> {
+    active
+        .stages
+        .iter()
+        .filter_map(|stage| {
+            let connected = connected_node_ids.contains(&stage.node_id);
+            let eligible = eligible_participants
+                .iter()
+                .any(|participant| participant.node_id == stage.node_id);
+            let unavailable = unavailable_stage_nodes.contains(&stage.node_id);
+            (connected && !eligible && !unavailable).then_some(stage.node_id)
+        })
+        .collect()
+}
+
+async fn split_connected_node_ids(node: &mesh::Node) -> Vec<iroh::EndpointId> {
+    let mut node_ids = vec![node.id()];
+    node_ids.extend(node.peers().await.into_iter().map(|peer| peer.id));
+    node_ids.sort_by_key(ToString::to_string);
+    node_ids.dedup();
+    node_ids
 }
 
 async fn stop_split_generation(
@@ -3844,6 +3972,7 @@ mod tests {
             source_model_sha256: "source".to_string(),
             source_model_bytes: u64::from(layer_count) * 1_000_000,
             source_files: Vec::new(),
+            layer_weight_bytes: Vec::new(),
             layer_count,
             activation_width: 2048,
             tensor_count: 100,
@@ -3990,6 +4119,19 @@ mod tests {
         push_u32_kv(&mut bytes, "llama.attention.head_count_kv", 8);
         push_u32_kv(&mut bytes, "llama.attention.key_length", 128);
         fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn split_metadata_reads_a_synthetic_direct_gguf_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let model_path = temp.path().join("model.gguf");
+        write_fake_gguf_model(&model_path);
+        let package = skippy::synthetic_direct_gguf_package("test/model", &model_path).unwrap();
+
+        let metadata = scan_layer_package_metadata(&package).expect("direct GGUF metadata");
+
+        assert_eq!(metadata.context_length, 8192);
+        assert_eq!(metadata.embedding_size, 4096);
     }
 
     fn write_test_layer_package(dir: &Path, source_model_bytes: u64) {
@@ -5286,7 +5428,7 @@ max_tokens = 222
     }
 
     #[test]
-    fn split_missing_active_stage_nodes_ignores_unused_lost_participants() {
+    fn split_missing_active_stage_nodes_ignores_unused_lost_nodes() {
         let active = SplitTopologyGeneration::new(
             "topology-a".into(),
             "run-a".into(),
@@ -5294,10 +5436,10 @@ max_tokens = 222
             vec![participant(1), participant(2), participant(3)],
             vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)],
         );
-        let current_participants = vec![participant(1)];
+        let connected_node_ids = vec![make_id(1), make_id(3)];
 
         assert_eq!(
-            split_missing_active_stage_nodes(&active, &current_participants),
+            split_missing_active_stage_nodes(&active, &connected_node_ids),
             vec![make_id(2)]
         );
     }
@@ -5320,7 +5462,7 @@ max_tokens = 222
         assert_eq!(
             split_unavailable_active_stage_nodes(
                 &active,
-                &[participant(1), participant(2), participant(3)],
+                &[make_id(1), make_id(2), make_id(3)],
                 &statuses,
             ),
             vec![make_id(2)]
@@ -5345,8 +5487,29 @@ max_tokens = 222
         assert_eq!(
             split_unavailable_active_stage_nodes(
                 &active,
-                &[participant(1), participant(2), participant(3)],
+                &[make_id(1), make_id(2), make_id(3)],
                 &statuses,
+            ),
+            vec![make_id(2)]
+        );
+    }
+
+    #[test]
+    fn split_active_stage_nodes_pending_eligibility_retains_connected_stage() {
+        let active = SplitTopologyGeneration::new(
+            "topology-a".into(),
+            "run-a".into(),
+            1,
+            vec![participant(1), participant(2)],
+            vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)],
+        );
+
+        assert_eq!(
+            split_active_stage_nodes_pending_eligibility(
+                &active,
+                &[make_id(1), make_id(2)],
+                &[participant(1)],
+                &[],
             ),
             vec![make_id(2)]
         );
@@ -5683,7 +5846,7 @@ max_tokens = 222
         assert_eq!(
             split_loss_recovery_decision(
                 &active,
-                &[participant(1), participant(3)],
+                &[make_id(1), make_id(3)],
                 &[],
                 Some(&candidate),
                 true,
@@ -5711,7 +5874,7 @@ max_tokens = 222
         assert_eq!(
             split_loss_recovery_decision(
                 &active,
-                &[participant(1), participant(2), participant(3)],
+                &[make_id(1), make_id(2), make_id(3)],
                 &[make_id(2)],
                 Some(&candidate),
                 true,
@@ -5740,7 +5903,7 @@ max_tokens = 222
         assert_eq!(
             split_loss_recovery_decision(
                 &active,
-                &[participant(1), participant(2), participant(3)],
+                &[make_id(1), make_id(2), make_id(3)],
                 &[make_id(2)],
                 Some(&candidate),
                 true,
@@ -5765,7 +5928,7 @@ max_tokens = 222
         );
 
         assert_eq!(
-            split_loss_recovery_decision(&active, &[participant(1)], &[], None, true),
+            split_loss_recovery_decision(&active, &[make_id(1)], &[], None, true),
             SplitLossRecoveryDecision::LocalFallback
         );
     }
@@ -5781,8 +5944,67 @@ max_tokens = 222
         );
 
         assert_eq!(
-            split_loss_recovery_decision(&active, &[participant(1)], &[], None, false),
+            split_loss_recovery_decision(&active, &[make_id(1)], &[], None, false),
             SplitLossRecoveryDecision::Withdraw
+        );
+    }
+
+    #[test]
+    fn split_withdraw_grace_defers_a_fresh_loss() {
+        // First observation of a withdraw-only loss must defer, not withdraw —
+        // this is what holds the split through a transient jitter blip.
+        //
+        // Use a fixed `first_seen` baseline and derive `now` by *adding* to it,
+        // never subtracting from `Instant::now()` — subtraction can panic on a
+        // freshly booted CI VM whose uptime is less than the offset.
+        let first_seen = Instant::now();
+        assert_eq!(
+            split_withdraw_grace_action(Some(first_seen), first_seen, Duration::from_secs(75)),
+            SplitWithdrawGraceAction::Defer
+        );
+        // A loss seen well within the grace window still defers.
+        assert_eq!(
+            split_withdraw_grace_action(
+                Some(first_seen),
+                first_seen + Duration::from_secs(30),
+                Duration::from_secs(75),
+            ),
+            SplitWithdrawGraceAction::Defer
+        );
+    }
+
+    #[test]
+    fn split_withdraw_grace_withdraws_after_grace_elapses() {
+        // A loss that has persisted at least the grace period withdraws, so a
+        // genuinely dead peer is not held forever. `now` is derived by adding to
+        // the `first_seen` baseline (never subtracting from `Instant::now()`).
+        let first_seen = Instant::now();
+        assert_eq!(
+            split_withdraw_grace_action(
+                Some(first_seen),
+                first_seen + Duration::from_secs(75),
+                Duration::from_secs(75),
+            ),
+            SplitWithdrawGraceAction::Withdraw
+        );
+        assert_eq!(
+            split_withdraw_grace_action(
+                Some(first_seen),
+                first_seen + Duration::from_secs(120),
+                Duration::from_secs(75),
+            ),
+            SplitWithdrawGraceAction::Withdraw
+        );
+    }
+
+    #[test]
+    fn split_withdraw_grace_defers_when_no_loss_recorded() {
+        // No recorded first-seen instant means the grace timer has not started;
+        // defer rather than withdraw.
+        let now = Instant::now();
+        assert_eq!(
+            split_withdraw_grace_action(None, now, Duration::from_secs(75)),
+            SplitWithdrawGraceAction::Defer
         );
     }
 
@@ -5804,7 +6026,7 @@ max_tokens = 222
         );
 
         assert_eq!(
-            split_loss_recovery_decision(&active, &[participant(1)], &[], Some(&candidate), true),
+            split_loss_recovery_decision(&active, &[make_id(1)], &[], Some(&candidate), true),
             SplitLossRecoveryDecision::LocalFallback
         );
         assert!(!split_candidate_is_valid_replacement_split(&candidate));
@@ -5831,11 +6053,27 @@ max_tokens = 222
         assert_eq!(
             split_loss_recovery_decision(
                 &active,
-                &[participant(1), participant(2)],
+                &[make_id(1), make_id(2)],
                 &[],
                 Some(&candidate),
                 false,
             ),
+            SplitLossRecoveryDecision::NoActiveStageLoss
+        );
+    }
+
+    #[test]
+    fn split_loss_recovery_ignores_connected_but_temporarily_ineligible_stage_peer() {
+        let active = SplitTopologyGeneration::new(
+            "topology-a".into(),
+            "run-a".into(),
+            1,
+            vec![participant(1), participant(2)],
+            vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)],
+        );
+
+        assert_eq!(
+            split_loss_recovery_decision(&active, &[make_id(1), make_id(2)], &[], None, true,),
             SplitLossRecoveryDecision::NoActiveStageLoss
         );
     }

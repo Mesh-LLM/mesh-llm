@@ -260,6 +260,10 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             ConfigValueSchema::Boolean,
         ),
         plugin_setting(
+            &format!("{plugin_prefix}.web_ui_enabled"),
+            ConfigValueSchema::Boolean,
+        ),
+        plugin_setting(
             &format!("{plugin_prefix}.command"),
             ConfigValueSchema::String,
         ),

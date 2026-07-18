@@ -1,0 +1,9 @@
+version = 1
+
+[[plugin]]
+name = "web-ui-exemplar"
+enabled = true
+web_ui_enabled = true
+
+[plugin.settings]
+retention_days = 30

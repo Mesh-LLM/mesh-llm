@@ -550,13 +550,42 @@ fn tool_is_relevant_to_text(tool_name: &str, text: &str) -> bool {
             text,
             &["read ", "open ", "inspect ", "fetch file", "show file"],
         ),
-        "edit" | "edit_file" | "file_write" | "write" => {
-            contains_any(text, &["edit ", "change ", "modify ", "write ", "create "])
-        }
+        "edit" | "edit_file" | "file_write" | "write" => contains_any(
+            text,
+            &[
+                "edit ",
+                "change ",
+                "modify ",
+                "write ",
+                "create ",
+                "implement ",
+                "coding",
+                "fix ",
+            ],
+        ),
         "exec" | "run_command" | "process" => contains_any(
             text,
             &[
                 "run ", "execute ", "shell", "terminal", "command", "process",
+            ],
+        ),
+        "shell" => contains_any(
+            text,
+            &[
+                "run ", "execute ", "shell", "terminal", "command", "process", "test", "read ",
+                "inspect ",
+            ],
+        ),
+        "tree" | "dir_list" | "dir_fetch" | "list_files" => contains_any(
+            text,
+            &[
+                "inspect ",
+                "repository",
+                "project",
+                "list ",
+                "directory",
+                "folder",
+                "dir ",
             ],
         ),
         "web_search" => contains_any(
@@ -590,9 +619,6 @@ fn tool_is_relevant_to_text(tool_name: &str, text: &str) -> bool {
                 "github.com/",
             ],
         ),
-        "dir_list" | "dir_fetch" | "list_files" => {
-            contains_any(text, &["list ", "directory", "folder", "dir "])
-        }
         "image" | "image_generate" => contains_any(text, &["image", "picture", "generate"]),
         "pdf" => text.contains("pdf"),
         "memory_search" | "memory_get" => text.contains("memory"),
@@ -717,7 +743,7 @@ async fn handle_tool_result(
 ) -> TurnResult {
     let candidates = reducer_candidates(config);
     let candidate_count = candidates.len();
-    let repeated_tool = repeated_same_tool_results(session);
+    let repeated_tool = repeated_identical_tool_results(session);
     let force_answer = repeated_tool.is_some();
     let selected_tool_names = if force_answer {
         Vec::new()
@@ -917,16 +943,19 @@ fn short_exact_value(value: &str) -> bool {
     !trimmed.is_empty() && trimmed.len() <= 160 && !trimmed.contains('\n')
 }
 
-fn repeated_same_tool_results(session: &Session) -> Option<(String, usize)> {
+fn repeated_identical_tool_results(session: &Session) -> Option<(String, usize)> {
     let calls = session.pending_tool_calls();
     let last = calls.last()?;
     last.result.as_ref()?;
 
     let tool_name = last.function_name.as_str();
+    let arguments = &last.arguments;
     let count = calls
         .iter()
         .rev()
-        .take_while(|call| call.function_name == tool_name && call.result.is_some())
+        .take_while(|call| {
+            call.function_name == tool_name && call.arguments == *arguments && call.result.is_some()
+        })
         .count();
 
     (count >= SAME_TOOL_FORCE_ANSWER_THRESHOLD).then(|| (tool_name.to_string(), count))
@@ -1713,6 +1742,34 @@ mod response_builder_tests {
     }
 
     #[test]
+    fn coding_prompt_keeps_common_workflow_tools_selected() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Inspect the repository, read the files, implement the code, and run the tests."
+            })],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "edit"}},
+                {"type": "function", "function": {"name": "read_image"}},
+                {"type": "function", "function": {"name": "shell"}},
+                {"type": "function", "function": {"name": "tree"}},
+                {"type": "function", "function": {"name": "write"}}
+            ])),
+        );
+
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec![
+                "edit".to_string(),
+                "shell".to_string(),
+                "tree".to_string(),
+                "write".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn explicit_exec_request_suppresses_url_broadened_tools() {
         let mut session = Session::new();
         session.ingest(
@@ -1770,11 +1827,11 @@ mod response_builder_tests {
             ])),
         );
 
-        assert_eq!(repeated_same_tool_results(&session), None);
+        assert_eq!(repeated_identical_tool_results(&session), None);
     }
 
     #[test]
-    fn three_same_tool_results_force_answer() {
+    fn three_identical_tool_results_force_answer() {
         let mut session = Session::new();
         session.ingest(
             &[
@@ -1792,9 +1849,30 @@ mod response_builder_tests {
         );
 
         assert_eq!(
-            repeated_same_tool_results(&session),
+            repeated_identical_tool_results(&session),
             Some(("web_search".to_string(), 3))
         );
+    }
+
+    #[test]
+    fn three_same_tool_results_with_different_arguments_do_not_force_answer() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "inspect the project"}),
+                tool_call_msg_with_arguments("call_1", "tree", r#"{"path":"."}"#),
+                tool_result_msg("call_1", "facts src tests"),
+                tool_call_msg_with_arguments("call_2", "tree", r#"{"path":"facts"}"#),
+                tool_result_msg("call_2", "signal.md"),
+                tool_call_msg_with_arguments("call_3", "tree", r#"{"path":"src"}"#),
+                tool_result_msg("call_3", "smoke_calc.py"),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "tree"}}
+            ])),
+        );
+
+        assert_eq!(repeated_identical_tool_results(&session), None);
     }
 
     #[test]
@@ -1857,13 +1935,17 @@ mod response_builder_tests {
     }
 
     fn tool_call_msg(id: &str, name: &str) -> Value {
+        tool_call_msg_with_arguments(id, name, r#"{"query":"x"}"#)
+    }
+
+    fn tool_call_msg_with_arguments(id: &str, name: &str, arguments: &str) -> Value {
         serde_json::json!({
             "role": "assistant",
             "content": null,
             "tool_calls": [{
                 "id": id,
                 "type": "function",
-                "function": {"name": name, "arguments": "{\"query\":\"x\"}"}
+                "function": {"name": name, "arguments": arguments}
             }]
         })
     }

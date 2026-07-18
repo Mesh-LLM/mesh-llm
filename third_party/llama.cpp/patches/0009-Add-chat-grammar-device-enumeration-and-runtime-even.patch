@@ -1,7 +1,7 @@
-From a5efd500c194af551953a0fef9c1d851cde7a1e0 Mon Sep 17 00:00:00 2001
+From bd3343f6b65ad898f32c1179cdd8424275342df6 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 09/14] Add chat grammar, device enumeration, and runtime
+Subject: [PATCH 09/16] Add chat grammar, device enumeration, and runtime
  events
 
 Squashes chat grammar exception containment and lazy triggering, backend device enumeration, min-p sampling, KV cell compaction, and model-open runtime events.
@@ -20,7 +20,7 @@ Squashes chat grammar exception containment and lazy triggering, backend device 
  create mode 100644 include/skippy/devices.h
 
 diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
-index 36aab7ec..1ebff817 100644
+index 3f91364c..4b582932 100644
 --- a/common/chat-auto-parser-generator.cpp
 +++ b/common/chat-auto-parser-generator.cpp
 @@ -23,6 +23,18 @@ static void foreach_function(const json & tools, const std::function<void(const
@@ -1451,7 +1451,7 @@ index 27dc78b0..4dcd0d96 100644
  
  enum skippy_status skippy_model_free(
 diff --git a/tests/test-chat-auto-parser.cpp b/tests/test-chat-auto-parser.cpp
-index d15fdd2c..8e662c3e 100644
+index 78e42c65..2d854509 100644
 --- a/tests/test-chat-auto-parser.cpp
 +++ b/tests/test-chat-auto-parser.cpp
 @@ -57,6 +57,7 @@ static void test_seed_oss_tool_with_reasoning(testing & t);
@@ -1501,7 +1501,7 @@ index d15fdd2c..8e662c3e 100644
  static common_chat_template load_cohere_template(testing & t) {
      return load_template(t, "models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja");
  }
-@@ -2089,4 +2115,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
+@@ -2092,4 +2118,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
          }
      }
  }

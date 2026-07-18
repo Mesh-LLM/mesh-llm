@@ -476,10 +476,12 @@ pub fn installed_model_capabilities(model_name: &str) -> ModelCapabilities {
     capabilities::infer_local_model_capabilities(model_name, &path)
 }
 
+pub fn loaded_remote_catalog_display_name(model_name: &str) -> Option<String> {
+    find_loaded_remote_catalog_model_exact(model_name).map(|model| model.name.clone())
+}
+
 pub fn installed_model_display_name(model_name: &str) -> String {
-    find_loaded_remote_catalog_model_exact(model_name)
-        .map(|model| model.name.clone())
-        .unwrap_or_else(|| model_name.to_string())
+    loaded_remote_catalog_display_name(model_name).unwrap_or_else(|| model_name.to_string())
 }
 
 pub fn installed_model_huggingface_ref(identity: &HuggingFaceModelIdentity) -> String {

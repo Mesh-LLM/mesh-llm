@@ -37,6 +37,10 @@ Plugin authors think in terms of the host surfaces they contribute to:
 - `http`
 - `inference`
 - `provides`
+- `config`
+- `web_ui`
+- `mesh`
+- `events`
 
 The host runtime still executes native service invocations internally, but the author-facing DSL is organized by the surface the plugin contributes to.
 
@@ -47,6 +51,10 @@ This means:
 - local HTTP routes live under `http`
 - attached or plugin-hosted inference backends live under `inference`
 - stable product capabilities live under `provides`
+- plugin settings schemas live under `config`
+- local console pages and configuration sections live under `web_ui`
+- plugin-specific peer messages and host lifecycle subscriptions live under
+  `mesh` and `events`
 
 There is no separate top-level `services` section in the preferred DSL.
 
@@ -86,6 +94,14 @@ For large or streaming payloads, the host and plugin negotiate a short-lived sid
 ### 5. Capabilities Are Stable Product Contracts
 
 When `mesh-llm` wants a stable product API such as `/api/objects`, core should depend on a named capability like `object-store.v1`, not on a specific plugin ID like `blobstore`.
+
+### 6. Web UI Is A Host Projection
+
+Plugins may optionally declare a local web UI bundle. The host validates and
+serves the package assets on its own origin, mounts ready pages at the static
+`/plugins/<plugin>/<page>` route, and mounts configuration sections under
+Configuration → Plugins → Integrations. `web_ui_enabled` controls this
+projection only; it never starts, stops, or disables the plugin process.
 
 ## Architecture
 
@@ -159,12 +175,12 @@ The plugin system should also avoid:
 
 ## Open Questions
 
-- exact manifest schema
 - exact control protocol message shapes
 - exact stream framing format
 - capability provider selection when multiple plugins implement the same capability
 - whether promoted product routes are configured statically or negotiated dynamically
 - how auth and policy rules are expressed for plugin-defined HTTP bindings
+- how a future multi-bundle or isolated plugin UI version should be negotiated
 
 ## Architecture Baseline
 

@@ -8477,6 +8477,18 @@ impl Node {
         self.owner_control_update_from_state(&state)
     }
 
+    #[cfg(test)]
+    pub(crate) async fn replace_config_state_for_test(
+        &self,
+        path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        let state = crate::runtime::config_state::ConfigState::load(path)?;
+        let revision = state.revision();
+        *self.config_state.lock().await = state;
+        let _ = self.config_revision_tx.send(revision);
+        Ok(())
+    }
+
     fn owner_control_watch_response(
         &self,
         include_snapshot: bool,
@@ -9248,6 +9260,7 @@ mod gossip;
 mod heartbeat;
 mod lan_bootstrap;
 mod owner_control_response;
+mod plugin_config;
 mod plugin_streams;
 pub(crate) mod requirements;
 mod stage_proto;

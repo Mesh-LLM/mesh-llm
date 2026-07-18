@@ -1,7 +1,7 @@
-From cdd3c130c83f3e33bf202388cb75d74c63344397 Mon Sep 17 00:00:00 2001
+From 0b214c33dd63bb1513d74f13e486d9648da1965d Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 03/14] Add staged sampling, checkpoints, and part loading
+Subject: [PATCH 03/16] Add staged sampling, checkpoints, and part loading
 
 Squashes sampling configuration, batched verification frames, recurrent/native session checkpoints, logit bias, session trim, verification handoff fixes, split-metadata stripping, thinking toggle support, and ordered GGUF part loading.
 ---
@@ -321,7 +321,7 @@ index 3fb84fdd..d889c99d 100644
          bool use_mmap,
          bool use_direct_io,
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index aebbc1ff..78112d9a 100644
+index b66759b2..11ee5fa8 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -881,7 +881,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::

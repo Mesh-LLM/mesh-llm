@@ -123,6 +123,38 @@ This keeps product APIs stable while allowing the backing plugin to change.
 
 External endpoints do not automatically become HTTP routes. They are service registrations that the host may use for routing or aggregation according to their endpoint kind.
 
+## Web UI Projection
+
+The optional `web_ui` manifest block contributes local console UI through the
+existing plugin namespace. It is not a plugin-run HTTP server and it does not
+change plugin process state.
+
+The v1 host API is:
+
+- `GET /api/plugins/:plugin/web-ui`
+- `PATCH /api/plugins/:plugin/web-ui/enabled`
+- `GET /api/plugins/:plugin/web-ui/config`
+- `PATCH /api/plugins/:plugin/web-ui/config`
+- `GET /api/plugins/:plugin/web-ui/assets/*asset`
+
+`PATCH .../enabled` accepts `{ "enabled": true | false }` and persists only
+the `web_ui_enabled` preference. The config endpoint returns the mounted
+plugin's visible settings and schema; its patch accepts only plugin-owned
+`settings` and optional `unset` keys. It rejects host-owned fields such as
+`enabled`, `web_ui_enabled`, `command`, `args`, `url`, and `startup`.
+Malformed mutations return HTTP 400; schema-invalid values return HTTP 422.
+
+Only a `ready` projection serves assets or imports bundle code. The host
+exposes `none`, `ready`, `disabled`, `invalid`, and `plugin_not_running` states.
+Assets are same-origin trusted modules and use `Cache-Control: no-cache`, so a
+reinstalled local package is revalidated instead of remaining stale under an
+immutable URL.
+Pages use the static console route `/plugins/:plugin/:pageId`; configuration
+sections mount only under the existing Integrations surface. See [Developing
+Plugins](/docs/pages/developing-plugins/) for the author contract and the
+[web UI exemplar](https://github.com/Mesh-LLM/mesh-llm/tree/main/docs/plugins/exemplars/web-ui)
+for a complete package shape.
+
 ### Buffered vs Streamed HTTP
 
 HTTP bindings may be declared as buffered request / buffered response, streamed request / buffered response, buffered request / streamed response, or streamed request / streamed response. The host decides whether to keep the invocation on the control channel or negotiate a side stream based on the binding mode and payload size.

@@ -7,6 +7,7 @@ import { ConfigurationHeader } from '@/features/configuration/components/Configu
 import { ConfigurationLiveDataBoundary } from '@/features/configuration/components/ConfigurationLiveDataBoundary'
 import { ConfigurationReadOnlyNodesDivider } from '@/features/configuration/components/ConfigurationReadOnlyNodesDivider'
 import { ConfigurationRuntimeControlBanner } from '@/features/configuration/components/ConfigurationRuntimeControlBanner'
+import { PluginIntegrationsPanel } from '@/features/configuration/components/PluginIntegrationsPanel'
 import {
   formatRuntimeControlDisabledReason,
   formatRuntimeControlDisabledSaveError
@@ -675,6 +676,46 @@ function ConfigurationEditorPage({
       tomlSettings
     ]
   )
+  const pluginIntegrationMetadata = <PluginIntegrationsPanel metadataEnabled={liveMode && activeTab === 'plugins'} />
+  const pluginSettingsContent = pluginsSettingsData?.settings.length ? (
+    <DefaultsTab
+      data={pluginsSettingsData}
+      values={defaultsValues}
+      onResetAll={() => resetSettings(pluginsSettingsData)}
+      onSettingValueChange={updateDefaultSetting}
+      configFilePath={displayData.configFilePath}
+      readOnlyNotice={runtimeControlNotice}
+      previewTitle="[[plugin]]"
+      screenLabel="Configuration · plugins"
+      summaryDescription={
+        <>
+          Plugin settings are generated from installed plugin schemas and written under each matching{' '}
+          <span className="rounded border border-border-soft bg-surface px-1 font-mono text-foreground">
+            [[plugin]]
+          </span>{' '}
+          entry. Host-owned fields such as command and startup policy stay separate from plugin-owned custom settings.
+        </>
+      }
+      summaryStatus={
+        pluginsDirty
+          ? `${pluginsSettingsData.settings.length} settings · modified`
+          : `${pluginsSettingsData.settings.length} settings`
+      }
+      summaryTitle="Plugin settings"
+      summaryTitleId="plugins-summary-heading"
+      summarySupplement={pluginIntegrationMetadata}
+      previewTip={
+        <>Plugin manifests own these fields; update or reinstall the plugin when a setting is missing from this list.</>
+      }
+    />
+  ) : (
+    <div className="space-y-[14px]">
+      {pluginIntegrationMetadata}
+      <ConfigurationPlaceholderPanel title="Plugins" icon={Blocks}>
+        Plugin settings will appear here when an installed plugin publishes config schema metadata.
+      </ConfigurationPlaceholderPanel>
+    </div>
+  )
 
   const tabs: ConfigurationTabItem[] = [
     {
@@ -871,45 +912,7 @@ function ConfigurationEditorPage({
             label: 'Plugins',
             icon: Blocks,
             dirty: pluginsDirty,
-            content: pluginsSettingsData?.settings.length ? (
-              <DefaultsTab
-                data={pluginsSettingsData}
-                values={defaultsValues}
-                onResetAll={() => resetSettings(pluginsSettingsData)}
-                onSettingValueChange={updateDefaultSetting}
-                configFilePath={displayData.configFilePath}
-                readOnlyNotice={runtimeControlNotice}
-                previewTitle="[[plugin]]"
-                screenLabel="Configuration · plugins"
-                summaryDescription={
-                  <>
-                    Plugin settings are generated from installed plugin schemas and written under each matching{' '}
-                    <span className="rounded border border-border-soft bg-surface px-1 font-mono text-foreground">
-                      [[plugin]]
-                    </span>{' '}
-                    entry. Host-owned fields such as command and startup policy stay separate from plugin-owned custom
-                    settings.
-                  </>
-                }
-                summaryStatus={
-                  pluginsDirty
-                    ? `${pluginsSettingsData.settings.length} settings · modified`
-                    : `${pluginsSettingsData.settings.length} settings`
-                }
-                summaryTitle="Plugin settings"
-                summaryTitleId="plugins-summary-heading"
-                previewTip={
-                  <>
-                    Plugin manifests own these fields; update or reinstall the plugin when a setting is missing from
-                    this list.
-                  </>
-                }
-              />
-            ) : (
-              <ConfigurationPlaceholderPanel title="Plugins" icon={Blocks}>
-                Plugin settings will appear here when an installed plugin publishes config schema metadata.
-              </ConfigurationPlaceholderPanel>
-            )
+            content: pluginSettingsContent
           } satisfies ConfigurationTabItem
         ]
       : []),

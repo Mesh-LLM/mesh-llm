@@ -1,0 +1,66 @@
+{
+  "config_schema": {
+    "plugin_name": "web-ui-exemplar",
+    "schema_version": 1,
+    "allow_unvalidated_config": false,
+    "settings": [
+      {
+        "key": "retention_days",
+        "value_schema": {
+          "kind": "integer",
+          "allow_additional_properties": false
+        },
+        "required": false,
+        "default_json": "14",
+        "constraints": [
+          {
+            "kind": "range",
+            "min": "1",
+            "max": "365"
+          }
+        ],
+        "apply_mode": "dynamic_validation_only",
+        "restart_scope": "plugin_process",
+        "visibility": "user",
+        "description": "How long exemplar notes stay available.",
+        "presentation": {
+          "label": "Retention days",
+          "help": "Persisted through host-owned plugin config, not bundle-local storage.",
+          "category_id": "exemplar-retention",
+          "category_label": "Retention",
+          "category_summary": "Exemplar retention settings",
+          "category_order": 10,
+          "setting_order": 20,
+          "unit": "days",
+          "control_hint": "number"
+        }
+      }
+    ]
+  },
+  "web_ui": {
+    "pages": [
+      {
+        "id": "overview",
+        "label": "Exemplar Notes",
+        "route": "overview",
+        "bundle_id": "main",
+        "entry_script": "register-mesh-plugin-ui.js"
+      }
+    ],
+    "config_sections": [
+      {
+        "id": "page-actions",
+        "title": "Exemplar page",
+        "entry_script": "register-mesh-plugin-ui.js",
+        "parent_tab": "integrations",
+        "bundle_id": "main"
+      }
+    ],
+    "bundles": [
+      {
+        "id": "main",
+        "root_path": "bundle"
+      }
+    ]
+  }
+}
