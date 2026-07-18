@@ -3,6 +3,7 @@ use std::{fs, io::Write, path::PathBuf};
 use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use reqwest::Client;
+use sha2::Digest;
 
 use crate::{
     archive::{ExtractedPluginArchive, extract_plugin_archive},
@@ -340,6 +341,7 @@ async fn download_asset(
     asset: &GitHubReleaseAsset,
     progress: &mut impl PluginProgressReporter,
 ) -> Result<PathBuf> {
+    required_plugin_asset_sha256(asset)?;
     progress.report(PluginProgressEvent::DownloadStarted {
         asset: asset.name.clone(),
         total_bytes: asset.size,
@@ -355,29 +357,61 @@ async fn download_asset(
         bail!("plugin asset download failed: {status} {}", asset.name);
     }
 
-    let temp = tempfile::Builder::new()
+    let mut temp = tempfile::Builder::new()
         .prefix("mesh-plugin-asset-")
         .suffix(&format!("-{}", asset.name))
         .tempfile()
         .context("create plugin asset temp file")?;
-    let (mut file, path) = temp.keep().context("persist plugin asset temp path")?;
 
     let mut downloaded = 0u64;
+    let mut hasher = sha2::Sha256::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.with_context(|| format!("read plugin asset {}", asset.name))?;
         downloaded += chunk.len() as u64;
-        file.write_all(&chunk)
-            .with_context(|| format!("write plugin asset temp file {}", path.display()))?;
+        temp.write_all(&chunk)
+            .with_context(|| format!("write plugin asset temp file {}", temp.path().display()))?;
+        hasher.update(&chunk);
         progress.report(PluginProgressEvent::DownloadProgress {
             downloaded_bytes: downloaded,
             total_bytes: asset.size,
         });
     }
+    temp.flush()
+        .with_context(|| format!("flush plugin asset temp file {}", temp.path().display()))?;
+    verify_plugin_asset_checksum(asset, hasher)?;
+    let (_file, path) = temp.keep().context("persist plugin asset temp path")?;
     progress.report(PluginProgressEvent::DownloadFinished {
         asset: asset.name.clone(),
     });
     Ok(path)
+}
+
+fn verify_plugin_asset_checksum(asset: &GitHubReleaseAsset, hasher: sha2::Sha256) -> Result<()> {
+    let expected = required_plugin_asset_sha256(asset)?;
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        bail!(
+            "plugin asset checksum mismatch for {}: expected {expected}, got {actual}",
+            asset.name
+        );
+    }
+    Ok(())
+}
+
+fn required_plugin_asset_sha256(asset: &GitHubReleaseAsset) -> Result<String> {
+    let digest = asset
+        .digest
+        .as_deref()
+        .with_context(|| format!("plugin asset {} is missing a GitHub digest", asset.name))?;
+    let Some(sha256) = digest.trim().strip_prefix("sha256:") else {
+        bail!("plugin asset {} digest must use sha256", asset.name);
+    };
+    let sha256 = sha256.to_ascii_lowercase();
+    if sha256.len() != 64 || !sha256.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        bail!("plugin asset {} has an invalid sha256 digest", asset.name);
+    }
+    Ok(sha256)
 }
 
 #[cfg(test)]
@@ -616,6 +650,7 @@ mod tests {
             name: "demo-v1.0.0-aarch64-apple-darwin.tar.gz".to_string(),
             browser_download_url: "https://example.invalid/demo.tar.gz".to_string(),
             size: Some(123),
+            digest: None,
         };
 
         let metadata = build_installed_metadata(
@@ -741,5 +776,42 @@ mod tests {
             Some(PluginProgressEvent::Installed { name, version })
                 if name == "demo" && version == "0.1.0-dev"
         ));
+    }
+
+    #[test]
+    fn modified_plugin_asset_is_rejected_before_extraction() {
+        let expected = format!("{:x}", sha2::Sha256::digest(b"expected plugin archive"));
+        let asset = GitHubReleaseAsset {
+            name: "demo.tar.gz".to_string(),
+            browser_download_url: "https://example.invalid/demo.tar.gz".to_string(),
+            size: None,
+            digest: Some(format!("sha256:{expected}")),
+        };
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(b"modified plugin archive");
+
+        let error = verify_plugin_asset_checksum(&asset, hasher)
+            .expect_err("modified plugin asset must fail verification");
+        assert!(error.to_string().contains("checksum mismatch"), "{error:?}");
+    }
+
+    #[test]
+    fn plugin_assets_without_valid_github_digests_are_rejected() {
+        let mut asset = GitHubReleaseAsset {
+            name: "demo.tar.gz".to_string(),
+            browser_download_url: "https://example.invalid/demo.tar.gz".to_string(),
+            size: None,
+            digest: None,
+        };
+        let missing = required_plugin_asset_sha256(&asset).unwrap_err();
+        assert!(missing.to_string().contains("missing a GitHub digest"));
+
+        asset.digest = Some("sha512:abc".to_string());
+        let wrong_algorithm = required_plugin_asset_sha256(&asset).unwrap_err();
+        assert!(wrong_algorithm.to_string().contains("must use sha256"));
+
+        asset.digest = Some("sha256:not-a-digest".to_string());
+        let malformed = required_plugin_asset_sha256(&asset).unwrap_err();
+        assert!(malformed.to_string().contains("invalid sha256"));
     }
 }

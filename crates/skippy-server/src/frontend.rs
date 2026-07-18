@@ -1166,10 +1166,19 @@ struct PrefillTransportEstimate {
     observations: u64,
 }
 
+/// Read timeout for the lane ready handshake. `recv_ready` is a blocking
+/// `read_exact`; without this a stalled/half-dead downstream connection hangs
+/// lane creation forever (observed as a lane stuck in "waiting ready" that
+/// never completes and never errors). A single bounded deadline turns the stall
+/// into an error instead. `connect_binary_downstream` already bounds the TCP
+/// connect, so this handshake read is the only remaining unbounded wait — no
+/// outer retry, which would only multiply the worst-case stall (see PR #1011
+/// review). Applied only to the handshake read, then cleared so the persistent
+/// lane's generation reads stay blocking.
+const LANE_READY_READ_TIMEOUT: Duration = Duration::from_secs(20);
+
 impl PersistentStageLanePool {
     const PREFILL_TRANSPORT_EWMA_ALPHA: f64 = 0.25;
-    const CONNECT_ATTEMPTS: usize = 3;
-    const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
     fn new(
         config: &StageConfig,
@@ -1369,23 +1378,17 @@ impl PersistentStageLanePool {
     fn connect_lane(&self) -> Result<PersistentStageLane> {
         let lane_id = self.next_lane_id.fetch_add(1, Ordering::Relaxed);
         let timer = PhaseTimer::start();
-        let stream = retry_persistent_lane_open(|| {
-            let mut stream = connect_binary_downstream(&self.config, self.timeout_secs)?
-                .ok_or_else(|| anyhow!("embedded stage0 has no downstream"))?;
-            let local_addr = stream.local_addr().ok();
-            let peer_addr = stream.peer_addr().ok();
+        // Single bounded attempt. `connect_binary_downstream` already retries
+        // the TCP connect internally (its own attempt budget), and the ready
+        // handshake read below is bounded by `LANE_READY_READ_TIMEOUT`. An extra
+        // outer retry here only multiplies the worst-case stall — a dead peer
+        // would burn (connect budget × outer attempts) before failing (see PR
+        // #1011 review). Bring-up wants a single, predictable deadline.
+        let stream = self.connect_lane_once(lane_id).inspect_err(|error| {
             eprintln!(
-                "openai downstream lane waiting ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
-                self.config.stage_id
+                "openai downstream lane handshake failed: stage_id={} lane_id={lane_id}: {error:#}",
+                self.config.stage_id,
             );
-            send_client_ready_hello_if_enabled(&mut stream)
-                .context("send persistent downstream lane client ready hello")?;
-            receive_persistent_lane_ready(&mut stream, Duration::from_secs(self.timeout_secs))?;
-            eprintln!(
-                "openai downstream lane received ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
-                self.config.stage_id
-            );
-            Ok(stream)
         })?;
         let mut attrs = lifecycle_attrs(&self.config);
         attrs.insert(
@@ -1411,31 +1414,47 @@ impl PersistentStageLanePool {
             stream,
         })
     }
-}
 
-fn retry_persistent_lane_open<T>(mut open: impl FnMut() -> Result<T>) -> Result<T> {
-    let mut last_error = None;
-    for attempt in 0..PersistentStageLanePool::CONNECT_ATTEMPTS {
-        match open() {
-            Ok(stream) => return Ok(stream),
-            Err(error) => last_error = Some(error),
-        }
-        if attempt + 1 < PersistentStageLanePool::CONNECT_ATTEMPTS {
-            std::thread::sleep(PersistentStageLanePool::CONNECT_RETRY_DELAY);
-        }
+    /// Perform a single connect + ready-handshake attempt for one lane.
+    ///
+    /// Returns the connected, ready `TcpStream` on success. Callers retry this
+    /// with a backoff so a transient short read on `recv_ready` does not fail
+    /// lane creation outright.
+    fn connect_lane_once(&self, lane_id: u64) -> Result<TcpStream> {
+        let mut stream = connect_binary_downstream(&self.config, self.timeout_secs)?
+            .ok_or_else(|| anyhow!("embedded stage0 has no downstream"))?;
+        let local_addr = stream.local_addr().ok();
+        let peer_addr = stream.peer_addr().ok();
+        eprintln!(
+            "openai downstream lane waiting ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
+            self.config.stage_id
+        );
+        send_client_ready_hello_if_enabled(&mut stream)
+            .context("send persistent downstream lane client ready hello")?;
+        // Bound the ready handshake read. `recv_ready` is a blocking
+        // `read_exact`; without a timeout a stalled or half-dead downstream
+        // connection hangs lane creation forever (observed as a lane stuck in
+        // "waiting ready" that never completes and never errors). A single
+        // bounded read timeout turns the stall into an error. Both the set and
+        // the clear are propagated: if the set fails, `recv_ready` would be
+        // unbounded (defeating the fix); if the clear fails, the handshake
+        // timeout would leak into the persistent lane's later generation reads
+        // and truncate long generations.
+        stream
+            .set_read_timeout(Some(LANE_READY_READ_TIMEOUT))
+            .context("set persistent downstream lane ready read timeout")?;
+        let ready =
+            recv_ready(&mut stream).context("persistent downstream lane did not become ready");
+        stream
+            .set_read_timeout(None)
+            .context("clear persistent downstream lane ready read timeout")?;
+        ready?;
+        eprintln!(
+            "openai downstream lane received ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
+            self.config.stage_id
+        );
+        Ok(stream)
     }
-    Err(last_error.unwrap_or_else(|| anyhow!("persistent downstream lane open failed")))
-}
-
-fn receive_persistent_lane_ready(stream: &mut TcpStream, timeout: Duration) -> Result<()> {
-    stream
-        .set_read_timeout(Some(timeout))
-        .context("set persistent downstream lane ready timeout")?;
-    let ready = recv_ready(&mut *stream).context("persistent downstream lane did not become ready");
-    stream
-        .set_read_timeout(None)
-        .context("restore persistent downstream lane read timeout")?;
-    ready
 }
 
 fn ewma(old: f64, sample: f64) -> f64 {

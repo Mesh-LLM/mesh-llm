@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod native_runtime_events;
 
@@ -34,6 +34,14 @@ use native_runtime_events::skippy_native_model_open_event_reporter;
 
 const SPLIT_PARTICIPANT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SPLIT_PARTICIPANT_STABLE_FOR: Duration = Duration::from_secs(2);
+/// Grace period before withdrawing a split whose only remaining recovery path is
+/// full teardown. A transient stage-peer blip (e.g. a Wi-Fi jitter spike that
+/// briefly drops the peer from gossip) otherwise tears the whole split down on
+/// the first health tick and forces a manual restart. Holding the topology for
+/// ~2 health ticks lets a peer that comes right back keep serving. A genuinely
+/// dead peer still withdraws once the grace elapses. Only delays withdrawal; it
+/// never withdraws more eagerly than before.
+const SPLIT_STAGE_LOSS_WITHDRAW_GRACE: Duration = Duration::from_secs(75);
 pub(super) const SPLIT_DEFAULT_MIN_PARTICIPANTS: usize = 2;
 const SPLIT_INITIAL_SHUTDOWN_GENERATION: u64 = 1;
 const SPLIT_COORDINATOR_LEASE_SECS: u64 = 4 * 60 * 60;
@@ -834,6 +842,7 @@ pub(super) async fn start_runtime_split_model(
         skippy_telemetry: spec.skippy_telemetry.clone(),
         survey_telemetry: spec.survey_telemetry.clone(),
         event_tx: coordinator_tx,
+        stage_loss_first_seen: None,
     }));
 
     Ok(SplitRuntimeStart::Started(Box::new(loaded)))
@@ -1896,6 +1905,11 @@ struct SplitTopologyCoordinator {
     skippy_telemetry: skippy::SkippyTelemetryOptions,
     survey_telemetry: survey::SurveyTelemetry,
     event_tx: tokio::sync::mpsc::Sender<SplitCoordinatorEvent>,
+    /// When the active split first entered a withdraw-only loss state (no
+    /// replacement split or local fallback available). Used to hold the topology
+    /// through a transient stage-peer blip before withdrawing. `None` whenever
+    /// the split is healthy or has a viable recovery path.
+    stage_loss_first_seen: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1910,6 +1924,30 @@ enum SplitLossRecoveryDecision {
     ReplacementSplit,
     LocalFallback,
     Withdraw,
+}
+
+/// Whether to defer a withdraw-only loss (hold the topology through a transient
+/// stage-peer blip) or withdraw now because the grace period has elapsed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SplitWithdrawGraceAction {
+    Defer,
+    Withdraw,
+}
+
+/// Decide whether a withdraw-only loss should be deferred or acted on, given
+/// when the loss was first observed and how long the grace period is.
+///
+/// Pure so the grace policy is unit-testable without a live coordinator. If the
+/// loss was first seen at least `grace` ago, withdraw; otherwise defer.
+fn split_withdraw_grace_action(
+    first_seen: Option<Instant>,
+    now: Instant,
+    grace: Duration,
+) -> SplitWithdrawGraceAction {
+    match first_seen {
+        Some(seen) if now.duration_since(seen) >= grace => SplitWithdrawGraceAction::Withdraw,
+        _ => SplitWithdrawGraceAction::Defer,
+    }
 }
 
 fn spawn_split_topology_coordinator(
@@ -2091,6 +2129,11 @@ impl SplitTopologyCoordinator {
             candidate,
             self.local_model_fits(),
         );
+        // Any non-withdraw outcome means the split is healthy or has a viable
+        // recovery path, so reset the withdraw grace timer.
+        if !matches!(decision, SplitLossRecoveryDecision::Withdraw) {
+            self.stage_loss_first_seen = None;
+        }
         match decision {
             SplitLossRecoveryDecision::NoActiveStageLoss => None,
             SplitLossRecoveryDecision::ReplacementSplit => {
@@ -2113,10 +2156,46 @@ impl SplitTopologyCoordinator {
                 )
                 .await,
             ),
-            SplitLossRecoveryDecision::Withdraw => Some(
-                self.handle_withdraw_loss(reason, missing_stage_nodes, unavailable_stage_nodes)
-                    .await,
-            ),
+            SplitLossRecoveryDecision::Withdraw => {
+                // Hold the topology through a transient stage-peer blip. Start
+                // the grace timer on first observed withdraw-only loss and defer
+                // (keep serving) until it elapses; a peer that returns clears
+                // the timer via the reset above. Only a sustained loss withdraws.
+                let now = Instant::now();
+                if self.stage_loss_first_seen.is_none() {
+                    self.stage_loss_first_seen = Some(now);
+                }
+                match split_withdraw_grace_action(
+                    self.stage_loss_first_seen,
+                    now,
+                    SPLIT_STAGE_LOSS_WITHDRAW_GRACE,
+                ) {
+                    SplitWithdrawGraceAction::Defer => {
+                        tracing::warn!(
+                            model_ref = self.model_ref,
+                            reason,
+                            topology_id = self.active.topology_id,
+                            generation = self.active.generation,
+                            missing_stage_nodes = ?split_node_labels(missing_stage_nodes),
+                            unavailable_stage_nodes = ?split_node_labels(unavailable_stage_nodes),
+                            grace_secs = SPLIT_STAGE_LOSS_WITHDRAW_GRACE.as_secs(),
+                            "split topology lost an active stage peer; holding topology through grace period before withdrawing"
+                        );
+                        Some(true)
+                    }
+                    SplitWithdrawGraceAction::Withdraw => {
+                        self.stage_loss_first_seen = None;
+                        Some(
+                            self.handle_withdraw_loss(
+                                reason,
+                                missing_stage_nodes,
+                                unavailable_stage_nodes,
+                            )
+                            .await,
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -5867,6 +5946,65 @@ max_tokens = 222
         assert_eq!(
             split_loss_recovery_decision(&active, &[make_id(1)], &[], None, false),
             SplitLossRecoveryDecision::Withdraw
+        );
+    }
+
+    #[test]
+    fn split_withdraw_grace_defers_a_fresh_loss() {
+        // First observation of a withdraw-only loss must defer, not withdraw —
+        // this is what holds the split through a transient jitter blip.
+        //
+        // Use a fixed `first_seen` baseline and derive `now` by *adding* to it,
+        // never subtracting from `Instant::now()` — subtraction can panic on a
+        // freshly booted CI VM whose uptime is less than the offset.
+        let first_seen = Instant::now();
+        assert_eq!(
+            split_withdraw_grace_action(Some(first_seen), first_seen, Duration::from_secs(75)),
+            SplitWithdrawGraceAction::Defer
+        );
+        // A loss seen well within the grace window still defers.
+        assert_eq!(
+            split_withdraw_grace_action(
+                Some(first_seen),
+                first_seen + Duration::from_secs(30),
+                Duration::from_secs(75),
+            ),
+            SplitWithdrawGraceAction::Defer
+        );
+    }
+
+    #[test]
+    fn split_withdraw_grace_withdraws_after_grace_elapses() {
+        // A loss that has persisted at least the grace period withdraws, so a
+        // genuinely dead peer is not held forever. `now` is derived by adding to
+        // the `first_seen` baseline (never subtracting from `Instant::now()`).
+        let first_seen = Instant::now();
+        assert_eq!(
+            split_withdraw_grace_action(
+                Some(first_seen),
+                first_seen + Duration::from_secs(75),
+                Duration::from_secs(75),
+            ),
+            SplitWithdrawGraceAction::Withdraw
+        );
+        assert_eq!(
+            split_withdraw_grace_action(
+                Some(first_seen),
+                first_seen + Duration::from_secs(120),
+                Duration::from_secs(75),
+            ),
+            SplitWithdrawGraceAction::Withdraw
+        );
+    }
+
+    #[test]
+    fn split_withdraw_grace_defers_when_no_loss_recorded() {
+        // No recorded first-seen instant means the grace timer has not started;
+        // defer rather than withdraw.
+        let now = Instant::now();
+        assert_eq!(
+            split_withdraw_grace_action(None, now, Duration::from_secs(75)),
+            SplitWithdrawGraceAction::Defer
         );
     }
 

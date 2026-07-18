@@ -2838,21 +2838,6 @@ fn prefill_transport_ewma_seeds_adaptive_ramp() {
 }
 
 #[test]
-fn persistent_lane_open_retries_transient_readiness_failure() {
-    let mut attempts = 0usize;
-    let opened = retry_persistent_lane_open(|| {
-        attempts += 1;
-        if attempts < PersistentStageLanePool::CONNECT_ATTEMPTS {
-            return Err(anyhow!("downstream stage is not ready"));
-        }
-        Ok(())
-    });
-
-    opened.unwrap();
-    assert_eq!(attempts, PersistentStageLanePool::CONNECT_ATTEMPTS);
-}
-
-#[test]
 fn persistent_lane_ready_handshake_times_out_for_silent_downstream() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

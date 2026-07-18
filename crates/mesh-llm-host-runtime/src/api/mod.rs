@@ -43,6 +43,7 @@
 //! and `/api/models` per-model `routing_metrics.targets` are measured on the
 //! current node only; not mesh-wide aggregates.
 
+mod access;
 mod assets;
 mod http;
 mod model_target_capacity;

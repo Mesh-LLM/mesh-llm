@@ -1,5 +1,8 @@
 use super::{
     MeshApi,
+    access::{
+        is_trusted_local_request, request_host, request_origin, requires_trusted_local_access,
+    },
     assets::{respond_console_asset, respond_console_index},
     http::{http_body_text, respond_error},
     routes::dispatch_request,
@@ -216,6 +219,23 @@ pub(crate) async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> an
     if method == "GET" && state.is_headless().await && is_ui_only_route(path_only) {
         respond_error(&mut stream, 404, "Not found").await?;
         return Ok(());
+    }
+
+    if requires_trusted_local_access(method, path_only) {
+        let trusted_local_request = match (request_origin(&request.raw), request_host(&request.raw))
+        {
+            (Ok(origin), Ok(host)) => is_trusted_local_request(source_addr, origin, host),
+            _ => false,
+        };
+        if !trusted_local_request {
+            respond_error(
+                &mut stream,
+                403,
+                "This management route requires a trusted local caller",
+            )
+            .await?;
+            return Ok(());
+        }
     }
 
     match (method, path_only) {

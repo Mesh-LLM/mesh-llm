@@ -484,15 +484,18 @@ fn push_model_name(
     }
 }
 
-fn scan_hf_cache_models(names: &mut Vec<String>, seen: &mut HashSet<String>, min_size_bytes: u64) {
-    let cache_root = huggingface_hub_cache_dir();
-
-    for path in direct_hf_cache_root_gguf_paths(&cache_root) {
+fn scan_hf_cache_models(
+    cache_root: &Path,
+    names: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    min_size_bytes: u64,
+) {
+    for path in direct_hf_cache_root_gguf_paths(cache_root) {
         push_model_name(&path, names, seen, min_size_bytes);
     }
 
     if std::env::var("MESH_LLM_ALLOW_FULL_HF_CACHE_SCAN").unwrap_or_default() == "1" {
-        let Some(cache_info) = scan_hf_cache_info(&cache_root) else {
+        let Some(cache_info) = scan_hf_cache_info(cache_root) else {
             return;
         };
         for repo in &cache_info.repos {
@@ -512,24 +515,23 @@ fn scan_hf_cache_models(names: &mut Vec<String>, seen: &mut HashSet<String>, min
                     if !file.file_name.ends_with(".gguf") {
                         continue;
                     }
-                    let path = cache_scanned_file_path(&cache_root, repo, revision, file);
+                    let path = cache_scanned_file_path(cache_root, repo, revision, file);
                     push_model_name(&path, names, seen, min_size_bytes);
                 }
             }
         }
     } else {
-        for path in scan_hf_cache_fast(&cache_root) {
+        for path in scan_hf_cache_fast(cache_root) {
             push_model_name(&path, names, seen, min_size_bytes);
         }
     }
 }
 
-fn scan_models_with_min_size(min_size_bytes: u64) -> Vec<String> {
+fn scan_models_with_min_size(cache_root: &Path, min_size_bytes: u64) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
-    let canonical_dir = huggingface_hub_cache_dir();
-    if canonical_dir.exists() {
-        scan_hf_cache_models(&mut names, &mut seen, min_size_bytes);
+    if cache_root.exists() {
+        scan_hf_cache_models(cache_root, &mut names, &mut seen, min_size_bytes);
     }
     names.sort();
     names
@@ -537,12 +539,17 @@ fn scan_models_with_min_size(min_size_bytes: u64) -> Vec<String> {
 
 /// Scan model directories for GGUF files and return canonical model refs.
 pub fn scan_local_models() -> Vec<String> {
-    scan_models_with_min_size(500_000_000)
+    scan_models_with_min_size(&huggingface_hub_cache_dir(), 500_000_000)
 }
 
 /// Scan installed GGUF models, including small draft models, and return canonical model refs.
 pub fn scan_installed_models() -> Vec<String> {
-    scan_models_with_min_size(0)
+    scan_installed_models_in(&huggingface_hub_cache_dir())
+}
+
+/// Scan an explicit Hugging Face cache for installed GGUF models.
+pub fn scan_installed_models_in(cache_root: &Path) -> Vec<String> {
+    scan_models_with_min_size(cache_root, 0)
 }
 
 fn hf_identity_model_ref(identity: &HuggingFaceModelIdentity) -> String {
