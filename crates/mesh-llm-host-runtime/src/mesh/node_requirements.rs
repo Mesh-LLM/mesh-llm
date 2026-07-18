@@ -2,6 +2,48 @@ use super::*;
 use crate::mesh::identity_persistence::mesh_genesis_policy_path;
 use crate::mesh::node::RequirementAwareMeshState;
 
+fn same_requirement_mesh(
+    left: &RequirementAwareMeshState,
+    right: &RequirementAwareMeshState,
+) -> bool {
+    left.mesh_id == right.mesh_id
+        && left.policy_hash == right.policy_hash
+        && left.policy == right.policy
+}
+
+fn install_requirement_mesh_state_transition(
+    current: &mut Option<RequirementAwareMeshState>,
+    requested: RequirementAwareMeshState,
+) -> Result<bool> {
+    if let Some(installed) = current.as_ref()
+        && !same_requirement_mesh(installed, &requested)
+    {
+        anyhow::bail!(
+            "mesh ID conflict: local mesh is '{}' but bootstrap token requires '{}'",
+            installed.mesh_id,
+            requested.mesh_id
+        );
+    }
+    let was_empty = current.is_none();
+    *current = Some(requested);
+    Ok(was_empty)
+}
+
+fn enrich_requirement_mesh_state(
+    current: &mut Option<RequirementAwareMeshState>,
+    verified: &RequirementAwareMeshState,
+    signed_policy: crate::SignedMeshGenesisPolicy,
+) -> std::result::Result<(), MeshRequirementRejectReason> {
+    let Some(installed) = current.as_mut() else {
+        return Err(MeshRequirementRejectReason::MeshPolicyMismatch);
+    };
+    if !same_requirement_mesh(installed, verified) {
+        return Err(MeshRequirementRejectReason::MeshPolicyMismatch);
+    }
+    installed.signed_policy = Some(signed_policy);
+    Ok(())
+}
+
 pub(crate) fn preflight_pushed_config_for_current_node(
     config: &crate::plugin::MeshConfig,
 ) -> Result<()> {
@@ -238,32 +280,31 @@ impl Node {
         signed_policy: Option<crate::SignedMeshGenesisPolicy>,
         bootstrap_token: Option<crate::SignedBootstrapToken>,
     ) -> Result<()> {
-        let current_mesh_id = self.mesh_id().await;
-        if current_mesh_id
-            .as_deref()
-            .is_some_and(|current| current != mesh_id.as_str())
-        {
-            anyhow::bail!(
-                "mesh ID conflict: local mesh is '{}' but bootstrap token requires '{}'",
-                current_mesh_id.unwrap_or_default(),
-                mesh_id
-            );
-        }
         let state = RequirementAwareMeshState {
-            mesh_id: mesh_id.clone(),
-            policy_hash: policy_hash.clone(),
-            policy: policy.clone(),
-            signed_policy: signed_policy.clone(),
-            bootstrap_token: bootstrap_token.clone(),
+            mesh_id,
+            policy_hash,
+            policy,
+            signed_policy,
+            bootstrap_token,
         };
-        self.publish_requirement_mesh_state(state).await;
-        Ok(())
-    }
-
-    pub(crate) async fn publish_requirement_mesh_state(&self, state: RequirementAwareMeshState) {
-        let previous_mesh_id = self.mesh_id().await;
-        *self.requirement_mesh_state.lock().await = Some(state);
-        if previous_mesh_id.is_none() {
+        let mut requirement_state = self.requirement_mesh_state.lock().await;
+        if requirement_state.is_none() {
+            let legacy_mesh_id = self.mesh_id.lock().await;
+            if legacy_mesh_id
+                .as_deref()
+                .is_some_and(|current| current != state.mesh_id)
+            {
+                anyhow::bail!(
+                    "mesh ID conflict: local mesh is '{}' but bootstrap token requires '{}'",
+                    legacy_mesh_id.as_deref().unwrap_or_default(),
+                    state.mesh_id
+                );
+            }
+        }
+        let should_emit_mesh_id =
+            install_requirement_mesh_state_transition(&mut requirement_state, state)?;
+        drop(requirement_state);
+        if should_emit_mesh_id {
             self.emit_plugin_mesh_event(
                 crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
                 None,
@@ -271,6 +312,29 @@ impl Node {
             )
             .await;
         }
+        Ok(())
+    }
+
+    pub(crate) async fn publish_requirement_mesh_state(
+        &self,
+        state: RequirementAwareMeshState,
+    ) -> bool {
+        let mut requirement_state = self.requirement_mesh_state.lock().await;
+        let Ok(should_emit_mesh_id) =
+            install_requirement_mesh_state_transition(&mut requirement_state, state)
+        else {
+            return false;
+        };
+        drop(requirement_state);
+        if should_emit_mesh_id {
+            self.emit_plugin_mesh_event(
+                crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
+                None,
+                String::new(),
+            )
+            .await;
+        }
+        true
     }
 
     pub(crate) async fn validate_bootstrap_token(
@@ -318,11 +382,19 @@ impl Node {
             if signed_policy.policy.canonical_hash_hex()? != active_policy.policy_hash {
                 return Err(MeshRequirementRejectReason::MeshPolicyMismatch);
             }
+            let verified_state = RequirementAwareMeshState {
+                mesh_id: active_policy.mesh_id,
+                policy_hash: active_policy.policy_hash,
+                policy: active_policy.policy,
+                signed_policy: None,
+                bootstrap_token: None,
+            };
             let mut requirement_state = self.requirement_mesh_state.lock().await;
-            if let Some(mut state) = requirement_state.clone() {
-                state.signed_policy = Some(signed_policy.clone());
-                *requirement_state = Some(state);
-            }
+            enrich_requirement_mesh_state(
+                &mut requirement_state,
+                &verified_state,
+                signed_policy.clone(),
+            )?;
         }
         Ok(())
     }
@@ -440,5 +512,66 @@ impl Node {
             .to_bytes()
             .to_vec();
         Some(proof)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn requirement_state(
+        mesh_id: &str,
+        owner: &crate::crypto::OwnerKeypair,
+    ) -> RequirementAwareMeshState {
+        let policy = crate::MeshGenesisPolicy::new(
+            owner.owner_id(),
+            1_717_171_717_000,
+            crate::MeshRequirements::default(),
+        )
+        .expect("test policy");
+        RequirementAwareMeshState {
+            mesh_id: mesh_id.to_string(),
+            policy_hash: policy.canonical_hash_hex().expect("policy hash"),
+            policy,
+            signed_policy: None,
+            bootstrap_token: None,
+        }
+    }
+
+    #[test]
+    fn install_transition_rejects_conflicting_mesh() {
+        // Given an installed requirement-aware mesh state.
+        let installed =
+            requirement_state("installed-mesh", &crate::crypto::OwnerKeypair::generate());
+        let requested =
+            requirement_state("requested-mesh", &crate::crypto::OwnerKeypair::generate());
+        let mut current = Some(installed.clone());
+
+        // When a conflicting state attempts to install.
+        let result = install_requirement_mesh_state_transition(&mut current, requested);
+
+        // Then the installed state remains unchanged.
+        assert!(result.is_err());
+        assert_eq!(current, Some(installed));
+    }
+
+    #[test]
+    fn signed_policy_enrichment_rejects_stale_snapshot() {
+        // Given verification against a snapshot that has since been replaced.
+        let verified_owner = crate::crypto::OwnerKeypair::generate();
+        let verified_snapshot = requirement_state("verified-mesh", &verified_owner);
+        let replacement =
+            requirement_state("replacement-mesh", &crate::crypto::OwnerKeypair::generate());
+        let mut current = Some(replacement.clone());
+        let signed_policy =
+            crate::SignedMeshGenesisPolicy::sign(verified_snapshot.policy.clone(), &verified_owner)
+                .expect("signed policy");
+
+        // When enrichment attempts to publish the verified signed policy.
+        let result = enrich_requirement_mesh_state(&mut current, &verified_snapshot, signed_policy);
+
+        // Then the newer state remains unchanged.
+        assert_eq!(result, Err(MeshRequirementRejectReason::MeshPolicyMismatch));
+        assert_eq!(current, Some(replacement));
     }
 }

@@ -913,14 +913,11 @@ impl Node {
             .await;
         }
 
-        // Discover public IP via STUN so the invite token includes it.
-        // With --bind-port, the advertised port is the bound port (for port forwarding).
-        // Without --bind-port, port 0 is intentional: it asks the OS for a conflict-free
-        // ephemeral port. The IP is still useful for hole-punching.
-        // Relay STUN may not work on sinkholed networks, so we use raw STUN to Google/Cloudflare.
-        let stun_port = quic_bind.port.unwrap_or(EPHEMERAL_QUIC_PORT);
+        // Use iroh's net report because it probes through the endpoint's actual QUIC sockets.
+        // Its direct address includes the observed NAT-mapped port; substituting the configured
+        // bind port would advertise an address that was never verified externally.
         let public_addr = if relay.policy.uses_raw_stun() {
-            stun_public_addr(stun_port).await
+            stun_public_addr(&endpoint).await
         } else {
             tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
             None

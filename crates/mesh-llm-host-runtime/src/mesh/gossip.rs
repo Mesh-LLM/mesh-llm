@@ -496,14 +496,17 @@ impl Node {
                     reason.code()
                 );
             }
-            if let Some(ref their_id) = ann.mesh_id {
-                self.set_mesh_id(their_id.clone()).await;
-            }
-            self.merge_remote_demand(&ann.model_demand);
-            self.add_peer_after_direct_requirements_validated(remote, addr.clone(), ann)
-                .await;
-            if let Some(rtt_ms) = context.rtt_ms {
-                self.update_peer_rtt(remote, rtt_ms).await;
+            if self
+                .add_peer_after_direct_requirements_validated(remote, addr.clone(), ann)
+                .await
+            {
+                if let Some(ref their_id) = ann.mesh_id {
+                    self.set_mesh_id(their_id.clone()).await;
+                }
+                self.merge_remote_demand(&ann.model_demand);
+                if let Some(rtt_ms) = context.rtt_ms {
+                    self.update_peer_rtt(remote, rtt_ms).await;
+                }
             }
             return Ok(());
         }
@@ -1615,7 +1618,7 @@ impl Node {
         id: EndpointId,
         addr: EndpointAddr,
         ann: &PeerAnnouncement,
-    ) {
+    ) -> bool {
         // Reject ingest from peers below the supported version floor. They
         // are not added to local state, do not appear in /api/status, and
         // are not re-broadcast. A peer that updates and re-announces will
@@ -1627,18 +1630,18 @@ impl Node {
                 ann.version
             );
             self.remove_disallowed_peer(id).await;
-            return;
+            return false;
         }
         let owner_summary = self.direct_peer_owner_summary(id, ann).await;
         if self.reject_direct_peer_for_policy(id, &owner_summary).await {
             self.capture_peer_rejected(id, &addr, ann, &owner_summary, "direct", None);
-            return;
+            return false;
         }
         let mut state = self.state.lock().await;
         state.policy_rejected_peers.remove(&id);
         state.requirement_rejected_peers.remove(&id);
         if id == self.endpoint.id() {
-            return;
+            return false;
         }
         let now = std::time::Instant::now();
         // If this peer was previously dead, clear it — add_peer is only called
@@ -1657,10 +1660,11 @@ impl Node {
                 .upsert_existing_direct_peer(id, addr.clone(), ann, owner_summary.clone(), now)
                 .await
         {
-            return;
+            return true;
         }
         self.insert_new_direct_peer(id, addr, ann, owner_summary)
             .await;
+        true
     }
 
     /// Update a peer learned transitively through gossip (not directly connected).

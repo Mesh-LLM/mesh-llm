@@ -86,12 +86,14 @@ pub(crate) fn elapsed_ms_u64(duration: std::time::Duration) -> u64 {
 }
 
 mod artifact_transfer_io;
+mod connection_reservation;
 mod connections;
 mod direct_path;
 mod gossip;
 mod heartbeat;
 mod identity_persistence;
 mod lan_bootstrap;
+mod model_identity;
 mod node;
 mod node_identity;
 mod node_requirements;
@@ -108,7 +110,9 @@ mod stage_transport;
 mod stage_transport_bridge;
 mod stun;
 
+use connection_reservation::*;
 use connections::*;
+use model_identity::*;
 use node_identity::*;
 pub(crate) use node_requirements::*;
 use owner_control::*;

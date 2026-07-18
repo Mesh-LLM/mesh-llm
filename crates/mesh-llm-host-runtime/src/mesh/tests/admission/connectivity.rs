@@ -390,6 +390,42 @@ async fn pending_connection_failure_cleanup_is_owner_scoped() -> Result<()> {
 }
 
 #[tokio::test]
+async fn recovered_connection_waiter_failure_removes_stale_peer() -> Result<()> {
+    // Given: recovery lost the pending-connection race for a tracked peer.
+    let node = make_test_node(super::super::NodeRole::Worker).await?;
+    let peer_id = make_test_endpoint_id(0xa4);
+    node.state
+        .lock()
+        .await
+        .peers
+        .insert(peer_id, make_test_peer(peer_id, Some(20), 8));
+    let owner = match node.reserve_pending_connection(peer_id).await {
+        PendingConnectionReservation::Owner(owner) => owner,
+        PendingConnectionReservation::Waiter(_) => {
+            anyhow::bail!("first pending reservation should own the handshake")
+        }
+    };
+    let waiter = match node.reserve_pending_connection(peer_id).await {
+        PendingConnectionReservation::Owner(_) => {
+            anyhow::bail!("recovered connection should wait on the active handshake")
+        }
+        PendingConnectionReservation::Waiter(waiter) => waiter,
+    };
+    node.finish_pending_connection(
+        owner,
+        PendingConnectionOutcome::Failed("owner gossip failed".to_string()),
+    )
+    .await;
+
+    // When: the recovered-connection waiter observes the failed owner.
+    node.complete_recovered_connection_waiter(waiter).await;
+
+    // Then: the peer whose dispatcher already exited is not left routable.
+    assert!(!node.state.lock().await.peers.contains_key(&peer_id));
+    Ok(())
+}
+
+#[tokio::test]
 async fn dropped_pending_connection_owner_is_pruned() -> Result<()> {
     let node = make_test_node(super::super::NodeRole::Worker).await?;
     let peer_id = make_test_endpoint_id(0xa3);

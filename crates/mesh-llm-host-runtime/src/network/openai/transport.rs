@@ -5125,6 +5125,9 @@ mod tests {
         let descriptors = vec![hf_descriptor(&models[0])];
 
         let body = models_list_json(&models, &descriptors, &[]);
+        let public_id = body["data"][0]["id"]
+            .as_str()
+            .expect("models list id should be a string");
 
         assert_eq!(
             body["data"][0]["id"],
@@ -5135,6 +5138,39 @@ mod tests {
             "tiiuae/Falcon-H1-1.5B-Instruct-GGUF@0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a:Q4_K_M"
         );
         assert_eq!(body["data"][0]["owned_by"], "mesh-llm");
+
+        // Given the exact public identifier emitted by /v1/models.
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{{\"model\":{}}}",
+            serde_json::to_string(public_id).expect("public model id should serialize")
+        )
+        .into_bytes();
+        let mut request = BufferedHttpRequest {
+            raw,
+            method: "POST".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            client_path: "/v1/chat/completions".to_string(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: 0,
+            completion_tokens: None,
+            stream: None,
+            model_name: Some(public_id.to_string()),
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::None,
+        };
+
+        // When the request alias is rewritten, then it resolves to the internal model.
+        rewrite_public_model_alias(&mut request, &models, &descriptors);
+        request.ensure_body_json();
+        assert_eq!(
+            request
+                .body_json
+                .as_ref()
+                .and_then(|body| body["model"].as_str()),
+            Some(models[0].as_str())
+        );
     }
 
     #[test]

@@ -1067,7 +1067,7 @@ fn infer_remote_served_descriptors_marks_exactly_one_primary_for_duplicate_names
 }
 
 #[test]
-fn infer_remote_served_descriptors_falls_back_to_first_primary_when_name_absent() {
+fn infer_remote_served_descriptors_leaves_primary_unknown_when_name_absent() {
     let serving_models = vec![
         "Qwen3-8B-Q4_K_M".to_string(),
         "Llama-3.2-3B-Q4_K_M".to_string(),
@@ -1079,15 +1079,16 @@ fn infer_remote_served_descriptors_falls_back_to_first_primary_when_name_absent(
         Some("Qwen/Qwen3-8B-GGUF@revabc/Qwen3-8B-Q4_K_M.gguf"),
     );
 
-    assert_eq!(
+    assert!(
         descriptors
             .iter()
-            .filter(|descriptor| descriptor.identity.is_primary)
-            .count(),
-        1
+            .all(|descriptor| !descriptor.identity.is_primary)
     );
-    assert!(descriptors[0].identity.is_primary);
-    assert!(!descriptors[1].identity.is_primary);
+    assert!(
+        descriptors
+            .iter()
+            .all(|descriptor| descriptor.identity.source_kind == ModelSourceKind::Unknown)
+    );
 }
 
 #[test]

@@ -10,6 +10,7 @@ mod options;
 mod proxy;
 mod release_attestation;
 mod split_planning;
+mod startup_identity;
 pub(crate) mod survey;
 pub(crate) mod wakeable;
 
@@ -42,6 +43,7 @@ pub use self::options::{MeshGuardrailMode, RuntimeOptions, RuntimeSurface};
 use self::proxy::{api_proxy, bootstrap_proxy};
 #[cfg(test)]
 pub(crate) use self::release_attestation::assert_release_attestation_reports_missing_for_unstamped_binary;
+use self::startup_identity::{emit_private_mesh_name_warning, handle_public_identity_transition};
 use crate::MeshRequirements;
 use crate::api;
 use crate::crypto::{
@@ -3262,42 +3264,6 @@ fn write_runtime_owner_metadata(
     if let Ok(json) = serde_json::to_string_pretty(&owner_meta) {
         let _ = crate::runtime::instance::write_text_file_atomic(&owner_path, &json);
     }
-}
-
-fn emit_private_mesh_name_warning(options: &RuntimeOptions) {
-    let Some(mesh_name) = options
-        .mesh_name
-        .as_ref()
-        .filter(|_| !options.publish && !options.auto && options.discover.is_none())
-    else {
-        return;
-    };
-
-    let _ = emit_event(OutputEvent::Info {
-        message: format!(
-            "Mesh named '{}' — private by default. Add --publish to make it publicly discoverable.",
-            mesh_name
-        ),
-        context: None,
-    });
-}
-
-fn handle_public_identity_transition(options: &RuntimeOptions) -> Result<()> {
-    let is_public = options.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
-        && (options.auto || options.publish || options.discover.is_some());
-    if is_public {
-        mesh::mark_was_public()?;
-        return Ok(());
-    }
-
-    if mesh::was_previously_public() {
-        let _ = emit_event(OutputEvent::Info {
-            message: "Previous run was public — rotating identity for private mesh".to_string(),
-            context: None,
-        });
-        mesh::clear_public_identity()?;
-    }
-    Ok(())
 }
 
 async fn maybe_discover_join_candidates(

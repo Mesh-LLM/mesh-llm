@@ -487,27 +487,31 @@ fn forward_plugin_mesh_stream_request(
 ) {
     tokio::spawn(async move {
         let (response_tx, response_rx) = oneshot::channel();
-        let response = if mesh_tx
-            .send(PluginMeshEvent::OpenStream {
+        let deadline = tokio::time::Instant::now() + PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT;
+        let enqueue = tokio::time::timeout_at(
+            deadline,
+            mesh_tx.send(PluginMeshEvent::OpenStream {
                 plugin_id: plugin_name.clone(),
                 request,
                 response_tx,
-            })
-            .await
-            .is_ok()
-        {
-            match tokio::time::timeout(PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT, response_rx).await {
+            }),
+        )
+        .await;
+        let response = match enqueue {
+            Ok(Ok(())) => match tokio::time::timeout_at(deadline, response_rx).await {
                 Ok(response) => response.map_err(|_| {
                     plugin_mesh_stream_error("Mesh stream broker dropped the response")
                 }),
                 Err(_) => Err(plugin_mesh_stream_error(format!(
-                    "Mesh stream broker response timed out after {PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT:?}"
+                    "Mesh stream broker timed out after {PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT:?}"
                 ))),
-            }
-        } else {
-            Err(plugin_mesh_stream_error(
+            },
+            Ok(Err(_)) => Err(plugin_mesh_stream_error(
                 "Mesh stream broker is unavailable",
-            ))
+            )),
+            Err(_) => Err(plugin_mesh_stream_error(format!(
+                "Mesh stream broker timed out after {PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT:?}"
+            ))),
         };
 
         let payload = match response {
@@ -654,10 +658,39 @@ mod tests {
             panic!("expected timeout to map to an error response");
         };
         assert_eq!(error.code, ErrorCode::INTERNAL_ERROR.0);
-        assert!(
-            error
-                .message
-                .contains("Mesh stream broker response timed out")
+        assert!(error.message.contains("Mesh stream broker timed out"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn forward_plugin_mesh_stream_request_times_out_when_broker_queue_is_full() {
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+        let (blocked_response_tx, _blocked_response_rx) = oneshot::channel();
+        mesh_tx
+            .send(PluginMeshEvent::OpenStream {
+                plugin_id: "blocked-plugin".into(),
+                request: super::proto::OpenMeshStreamRequest::default(),
+                response_tx: blocked_response_tx,
+            })
+            .await
+            .expect("fixture should fill the broker queue");
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(1);
+
+        forward_plugin_mesh_stream_request(
+            "demo-plugin".into(),
+            8,
+            super::proto::OpenMeshStreamRequest::default(),
+            mesh_tx,
+            outbound_tx,
         );
+        tokio::time::advance(PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT + Duration::from_secs(1)).await;
+
+        let envelope = outbound_rx
+            .recv()
+            .await
+            .expect("timed out enqueue should publish an error response");
+        let Some(super::proto::envelope::Payload::ErrorResponse(error)) = envelope.payload else {
+            panic!("expected timeout to map to an error response");
+        };
+        assert!(error.message.contains("Mesh stream broker timed out"));
     }
 }

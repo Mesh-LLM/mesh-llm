@@ -28,6 +28,7 @@ pub(crate) struct AcceptedMeshStream {
 }
 
 pub(crate) const MAX_CONTROL_STREAM_WORK_PER_CONNECTION: usize = 32;
+const MESH_STREAM_TYPE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub(crate) fn control_stream_semaphore() -> Arc<tokio::sync::Semaphore> {
     Arc::new(tokio::sync::Semaphore::new(
@@ -818,7 +819,15 @@ impl Node {
             });
         })?;
         let mut type_buf = [0u8; 1];
-        if recv.read_exact(&mut type_buf).await.is_err() {
+        if !matches!(
+            tokio::time::timeout(
+                MESH_STREAM_TYPE_READ_TIMEOUT,
+                recv.read_exact(&mut type_buf),
+            )
+            .await,
+            Ok(Ok(_))
+        ) {
+            let _ = recv.stop(0u32.into());
             return Err(());
         }
         Ok(AcceptedMeshStream {
@@ -952,7 +961,7 @@ impl Node {
             PendingConnectionReservation::Owner(owner) => owner,
             PendingConnectionReservation::Waiter(waiter) => {
                 new_conn.close(0u32.into(), b"recovered-connection-raced");
-                let _ = self.await_pending_connection(waiter).await;
+                self.complete_recovered_connection_waiter(waiter).await;
                 return;
             }
         };
@@ -977,6 +986,17 @@ impl Node {
                 PendingConnectionOutcome::Failed("recovered connection gossip failed".to_string()),
             )
             .await;
+            self.remove_peer_after_recovered_gossip_failure(remote)
+                .await;
+        }
+    }
+
+    pub(crate) async fn complete_recovered_connection_waiter(
+        &self,
+        waiter: PendingConnectionWaiter,
+    ) {
+        let remote = waiter.peer_id;
+        if self.await_pending_connection(waiter).await.is_err() {
             self.remove_peer_after_recovered_gossip_failure(remote)
                 .await;
         }

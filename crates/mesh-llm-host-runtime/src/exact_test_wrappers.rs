@@ -281,6 +281,11 @@ fn requirement_state_reads_coherent_snapshot() {
 }
 
 #[test]
+fn concurrent_requirement_state_installs_do_not_overwrite() {
+    mesh::tests::assert_concurrent_requirement_state_installs_do_not_overwrite();
+}
+
+#[test]
 fn mesh_requirements_status_excludes_rejected_peers_from_admitted_list() {
     api::tests::assert_mesh_requirements_status_excludes_rejected_peers_from_admitted_list();
 }

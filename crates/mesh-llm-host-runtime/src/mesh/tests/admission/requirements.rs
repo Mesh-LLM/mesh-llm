@@ -1152,12 +1152,35 @@ pub(crate) fn assert_named_mesh_id_uses_documented_sha256_derivation() {
     );
 }
 
+struct HomeGuard(Option<std::ffi::OsString>);
+
+impl HomeGuard {
+    fn set(path: &std::path::Path) -> Self {
+        let previous = std::env::var_os("HOME");
+        // SAFETY: requirement tests using this guard run serially, and Drop restores HOME.
+        unsafe { std::env::set_var("HOME", path) };
+        Self(previous)
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(value) => {
+                // SAFETY: this guard restores the process environment key it exclusively changed.
+                unsafe { std::env::set_var("HOME", value) }
+            }
+            None => {
+                // SAFETY: this guard restores the process environment key it exclusively changed.
+                unsafe { std::env::remove_var("HOME") }
+            }
+        }
+    }
+}
+
 pub(crate) fn assert_persisted_random_mesh_id_is_preserved() {
     let temp = tempfile::tempdir().expect("temp home");
-    let previous_home = std::env::var_os("HOME");
-    // SAFETY: requirement tests that call this helper run serially while this
-    // helper owns and restores HOME before returning.
-    unsafe { std::env::set_var("HOME", temp.path()) };
+    let _home = HomeGuard::set(temp.path());
 
     let persisted = "legacy-random-mesh-id";
     let mesh_dir = temp.path().join(".mesh-llm");
@@ -1166,7 +1189,6 @@ pub(crate) fn assert_persisted_random_mesh_id_is_preserved() {
 
     let mesh_id = crate::mesh::identity_persistence::generate_mesh_id(None, None)
         .expect("persisted id should load");
-    restore_env("HOME", previous_home);
 
     assert_eq!(mesh_id, persisted);
 }
@@ -1214,10 +1236,7 @@ pub(crate) fn assert_requirement_invite_signing_failure_uses_cached_fallback() {
 
 pub(crate) fn assert_malformed_genesis_policy_fails_closed() {
     let temp = tempfile::tempdir().expect("temp home");
-    let previous_home = std::env::var_os("HOME");
-    // SAFETY: requirement tests that call this helper run serially while this
-    // helper owns and restores HOME before returning.
-    unsafe { std::env::set_var("HOME", temp.path()) };
+    let _home = HomeGuard::set(temp.path());
     let mesh_dir = temp.path().join(".mesh-llm");
     std::fs::create_dir_all(&mesh_dir).expect("mesh dir");
     std::fs::write(mesh_dir.join("mesh-genesis-policy.json"), b"not-json")
@@ -1227,17 +1246,13 @@ pub(crate) fn assert_malformed_genesis_policy_fails_closed() {
     let error = node
         .load_or_create_signed_genesis_policy()
         .expect_err("malformed policy must fail closed");
-    restore_env("HOME", previous_home);
 
     assert!(error.to_string().contains("parse"));
 }
 
 pub(crate) fn assert_unverified_genesis_policy_fails_closed() {
     let temp = tempfile::tempdir().expect("temp home");
-    let previous_home = std::env::var_os("HOME");
-    // SAFETY: requirement tests that call this helper run serially while this
-    // helper owns and restores HOME before returning.
-    unsafe { std::env::set_var("HOME", temp.path()) };
+    let _home = HomeGuard::set(temp.path());
     let policy = requirement_policy_without_release_attestation();
     let mut signed =
         crate::SignedMeshGenesisPolicy::sign(policy.clone(), &requirement_policy_owner())
@@ -1249,17 +1264,13 @@ pub(crate) fn assert_unverified_genesis_policy_fails_closed() {
     let error = node
         .load_or_create_signed_genesis_policy()
         .expect_err("unverified policy must fail closed");
-    restore_env("HOME", previous_home);
 
     assert!(error.to_string().contains("verify"));
 }
 
 pub(crate) fn assert_mismatched_genesis_policy_fails_closed() {
     let temp = tempfile::tempdir().expect("temp home");
-    let previous_home = std::env::var_os("HOME");
-    // SAFETY: requirement tests that call this helper run serially while this
-    // helper owns and restores HOME before returning.
-    unsafe { std::env::set_var("HOME", temp.path()) };
+    let _home = HomeGuard::set(temp.path());
     let persisted_policy = requirement_policy_without_release_attestation();
     let signed =
         crate::SignedMeshGenesisPolicy::sign(persisted_policy, &requirement_policy_owner())
@@ -1270,7 +1281,6 @@ pub(crate) fn assert_mismatched_genesis_policy_fails_closed() {
     let error = node
         .load_or_create_signed_genesis_policy()
         .expect_err("mismatched policy must fail closed");
-    restore_env("HOME", previous_home);
 
     assert!(error.to_string().contains("does not match"));
 }
@@ -1325,6 +1335,75 @@ pub(crate) fn assert_requirement_state_reads_coherent_snapshot() {
     });
 }
 
+pub(crate) fn assert_concurrent_requirement_state_installs_do_not_overwrite() {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    runtime.block_on(async {
+        // Given two different requirement-aware mesh states and one fresh node.
+        let node = std::sync::Arc::new(
+            make_test_node(super::super::NodeRole::Worker)
+                .await
+                .expect("test node"),
+        );
+        let first_policy = requirement_policy_without_release_attestation();
+        let second_policy = requirement_policy(&test_release_signer_key_id(9));
+        let first_mesh_id = first_policy.policy_derived_mesh_id().expect("first mesh id");
+        let second_mesh_id = second_policy
+            .policy_derived_mesh_id()
+            .expect("second mesh id");
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+
+        // When both installs begin from the same empty state.
+        let first = {
+            let node = node.clone();
+            let barrier = barrier.clone();
+            let mesh_id = first_mesh_id.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                node.install_requirement_aware_mesh_state(
+                    mesh_id,
+                    first_policy.canonical_hash_hex().expect("first hash"),
+                    first_policy,
+                    None,
+                    None,
+                )
+                .await
+            })
+        };
+        let second = {
+            let node = node.clone();
+            let barrier = barrier.clone();
+            let mesh_id = second_mesh_id.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                node.install_requirement_aware_mesh_state(
+                    mesh_id,
+                    second_policy.canonical_hash_hex().expect("second hash"),
+                    second_policy,
+                    None,
+                    None,
+                )
+                .await
+            })
+        };
+        barrier.wait().await;
+        let first_result = first.await.expect("first install task");
+        let second_result = second.await.expect("second install task");
+
+        // Then exactly one install wins and the losing state cannot overwrite it.
+        assert_ne!(first_result.is_ok(), second_result.is_ok());
+        let installed = node
+            .active_mesh_policy_state()
+            .await
+            .expect("one requirement state should be installed");
+        let expected_mesh_id = if first_result.is_ok() {
+            first_mesh_id
+        } else {
+            second_mesh_id
+        };
+        assert_eq!(installed.mesh_id, expected_mesh_id);
+    });
+}
+
 fn node_with_requirement_owner(policy: crate::MeshGenesisPolicy) -> super::super::Node {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let mut node = runtime
@@ -1343,19 +1422,4 @@ fn write_genesis_policy(home: &std::path::Path, signed: &crate::SignedMeshGenesi
         serde_json::to_vec_pretty(signed).expect("serialize policy"),
     )
     .expect("write policy");
-}
-
-fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
-    match value {
-        Some(value) => {
-            // SAFETY: callers are serial requirement helpers restoring the same
-            // process environment key they mutated earlier in the helper.
-            unsafe { std::env::set_var(key, value) }
-        }
-        None => {
-            // SAFETY: callers are serial requirement helpers restoring the same
-            // process environment key they mutated earlier in the helper.
-            unsafe { std::env::remove_var(key) }
-        }
-    }
 }

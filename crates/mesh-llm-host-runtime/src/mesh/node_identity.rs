@@ -211,14 +211,18 @@ impl Node {
             Ok((signed_policy, token)) => {
                 debug_assert_eq!(mesh_id, token.mesh_id);
                 debug_assert_eq!(policy_hash, token.policy_hash);
-                self.publish_requirement_mesh_state(RequirementAwareMeshState {
-                    mesh_id: mesh_id.to_string(),
-                    policy_hash: policy_hash.to_string(),
-                    policy: policy.clone(),
-                    signed_policy: Some(signed_policy),
-                    bootstrap_token: Some(token.clone()),
-                })
-                .await;
+                if !self
+                    .publish_requirement_mesh_state(RequirementAwareMeshState {
+                        mesh_id: mesh_id.to_string(),
+                        policy_hash: policy_hash.to_string(),
+                        policy: policy.clone(),
+                        signed_policy: Some(signed_policy),
+                        bootstrap_token: Some(token.clone()),
+                    })
+                    .await
+                {
+                    return None;
+                }
                 Some(encode_signed_bootstrap_token(&token))
             }
             Err(error) => {

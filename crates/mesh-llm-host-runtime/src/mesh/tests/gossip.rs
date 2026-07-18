@@ -582,6 +582,35 @@ pub(crate) async fn direct_add_peer_rejects_below_version_floor() {
     );
 }
 
+#[tokio::test]
+pub(crate) async fn rejected_direct_peer_does_not_apply_mesh_state_or_demand() {
+    // Given: a direct announcement that passes requirement validation but is
+    // rejected by the supported-version admission policy.
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let addr = test_addr(0x59);
+    let mut ann = test_announcement(None);
+    ann.addr = addr.clone();
+    ann.version = Some("0.57.0".to_string());
+    ann.mesh_id = Some("rejected-mesh".to_string());
+    ann.model_demand.insert(
+        "rejected-demand".to_string(),
+        ModelDemand {
+            last_active: now_secs(),
+            request_count: 1,
+        },
+    );
+
+    // When: the direct payload is applied through the production gossip path.
+    node.apply_announced_peers(addr.id, &[(addr.clone(), ann)], None, None, true)
+        .await
+        .expect("policy rejection should not fail the gossip frame");
+
+    // Then: admission rejection must happen before mesh-wide side effects.
+    assert_eq!(node.mesh_id().await, None);
+    assert!(node.get_demand().is_empty());
+    assert!(!node.state.lock().await.peers.contains_key(&addr.id));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 pub(crate) async fn inbound_gossip_rejection_preserves_dead_peer_state() -> Result<()> {
     // Given: a host that still considers the direct sender dead, and a direct
