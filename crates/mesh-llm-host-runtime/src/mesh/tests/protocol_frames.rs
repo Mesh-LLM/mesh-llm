@@ -719,6 +719,7 @@ fn worker_only_legacy_models_are_excluded_from_http_routes() {
 }
 
 #[test]
+#[serial_test::serial]
 fn canonical_demand_model_ref_uses_loaded_catalog_without_refreshing() {
     use crate::models::remote_catalog::{
         CatalogCurated, CatalogEntry, CatalogSource, CatalogVariant, set_catalog_entries_for_test,
@@ -821,7 +822,9 @@ async fn dead_peer_ttl_expires() {
     {
         let mut state = node.state.lock().await;
         state.dead_peers.insert(peer_id, expired_at);
-        state.dead_peers.insert(fresh_peer_id, std::time::Instant::now());
+        state
+            .dead_peers
+            .insert(fresh_peer_id, std::time::Instant::now());
     }
 
     let expired = node.retain_live_heartbeat_state().await;
@@ -918,7 +921,8 @@ async fn reconnect_gossip_failure_removes_zombie_peer() {
         "peer must start admitted"
     );
 
-    node.remove_peer_after_recovered_gossip_failure(peer_id).await;
+    node.remove_peer_after_recovered_gossip_failure(peer_id)
+        .await;
 
     assert!(
         !is_peer_admitted(&node.state.lock().await.peers, &peer_id),
@@ -929,7 +933,8 @@ async fn reconnect_gossip_failure_removes_zombie_peer() {
     let peer_id2 = EndpointId::from(peer_key2.public());
     node.insert_test_peer(make_test_peer_info(peer_id2)).await;
 
-    node.recover_heartbeat_peer(peer_id2, &mut HashMap::new()).await;
+    node.recover_heartbeat_peer(peer_id2, &mut HashMap::new())
+        .await;
 
     assert!(
         is_peer_admitted(&node.state.lock().await.peers, &peer_id2),

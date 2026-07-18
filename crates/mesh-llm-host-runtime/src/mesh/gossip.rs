@@ -1,8 +1,24 @@
 //! Gossip protocol: peer announcement exchange, transitive peer tracking,
 //! and peer list management (add/remove/update).
 
-use super::*;
+use super::{
+    DEAD_PEER_TTL, DisplayLatencySource, InviteTokenMaterial, ModelDemand, ModelRuntimeDescriptor,
+    Node, NodeRole, PEER_CONNECT_AND_GOSSIP_TIMEOUT, PEER_STALE_SECS, PeerAnnouncement, PeerInfo,
+    ServedModelDescriptor, SignedNodeOwnership, connect_mesh, elapsed_ms_u64, emit_mesh_info,
+    infer_remote_served_descriptors, parse_invite_token,
+};
+use crate::crypto::{OwnershipSummary, verify_node_ownership};
+use crate::mesh::peer_state::{PropagatedLatencyObservation, policy_accepts_peer};
+use crate::mesh::requirements::current_time_unix_ms;
+use crate::mesh::stage_transport::PeerLifecycleCaptureEvent;
 use crate::models::append_external_inference_models;
+use crate::protocol::{
+    ControlProtocol, NODE_PROTOCOL_GENERATION, STREAM_GOSSIP, connection_protocol,
+    decode_gossip_payload, read_len_prefixed, write_gossip_payload,
+};
+use anyhow::Result;
+use iroh::{EndpointAddr, EndpointId, endpoint::Connection};
+use std::collections::HashMap;
 
 /// Minimum peer version we accept into the local mesh table and re-broadcast.
 ///

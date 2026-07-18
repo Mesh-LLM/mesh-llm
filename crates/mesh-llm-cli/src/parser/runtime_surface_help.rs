@@ -1,4 +1,4 @@
-use super::RuntimeSurface;
+use super::normalization::RuntimeSurface;
 
 pub fn runtime_surface_help(surface: RuntimeSurface) -> String {
     match surface {

@@ -6,10 +6,9 @@
 //! `skippy-stage/2` ALPN.
 
 pub use mesh_llm_types::mesh::{
-    DEMAND_TTL_SECS, MAX_SPLIT_RTT_MS, ModelDemand, ModelRuntimeDescriptor, ModelSourceKind,
-    ServedModelDescriptor, ServedModelIdentity, ServedModelMetadata,
-    infer_available_model_descriptors, infer_local_served_model_descriptor,
-    infer_served_model_descriptors, merge_demand,
+    MAX_SPLIT_RTT_MS, ModelDemand, ModelRuntimeDescriptor, ModelSourceKind, ServedModelDescriptor,
+    ServedModelIdentity, ServedModelMetadata, infer_available_model_descriptors,
+    infer_local_served_model_descriptor, infer_served_model_descriptors,
 };
 
 use anyhow::{Context, Result};
@@ -19,9 +18,7 @@ use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey, TransportAddr};
 use mesh_llm_events::OutputEvent;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, watch};
@@ -34,19 +31,12 @@ use self::requirements::{
 use crate::crypto::{
     DEFAULT_NODE_CERT_LIFETIME_SECS, OwnershipStatus, OwnershipSummary, SignedNodeOwnership,
     TrustPolicy, TrustStore, default_node_ownership_path, save_node_ownership, sign_node_ownership,
-    verify_control_plane_target_node, verify_node_ownership,
+    verify_node_ownership,
 };
 use crate::protocol::*;
 
-use self::artifact_transfer_io::{
-    PartialArtifactGuard, append_artifact_transfer_body, select_partial_artifact,
-    write_artifact_transfer_chunk,
-};
-
 #[cfg(test)]
 use self::artifact_transfer_io::read_artifact_transfer_chunk;
-
-use skippy_protocol::proto::stage as skippy_stage_proto;
 
 const PRETTY_LOCAL_REQUEST_WINDOW_SECS: u64 = 24 * 60 * 60;
 const EPHEMERAL_QUIC_PORT: u16 = 0;
@@ -114,10 +104,9 @@ use connection_reservation::*;
 use connections::*;
 use model_identity::*;
 use node_identity::*;
-pub(crate) use node_requirements::*;
 use owner_control::*;
 use peer_state::*;
-#[allow(unused_imports)]
+#[cfg(test)]
 use plugin_mesh::*;
 #[expect(
     unused_imports,
@@ -138,7 +127,6 @@ pub use identity_persistence::{
     load_node_key_from_path, mark_was_public, save_last_mesh_id, save_node_key_to_path,
     was_previously_public,
 };
-pub(crate) use node::{LocalRequestMetricsSampler, PeerDownReport, peer_down_endpoint_id};
 #[expect(
     unused_imports,
     reason = "public compatibility re-export for existing mesh node callers"
@@ -146,9 +134,10 @@ pub(crate) use node::{LocalRequestMetricsSampler, PeerDownReport, peer_down_endp
 pub use node::{
     LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_vram_bytes_capped,
 };
+pub(crate) use node::{PeerDownReport, peer_down_endpoint_id};
 pub(crate) use peer_state::{
     ControlListenerLifecycle, DEAD_PEER_TTL, MeshState, PEER_DOWN_REPORTER_COOLDOWN_SECS,
-    PEER_STALE_SECS, public_model_id_from_identity, resolve_peer_leaving,
+    PEER_STALE_SECS, resolve_peer_leaving,
 };
 #[expect(
     unused_imports,
@@ -159,10 +148,8 @@ pub use peer_state::{
     PeerAnnouncement, PeerInfo, PropagatedLatencyObservation,
 };
 pub(crate) use stage_transport::{
-    ARTIFACT_TRANSFER_BUFFER_BYTES, ARTIFACT_TRANSFER_INVALID_OFFSET_ERROR,
-    ARTIFACT_TRANSFER_OPEN_TIMEOUT, ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT, ConnectionCaptureEvent,
-    HttpCaptureEvent, MeshBiStream, PeerLifecycleCaptureEvent, SelectedPathObservation,
-    StageTopologyState,
+    ConnectionCaptureEvent, HttpCaptureEvent, MeshBiStream, PeerLifecycleCaptureEvent,
+    SelectedPathObservation, StageTopologyState,
 };
 #[expect(
     unused_imports,
@@ -176,12 +163,9 @@ pub(crate) use stage_transport_bridge::{StageTransportBridge, StageTransportBrid
 
 #[allow(unused_imports)]
 use gossip::{apply_transitive_ann, peer_meaningfully_changed};
+#[cfg(test)]
+use heartbeat::heartbeat_failure_policy_for_peer;
 pub(crate) use heartbeat::resolve_peer_down;
-#[expect(
-    unused_imports,
-    reason = "sibling mesh modules import this parent prelude with `super::*`"
-)]
-use heartbeat::{HeartbeatFailurePolicy, heartbeat_failure_policy_for_peer};
 use heartbeat::{PeerDownReportDisposition, peer_down_report_disposition};
 use stage_proto::*;
 

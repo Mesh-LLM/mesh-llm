@@ -9,14 +9,10 @@ use mesh_llm_config::{
     built_in_config_schema,
 };
 use mesh_llm_plugin_manager::{
-    InstalledPluginApplyMode, InstalledPluginConditionOperator, InstalledPluginConditionValue,
-    InstalledPluginConditionalDisable, InstalledPluginConfigSchema, InstalledPluginConflictRule,
-    InstalledPluginConstraint, InstalledPluginControlAvailability,
-    InstalledPluginControlAvailabilitySource, InstalledPluginControlBehavior,
-    InstalledPluginControlCondition, InstalledPluginDisabledWritePolicy, InstalledPluginMetadata,
-    InstalledPluginOptionsSource, InstalledPluginPresentationMetadata, InstalledPluginRestartScope,
-    InstalledPluginTextFormat, InstalledPluginValueKind, InstalledPluginValueSchema,
-    InstalledPluginVisibility, PluginStore, default_store_root,
+    InstalledPluginApplyMode, InstalledPluginConfigSchema, InstalledPluginConstraint,
+    InstalledPluginMetadata, InstalledPluginPresentationMetadata, InstalledPluginRestartScope,
+    InstalledPluginValueKind, InstalledPluginValueSchema, InstalledPluginVisibility, PluginStore,
+    default_store_root,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;

@@ -1,4 +1,5 @@
 use super::*;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub(crate) struct NodeHardwareSnapshot {
     pub(crate) vram_bytes: u64,

@@ -1,4 +1,44 @@
-use super::*;
+use std::{
+    collections::BTreeMap,
+    net::TcpStream,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+
+use anyhow::{Context, Result, bail};
+use serde_json::json;
+use skippy_protocol::{
+    StageConfig, StageTopology,
+    binary::{
+        StageReply, StageReplyStats, StageStateHeader, StageWireMessage, WireActivationDType,
+        WireMessageKind, WireReplyKind,
+    },
+};
+
+use crate::{
+    kv_integration::KvStageIntegration, runtime_state::RuntimeState, telemetry::Telemetry,
+};
+
+use super::{
+    BinaryStageExecutionOptions, WireCondition, direct_return, forwarding,
+    forwarding::forwarded_stage_message_timed, wire::write_stage_message_conditioned,
+};
+use super::{
+    binary_kv::{
+        add_binary_record_stats, emit_binary_proactive_eviction, maybe_prefix_cache_control,
+        maybe_record_binary_full_prefill,
+    },
+    binary_messaging::reply::configure_prediction_return_stream,
+    direct_return::PredictionReturnSinks,
+    kv_eviction::{
+        BinaryProactiveEviction, BinaryProactiveEvictionPlan,
+        evict_binary_resident_prefix_for_decode,
+    },
+    stage_execution::{
+        binary_message_attrs, elapsed_ms, input_activation_frame, run_binary_stage_message,
+        runtime_sampling_config, stage_output_activation_capacity,
+    },
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RestorePrefillDecodeRoute {
@@ -356,6 +396,7 @@ pub(super) fn restore_prefill_decode_as_decode_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use skippy_protocol::binary::StageSamplingConfig;
 
     #[test]
     fn restore_decode_routes_misses_and_terminal_hits_directly() {
@@ -379,5 +420,47 @@ mod tests {
             restore_prefill_decode_route(true, true),
             RestorePrefillDecodeRoute::ForwardHit
         );
+    }
+
+    #[test]
+    fn restore_prefill_decode_as_decode_preserves_chat_metadata() {
+        let metadata = r#"{"grammar":"chat"}"#;
+        let sampling = StageSamplingConfig {
+            flags: 1,
+            seed: 42,
+            ..StageSamplingConfig::default()
+        };
+        let mut state = StageStateHeader::new(
+            WireMessageKind::TryRestorePrefillDecode,
+            WireActivationDType::F16,
+        );
+        state.prompt_token_count = 4;
+        state.decode_step = 0;
+        state.current_token = 104;
+
+        let message = StageWireMessage {
+            kind: WireMessageKind::TryRestorePrefillDecode,
+            pos_start: 3,
+            token_count: 1,
+            state,
+            request_id: 11,
+            session_id: 13,
+            sampling: Some(sampling.clone()),
+            chat_sampling_metadata: Some(metadata.to_string()),
+            tokens: vec![101, 102, 103, 104],
+            positions: Vec::new(),
+            activation: vec![1, 2, 3, 4],
+            raw_bytes: Vec::new(),
+        };
+
+        let decode = restore_prefill_decode_as_decode_message(&message, 104);
+
+        assert_eq!(decode.kind, WireMessageKind::DecodeEmbd);
+        assert_eq!(decode.token_count, 1);
+        assert_eq!(decode.tokens, vec![104]);
+        assert_eq!(decode.sampling, Some(sampling));
+        assert_eq!(decode.chat_sampling_metadata.as_deref(), Some(metadata));
+        assert!(decode.activation.is_empty());
+        assert!(decode.positions.is_empty());
     }
 }

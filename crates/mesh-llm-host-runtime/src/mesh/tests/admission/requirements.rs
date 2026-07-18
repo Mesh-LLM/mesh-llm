@@ -1346,7 +1346,9 @@ pub(crate) fn assert_concurrent_requirement_state_installs_do_not_overwrite() {
         );
         let first_policy = requirement_policy_without_release_attestation();
         let second_policy = requirement_policy(&test_release_signer_key_id(9));
-        let first_mesh_id = first_policy.policy_derived_mesh_id().expect("first mesh id");
+        let first_mesh_id = first_policy
+            .policy_derived_mesh_id()
+            .expect("first mesh id");
         let second_mesh_id = second_policy
             .policy_derived_mesh_id()
             .expect("second mesh id");

@@ -266,7 +266,10 @@ async fn local_announcement_uses_enumerate_host_for_host_fields_only() {
     assert_eq!(private_ann.hostname, None);
     assert_eq!(private_ann.gpu_vram, None);
     assert_eq!(private_ann.is_soc, Some(true));
-    assert_eq!(private_ann.gpu_mem_bandwidth_gbps.as_deref(), Some("1792.00"));
+    assert_eq!(
+        private_ann.gpu_mem_bandwidth_gbps.as_deref(),
+        Some("1792.00")
+    );
 
     node.enumerate_host = true;
     let public_ann = node.build_local_announcement(node.snapshot_local_announcement_data().await);
@@ -274,7 +277,10 @@ async fn local_announcement_uses_enumerate_host_for_host_fields_only() {
     assert_eq!(public_ann.hostname.as_deref(), Some("carrack"));
     assert_eq!(public_ann.gpu_vram.as_deref(), Some("34359738368"));
     assert_eq!(public_ann.is_soc, Some(true));
-    assert_eq!(public_ann.gpu_mem_bandwidth_gbps.as_deref(), Some("1792.00"));
+    assert_eq!(
+        public_ann.gpu_mem_bandwidth_gbps.as_deref(),
+        Some("1792.00")
+    );
 }
 
 fn make_valid_gossip_frame() -> GossipFrame {

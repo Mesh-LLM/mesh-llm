@@ -23,7 +23,9 @@ use skippy_protocol::{
 };
 
 use super::socket::{connect_downstream_socket, downstream_source_ip, resolve_downstream_endpoint};
-use super::{consume_optional_client_ready_hello, send_client_ready_hello_if_enabled};
+use super::stage_execution::{
+    consume_optional_client_ready_hello, send_client_ready_hello_if_enabled,
+};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PredictionReturnKey {

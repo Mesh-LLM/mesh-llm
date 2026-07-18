@@ -2,6 +2,57 @@ use std::collections::VecDeque;
 
 use super::embedded_execution::DispatchedEmbeddedStage;
 use super::*;
+use crate::binary_transport::BinaryStageExecutionOptions;
+use crate::binary_transport::forwarded_stage_message;
+use crate::binary_transport::forwarded_stage_message_timed;
+use crate::binary_transport::run_binary_stage_message;
+use crate::binary_transport::write_stage_message_conditioned;
+use crate::frontend::NativeMtpDecodeCounters;
+use crate::frontend::NativeMtpDecodeOptions;
+use crate::frontend::NativeMtpDraft;
+use crate::frontend::NativeMtpDraftOrigin;
+use crate::frontend::NativeMtpVerifier;
+use crate::frontend::generation::EmbeddedStageZeroGeneration;
+use crate::frontend::generation::GenerationCacheStats;
+use crate::frontend::generation::LocalGeneration;
+use crate::frontend::generation::PhaseTimer;
+use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::generation::TokenControl;
+use crate::frontend::generation::attrs_insert_prefill_chunk_policy;
+use crate::frontend::generation::decode_token_phase;
+use crate::frontend::prefill::PrefillChunkObservation;
+use crate::frontend::prefill::drain_embedded_prefill_replies;
+use crate::frontend::prefill::drain_one_embedded_prefill_reply;
+use crate::frontend::request::wire_sampling_config;
+use crate::frontend::speculative::OpenAiSpeculativeStats;
+use crate::frontend::speculative::classify_verify_window;
+use crate::frontend::speculative::propose_ngram_tokens;
+use crate::frontend::speculative::repaired_commit_tokens;
+use crate::frontend::speculative::verify_inputs_for_proposals;
+use crate::frontend::util::ms_to_us;
+use crate::frontend::util::openai_backend_error;
+use crate::frontend::util::openai_io_error;
+use crate::frontend::util::saturating_u32;
+use crate::frontend::util::token_is_eog_with_runtime;
+use crate::frontend::util::us_to_ms;
+use crate::frontend::wire_messages::DecodeMessageArgs;
+use crate::frontend::wire_messages::OpenAiPrefillChunk;
+use crate::frontend::wire_messages::ReusableDecodeMessage;
+use crate::frontend::wire_messages::ReusableDecodeMessageArgs;
+use crate::frontend::wire_messages::VerifyWindowMessageArgs;
+use crate::frontend::wire_messages::embedded_decode_message;
+use crate::frontend::wire_messages::embedded_prefill_message;
+use crate::frontend::wire_messages::embedded_verify_window_message;
+use crate::frontend::wire_messages::generation_config_message;
+use crate::telemetry::now_unix_nanos;
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiResult;
+use serde_json::json;
+use skippy_protocol::binary::StageReplyStats;
+use skippy_protocol::binary::StageWireMessage;
+use skippy_protocol::binary::WireReplyKind;
+use skippy_protocol::binary::recv_reply;
+use skippy_protocol::binary::write_stage_message;
 
 struct PipelinedCompositeWindow {
     window: VerifyWindow,
@@ -268,7 +319,9 @@ impl StageOpenAiBackend {
                                     0,
                                     request.native_mtp_enabled,
                                 )
-                                .with_native_mtp_max_tokens(request.native_mtp_max_tokens),
+                                .with_native_mtp_max_tokens(
+                                    request.speculative.native_mtp.max_draft_tokens,
+                                ),
                             )
                             .map_err(openai_backend_error)?
                             .2;

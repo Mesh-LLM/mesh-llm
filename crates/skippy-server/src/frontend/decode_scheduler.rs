@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use super::{OpenAiError, OpenAiResult};
+use openai_frontend::{OpenAiError, OpenAiResult};
 
 const PIPELINE_PROFILE_MIN_OBSERVATIONS: usize = 8;
 const PIPELINE_PROFILE_MAX_OBSERVATIONS: usize = 32;

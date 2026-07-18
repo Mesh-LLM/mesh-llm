@@ -571,7 +571,7 @@ impl SplitCapacityReadinessReport {
 
 #[cfg(test)]
 mod tests {
-    use super::super::local::SplitParticipantExclusionReason;
+    use super::super::local_package::SplitParticipantExclusionReason;
     use super::*;
     use iroh::SecretKey;
     use std::path::PathBuf;

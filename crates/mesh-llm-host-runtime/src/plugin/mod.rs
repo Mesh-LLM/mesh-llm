@@ -1,4 +1,5 @@
 mod config;
+mod health;
 mod installed;
 pub(crate) mod mcp;
 mod runtime;
@@ -7,8 +8,15 @@ pub(crate) mod stapler;
 mod startup;
 mod support;
 mod transport;
+mod types;
 mod web_ui;
 
+pub(crate) use self::types::BridgeFuture;
+pub use self::types::{
+    InferenceEndpointRoute, PluginCapabilityProvider, PluginEndpointSummary,
+    PluginManifestOverview, PluginMeshEvent, PluginRpcBridge, PluginSummary, RpcResult,
+    ToolCallResult, ToolSummary,
+};
 pub use self::web_ui::{
     PluginWebUiConfigSectionOverview, PluginWebUiManifestOverview, PluginWebUiPageOverview,
     PluginWebUiState, PluginWebUiStateKind,
@@ -35,13 +43,13 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::BTreeSet;
+#[cfg(test)]
 use std::future::Future;
+#[cfg(test)]
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
-use url::Url;
 
 #[allow(unused_imports)]
 pub use self::config::ExternalPluginSpec;
@@ -70,6 +78,9 @@ pub(crate) use self::config::{
     mesh_requirements_config_from_runtime, mesh_requirements_config_to_runtime,
     mesh_requirements_validation_error, validate_config_diagnostics_with_installed_plugin_schemas,
 };
+use self::health::EndpointHealthState;
+#[cfg(test)]
+use self::health::{endpoint_declared_capabilities, endpoint_record_from_plugin_status};
 use self::runtime::ExternalPlugin;
 pub use self::startup::{PluginStartupOptions, PluginStartupSummary};
 pub(crate) use self::support::parse_optional_json;
@@ -85,199 +96,37 @@ pub(crate) use self::transport::{
 use mesh_llm_plugin::MeshVisibility;
 #[cfg(test)]
 use mesh_llm_plugin_manager::store::InstalledPluginWebUiValidationStatus;
-use tokio::sync::oneshot;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
-const HEALTH_CHECK_INTERVAL_SECS: u64 = 15;
-const ENDPOINT_STARTUP_GRACE_SECS: u64 = 30;
-const ENDPOINT_FAILURE_THRESHOLD: u32 = 2;
-
-#[derive(Debug)]
-pub enum PluginMeshEvent {
-    Channel {
-        plugin_id: String,
-        message: proto::ChannelMessage,
-    },
-    BulkTransfer {
-        plugin_id: String,
-        message: proto::BulkTransferMessage,
-    },
-    OpenStream {
-        plugin_id: String,
-        request: proto::OpenMeshStreamRequest,
-        response_tx: oneshot::Sender<Result<proto::OpenMeshStreamResponse, proto::ErrorResponse>>,
-    },
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct ToolSummary {
-    pub name: String,
-    pub description: String,
-    pub input_schema_json: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct ToolCallResult {
-    pub content_json: String,
-    pub is_error: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct RpcResult {
-    pub result_json: String,
-}
-
-pub(crate) type BridgeFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 #[cfg(test)]
 type TestStreamFuture = Pin<Box<dyn Future<Output = Result<LocalStream>> + Send>>;
 #[cfg(test)]
 type TestStreamHandler = Arc<dyn Fn(proto::OpenStreamRequest) -> TestStreamFuture + Send + Sync>;
 
-pub trait PluginRpcBridge: Send + Sync {
-    fn handle_request(
-        &self,
-        plugin_name: String,
-        method: String,
-        params_json: String,
-    ) -> BridgeFuture<Result<RpcResult, proto::ErrorResponse>>;
-
-    fn handle_notification(
-        &self,
-        plugin_name: String,
-        method: String,
-        params_json: String,
-    ) -> BridgeFuture<()>;
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct PluginSummary {
-    pub name: String,
-    pub kind: String,
-    pub enabled: bool,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pid: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub capabilities: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub args: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub tools: Vec<ToolSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manifest: Option<PluginManifestOverview>,
-    #[serde(default)]
-    pub web_ui: PluginWebUiState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub startup: Option<PluginStartupSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct PluginManifestOverview {
-    pub operations: usize,
-    pub resources: usize,
-    pub resource_templates: usize,
-    pub prompts: usize,
-    pub completions: usize,
-    pub http_bindings: usize,
-    pub endpoints: usize,
-    pub mesh_channels: usize,
-    pub mesh_event_subscriptions: usize,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub capabilities: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub web_ui: Option<PluginWebUiManifestOverview>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct PluginEndpointSummary {
-    pub plugin_name: String,
-    pub plugin_status: String,
-    pub endpoint_id: String,
-    pub state: String,
-    pub available: bool,
-    pub kind: String,
-    pub transport_kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub address: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub args: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-    pub supports_streaming: bool,
-    pub managed_by_plugin: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub models: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct PluginCapabilityProvider {
-    pub capability: String,
-    pub plugin_name: String,
-    pub plugin_status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub endpoint_id: Option<String>,
-    pub available: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct EndpointHealthRecord {
-    state: String,
-    available: bool,
-    detail: Option<String>,
-    models: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-struct EndpointHealthState {
-    record: EndpointHealthRecord,
-    first_checked_at: Instant,
-    consecutive_failures: u32,
-}
-
-#[derive(Clone, Debug)]
-pub struct InferenceEndpointRoute {
-    pub plugin_name: String,
-    pub endpoint_id: String,
-    pub address: String,
-    pub models: Vec<String>,
-}
-
 #[derive(Clone)]
 pub struct PluginManager {
-    inner: Arc<PluginManagerInner>,
+    pub(in crate::plugin) inner: Arc<PluginManagerInner>,
 }
 
-struct PluginManagerInner {
-    plugins: BTreeMap<String, ExternalPlugin>,
-    inactive: BTreeMap<String, PluginSummary>,
-    endpoint_health: Arc<Mutex<BTreeMap<String, EndpointHealthState>>>,
-    runtime_data: RuntimeDataCollector,
-    rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
-    shutting_down: AtomicBool,
+pub(in crate::plugin) struct PluginManagerInner {
+    pub(in crate::plugin) plugins: BTreeMap<String, ExternalPlugin>,
+    pub(in crate::plugin) inactive: BTreeMap<String, PluginSummary>,
+    pub(in crate::plugin) endpoint_health: Arc<Mutex<BTreeMap<String, EndpointHealthState>>>,
+    pub(in crate::plugin) runtime_data: RuntimeDataCollector,
+    pub(in crate::plugin) rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
+    pub(in crate::plugin) shutting_down: AtomicBool,
     #[cfg(test)]
-    bridged_plugins: BTreeSet<String>,
+    pub(in crate::plugin) bridged_plugins: BTreeSet<String>,
     #[cfg(test)]
-    test_endpoints: Arc<Mutex<Vec<PluginEndpointSummary>>>,
+    pub(in crate::plugin) test_endpoints: Arc<Mutex<Vec<PluginEndpointSummary>>>,
     #[cfg(test)]
-    test_inference_endpoints: Arc<Mutex<Vec<InferenceEndpointRoute>>>,
+    pub(in crate::plugin) test_inference_endpoints: Arc<Mutex<Vec<InferenceEndpointRoute>>>,
     #[cfg(test)]
-    test_manifests: Arc<Mutex<BTreeMap<String, proto::PluginManifest>>>,
+    pub(in crate::plugin) test_manifests: Arc<Mutex<BTreeMap<String, proto::PluginManifest>>>,
     #[cfg(test)]
-    test_stream_handlers: Arc<Mutex<BTreeMap<String, TestStreamHandler>>>,
+    pub(in crate::plugin) test_stream_handlers: Arc<Mutex<BTreeMap<String, TestStreamHandler>>>,
 }
 
 impl PluginManager {
@@ -547,7 +396,7 @@ impl PluginManager {
         }
     }
 
-    fn plugin_summary_producer(
+    pub(in crate::plugin) fn plugin_summary_producer(
         &self,
         plugin_name: &str,
     ) -> crate::runtime_data::RuntimeDataProducer {
@@ -561,7 +410,7 @@ impl PluginManager {
         })
     }
 
-    fn plugin_endpoint_producer(
+    pub(in crate::plugin) fn plugin_endpoint_producer(
         &self,
         plugin_name: &str,
         endpoint_id: &str,
@@ -576,19 +425,23 @@ impl PluginManager {
         })
     }
 
-    fn publish_plugin_summary(&self, summary: &PluginSummary) {
+    pub(in crate::plugin) fn publish_plugin_summary(&self, summary: &PluginSummary) {
         self.plugin_summary_producer(&summary.name)
             .publish_plugin_summary(summary.clone());
     }
 
-    fn publish_plugin_manifest(&self, plugin_name: &str, manifest: Option<PluginManifestOverview>) {
+    pub(in crate::plugin) fn publish_plugin_manifest(
+        &self,
+        plugin_name: &str,
+        manifest: Option<PluginManifestOverview>,
+    ) {
         if let Some(manifest) = manifest {
             self.plugin_summary_producer(plugin_name)
                 .publish_plugin_manifest(manifest);
         }
     }
 
-    fn publish_plugin_providers(
+    pub(in crate::plugin) fn publish_plugin_providers(
         &self,
         plugin_name: &str,
         providers: Vec<PluginCapabilityProvider>,
@@ -1420,8 +1273,9 @@ impl PluginManager {
     fn start_supervisor(&self) {
         let manager = self.clone();
         tokio::spawn(async move {
-            let mut ticker =
-                tokio::time::interval(std::time::Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS));
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(
+                health::HEALTH_CHECK_INTERVAL_SECS,
+            ));
             loop {
                 ticker.tick().await;
                 if manager.inner.shutting_down.load(Ordering::SeqCst) {
@@ -1449,145 +1303,6 @@ impl PluginManager {
                 }
             }
         });
-    }
-
-    async fn refresh_plugin_endpoints(&self, plugin_name: &str) -> Result<()> {
-        let summary = if let Some(plugin) = self.inner.plugins.get(plugin_name) {
-            plugin.summary().await
-        } else if let Some(summary) = self.inner.inactive.get(plugin_name) {
-            summary.clone()
-        } else {
-            self.clear_plugin_endpoint_health(plugin_name).await;
-            return Ok(());
-        };
-        self.publish_plugin_summary(&summary);
-
-        let manifest = if let Some(plugin) = self.inner.plugins.get(plugin_name) {
-            plugin.manifest_snapshot().await
-        } else {
-            self.manifest(plugin_name).await.ok().flatten()
-        };
-        let Some(manifest) = manifest else {
-            self.clear_plugin_endpoint_health(plugin_name).await;
-            self.publish_plugin_summary(&summary);
-            self.publish_plugin_providers(plugin_name, Vec::new());
-            return Ok(());
-        };
-
-        let now = Instant::now();
-        let prefix = format!("{plugin_name}:");
-        let previous = self
-            .inner
-            .endpoint_health
-            .lock()
-            .await
-            .iter()
-            .filter_map(|(key, value)| {
-                key.strip_prefix(&prefix)
-                    .map(|endpoint_id| (endpoint_id.to_string(), value.clone()))
-            })
-            .collect::<BTreeMap<_, _>>();
-        let plugin_default = endpoint_record_from_plugin_status(&summary);
-        let mut providers = manifest
-            .capabilities
-            .iter()
-            .map(|capability| PluginCapabilityProvider {
-                capability: capability.clone(),
-                plugin_name: summary.name.clone(),
-                plugin_status: summary.status.clone(),
-                endpoint_id: None,
-                available: plugin_default.available,
-                detail: plugin_default.detail.clone(),
-            })
-            .collect::<Vec<_>>();
-        let mut endpoint_states = BTreeMap::new();
-        let mut endpoint_summaries = Vec::new();
-        for endpoint in &manifest.endpoints {
-            let key = endpoint.endpoint_id.clone();
-            let health =
-                endpoint_health_for_summary(&summary, endpoint, previous.get(&key), now).await;
-            for capability in endpoint_declared_capabilities(endpoint) {
-                providers.push(PluginCapabilityProvider {
-                    capability,
-                    plugin_name: summary.name.clone(),
-                    plugin_status: summary.status.clone(),
-                    endpoint_id: Some(endpoint.endpoint_id.clone()),
-                    available: health.record.available,
-                    detail: health.record.detail.clone(),
-                });
-            }
-            endpoint_summaries.push(PluginEndpointSummary {
-                plugin_name: summary.name.clone(),
-                plugin_status: summary.status.clone(),
-                endpoint_id: endpoint.endpoint_id.clone(),
-                state: health.record.state.clone(),
-                available: health.record.available,
-                kind: endpoint_kind_name(endpoint.kind).to_string(),
-                transport_kind: endpoint_transport_kind_name(endpoint.transport_kind).to_string(),
-                protocol: endpoint.protocol.clone(),
-                address: endpoint.address.clone(),
-                args: endpoint.args.clone(),
-                namespace: endpoint.namespace.clone(),
-                supports_streaming: endpoint.supports_streaming,
-                managed_by_plugin: endpoint.managed_by_plugin,
-                detail: health.record.detail.clone(),
-                models: health.record.models.clone(),
-            });
-            endpoint_states.insert(endpoint_key(plugin_name, &key), health);
-        }
-
-        self.clear_plugin_endpoint_health(plugin_name).await;
-        self.publish_plugin_summary(&summary);
-        self.publish_plugin_manifest(plugin_name, Some(plugin_manifest_overview(&manifest)));
-        self.publish_plugin_providers(plugin_name, providers);
-        for endpoint_summary in endpoint_summaries {
-            self.plugin_endpoint_producer(plugin_name, &endpoint_summary.endpoint_id)
-                .publish_plugin_endpoint(endpoint_summary);
-        }
-
-        let mut registry = self.inner.endpoint_health.lock().await;
-        registry.extend(endpoint_states);
-        Ok(())
-    }
-
-    async fn clear_plugin_endpoint_health(&self, plugin_name: &str) {
-        let mut registry = self.inner.endpoint_health.lock().await;
-        registry.retain(|key, _| !key.starts_with(&format!("{plugin_name}:")));
-        drop(registry);
-        self.plugin_summary_producer(plugin_name)
-            .clear_plugin_reports(plugin_name);
-    }
-
-    async fn inference_endpoints(&self) -> Result<Vec<InferenceEndpointRoute>> {
-        #[cfg(test)]
-        if self.inner.plugins.is_empty() && self.inner.inactive.is_empty() {
-            let mut endpoints = self.inner.test_inference_endpoints.lock().await.clone();
-            endpoints.sort_by(|a, b| {
-                a.plugin_name
-                    .cmp(&b.plugin_name)
-                    .then_with(|| a.endpoint_id.cmp(&b.endpoint_id))
-            });
-            if !endpoints.is_empty() {
-                return Ok(endpoints);
-            }
-        }
-        let endpoint_summaries = self.endpoints().await?;
-        let mut endpoints = Vec::new();
-        for endpoint in endpoint_summaries {
-            if endpoint.kind != "inference" || !endpoint.available {
-                continue;
-            }
-            let Some(address) = endpoint.address.clone() else {
-                continue;
-            };
-            endpoints.push(InferenceEndpointRoute {
-                plugin_name: endpoint.plugin_name,
-                endpoint_id: endpoint.endpoint_id,
-                address,
-                models: endpoint.models,
-            });
-        }
-        Ok(endpoints)
     }
 }
 
@@ -1739,7 +1454,7 @@ fn mesh_event_kind_name(value: i32) -> &'static str {
     }
 }
 
-fn endpoint_kind_name(value: i32) -> &'static str {
+pub(in crate::plugin) fn endpoint_kind_name(value: i32) -> &'static str {
     match proto::EndpointKind::try_from(value).unwrap_or(proto::EndpointKind::Unspecified) {
         proto::EndpointKind::Inference => "inference",
         proto::EndpointKind::Mcp => "mcp",
@@ -1747,7 +1462,7 @@ fn endpoint_kind_name(value: i32) -> &'static str {
     }
 }
 
-fn endpoint_transport_kind_name(value: i32) -> &'static str {
+pub(in crate::plugin) fn endpoint_transport_kind_name(value: i32) -> &'static str {
     match proto::EndpointTransportKind::try_from(value)
         .unwrap_or(proto::EndpointTransportKind::Unspecified)
     {
@@ -1757,76 +1472,6 @@ fn endpoint_transport_kind_name(value: i32) -> &'static str {
         proto::EndpointTransportKind::EndpointTransportNamedPipe => "named_pipe",
         proto::EndpointTransportKind::EndpointTransportTcp => "tcp",
         proto::EndpointTransportKind::Unspecified => "unspecified",
-    }
-}
-
-fn endpoint_record_from_plugin_status(summary: &PluginSummary) -> EndpointHealthRecord {
-    if !summary.enabled || summary.status == "disabled" {
-        return EndpointHealthRecord {
-            state: "unavailable".into(),
-            available: false,
-            detail: summary.error.clone(),
-            models: Vec::new(),
-        };
-    }
-
-    match summary.status.as_str() {
-        "running" => EndpointHealthRecord {
-            state: "healthy".into(),
-            available: true,
-            detail: None,
-            models: Vec::new(),
-        },
-        "starting" | "restarting" => EndpointHealthRecord {
-            state: "starting".into(),
-            available: false,
-            detail: summary.error.clone(),
-            models: Vec::new(),
-        },
-        "degraded" => EndpointHealthRecord {
-            state: "unhealthy".into(),
-            available: false,
-            detail: summary.error.clone(),
-            models: Vec::new(),
-        },
-        _ => EndpointHealthRecord {
-            state: "unavailable".into(),
-            available: false,
-            detail: summary.error.clone(),
-            models: Vec::new(),
-        },
-    }
-}
-
-fn endpoint_state_from_plugin_status(summary: &PluginSummary, now: Instant) -> EndpointHealthState {
-    EndpointHealthState {
-        record: endpoint_record_from_plugin_status(summary),
-        first_checked_at: now,
-        consecutive_failures: 0,
-    }
-}
-
-fn endpoint_key(plugin_name: &str, endpoint_id: &str) -> String {
-    format!("{plugin_name}:{endpoint_id}")
-}
-
-fn endpoint_declared_capabilities(endpoint: &proto::EndpointManifest) -> Vec<String> {
-    match proto::EndpointKind::try_from(endpoint.kind).unwrap_or(proto::EndpointKind::Unspecified) {
-        proto::EndpointKind::Inference => {
-            let mut capabilities = vec!["endpoint:inference".into()];
-            if let Some(protocol) = endpoint.protocol.as_deref() {
-                capabilities.push(format!("endpoint:inference/{protocol}"));
-            }
-            capabilities
-        }
-        proto::EndpointKind::Mcp => {
-            let mut capabilities = vec!["endpoint:mcp".into()];
-            if let Some(namespace) = endpoint.namespace.as_deref() {
-                capabilities.push(format!("endpoint:mcp/{namespace}"));
-            }
-            capabilities
-        }
-        proto::EndpointKind::Unspecified => Vec::new(),
     }
 }
 
@@ -1840,181 +1485,6 @@ fn normalize_test_tool_result_content(result: &rmcp::model::CallToolResult) -> R
     serde_json::to_string(&result.content).map_err(Into::into)
 }
 
-async fn endpoint_health_for_summary(
-    summary: &PluginSummary,
-    endpoint: &proto::EndpointManifest,
-    previous: Option<&EndpointHealthState>,
-    now: Instant,
-) -> EndpointHealthState {
-    if summary.status != "running" {
-        return endpoint_state_from_plugin_status(summary, now);
-    }
-
-    let probe = probe_endpoint(endpoint)
-        .await
-        .unwrap_or(EndpointHealthRecord {
-            state: "healthy".into(),
-            available: true,
-            detail: None,
-            models: Vec::new(),
-        });
-    apply_endpoint_probe(previous, probe, now)
-}
-
-fn apply_endpoint_probe(
-    previous: Option<&EndpointHealthState>,
-    probe: EndpointHealthRecord,
-    now: Instant,
-) -> EndpointHealthState {
-    let first_checked_at = previous.map(|state| state.first_checked_at).unwrap_or(now);
-
-    if probe.available {
-        return EndpointHealthState {
-            record: probe,
-            first_checked_at,
-            consecutive_failures: 0,
-        };
-    }
-
-    let failure_streak = previous
-        .map(|state| state.consecutive_failures.saturating_add(1))
-        .unwrap_or(1);
-    let within_startup_grace =
-        now.duration_since(first_checked_at) < Duration::from_secs(ENDPOINT_STARTUP_GRACE_SECS);
-    let was_available = previous
-        .map(|state| state.record.available)
-        .unwrap_or(false);
-
-    let record = if !was_available && within_startup_grace {
-        EndpointHealthRecord {
-            state: "starting".into(),
-            available: false,
-            detail: probe.detail,
-            models: Vec::new(),
-        }
-    } else if was_available && failure_streak < ENDPOINT_FAILURE_THRESHOLD {
-        EndpointHealthRecord {
-            state: "degraded".into(),
-            available: true,
-            detail: probe.detail,
-            models: Vec::new(),
-        }
-    } else {
-        EndpointHealthRecord {
-            state: "unhealthy".into(),
-            available: false,
-            detail: probe.detail,
-            models: Vec::new(),
-        }
-    };
-
-    EndpointHealthState {
-        record,
-        first_checked_at,
-        consecutive_failures: failure_streak,
-    }
-}
-
-async fn probe_endpoint(endpoint: &proto::EndpointManifest) -> Option<EndpointHealthRecord> {
-    match (
-        proto::EndpointKind::try_from(endpoint.kind).unwrap_or(proto::EndpointKind::Unspecified),
-        proto::EndpointTransportKind::try_from(endpoint.transport_kind)
-            .unwrap_or(proto::EndpointTransportKind::Unspecified),
-    ) {
-        (proto::EndpointKind::Inference, proto::EndpointTransportKind::EndpointTransportHttp) => {
-            let protocol = endpoint.protocol.as_deref().unwrap_or_default();
-            if protocol.eq_ignore_ascii_case("openai_compatible") {
-                return Some(
-                    probe_openai_compatible_http_endpoint(endpoint.address.as_deref()?).await,
-                );
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-async fn probe_openai_compatible_http_endpoint(address: &str) -> EndpointHealthRecord {
-    let models_url = match endpoint_models_url(address) {
-        Some(url) => url,
-        None => {
-            return EndpointHealthRecord {
-                state: "unhealthy".into(),
-                available: false,
-                detail: Some(format!("invalid endpoint address '{address}'")),
-                models: Vec::new(),
-            };
-        }
-    };
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-    {
-        Ok(client) => client,
-        Err(err) => {
-            return EndpointHealthRecord {
-                state: "unhealthy".into(),
-                available: false,
-                detail: Some(format!("build health probe client: {err}")),
-                models: Vec::new(),
-            };
-        }
-    };
-
-    match client.get(models_url.clone()).send().await {
-        Ok(response) if response.status().is_success() => EndpointHealthRecord {
-            state: "healthy".into(),
-            available: true,
-            detail: Some(format!("GET {} -> {}", models_url, response.status())),
-            models: parse_models_response(response).await.unwrap_or_default(),
-        },
-        Ok(response) => EndpointHealthRecord {
-            state: "unhealthy".into(),
-            available: false,
-            detail: Some(format!("GET {} -> {}", models_url, response.status())),
-            models: Vec::new(),
-        },
-        Err(err) => EndpointHealthRecord {
-            state: "unhealthy".into(),
-            available: false,
-            detail: Some(format!("GET {} failed: {}", models_url, err)),
-            models: Vec::new(),
-        },
-    }
-}
-
-async fn parse_models_response(response: reqwest::Response) -> Result<Vec<String>> {
-    let body = response.json::<Value>().await?;
-    let models = body
-        .get("data")
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.get("id").and_then(|id| id.as_str()))
-        .map(|id| id.to_string())
-        .collect::<Vec<_>>();
-    Ok(models)
-}
-
-fn endpoint_models_url(address: &str) -> Option<Url> {
-    let mut url = Url::parse(address).ok()?;
-    let mut path = url.path().trim_end_matches('/').to_string();
-    if path.is_empty() {
-        path = "/v1".into();
-    }
-    if !path.ends_with("/models") {
-        if path.ends_with("/v1") || path.ends_with("/api/v1") {
-            path.push_str("/models");
-        } else {
-            path.push_str("/v1/models");
-        }
-    }
-    url.set_path(&path);
-    url.set_query(None);
-    Some(url)
-}
-
 pub async fn run_plugin_process(name: String) -> Result<()> {
     match name.as_str() {
         BLOBSTORE_PLUGIN_ID => crate::plugins::blobstore::run_plugin(name).await,
@@ -2026,12 +1496,6 @@ pub async fn run_plugin_process(name: String) -> Result<()> {
 mod tests {
     use super::config::{MeshConfig, PluginConfigEntry};
     use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
 
     fn private_host_mode() -> PluginHostMode {
         PluginHostMode {
@@ -2075,30 +1539,6 @@ mod tests {
         let web_ui = overview.web_ui.expect("web UI overview should be present");
         assert_eq!(web_ui.pages[0].id, "home");
         assert_eq!(web_ui.config_sections[0].id, "settings");
-    }
-
-    async fn spawn_fake_models_server(
-        responses: Vec<(&'static str, &'static str)>,
-    ) -> (String, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let requests = Arc::new(AtomicUsize::new(0));
-        let requests_seen = requests.clone();
-        let handle = tokio::spawn(async move {
-            for (status, body) in responses {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut buf = vec![0u8; 4096];
-                let _ = stream.read(&mut buf).await.unwrap();
-                requests_seen.fetch_add(1, Ordering::SeqCst);
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len(),
-                );
-                stream.write_all(response.as_bytes()).await.unwrap();
-                let _ = stream.shutdown().await;
-            }
-        });
-        (format!("http://{addr}/api/v1"), handle, requests)
     }
 
     #[test]
@@ -2490,245 +1930,6 @@ mod tests {
         assert_eq!(
             windows_pipe_name("p1234-deadbeef", "Pipes"),
             r"\\.\pipe\mesh-llm-p1234-deadbeef-Pipes"
-        );
-    }
-
-    fn running_summary() -> PluginSummary {
-        PluginSummary {
-            name: "demo".into(),
-            kind: "external".into(),
-            enabled: true,
-            status: "running".into(),
-            pid: None,
-            version: None,
-            capabilities: Vec::new(),
-            command: None,
-            args: Vec::new(),
-            tools: Vec::new(),
-            manifest: None,
-            web_ui: PluginWebUiState::default(),
-            startup: None,
-            error: None,
-        }
-    }
-
-    #[test]
-    fn running_plugin_endpoints_are_healthy() {
-        let summary = running_summary();
-        assert_eq!(
-            endpoint_record_from_plugin_status(&summary),
-            EndpointHealthRecord {
-                state: "healthy".into(),
-                available: true,
-                detail: None,
-                models: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn restarting_plugin_endpoints_are_not_available() {
-        let summary = PluginSummary {
-            status: "restarting".into(),
-            error: Some("timed out".into()),
-            ..running_summary()
-        };
-        assert_eq!(
-            endpoint_record_from_plugin_status(&summary),
-            EndpointHealthRecord {
-                state: "starting".into(),
-                available: false,
-                detail: Some("timed out".into()),
-                models: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn first_probe_failure_stays_in_startup_grace() {
-        let now = Instant::now();
-        let state = apply_endpoint_probe(
-            None,
-            EndpointHealthRecord {
-                state: "unhealthy".into(),
-                available: false,
-                detail: Some("GET /models failed".into()),
-                models: Vec::new(),
-            },
-            now,
-        );
-        assert_eq!(state.record.state, "starting");
-        assert!(!state.record.available);
-        assert_eq!(state.consecutive_failures, 1);
-    }
-
-    #[test]
-    fn healthy_endpoint_degrades_before_becoming_unhealthy() {
-        let now = Instant::now();
-        let healthy = EndpointHealthState {
-            record: EndpointHealthRecord {
-                state: "healthy".into(),
-                available: true,
-                detail: None,
-                models: vec!["demo".into()],
-            },
-            first_checked_at: now - Duration::from_secs(ENDPOINT_STARTUP_GRACE_SECS + 1),
-            consecutive_failures: 0,
-        };
-
-        let degraded = apply_endpoint_probe(
-            Some(&healthy),
-            EndpointHealthRecord {
-                state: "unhealthy".into(),
-                available: false,
-                detail: Some("503".into()),
-                models: Vec::new(),
-            },
-            now,
-        );
-        assert_eq!(degraded.record.state, "degraded");
-        assert!(degraded.record.available);
-        assert_eq!(degraded.consecutive_failures, 1);
-
-        let unhealthy = apply_endpoint_probe(
-            Some(&degraded),
-            EndpointHealthRecord {
-                state: "unhealthy".into(),
-                available: false,
-                detail: Some("503".into()),
-                models: Vec::new(),
-            },
-            now + Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS),
-        );
-        assert_eq!(unhealthy.record.state, "unhealthy");
-        assert!(!unhealthy.record.available);
-        assert_eq!(unhealthy.consecutive_failures, 2);
-    }
-
-    #[test]
-    fn unhealthy_endpoint_recovers_immediately_on_success() {
-        let now = Instant::now();
-        let unhealthy = EndpointHealthState {
-            record: EndpointHealthRecord {
-                state: "unhealthy".into(),
-                available: false,
-                detail: Some("503".into()),
-                models: Vec::new(),
-            },
-            first_checked_at: now - Duration::from_secs(ENDPOINT_STARTUP_GRACE_SECS + 1),
-            consecutive_failures: ENDPOINT_FAILURE_THRESHOLD,
-        };
-
-        let recovered = apply_endpoint_probe(
-            Some(&unhealthy),
-            EndpointHealthRecord {
-                state: "healthy".into(),
-                available: true,
-                detail: None,
-                models: vec!["demo".into()],
-            },
-            now,
-        );
-        assert_eq!(recovered.record.state, "healthy");
-        assert!(recovered.record.available);
-        assert_eq!(recovered.record.models, vec!["demo".to_string()]);
-        assert_eq!(recovered.consecutive_failures, 0);
-    }
-
-    #[test]
-    fn models_probe_url_extends_openai_v1_base() {
-        let url = endpoint_models_url("http://localhost:8000/v1").unwrap();
-        assert_eq!(url.as_str(), "http://localhost:8000/v1/models");
-    }
-
-    #[test]
-    fn models_probe_url_extends_api_v1_base() {
-        let url = endpoint_models_url("http://localhost:8000/api/v1").unwrap();
-        assert_eq!(url.as_str(), "http://localhost:8000/api/v1/models");
-    }
-
-    #[tokio::test]
-    async fn openai_http_endpoint_probe_extracts_models_from_fake_server() {
-        let (address, handle, requests) = spawn_fake_models_server(vec![(
-            "200 OK",
-            r#"{"data":[{"id":"lemonade-small"},{"id":"lemonade-large"}]}"#,
-        )])
-        .await;
-
-        let health = probe_openai_compatible_http_endpoint(&address).await;
-        assert!(health.available);
-        assert_eq!(health.state, "healthy");
-        assert_eq!(
-            health.models,
-            vec!["lemonade-small".to_string(), "lemonade-large".to_string()]
-        );
-        assert_eq!(requests.load(Ordering::SeqCst), 1);
-
-        handle.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn openai_http_endpoint_probe_marks_503_unavailable() {
-        let (address, handle, requests) =
-            spawn_fake_models_server(vec![("503 Service Unavailable", r#"{"error":"warming"}"#)])
-                .await;
-
-        let health = probe_openai_compatible_http_endpoint(&address).await;
-        assert!(!health.available);
-        assert_eq!(health.state, "unhealthy");
-        assert!(health.models.is_empty());
-        assert!(
-            health
-                .detail
-                .as_deref()
-                .unwrap_or_default()
-                .contains("503 Service Unavailable")
-        );
-        assert_eq!(requests.load(Ordering::SeqCst), 1);
-
-        handle.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn openai_http_endpoint_probe_recovers_when_fake_server_recovers() {
-        let (address, handle, requests) = spawn_fake_models_server(vec![
-            ("503 Service Unavailable", r#"{"error":"warming"}"#),
-            ("200 OK", r#"{"data":[{"id":"lemonade-recovered"}]}"#),
-        ])
-        .await;
-
-        let first = probe_openai_compatible_http_endpoint(&address).await;
-        assert!(!first.available);
-        assert_eq!(first.state, "unhealthy");
-
-        let second = probe_openai_compatible_http_endpoint(&address).await;
-        assert!(second.available);
-        assert_eq!(second.state, "healthy");
-        assert_eq!(second.models, vec!["lemonade-recovered".to_string()]);
-        assert_eq!(requests.load(Ordering::SeqCst), 2);
-
-        handle.await.unwrap();
-    }
-
-    #[test]
-    fn endpoint_declares_inference_capabilities() {
-        let endpoint = proto::EndpointManifest {
-            endpoint_id: "demo".into(),
-            kind: proto::EndpointKind::Inference as i32,
-            transport_kind: proto::EndpointTransportKind::EndpointTransportHttp as i32,
-            protocol: Some("openai_compatible".into()),
-            address: Some("http://localhost:8000/api/v1".into()),
-            args: Vec::new(),
-            namespace: None,
-            supports_streaming: true,
-            managed_by_plugin: false,
-        };
-        assert_eq!(
-            endpoint_declared_capabilities(&endpoint),
-            vec![
-                "endpoint:inference".to_string(),
-                "endpoint:inference/openai_compatible".to_string()
-            ]
         );
     }
 }

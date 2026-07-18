@@ -1,16 +1,22 @@
-use std::{
-    collections::VecDeque,
-    sync::{
-        Arc, Condvar, Mutex, Weak,
-        atomic::{AtomicUsize, Ordering},
-        mpsc as std_mpsc,
-    },
-    thread::{self, JoinHandle},
-    time::{Duration, Instant},
-};
-
-use super::*;
+use crate::frontend::generation::PhaseTimer;
+use crate::frontend::util::openai_backend_error;
 use crate::runtime_state::RuntimeDecodeBatchRequest;
+use crate::runtime_state::RuntimeState;
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiResult;
+use skippy_runtime::SamplingConfig;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
+use std::sync::Weak;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc as std_mpsc;
+use std::thread;
+use std::thread::JoinHandle;
+use std::time::Duration;
+use std::time::Instant;
 
 pub(super) struct DecodeBatcher {
     shared: Arc<DecodeBatcherShared>,

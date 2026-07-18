@@ -1,4 +1,46 @@
-use super::*;
+use crate::binary_transport::BinaryStageExecutionOptions;
+use crate::binary_transport::forwarded_stage_message_timed;
+use crate::binary_transport::run_binary_stage_message;
+use crate::binary_transport::stage_output_activation_capacity;
+use crate::binary_transport::write_stage_message_conditioned;
+use crate::frontend::NativeMtpDraft;
+use crate::frontend::generation::ChainPrefixRestore;
+use crate::frontend::generation::EmbeddedExecutionStats;
+use crate::frontend::generation::EmbeddedFusedFirstDecode;
+use crate::frontend::generation::EmbeddedStageZeroGeneration;
+use crate::frontend::generation::MAX_EXACT_REPLAY_TOKENS;
+use crate::frontend::generation::OpenAiGenerationIds;
+use crate::frontend::generation::PhaseTimer;
+use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::util::openai_backend_error;
+use crate::frontend::util::openai_io_error;
+use crate::frontend::wire_messages::DecodeMessageArgs;
+use crate::frontend::wire_messages::RestorePrefillDecodeMessageArgs;
+use crate::frontend::wire_messages::embedded_decode_message;
+use crate::frontend::wire_messages::embedded_prefix_cache_message;
+use crate::frontend::wire_messages::embedded_restore_prefill_decode_message;
+use crate::frontend::wire_messages::openai_stage_mask;
+use crate::kv_integration::KvStageIntegration;
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiResult;
+use serde_json::Value;
+use serde_json::json;
+use sha2::Digest;
+use sha2::Sha256;
+use skippy_protocol::MessageBase;
+use skippy_protocol::SCHEMA_VERSION;
+use skippy_protocol::StageConfig;
+use skippy_protocol::binary::StageReplyStats;
+use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
+use skippy_protocol::binary::StageWireMessage;
+use skippy_protocol::binary::WireActivationDType;
+use skippy_protocol::binary::WireMessageKind;
+use skippy_protocol::binary::WireReplyKind;
+use skippy_protocol::binary::recv_reply;
+use skippy_runtime::ActivationFrame;
+use skippy_runtime::SamplingConfig;
+use std::collections::BTreeMap;
+use std::net::TcpStream;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct ChainPrefixCacheSavings {
@@ -943,7 +985,7 @@ impl StageOpenAiBackend {
                     .map_err(openai_backend_error)?,
                     request.native_mtp_enabled,
                 )
-                .with_native_mtp_max_tokens(request.native_mtp_max_tokens),
+                .with_native_mtp_max_tokens(request.speculative.native_mtp.max_draft_tokens),
             )
             .map_err(openai_backend_error)?
             .2;

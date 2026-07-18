@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub(super) struct BinaryProactiveEviction {
+pub(in crate::binary_transport) struct BinaryProactiveEviction {
     status: &'static str,
     error_kind: Option<&'static str>,
     target_tokens: u64,
@@ -29,7 +29,7 @@ impl BinaryProactiveEviction {
         }
     }
 
-    pub(super) fn attrs(&self) -> BTreeMap<String, Value> {
+    pub(in crate::binary_transport) fn attrs(&self) -> BTreeMap<String, Value> {
         proactive_eviction_attrs(
             self.status,
             self.error_kind,
@@ -39,7 +39,7 @@ impl BinaryProactiveEviction {
         )
     }
 
-    pub(super) fn insert_attrs(&self, attrs: &mut BTreeMap<String, Value>) {
+    pub(in crate::binary_transport) fn insert_attrs(&self, attrs: &mut BTreeMap<String, Value>) {
         attrs.extend(self.attrs());
     }
 
@@ -49,9 +49,9 @@ impl BinaryProactiveEviction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct BinaryProactiveEvictionPlan {
-    pub(super) required: bool,
-    pub(super) ensure_session_before_eviction: bool,
+pub(in crate::binary_transport) struct BinaryProactiveEvictionPlan {
+    pub(in crate::binary_transport) required: bool,
+    pub(in crate::binary_transport) ensure_session_before_eviction: bool,
 }
 
 pub(super) fn binary_proactive_eviction_plan(
@@ -86,7 +86,7 @@ pub(super) fn binary_proactive_eviction_required(
         )
 }
 
-pub(super) fn evict_binary_resident_prefix_for_decode(
+pub(in crate::binary_transport) fn evict_binary_resident_prefix_for_decode(
     runtime: &mut RuntimeState,
     kv: Option<&Arc<KvStageIntegration>>,
     session_id: &str,
@@ -124,6 +124,45 @@ pub(super) fn evict_binary_resident_prefix_for_decode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type BinaryEvictionFn = fn(
+        &mut RuntimeState,
+        Option<&std::sync::Arc<KvStageIntegration>>,
+        &str,
+        BinaryProactiveEvictionPlan,
+    ) -> anyhow::Result<BinaryProactiveEviction>;
+    #[test]
+    fn binary_decode_work_requires_proactive_resident_eviction() {
+        assert!(
+            binary_proactive_eviction_plan(WireMessageKind::PrefillFinalEmbd, false, 128).required
+        );
+        assert!(binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, false, 1).required);
+        assert!(
+            binary_proactive_eviction_plan(WireMessageKind::DecodeReplayEmbd, false, 64).required
+        );
+        assert!(!binary_proactive_eviction_plan(WireMessageKind::PrefillEmbd, false, 128).required);
+        assert!(!binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, true, 1).required);
+        assert!(!binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, false, 0).required);
+        assert!(
+            !binary_proactive_eviction_plan(WireMessageKind::TryRestorePrefillDecode, false, 1)
+                .required
+        );
+    }
+
+    #[test]
+    fn one_chunk_prefill_final_admits_session_before_proactive_eviction() {
+        let plan = binary_proactive_eviction_plan(WireMessageKind::PrefillFinalEmbd, false, 1);
+
+        assert!(plan.required);
+        assert!(plan.ensure_session_before_eviction);
+    }
+
+    #[test]
+    fn required_binary_proactive_eviction_is_fallible_before_decode() {
+        fn accepts_fallible_eviction(_evict: BinaryEvictionFn) {}
+
+        accepts_fallible_eviction(evict_binary_resident_prefix_for_decode);
+    }
 
     #[test]
     fn disabled_and_noop_evictions_are_debug_only() {

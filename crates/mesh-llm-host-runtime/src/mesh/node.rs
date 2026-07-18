@@ -1,5 +1,8 @@
 use super::*;
 use crate::mesh::identity_persistence::load_or_create_key;
+use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
+use serde_json::json;
+use std::net::SocketAddr;
 
 pub fn detect_vram_bytes_capped(max_vram_gb: Option<f64>) -> u64 {
     let mut detected = crate::system::hardware::survey().vram_bytes;

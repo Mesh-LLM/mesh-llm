@@ -1,4 +1,22 @@
-use super::*;
+use crate::frontend::EmbeddedOpenAiRequestDefaults;
+use crate::frontend::EmbeddedReasoningFormat;
+use base64::Engine;
+use openai_frontend::ChatCompletionRequest;
+use openai_frontend::CompletionRequest;
+use openai_frontend::MessageContent;
+use openai_frontend::MessageContentPart;
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiResult;
+use serde_json::Value;
+use skippy_protocol::binary::MAX_STAGE_LOGIT_BIAS;
+use skippy_protocol::binary::StageLogitBias as WireLogitBias;
+use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
+use skippy_runtime::ChatReasoningFormat;
+use skippy_runtime::ChatTemplateOptions;
+use skippy_runtime::LogitBias as RuntimeLogitBias;
+use skippy_runtime::MAX_LOGIT_BIAS;
+use skippy_runtime::MediaInput;
+use skippy_runtime::SamplingConfig;
 
 struct SharedRequestFields<'a> {
     presence_penalty: &'a mut Option<f32>,

@@ -1,4 +1,33 @@
-use super::*;
+use crate::binary_transport::BinaryStageExecutionOptions;
+use crate::binary_transport::PredictionReturnReceiver;
+use crate::binary_transport::forwarded_stage_message_timed;
+use crate::binary_transport::run_binary_stage_message;
+use crate::binary_transport::stage_output_activation_capacity;
+use crate::binary_transport::write_stage_message_conditioned;
+use crate::frontend::generation::EmbeddedExecutionStats;
+use crate::frontend::generation::EmbeddedLocalOutput;
+use crate::frontend::generation::EmbeddedSessionControl;
+use crate::frontend::generation::EmbeddedStageExecution;
+use crate::frontend::generation::EmbeddedStageZeroGeneration;
+use crate::frontend::generation::PhaseTimer;
+use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::util::ms_to_us;
+use crate::frontend::util::openai_backend_error;
+use crate::frontend::util::openai_io_error;
+use crate::frontend::wire_messages::embedded_session_control_message;
+use crate::frontend::wire_messages::embedded_trim_session_message;
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiResult;
+use skippy_protocol::binary::StageReply;
+use skippy_protocol::binary::StageReplyStats;
+use skippy_protocol::binary::StageWireMessage;
+use skippy_protocol::binary::WireMessageKind;
+use skippy_protocol::binary::WireReplyKind;
+use skippy_protocol::binary::recv_reply;
+use skippy_protocol::binary::state_flags;
+use std::net::TcpStream;
+use std::time::Duration;
+use std::time::Instant;
 
 const DIRECT_RETURN_FALLBACK_POLL: Duration = Duration::from_millis(10);
 const DIRECT_RETURN_FALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -80,7 +109,7 @@ impl StageOpenAiBackend {
                     .map_err(openai_backend_error)?,
                     request.native_mtp_enabled,
                 )
-                .with_native_mtp_max_tokens(request.native_mtp_max_tokens),
+                .with_native_mtp_max_tokens(request.speculative.native_mtp.max_draft_tokens),
             )
             .map_err(openai_backend_error)?
             .2;
@@ -434,6 +463,9 @@ fn receive_downstream_stage_reply_one_of(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binary_transport::PredictionReturnHub;
+    use skippy_protocol::binary::{StageStateHeader, WireActivationDType};
+    use std::sync::Arc;
 
     #[test]
     fn embedded_stage_reply_accepts_fused_restore_hits_and_misses_from_direct_return() {

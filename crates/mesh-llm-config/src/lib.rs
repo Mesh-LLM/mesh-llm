@@ -1,9 +1,12 @@
 mod authoring;
 mod diagnostic;
+mod hardware_validation;
 mod model;
+mod model_validation;
 mod plugin_validation;
 mod store;
 mod validate;
+mod validation_support;
 
 #[cfg(test)]
 mod validate_schema_contract;

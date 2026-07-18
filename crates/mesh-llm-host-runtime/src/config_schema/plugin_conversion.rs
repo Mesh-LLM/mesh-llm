@@ -1,4 +1,16 @@
-use super::*;
+use super::{
+    ConfigConditionOperator, ConfigConditionValue, ConfigConditionalDisable, ConfigConflictRule,
+    ConfigControlAvailability, ConfigControlAvailabilitySource, ConfigControlBehavior,
+    ConfigControlCondition, ConfigDisabledWritePolicy, ConfigNumericControl, ConfigOptionsSource,
+    ConfigPath, ConfigTextFormat,
+};
+use mesh_llm_plugin_manager::{
+    InstalledPluginConditionOperator, InstalledPluginConditionValue,
+    InstalledPluginConditionalDisable, InstalledPluginConflictRule,
+    InstalledPluginControlAvailability, InstalledPluginControlAvailabilitySource,
+    InstalledPluginControlBehavior, InstalledPluginControlCondition,
+    InstalledPluginDisabledWritePolicy, InstalledPluginOptionsSource, InstalledPluginTextFormat,
+};
 
 pub(super) fn plugin_control_behavior_from_installed(
     behavior: &InstalledPluginControlBehavior,

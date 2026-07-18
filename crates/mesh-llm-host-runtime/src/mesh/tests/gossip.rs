@@ -1,6 +1,9 @@
 use super::*;
 use crate::crypto::OwnershipSummary;
+use crate::mesh::connections::encode_endpoint_addr_token;
+use crate::mesh::now_secs;
 use iroh::SecretKey;
+use mesh_llm_types::mesh::DEMAND_TTL_SECS;
 use std::collections::HashMap;
 
 pub(crate) fn test_endpoint_id(seed: u8) -> EndpointId {

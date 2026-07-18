@@ -1,4 +1,25 @@
-use super::*;
+use super::{Node, PeerInfo};
+use crate::crypto::{OwnershipStatus, OwnershipSummary};
+use crate::mesh::artifact_transfer_io::{
+    PartialArtifactGuard, append_artifact_transfer_body, select_partial_artifact,
+    write_artifact_transfer_chunk,
+};
+use crate::mesh::stage_proto::{
+    stage_control_request_from_proto, stage_control_response_to_proto,
+    stage_control_unavailable_response, stage_status_from_load, stage_topology_from_load,
+};
+use crate::mesh::stage_transport::{
+    ARTIFACT_TRANSFER_BUFFER_BYTES, ARTIFACT_TRANSFER_INVALID_OFFSET_ERROR,
+    ARTIFACT_TRANSFER_OPEN_TIMEOUT, ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT,
+    LOCAL_STAGE_CONTROL_RESPONSE_TIMEOUT, StageTopologyInstance,
+    artifact_transfer_allowed_by_topology, wait_local_stage_control_response,
+    write_artifact_transfer_response,
+};
+use crate::protocol::{ValidateControlFrame, read_len_prefixed, write_len_prefixed};
+use anyhow::{Context, Result};
+use iroh::EndpointId;
+use prost::Message;
+use skippy_protocol::proto::stage as skippy_stage_proto;
 
 impl Node {
     pub(crate) async fn handle_mesh_subprotocol_stream(

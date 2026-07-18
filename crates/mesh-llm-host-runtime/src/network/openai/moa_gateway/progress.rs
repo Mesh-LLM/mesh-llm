@@ -11,10 +11,10 @@
 //! (`send_moa_as_*_sse_inner`), and the chunking helpers that this
 //! module hands the final answer off to.
 
-use super::final_text_stream_mode_for_result;
-use super::is_moa_failure_body;
-use super::send_moa_as_responses_sse_inner;
-use super::send_moa_as_sse_inner;
+use super::streaming::{
+    ProgressContinuation, final_text_stream_mode_for_result, is_moa_failure_body,
+    send_moa_as_responses_sse_inner, send_moa_as_sse_inner,
+};
 use crate::network::openai::transport as proxy;
 use mesh_mixture_of_agents as moa;
 use tokio::io::AsyncWriteExt;
@@ -168,20 +168,6 @@ fn overwrite_response_id(body: &mut serde_json::Value, completion_id: &str) {
             serde_json::Value::String(completion_id.to_string()),
         );
     }
-}
-
-/// Carries Responses-API streaming state from the progress phase to
-/// the body writer so the full stream maintains monotonic
-/// sequence_number and a stable created_at across both phases.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ProgressContinuation {
-    /// `created_at` baked into the early `response.created` event;
-    /// must be reused for the final `response.completed` so clients
-    /// see one consistent timestamp for the response.
-    pub(super) created_at: i64,
-    /// Next `sequence_number` to use — strictly greater than the last
-    /// `sequence_number` emitted by the progress phase.
-    pub(super) next_sequence_number: i32,
 }
 
 /// Marker for "client disconnected mid-progress; cancel MoA work".
@@ -538,7 +524,7 @@ async fn write_failure_as_sse_tail(
 
 #[cfg(test)]
 mod tests {
-    use super::super::MoaFinalTextStreamMode;
+    use super::super::streaming::MoaFinalTextStreamMode;
     use super::*;
 
     /// Test fixture: a stable completion id with the same shape as
@@ -811,7 +797,7 @@ mod tests {
             // Imitate run_moa_turn_with_progress on the Responses path:
             // headers → response.created → one progress delta → body
             // writer with header_already_sent=true.
-            super::super::write_sse_response_headers(&mut socket, &[])
+            super::super::streaming::write_sse_response_headers(&mut socket, &[])
                 .await
                 .unwrap();
             let created_at = write_progress_response_created(&mut socket, TEST_COMPLETION_ID)
@@ -920,7 +906,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept");
-            super::super::write_sse_response_headers(&mut socket, &[])
+            super::super::streaming::write_sse_response_headers(&mut socket, &[])
                 .await
                 .unwrap();
             let created_at = write_progress_response_created(&mut socket, TEST_COMPLETION_ID)

@@ -1,4 +1,7 @@
-use super::*;
+#[cfg(test)]
+use super::is_public_ipv4_candidate;
+use iroh::{EndpointAddr, TransportAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// Detect the most likely LAN IPv4 address for mDNS-only meshes.
 pub fn detect_primary_lan_ipv4() -> Option<IpAddr> {

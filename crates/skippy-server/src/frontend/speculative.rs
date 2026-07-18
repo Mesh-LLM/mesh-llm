@@ -1,4 +1,177 @@
-use super::*;
+use anyhow::{Context, Result, bail};
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiResult;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use serde_json::json;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use crate::config::load_json;
+use crate::frontend::util::openai_backend_error;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeculativeDecodeConfig {
+    pub requested_strategy: String,
+    pub effective_strategy: String,
+    pub native_mtp: NativeMtpProposalConfig,
+    pub ngram: Option<NgramProposalConfig>,
+    pub extension: Option<NgramExtensionConfig>,
+    pub verify_window: VerifyWindowConfig,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeMtpProposalConfig {
+    pub enabled: bool,
+    pub max_draft_tokens: usize,
+    pub min_draft_tokens: usize,
+    pub reject_cooldown_tokens: usize,
+    pub suppress_cooldown_drafts: bool,
+    pub suppress_cooldown_draft_limit: usize,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NgramProposerKind {
+    Simple,
+    Cache,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NgramProposalConfig {
+    pub kind: NgramProposerKind,
+    pub min_ngram: usize,
+    pub max_ngram: usize,
+    pub max_proposal_tokens: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NgramExtensionConfig {
+    pub initial_tokens: usize,
+    pub max_tokens: usize,
+    pub tail_backoff_proposals: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyWindowConfig {
+    pub min_tokens: usize,
+    pub max_tokens: usize,
+    pub pipeline_depth: usize,
+}
+
+impl Default for SpeculativeDecodeConfig {
+    fn default() -> Self {
+        Self {
+            requested_strategy: "auto".to_string(),
+            effective_strategy: "disabled".to_string(),
+            native_mtp: NativeMtpProposalConfig {
+                enabled: false,
+                max_draft_tokens: 1,
+                min_draft_tokens: 0,
+                reject_cooldown_tokens: 0,
+                suppress_cooldown_drafts: false,
+                suppress_cooldown_draft_limit: 0,
+            },
+            ngram: None,
+            extension: None,
+            verify_window: VerifyWindowConfig {
+                min_tokens: 1,
+                max_tokens: 4,
+                pipeline_depth: 1,
+            },
+        }
+    }
+}
+
+impl SpeculativeDecodeConfig {
+    pub fn validate(&self) -> Result<()> {
+        if self.requested_strategy.trim().is_empty() || self.effective_strategy.trim().is_empty() {
+            bail!("speculative decode strategies must not be empty");
+        }
+        if self.native_mtp.min_draft_tokens > self.native_mtp.max_draft_tokens {
+            bail!("native MTP min_draft_tokens must not exceed max_draft_tokens");
+        }
+        if let Some(ngram) = &self.ngram
+            && (ngram.min_ngram == 0
+                || ngram.min_ngram > ngram.max_ngram
+                || ngram.max_proposal_tokens < ngram.min_ngram)
+        {
+            bail!(
+                "N-gram proposer requires 0 < min_ngram <= max_ngram and max_proposal_tokens >= min_ngram"
+            );
+        }
+        if let Some(ngram) = &self.ngram
+            && ngram.kind == NgramProposerKind::Cache
+            && ngram.max_ngram > skippy_runtime::NGRAM_CACHE_MAX_NGRAM
+        {
+            bail!(
+                "cache N-gram proposer max_ngram must not exceed llama.cpp limit {}",
+                skippy_runtime::NGRAM_CACHE_MAX_NGRAM
+            );
+        }
+        if self.extension.is_some() && (!self.native_mtp.enabled || self.ngram.is_none()) {
+            bail!("N-gram extension requires both native MTP and an N-gram proposer");
+        }
+        if let Some(extension) = &self.extension
+            && (extension.initial_tokens == 0
+                || extension.initial_tokens > extension.max_tokens
+                || extension.max_tokens == 0)
+        {
+            bail!("N-gram extension requires 0 < initial_tokens <= max_tokens");
+        }
+        if self.verify_window.min_tokens == 0
+            || self.verify_window.min_tokens > self.verify_window.max_tokens
+            || self.verify_window.pipeline_depth == 0
+        {
+            bail!("verify window requires 0 < min_tokens <= max_tokens and pipeline_depth > 0");
+        }
+        Ok(())
+    }
+
+    pub(super) fn insert_telemetry_attrs(&self, attrs: &mut BTreeMap<String, Value>) {
+        attrs.insert(
+            "llama_stage.spec.requested_strategy".to_string(),
+            json!(self.requested_strategy),
+        );
+        attrs.insert(
+            "llama_stage.spec.effective_strategy".to_string(),
+            json!(self.effective_strategy),
+        );
+    }
+}
+
+pub(super) fn load_standalone_speculative_config(
+    path: Option<&PathBuf>,
+) -> Result<SpeculativeDecodeConfig> {
+    let config = match path {
+        Some(path) => load_json(path)
+            .with_context(|| format!("load speculative decode config {}", path.display()))?,
+        None => SpeculativeDecodeConfig::default(),
+    };
+    config.validate()?;
+    Ok(config)
+}
+
+pub(super) fn standalone_simple_ngram_min(config: &SpeculativeDecodeConfig) -> usize {
+    config
+        .ngram
+        .as_ref()
+        .filter(|ngram| ngram.kind == NgramProposerKind::Simple)
+        .map_or(0, |ngram| ngram.min_ngram)
+}
+
+pub(super) fn standalone_simple_ngram_max(config: &SpeculativeDecodeConfig) -> usize {
+    config
+        .ngram
+        .as_ref()
+        .filter(|ngram| ngram.kind == NgramProposerKind::Simple)
+        .map_or(0, |ngram| ngram.max_proposal_tokens.min(ngram.max_ngram))
+}
 
 #[derive(Clone, Default)]
 pub(super) struct OpenAiSpeculativeStats {

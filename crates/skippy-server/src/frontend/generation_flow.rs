@@ -1,4 +1,42 @@
-use super::*;
+use crate::binary_transport::forwarded_stage_message_timed;
+use crate::binary_transport::write_stage_message_conditioned;
+use crate::frontend::admission::GenerationTokenBudgetRequest;
+use crate::frontend::generation::EmbeddedStageZeroGeneration;
+use crate::frontend::generation::GENERATION_ADMISSION_TIMEOUT;
+use crate::frontend::generation::GeneratedText;
+use crate::frontend::generation::GenerationCacheStats;
+use crate::frontend::generation::GenerationTokenLimit;
+use crate::frontend::generation::LocalGeneration;
+use crate::frontend::generation::OpenAiBackendMode;
+use crate::frontend::generation::OpenAiGenerationIds;
+use crate::frontend::generation::PhaseTimer;
+use crate::frontend::generation::PreparedGenerationPrompt;
+use crate::frontend::generation::SplitMultimodalGeneration;
+use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::generation::TextGenerationCollector;
+use crate::frontend::generation::TokenControl;
+use crate::frontend::generation::emulation_generation_active;
+use crate::frontend::request::wire_sampling_config;
+use crate::frontend::util::generation_stop_values;
+use crate::frontend::util::openai_backend_error;
+use crate::frontend::util::openai_io_error;
+use crate::frontend::wire_messages::MultimodalPrefillArgs;
+use crate::frontend::wire_messages::ReusableDecodeMessage;
+use crate::frontend::wire_messages::ReusableDecodeMessageArgs;
+use crate::frontend::wire_messages::generation_config_message;
+use crate::frontend::wire_messages::multimodal_prefill_message;
+use crate::kv_integration::proactive_eviction_attrs;
+use crate::kv_integration::proactive_eviction_error_kind;
+use anyhow::anyhow;
+use openai_frontend::ChatCompletionRequest;
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiResult;
+use serde_json::json;
+use skippy_protocol::binary::StageWireMessage;
+use skippy_protocol::binary::WireReplyKind;
+use skippy_protocol::binary::recv_reply;
+use skippy_protocol::binary::write_stage_message;
+use skippy_runtime::SamplingConfig;
 
 impl StageOpenAiBackend {
     #[allow(clippy::too_many_arguments)]
@@ -142,7 +180,6 @@ impl StageOpenAiBackend {
                     ngram_max: self.ngram_max,
                     native_mtp_enabled: config.native_mtp_enabled
                         && self.speculative.native_mtp.enabled,
-                    native_mtp_max_tokens: self.speculative.native_mtp.max_draft_tokens,
                     prompt_token_ids: &prompt_token_ids,
                     max_tokens,
                     sampling: &sampling,

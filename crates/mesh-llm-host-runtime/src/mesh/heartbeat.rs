@@ -4,7 +4,17 @@
 //! and removes peers that fail to respond after repeated attempts.
 //! PeerDown messages are broadcast to the mesh when a peer is confirmed dead.
 
-use super::*;
+use super::{
+    ConnectionCaptureEvent, ControlProtocol, DEAD_PEER_TTL, ModelRuntimeDescriptor, Node,
+    PEER_DOWN_REPORTER_COOLDOWN_SECS, PEER_STALE_SECS, PeerInfo, PeerLifecycleCaptureEvent,
+    ServedModelDescriptor, connect_mesh, connection_protocol, endpoint_id_hex,
+};
+use crate::protocol::{
+    NODE_PROTOCOL_GENERATION, STREAM_PEER_DOWN, STREAM_PEER_LEAVING, write_len_prefixed,
+};
+use iroh::{EndpointAddr, EndpointId, endpoint::Connection};
+use prost::Message;
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct HeartbeatFailurePolicy {

@@ -3,11 +3,13 @@ pub mod control_behavior;
 use self::control_behavior::PluginControlBehavior;
 
 use crate::PluginConfigEntry;
+use crate::diagnostic::DiagnosticResult;
 use crate::model::ConfigPath;
 use crate::validate::{
     ConfigDiagnostic, ConfigDiagnosticCode, ConfigDiagnosticSchemaSource, ConfigDiagnosticSeverity,
-    ConfigDiagnosticSource, DiagnosticResult, validation_diagnostic,
+    ConfigDiagnosticSource,
 };
+use crate::validation_support::validation_diagnostic;
 use std::collections::{BTreeMap, BTreeSet};
 use toml::Value;
 

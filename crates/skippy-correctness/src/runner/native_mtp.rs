@@ -6,12 +6,46 @@ use serde::Serialize;
 use skippy_protocol::binary::StageReply;
 use skippy_runtime::ModelInfo;
 
+#[derive(Clone, Copy)]
+pub(crate) struct NativeMtpRequirement {
+    pub(crate) require_draft: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct NativeMtpArtifactSummary {
+    pub(crate) nextn_predict_layers: u32,
+    pub(crate) has_eh_proj: bool,
+    pub(crate) has_enorm: bool,
+    pub(crate) has_hnorm: bool,
+}
+
+impl NativeMtpArtifactSummary {
+    pub(crate) fn supports_native_mtp(&self) -> bool {
+        self.nextn_predict_layers > 0 && self.has_eh_proj && self.has_enorm && self.has_hnorm
+    }
+
+    pub(crate) fn missing_reasons(&self) -> Vec<&'static str> {
+        let mut missing = Vec::new();
+        if self.nextn_predict_layers == 0 {
+            missing.push("*.nextn_predict_layers > 0");
+        }
+        if !self.has_eh_proj {
+            missing.push("*.nextn.eh_proj tensor");
+        }
+        if !self.has_enorm {
+            missing.push("*.nextn.enorm tensor");
+        }
+        if !self.has_hnorm {
+            missing.push("*.nextn.hnorm tensor");
+        }
+        missing
+    }
+}
+
 use crate::{
     cli::{NativeMtpArgs, RuntimeArgs},
     report::{NativeMtpSidebandReport, NativeMtpVerificationReport},
 };
-
-use super::{NativeMtpArtifactSummary, NativeMtpRequirement};
 
 pub(crate) fn native_mtp_verification_report(
     requested: bool,

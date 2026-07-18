@@ -1,4 +1,55 @@
-use super::*;
+use crate::frontend::generation::ChatOutputStreamParser;
+use crate::frontend::generation::GENERATION_ADMISSION_TIMEOUT;
+use crate::frontend::generation::GeneratedText;
+use crate::frontend::generation::GenerationStream;
+use crate::frontend::generation::GenerationStreamEvent;
+use crate::frontend::generation::GenerationTokenLimit;
+use crate::frontend::generation::OpenAiCacheHints;
+use crate::frontend::generation::OpenAiGenerationIds;
+use crate::frontend::generation::PhaseTimer;
+use crate::frontend::generation::PreparedGenerationPrompt;
+use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::generation::acquire_generation_permit_with_queue;
+use crate::frontend::generation::apply_reasoning_visibility;
+use crate::frontend::generation::chat_output_parser_required;
+use crate::frontend::generation::chat_response_from_generated_text;
+use crate::frontend::generation::completion_response_from_generated_text;
+use crate::frontend::generation::ensure_requested_model;
+use crate::frontend::generation::generation_event_to_chat_chunk;
+use crate::frontend::generation::generation_event_to_completion_chunk;
+use crate::frontend::generation::template_exposes_reasoning;
+use crate::frontend::request::{
+    apply_chat_request_defaults, apply_completion_request_defaults, chat_sampling_config,
+    chat_template_options, completion_sampling_config, ensure_chat_runtime_features_supported,
+    ensure_completion_runtime_features_supported,
+};
+use crate::runtime_state::RuntimeSessionStats;
+use crate::telemetry::lifecycle_attrs;
+use crate::telemetry::now_unix_nanos;
+use async_trait::async_trait;
+use futures_util::StreamExt;
+use futures_util::stream;
+use openai_frontend::ChatCompletionRequest;
+use openai_frontend::ChatCompletionResponse;
+use openai_frontend::ChatCompletionStream;
+use openai_frontend::CompletionRequest;
+use openai_frontend::CompletionResponse;
+use openai_frontend::CompletionStream;
+use openai_frontend::ModelObject;
+use openai_frontend::OpenAiBackend;
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiRequestContext;
+use openai_frontend::OpenAiResult;
+use openai_frontend::apply_chat_hook_outcome;
+use openai_frontend::chat_mesh_hooks_enabled;
+use serde_json::Value;
+use serde_json::json;
+use skippy_metrics::attr as attr_key;
+use skippy_runtime::SamplingConfig;
+use std::collections::BTreeMap;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::mpsc;
+use tokio::task;
 
 #[async_trait]
 impl OpenAiBackend for StageOpenAiBackend {

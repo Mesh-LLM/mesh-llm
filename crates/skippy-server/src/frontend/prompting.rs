@@ -1,4 +1,27 @@
-use super::*;
+use crate::frontend::generation::ParsedChatMessage;
+use crate::frontend::generation::PreparedGenerationPrompt;
+use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::generation::chat_message_generation_value;
+use crate::frontend::generation::hook_injected_text;
+use crate::frontend::generation::mid_generation_window_should_fire;
+use crate::frontend::generation::parsed_chat_message_from_json;
+use crate::frontend::generation::request_allowed_tool_names;
+use crate::frontend::generation::tool_calls_requested;
+use crate::frontend::tool_emulation;
+use crate::frontend::util::openai_backend_error;
+use openai_frontend::ChatCompletionRequest;
+use openai_frontend::GenerationHookSignals;
+use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiResult;
+use openai_frontend::PrefillHookSignals;
+use openai_frontend::apply_chat_hook_outcome;
+use openai_frontend::chat_mesh_hooks_enabled;
+use serde_json::Value;
+use skippy_runtime::ChatTemplateJsonOptions;
+use skippy_runtime::ChatTemplateOptions;
+use skippy_runtime::GenerationSignalWindow;
+use skippy_runtime::MediaInput;
+use skippy_runtime::TokenSignal;
 
 /// Output of a single chat-template application, before it is folded into a
 /// [`PreparedGenerationPrompt`].

@@ -442,8 +442,7 @@ mod lan_join_target_tracking_tests {
             "100.64.0.1:47916",
             "172.17.0.1:47916",
         ] {
-            addr
-                .addrs
+            addr.addrs
                 .insert(TransportAddr::Ip(socket_addr.parse().unwrap()));
         }
         let announcement = peer_state_test_announcement(addr.clone());
@@ -614,12 +613,8 @@ async fn incoming_peer_promoted_after_valid_gossip() {
     };
     let announcement = peer_state_test_announcement(addr);
     let frame = build_gossip_frame(&[announcement], peer_id);
-    let decoded = decode_gossip_payload(
-        ControlProtocol::ProtoV1,
-        peer_id,
-        &frame.encode_to_vec(),
-    )
-    .expect("valid gossip frame must decode through the production boundary");
+    let decoded = decode_gossip_payload(ControlProtocol::ProtoV1, peer_id, &frame.encode_to_vec())
+        .expect("valid gossip frame must decode through the production boundary");
 
     assert!(
         !is_peer_admitted(&node.state.lock().await.peers, &peer_id),

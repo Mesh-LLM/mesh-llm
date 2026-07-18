@@ -4,8 +4,17 @@
 //! deliberately targeted: one peer per tick, per-peer cooldowns on both sender
 //! and receiver, and no gossip fanout.
 
-use super::*;
-use crate::protocol::{STREAM_DIRECT_PATH_REQUEST, ValidateControlFrame};
+use super::{
+    ConnectionCaptureEvent, NODE_PROTOCOL_GENERATION, Node, connect_mesh, connection_protocol,
+    endpoint_id_hex, heartbeat,
+};
+use crate::protocol::{
+    STREAM_DIRECT_PATH_REQUEST, ValidateControlFrame, read_len_prefixed, write_len_prefixed,
+};
+use anyhow::{Context, Result};
+use iroh::{EndpointAddr, EndpointId, TransportAddr, endpoint::Connection};
+use prost::Message;
+use std::collections::HashMap;
 
 pub(super) const DIRECT_PATH_MAINTENANCE_CHECK_SECS: u64 = 30;
 pub(super) const DIRECT_PATH_REPAIR_GRACE_SECS: u64 = 15;

@@ -7,9 +7,11 @@ mod context;
 mod dsl;
 mod error;
 mod helpers;
+mod internal_rpc;
 mod io;
 mod manifest;
 mod runtime;
+mod simple_plugin;
 
 pub use async_trait::async_trait;
 pub use context::PluginContext;

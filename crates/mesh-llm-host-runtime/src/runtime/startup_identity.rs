@@ -1,4 +1,8 @@
-use super::*;
+use super::RuntimeOptions;
+use crate::mesh;
+use crate::network::discovery as mesh_discovery;
+use anyhow::Result;
+use mesh_llm_events::{OutputEvent, emit_event};
 
 pub(super) fn emit_private_mesh_name_warning(options: &RuntimeOptions) {
     let Some(mesh_name) = options

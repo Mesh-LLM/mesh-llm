@@ -10,7 +10,7 @@ use std::{
 
 use skippy_protocol::StageConfig;
 
-use super::connect_binary_downstream;
+use super::stage_execution::connect_binary_downstream;
 
 const WARM_DOWNSTREAM_RETRY_SLEEP: Duration = Duration::from_millis(500);
 const WARM_DOWNSTREAM_SLOT_POLL: Duration = Duration::from_millis(50);
