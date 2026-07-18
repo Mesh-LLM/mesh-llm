@@ -758,6 +758,19 @@ Subcommands:
 
 - `auth init`: generate/save owner keypair.
 - `auth status`: show identity/keystore status.
+- `auth sign-node`: sign the current node identity with the owner key.
+- `auth renew-node`: renew the local node ownership certificate.
+- `auth verify-node`: verify a node ownership certificate and trust policy.
+- `auth rotate-node`: rotate the local node identity key and optionally revoke
+  the previous certificate.
+- `auth revoke-owner`: revoke an owner in the local trust store.
+- `auth revoke-node`: revoke a node certificate or node ID in the local trust
+  store.
+- `auth rotate-owner`: rotate the owner keystore identity.
+- `auth trust add <OWNER_ID>`: add an owner to the local trust allowlist.
+- `auth trust remove <OWNER_ID>`: remove an owner from the local trust
+  allowlist.
+- `auth trust list`: show the current trust store.
 
 `auth init` switches:
 
@@ -778,6 +791,12 @@ Subcommands:
 `auth rotate-owner` switches:
 
 - `--owner-key <OWNER_KEY>`: keystore path.
+
+`auth trust` switches:
+
+- `--trust-store <PATH>`: use a specific trust store instead of the default.
+- `auth trust add --label <LABEL>`: attach a human-readable label to a trusted
+  owner.
 
 ## Model reference formats
 
