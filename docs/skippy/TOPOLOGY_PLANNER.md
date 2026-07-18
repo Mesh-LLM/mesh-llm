@@ -262,3 +262,62 @@ contract:
 - exact recurrent-state transfer is an explicit opt-in policy, not the default;
 - exact activation wire defaults to `f16`;
 - `q8` is opt-in only when the relevant family/split has passed correctness.
+
+## Latency-Aware Placement: current behaviour and gaps
+
+This section records what the planner actually does today for network-aware
+placement (verified against `crates/skippy-coordinator/src/topology.rs`,
+`crates/skippy-topology/src/{lib,edge_order}.rs`, and the host-runtime call site
+`crates/mesh-llm-host-runtime/src/inference/skippy/topology.rs`), and the gaps
+that matter as the mesh grows to many nodes.
+
+### What works today
+
+- **Latency is a cost, not just an exclusion.** `node_package_score` subtracts
+  `rtt_ms × 16MiB` from a node's placement score, so higher-RTT nodes are
+  deprioritised but still usable. A relay-only peer (no direct path) is the one
+  case that is excluded outright.
+- **The planner selects a node subset; it does not have to use every eligible
+  node.** `plan_topology` enumerates `node_count in minimum_nodes..=usable_nodes`
+  and, for each count, every node subset (`for_each_node_subset`). It can and
+  does leave nodes out.
+- **Stage count is gated on a decode-TPOT target.** When any node has a measured
+  hop latency, planning is latency-aware: candidates are ranked
+  target-met-first, then by lowest `estimated_decode_network_ms_per_token`
+  (`latency_candidate_ordering` / `decode_tpot_target_met`, default target
+  `DEFAULT_TARGET_DECODE_TPOT_MS = 33`). A shallower split that meets the target
+  is preferred over a deeper split that does not — deeper is not chosen just
+  because it fits.
+
+### Gaps for the many-node / co-located future
+
+1. **No peer-to-peer RTT matrix in production.** `edge_order.rs` implements
+   adjacent-stage RTT ordering (exhaustive for ≤8 stages, greedy beyond) driven
+   by `StageEdgeSignal { source, target, rtt_ms }`. **The host runtime never
+   supplies edge signals** — it calls
+   `plan_package_aware_contiguous_with_signals` (no transport variant), so the
+   edge-matrix machinery is effectively dead in production. Placement sees only
+   each node's RTT *to the coordinator*, not node↔node RTT.
+2. **The network estimate is a worst-case proxy, not a path sum.**
+   `estimate_decode_network_ms_per_token = max(per-node coordinator RTT) ×
+   node_count`. It assumes every hop costs the slowest node's coordinator-RTT.
+   This is why **co-located nodes cannot be exploited**: two nodes close to each
+   other but each ~25 ms from the coordinator are modelled as ~25 ms hops, even
+   if their real A↔B hop is ~1 ms. Combined with vast.ai's NAT hairpin (two
+   containers behind one host cannot hole-punch and fall back to a ~200 ms
+   relay), co-located pipeline stages are currently not achievable there.
+3. **`minimum_nodes` forces splitting in labs, but there is no first-class
+   "prefer fewer/none" cost knob beyond the TPOT gate.** For single-fit models
+   the TPOT gate already discourages needless splitting; for forced-split lab
+   runs `minimum_nodes` overrides it. Fine today, but a future many-node mesh
+   wants an explicit placement policy (e.g. "only add a stage if it improves
+   TPOT by X" and "never place on nodes above Y ms").
+
+### Implications
+
+- Adding a real node↔node RTT matrix (wire `edge_signals` from measured
+  peer-to-peer RTT into `plan_package_aware_contiguous_with_transport`) is the
+  single change that would unlock co-location and correct many-node ordering.
+- Until then, treat placement as **coordinator-RTT-aware only**: it will
+  deprioritise distant nodes and pick a sensible subset/stage-count, but it
+  cannot reason about which nodes are close to *each other*.
