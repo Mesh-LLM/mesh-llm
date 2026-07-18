@@ -17,6 +17,18 @@ web-ui = ["mesh-llm-ui/embed-assets"]
 gpu-bench-cuda = ["mesh-llm-system/gpu-bench-cuda"]
 gpu-bench-hip = ["mesh-llm-system/gpu-bench-hip"]
 gpu-bench-intel = ["mesh-llm-system/gpu-bench-intel"]
+# Serve HF safetensors models on Apple Silicon via the MLX (Metal) engine.
+# macOS-only in practice: the dep is declared under a macOS target table, and all
+# engine code is additionally cfg(target_os = "macos") gated. Off by default so
+# the heavy MLX native build never runs in normal builds/CI.
+#
+# Implies `dynamic-native-runtime`: MLX statically links its own vendored GGUF
+# parser (antirez gguflib), which collides with the patched llama.cpp GGUF
+# symbols (e.g. `gguf_get_key`) when llama.cpp is linked statically. Loading the
+# llama.cpp runtime dynamically (as release builds already do) keeps the two
+# native GGUF parsers in separate link units and avoids the duplicate-symbol
+# link failure.
+mlx = ["dep:skippy-engine-mlx", "dynamic-native-runtime"]
 dynamic-native-runtime = [
     "mesh-llm-system/dynamic-native-runtime",
     "skippy-runtime/dynamic-native-runtime",
@@ -113,6 +125,15 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 hf_hub = { package = "hf-hub", version = "1.0.0-rc.1", default-features = false, features = ["blocking"] }
 tabwriter = "1"
 tempfile = "3"
+
+# MLX (Metal) serving engine — Apple Silicon only. Declared under a macOS target
+# table so non-macOS builds never see it, and optional so it is pulled in only
+# with `--features mlx`. Enabling the feature turns on the crate's own `mlx`
+# feature (which runs the heavy MLX native build).
+[target.'cfg(target_os = "macos")'.dependencies]
+skippy-engine-mlx = { path = "../skippy-engine-mlx", version = "0.72.1", features = [
+    "mlx",
+], optional = true }
 
 [dev-dependencies]
 serial_test = "3"

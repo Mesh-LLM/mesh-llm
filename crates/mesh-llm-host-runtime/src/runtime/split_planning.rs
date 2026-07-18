@@ -453,9 +453,10 @@ pub(super) fn validate_split_capacity(
         .iter()
         .map(|participant| participant.vram_bytes)
         .sum::<u64>();
-    // Use raw model weight for aggregate split check — the topology planner
-    // already performed detailed per-node budgeting with KV and headroom.
-    let required_total_bytes = package.source_model_bytes;
+    // Use exact runtime layer estimates when available. This is especially
+    // important for load-time-quantized SafeTensors checkpoints, whose dense
+    // source size can exceed the memory actually required by every stage.
+    let required_total_bytes = required_split_weight_bytes(package);
     anyhow::ensure!(
         total_vram_bytes >= required_total_bytes,
         "{}",
@@ -490,6 +491,17 @@ pub(super) fn validate_split_capacity(
         );
     }
     Ok(())
+}
+
+fn required_split_weight_bytes(package: &skippy::SkippyPackageIdentity) -> u64 {
+    if package.layer_weight_bytes.len() != package.layer_count as usize {
+        return package.source_model_bytes;
+    }
+    package
+        .layer_weight_bytes
+        .iter()
+        .try_fold(0_u64, |total, bytes| total.checked_add(*bytes))
+        .unwrap_or(u64::MAX)
 }
 
 pub(super) fn format_aggregate_split_capacity_error(
@@ -731,6 +743,14 @@ mod tests {
         );
         assert_eq!(plan.stages[0].parameter_bytes, 9 * GIB + GIB / 4);
         assert_eq!(plan.stages[1].parameter_bytes, 8 * GIB);
+    }
+
+    #[test]
+    fn aggregate_capacity_uses_exact_runtime_layer_weights() {
+        let mut package = package(2, 100);
+        package.layer_weight_bytes = vec![20, 30];
+
+        assert_eq!(required_split_weight_bytes(&package), 50);
     }
 
     #[test]

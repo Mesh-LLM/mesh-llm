@@ -21,6 +21,8 @@ pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION: &str =
     STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3;
 pub const STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER: &str = "artifact-transfer";
 pub const STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST: &str = "status-list";
+/// The peer can derive and execute MLX SafeTensors artifact slices.
+pub const STAGE_SUBPROTOCOL_FEATURE_BACKEND_MLX: &str = "backend-mlx";
 pub const STAGE_STREAM_CONTROL: u8 = 0x01;
 pub const STAGE_STREAM_TRANSPORT: u8 = 0x02;
 pub const STAGE_STREAM_ARTIFACT_TRANSFER: u8 = 0x03;
@@ -733,6 +735,7 @@ mod tests {
                     model_id: "qwen".to_string(),
                     package_ref: "hf://repo/model".to_string(),
                     manifest_sha256: "a5".repeat(32),
+                    weight_quantization: 0,
                 },
             )),
             ..frame.clone()

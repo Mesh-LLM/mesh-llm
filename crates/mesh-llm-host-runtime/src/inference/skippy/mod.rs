@@ -68,8 +68,8 @@ pub(crate) use stage::{
     StageInventoryRequest, StageLayerInventory, StageLoadRequest, StagePackagePrefetcher,
     StagePeerDescriptor, StagePreparationState, StagePreparationStatus,
     StagePrepareAcceptedResponse, StagePrepareRequest, StageReadyResponse, StageRuntimeState,
-    StageStatusAck, StageStatusFilter, StageStatusSnapshot, StageStopRequest, StageWireDType,
-    spawn_stage_control_loop, stage_load_timeout,
+    StageStatusAck, StageStatusFilter, StageStatusSnapshot, StageStopRequest,
+    StageWeightQuantization, StageWireDType, spawn_stage_control_loop, stage_load_timeout,
 };
 #[cfg(test)]
 pub(crate) use topology::{StageTopologyParticipant, plan_package_identity_topology};

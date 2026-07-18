@@ -96,6 +96,19 @@ capability only. Neither path exports prompts, completions, logs, traces,
 hostnames, mesh gossip, relay messages, raw node IDs, raw GPU stable IDs,
 endpoint URLs, or prompt hashes.
 
+Benchmark-only staged-runtime traces are a separate, explicit operator flow.
+For example, `mlx-stage bench-boundary` requires metrics-server HTTP and OTLP
+arguments on every run and exports only bounded synthetic shape, dtype,
+byte-count, duration, validated run-label, schema/revision, and stage
+attributes under the shared
+`stage.mlx_boundary_*` span names. It does not consume ambient collector
+configuration. The collector arguments are explicit transport targets but are
+not copied into span attributes or run config. It does not export
+prompt/completion text, activation values, paths, collector URLs, raw hardware
+identifiers, or model contents. These benchmark traces are not emitted by
+normal mesh runtime telemetry. The separately written local report may contain
+the output path chosen by the operator; that field is not telemetry.
+
 Guardrail telemetry follows the same boundary. It exports only bounded labels for
 guardrail mode, contract kind, decision, bypass reason, parser stage, and retry
 bucket. It does not export prompt text, completion text, schemas, tool

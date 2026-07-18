@@ -1,3 +1,4 @@
+pub mod safetensors_stage;
 pub mod store;
 
 use std::{

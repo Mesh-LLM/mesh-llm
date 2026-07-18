@@ -1,4 +1,3 @@
-#[cfg(feature = "dynamic-native-runtime")]
 pub(crate) mod native_runtime;
 pub(crate) mod native_runtime_install;
 

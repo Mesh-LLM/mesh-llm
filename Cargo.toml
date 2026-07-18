@@ -37,10 +37,12 @@ members = [
     "crates/model-hf",
     "crates/model-resolver",
     "crates/skippy-protocol",
+    "crates/skippy-engine",
     "crates/skippy-coordinator",
     "crates/skippy-topology",
     "crates/skippy-cache",
     "crates/skippy-metrics",
+    "crates/skippy-engine-mlx",
     "crates/openai-frontend",
     "crates/skippy-ffi",
     "crates/skippy-runtime",
@@ -81,6 +83,9 @@ strum = { version = "0.28", features = ["derive"] }
 
 [patch.crates-io]
 hf-hub = { git = "https://github.com/Mesh-LLM/hf-hub", branch = "mesh-llm" }
+safemlx = { git = "https://github.com/michaelneale/safemlx", rev = "c6b4741" }
+safemlx-lm = { git = "https://github.com/michaelneale/safemlx", rev = "c6b4741" }
+safemlx-lm-utils = { git = "https://github.com/michaelneale/safemlx", rev = "c6b4741" }
 
 [workspace.lints.clippy]
 cognitive_complexity = "warn"

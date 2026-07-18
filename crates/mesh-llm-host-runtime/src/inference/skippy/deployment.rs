@@ -59,6 +59,7 @@ pub(crate) fn remote_stage_load_request(
         n_gpu_layers: -1,
         mmap: context.mmap,
         mlock: context.mlock,
+        weight_quantization: super::StageWeightQuantization::Auto,
         cache_type_k: context.kv_cache.cache_type_k().to_string(),
         cache_type_v: context.kv_cache.cache_type_v().to_string(),
         flash_attn_type: context.flash_attn_type,

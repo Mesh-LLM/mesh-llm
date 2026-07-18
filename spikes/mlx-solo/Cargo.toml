@@ -1,0 +1,36 @@
+# Standalone spike crate — its OWN workspace, deliberately NOT part of the
+# mesh-llm cargo workspace (keeps MLX/CMake native deps off every other build).
+#
+# Mirrors goose's MLX setup exactly (crates/goose-local-inference):
+#   - Metal backend on (Apple Silicon GPU), same feature list as goose
+#   - pristine safemlx fork, NO fork patches
+# Path-depends on a sibling checkout of the fork at ../../../safemlx.
+[package]
+name = "mlx-solo-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "mlx-solo"
+path = "src/main.rs"
+
+[[bin]]
+name = "mlx-split-proof"
+path = "src/bin/mlx-split-proof.rs"
+
+[workspace]
+
+[dependencies]
+# Same feature set goose declares on safemlx.
+safemlx = { path = "../../../safemlx/safemlx", default-features = false, features = [
+    "accelerate",
+    "metal",
+    "safetensors",
+] }
+# Default features (onig + esaxx_fast), exactly as goose consumes it.
+safemlx-lm = { path = "../../../safemlx/safemlx-lm" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+skippy-protocol = { path = "../../crates/skippy-protocol" }

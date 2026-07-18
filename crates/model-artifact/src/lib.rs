@@ -1,4 +1,5 @@
 pub mod gguf;
+pub mod safetensors;
 
 use std::path::Path;
 
@@ -253,6 +254,26 @@ fn artifact_file_set(primary_file: &str, files: &[ModelArtifactFile]) -> Vec<Mod
         }
     }
 
+    if let Some((primary_dir, primary_prefix, _, primary_total)) =
+        split_safetensors_path_info(primary_file)
+    {
+        let mut shards = files
+            .iter()
+            .filter(|file| {
+                split_safetensors_path_info(&file.path)
+                    .map(|(dir, prefix, _, total)| {
+                        dir == primary_dir && prefix == primary_prefix && total == primary_total
+                    })
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        shards.sort_by(|left, right| left.path.cmp(&right.path));
+        if !shards.is_empty() {
+            return shards;
+        }
+    }
+
     vec![
         files
             .iter()
@@ -336,6 +357,20 @@ fn split_safetensors_shard_info(stem: &str) -> Option<(&str, &str, &str)> {
         return None;
     }
     Some((prefix, part, total))
+}
+
+fn split_safetensors_path_info(path: &str) -> Option<(String, String, String, String)> {
+    let path = Path::new(path);
+    let stem = path.file_name()?.to_str()?.strip_suffix(".safetensors")?;
+    let (prefix, part, total) = split_safetensors_shard_info(stem)?;
+    Some((
+        path.parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map_or_else(String::new, |parent| parent.to_string_lossy().into_owned()),
+        prefix.to_string(),
+        part.to_string(),
+        total.to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -508,6 +543,32 @@ mod tests {
                 "UD-IQ2_M/GLM-5.1-UD-IQ2_M-00001-of-00003.gguf",
                 "UD-IQ2_M/GLM-5.1-UD-IQ2_M-00002-of-00003.gguf",
                 "UD-IQ2_M/GLM-5.1-UD-IQ2_M-00003-of-00003.gguf",
+            ]
+        );
+    }
+
+    #[test]
+    fn public_artifact_set_returns_only_matching_safetensors_shards() {
+        let files = files(&[
+            "weights/model-00002-of-00003.safetensors",
+            "weights/model-00001-of-00003.safetensors",
+            "weights/model-00003-of-00003.safetensors",
+            "other/model-00001-of-00003.safetensors",
+            "weights/adapter-00001-of-00003.safetensors",
+            "model.safetensors.index.json",
+        ]);
+
+        let shards = artifact_files_for_primary("weights/model-00001-of-00003.safetensors", &files);
+
+        assert_eq!(
+            shards
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "weights/model-00001-of-00003.safetensors",
+                "weights/model-00002-of-00003.safetensors",
+                "weights/model-00003-of-00003.safetensors",
             ]
         );
     }

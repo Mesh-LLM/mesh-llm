@@ -77,10 +77,11 @@ fn quant_from_text(value: &str) -> Option<String> {
 }
 
 fn parameter_size_from_text(text: &str) -> Option<String> {
-    static MULTIPLIED_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)([bm])").unwrap());
+    static MULTIPLIED_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)([bm])(?:$|[^a-z])").unwrap()
+    });
     static SIMPLE_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)(\d+(?:\.\d+)?)([bm])").unwrap());
+        LazyLock::new(|| Regex::new(r"(?i)(\d+(?:\.\d+)?)([bm])(?:$|[^a-z])").unwrap());
 
     MULTIPLIED_RE
         .captures(text)
@@ -100,10 +101,11 @@ fn parameter_size_from_text(text: &str) -> Option<String> {
 }
 
 fn parameter_count_b_from_text(text: &str) -> Option<f64> {
-    static MULTIPLIED_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)([bm])").unwrap());
+    static MULTIPLIED_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)([bm])(?:$|[^a-z])").unwrap()
+    });
     static SIMPLE_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)(\d+(?:\.\d+)?)([bm])").unwrap());
+        LazyLock::new(|| Regex::new(r"(?i)(\d+(?:\.\d+)?)([bm])(?:$|[^a-z])").unwrap());
 
     let mut best: Option<f64> = None;
     for captures in MULTIPLIED_RE.captures_iter(text) {
@@ -154,6 +156,10 @@ mod tests {
             parameter_size_from_text("mixtral-8x7b").as_deref(),
             Some("8x7B")
         );
+        assert_eq!(
+            parameter_size_from_text("mlx-community/Qwen3-0.6B-4bit").as_deref(),
+            Some("0.6B")
+        );
     }
 
     #[test]
@@ -161,5 +167,9 @@ mod tests {
         assert_eq!(parameter_count_b_from_text("Qwen3-32B-Q4_K_M"), Some(32.0));
         assert_eq!(parameter_count_b_from_text("mixtral-8x7b"), Some(56.0));
         assert_eq!(parameter_count_b_from_text("235B-A22B"), Some(235.0));
+        assert_eq!(
+            parameter_count_b_from_text("mlx-community/Qwen3-0.6B-4bit"),
+            Some(0.6)
+        );
     }
 }

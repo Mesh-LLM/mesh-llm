@@ -252,6 +252,7 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.artifact_transfer_supported != new.artifact_transfer_supported
         || old.stage_protocol_generation_supported != new.stage_protocol_generation_supported
         || old.stage_status_list_supported != new.stage_status_list_supported
+        || old.mlx_stage_supported != new.mlx_stage_supported
         || old.version != new.version
         || old.owner_summary != new.owner_summary
         || old.gpu_reserved_bytes != new.gpu_reserved_bytes
@@ -331,6 +332,7 @@ pub(super) fn apply_transitive_ann(
     existing.artifact_transfer_supported = ann.artifact_transfer_supported;
     existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
     existing.stage_status_list_supported = ann.stage_status_list_supported;
+    existing.mlx_stage_supported = ann.mlx_stage_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
     if ann.experts_summary.is_some() {
         existing.experts_summary = ann.experts_summary.clone();
@@ -655,6 +657,7 @@ impl Node {
         existing.artifact_transfer_supported = ann.artifact_transfer_supported;
         existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
         existing.stage_status_list_supported = ann.stage_status_list_supported;
+        existing.mlx_stage_supported = ann.mlx_stage_supported;
         existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
         if ann.version.is_some() {
             existing.version = ann.version.clone();
@@ -976,6 +979,7 @@ impl Node {
             artifact_transfer_supported: peer.artifact_transfer_supported,
             stage_protocol_generation_supported: peer.stage_protocol_generation_supported,
             stage_status_list_supported: peer.stage_status_list_supported,
+            mlx_stage_supported: peer.mlx_stage_supported,
             advertised_model_throughput: peer.advertised_model_throughput.clone(),
             latency_ms: latency.latency_ms,
             latency_source: Some(match latency.source {
@@ -1040,6 +1044,11 @@ impl Node {
             artifact_transfer_supported: data.artifact_transfer_supported,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
+            mlx_stage_supported: cfg!(all(
+                feature = "mlx",
+                target_os = "macos",
+                target_arch = "aarch64"
+            )),
             advertised_model_throughput: data.advertised_model_throughput,
             latency_ms: None,
             latency_source: None,
@@ -1833,6 +1842,7 @@ mod tests {
             artifact_transfer_supported: true,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
+            mlx_stage_supported: false,
             advertised_model_throughput: vec![],
             latency_ms: None,
             latency_source: None,

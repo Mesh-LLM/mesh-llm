@@ -57,3 +57,11 @@ pub mod metric {
     pub const KV_PEER_TRANSFER_ATTEMPTS: &str = "skippy.kv.peer_transfer_attempts";
     pub const KV_PEER_TRANSFER_ERRORS: &str = "skippy.kv.peer_transfer_errors";
 }
+
+pub mod span {
+    pub const MLX_BOUNDARY_EVAL_FENCE: &str = "stage.mlx_boundary_eval_fence";
+    pub const MLX_BOUNDARY_HOST_COPY: &str = "stage.mlx_boundary_host_copy";
+    pub const MLX_BOUNDARY_ENCODE: &str = "stage.mlx_boundary_encode";
+    pub const MLX_BOUNDARY_DECODE: &str = "stage.mlx_boundary_decode";
+    pub const MLX_BOUNDARY_TCP_ROUNDTRIP: &str = "stage.mlx_boundary_tcp_roundtrip";
+}

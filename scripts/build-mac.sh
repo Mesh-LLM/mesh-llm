@@ -14,6 +14,7 @@ build_profile="${MESH_LLM_BUILD_PROFILE:-debug}"
 MESH_LLM_LOCAL_CODESIGN_IDENTITY="${MESH_LLM_LOCAL_CODESIGN_IDENTITY:-Mesh-LLM Local Codesign}"
 MESH_LLM_AUTO_GENERATE_CODESIGN="${MESH_LLM_AUTO_GENERATE_CODESIGN:-1}"
 rustc_wrapper=""
+MESH_LLM_CARGO_FEATURES="${MESH_LLM_CARGO_FEATURES:-}"
 build_profile="${build_profile:l}"
 
 append_rustflag() {
@@ -497,14 +498,18 @@ if [[ -d "$MESH_DIR" ]]; then
 
     configure_rust_cache
     mesh_binary=""
+    cargo_features=()
+    if [[ -n "$MESH_LLM_CARGO_FEATURES" ]]; then
+        cargo_features=(--features "$MESH_LLM_CARGO_FEATURES")
+    fi
     case "$build_profile" in
         dev|debug)
             echo "Building mesh-llm (profile: dev, bin only)..."
             stamp_build_version
             if [[ -n "$rustc_wrapper" ]]; then
-                (cd "$REPO_ROOT" && RUSTC_WRAPPER="$rustc_wrapper" cargo build -p mesh-llm --bin mesh-llm)
+                (cd "$REPO_ROOT" && RUSTC_WRAPPER="$rustc_wrapper" cargo build -p mesh-llm --bin mesh-llm "${cargo_features[@]}")
             else
-                (cd "$REPO_ROOT" && cargo build -p mesh-llm --bin mesh-llm)
+                (cd "$REPO_ROOT" && cargo build -p mesh-llm --bin mesh-llm "${cargo_features[@]}")
             fi
             mesh_binary="target/debug/mesh-llm"
             echo "Mesh binary: $mesh_binary"
@@ -513,9 +518,9 @@ if [[ -d "$MESH_DIR" ]]; then
             echo "Building mesh-llm (profile: release)..."
             stamp_build_version
             if [[ -n "$rustc_wrapper" ]]; then
-                (cd "$REPO_ROOT" && RUSTC_WRAPPER="$rustc_wrapper" cargo build --release -p mesh-llm)
+                (cd "$REPO_ROOT" && RUSTC_WRAPPER="$rustc_wrapper" cargo build --release -p mesh-llm "${cargo_features[@]}")
             else
-                (cd "$REPO_ROOT" && cargo build --release -p mesh-llm)
+                (cd "$REPO_ROOT" && cargo build --release -p mesh-llm "${cargo_features[@]}")
             fi
             mesh_binary="target/release/mesh-llm"
             echo "Mesh binary: $mesh_binary"
@@ -525,6 +530,22 @@ if [[ -d "$MESH_DIR" ]]; then
             exit 1
             ;;
     esac
+
+    if [[ "$MESH_LLM_CARGO_FEATURES" =~ '(^|[[:space:],])mlx($|[[:space:],])' ]]; then
+        resource_dir="${mesh_binary:h}/safemlx-resources"
+        metallib="${resource_dir}/mlx.metallib"
+        sibling="${mesh_binary:h}/mlx.metallib"
+        [[ -s "$REPO_ROOT/$metallib" ]] || {
+            echo "MLX build did not produce $metallib" >&2
+            exit 1
+        }
+        cp "$REPO_ROOT/$metallib" "$REPO_ROOT/$sibling"
+        cmp -s "$REPO_ROOT/$metallib" "$REPO_ROOT/$sibling" || {
+            echo "MLX metallib copy verification failed" >&2
+            exit 1
+        }
+        echo "MLX Metal library: $sibling"
+    fi
 
     sign_with_keychain_identity_if_available "$REPO_ROOT/$mesh_binary"
 fi

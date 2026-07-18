@@ -94,6 +94,7 @@ message LoadStage {
   optional bool native_mtp_enabled = 33;
   optional bool mmap = 34;
   optional bool mlock = 35;
+  StageWeightQuantization weight_quantization = 36;
 }
 
 message StopStage {
@@ -114,6 +115,7 @@ message GetLayerInventory {
   string model_id = 1;
   string package_ref = 2;
   string manifest_sha256 = 3;
+  StageWeightQuantization weight_quantization = 4;
 }
 
 message PrepareStage {
@@ -200,6 +202,7 @@ message StageStatus {
   uint64 coordinator_term = 29;
   optional string coordinator_id = 30;
   uint64 lease_until_unix_ms = 31;
+  StageWeightQuantization weight_quantization = 32;
 }
 
 message StageStatusList {
@@ -218,6 +221,7 @@ message LayerInventory {
   optional string source_model_path = 9;
   optional uint64 source_model_bytes = 10;
   SourceModelKind source_model_kind = 11;
+  StageWeightQuantization weight_quantization = 12;
 }
 
 message LayerRange {
@@ -245,6 +249,7 @@ message StagePreparationStatus {
   uint64 coordinator_term = 17;
   optional string coordinator_id = 18;
   uint64 lease_until_unix_ms = 19;
+  StageWeightQuantization weight_quantization = 20;
 }
 
 enum SourceModelKind {
@@ -295,6 +300,14 @@ enum StageWireDType {
   STAGE_WIRE_DTYPE_F32 = 1;
   STAGE_WIRE_DTYPE_F16 = 2;
   STAGE_WIRE_DTYPE_Q8 = 3;
+}
+
+enum StageWeightQuantization {
+  STAGE_WEIGHT_QUANTIZATION_UNSPECIFIED = 0;
+  STAGE_WEIGHT_QUANTIZATION_AUTO = 1;
+  STAGE_WEIGHT_QUANTIZATION_AFFINE4 = 2;
+  STAGE_WEIGHT_QUANTIZATION_AFFINE8 = 3;
+  STAGE_WEIGHT_QUANTIZATION_MXFP4 = 4;
 }
 
 enum StageRuntimeState {

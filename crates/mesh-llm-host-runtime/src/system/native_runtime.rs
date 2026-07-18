@@ -739,7 +739,10 @@ mod dynamic {
 #[cfg(feature = "dynamic-native-runtime")]
 pub(crate) use dynamic::*;
 
-#[cfg(not(feature = "dynamic-native-runtime"))]
-pub(crate) fn try_load_installed_native_runtime() -> anyhow::Result<Option<()>> {
-    Ok(None)
+pub(crate) fn ensure_native_runtime_loaded() -> anyhow::Result<()> {
+    anyhow::ensure!(
+        skippy_runtime::native_runtime_loaded(),
+        "the Skippy/llama backend requires a compatible MeshLLM native runtime; run `mesh-llm runtime install` or use a SafeTensors model with the MLX backend"
+    );
+    Ok(())
 }

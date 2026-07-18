@@ -67,6 +67,8 @@ use mesh_llm_events::{
     emit_event, flush_output, output_sink, schedule_ready_prompt, sort_dashboard_endpoint_rows,
 };
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
+#[cfg(all(feature = "mlx", target_os = "macos"))]
+use model_artifact::ModelRepository;
 use skippy_protocol::FlashAttentionType;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -4124,7 +4126,7 @@ fn build_startup_model_specs(
 
 async fn resolve_startup_models(
     specs: &[StartupModelSpec],
-    _split: bool,
+    split: bool,
 ) -> Result<Vec<StartupModelPlan>> {
     let mut plans = Vec::with_capacity(specs.len());
     for spec in specs {
@@ -4135,15 +4137,26 @@ async fn resolve_startup_models(
         // later, so layer-package discovery must not depend on `--split`.
         let requested_ref_for_catalog = requested_ref.to_string();
         let model_ref_for_catalog = spec.model_ref.clone();
-        let resolved_path = if let Some(package_ref) = tokio::task::spawn_blocking(move || {
-            resolve_split_layer_package(&requested_ref_for_catalog, &model_ref_for_catalog)
-        })
-        .await
-        .context("join resolve layer package task")?
-        {
-            PathBuf::from(package_ref)
+        let mlx_checkpoint = if split {
+            resolve_split_mlx_checkpoint(&requested_ref).await?
         } else {
-            resolve_model(&spec.model_ref).await?
+            None
+        };
+        let is_split_mlx_checkpoint = mlx_checkpoint.is_some();
+        let resolved_path = match mlx_checkpoint {
+            Some(path) => path,
+            None => {
+                if let Some(package_ref) = tokio::task::spawn_blocking(move || {
+                    resolve_split_layer_package(&requested_ref_for_catalog, &model_ref_for_catalog)
+                })
+                .await
+                .context("join resolve layer package task")?
+                {
+                    PathBuf::from(package_ref)
+                } else {
+                    resolve_model(&spec.model_ref).await?
+                }
+            }
         };
 
         let mmproj_path = match spec.mmproj_ref.as_ref() {
@@ -4157,7 +4170,7 @@ async fn resolve_startup_models(
                 // For hf:// layer package refs, use the requested ref as the model ref
                 // rather than trying to parse the hf:// URL as a filesystem path.
                 let path_str = resolved_path.to_string_lossy();
-                if path_str.starts_with("hf://") {
+                if path_str.starts_with("hf://") || is_split_mlx_checkpoint {
                     requested_ref.to_string()
                 } else if resolved_path.join("model-package.json").is_file() {
                     // Layer package directory: read the canonical model_id from the manifest
@@ -4185,6 +4198,61 @@ async fn resolve_startup_models(
         });
     }
     Ok(plans)
+}
+
+#[cfg(all(feature = "mlx", target_os = "macos"))]
+async fn resolve_split_mlx_checkpoint(requested_ref: &str) -> Result<Option<PathBuf>> {
+    let Some((repo, revision)) = split_mlx_huggingface_source(requested_ref) else {
+        return Ok(None);
+    };
+    let repository = model_hf::HfModelRepository::from_env()?;
+    let revision = repository
+        .resolve_revision(&repo, revision.as_deref())
+        .await?;
+    let files = repository.list_files(&repo, &revision).await?;
+    let has_safetensors = files.iter().any(|file| {
+        file.path == "model.safetensors"
+            || file.path == "model.safetensors.index.json"
+            || model_resolver::is_split_mlx_first_shard(&file.path)
+    });
+    if !has_safetensors {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        files.iter().any(|file| file.path == "tokenizer.json"),
+        "distributed MLX checkpoint {repo}@{revision} has no tokenizer.json"
+    );
+    let prepared = tokio::task::spawn_blocking(move || {
+        model_hf::safetensors_stage::SafetensorsStageMaterializer::from_environment()?
+            .prepare_checkpoint(&repo, &revision)
+    })
+    .await
+    .context("join distributed MLX checkpoint preparation")??;
+    tracing::info!(
+        checkpoint = %prepared.descriptor.checkpoint_sha256,
+        dense_tensor_bytes = prepared.descriptor.dense_tensor_bytes,
+        planned_affine4_bytes = prepared.descriptor.estimated_affine4_weight_bytes,
+        sidecar_path = %prepared.path.display(),
+        "prepared metadata-only distributed MLX checkpoint"
+    );
+    Ok(Some(prepared.path))
+}
+
+#[cfg(all(feature = "mlx", target_os = "macos"))]
+fn split_mlx_huggingface_source(input: &str) -> Option<(String, Option<String>)> {
+    if let Some((repo, revision, file)) = model_resolver::parse_huggingface_file_ref(input) {
+        let safetensors = file == "model.safetensors"
+            || file == "model.safetensors.index.json"
+            || model_resolver::is_split_mlx_first_shard(&file);
+        return safetensors.then_some((repo, revision));
+    }
+    let (repo, revision, selector) = model_resolver::parse_huggingface_repo_ref(input)?;
+    selector.is_none().then_some((repo, revision))
+}
+
+#[cfg(not(all(feature = "mlx", target_os = "macos")))]
+async fn resolve_split_mlx_checkpoint(_requested_ref: &str) -> Result<Option<PathBuf>> {
+    Ok(None)
 }
 
 /// Read the `model_id` field from a layer package's `model-package.json`.

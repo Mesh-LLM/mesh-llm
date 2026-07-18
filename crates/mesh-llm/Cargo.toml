@@ -12,6 +12,11 @@ web-ui = ["mesh-llm-host-runtime/web-ui"]
 gpu-bench-cuda = ["mesh-llm-host-runtime/gpu-bench-cuda"]
 gpu-bench-hip = ["mesh-llm-host-runtime/gpu-bench-hip"]
 gpu-bench-intel = ["mesh-llm-host-runtime/gpu-bench-intel"]
+# Serve HF safetensors models on Apple Silicon via the MLX (Metal) engine.
+# Off by default; enable on macOS builds. Implies `dynamic-native-runtime`
+# (see mesh-llm-host-runtime `mlx` for why: avoids a GGUF duplicate-symbol
+# link failure between MLX's vendored gguflib and the patched llama.cpp).
+mlx = ["mesh-llm-host-runtime/mlx", "dynamic-native-runtime"]
 dynamic-native-runtime = ["mesh-llm-host-runtime/dynamic-native-runtime"]
 
 [lints]

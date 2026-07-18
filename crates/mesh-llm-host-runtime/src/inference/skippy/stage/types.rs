@@ -68,6 +68,7 @@ pub(crate) struct StageLoadRequest {
     pub(crate) n_gpu_layers: i32,
     pub(crate) mmap: Option<bool>,
     pub(crate) mlock: bool,
+    pub(crate) weight_quantization: StageWeightQuantization,
     pub(crate) cache_type_k: String,
     pub(crate) cache_type_v: String,
     pub(crate) flash_attn_type: FlashAttentionType,
@@ -102,6 +103,7 @@ pub(crate) struct StageInventoryRequest {
     pub(crate) model_id: String,
     pub(crate) package_ref: String,
     pub(crate) manifest_sha256: String,
+    pub(crate) weight_quantization: StageWeightQuantization,
 }
 
 #[derive(Clone, Debug)]
@@ -137,6 +139,7 @@ pub(crate) struct StageLayerInventory {
     pub(crate) source_model_path: Option<String>,
     pub(crate) source_model_bytes: Option<u64>,
     pub(crate) source_model_kind: SourceModelKind,
+    pub(crate) weight_quantization: StageWeightQuantization,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,6 +163,15 @@ pub(crate) enum StageWireDType {
     F32,
     F16,
     Q8,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum StageWeightQuantization {
+    #[default]
+    Auto,
+    Affine4,
+    Affine8,
+    MxFp4,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -218,6 +230,7 @@ pub(crate) struct StageStatusSnapshot {
     pub(crate) n_batch: Option<u32>,
     pub(crate) n_ubatch: Option<u32>,
     pub(crate) flash_attn_type: FlashAttentionType,
+    pub(crate) weight_quantization: StageWeightQuantization,
     pub(crate) error: Option<String>,
     pub(crate) shutdown_generation: u64,
     pub(crate) coordinator_term: u64,
@@ -237,6 +250,7 @@ pub(crate) struct StagePreparationStatus {
     pub(crate) stage_index: u32,
     pub(crate) layer_start: u32,
     pub(crate) layer_end: u32,
+    pub(crate) weight_quantization: StageWeightQuantization,
     pub(crate) state: StagePreparationState,
     pub(crate) bytes_done: Option<u64>,
     pub(crate) bytes_total: Option<u64>,

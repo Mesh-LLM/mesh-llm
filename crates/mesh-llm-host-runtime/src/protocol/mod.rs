@@ -935,6 +935,7 @@ alias = "model-alias"
             artifact_transfer_supported: false,
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
+            mlx_stage_supported: false,
             owner_summary: OwnershipSummary::default(),
             advertised_model_throughput: vec![],
 
@@ -1376,6 +1377,7 @@ alias = "model-alias"
             artifact_transfer_supported: true,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
+            mlx_stage_supported: true,
             advertised_model_throughput: vec![],
             latency_ms: None,
             latency_source: None,
@@ -1404,6 +1406,12 @@ alias = "model-alias"
         );
         assert!(skippy.features.iter().any(|feature| feature
             == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3));
+        assert!(
+            skippy
+                .features
+                .iter()
+                .any(|feature| feature == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_BACKEND_MLX)
+        );
         assert_eq!(
             proto_pa
                 .owner_attestation
@@ -1417,6 +1425,7 @@ alias = "model-alias"
         assert!(roundtripped.artifact_transfer_supported);
         assert!(roundtripped.stage_status_list_supported);
         assert!(roundtripped.stage_protocol_generation_supported);
+        assert!(roundtripped.mlx_stage_supported);
         let roundtripped = roundtripped
             .owner_attestation
             .expect("owner attestation must round-trip");
@@ -1500,6 +1509,7 @@ alias = "model-alias"
             artifact_transfer_supported: false,
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
+            mlx_stage_supported: false,
             advertised_model_throughput: vec![
                 expected_hints[0].clone(),
                 crate::network::metrics::ModelThroughputHint {
@@ -1625,6 +1635,7 @@ alias = "model-alias"
             artifact_transfer_supported: true,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
+            mlx_stage_supported: false,
             advertised_model_throughput: vec![],
             latency_ms: None,
             latency_source: None,
@@ -2413,6 +2424,7 @@ alias = "model-alias"
             artifact_transfer_supported: true,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
+            mlx_stage_supported: false,
             advertised_model_throughput: vec![],
             latency_ms: None,
             latency_source: None,
@@ -2469,6 +2481,7 @@ alias = "model-alias"
             artifact_transfer_supported: false,
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
+            mlx_stage_supported: false,
             advertised_model_throughput: vec![],
             latency_ms: None,
             latency_source: None,

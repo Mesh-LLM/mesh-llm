@@ -13,6 +13,7 @@ anyhow.workspace = true
 async-trait = "0.1"
 model-ref = { path = "../model-ref", version = "0.72.1" }
 serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

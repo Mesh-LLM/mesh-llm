@@ -374,6 +374,10 @@ unpublished_registry_deps() {
             printf '%s\n' \
                 skippy-protocol
             ;;
+        skippy-engine)
+            printf '%s\n' \
+                skippy-protocol
+            ;;
         skippy-runtime)
             printf '%s\n' \
                 skippy-ffi
@@ -382,9 +386,19 @@ unpublished_registry_deps() {
             printf '%s\n' \
                 openai-frontend \
                 skippy-cache \
+                skippy-engine \
                 skippy-metrics \
                 skippy-protocol \
                 skippy-runtime
+            ;;
+        skippy-engine-mlx)
+            printf '%s\n' \
+                model-hf \
+                openai-frontend \
+                skippy-engine \
+                skippy-metrics \
+                skippy-protocol \
+                skippy-server
             ;;
         mesh-llm-host-runtime)
             printf '%s\n' \
@@ -413,6 +427,7 @@ unpublished_registry_deps() {
                 model-resolver \
                 openai-frontend \
                 skippy-coordinator \
+                skippy-engine-mlx \
                 skippy-protocol \
                 skippy-runtime \
                 skippy-server \
@@ -469,6 +484,7 @@ publish_crates=(
     mesh-llm-gpu-bench
     skippy-ffi
     skippy-protocol
+    skippy-engine
     skippy-coordinator
     skippy-topology
     skippy-metrics
@@ -494,6 +510,7 @@ publish_crates=(
     skippy-runtime
     openai-frontend
     skippy-server
+    skippy-engine-mlx
     mesh-llm-plugin-manager
     mesh-mixture-of-agents
     mesh-llm-system

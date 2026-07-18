@@ -5086,6 +5086,7 @@ mod tests {
             artifact_transfer_supported: false,
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
+            mlx_stage_supported: false,
             advertised_model_throughput: vec![],
             display_rtt: None,
             selected_path: None,

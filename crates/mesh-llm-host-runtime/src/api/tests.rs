@@ -663,6 +663,7 @@ fn make_test_state_peer(seed: u8, role: mesh::NodeRole) -> mesh::PeerInfo {
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        mlx_stage_supported: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         first_joined_mesh_ts: None,
         advertised_model_throughput: vec![],
@@ -1886,6 +1887,7 @@ fn make_test_peer(
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        mlx_stage_supported: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         advertised_model_throughput: vec![],
 
@@ -2400,6 +2402,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
             n_batch: Some(2048),
             n_ubatch: Some(512),
             flash_attn_type: skippy_protocol::FlashAttentionType::Enabled,
+            weight_quantization: crate::inference::skippy::StageWeightQuantization::Auto,
             error: None,
             shutdown_generation: 7,
             coordinator_term: 11,

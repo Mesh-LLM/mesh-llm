@@ -1,0 +1,16 @@
+[package]
+name = "skippy-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Engine-neutral staged execution contract for Skippy"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+skippy-protocol = { path = "../skippy-protocol", version = "0.72.1" }

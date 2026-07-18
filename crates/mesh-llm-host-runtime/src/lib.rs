@@ -93,14 +93,24 @@ pub async fn initialize_host_runtime_with_config(config_path: Option<&Path>) -> 
             }
             None => system::native_runtime::NativeRuntimeStartupSelection::current(),
         };
-        if let Some(runtime) =
-            system::native_runtime::try_load_installed_native_runtime(startup_selection).await?
-        {
-            tracing::info!(
-                native_runtime_id = %runtime.native_runtime_id,
-                libraries = ?runtime.libraries,
-                "Loaded MeshLLM native runtime"
-            );
+        match system::native_runtime::try_load_installed_native_runtime(startup_selection).await {
+            Ok(Some(runtime)) => {
+                tracing::info!(
+                    native_runtime_id = %runtime.native_runtime_id,
+                    libraries = ?runtime.libraries,
+                    "Loaded MeshLLM native runtime"
+                );
+            }
+            Ok(None) => {}
+            #[cfg(all(feature = "mlx", target_os = "macos"))]
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "Continuing with MLX available and the Skippy/llama backend disabled"
+                );
+            }
+            #[cfg(not(all(feature = "mlx", target_os = "macos")))]
+            Err(error) => return Err(error),
         }
     }
     #[cfg(not(feature = "dynamic-native-runtime"))]

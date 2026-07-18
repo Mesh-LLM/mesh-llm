@@ -1,16 +1,23 @@
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use anyhow::{Context, Result};
 use openai_frontend::OpenAiBackend;
+use skippy_engine::StageEngine;
 use skippy_protocol::{StageConfig, StageTopology};
 use tokio::{sync::oneshot, task::JoinHandle};
 
 use crate::{
     binary_transport::{BinaryStageOptions, serve_binary_stage_with_shutdown},
     config::validate_config,
+    engine_transport::{
+        EngineStageServerOptions, prepare_stage_engine_listener, serve_prepared_stage_engine_until,
+    },
     frontend::{EmbeddedOpenAiArgs, serve_embedded_openai_with_shutdown},
     http::{StageHttpOptions, serve_stage_http_with_shutdown},
     runtime_state::{
@@ -350,6 +357,49 @@ pub fn start_binary_stage(options: BinaryStageOptions) -> EmbeddedServerHandle {
     }
 }
 
+pub fn start_stage_engine(
+    engine: Arc<dyn StageEngine>,
+    options: EngineStageServerOptions,
+) -> EmbeddedServerHandle {
+    let bind_addr = options.bind_addr;
+    let status = Arc::new(Mutex::new(ServerHandleState {
+        name: "engine-stage",
+        bind_addr,
+        state: EmbeddedState::Starting,
+        started_at_unix_nanos: now_unix_nanos(),
+        stopped_at_unix_nanos: None,
+        last_error: None,
+    }));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let task_status = Arc::clone(&status);
+    let task_shutdown = Arc::clone(&shutdown);
+    let runtime = tokio::runtime::Handle::current();
+    let task = tokio::task::spawn_blocking(move || {
+        let watcher_shutdown = Arc::clone(&task_shutdown);
+        let watcher = runtime.spawn(async move {
+            let _ = shutdown_rx.await;
+            watcher_shutdown.store(true, Ordering::Release);
+        });
+        let result =
+            prepare_stage_engine_listener(engine.as_ref(), &options).and_then(|listener| {
+                {
+                    let mut status = task_status.lock().expect("server status lock poisoned");
+                    status.state = EmbeddedState::Ready;
+                }
+                serve_prepared_stage_engine_until(engine, options, listener, task_shutdown)
+            });
+        watcher.abort();
+        finish_server_status(&task_status, &result);
+        result
+    });
+    EmbeddedServerHandle {
+        status,
+        shutdown: Some(shutdown_tx),
+        task: Some(task),
+    }
+}
+
 fn spawn_async_server<F, Fut>(
     name: &'static str,
     bind_addr: SocketAddr,
@@ -396,5 +446,160 @@ fn finish_server_status(status: &Arc<Mutex<ServerHandleState>>, result: &Result<
             status.state = EmbeddedState::Failed;
             status.last_error = Some(error.to_string());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::Read,
+        net::{TcpListener, TcpStream},
+        time::Duration,
+    };
+
+    use skippy_engine::{StageEngineInfo, StageExecutionOutput, StageExecutionRequest};
+    use skippy_protocol::binary::{WireActivationDType, recv_ready};
+
+    use super::*;
+
+    struct FakeStageEngine {
+        info: StageEngineInfo,
+    }
+
+    impl StageEngine for FakeStageEngine {
+        fn info(&self) -> &StageEngineInfo {
+            &self.info
+        }
+
+        fn execute(&self, _request: StageExecutionRequest) -> Result<StageExecutionOutput> {
+            Ok(StageExecutionOutput::default())
+        }
+
+        fn reset_session(&self, _session_id: u64) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn engine_stage_reports_bind_failure_without_false_ready() {
+        let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
+        let bind_addr = occupied.local_addr().unwrap();
+        let handle = start_stage_engine(final_engine(), options(bind_addr, None));
+
+        let status = wait_for_state(&handle, EmbeddedState::Failed).await;
+
+        assert!(status.last_error.unwrap().contains("bind engine stage"));
+        assert!(handle.shutdown().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn engine_stage_reports_invalid_topology_without_false_ready() {
+        let handle = start_stage_engine(non_final_engine(), options(unused_addr(), None));
+
+        let status = wait_for_state(&handle, EmbeddedState::Failed).await;
+
+        assert!(status.last_error.unwrap().contains("only the final stage"));
+        assert!(handle.shutdown().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn engine_stage_preflights_unreachable_downstream() {
+        let handle = start_stage_engine(
+            non_final_engine(),
+            options(unused_addr(), Some(unused_addr())),
+        );
+
+        let status = wait_for_state(&handle, EmbeddedState::Failed).await;
+
+        assert!(status.last_error.unwrap().contains("preflight downstream"));
+        assert!(handle.shutdown().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn engine_stage_shutdown_closes_and_joins_live_connections() {
+        let bind_addr = unused_addr();
+        let handle = start_stage_engine(final_engine(), options(bind_addr, None));
+        wait_for_state(&handle, EmbeddedState::Ready).await;
+        let mut client = TcpStream::connect(bind_addr).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        recv_ready(&mut client).unwrap();
+
+        handle.shutdown().await.unwrap();
+
+        let mut byte = [0_u8; 1];
+        let closed = match client.read(&mut byte) {
+            Ok(0) => true,
+            Err(error) => matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
+            ),
+            _ => false,
+        };
+        assert!(closed, "live engine-stage connection survived shutdown");
+    }
+
+    fn final_engine() -> Arc<dyn StageEngine> {
+        engine(StageEngineInfo {
+            engine: "fake".to_string(),
+            model_id: "fake-model".to_string(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 1,
+            total_layers: 1,
+            activation_width: 2,
+        })
+    }
+
+    fn non_final_engine() -> Arc<dyn StageEngine> {
+        engine(StageEngineInfo {
+            engine: "fake".to_string(),
+            model_id: "fake-model".to_string(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 1,
+            total_layers: 2,
+            activation_width: 2,
+        })
+    }
+
+    fn engine(info: StageEngineInfo) -> Arc<dyn StageEngine> {
+        Arc::new(FakeStageEngine { info })
+    }
+
+    fn options(
+        bind_addr: SocketAddr,
+        downstream_addr: Option<SocketAddr>,
+    ) -> EngineStageServerOptions {
+        EngineStageServerOptions {
+            bind_addr,
+            downstream_addr,
+            wire_dtype: WireActivationDType::F16,
+        }
+    }
+
+    fn unused_addr() -> SocketAddr {
+        TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+    }
+
+    async fn wait_for_state(
+        handle: &EmbeddedServerHandle,
+        expected: EmbeddedState,
+    ) -> EmbeddedServerStatus {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = handle.status();
+                if status.state == expected {
+                    return status;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("engine stage did not reach expected state")
     }
 }

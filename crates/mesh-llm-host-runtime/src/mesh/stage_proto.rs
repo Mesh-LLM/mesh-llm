@@ -65,6 +65,7 @@ pub(super) fn stage_runtime_status_from_snapshot(
         n_batch: status.n_batch,
         n_ubatch: status.n_ubatch,
         flash_attn_type: status.flash_attn_type,
+        weight_quantization: status.weight_quantization,
         error: status.error,
         shutdown_generation: status.shutdown_generation,
     }
@@ -102,6 +103,7 @@ pub(super) fn stage_snapshot_from_runtime_status(
         n_batch: status.n_batch,
         n_ubatch: status.n_ubatch,
         flash_attn_type: status.flash_attn_type,
+        weight_quantization: status.weight_quantization,
         error,
         shutdown_generation: status.shutdown_generation,
         coordinator_term: 0,
@@ -167,6 +169,9 @@ pub(super) fn stage_control_request_to_proto(
                 model_id: inventory.model_id,
                 package_ref: inventory.package_ref,
                 manifest_sha256: inventory.manifest_sha256,
+                weight_quantization: stage_weight_quantization_to_proto(
+                    inventory.weight_quantization,
+                ) as i32,
             })
         }
         crate::inference::skippy::StageControlRequest::Prepare(prepare) => {
@@ -225,6 +230,7 @@ pub(super) fn stage_load_to_proto(
         n_gpu_layers: load.n_gpu_layers,
         mmap: load.mmap,
         mlock: Some(load.mlock),
+        weight_quantization: stage_weight_quantization_to_proto(load.weight_quantization) as i32,
         cache_type_k: load.cache_type_k,
         cache_type_v: load.cache_type_v,
         flash_attn_type: stage_flash_attn_type_to_proto(load.flash_attn_type) as i32,
@@ -329,6 +335,9 @@ pub(super) fn stage_control_request_from_proto(
                     model_id: inventory.model_id,
                     package_ref: inventory.package_ref,
                     manifest_sha256: inventory.manifest_sha256,
+                    weight_quantization: stage_weight_quantization_from_proto(
+                        inventory.weight_quantization,
+                    )?,
                 },
             ))
         }
@@ -362,7 +371,7 @@ pub(super) fn stage_control_request_from_proto(
                 .status
                 .ok_or_else(|| anyhow::anyhow!("stage status update missing status"))?;
             Ok(crate::inference::skippy::StageControlRequest::StatusUpdate(
-                stage_preparation_status_from_proto(status),
+                stage_preparation_status_from_proto(status)?,
             ))
         }
     }
@@ -404,6 +413,7 @@ pub(super) fn stage_load_from_proto(
         n_gpu_layers: load.n_gpu_layers,
         mmap: load.mmap,
         mlock: load.mlock.unwrap_or(false),
+        weight_quantization: stage_weight_quantization_from_proto(load.weight_quantization)?,
         cache_type_k: load.cache_type_k,
         cache_type_v: load.cache_type_v,
         flash_attn_type: stage_flash_attn_type_from_proto(load.flash_attn_type),
@@ -501,6 +511,30 @@ pub(super) fn stage_wire_dtype_from_proto(value: i32) -> crate::inference::skipp
     }
 }
 
+pub(super) fn stage_weight_quantization_from_proto(
+    value: i32,
+) -> anyhow::Result<crate::inference::skippy::StageWeightQuantization> {
+    Ok(
+        match skippy_stage_proto::StageWeightQuantization::try_from(value)
+            .map_err(|_| anyhow::anyhow!("unsupported stage weight quantization value {value}"))?
+        {
+            skippy_stage_proto::StageWeightQuantization::Unspecified
+            | skippy_stage_proto::StageWeightQuantization::Auto => {
+                crate::inference::skippy::StageWeightQuantization::Auto
+            }
+            skippy_stage_proto::StageWeightQuantization::Affine4 => {
+                crate::inference::skippy::StageWeightQuantization::Affine4
+            }
+            skippy_stage_proto::StageWeightQuantization::Affine8 => {
+                crate::inference::skippy::StageWeightQuantization::Affine8
+            }
+            skippy_stage_proto::StageWeightQuantization::Mxfp4 => {
+                crate::inference::skippy::StageWeightQuantization::MxFp4
+            }
+        },
+    )
+}
+
 pub(super) fn stage_control_unavailable_response(
     request: crate::inference::skippy::StageControlRequest,
 ) -> crate::inference::skippy::StageControlResponse {
@@ -545,6 +579,7 @@ pub(super) fn stage_control_unavailable_response(
                 n_batch: None,
                 n_ubatch: None,
                 flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
+                weight_quantization: crate::inference::skippy::StageWeightQuantization::Auto,
                 error: Some("stage control is not available".to_string()),
                 shutdown_generation: stop.shutdown_generation,
                 coordinator_term: stop.coordinator_term,
@@ -569,6 +604,7 @@ pub(super) fn stage_control_unavailable_response(
                     source_model_path: None,
                     source_model_bytes: None,
                     source_model_kind: crate::inference::skippy::SourceModelKind::Unknown,
+                    weight_quantization: inventory.weight_quantization,
                 },
             );
         }
@@ -643,6 +679,7 @@ pub(super) fn stage_status_from_load(
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         flash_attn_type: load.flash_attn_type,
+        weight_quantization: load.weight_quantization,
         error: Some("stage control is not available".to_string()),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
@@ -667,6 +704,7 @@ pub(super) fn stage_preparation_status_from_load(
         stage_index: load.stage_index,
         layer_start: load.layer_start,
         layer_end: load.layer_end,
+        weight_quantization: load.weight_quantization,
         state,
         bytes_done: None,
         bytes_total: None,
@@ -695,6 +733,7 @@ pub(super) fn stage_preparation_status_from_cancel(
         stage_index: 0,
         layer_start: 0,
         layer_end: 0,
+        weight_quantization: crate::inference::skippy::StageWeightQuantization::Auto,
         state,
         bytes_done: None,
         bytes_total: None,
@@ -821,7 +860,7 @@ pub(super) fn stage_control_response_from_proto(
         }
         Response::LayerInventory(inventory) => {
             Ok(crate::inference::skippy::StageControlResponse::Inventory(
-                layer_inventory_from_proto(inventory),
+                layer_inventory_from_proto(inventory)?,
             ))
         }
         Response::PrepareStageAccepted(accepted) => {
@@ -832,7 +871,7 @@ pub(super) fn stage_control_response_from_proto(
                 crate::inference::skippy::StageControlResponse::PrepareAccepted(
                     crate::inference::skippy::StagePrepareAcceptedResponse {
                         accepted: accepted.accepted,
-                        status: stage_preparation_status_from_proto(status),
+                        status: stage_preparation_status_from_proto(status)?,
                         error: accepted.error,
                     },
                 ),
@@ -840,7 +879,7 @@ pub(super) fn stage_control_response_from_proto(
         }
         Response::StagePreparationStatus(status) => Ok(
             crate::inference::skippy::StageControlResponse::PreparationStatus(
-                stage_preparation_status_from_proto(status),
+                stage_preparation_status_from_proto(status)?,
             ),
         ),
         Response::StageStatusAck(ack) => {
@@ -885,13 +924,15 @@ pub(super) fn layer_inventory_to_proto(
         source_model_path: inventory.source_model_path,
         source_model_bytes: inventory.source_model_bytes,
         source_model_kind: source_model_kind_to_proto(inventory.source_model_kind) as i32,
+        weight_quantization: stage_weight_quantization_to_proto(inventory.weight_quantization)
+            as i32,
     }
 }
 
 pub(super) fn layer_inventory_from_proto(
     inventory: skippy_stage_proto::LayerInventory,
-) -> crate::inference::skippy::StageLayerInventory {
-    crate::inference::skippy::StageLayerInventory {
+) -> anyhow::Result<crate::inference::skippy::StageLayerInventory> {
+    Ok(crate::inference::skippy::StageLayerInventory {
         model_id: inventory.model_id,
         package_ref: inventory.package_ref,
         manifest_sha256: inventory.manifest_sha256,
@@ -915,11 +956,12 @@ pub(super) fn layer_inventory_from_proto(
             .preparing_ranges
             .into_iter()
             .map(stage_preparation_status_from_proto)
-            .collect(),
+            .collect::<anyhow::Result<Vec<_>>>()?,
         source_model_path: inventory.source_model_path,
         source_model_bytes: inventory.source_model_bytes,
         source_model_kind: source_model_kind_from_proto(inventory.source_model_kind),
-    }
+        weight_quantization: stage_weight_quantization_from_proto(inventory.weight_quantization)?,
+    })
 }
 
 pub(super) fn layer_range_to_proto(
@@ -1003,12 +1045,13 @@ pub(super) fn stage_preparation_status_to_proto(
         coordinator_term: status.coordinator_term,
         coordinator_id: status.coordinator_id.map(|id| id.to_string()),
         lease_until_unix_ms: status.lease_until_unix_ms,
+        weight_quantization: stage_weight_quantization_to_proto(status.weight_quantization) as i32,
     }
 }
 
 pub(super) fn stage_preparation_status_from_proto(
     status: skippy_stage_proto::StagePreparationStatus,
-) -> crate::inference::skippy::StagePreparationStatus {
+) -> anyhow::Result<crate::inference::skippy::StagePreparationStatus> {
     let coordinator_id = status.coordinator_id.and_then(|id| match id.parse() {
         Ok(id) => Some(id),
         Err(error) => {
@@ -1020,7 +1063,7 @@ pub(super) fn stage_preparation_status_from_proto(
             None
         }
     });
-    crate::inference::skippy::StagePreparationStatus {
+    Ok(crate::inference::skippy::StagePreparationStatus {
         topology_id: status.topology_id,
         run_id: status.run_id,
         model_id: status.model_id,
@@ -1031,6 +1074,7 @@ pub(super) fn stage_preparation_status_from_proto(
         stage_index: status.stage_index,
         layer_start: status.layer_start,
         layer_end: status.layer_end,
+        weight_quantization: stage_weight_quantization_from_proto(status.weight_quantization)?,
         state: stage_preparation_state_from_proto(status.state),
         bytes_done: status.bytes_done,
         bytes_total: status.bytes_total,
@@ -1040,7 +1084,7 @@ pub(super) fn stage_preparation_status_from_proto(
         coordinator_term: status.coordinator_term,
         coordinator_id,
         lease_until_unix_ms: status.lease_until_unix_ms,
-    }
+    })
 }
 
 pub(super) fn stage_status_to_proto(
@@ -1078,6 +1122,7 @@ pub(super) fn stage_status_to_proto(
         coordinator_term: status.coordinator_term,
         coordinator_id: status.coordinator_id.map(|id| id.to_string()),
         lease_until_unix_ms: status.lease_until_unix_ms,
+        weight_quantization: stage_weight_quantization_to_proto(status.weight_quantization) as i32,
     }
 }
 
@@ -1118,6 +1163,7 @@ pub(super) fn stage_status_from_proto(
         materialized_pinned: status.materialized_pinned.unwrap_or(false),
         projector_path: status.projector_path,
         flash_attn_type: stage_flash_attn_type_from_proto(status.flash_attn_type),
+        weight_quantization: stage_weight_quantization_from_proto(status.weight_quantization)?,
         error: status.error,
         shutdown_generation: status.shutdown_generation,
         coordinator_term: status.coordinator_term,
@@ -1283,6 +1329,25 @@ pub(super) fn stage_wire_dtype_to_proto(
         }
         crate::inference::skippy::StageWireDType::Q8 => {
             skippy_stage_proto::StageWireDType::StageWireDtypeQ8
+        }
+    }
+}
+
+pub(super) fn stage_weight_quantization_to_proto(
+    quantization: crate::inference::skippy::StageWeightQuantization,
+) -> skippy_stage_proto::StageWeightQuantization {
+    match quantization {
+        crate::inference::skippy::StageWeightQuantization::Auto => {
+            skippy_stage_proto::StageWeightQuantization::Auto
+        }
+        crate::inference::skippy::StageWeightQuantization::Affine4 => {
+            skippy_stage_proto::StageWeightQuantization::Affine4
+        }
+        crate::inference::skippy::StageWeightQuantization::Affine8 => {
+            skippy_stage_proto::StageWeightQuantization::Affine8
+        }
+        crate::inference::skippy::StageWeightQuantization::MxFp4 => {
+            skippy_stage_proto::StageWeightQuantization::Mxfp4
         }
     }
 }

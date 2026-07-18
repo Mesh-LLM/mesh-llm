@@ -1491,6 +1491,7 @@ fn cache_key(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inference::skippy::StageWeightQuantization;
     use std::ffi::OsString;
 
     use serial_test::serial;
@@ -1604,6 +1605,7 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            weight_quantization: StageWeightQuantization::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -2116,6 +2118,7 @@ mod tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            weight_quantization: StageWeightQuantization::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: skippy_protocol::FlashAttentionType::Auto,

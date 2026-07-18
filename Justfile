@@ -239,6 +239,39 @@ skippy-quantize-standalone-build backend="cpu":
 skippy-quantize-standalone-release-build backend="cpu":
     LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static just with-lld cargo build --release --locked -p skippy-quantize
 
+# Build and test the standalone SafeTensors stage-range research spike.
+mlx-safetensors-stage-plan-test:
+    just with-lld cargo test --manifest-path spikes/mlx-safetensors-stages/Cargo.toml
+
+# Inspect a remote checkpoint without downloading tensor payloads.
+mlx-safetensors-stage-plan *ARGS:
+    just with-lld cargo run --manifest-path spikes/mlx-safetensors-stages/Cargo.toml -- {{ ARGS }}
+
+# Compare whole-model MLX against two partial SafeTensors stages on Metal.
+mlx-safetensors-split-proof *ARGS:
+    DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer just with-lld cargo run --release --manifest-path spikes/mlx-solo/Cargo.toml --bin mlx-split-proof -- {{ ARGS }}
+
+# Build the MLX stage binary and its required sibling Metal library.
+mlx-stage-build:
+    DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer just with-lld cargo build --release -p skippy-engine-mlx --features mlx --bin mlx-stage
+    test -s target/release/safemlx-resources/mlx.metallib
+    cp target/release/safemlx-resources/mlx.metallib target/release/mlx.metallib
+    cmp -s target/release/safemlx-resources/mlx.metallib target/release/mlx.metallib
+
+# Build the shipped mesh-llm binary with whole-model and distributed MLX serving.
+[macos]
+mlx-build:
+    DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer MESH_LLM_CARGO_FEATURES=mlx scripts/build-mac.sh
+
+# Release-mode MLX build; writes mesh-llm and its sibling mlx.metallib.
+[macos]
+mlx-release-build:
+    DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer MESH_LLM_BUILD_PROFILE=release MESH_LLM_CARGO_FEATURES=mlx scripts/build-mac.sh
+
+# Run `mlx-stage serve ...` or `mlx-stage prove ...` after `just mlx-stage-build`.
+mlx-stage *ARGS:
+    target/release/mlx-stage {{ ARGS }}
+
 # Generate a reproducible benchmark corpus for skippy bench tooling.
 bench-corpus tier="smoke" *ARGS="":
     scripts/generate-bench-corpus.py "{{ tier }}" {{ ARGS }}

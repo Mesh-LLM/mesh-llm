@@ -308,6 +308,7 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         n_gpu_layers: -1,
         mmap: Some(false),
         mlock: true,
+        weight_quantization: crate::inference::skippy::StageWeightQuantization::Affine8,
         cache_type_k: "f16".to_string(),
         cache_type_v: "q8_0".to_string(),
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
@@ -651,12 +652,75 @@ fn stage_load_proto_roundtrip_preserves_source_model_bytes() {
     assert_eq!(proto.source_model_bytes, Some(123_456_789));
     assert_eq!(proto.mmap, Some(false));
     assert_eq!(proto.mlock, Some(true));
+    assert_eq!(
+        proto.weight_quantization,
+        skippy_stage_proto::StageWeightQuantization::Affine8 as i32
+    );
 
     let decoded = stage_load_from_proto(proto).unwrap();
     assert_eq!(decoded.source_model_bytes, Some(123_456_789));
     assert_eq!(decoded.model_path.as_deref(), Some("/models/demo.gguf"));
     assert_eq!(decoded.mmap, Some(false));
     assert!(decoded.mlock);
+    assert_eq!(
+        decoded.weight_quantization,
+        crate::inference::skippy::StageWeightQuantization::Affine8
+    );
+}
+
+#[test]
+fn stage_load_proto_defaults_missing_weight_quantization_and_rejects_unknown_values() {
+    let mut proto = stage_load_to_proto(stage_load_request());
+    proto.weight_quantization = 0;
+    assert_eq!(
+        stage_load_from_proto(proto.clone())
+            .unwrap()
+            .weight_quantization,
+        crate::inference::skippy::StageWeightQuantization::Auto
+    );
+
+    proto.weight_quantization = 99;
+    assert!(stage_load_from_proto(proto).is_err());
+}
+
+#[test]
+fn stage_status_proto_defaults_missing_weight_quantization_and_rejects_unknown_values() {
+    let mut preparation = stage_preparation_status_to_proto(test_preparation_status(
+        crate::inference::skippy::StagePreparationState::Available,
+    ));
+    preparation.weight_quantization = 0;
+    assert_eq!(
+        stage_preparation_status_from_proto(preparation.clone())
+            .unwrap()
+            .weight_quantization,
+        crate::inference::skippy::StageWeightQuantization::Auto
+    );
+    preparation.weight_quantization = 99;
+    assert!(stage_preparation_status_from_proto(preparation).is_err());
+
+    let mut status = stage_status_to_proto(stage_status_from_load(
+        &stage_load_request(),
+        crate::inference::skippy::StageRuntimeState::Ready,
+    ));
+    status.weight_quantization = 0;
+    assert_eq!(
+        stage_status_from_proto(status.clone())
+            .unwrap()
+            .weight_quantization,
+        crate::inference::skippy::StageWeightQuantization::Auto
+    );
+    status.weight_quantization = 99;
+    assert!(stage_status_from_proto(status).is_err());
+
+    let mut inventory = skippy_stage_proto::LayerInventory::default();
+    assert_eq!(
+        layer_inventory_from_proto(inventory.clone())
+            .unwrap()
+            .weight_quantization,
+        crate::inference::skippy::StageWeightQuantization::Auto
+    );
+    inventory.weight_quantization = 99;
+    assert!(layer_inventory_from_proto(inventory).is_err());
 }
 
 #[test]
@@ -1187,6 +1251,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        mlx_stage_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
 
@@ -3737,6 +3802,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        mlx_stage_supported: false,
         advertised_model_throughput: vec![],
         latency_ms: None,
         latency_source: None,
@@ -4025,6 +4091,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         artifact_transfer_supported: true,
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
+        mlx_stage_supported: false,
         advertised_model_throughput: vec![],
         latency_ms: None,
         latency_source: None,
@@ -4115,6 +4182,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         artifact_transfer_supported: true,
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
+        mlx_stage_supported: false,
         advertised_model_throughput: vec![],
         latency_ms: None,
         latency_source: None,
@@ -4179,6 +4247,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         artifact_transfer_supported: true,
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
+        mlx_stage_supported: false,
         advertised_model_throughput: vec![],
         latency_ms: None,
         latency_source: None,
@@ -4766,6 +4835,7 @@ fn transitive_peer_update_refreshes_last_mentioned() {
         artifact_transfer_supported: true,
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
+        mlx_stage_supported: false,
         advertised_model_throughput: vec![],
         latency_ms: None,
         latency_source: None,
@@ -5518,6 +5588,7 @@ fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) -> PeerInfo
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        mlx_stage_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
 
@@ -6121,6 +6192,7 @@ fn requirement_peer_announcement(
         artifact_transfer_supported: true,
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
+        mlx_stage_supported: false,
         advertised_model_throughput: vec![],
         latency_ms: None,
         latency_source: None,
@@ -6751,6 +6823,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_untrusted_release_signer
             artifact_transfer_supported: true,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
+            mlx_stage_supported: false,
             advertised_model_throughput: vec![],
             latency_ms: None,
             latency_source: None,
@@ -6840,6 +6913,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_invalid_release_attestat
             artifact_transfer_supported: true,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
+            mlx_stage_supported: false,
             advertised_model_throughput: vec![],
             latency_ms: None,
             latency_source: None,
@@ -6926,6 +7000,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_wrong_mesh_id() {
             artifact_transfer_supported: true,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
+            mlx_stage_supported: false,
             advertised_model_throughput: vec![],
             latency_ms: None,
             latency_source: None,
@@ -7535,6 +7610,7 @@ fn test_stage_status(
         n_batch: None,
         n_ubatch: None,
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
+        weight_quantization: crate::inference::skippy::StageWeightQuantization::Auto,
         error: None,
         shutdown_generation: 1,
     }
@@ -7566,6 +7642,7 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         n_gpu_layers: -1,
         mmap: None,
         mlock: false,
+        weight_quantization: crate::inference::skippy::StageWeightQuantization::Affine8,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
@@ -7599,6 +7676,7 @@ fn test_preparation_status(
         stage_index: 1,
         layer_start: 12,
         layer_end: 24,
+        weight_quantization: crate::inference::skippy::StageWeightQuantization::Affine8,
         state,
         bytes_done: Some(1024),
         bytes_total: Some(4096),
@@ -7619,6 +7697,7 @@ fn stage_control_inventory_request_round_trips_proto() {
             model_id: "model-a".to_string(),
             package_ref: "gguf:///model.gguf".to_string(),
             manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
+            weight_quantization: crate::inference::skippy::StageWeightQuantization::Affine8,
         },
     );
 
@@ -7632,6 +7711,10 @@ fn stage_control_inventory_request_round_trips_proto() {
     assert_eq!(inventory.model_id, "model-a");
     assert_eq!(inventory.package_ref, "gguf:///model.gguf");
     assert_eq!(inventory.manifest_sha256, "direct-gguf:1:model.gguf");
+    assert_eq!(
+        inventory.weight_quantization,
+        crate::inference::skippy::StageWeightQuantization::Affine8
+    );
 }
 
 #[test]
@@ -7687,6 +7770,10 @@ fn stage_control_status_update_request_round_trips_proto() {
     assert_eq!(status.bind_addr.as_deref(), Some("127.0.0.1:51234"));
     assert_eq!(status.bytes_done, Some(1024));
     assert_eq!(status.bytes_total, Some(4096));
+    assert_eq!(
+        status.weight_quantization,
+        crate::inference::skippy::StageWeightQuantization::Affine8
+    );
 }
 
 #[test]
@@ -7712,6 +7799,7 @@ fn stage_control_inventory_response_round_trips_plain_gguf_source() {
             source_model_path: Some("/model.gguf".to_string()),
             source_model_bytes: Some(4_096),
             source_model_kind: crate::inference::skippy::SourceModelKind::PlainGguf,
+            weight_quantization: crate::inference::skippy::StageWeightQuantization::Affine8,
         },
     );
 
@@ -7730,8 +7818,16 @@ fn stage_control_inventory_response_round_trips_plain_gguf_source() {
     assert_eq!(inventory.available_ranges[0].layer_start, 0);
     assert_eq!(inventory.available_ranges[0].layer_end, 32);
     assert_eq!(
+        inventory.weight_quantization,
+        crate::inference::skippy::StageWeightQuantization::Affine8
+    );
+    assert_eq!(
         inventory.preparing_ranges[0].state,
         crate::inference::skippy::StagePreparationState::Resolving
+    );
+    assert_eq!(
+        inventory.preparing_ranges[0].weight_quantization,
+        crate::inference::skippy::StageWeightQuantization::Affine8
     );
 }
 

@@ -1,0 +1,103 @@
+# MLX (Metal) serving engine for mesh-llm.
+#
+# Serves HF safetensors tensor models over mesh-llm's REAL OpenAI-compatible
+# frontend (`openai-frontend::OpenAiBackend`), goose-style, on Apple Silicon.
+#
+# The published manifest uses crates.io versions. This repository patches them
+# to a proven public safemlx commit until an equivalent release is available.
+# Root patches do not propagate, so standalone published consumers cannot use
+# the `mlx` feature until those safemlx APIs are released. See WIRING.md.
+[package]
+name = "skippy-engine-mlx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Apple MLX stage and OpenAI serving engine for Skippy"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "STAGED_EXECUTION.md"
+
+[lib]
+name = "skippy_engine_mlx"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mlx-serve"
+path = "src/bin/mlx-serve.rs"
+
+[[bin]]
+name = "mlx-stage"
+path = "src/bin/mlx-stage.rs"
+
+[features]
+default = []
+# Enable the real MLX engine. macOS-only in practice (code is cfg-gated to
+# target_os = "macos"); the deps still resolve elsewhere but compile to nothing.
+mlx = [
+    "dep:bytemuck",
+    "dep:half",
+    "dep:libc",
+    "dep:memmap2",
+    "dep:model-hf",
+    "dep:reqwest",
+    "dep:safetensors",
+    "dep:safemlx",
+    "dep:safemlx-lm",
+    "dep:safemlx-lm-utils",
+    "dep:serde",
+    "dep:sha2",
+    "dep:skippy-metrics",
+    "dep:tokenizers",
+    # SafeMLX and static llama.cpp both export GGUF C symbols such as
+    # `gguf_get_key`; keep the native llama runtime in a separate link unit.
+    "skippy-server/dynamic-native-runtime",
+]
+
+[dependencies]
+# The real mesh-llm OpenAI frontend — this is what proves we serve over the
+# same surface the shipped binary uses, not a toy.
+openai-frontend = { path = "../openai-frontend", version = "0.72.1" }
+model-hf = { path = "../model-hf", version = "0.72.1", optional = true }
+skippy-engine = { path = "../skippy-engine", version = "0.72.1" }
+skippy-metrics = { path = "../skippy-metrics", version = "0.72.1", optional = true }
+skippy-protocol = { path = "../skippy-protocol", version = "0.72.1" }
+skippy-server = { path = "../skippy-server", version = "0.72.1" }
+async-trait = "0.1"
+async-stream = "0.3"
+anyhow = "1"
+axum = "0.8"
+bytemuck = { version = "1", optional = true }
+clap = { version = "4", features = ["derive"] }
+futures-core = "0.3"
+half = { version = "2", features = ["bytemuck"], optional = true }
+libc = { version = "0.2", optional = true }
+memmap2 = { version = "0.9", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+serde_json = "1"
+serde = { version = "1", features = ["derive"], optional = true }
+sha2 = { version = "0.10", optional = true }
+safetensors = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# MLX stack. The workspace root patches these versions to the proven public
+# commit. The registry versions do not yet provide all APIs used by this
+# feature, so this is currently a workspace/source-build integration.
+safemlx = { version = "0.1.3", default-features = false, features = [
+    "accelerate",
+    "metal",
+    "safetensors",
+], optional = true }
+safemlx-lm = { version = "0.4.1", optional = true }
+safemlx-lm-utils = { version = "0.1.4", default-features = false, features = [
+    "onig",
+], optional = true }
+# Standalone tokenizer for incremental (streaming) detokenization without
+# borrowing the model. `onig` matches safemlx-lm so the build dedupes.
+tokenizers = { version = "0.23", default-features = false, features = [
+    "onig",
+], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
