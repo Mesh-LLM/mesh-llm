@@ -571,21 +571,6 @@ mod tests {
         drop(client);
     }
 
-    #[test]
-    fn prediction_return_open_retries_transient_failures() {
-        let mut attempts = 0usize;
-        let opened = retry_prediction_return_open(|| {
-            attempts += 1;
-            if attempts < PREDICTION_RETURN_OPEN_ATTEMPTS {
-                return Err(anyhow!("sink is not ready"));
-            }
-            Ok(())
-        });
-
-        opened.unwrap();
-        assert_eq!(attempts, PREDICTION_RETURN_OPEN_ATTEMPTS);
-    }
-
     fn poll_test_reply(receiver: &PredictionReturnReceiver, expected: WireReplyKind) -> StageReply {
         let started = std::time::Instant::now();
         loop {

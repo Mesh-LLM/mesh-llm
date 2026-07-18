@@ -2858,6 +2858,51 @@ fn persistent_lane_ready_handshake_times_out_for_silent_downstream() {
 }
 
 #[test]
+fn steady_state_lane_reconnect_deadline_is_much_shorter_than_warmup() {
+    // A mid-life reconnect to an already-serving mesh must fail fast so a new
+    // request routed to a dead stage errors quickly instead of stalling for the
+    // full warmup deadline. Guard the invariant that the steady-state deadline
+    // stays well under the warmup deadline.
+    assert!(
+        LANE_STEADY_CONNECT_TIMEOUT < LANE_READY_READ_TIMEOUT,
+        "steady-state reconnect deadline must be shorter than the warmup deadline"
+    );
+    assert!(
+        LANE_STEADY_CONNECT_TIMEOUT <= Duration::from_secs(5),
+        "steady-state reconnect deadline must stay small enough to fail fast on a dead stage"
+    );
+}
+
+#[test]
+fn steady_state_ready_handshake_times_out_fast_for_silent_downstream() {
+    // A downstream that accepts the TCP connection but never sends the ready
+    // frame must be bounded by the supplied deadline, not hang. This mirrors the
+    // silent-downstream case a dead split stage produces on a new request.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (_stream, _) = listener.accept().unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+    });
+    let mut client = TcpStream::connect(address).unwrap();
+
+    let start = std::time::Instant::now();
+    let error = receive_persistent_lane_ready(&mut client, Duration::from_millis(25)).unwrap_err();
+    let elapsed = start.elapsed();
+
+    assert!(
+        error
+            .to_string()
+            .contains("persistent downstream lane did not become ready")
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "handshake read must fail within the supplied deadline, took {elapsed:?}"
+    );
+    server.join().unwrap();
+}
+
+#[test]
 fn model_matching_is_exact_for_mesh_style_ids() {
     ensure_requested_model(
         "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
