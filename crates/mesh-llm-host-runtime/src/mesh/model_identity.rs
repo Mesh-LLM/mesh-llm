@@ -185,8 +185,14 @@ pub(crate) fn parse_hf_resolve_url_parts(url: &str) -> Option<(String, Option<St
         .or_else(|| url.strip_prefix("http://huggingface.co/"))?;
     let (repo, rest) = path.split_once("/resolve/")?;
     let (revision, file) = rest.split_once('/')?;
-    let canonical = format!("{repo}@{revision}/{file}");
-    parse_hf_ref_parts(&canonical)
+    if repo.is_empty() || revision.is_empty() || file.is_empty() {
+        return None;
+    }
+    Some((
+        repo.to_string(),
+        Some(revision.to_string()),
+        file.to_string(),
+    ))
 }
 
 pub(crate) fn format_hf_canonical_ref(repo: &str, revision: Option<&str>, file: &str) -> String {
@@ -201,4 +207,28 @@ pub(crate) fn identity_hash_for(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_url_supports_top_level_hugging_face_repository() {
+        // Given: a resolve URL for a top-level Hugging Face repository.
+        let url = "https://huggingface.co/gpt2/resolve/main/model.safetensors";
+
+        // When: the URL identity is parsed.
+        let parts = parse_hf_resolve_url_parts(url);
+
+        // Then: the repository, revision, and artifact are preserved.
+        assert_eq!(
+            parts,
+            Some((
+                "gpt2".to_string(),
+                Some("main".to_string()),
+                "model.safetensors".to_string(),
+            ))
+        );
+    }
 }

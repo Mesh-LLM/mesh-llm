@@ -19,7 +19,9 @@ pub(crate) async fn stun_public_addr(endpoint: &iroh::Endpoint) -> Option<std::n
             return Some(addr);
         }
 
-        let remaining = deadline.checked_duration_since(tokio::time::Instant::now())?;
+        let remaining = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .unwrap_or_default();
         match tokio::time::timeout(remaining, addresses.updated()).await {
             Ok(Ok(_)) => {}
             Ok(Err(_)) | Err(_) => {
