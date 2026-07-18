@@ -50,8 +50,13 @@ Config and inventory mutation are exclusive to `mesh-llm-control/1`. The former 
 Owned-node commands use a separate QUIC ALPN and do not consume a public mesh
 stream type. Each bidirectional owner-control stream carries 4-byte
 little-endian length-prefixed `OwnerControlEnvelope` messages: a handshake,
-then exactly one typed request and its response. The same 8 MiB inbound and
-outbound limit applies.
+then typed request/response envelopes. Current unary client calls (`get_config`,
+`apply_config`, and `refresh_inventory`) open one authenticated stream per
+command and expect one response before closing. `watch_config` sends one
+request, then receives either an initial `accepted` response
+(`include_snapshot=false`) or `snapshot` response (`include_snapshot=true`),
+followed by zero or more `update` responses until either side closes the stream.
+The same 8 MiB inbound and outbound limit applies.
 
 The client must receive an explicit owner-control endpoint token out of band.
 Control endpoints are never derived from peer IDs, gossip, Nostr, route tables,
@@ -120,7 +125,8 @@ remain a separate projection of a successful local scan.
 
 - Client connect: 8 seconds; stream open: 2 seconds; handshake write: 2
   seconds; request write: 2 seconds.
-- Get/apply unary response: 5 seconds; inventory response: 30 seconds; watch
+- Client get/apply unary response: 5 seconds; client inventory response: 35
+  seconds, covering the server's 30-second scan deadline plus margin; watch
   acceptance: 5 seconds. An accepted watch has no unary response deadline.
 - Server handshake read: 2 seconds; request read: 5 seconds.
 - At most 32 owner-control stream workers are active per connection. The
@@ -365,7 +371,7 @@ Used by a Skippy worker to fetch missing Hugging Face layer-package artifacts fr
 ```proto
 message MeshSubprotocol {
   string name = 1;              // "skippy-stage"
-  uint32 major = 2;             // 1
+  uint32 major = 2;             // 2
   repeated string features = 3; // includes "artifact-transfer"
 }
 

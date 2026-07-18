@@ -302,6 +302,51 @@ fn relay_reconnect_controller_applies_cooldown_after_attempt_and_prunes_gone_pee
     );
 }
 
+fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
+    super::PeerAnnouncement {
+        addr,
+        role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
+        models: vec![],
+        vram_bytes: 0,
+        model_source: None,
+        serving_models: vec![],
+        hosted_models: None,
+        available_models: vec![],
+        requested_models: vec![],
+        explicit_model_interests: vec![],
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        model_demand: HashMap::new(),
+        mesh_id: None,
+        mesh_policy_hash: None,
+        gpu_name: None,
+        hostname: None,
+        is_soc: None,
+        gpu_vram: None,
+        gpu_reserved_bytes: None,
+        gpu_mem_bandwidth_gbps: None,
+        gpu_compute_tflops_fp32: None,
+        gpu_compute_tflops_fp16: None,
+        available_model_metadata: vec![],
+        experts_summary: None,
+        available_model_sizes: HashMap::new(),
+        served_model_descriptors: vec![],
+        served_model_runtime: vec![],
+        owner_attestation: None,
+        genesis_policy: None,
+        release_attestation: None,
+        direct_admission_proof: None,
+        artifact_transfer_supported: true,
+        stage_protocol_generation_supported: true,
+        stage_status_list_supported: true,
+        advertised_model_throughput: vec![],
+        latency_ms: None,
+        latency_source: None,
+        latency_age_ms: None,
+        latency_observer_id: None,
+    }
+}
+
 mod lan_join_target_tracking_tests {
     use super::*;
 
@@ -387,18 +432,24 @@ mod lan_join_target_tracking_tests {
             .await
             .unwrap();
         let peer_id = make_test_endpoint_id(36);
-        let mut peer = make_test_peer_info(peer_id);
-        for addr in [
+        let mut addr = EndpointAddr {
+            id: peer_id,
+            addrs: Default::default(),
+        };
+        for socket_addr in [
             "10.0.0.5:47916",
             "203.0.113.5:47916",
             "100.64.0.1:47916",
             "172.17.0.1:47916",
         ] {
-            peer.addr
+            addr
                 .addrs
-                .insert(TransportAddr::Ip(addr.parse().unwrap()));
+                .insert(TransportAddr::Ip(socket_addr.parse().unwrap()));
         }
-        node.state.lock().await.peers.insert(peer_id, peer);
+        let announcement = peer_state_test_announcement(addr.clone());
+
+        node.add_peer(peer_id, addr, &announcement, Some(NODE_PROTOCOL_GENERATION))
+            .await;
 
         let lan_addrs: HashSet<_> = node
             .known_peer_lan_ipv4()
@@ -549,20 +600,29 @@ fn peer_meaningfully_changed_detects_reserved_bytes_updates() {
     assert!(peer_meaningfully_changed(&old_peer, &new_peer));
 }
 
-#[test]
-fn incoming_peer_promoted_after_valid_gossip() {
-    let frame = make_valid_gossip_frame();
-    let encoded = encode_control_frame(STREAM_GOSSIP, &frame);
-    let decoded: GossipFrame = decode_control_frame(STREAM_GOSSIP, &encoded)
-        .expect("valid gossip frame must decode successfully");
-    assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
-    assert!(!decoded.peers.is_empty());
+#[tokio::test]
+async fn incoming_peer_promoted_after_valid_gossip() {
+    use prost::Message as _;
 
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xab; 32]).public());
-    let mut peers: HashMap<EndpointId, PeerInfo> = HashMap::new();
+    let addr = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    let announcement = peer_state_test_announcement(addr);
+    let frame = build_gossip_frame(&[announcement], peer_id);
+    let decoded = decode_gossip_payload(
+        ControlProtocol::ProtoV1,
+        peer_id,
+        &frame.encode_to_vec(),
+    )
+    .expect("valid gossip frame must decode through the production boundary");
 
     assert!(
-        !is_peer_admitted(&peers, &peer_id),
+        !is_peer_admitted(&node.state.lock().await.peers, &peer_id),
         "peer must NOT be admitted before gossip"
     );
 
@@ -580,16 +640,24 @@ fn incoming_peer_promoted_after_valid_gossip() {
         "STREAM_GOSSIP must always be allowed — it is the admission path"
     );
 
-    peers.insert(peer_id, make_test_peer_info(peer_id));
+    node.apply_announced_peers(
+        peer_id,
+        &decoded,
+        None,
+        Some(NODE_PROTOCOL_GENERATION),
+        false,
+    )
+    .await
+    .expect("valid gossip must pass production admission");
 
     assert!(
-        is_peer_admitted(&peers, &peer_id),
-        "peer must be admitted after gossip completes (add_peer inserts into state.peers)"
+        is_peer_admitted(&node.state.lock().await.peers, &peer_id),
+        "peer must be admitted after production gossip admission completes"
     );
 }
 
-#[test]
-fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
+#[tokio::test]
+async fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
     let malformed_payload = vec![0xFF_u8; 20];
     let mut bad_frame = vec![STREAM_GOSSIP];
     bad_frame.extend_from_slice(&(malformed_payload.len() as u32).to_le_bytes());
@@ -650,20 +718,24 @@ fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
     );
 
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xcd; 32]).public());
-    let peers: HashMap<EndpointId, PeerInfo> = HashMap::new();
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
     assert!(
-        !is_peer_admitted(&peers, &peer_id),
-        "peer must NOT be admitted when gossip fails"
+        !is_peer_admitted(&node.state.lock().await.peers, &peer_id),
+        "a payload rejected by the production decoder must not admit a peer"
     );
 }
 
-#[test]
-fn passive_route_table_request_does_not_admit_peer() {
+#[tokio::test]
+async fn passive_route_table_request_does_not_admit_peer() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xef; 32]).public());
-    let mut peers: HashMap<EndpointId, PeerInfo> = HashMap::new();
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
 
     assert!(
-        !is_peer_admitted(&peers, &peer_id),
+        !is_peer_admitted(&node.state.lock().await.peers, &peer_id),
         "passive caller must NOT be admitted before route request"
     );
 
@@ -712,14 +784,20 @@ fn passive_route_table_request_does_not_admit_peer() {
     );
 
     assert!(
-        !is_peer_admitted(&peers, &peer_id),
+        !is_peer_admitted(&node.state.lock().await.peers, &peer_id),
         "passive caller must NOT be admitted after route-table response"
     );
 
-    peers.insert(peer_id, make_test_peer_info(peer_id));
+    let addr = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    let announcement = peer_state_test_announcement(addr.clone());
+    node.add_peer(peer_id, addr, &announcement, Some(NODE_PROTOCOL_GENERATION))
+        .await;
     assert!(
-        is_peer_admitted(&peers, &peer_id),
-        "only explicit gossip (add_peer) should promote to admitted"
+        is_peer_admitted(&node.state.lock().await.peers, &peer_id),
+        "only the production gossip admission path should promote the peer"
     );
 }
 
@@ -1110,6 +1188,8 @@ fn public_model_id_from_identity_preserves_huggingface_revision() {
 
 #[test]
 fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
+    use prost::Message as _;
+
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xaa; 32]).public());
     let peer_id_bytes = peer_id.as_bytes().to_vec();
 
@@ -1141,13 +1221,13 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
             ..Default::default()
         }],
     };
-    let remote = peer_id;
-    let is_forged = !mismatch_frame.sender_id.is_empty()
-        && mismatch_frame.sender_id.as_slice() != remote.as_bytes();
-    assert!(
-        is_forged,
-        "sender_id != remote.as_bytes() must be detected as a forged sender"
-    );
+    let err = decode_gossip_payload(
+        ControlProtocol::ProtoV1,
+        peer_id,
+        &mismatch_frame.encode_to_vec(),
+    )
+    .expect_err("the production gossip decoder must reject a forged sender identity");
+    assert!(err.to_string().contains("sender_id mismatch"));
 
     let bad_endpoint_frame = GossipFrame {
         r#gen: NODE_PROTOCOL_GENERATION,
