@@ -1,3 +1,4 @@
+use anyhow::{Result, anyhow};
 use skippy_ffi::{
     ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
     GenerationSignalWindow as RawGenerationSignalWindow, KvPageDesc as RawKvPageDesc,
@@ -84,6 +85,21 @@ pub(crate) fn empty_raw_activation_desc() -> RawActivationDesc {
 pub struct ActivationFrame {
     pub desc: ActivationDesc,
     pub payload: Vec<u8>,
+}
+
+impl ActivationFrame {
+    pub(crate) fn validate_payload_len(&self) -> Result<()> {
+        let payload_len = u64::try_from(self.payload.len())
+            .map_err(|_| anyhow!("activation payload length exceeds u64"))?;
+        if self.desc.payload_bytes != payload_len {
+            return Err(anyhow!(
+                "activation payload length {} does not match descriptor payload_bytes {}",
+                self.payload.len(),
+                self.desc.payload_bytes
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

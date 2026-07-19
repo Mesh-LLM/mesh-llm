@@ -221,7 +221,7 @@ fn windows_vulkan_sdk_root_exists() -> bool {
 fn command_exists(name: &str) -> bool {
     let path = Path::new(name);
     if path.components().count() > 1 {
-        return path.is_file();
+        return command_file_exists(path);
     }
 
     std::env::var_os("PATH").is_some_and(|paths| {
@@ -251,7 +251,26 @@ fn command_exists_in_dir(dir: &Path, name: &str) -> bool {
 
 #[cfg(not(windows))]
 fn command_exists_in_dir(dir: &Path, name: &str) -> bool {
-    dir.join(name).is_file()
+    command_file_exists(&dir.join(name))
+}
+
+#[cfg(windows)]
+fn command_file_exists(path: &Path) -> bool {
+    path.is_file()
+}
+
+#[cfg(unix)]
+fn command_file_exists(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn command_file_exists(path: &Path) -> bool {
+    path.is_file()
 }
 
 fn command_success(name: &str, args: &[&str]) -> bool {
@@ -266,6 +285,25 @@ fn command_success(name: &str, args: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(unix)]
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let unique = format!(
+            "mesh-llm-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
 
     #[test]
     fn test_update_flavor_preference_uses_backend_order() {
@@ -301,6 +339,43 @@ mod tests {
             preferred_bundle_flavor_for_platform("linux", "x86_64", probe),
             Some(backend::BinaryFlavor::Vulkan)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_command_exists_rejects_non_executable_regular_file() {
+        let dir = temp_dir("command-probe-non-executable");
+        let command = dir.join("probe-tool");
+        std::fs::write(&command, b"#!/bin/sh\n").unwrap();
+        let mut permissions = std::fs::metadata(&command).unwrap().permissions();
+        permissions.set_mode(0o644);
+        std::fs::set_permissions(&command, permissions).unwrap();
+
+        assert!(!command_exists_in_dir(&dir, "probe-tool"));
+        assert!(!command_exists(command.to_string_lossy().as_ref()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_command_exists_accepts_executable_regular_file_only() {
+        let dir = temp_dir("command-probe-executable");
+        let command = dir.join("probe-tool");
+        let directory = dir.join("directory-tool");
+        std::fs::write(&command, b"#!/bin/sh\n").unwrap();
+        std::fs::create_dir(&directory).unwrap();
+        let mut permissions = std::fs::metadata(&command).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&command, permissions).unwrap();
+        let mut permissions = std::fs::metadata(&directory).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&directory, permissions).unwrap();
+
+        assert!(command_exists_in_dir(&dir, "probe-tool"));
+        assert!(command_exists(command.to_string_lossy().as_ref()));
+        assert!(!command_exists_in_dir(&dir, "directory-tool"));
+        assert!(!command_exists(directory.to_string_lossy().as_ref()));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

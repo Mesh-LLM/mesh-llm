@@ -87,7 +87,7 @@ use tokio::sync::Mutex;
 #[cfg(test)]
 use self::http::http_body_text;
 #[cfg(test)]
-use self::status::{LocalInstance, NodeState, WakeableNode, WakeableNodeState, build_gpus};
+use self::status::{NodeState, WakeableNode, WakeableNodeState, build_gpus};
 #[cfg(test)]
 use crate::inference::election;
 #[cfg(test)]

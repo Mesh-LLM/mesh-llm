@@ -17,6 +17,7 @@ use release_integrity::{
 };
 
 const DEFAULT_RELEASE_REPO: &str = "Mesh-LLM/mesh-llm";
+const PATH_WRITE_PROBE_PREFIX: &str = ".mesh-llm-write-probe";
 #[cfg(not(windows))]
 pub(super) const INSTALL_SCRIPT_URL: &str =
     "https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh";
@@ -286,21 +287,26 @@ pub(super) fn describe_requested_update(
 }
 
 pub(super) fn path_is_writable(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
-            return false;
-        };
-        unsafe { libc::access(c_path.as_ptr(), libc::W_OK) == 0 }
-    }
+    let probe = path.join(format!(
+        "{PATH_WRITE_PROBE_PREFIX}-{}-{}",
+        std::process::id(),
+        PATH_WRITE_PROBE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
 
-    #[cfg(not(unix))]
-    {
-        std::fs::metadata(path)
-            .map(|meta| !meta.permissions().readonly())
-            .unwrap_or(false)
-    }
+    let Ok(file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    else {
+        return false;
+    };
+    drop(file);
+
+    std::fs::remove_file(&probe).is_ok()
 }
+
+static PATH_WRITE_PROBE_COUNTER: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 pub(super) async fn install_latest_bundle(
     exe: &Path,
@@ -699,31 +705,39 @@ fn replace_bundle_files(
     let managed_names: BTreeSet<String> = BTreeSet::from([mesh_binary_name()]);
 
     let mut backed_up = Vec::new();
-    for name in managed_names {
-        backup_existing_file(install_dir, backup, &name, &mut backed_up)?;
-    }
-    for name in staged_files {
-        backup_existing_file(install_dir, backup, name, &mut backed_up)?;
-    }
-
     let mut installed = Vec::new();
-    for name in staged_files {
-        let source = extracted.join(name);
-        let dest = install_dir.join(name);
-        if let Err(err) = std::fs::rename(&source, &dest) {
-            rollback_bundle_replace(install_dir, backup, &installed, &backed_up);
-            return Err(err).with_context(|| {
-                format!(
-                    "Failed to install {} into {}",
-                    source.display(),
-                    dest.display()
-                )
-            });
+
+    let result = (|| {
+        for name in managed_names {
+            backup_existing_file(install_dir, backup, &name, &mut backed_up)?;
         }
-        installed.push(name.clone());
+        for name in staged_files {
+            backup_existing_file(install_dir, backup, name, &mut backed_up)?;
+        }
+
+        for name in staged_files {
+            let source = extracted.join(name);
+            let dest = install_dir.join(name);
+            if let Err(err) = std::fs::rename(&source, &dest) {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Failed to install {} into {}",
+                        source.display(),
+                        dest.display()
+                    )
+                });
+            }
+            installed.push(name.clone());
+        }
+
+        Ok(())
+    })();
+
+    if result.is_err() {
+        rollback_bundle_replace(install_dir, backup, &installed, &backed_up);
     }
 
-    Ok(())
+    result
 }
 
 #[cfg(not(windows))]
@@ -1273,11 +1287,84 @@ mod tests {
     }
 
     #[test]
-    fn test_path_is_writable_for_temp_file() {
+    fn test_path_is_writable_for_temp_dir() {
         let dir = temp_dir("self-update-writable");
+        assert!(path_is_writable(&dir));
+        assert!(std::fs::read_dir(&dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(PATH_WRITE_PROBE_PREFIX)
+        }));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_path_is_writable_rejects_non_directory_path() {
+        let dir = temp_dir("self-update-writable-file");
         let path = dir.join("mesh-llm");
         std::fs::write(&path, b"binary").unwrap();
-        assert!(path_is_writable(&path));
+
+        assert!(!path_is_writable(&path));
+        assert_eq!(std::fs::read(&path).unwrap(), b"binary");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_replace_bundle_files_rolls_back_backup_failure() {
+        let dir = temp_dir("self-update-backup-rollback");
+        let install_dir = dir.join("install");
+        let extracted = dir.join("extracted");
+        let backup = dir.join("backup");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::create_dir_all(&extracted).unwrap();
+        std::fs::create_dir_all(backup.join("sidecar")).unwrap();
+        std::fs::write(install_dir.join(mesh_binary_name()), b"old-binary").unwrap();
+        std::fs::write(install_dir.join("sidecar"), b"old-sidecar").unwrap();
+
+        let err = replace_bundle_files(&install_dir, &extracted, &backup, &["sidecar".to_string()])
+            .unwrap_err();
+
+        assert!(err.to_string().contains("Failed to move"));
+        assert_eq!(
+            std::fs::read(install_dir.join(mesh_binary_name())).unwrap(),
+            b"old-binary"
+        );
+        assert_eq!(
+            std::fs::read(install_dir.join("sidecar")).unwrap(),
+            b"old-sidecar"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_replace_bundle_files_rolls_back_install_failure() {
+        let dir = temp_dir("self-update-install-rollback");
+        let install_dir = dir.join("install");
+        let extracted = dir.join("extracted");
+        let backup = dir.join("backup");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::create_dir_all(&extracted).unwrap();
+        std::fs::write(install_dir.join(mesh_binary_name()), b"old-binary").unwrap();
+        std::fs::write(install_dir.join("sidecar"), b"old-sidecar").unwrap();
+        std::fs::write(extracted.join("sidecar"), b"new-sidecar").unwrap();
+
+        let staged_files = ["sidecar".to_string(), mesh_binary_name()];
+        let err =
+            replace_bundle_files(&install_dir, &extracted, &backup, &staged_files).unwrap_err();
+
+        assert!(err.to_string().contains("Failed to install"));
+        assert_eq!(
+            std::fs::read(install_dir.join(mesh_binary_name())).unwrap(),
+            b"old-binary"
+        );
+        assert_eq!(
+            std::fs::read(install_dir.join("sidecar")).unwrap(),
+            b"old-sidecar"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -19,6 +19,16 @@ async fn wakeable_inventory_does_not_change_peer_count() {
 #[tokio::test]
 async fn wakeable_inventory_does_not_change_mesh_vram_totals() {
     let state = build_test_mesh_api().await;
+    let status_before = state.status().await;
+    let (addr_before, handle_before) = spawn_management_test_server(state.clone()).await;
+    let response_before = send_management_request(
+        addr_before,
+        "GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+    )
+    .await;
+    handle_before.await.unwrap().unwrap();
+    let payload_before = json_body(&response_before);
+
     replace_test_wakeable_inventory(
         &state,
         vec![make_test_wakeable_entry(
@@ -29,19 +39,31 @@ async fn wakeable_inventory_does_not_change_mesh_vram_totals() {
     )
     .await;
 
-    let status = state.status().await;
-    let peers = vec![make_test_peer(
-        0x51,
-        mesh::NodeRole::Host { http_port: 9337 },
-        vec!["wakeable-only-model"],
-        vec!["wakeable-only-model"],
-        true,
-    )];
-    let route_stats = http_route_stats("wakeable-only-model", &peers, &[], None, 0.0);
+    let status_after = state.status().await;
+    let (addr_after, handle_after) = spawn_management_test_server(state.clone()).await;
+    let response_after = send_management_request(
+        addr_after,
+        "GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+    )
+    .await;
+    handle_after.await.unwrap().unwrap();
+    let payload_after = json_body(&response_after);
 
-    assert_eq!(status.wakeable_nodes.len(), 1);
-    assert_eq!(route_stats.node_count, 1);
-    assert!(route_stats.mesh_vram_gb > 0.0);
+    assert_eq!(status_after.peers, status_before.peers);
+    assert_eq!(status_after.my_vram_gb, status_before.my_vram_gb);
+    assert_eq!(status_after.wakeable_nodes.len(), 1);
+    assert!(response_before.starts_with("HTTP/1.1 200"));
+    assert!(response_after.starts_with("HTTP/1.1 200"));
+    assert_eq!(payload_after["peers"], payload_before["peers"]);
+    assert_eq!(
+        payload_after["my_vram_gb"],
+        payload_before["my_vram_gb"]
+    );
+    assert_eq!(
+        payload_after["wakeable_nodes"][0]["logical_id"],
+        "sleeping-node-1"
+    );
+
 }
 
 #[tokio::test]

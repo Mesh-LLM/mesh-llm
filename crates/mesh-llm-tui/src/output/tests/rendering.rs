@@ -473,6 +473,17 @@ pub(super) fn tui_list_scrollbar_layout_reserves_one_column_gutter_on_overflow()
     );
 }
 #[test]
+pub(super) fn tui_list_scrollbar_state_uses_row_count_and_clamps_to_max_offset() {
+    let state = tui_list_scrollbar_state(10, 3, 99);
+
+    assert_eq!(
+        state,
+        ratatui::widgets::ScrollbarState::new(10)
+            .position(9)
+            .viewport_content_length(3)
+    );
+}
+#[test]
 pub(super) fn tui_layout_uses_join_token_band_with_nested_process_tables() {
     let mut state = DashboardState::default();
     state.reduce(DashboardAction::Resize(dashboard_layout_for_terminal_size(
@@ -720,8 +731,8 @@ pub(super) fn join_token_slice_indicates_hidden_content() {
     let token = "abcdefghij";
 
     assert_eq!(join_token_visible_slice(token, 0, 5), "abcd…");
-    assert_eq!(join_token_visible_slice(token, 2, 5), "…def…");
-    assert_eq!(join_token_visible_slice(token, 5, 5), "…ghij");
+    assert_eq!(join_token_visible_slice(token, 2, 5), "…cde…");
+    assert_eq!(join_token_visible_slice(token, 5, 5), "…fghi");
     assert_eq!(join_token_visible_slice(token, 0, 10), token);
 }
 #[test]
@@ -911,6 +922,11 @@ pub(super) fn tui_frame_clears_stale_join_token_rows_between_draws() {
         !rendered.contains("mesh-invite-token-123"),
         "full-frame redraw should clear stale token text from previous frames\n{rendered}"
     );
+}
+#[test]
+pub(super) fn loading_progress_bar_keeps_zero_empty_and_positive_visible() {
+    assert_eq!(loading_progress_bar(0.0, 8), "░░░░░░░░");
+    assert_eq!(loading_progress_bar(0.01, 8), "█░░░░░░░");
 }
 #[test]
 pub(super) fn tui_process_tables_render_empty_states_without_collapsing() {

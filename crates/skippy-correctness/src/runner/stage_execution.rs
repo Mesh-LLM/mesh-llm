@@ -628,11 +628,3 @@ pub(in crate::runner) fn ensure_matches(matches: bool, allow_mismatch: bool) -> 
 pub(in crate::runner) fn status(matches: bool) -> &'static str {
     if matches { "pass" } else { "fail" }
 }
-
-#[allow(dead_code)]
-fn _assert_model_path(path: &Path) -> Result<()> {
-    if !path.exists() {
-        bail!("model path does not exist: {}", path.display());
-    }
-    Ok(())
-}

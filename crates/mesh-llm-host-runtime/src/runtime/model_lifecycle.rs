@@ -369,9 +369,10 @@ pub(super) async fn run_auto_load_runtime_model(
         .iter()
         .find(|m| m.model == spec && m.derived_profile() == *profile);
     let ctx_size_override = runtime_model_ctx_size_override(ctx.options, model_overrides);
-    let parallel_override = model_overrides
-        .and_then(|m| m.parallel)
-        .or(ctx.config.gpu.parallel);
+    let parallel_override = super::startup_models::resolve_model_parallel_override(
+        model_overrides.and_then(|m| m.parallel),
+        &ctx.config.gpu,
+    );
     let instance_id = next_runtime_instance_id(ctx.next_runtime_instance_sequence);
     let capacity_reservation = reserve_runtime_capacity_for_model(
         ctx.runtime_capacity_ledger,

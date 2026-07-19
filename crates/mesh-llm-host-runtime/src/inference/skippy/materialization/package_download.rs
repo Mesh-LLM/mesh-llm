@@ -1044,6 +1044,15 @@ mod tests {
         previous: Option<OsString>,
     }
 
+    impl EnvRestore {
+        fn capture(key: &'static str) -> Self {
+            Self {
+                key,
+                previous: std::env::var_os(key),
+            }
+        }
+    }
+
     impl Drop for EnvRestore {
         fn drop(&mut self) {
             restore_env(self.key, self.previous.take());
@@ -1182,6 +1191,25 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn env_restore_preserves_previous_value_after_unwind() {
+        const KEY: &str = "MESH_LLM_TEST_ENV_RESTORE_PANIC";
+        let _restore_outer = EnvRestore::capture(KEY);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(KEY, "before") };
+
+        let panic_result = std::panic::catch_unwind(|| {
+            let _restore_inner = EnvRestore::capture(KEY);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(KEY, "during") };
+            panic!("force unwind after env mutation");
+        });
+
+        assert!(panic_result.is_err());
+        assert_eq!(std::env::var(KEY).unwrap(), "before");
+    }
+
+    #[test]
     fn local_package_resolution_rejects_manifest_traversal() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
@@ -1250,9 +1278,9 @@ mod tests {
     #[test]
     #[serial]
     fn hf_package_resolution_rejects_revision_cache_traversal() {
-        let prev_hf_home = std::env::var_os("HF_HOME");
-        let prev_hf_cache = std::env::var_os("HF_HUB_CACHE");
-        let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
+        let _hf_home = EnvRestore::capture("HF_HOME");
+        let _hf_cache = EnvRestore::capture("HF_HUB_CACHE");
+        let _huggingface_cache = EnvRestore::capture("HUGGINGFACE_HUB_CACHE");
 
         let temp = tempfile::tempdir().unwrap();
         // TODO: Audit that the environment access only happens in single-threaded code.
@@ -1269,18 +1297,14 @@ mod tests {
             error.contains("invalid HF revision") || error.contains("safe relative path"),
             "{error}"
         );
-
-        restore_env("HF_HOME", prev_hf_home);
-        restore_env("HF_HUB_CACHE", prev_hf_cache);
-        restore_env("HUGGINGFACE_HUB_CACHE", prev_huggingface_cache);
     }
 
     #[test]
     #[serial]
     fn hf_package_resolution_rejects_ref_target_cache_traversal() {
-        let prev_hf_home = std::env::var_os("HF_HOME");
-        let prev_hf_cache = std::env::var_os("HF_HUB_CACHE");
-        let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
+        let _hf_home = EnvRestore::capture("HF_HOME");
+        let _hf_cache = EnvRestore::capture("HF_HUB_CACHE");
+        let _huggingface_cache = EnvRestore::capture("HUGGINGFACE_HUB_CACHE");
 
         let temp = tempfile::tempdir().unwrap();
         // TODO: Audit that the environment access only happens in single-threaded code.
@@ -1305,18 +1329,14 @@ mod tests {
             error.contains("invalid HF cache commit hash") || error.contains("safe relative path"),
             "{error}"
         );
-
-        restore_env("HF_HOME", prev_hf_home);
-        restore_env("HF_HUB_CACHE", prev_hf_cache);
-        restore_env("HUGGINGFACE_HUB_CACHE", prev_huggingface_cache);
     }
 
     #[test]
     #[serial]
     fn hf_package_resolution_uses_direct_snapshot_revision_cache() {
-        let prev_hf_home = std::env::var_os("HF_HOME");
-        let prev_hf_cache = std::env::var_os("HF_HUB_CACHE");
-        let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
+        let _hf_home = EnvRestore::capture("HF_HOME");
+        let _hf_cache = EnvRestore::capture("HF_HUB_CACHE");
+        let _huggingface_cache = EnvRestore::capture("HUGGINGFACE_HUB_CACHE");
 
         let temp = tempfile::tempdir().unwrap();
         // TODO: Audit that the environment access only happens in single-threaded code.
@@ -1338,10 +1358,6 @@ mod tests {
             resolve_hf_package_to_local("hf://owner/repo@abc123", 0, 1, false, false).unwrap();
 
         assert_eq!(PathBuf::from(resolved), snapshot);
-
-        restore_env("HF_HOME", prev_hf_home);
-        restore_env("HF_HUB_CACHE", prev_hf_cache);
-        restore_env("HUGGINGFACE_HUB_CACHE", prev_huggingface_cache);
     }
 
     #[test]
@@ -1350,10 +1366,10 @@ mod tests {
     /// cache lookup returns it directly without downloading or scanning other
     /// snapshots.  A stale snapshot with different content must NOT be picked.
     fn pinned_revision_resolves_directly_from_cache() {
-        let prev_hf_home = std::env::var_os("HF_HOME");
-        let prev_hf_cache = std::env::var_os("HF_HUB_CACHE");
-        let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
-        let prev_xdg_cache = std::env::var_os("XDG_CACHE_HOME");
+        let _hf_home = EnvRestore::capture("HF_HOME");
+        let _hf_cache = EnvRestore::capture("HF_HUB_CACHE");
+        let _huggingface_cache = EnvRestore::capture("HUGGINGFACE_HUB_CACHE");
+        let _xdg_cache = EnvRestore::capture("XDG_CACHE_HOME");
 
         let temp = tempfile::tempdir().unwrap();
         // TODO: Audit that the environment access only happens in single-threaded code.
@@ -1383,20 +1399,15 @@ mod tests {
             resolve_hf_package_to_local("hf://owner/repo@abc123", 0, 0, false, false).unwrap();
 
         assert_eq!(PathBuf::from(resolved), pinned_snapshot);
-
-        restore_env("HF_HOME", prev_hf_home);
-        restore_env("HF_HUB_CACHE", prev_hf_cache);
-        restore_env("HUGGINGFACE_HUB_CACHE", prev_huggingface_cache);
-        restore_env("XDG_CACHE_HOME", prev_xdg_cache);
     }
 
     #[test]
     #[serial]
     fn hf_package_metadata_only_cache_resolution_uses_metadata_integrity_scope() {
-        let prev_hf_home = std::env::var_os("HF_HOME");
-        let prev_hf_cache = std::env::var_os("HF_HUB_CACHE");
-        let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
-        let prev_xdg_cache = std::env::var_os("XDG_CACHE_HOME");
+        let _hf_home = EnvRestore::capture("HF_HOME");
+        let _hf_cache = EnvRestore::capture("HF_HUB_CACHE");
+        let _huggingface_cache = EnvRestore::capture("HUGGINGFACE_HUB_CACHE");
+        let _xdg_cache = EnvRestore::capture("XDG_CACHE_HOME");
 
         let temp = tempfile::tempdir().unwrap();
         // TODO: Audit that the environment access only happens in single-threaded code.
@@ -1434,20 +1445,15 @@ mod tests {
             .to_string();
         assert!(error.contains("checksum mismatch"), "{error}");
         assert!(error.contains("shared/metadata.gguf"), "{error}");
-
-        restore_env("HF_HOME", prev_hf_home);
-        restore_env("HF_HUB_CACHE", prev_hf_cache);
-        restore_env("HUGGINGFACE_HUB_CACHE", prev_huggingface_cache);
-        restore_env("XDG_CACHE_HOME", prev_xdg_cache);
     }
 
     #[test]
     #[serial]
     fn hf_package_resolution_verifies_cached_snapshot_artifact_checksums() {
-        let prev_hf_home = std::env::var_os("HF_HOME");
-        let prev_hf_cache = std::env::var_os("HF_HUB_CACHE");
-        let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
-        let prev_xdg_cache = std::env::var_os("XDG_CACHE_HOME");
+        let _hf_home = EnvRestore::capture("HF_HOME");
+        let _hf_cache = EnvRestore::capture("HF_HUB_CACHE");
+        let _huggingface_cache = EnvRestore::capture("HUGGINGFACE_HUB_CACHE");
+        let _xdg_cache = EnvRestore::capture("XDG_CACHE_HOME");
 
         let temp = tempfile::tempdir().unwrap();
         // TODO: Audit that the environment access only happens in single-threaded code.
@@ -1476,11 +1482,6 @@ mod tests {
             .to_string();
 
         assert!(error.contains("checksum mismatch"), "{error}");
-
-        restore_env("HF_HOME", prev_hf_home);
-        restore_env("HF_HUB_CACHE", prev_hf_cache);
-        restore_env("HUGGINGFACE_HUB_CACHE", prev_huggingface_cache);
-        restore_env("XDG_CACHE_HOME", prev_xdg_cache);
     }
 
     /// Integration test: resolves package metadata without downloading layer files from HF.

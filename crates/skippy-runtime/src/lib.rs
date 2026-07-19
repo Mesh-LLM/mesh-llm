@@ -14,6 +14,7 @@ mod native;
 mod native_mtp;
 mod ngram;
 pub mod package;
+mod path_cstring;
 mod runtime_events;
 mod session;
 mod types;

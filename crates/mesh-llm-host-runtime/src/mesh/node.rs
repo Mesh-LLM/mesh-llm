@@ -1649,8 +1649,10 @@ impl Node {
             // If RTT dropped from above the split threshold (80ms) to below it
             // (e.g. relay → direct), trigger a re-election so the peer can now
             // be included in split mode.
-            let was_above = old_rtt.is_some_and(|r| r > MAX_SPLIT_RTT_MS);
-            if was_above && rtt_ms <= MAX_SPLIT_RTT_MS {
+            let became_split_eligible = old_rtt
+                .map(|old| old > MAX_SPLIT_RTT_MS && rtt_ms <= MAX_SPLIT_RTT_MS)
+                .unwrap_or(rtt_ms <= MAX_SPLIT_RTT_MS);
+            if became_split_eligible {
                 emit_mesh_info(format!(
                     "📡 Peer {} RTT improved ({}ms → {}ms) — re-electing for split",
                     id.fmt_short(),
@@ -1834,16 +1836,7 @@ impl Node {
     /// Call periodically to prevent unbounded map growth.
     pub async fn gc_demand(&self) {
         let now = now_secs();
-        let my_requested = self.requested_models.lock().await;
-        let peers = self.state.lock().await;
-        let mut pinned: std::collections::HashSet<String> = my_requested.iter().cloned().collect();
-        for p in peers.peers.values() {
-            for m in &p.requested_models {
-                pinned.insert(m.clone());
-            }
-        }
-        drop(peers);
-        drop(my_requested);
+        let pinned = self.pinned_requested_models().await;
 
         let mut demand = self.model_demand.lock().unwrap();
         demand.retain(|model, d| {
@@ -1856,18 +1849,7 @@ impl Node {
     pub async fn active_demand(&self) -> HashMap<String, ModelDemand> {
         let now = now_secs();
         let demand = self.model_demand.lock().unwrap().clone();
-
-        // Check which models are pinned (declared via --model by self or a live peer)
-        let my_requested = self.requested_models.lock().await;
-        let peers = self.state.lock().await;
-        let mut pinned: std::collections::HashSet<String> = my_requested.iter().cloned().collect();
-        for p in peers.peers.values() {
-            for m in &p.requested_models {
-                pinned.insert(m.clone());
-            }
-        }
-        drop(peers);
-        drop(my_requested);
+        let pinned = self.pinned_requested_models().await;
 
         demand
             .into_iter()
@@ -1875,6 +1857,16 @@ impl Node {
                 pinned.contains(model) || now.saturating_sub(d.last_active) < DEMAND_TTL_SECS
             })
             .collect()
+    }
+
+    async fn pinned_requested_models(&self) -> std::collections::HashSet<String> {
+        let my_requested = self.requested_models.lock().await;
+        let peers = self.state.lock().await;
+        let mut pinned: std::collections::HashSet<String> = my_requested.iter().cloned().collect();
+        for peer in peers.peers.values() {
+            pinned.extend(peer.requested_models.iter().cloned());
+        }
+        pinned
     }
 
     pub async fn set_requested_models(&self, models: Vec<String>) {
@@ -1907,5 +1899,77 @@ impl Node {
 
     pub async fn explicit_model_interests(&self) -> Vec<String> {
         self.explicit_model_interests.lock().await.clone()
+    }
+}
+
+#[cfg(test)]
+mod node_tests {
+    use super::*;
+
+    fn test_peer_announcement(addr: EndpointAddr) -> PeerAnnouncement {
+        PeerAnnouncement {
+            addr,
+            role: NodeRole::Worker,
+            first_joined_mesh_ts: None,
+            models: Vec::new(),
+            vram_bytes: 0,
+            model_source: None,
+            serving_models: Vec::new(),
+            hosted_models: None,
+            available_models: Vec::new(),
+            requested_models: Vec::new(),
+            explicit_model_interests: Vec::new(),
+            version: None,
+            model_demand: HashMap::new(),
+            mesh_id: None,
+            mesh_policy_hash: None,
+            gpu_name: None,
+            hostname: None,
+            is_soc: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: Vec::new(),
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: Vec::new(),
+            served_model_runtime: Vec::new(),
+            owner_attestation: None,
+            genesis_policy: None,
+            release_attestation: None,
+            direct_admission_proof: None,
+            artifact_transfer_supported: false,
+            stage_protocol_generation_supported: false,
+            stage_status_list_supported: false,
+            advertised_model_throughput: Vec::new(),
+            latency_ms: None,
+            latency_source: None,
+            latency_age_ms: None,
+            latency_observer_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn update_peer_rtt_notifies_when_first_sample_is_split_eligible() {
+        let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+        let peer_node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+        let peer_id = peer_node.id();
+        let peer = PeerInfo::from_announcement(
+            peer_id,
+            peer_node.endpoint_addr_for_advertisement(),
+            &test_peer_announcement(peer_node.endpoint_addr_for_advertisement()),
+            OwnershipSummary::default(),
+        );
+        node.insert_test_peer(peer).await;
+
+        let mut peer_changes = node.peer_change_rx.clone();
+        node.update_peer_rtt(peer_id, MAX_SPLIT_RTT_MS).await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), peer_changes.changed())
+            .await
+            .expect("first split-eligible RTT should notify election watchers")
+            .expect("peer change channel should stay open");
     }
 }

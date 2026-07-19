@@ -91,13 +91,34 @@ fn plain_client_still_skips_runtime_owner_registration() {
 #[serial_test::serial]
 fn swarm_capture_env_client_registers_runtime_owner() {
     let key = crate::capture::SWARM_CAPTURE_ENV;
-    let old = std::env::var_os(key);
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var(key, "/tmp/mesh-capture") };
+    let _env_guard = EnvVarGuard::set(key, "/tmp/mesh-capture");
     let options = make_runtime_cli(&["mesh-llm", "client", "--auto"]);
 
     assert!(swarm_capture_observer_requested(&options));
-    restore_env(key, old);
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let guard = Self {
+            key,
+            previous: std::env::var_os(key),
+        };
+        // SAFETY: these serial tests mutate the process environment before
+        // building runtime options and restore it via Drop before the next test.
+        unsafe { std::env::set_var(key, value) };
+        guard
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        restore_env(self.key, self.previous.take());
+    }
 }
 
 #[test]

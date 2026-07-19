@@ -110,36 +110,40 @@ pub fn rotate_keys() -> Result<()> {
 mod rotate_key_tests {
     use super::*;
     use serial_test::serial;
+    use std::ffi::OsString;
     use std::fs;
 
-    // rotate_keys uses hardcoded paths (~/.mesh-llm/), so we test the logic
-    // by verifying files are created/deleted in the real location.
-    // This is safe because rotate_keys only deletes key and nostr.nsec.
-    //
-    // Both scenarios (keys present + keys missing) run in a single test to
-    // avoid a race — Rust runs tests in parallel and both would touch the
-    // same files.
+    struct HomeEnvGuard {
+        previous: Option<OsString>,
+    }
+
+    impl HomeEnvGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let previous = std::env::var_os("HOME");
+            unsafe { std::env::set_var("HOME", path) };
+            Self { previous }
+        }
+    }
+
+    impl Drop for HomeEnvGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => unsafe { std::env::set_var("HOME", value) },
+                None => unsafe { std::env::remove_var("HOME") },
+            }
+        }
+    }
 
     #[test]
     #[serial]
     fn rotate_deletes_both_keys_and_handles_missing() {
+        let temp = tempfile::tempdir().expect("temp home");
+        let _home = HomeEnvGuard::set(temp.path());
         let dir = dirs::home_dir().unwrap().join(".mesh-llm");
         fs::create_dir_all(&dir).ok();
 
         let key_path = dir.join("key");
         let nsec_path = dir.join("nostr.nsec");
-
-        // Save originals so we can restore after the test.
-        let orig_key = if key_path.exists() {
-            Some(fs::read(&key_path).unwrap())
-        } else {
-            None
-        };
-        let orig_nsec = if nsec_path.exists() {
-            Some(fs::read(&nsec_path).unwrap())
-        } else {
-            None
-        };
 
         // --- Scenario 1: both keys exist → rotate deletes them ---
         fs::write(&key_path, b"test-node-key").unwrap();
@@ -154,14 +158,6 @@ mod rotate_key_tests {
         // (files were just deleted above, so the directory is clean)
         let result = rotate_keys();
         assert!(result.is_ok(), "rotate should succeed even with no keys");
-
-        // Restore originals.
-        if let Some(k) = orig_key {
-            fs::write(&key_path, k).ok();
-        }
-        if let Some(n) = orig_nsec {
-            fs::write(&nsec_path, n).ok();
-        }
     }
 }
 

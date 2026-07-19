@@ -69,9 +69,13 @@ async fn test_api_search_catalog_returns_canonical_model_refs() {
 #[tokio::test]
 #[serial]
 async fn test_api_search_caps_limit_and_uses_canonical_parameter_sort_name() {
-    let _catalog_guard = crate::models::remote_catalog::set_catalog_entries_for_test(vec![
-        qwen_coder_remote_catalog_entry(),
-    ]);
+    let _catalog_guard =
+        crate::models::remote_catalog::set_catalog_entries_for_test(qwen_coder_catalog_entries(60));
+    let uncapped_matches = crate::models::search_catalog_models("Qwen3-Coder-Next").unwrap();
+    assert!(
+        uncapped_matches.len() > 50,
+        "test catalog must contain more matches than the API cap"
+    );
     let state = build_test_mesh_api().await;
     let (addr, handle) = spawn_management_test_server(state).await;
 
@@ -85,12 +89,24 @@ async fn test_api_search_caps_limit_and_uses_canonical_parameter_sort_name() {
     let payload = json_body(&response);
     assert_eq!(payload["sort"], json!("parameters-desc"));
     let results = payload["results"].as_array().cloned().unwrap_or_default();
-    assert!(
-        results.len() <= 50,
-        "expected catalog response to apply the API limit cap"
-    );
+    assert_eq!(results.len(), 50);
 
     handle.abort();
+}
+
+fn qwen_coder_catalog_entries(count: usize) -> Vec<crate::models::remote_catalog::CatalogEntry> {
+    (0..count)
+        .map(|index| {
+            let mut entry = qwen_coder_remote_catalog_entry();
+            entry.source_repo = format!("Qwen/Qwen3-Coder-Next-GGUF-{index:03}");
+            let mut variant = entry.variants.remove("Qwen3-Coder-Next-Q4_K_M").unwrap();
+            variant.source.repo.clone_from(&entry.source_repo);
+            variant.source.file = Some(format!("Qwen3-Coder-Next-Q4_K_M-{index:03}.gguf"));
+            variant.curated.name = format!("Qwen3-Coder-Next-Q4_K_M-{index:03}");
+            entry.variants.insert(variant.curated.name.clone(), variant);
+            entry
+        })
+        .collect()
 }
 
 #[tokio::test]

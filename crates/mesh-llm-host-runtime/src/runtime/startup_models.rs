@@ -544,6 +544,21 @@ pub(super) fn cli_has_explicit_models(options: &RuntimeOptions) -> bool {
     !options.model.is_empty() || !options.gguf.is_empty()
 }
 
+pub(super) fn resolve_model_parallel_override(
+    model_parallel: Option<usize>,
+    gpu_config: &plugin::GpuConfig,
+) -> Option<usize> {
+    model_parallel.or(gpu_config.parallel)
+}
+
+pub(super) fn resolve_model_parallel_slots(
+    model_parallel: Option<usize>,
+    gpu_config: &plugin::GpuConfig,
+    default_slots: usize,
+) -> usize {
+    resolve_model_parallel_override(model_parallel, gpu_config).unwrap_or(default_slots)
+}
+
 pub(super) fn build_startup_model_specs(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,

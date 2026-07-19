@@ -394,30 +394,26 @@ fn poll_direct_or_downstream_reply(
     prediction_return: &PredictionReturnReceiver,
     expected_replies: &[WireReplyKind],
 ) -> OpenAiResult<StageReply> {
-    let previous_timeout = downstream.read_timeout().map_err(openai_io_error)?;
-    downstream
-        .set_read_timeout(Some(DIRECT_RETURN_FALLBACK_POLL))
-        .map_err(openai_io_error)?;
+    let mut timeout_restore = DirectReturnFallbackTimeout::install(downstream)?;
     let started = Instant::now();
-    loop {
+    let result = loop {
         if let Some(reply) = prediction_return
             .try_recv_one_of(expected_replies)
             .map_err(openai_backend_error)?
         {
-            restore_downstream_read_timeout(downstream, previous_timeout)?;
-            return Ok(reply);
+            break Ok(reply);
         }
         if downstream_reply_available(downstream)? {
-            restore_downstream_read_timeout(downstream, previous_timeout)?;
-            return receive_downstream_stage_reply_one_of(downstream, expected_replies);
+            break receive_downstream_stage_reply_one_of(downstream, expected_replies);
         }
         if started.elapsed() >= DIRECT_RETURN_FALLBACK_TIMEOUT {
-            restore_downstream_read_timeout(downstream, previous_timeout)?;
-            return Err(OpenAiError::backend(format!(
+            break Err(OpenAiError::backend(format!(
                 "timed out waiting for one of {expected_replies:?} from direct return or downstream"
             )));
         }
-    }
+    };
+    timeout_restore.restore()?;
+    result
 }
 
 fn downstream_reply_available(downstream: &TcpStream) -> OpenAiResult<bool> {
@@ -437,13 +433,41 @@ fn downstream_reply_available(downstream: &TcpStream) -> OpenAiResult<bool> {
     }
 }
 
-fn restore_downstream_read_timeout(
-    downstream: &TcpStream,
-    timeout: Option<Duration>,
-) -> OpenAiResult<()> {
-    downstream
-        .set_read_timeout(timeout)
-        .map_err(openai_io_error)
+struct DirectReturnFallbackTimeout {
+    downstream: TcpStream,
+    previous_timeout: Option<Duration>,
+    restored: bool,
+}
+
+impl DirectReturnFallbackTimeout {
+    fn install(downstream: &TcpStream) -> OpenAiResult<Self> {
+        let previous_timeout = downstream.read_timeout().map_err(openai_io_error)?;
+        let restore_stream = downstream.try_clone().map_err(openai_io_error)?;
+        downstream
+            .set_read_timeout(Some(DIRECT_RETURN_FALLBACK_POLL))
+            .map_err(openai_io_error)?;
+        Ok(Self {
+            downstream: restore_stream,
+            previous_timeout,
+            restored: false,
+        })
+    }
+
+    fn restore(&mut self) -> OpenAiResult<()> {
+        self.downstream
+            .set_read_timeout(self.previous_timeout)
+            .map_err(openai_io_error)?;
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for DirectReturnFallbackTimeout {
+    fn drop(&mut self) {
+        if !self.restored {
+            let _ = self.downstream.set_read_timeout(self.previous_timeout);
+        }
+    }
 }
 
 fn receive_downstream_stage_reply_one_of(
@@ -465,6 +489,7 @@ mod tests {
     use super::*;
     use crate::binary_transport::PredictionReturnHub;
     use skippy_protocol::binary::{StageStateHeader, WireActivationDType};
+    use std::net::TcpListener;
     use std::sync::Arc;
 
     #[test]
@@ -541,9 +566,30 @@ mod tests {
     }
 
     fn tcp_pair() -> (TcpStream, TcpStream) {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        connected_stream_pair()
+    }
+
+    fn connected_stream_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         (client, server)
+    }
+
+    #[test]
+    fn direct_return_fallback_timeout_restores_on_drop_after_early_exit() {
+        let (stream, _peer) = connected_stream_pair();
+        let original = Some(Duration::from_millis(123));
+        stream.set_read_timeout(original).unwrap();
+
+        {
+            let _restore = DirectReturnFallbackTimeout::install(&stream).unwrap();
+            assert_eq!(
+                stream.read_timeout().unwrap(),
+                Some(DIRECT_RETURN_FALLBACK_POLL)
+            );
+        }
+
+        assert_eq!(stream.read_timeout().unwrap(), original);
     }
 }

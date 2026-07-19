@@ -420,8 +420,28 @@ pub(crate) fn stamp_release_attestation(args: &[String]) -> DynResult<()> {
 pub(crate) fn inspect_release_attestation(args: &[String]) -> DynResult<()> {
     let parsed = parse_inspect_args(args)?;
     let summary = inspect_release_attestation_summary(&parsed)?;
-    let _emit_json = parsed.json;
-    print_json(&summary)
+    if parsed.json {
+        print_json(&summary)
+    } else {
+        print_release_attestation_summary(&summary);
+        Ok(())
+    }
+}
+
+fn print_release_attestation_summary(summary: &ReleaseAttestationInspectSummary) {
+    println!("release attestation: {}", summary.status);
+    if let Some(version) = summary.version {
+        println!("version: {version}");
+    }
+    if let Some(signer_key_id) = &summary.signer_key_id {
+        println!("signer key: {signer_key_id}");
+    }
+    if let Some(artifact_digest) = &summary.artifact_digest {
+        println!("artifact digest: {artifact_digest}");
+    }
+    if let Some(error) = &summary.error {
+        println!("error: {error}");
+    }
 }
 
 pub(crate) fn inspect_release_attestation_summary(
@@ -616,7 +636,10 @@ fn default_build_id(binary: &Path, artifact_digest: &str) -> String {
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("mesh-llm");
-    format!("{stem}-{}", &artifact_digest[..12])
+    let digest = artifact_digest
+        .strip_prefix("sha256:")
+        .unwrap_or(artifact_digest);
+    format!("{stem}-{}", digest.get(..12).unwrap_or(digest))
 }
 
 fn default_commit() -> String {

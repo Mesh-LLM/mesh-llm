@@ -9,6 +9,7 @@ use skippy_ffi::TensorRole;
 use skippy_runtime::TensorInfo;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 #[test]
 fn artifact_hook_tolerates_a_hook_that_deletes_the_uploaded_file() {
     // The production upload hook (split-model-job.sh) uploads each artifact

@@ -86,9 +86,14 @@ pub(in crate::output) fn tui_list_scrollbar_state(
     scroll_offset: usize,
 ) -> ScrollbarState {
     let visible_rows = viewport_rows.min(row_count);
-    let scroll_positions = row_count.saturating_sub(visible_rows).saturating_add(1);
-    ScrollbarState::new(scroll_positions)
-        .position(scroll_offset.min(scroll_positions.saturating_sub(1)))
+    let max_scroll_offset = row_count.saturating_sub(visible_rows);
+    let clamped_offset = scroll_offset.min(max_scroll_offset);
+    let scrollbar_position = clamped_offset
+        .saturating_mul(row_count.saturating_sub(1))
+        .checked_div(max_scroll_offset)
+        .unwrap_or(0);
+    ScrollbarState::new(row_count)
+        .position(scrollbar_position)
         .viewport_content_length(visible_rows)
 }
 

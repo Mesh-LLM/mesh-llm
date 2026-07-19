@@ -7,9 +7,13 @@ async fn test_management_request_parser_handles_fragmented_post_body() {
         "POST /api/plugins/demo/http/post HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
         body.len()
     );
+    let header_split = headers.find("\r\n\r\n").unwrap() + 2;
+    let body_split = 8;
+    let (server_ready_tx, server_ready_rx) = oneshot::channel();
 
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
+        server_ready_tx.send(()).unwrap();
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
             proxy::read_http_request(&mut stream),
@@ -21,10 +25,21 @@ async fn test_management_request_parser_handles_fragmented_post_body() {
 
     let client = tokio::spawn(async move {
         let mut stream = TcpStream::connect(addr).await.unwrap();
-        stream.write_all(&headers.as_bytes()[..45]).await.unwrap();
-        stream.write_all(&headers.as_bytes()[45..]).await.unwrap();
-        stream.write_all(&body[..8]).await.unwrap();
-        stream.write_all(&body[8..]).await.unwrap();
+        stream.set_nodelay(true).unwrap();
+        server_ready_rx.await.unwrap();
+        stream
+            .write_all(&headers.as_bytes()[..header_split])
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        stream
+            .write_all(&headers.as_bytes()[header_split..])
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        stream.write_all(&body[..body_split]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        stream.write_all(&body[body_split..]).await.unwrap();
         let mut sink = [0u8; 1];
         let _ = stream.read(&mut sink).await;
     });

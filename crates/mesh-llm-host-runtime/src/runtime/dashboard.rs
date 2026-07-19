@@ -146,17 +146,6 @@ pub(super) fn dashboard_inventory_value_for_model<'a, T>(
         .find_map(|key| values_by_name.get(&key))
 }
 
-pub(super) fn dashboard_context_usage_for_model(
-    values_by_name: &HashMap<String, HashMap<DashboardContextUsageSource, u64>>,
-    model_name: &str,
-) -> Option<u64> {
-    dashboard_inventory_model_keys(model_name)
-        .into_iter()
-        .filter_map(|key| values_by_name.get(&key))
-        .flat_map(|source_values| source_values.values().copied())
-        .max()
-}
-
 pub(super) fn dashboard_context_usage_for_process(
     values_by_name: &HashMap<String, HashMap<DashboardContextUsageSource, u64>>,
     process: &api::RuntimeProcessPayload,
@@ -169,7 +158,6 @@ pub(super) fn dashboard_context_usage_for_process(
         .into_iter()
         .filter_map(|key| values_by_name.get(&key))
         .find_map(|source_values| source_values.get(&source).copied())
-        .or_else(|| dashboard_context_usage_for_model(values_by_name, &process.name))
 }
 
 pub(super) fn dashboard_lanes_for_process(
@@ -633,5 +621,61 @@ pub(super) fn dashboard_context_usage_source(
     DashboardContextUsageSource {
         port: handle.port,
         pid: handle.pid(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn runtime_process(name: &str, port: u16, pid: u32) -> api::RuntimeProcessPayload {
+        api::RuntimeProcessPayload {
+            name: name.to_string(),
+            instance_id: None,
+            profile: String::new(),
+            backend: String::new(),
+            status: "ready".to_string(),
+            port,
+            pid,
+            slots: 1,
+            context_length: None,
+        }
+    }
+
+    #[test]
+    fn dashboard_context_usage_for_process_requires_exact_source() {
+        let mut values_by_name = HashMap::new();
+        values_by_name.insert(
+            "model.gguf".to_string(),
+            HashMap::from([(
+                DashboardContextUsageSource {
+                    port: 9001,
+                    pid: 42,
+                },
+                512,
+            )]),
+        );
+
+        assert_eq!(
+            dashboard_context_usage_for_process(
+                &values_by_name,
+                &runtime_process("model.gguf", 9002, 42),
+            ),
+            None
+        );
+        assert_eq!(
+            dashboard_context_usage_for_process(
+                &values_by_name,
+                &runtime_process("model.gguf", 9001, 43),
+            ),
+            None
+        );
+        assert_eq!(
+            dashboard_context_usage_for_process(
+                &values_by_name,
+                &runtime_process("model.gguf", 9001, 42),
+            ),
+            Some(512)
+        );
     }
 }

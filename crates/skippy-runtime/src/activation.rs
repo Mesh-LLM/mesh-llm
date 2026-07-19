@@ -1,3 +1,4 @@
+use std::ffi::c_void;
 use std::ptr;
 
 use anyhow::{Context, Result, anyhow};
@@ -10,6 +11,23 @@ use crate::error::{ensure_ok, free_error};
 use crate::session::StageSession;
 use crate::types::empty_raw_activation_desc;
 use crate::{ActivationFrame, DecodeFrameBatchOutput, NativeMtpDraft, SamplingConfig, Status};
+
+type RawInputFrame = (Option<RawActivationDesc>, *const c_void);
+
+fn raw_input_frame(input: Option<&ActivationFrame>) -> Result<RawInputFrame> {
+    let Some(frame) = input else {
+        return Ok((None, ptr::null()));
+    };
+    frame.validate_payload_len()?;
+    Ok((Some(frame.desc.as_raw()), frame.payload.as_ptr().cast()))
+}
+
+fn raw_input_desc_ptr(input: &RawInputFrame) -> *const RawActivationDesc {
+    input
+        .0
+        .as_ref()
+        .map_or(ptr::null(), |desc| desc as *const RawActivationDesc)
+}
 
 pub struct DecodeFrameBatchRequest<'a> {
     pub session: &'a mut StageSession,
@@ -55,11 +73,9 @@ impl StageSession {
         input: Option<&ActivationFrame>,
         output_capacity: usize,
     ) -> Result<(RawActivationDesc, Vec<u8>)> {
-        let input_desc = input.map(|frame| frame.desc.as_raw());
-        let input_desc_ptr = input_desc
-            .as_ref()
-            .map_or(ptr::null(), |desc| desc as *const RawActivationDesc);
-        let input_payload_ptr = input.map_or(ptr::null(), |frame| frame.payload.as_ptr().cast());
+        let raw_input = raw_input_frame(input)?;
+        let input_desc_ptr = raw_input_desc_ptr(&raw_input);
+        let input_payload_ptr = raw_input.1;
         let mut output_desc = RawActivationDesc {
             version: 0,
             dtype: ActivationDType::Unknown,
@@ -169,11 +185,9 @@ impl StageSession {
         input: Option<&ActivationFrame>,
         output_capacity: usize,
     ) -> Result<(i32, RawActivationDesc, Vec<u8>)> {
-        let input_desc = input.map(|frame| frame.desc.as_raw());
-        let input_desc_ptr = input_desc
-            .as_ref()
-            .map_or(ptr::null(), |desc| desc as *const RawActivationDesc);
-        let input_payload_ptr = input.map_or(ptr::null(), |frame| frame.payload.as_ptr().cast());
+        let raw_input = raw_input_frame(input)?;
+        let input_desc_ptr = raw_input_desc_ptr(&raw_input);
+        let input_payload_ptr = raw_input.1;
         let raw_sampling = sampling.map(SamplingConfig::as_raw);
         let sampling_ptr = raw_sampling
             .as_ref()
@@ -308,11 +322,9 @@ impl StageSession {
         input: Option<&ActivationFrame>,
         output_capacity: usize,
     ) -> Result<(i32, RawActivationDesc, Vec<u8>)> {
-        let input_desc = input.map(|frame| frame.desc.as_raw());
-        let input_desc_ptr = input_desc
-            .as_ref()
-            .map_or(ptr::null(), |desc| desc as *const RawActivationDesc);
-        let input_payload_ptr = input.map_or(ptr::null(), |frame| frame.payload.as_ptr().cast());
+        let raw_input = raw_input_frame(input)?;
+        let input_desc_ptr = raw_input_desc_ptr(&raw_input);
+        let input_payload_ptr = raw_input.1;
         let mut output_desc = RawActivationDesc {
             version: 0,
             dtype: ActivationDType::Unknown,
@@ -369,11 +381,9 @@ impl StageSession {
         output_capacity: usize,
         max_draft_tokens: usize,
     ) -> Result<(i32, Option<NativeMtpDraft>, RawActivationDesc, Vec<u8>)> {
-        let input_desc = input.map(|frame| frame.desc.as_raw());
-        let input_desc_ptr = input_desc
-            .as_ref()
-            .map_or(ptr::null(), |desc| desc as *const RawActivationDesc);
-        let input_payload_ptr = input.map_or(ptr::null(), |frame| frame.payload.as_ptr().cast());
+        let raw_input = raw_input_frame(input)?;
+        let input_desc_ptr = raw_input_desc_ptr(&raw_input);
+        let input_payload_ptr = raw_input.1;
         let mut output_desc = RawActivationDesc {
             version: 0,
             dtype: ActivationDType::Unknown,
@@ -469,25 +479,15 @@ impl StageSession {
                     .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig)
             })
             .collect::<Vec<_>>();
-        let input_descs = requests
+        let input_frames = requests
             .iter()
-            .map(|request| request.input.map(|frame| frame.desc.as_raw()))
-            .collect::<Vec<_>>();
-        let input_desc_ptrs = input_descs
+            .map(|request| raw_input_frame(request.input))
+            .collect::<Result<Vec<_>>>()?;
+        let input_desc_ptrs = input_frames
             .iter()
-            .map(|desc| {
-                desc.as_ref()
-                    .map_or(ptr::null(), |desc| desc as *const RawActivationDesc)
-            })
+            .map(raw_input_desc_ptr)
             .collect::<Vec<_>>();
-        let input_payloads = requests
-            .iter()
-            .map(|request| {
-                request
-                    .input
-                    .map_or(ptr::null(), |frame| frame.payload.as_ptr().cast())
-            })
-            .collect::<Vec<_>>();
+        let input_payloads = input_frames.iter().map(|input| input.1).collect::<Vec<_>>();
         let mut output_descs = vec![empty_raw_activation_desc(); requests.len()];
         let mut output_payloads = output_capacities
             .iter()
@@ -615,11 +615,9 @@ impl StageSession {
         input: Option<&ActivationFrame>,
         output_capacity: usize,
     ) -> Result<(Vec<i32>, RawActivationDesc, Vec<u8>)> {
-        let input_desc = input.map(|frame| frame.desc.as_raw());
-        let input_desc_ptr = input_desc
-            .as_ref()
-            .map_or(ptr::null(), |desc| desc as *const RawActivationDesc);
-        let input_payload_ptr = input.map_or(ptr::null(), |frame| frame.payload.as_ptr().cast());
+        let raw_input = raw_input_frame(input)?;
+        let input_desc_ptr = raw_input_desc_ptr(&raw_input);
+        let input_payload_ptr = raw_input.1;
         let mut output_desc = RawActivationDesc {
             version: 0,
             dtype: ActivationDType::Unknown,
@@ -748,5 +746,55 @@ impl StageSession {
         };
         ensure_ok(status, error)?;
         Ok(predicted)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::raw_input_frame;
+    use crate::{ActivationDesc, ActivationFrame, RuntimeActivationDType, RuntimeActivationLayout};
+
+    fn activation_desc(payload_bytes: u64) -> ActivationDesc {
+        ActivationDesc {
+            version: 1,
+            dtype: RuntimeActivationDType::F32,
+            layout: RuntimeActivationLayout::TokenMajor,
+            producer_stage_index: 0,
+            layer_start: 0,
+            layer_end: 1,
+            token_count: 1,
+            sequence_count: 1,
+            payload_bytes,
+            flags: 0,
+        }
+    }
+
+    #[test]
+    fn raw_input_frame_rejects_payload_len_mismatch() {
+        let frame = ActivationFrame {
+            desc: activation_desc(2),
+            payload: vec![1],
+        };
+
+        let error = raw_input_frame(Some(&frame)).unwrap_err().to_string();
+
+        assert!(
+            error.contains("activation payload length 1 does not match descriptor payload_bytes 2"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn raw_input_frame_accepts_matching_payload_len() -> anyhow::Result<()> {
+        let frame = ActivationFrame {
+            desc: activation_desc(1),
+            payload: vec![1],
+        };
+
+        let (desc, payload) = raw_input_frame(Some(&frame))?;
+
+        assert_eq!(desc.unwrap().payload_bytes, 1);
+        assert_eq!(payload, frame.payload.as_ptr().cast());
+        Ok(())
     }
 }

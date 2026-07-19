@@ -245,14 +245,13 @@ pub async fn publish_watchdog(
                     publish_loop(
                         node,
                         keys,
-                        PublishLoopConfig {
+                        watchdog_takeover_publish_config(
                             relays,
-                            name: mesh_name,
+                            mesh_name,
                             region,
-                            max_clients: None,
-                            interval_secs: 60,
+                            check_interval_secs,
                             status_tx,
-                        },
+                        ),
                     )
                     .await;
                     return;
@@ -421,6 +420,23 @@ async fn load_watchdog_publish_keys(check_interval_secs: u64) -> Option<Keys> {
             tokio::time::sleep(Duration::from_secs(check_interval_secs)).await;
             None
         }
+    }
+}
+
+fn watchdog_takeover_publish_config(
+    relays: Vec<String>,
+    name: Option<String>,
+    region: Option<String>,
+    interval_secs: u64,
+    status_tx: Option<tokio::sync::watch::Sender<Option<PublishStateUpdate>>>,
+) -> PublishLoopConfig {
+    PublishLoopConfig {
+        relays,
+        name,
+        region,
+        max_clients: None,
+        interval_secs,
+        status_tx,
     }
 }
 
@@ -635,4 +651,26 @@ async fn update_delisted_state(
         *delisted = false;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watchdog_takeover_publish_config_uses_configured_interval() {
+        let config = watchdog_takeover_publish_config(
+            vec!["wss://relay.example".to_string()],
+            Some("mesh".to_string()),
+            Some("iad".to_string()),
+            17,
+            None,
+        );
+
+        assert_eq!(config.interval_secs, 17);
+        assert_eq!(config.name.as_deref(), Some("mesh"));
+        assert_eq!(config.region.as_deref(), Some("iad"));
+        assert_eq!(config.relays, vec!["wss://relay.example".to_string()]);
+        assert_eq!(config.max_clients, None);
+    }
 }

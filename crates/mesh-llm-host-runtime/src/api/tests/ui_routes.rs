@@ -52,11 +52,11 @@ async fn lan_details_uses_same_publication_metadata_as_mdns_advertisement() {
 #[tokio::test]
 async fn status_payload_populates_local_instances_from_scanner() {
     use crate::runtime::instance::LocalInstanceSnapshot;
+    use crate::runtime_data::RuntimeDataCollector;
     use std::path::PathBuf;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
 
-    let snapshots = vec![
+    let collector = RuntimeDataCollector::new();
+    collector.replace_local_instances_snapshot(vec![
         LocalInstanceSnapshot {
             pid: 1234,
             api_port: Some(3131),
@@ -73,22 +73,9 @@ async fn status_payload_populates_local_instances_from_scanner() {
             runtime_dir: PathBuf::from("/tmp/b"),
             is_self: false,
         },
-    ];
-
-    let shared: Arc<Mutex<Vec<LocalInstanceSnapshot>>> = Arc::new(Mutex::new(snapshots));
-    let result: Vec<LocalInstance> = {
-        let s = shared.lock().await;
-        s.iter()
-            .map(|snap| LocalInstance {
-                pid: snap.pid,
-                api_port: snap.api_port,
-                version: snap.version.clone(),
-                started_at_unix: snap.started_at_unix,
-                runtime_dir: snap.runtime_dir.to_string_lossy().to_string(),
-                is_self: snap.is_self,
-            })
-            .collect()
-    };
+    ]);
+    let snapshot = collector.build_status_view(status_view_input(&collector));
+    let result = snapshot.local_instances;
 
     assert_eq!(result.len(), 2);
     assert!(result.iter().any(|i| i.is_self && i.pid == 1234));
@@ -97,37 +84,9 @@ async fn status_payload_populates_local_instances_from_scanner() {
 
 #[tokio::test]
 async fn status_payload_safety_net_adds_self_when_empty() {
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
-    let shared: Arc<Mutex<Vec<crate::runtime::instance::LocalInstanceSnapshot>>> =
-        Arc::new(Mutex::new(vec![]));
-
-    let mut instances: Vec<LocalInstance> = {
-        let s = shared.lock().await;
-        s.iter()
-            .map(|snap| LocalInstance {
-                pid: snap.pid,
-                api_port: snap.api_port,
-                version: snap.version.clone(),
-                started_at_unix: snap.started_at_unix,
-                runtime_dir: snap.runtime_dir.to_string_lossy().to_string(),
-                is_self: snap.is_self,
-            })
-            .collect()
-    };
-
-    // Simulate the safety net logic
-    if instances.is_empty() {
-        instances.push(LocalInstance {
-            pid: std::process::id(),
-            api_port: Some(3131),
-            version: Some(MESH_LLM_BUILD_VERSION.to_string()),
-            started_at_unix: 0,
-            runtime_dir: String::new(),
-            is_self: true,
-        });
-    }
+    let collector = crate::runtime_data::RuntimeDataCollector::new();
+    let snapshot = collector.build_status_view(status_view_input(&collector));
+    let instances = snapshot.local_instances;
 
     assert_eq!(instances.len(), 1);
     assert!(instances[0].is_self);
@@ -137,6 +96,57 @@ async fn status_payload_safety_net_adds_self_when_empty() {
         instances[0].version,
         Some(MESH_LLM_BUILD_VERSION.to_string())
     );
+}
+
+fn status_view_input(
+    collector: &crate::runtime_data::RuntimeDataCollector,
+) -> crate::runtime_data::StatusViewInput {
+    crate::runtime_data::StatusViewInput {
+        version: MESH_LLM_BUILD_VERSION.to_string(),
+        latest_version: None,
+        node_id: "node-1".to_string(),
+        owner: crate::crypto::OwnershipSummary::default(),
+        release_attestation: crate::ReleaseAttestationSummary::default(),
+        token: "invite-token".to_string(),
+        is_host: false,
+        is_client: false,
+        llama_ready: false,
+        model_name: "test-model".to_string(),
+        models: Vec::new(),
+        available_models: Vec::new(),
+        requested_models: Vec::new(),
+        serving_models: Vec::new(),
+        hosted_models: Vec::new(),
+        draft_name: None,
+        api_port: 3131,
+        inflight_requests: 0,
+        mesh_id: None,
+        mesh_name: None,
+        mesh_discovery_mode: "nostr".to_string(),
+        discovery_scope: "public".to_string(),
+        discovery_source: "nostr-relay".to_string(),
+        nostr_discovery: false,
+        publication_state: "private".to_string(),
+        local_processes: Vec::new(),
+        peers: Vec::new(),
+        wakeable_nodes: Vec::new(),
+        routing_affinity: crate::network::affinity::AffinityStatsSnapshot::default(),
+        hardware: collector.build_hardware_view(
+            crate::runtime_data::HardwareViewInput {
+                gpu_name: None,
+                gpu_vram: None,
+                gpu_reserved_bytes: None,
+                gpu_mem_bandwidth_gbps: None,
+                gpu_compute_tflops_fp32: None,
+                gpu_compute_tflops_fp16: None,
+                my_hostname: None,
+                my_is_soc: None,
+                my_vram_gb: 0.0,
+                model_size_gb: 0.0,
+                first_joined_mesh_ts: None,
+            },
+        ),
+    }
 }
 
 #[test]
@@ -221,18 +231,9 @@ async fn direct_configuration_deep_link_serves_embedded_ui_index() {
 
 #[test]
 fn headless_status_command_works_against_management_api() {
-    assert!(
-        !is_ui_only_route("/api/status"),
-        "/api/status must not be blocked in headless mode"
-    );
-    assert!(
-        !is_ui_only_route("/api/events"),
-        "/api/events must not be blocked in headless mode"
-    );
-    assert!(
-        !is_ui_only_route("/api/discover"),
-        "/api/discover must not be blocked in headless mode"
-    );
+    for path in ["/api/status", "/api/events", "/api/discover"] {
+        assert!(!is_ui_only_route(path), "{path} must not be blocked");
+    }
 }
 
 #[test]

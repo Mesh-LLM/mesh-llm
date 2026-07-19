@@ -767,10 +767,11 @@ Subcommands:
 - `auth revoke-node`: revoke a node certificate or node ID in the local trust
   store.
 - `auth rotate-owner`: rotate the owner keystore identity.
-- `auth trust add <OWNER_ID>`: add an owner to the local trust allowlist.
-- `auth trust remove <OWNER_ID>`: remove an owner from the local trust
-  allowlist.
-- `auth trust list`: show the current trust store.
+- `auth trust add <OWNER_ID> [--label <LABEL>] [--trust-store <PATH>]`: add an
+  owner to the local trust allowlist.
+- `auth trust remove <OWNER_ID> [--trust-store <PATH>]`: remove an owner from
+  the local trust allowlist.
+- `auth trust list [--trust-store <PATH>]`: show the current trust store.
 
 `auth init` switches:
 
@@ -795,8 +796,8 @@ Subcommands:
 `auth trust` switches:
 
 - `--trust-store <PATH>`: use a specific trust store instead of the default.
-- `auth trust add --label <LABEL>`: attach a human-readable label to a trusted
-  owner.
+- `auth trust add <OWNER_ID> --label <LABEL>`: attach a human-readable label to
+  a trusted owner.
 
 ## Model reference formats
 

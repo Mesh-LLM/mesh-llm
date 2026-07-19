@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::path::Path;
 use std::ptr;
 
@@ -9,6 +9,7 @@ use skippy_ffi::{
 
 use crate::TensorInfo;
 use crate::error::ensure_ok;
+use crate::path_cstring::path_to_cstring;
 
 pub struct ModelInfo {
     raw: *mut RawModelInfo,
@@ -21,8 +22,7 @@ pub struct SlicePlan {
 impl ModelInfo {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let path = CString::new(path.to_string_lossy().as_bytes())
-            .context("model path contains an interior NUL byte")?;
+        let path = path_to_cstring(path, "model path")?;
         let mut raw = ptr::null_mut();
         let mut error = ptr::null_mut();
         let status =
@@ -101,8 +101,7 @@ impl ModelInfo {
     ) -> Result<()> {
         let stage_index = i32::try_from(stage_index).context("stage_index exceeds i32")?;
         let output_path = output_path.as_ref();
-        let output_path = CString::new(output_path.to_string_lossy().as_bytes())
-            .context("output path contains an interior NUL byte")?;
+        let output_path = path_to_cstring(output_path, "output path")?;
         let mut error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_write_slice_gguf(
@@ -172,17 +171,13 @@ pub fn write_gguf_from_parts(
 
     let input_paths = input_paths
         .iter()
-        .map(|path| {
-            CString::new(path.as_ref().to_string_lossy().as_bytes())
-                .context("input path contains an interior NUL byte")
-        })
+        .map(|path| path_to_cstring(path.as_ref(), "input path"))
         .collect::<Result<Vec<_>>>()?;
     let input_ptrs = input_paths
         .iter()
         .map(|path| path.as_ptr())
         .collect::<Vec<_>>();
-    let output_path = CString::new(output_path.as_ref().to_string_lossy().as_bytes())
-        .context("output path contains an interior NUL byte")?;
+    let output_path = path_to_cstring(output_path.as_ref(), "output path")?;
     let mut error = ptr::null_mut();
     let status = unsafe {
         skippy_ffi::skippy_write_gguf_from_parts(

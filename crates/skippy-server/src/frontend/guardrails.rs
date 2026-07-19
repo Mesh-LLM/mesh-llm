@@ -152,10 +152,9 @@ fn streaming_mode_label(mode: StreamingGuardrailMode) -> &'static str {
 }
 
 fn retry_exhaustion_label(policy: &GuardrailPolicy) -> &'static str {
-    match format!("{:?}", policy.retry_exhaustion_mode).as_str() {
-        "Error" => "error",
-        "PassLastText" => "pass_last_text",
-        _ => "unknown",
+    match policy.retry_exhaustion_mode {
+        RetryExhaustionMode::Error => "error",
+        RetryExhaustionMode::PassLastText => "pass_last_text",
     }
 }
 

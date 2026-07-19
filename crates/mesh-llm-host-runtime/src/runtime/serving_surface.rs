@@ -108,7 +108,14 @@ pub(super) fn startup_launch_plan(
                     .map(|gpu| gpu.backend_device.clone())
                     .or_else(|| model.gpu_id.clone())
                     .or_else(|| default_backend_device.clone()),
-                slots: model.parallel.or(default_parallel),
+                slots: Some(super::startup_models::resolve_model_parallel_slots(
+                    model.parallel,
+                    &plugin::GpuConfig {
+                        assignment: plugin::GpuAssignment::Auto,
+                        parallel: default_parallel,
+                    },
+                    4,
+                )),
                 quantization: None,
                 ctx_size: model.ctx_size,
                 ctx_used_tokens: None,
@@ -1114,7 +1121,10 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
             n_batch: extra_model.n_batch,
             n_ubatch: extra_model.n_ubatch,
             flash_attention: extra_model.flash_attention,
-            parallel_override: extra_model.parallel.or(ctx.config.gpu.parallel),
+            parallel_override: super::startup_models::resolve_model_parallel_override(
+                extra_model.parallel,
+                &ctx.config.gpu,
+            ),
             resource_planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             split: ctx.options.split,

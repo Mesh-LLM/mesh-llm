@@ -229,9 +229,7 @@ mod scoring_tests {
     }
 
     #[test]
-    fn public_listing_json_does_not_expose_control_endpoint_data() {
-        let control_endpoint =
-            "control://mesh-llm-control/1?token=owner-only-endpoint-never-public";
+    fn public_listing_json_uses_public_discovery_schema() {
         let mesh = make_mesh(
             Some("mesh-llm"),
             Some("public-mesh"),
@@ -242,25 +240,48 @@ mod scoring_tests {
             0,
         );
 
-        let listing_json = serde_json::to_string(&mesh.listing).expect("listing must serialize");
-        let discovered_json = serde_json::to_string(&mesh).expect("discovered mesh must serialize");
+        let listing_json = serde_json::to_value(&mesh.listing).expect("listing must serialize");
+        let discovered_json = serde_json::to_value(&mesh).expect("discovered mesh must serialize");
+        let listing = listing_json.as_object().expect("listing JSON object");
+        let discovered = discovered_json.as_object().expect("discovered JSON object");
 
-        assert!(
-            !listing_json.contains(control_endpoint),
-            "published MeshListing JSON must not leak control endpoint data"
+        let listing_keys = listing
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        let discovered_keys = discovered
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            listing_keys,
+            std::collections::BTreeSet::from([
+                "invite_token",
+                "serving",
+                "wanted",
+                "on_disk",
+                "total_vram_bytes",
+                "node_count",
+                "client_count",
+                "max_clients",
+                "name",
+                "mesh_id",
+            ])
         );
-        assert!(
-            !discovered_json.contains(control_endpoint),
-            "discovered public listing JSON must not leak control endpoint data"
+        assert_eq!(
+            discovered_keys,
+            std::collections::BTreeSet::from([
+                "listing",
+                "publisher_npub",
+                "published_at",
+                "expires_at",
+            ])
         );
-        assert!(
-            !listing_json.contains("mesh-llm-control/1"),
-            "published MeshListing JSON must not mention the owner-control ALPN"
-        );
-        assert!(
-            !discovered_json.contains("owner-only-endpoint"),
-            "public discovery JSON must not expose owner-only endpoint tokens"
-        );
+        assert!(!listing.contains_key("control_endpoint"));
+        assert!(!listing.contains_key("owner_control_endpoint"));
+        assert!(!discovered.contains_key("control_endpoint"));
+        assert!(!discovered.contains_key("owner_control_endpoint"));
     }
 
     #[test]
@@ -383,6 +404,28 @@ mod scoring_tests {
 #[cfg(test)]
 mod smart_auto_tests {
     use super::*;
+    use std::ffi::OsString;
+
+    struct HomeEnvGuard {
+        previous: Option<OsString>,
+    }
+
+    impl HomeEnvGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let previous = std::env::var_os("HOME");
+            unsafe { std::env::set_var("HOME", path) };
+            Self { previous }
+        }
+    }
+
+    impl Drop for HomeEnvGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => unsafe { std::env::set_var("HOME", value) },
+                None => unsafe { std::env::remove_var("HOME") },
+            }
+        }
+    }
 
     fn make_mesh(
         name: Option<&str>,
@@ -586,20 +629,11 @@ mod smart_auto_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn smart_auto_sticky_preference() {
-        // Save a fake last-mesh
-        let dir = dirs::home_dir().unwrap().join(".mesh-llm");
-        let path = dir.join("last-mesh");
-        let had_file = path.exists();
-        let old_content = if had_file {
-            std::fs::read_to_string(&path).ok()
-        } else {
-            None
-        };
-
-        // Write our test mesh_id
-        std::fs::create_dir_all(&dir).ok();
-        std::fs::write(&path, "sticky-mesh").ok();
+        let temp = tempfile::tempdir().expect("temp home");
+        let _home = HomeEnvGuard::set(temp.path());
+        crate::mesh::save_last_mesh_id("sticky-mesh").expect("save last mesh id");
 
         let meshes = vec![
             make_mesh(None, "other", &["Qwen3-8B-Q4_K_M"], 3, 24_000_000_000, 0, 0),
@@ -614,15 +648,6 @@ mod smart_auto_tests {
             ),
         ];
         let result = smart_auto(&meshes, 8.0, None);
-
-        // Restore
-        if let Some(old) = old_content {
-            std::fs::write(&path, old).ok();
-        } else if had_file {
-            // shouldn't happen but be safe
-        } else {
-            std::fs::remove_file(&path).ok();
-        }
 
         match result {
             AutoDecision::Join { candidates } => {

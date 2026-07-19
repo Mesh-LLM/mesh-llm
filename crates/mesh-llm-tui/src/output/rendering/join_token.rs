@@ -318,8 +318,7 @@ pub(in crate::output) fn join_token_visible_slice(
     if hidden_left {
         visible.push('…');
     }
-    let content_offset = scroll_offset.saturating_add(usize::from(hidden_left));
-    visible.extend(token.chars().skip(content_offset).take(visible_width));
+    visible.extend(token.chars().skip(scroll_offset).take(visible_width));
     if hidden_right {
         visible.push('…');
     }

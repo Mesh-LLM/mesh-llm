@@ -6,6 +6,7 @@ use skippy_ffi::Model as RawModel;
 
 use crate::error::{ensure_ok, free_error};
 use crate::native::StageModel;
+use crate::path_cstring::path_to_cstring;
 use crate::session::StageSession;
 use crate::{
     ActivationDesc, ActivationFrame, MediaInput, MediaPrefill, MediaPrefillChunkFrame,
@@ -30,8 +31,7 @@ unsafe impl Send for MediaProjector {}
 
 impl MediaProjector {
     pub(crate) fn open(path: &str, model: *mut RawModel) -> Result<Self> {
-        let path = CString::new(path.as_bytes())
-            .context("projector path contains an interior NUL byte")?;
+        let path = path_to_cstring(std::path::Path::new(path), "projector path")?;
         let raw_model = unsafe { skippy_ffi::skippy_model_llama_model(model) };
         if raw_model.is_null() {
             return Err(anyhow!("model did not expose a llama_model handle"));

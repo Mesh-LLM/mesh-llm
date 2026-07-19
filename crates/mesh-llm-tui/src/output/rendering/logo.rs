@@ -418,9 +418,12 @@ pub(in crate::output) fn tui_logo_line_has_visible_content(line: &Line<'static>)
 
 pub(in crate::output) fn loading_progress_bar(ratio: f64, width: usize) -> String {
     let width = width.clamp(8, 40);
-    let filled = (ratio.clamp(0.0, 1.0) * width as f64)
-        .round()
-        .clamp(1.0, width as f64) as usize;
+    let ratio = ratio.clamp(0.0, 1.0);
+    let filled = if ratio == 0.0 {
+        0
+    } else {
+        (ratio * width as f64).round().clamp(1.0, width as f64) as usize
+    };
     format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
 }
 

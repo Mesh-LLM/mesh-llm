@@ -952,9 +952,10 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(
         ready_console_port,
     );
     let startup_load_gate = Arc::new(tokio::sync::Mutex::new(()));
-    let primary_parallel_override = primary_startup_model
-        .and_then(|m| m.parallel)
-        .or(config.gpu.parallel);
+    let primary_parallel_override = super::startup_models::resolve_model_parallel_override(
+        primary_startup_model.and_then(|m| m.parallel),
+        &config.gpu,
+    );
     let resource_planning_profile = runtime_resource_planning_profile(options);
     let console_state_for_election = console_state.cloned();
     let interactive_console_state = console_state.cloned();

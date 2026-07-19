@@ -8,6 +8,7 @@ use skippy_ffi::{ChatMessage as RawChatMessage, Model as RawModel};
 use crate::error::{ensure_ok, free_error};
 use crate::logging::write_native_log_note;
 use crate::media::MediaProjector;
+use crate::path_cstring::path_to_cstring;
 use crate::runtime_events;
 use crate::session::StageSession;
 use crate::{
@@ -75,8 +76,7 @@ impl StageModel {
             path.display(),
             config.native_log_summary()
         ));
-        let path = CString::new(path.to_string_lossy().as_bytes())
-            .context("model path contains an interior NUL byte")?;
+        let path = path_to_cstring(path, "model path")?;
         let raw_config = config.as_raw()?;
         #[cfg(not(test))]
         let (raw, status, error) = runtime_events::run_model_open(
@@ -157,10 +157,7 @@ impl StageModel {
         ));
         let paths = paths
             .iter()
-            .map(|path| {
-                CString::new(path.as_ref().to_string_lossy().as_bytes())
-                    .context("part path contains an interior NUL byte")
-            })
+            .map(|path| path_to_cstring(path.as_ref(), "part path"))
             .collect::<Result<Vec<_>>>()?;
         let path_ptrs = paths.iter().map(|path| path.as_ptr()).collect::<Vec<_>>();
         let raw_config = config.as_raw()?;
@@ -272,8 +269,7 @@ impl StageModel {
             path.display(),
             config.native_log_summary()
         ));
-        let path = CString::new(path.to_string_lossy().as_bytes())
-            .context("MTP draft model path contains an interior NUL byte")?;
+        let path = path_to_cstring(path, "MTP draft model path")?;
         let raw_config = config.as_raw()?;
         let mut error = ptr::null_mut();
         let status = unsafe { attach_symbol(self.raw, path.as_ptr(), &raw_config.raw, &mut error) };

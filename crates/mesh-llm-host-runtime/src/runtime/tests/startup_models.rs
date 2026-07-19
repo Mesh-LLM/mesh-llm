@@ -307,10 +307,6 @@ fn synthetic_gpu(index: usize, stable_id: Option<&str>, backend_device: Option<&
 #[serial_test::serial]
 #[ignore = "downloads ~800MB from HuggingFace and depends on exact snapshot hash"]
 async fn resolve_model_accepts_short_catalog_name_from_hf_cache() {
-    let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
-    let prev_hf_home = std::env::var_os("HF_HOME");
-    let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
-
     let cache_root = std::env::temp_dir().join(format!(
         "mesh-llm-short-name-cache-{}",
         std::time::SystemTime::now()
@@ -319,12 +315,9 @@ async fn resolve_model_accepts_short_catalog_name_from_hf_cache() {
             .as_nanos()
     ));
     std::fs::create_dir_all(&cache_root).unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HF_HUB_CACHE", &cache_root) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("HF_HOME") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+    let _hub_cache = EnvVarGuard::set_path("HF_HUB_CACHE", &cache_root);
+    let _hf_home = EnvVarGuard::remove("HF_HOME");
+    let _xdg_cache_home = EnvVarGuard::remove("XDG_CACHE_HOME");
 
     let repo_id = "bartowski/Llama-3.2-1B-Instruct-GGUF";
     let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
@@ -341,18 +334,11 @@ async fn resolve_model_accepts_short_catalog_name_from_hf_cache() {
     assert_eq!(resolved, model_path);
 
     let _ = std::fs::remove_dir_all(&cache_root);
-    restore_env("HF_HUB_CACHE", prev_hub_cache);
-    restore_env("HF_HOME", prev_hf_home);
-    restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
 #[tokio::test]
 #[serial_test::serial]
 async fn resolve_model_accepts_non_catalog_name_from_hf_cache() {
-    let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
-    let prev_hf_home = std::env::var_os("HF_HOME");
-    let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
-
     let cache_root = std::env::temp_dir().join(format!(
         "mesh-llm-non-catalog-cache-{}",
         std::time::SystemTime::now()
@@ -361,12 +347,9 @@ async fn resolve_model_accepts_non_catalog_name_from_hf_cache() {
             .as_nanos()
     ));
     std::fs::create_dir_all(&cache_root).unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HF_HUB_CACHE", &cache_root) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("HF_HOME") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+    let _hub_cache = EnvVarGuard::set_path("HF_HUB_CACHE", &cache_root);
+    let _hf_home = EnvVarGuard::remove("HF_HOME");
+    let _xdg_cache_home = EnvVarGuard::remove("XDG_CACHE_HOME");
 
     let repo_id = "someone/Custom-GGUF";
     let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
@@ -388,9 +371,41 @@ async fn resolve_model_accepts_non_catalog_name_from_hf_cache() {
     assert_eq!(resolved_by_filename, model_path);
 
     let _ = std::fs::remove_dir_all(&cache_root);
-    restore_env("HF_HUB_CACHE", prev_hub_cache);
-    restore_env("HF_HOME", prev_hf_home);
-    restore_env("XDG_CACHE_HOME", prev_xdg);
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set_path(key: &'static str, value: &Path) -> Self {
+        let guard = Self {
+            key,
+            previous: std::env::var_os(key),
+        };
+        // SAFETY: these serial tests mutate the process environment before
+        // model resolution and restore it via Drop before the next test.
+        unsafe { std::env::set_var(key, value) };
+        guard
+    }
+
+    fn remove(key: &'static str) -> Self {
+        let guard = Self {
+            key,
+            previous: std::env::var_os(key),
+        };
+        // SAFETY: these serial tests mutate the process environment before
+        // model resolution and restore it via Drop before the next test.
+        unsafe { std::env::remove_var(key) };
+        guard
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        restore_env(self.key, self.previous.take());
+    }
 }
 
 #[test]
@@ -1228,13 +1243,14 @@ fn per_model_parallel_override_applied_when_no_global() {
     }];
     let gpu_config = GpuConfig::default(); // no parallel set
 
-    // Simulate load handler lookup by spec name
-    let slots = config_models
-        .iter()
-        .find(|m| m.model == "my-model")
-        .and_then(|m| m.parallel)
-        .or(gpu_config.parallel)
-        .unwrap_or(4);
+    let slots = resolve_model_parallel_slots(
+        config_models
+            .iter()
+            .find(|model| model.model == "my-model")
+            .and_then(|model| model.parallel),
+        &gpu_config,
+        4,
+    );
 
     assert_eq!(
         slots, 1,
@@ -1276,25 +1292,27 @@ fn per_model_parallel_applies_to_correct_model() {
     ];
     let gpu_config = GpuConfig::default();
 
-    // Model A: falls back to default (no model entry match → default 4)
-    let slots_a = config_models
-        .iter()
-        .find(|m| m.model == "model-a")
-        .and_then(|m| m.parallel)
-        .or(gpu_config.parallel)
-        .unwrap_or(4);
+    let slots_a = resolve_model_parallel_slots(
+        config_models
+            .iter()
+            .find(|model| model.model == "model-a")
+            .and_then(|model| model.parallel),
+        &gpu_config,
+        4,
+    );
     assert_eq!(
         slots_a, 4,
         "model-a should get default 4 when it has no parallel entry"
     );
 
-    // Model B: gets its own explicit value
-    let slots_b = config_models
-        .iter()
-        .find(|m| m.model == "model-b")
-        .and_then(|m| m.parallel)
-        .or(gpu_config.parallel)
-        .unwrap_or(4);
+    let slots_b = resolve_model_parallel_slots(
+        config_models
+            .iter()
+            .find(|model| model.model == "model-b")
+            .and_then(|model| model.parallel),
+        &gpu_config,
+        4,
+    );
     assert_eq!(slots_b, 3, "model-b should get its own parallel=3 override");
 }
 
@@ -1336,25 +1354,27 @@ fn per_model_parallel_fallback_to_global_for_missing_entry() {
         parallel: Some(3), // global default
     };
 
-    // First model: no per-model value → falls back to gpu.parallel = 3
-    let slots_first = config_models
-        .iter()
-        .find(|m| m.model == "first")
-        .and_then(|m| m.parallel)
-        .or(gpu_config.parallel)
-        .unwrap_or(4);
+    let slots_first = resolve_model_parallel_slots(
+        config_models
+            .iter()
+            .find(|model| model.model == "first")
+            .and_then(|model| model.parallel),
+        &gpu_config,
+        4,
+    );
     assert_eq!(
         slots_first, 3,
         "missing model parallel should fall back to gpu.parallel=3"
     );
 
-    // Second model: its own value wins over global
-    let slots_second = config_models
-        .iter()
-        .find(|m| m.model == "second")
-        .and_then(|m| m.parallel)
-        .or(gpu_config.parallel)
-        .unwrap_or(4);
+    let slots_second = resolve_model_parallel_slots(
+        config_models
+            .iter()
+            .find(|model| model.model == "second")
+            .and_then(|model| model.parallel),
+        &gpu_config,
+        4,
+    );
     assert_eq!(
         slots_second, 2,
         "model-specific parallel=2 should win over global gpu.parallel=3"

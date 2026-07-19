@@ -883,6 +883,25 @@ pub fn infer_family_capability(
     let normalized = model_identity.to_ascii_lowercase();
     let compact = normalized.replace(['_', '-', '/', ' '], "");
 
+    infer_granite_gemma_capability(&compact, layer_count, activation_width)
+        .or_else(|| {
+            infer_falcon_minimax_glm_deepseek_capability(&compact, layer_count, activation_width)
+        })
+        .or_else(|| infer_mistral_olmo_llama_capability(&compact, layer_count, activation_width))
+        .or_else(|| infer_qwen_next_capability(&compact, layer_count, activation_width))
+        .or_else(|| infer_recurrent_capability(&compact, layer_count, activation_width))
+        .or_else(|| infer_qwen_capability(&compact, layer_count, activation_width))
+        .or_else(|| infer_remaining_family_capability(&compact, layer_count, activation_width))
+        .or_else(|| {
+            infer_stage_runtime_fallback_capability(&compact, layer_count, activation_width)
+        })
+}
+
+fn infer_granite_gemma_capability(
+    compact: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> Option<FamilyCapabilityRecord> {
     if compact.contains("granitehybrid") {
         return Some(recurrent_family_capability(
             "granite_hybrid",
@@ -941,6 +960,15 @@ pub fn infer_family_capability(
             ExactStateMobility::Accepted,
         ));
     }
+
+    None
+}
+
+fn infer_falcon_minimax_glm_deepseek_capability(
+    compact: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> Option<FamilyCapabilityRecord> {
     if compact.contains("falconh1") {
         return Some(falcon_h1_capability(layer_count, activation_width));
     }
@@ -977,6 +1005,15 @@ pub fn infer_family_capability(
     if compact.contains("deepseekv3") || compact.contains("deepseek3") {
         return Some(deepseek3_capability(layer_count, activation_width));
     }
+
+    None
+}
+
+fn infer_mistral_olmo_llama_capability(
+    compact: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> Option<FamilyCapabilityRecord> {
     if compact.contains("mistral4") {
         return Some(dense_family_capability(
             "mistral4",
@@ -1019,6 +1056,15 @@ pub fn infer_family_capability(
     if compact.contains("llama") {
         return Some(llama_capability(layer_count, activation_width));
     }
+
+    None
+}
+
+fn infer_qwen_next_capability(
+    compact: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> Option<FamilyCapabilityRecord> {
     if compact.contains("qwen3next") || compact.contains("qwen3codernext") {
         return Some(qwen3next_capability(
             layer_count,
@@ -1029,6 +1075,15 @@ pub fn infer_family_capability(
             }],
         ));
     }
+
+    None
+}
+
+fn infer_recurrent_capability(
+    compact: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> Option<FamilyCapabilityRecord> {
     if compact.contains("kimilinear") {
         return Some(kimi_linear_capability(layer_count, activation_width));
     }
@@ -1080,6 +1135,15 @@ pub fn infer_family_capability(
     if compact.contains("rwkv7") {
         return Some(rwkv7_capability(layer_count, activation_width));
     }
+
+    None
+}
+
+fn infer_qwen_capability(
+    compact: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> Option<FamilyCapabilityRecord> {
     if compact.contains("qwen2moe") {
         return Some(qwen2moe_capability(layer_count, activation_width));
     }
@@ -1097,7 +1161,7 @@ pub fn infer_family_capability(
             activation_width,
         ));
     }
-    if compact.contains("qwen3moe") || is_qwen3_active_parameter_moe(&compact) {
+    if compact.contains("qwen3moe") || is_qwen3_active_parameter_moe(compact) {
         return Some(qwen3moe_capability(layer_count, activation_width));
     }
     if compact.contains("qwen2vl") {
@@ -1139,6 +1203,27 @@ pub fn infer_family_capability(
             ExactStateMobility::Accepted,
         ));
     }
+
+    None
+}
+
+fn infer_remaining_family_capability(
+    compact: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> Option<FamilyCapabilityRecord> {
+    infer_hunyuan_phi_gpt_capability(compact, layer_count, activation_width)
+        .or_else(|| infer_mid_remaining_capability(compact, layer_count, activation_width))
+        .or_else(|| {
+            infer_exaone_stable_starcoder_capability(compact, layer_count, activation_width)
+        })
+}
+
+fn infer_hunyuan_phi_gpt_capability(
+    compact: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> Option<FamilyCapabilityRecord> {
     if compact.contains("hunyuanmoe") {
         return Some(dense_family_capability(
             "hunyuan_moe",
@@ -1211,6 +1296,15 @@ pub fn infer_family_capability(
             ExactStateMobility::Accepted,
         ));
     }
+
+    None
+}
+
+fn infer_mid_remaining_capability(
+    compact: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> Option<FamilyCapabilityRecord> {
     if compact.contains("mpt") {
         return Some(dense_family_capability(
             "mpt",
@@ -1274,6 +1368,15 @@ pub fn infer_family_capability(
             ExactStateMobility::Accepted,
         ));
     }
+
+    None
+}
+
+fn infer_exaone_stable_starcoder_capability(
+    compact: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> Option<FamilyCapabilityRecord> {
     if compact.contains("exaonemoe") {
         return Some(dense_family_capability(
             "exaone_moe",
@@ -1319,6 +1422,15 @@ pub fn infer_family_capability(
             ExactStateMobility::Accepted,
         ));
     }
+
+    None
+}
+
+fn infer_stage_runtime_fallback_capability(
+    compact: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> Option<FamilyCapabilityRecord> {
     let mut fallback: Option<(&StageRuntimeFamilyExpectation, usize)> = None;
     for expected in STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS {
         let architecture = expected

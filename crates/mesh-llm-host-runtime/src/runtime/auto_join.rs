@@ -248,14 +248,6 @@ pub(super) async fn handle_auto_decision(
                 {
                     options.mesh_name = Some(name.clone());
                 }
-                let _ = emit_event(OutputEvent::DiscoveryJoined {
-                    mesh: mesh
-                        .listing
-                        .name
-                        .as_deref()
-                        .unwrap_or("unnamed")
-                        .to_string(),
-                });
                 for (token, _) in &candidates {
                     options.join.push(token.clone());
                 }
@@ -898,6 +890,9 @@ pub(super) async fn attempt_run_auto_join(
                     message: "Connected to bootstrap peer; awaiting mesh admission".to_string(),
                     context: None,
                 });
+                let _ = emit_event(OutputEvent::DiscoveryJoined {
+                    mesh: successful_join_mesh_label(mesh_name.as_deref()),
+                });
                 outcome.joined = true;
                 outcome.successful_join = Some((token.clone(), mesh_name.clone()));
                 break;
@@ -937,11 +932,18 @@ pub(super) async fn build_successful_run_auto_join(
         message: "Connected to bootstrap peer; awaiting mesh admission".to_string(),
         context: None,
     });
+    let _ = emit_event(OutputEvent::DiscoveryJoined {
+        mesh: successful_join_mesh_label(successful_join.1.as_deref()),
+    });
     RunAutoJoinOutcome {
         joined: true,
         last_join_error: None,
         successful_join: Some(successful_join),
     }
+}
+
+pub(super) fn successful_join_mesh_label(mesh_name: Option<&str>) -> String {
+    mesh_name.unwrap_or("unnamed").to_string()
 }
 
 pub(super) fn update_cli_with_successful_run_auto_join(
@@ -1191,4 +1193,15 @@ pub(super) fn run_auto_model_identity(
         .map(|startup_model| startup_model.declared_ref.clone())
         .unwrap_or_else(|| model_name.clone());
     (model_name, model_source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn successful_join_mesh_label_preserves_named_and_unnamed_meshes() {
+        assert_eq!(successful_join_mesh_label(Some("mesh-llm")), "mesh-llm");
+        assert_eq!(successful_join_mesh_label(None), "unnamed");
+    }
 }
