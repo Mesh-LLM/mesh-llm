@@ -131,3 +131,42 @@ measured MTP + N-gram gain grows on longer/coding output (higher `k_accepted`):
    `C_total/(S·(S+1)) > 2·RTT + P` still holds before adding each stage.
 6. Under concurrency, prefer more stages for aggregate throughput once per-stage
    compute ≥ `2·RTT`.
+
+## Speculative recovery cost over WAN (measured)
+
+Enabling N-gram speculation on a large MoE (MiniMax-M2.7, 2-stage M5↔Melbourne,
+~18ms RTT, agentic OSL512) was **~40% slower** than no speculation (≈15 vs ≈17
+tok/s) despite a **high 0.89 token accept rate**. The cause is recovery cost on
+rejected windows, not proposal quality.
+
+Measured (metrics-server, coordinator stage-0 spans):
+
+- accept_rate 0.89, accepted 660 / proposed 2214
+- full_accept_windows 45, **early_reject_windows 231**, rejected_windows 234
+- **recovery_restores 231**, recovery_ms ≈ 18,971, recovery_restore_downstream_wait_ms ≈ 4,620
+- **window_shrinks 0** despite 231 early rejects — the adaptive window stayed at
+  12 the entire run
+
+Mechanism (verified in `frontend/embedded_generation.rs` +
+`frontend/embedded_execution.rs`): each early-reject window pays **two serial
+extra WAN round-trips** — `restore_embedded_stage_session` (write + wait for
+ACK) then the repair `execute_embedded_stage_message` (write + wait for reply).
+A rejected window therefore costs ~3 round-trips to commit what plain decode
+commits in 1. Over WAN those round-trips dominate.
+
+The smoking gun is `window_shrinks 0`: the adaptive policy never narrowed the
+window under a sustained reject storm, so it kept proposing deep, kept
+rejecting, and kept paying the 3× round-trip recovery.
+
+Fix directions (not required for merge — speculation is opt-in and off by
+default; this only affects deployments that explicitly enable N-gram):
+
+1. Adaptive window must actually shrink on early-reject (it did not here).
+2. Fuse restore+repair into a single round-trip instead of two serial waits.
+3. For single-token repair (`repair_input_count == 1`), avoid the separate
+   restore round-trip entirely (piggyback the correction).
+
+Takeaway for large-model MTP work: over WAN, speculation only pays off when the
+reject/recovery rate stays low. Native MTP (high acceptance) plus a
+reject-responsive adaptive window is the regime to target; blind deep N-gram
+proposal on a latency-bound split is counterproductive.
