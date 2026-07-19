@@ -1242,7 +1242,14 @@ impl PersistentStageLanePool {
                 .map_err(|_| OpenAiError::backend("persistent lane pool lock poisoned"))?;
             lanes.pop()
         };
-        let lane = match lane {
+        // A pooled lane may be stale: if the downstream stage died while the
+        // lane was checked in, the cached TCP stream is dead but reusing it
+        // would block forever on the next generation read (the handshake
+        // read-timeout is deliberately cleared so long generations don't
+        // truncate). Probe liveness before reuse and drop a dead lane so we
+        // reconnect with the short steady-state deadline instead of hanging.
+        let live_pooled = lane.filter(|lane| lane_stream_is_live(&lane.stream));
+        let lane = match live_pooled {
             Some(lane) => lane,
             // Steady-state reconnect: the mesh is already serving, so a healthy
             // downstream answers fast. Use the short deadline so a request
@@ -1480,6 +1487,39 @@ fn receive_persistent_lane_ready(stream: &mut TcpStream, timeout: Duration) -> R
         .set_read_timeout(None)
         .context("restore persistent downstream lane read timeout")?;
     ready
+}
+
+/// Cheap liveness probe for a pooled lane before reuse.
+///
+/// A pooled lane whose downstream stage died is a dead TCP stream; reusing it
+/// would block the next generation read forever (the handshake read-timeout is
+/// cleared for pooled lanes so long generations don't truncate). A nonblocking
+/// peek distinguishes cases without consuming data:
+///
+/// - `Ok(0)` => peer sent EOF / closed => dead, discard.
+/// - `Err(WouldBlock)` => connection open, no pending data => healthy, reuse.
+/// - other `Err` (reset, etc.) => dead, discard.
+///
+/// Between requests a healthy lane has no unread bytes, so a nonzero peek would
+/// be unexpected protocol data; treat that as unsafe-to-reuse and discard too.
+/// The blocking mode is always restored so the caller's reads are unaffected.
+fn lane_stream_is_live(stream: &TcpStream) -> bool {
+    use std::io::ErrorKind;
+    if stream.set_nonblocking(true).is_err() {
+        return false;
+    }
+    let mut probe = [0u8; 1];
+    let live = match stream.peek(&mut probe) {
+        Ok(0) => false,
+        Ok(_) => false,
+        Err(ref e) if e.kind() == ErrorKind::WouldBlock => true,
+        Err(_) => false,
+    };
+    // Restore blocking mode; if we can't, the lane is not safe to hand back.
+    if stream.set_nonblocking(false).is_err() {
+        return false;
+    }
+    live
 }
 
 fn ewma(old: f64, sample: f64) -> f64 {
