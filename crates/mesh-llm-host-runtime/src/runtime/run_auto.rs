@@ -320,7 +320,7 @@ pub(super) fn apply_runtime_config_options(
     options.listen_all |= config.runtime.listen_all;
 }
 
-fn apply_runtime_cli_speculative_overrides(
+pub(in crate::runtime) fn apply_runtime_cli_speculative_overrides(
     config: &mut plugin::MeshConfig,
     overrides: Option<&plugin::SpeculativeConfig>,
 ) {

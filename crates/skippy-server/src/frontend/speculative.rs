@@ -173,6 +173,83 @@ pub(super) fn standalone_simple_ngram_max(config: &SpeculativeDecodeConfig) -> u
         .map_or(0, |ngram| ngram.max_proposal_tokens.min(ngram.max_ngram))
 }
 
+#[cfg(test)]
+mod standalone_speculative_config_tests {
+    use super::*;
+
+    #[test]
+    fn standalone_speculative_config_rejects_invalid_composite_plan() {
+        let config = SpeculativeDecodeConfig {
+            extension: Some(NgramExtensionConfig {
+                initial_tokens: 2,
+                max_tokens: 4,
+                tail_backoff_proposals: 1,
+            }),
+            ..SpeculativeDecodeConfig::default()
+        };
+
+        let error = config.validate().expect_err("extension requires proposers");
+
+        assert!(
+            error
+                .to_string()
+                .contains("requires both native MTP and an N-gram proposer")
+        );
+    }
+
+    #[test]
+    fn standalone_speculative_config_round_trips_cache_composite() {
+        let config = SpeculativeDecodeConfig {
+            requested_strategy: "mtp-cache".to_string(),
+            effective_strategy: "native-mtp-cache".to_string(),
+            native_mtp: NativeMtpProposalConfig {
+                enabled: true,
+                max_draft_tokens: 2,
+                ..SpeculativeDecodeConfig::default().native_mtp
+            },
+            ngram: Some(NgramProposalConfig {
+                kind: NgramProposerKind::Cache,
+                min_ngram: 2,
+                max_ngram: 4,
+                max_proposal_tokens: 6,
+            }),
+            extension: Some(NgramExtensionConfig {
+                initial_tokens: 2,
+                max_tokens: 6,
+                tail_backoff_proposals: 2,
+            }),
+            ..SpeculativeDecodeConfig::default()
+        };
+
+        let json = serde_json::to_string(&config).expect("serialize plan");
+        let decoded: SpeculativeDecodeConfig = serde_json::from_str(&json).expect("parse plan");
+
+        assert_eq!(decoded, config);
+        decoded.validate().expect("valid composite plan");
+    }
+
+    #[test]
+    fn standalone_speculative_config_rejects_cache_windows_above_llama_limit() {
+        let config = SpeculativeDecodeConfig {
+            ngram: Some(NgramProposalConfig {
+                kind: NgramProposerKind::Cache,
+                min_ngram: 2,
+                max_ngram: skippy_runtime::NGRAM_CACHE_MAX_NGRAM + 1,
+                max_proposal_tokens: 6,
+            }),
+            ..SpeculativeDecodeConfig::default()
+        };
+
+        let error = config.validate().expect_err("cache max must be bounded");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must not exceed llama.cpp limit 4")
+        );
+    }
+}
+
 #[derive(Clone, Default)]
 pub(super) struct OpenAiSpeculativeStats {
     pub(super) windows: usize,

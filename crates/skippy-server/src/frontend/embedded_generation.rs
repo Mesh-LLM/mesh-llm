@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
-use super::embedded_execution::DispatchedEmbeddedStage;
+mod lifecycle;
+
 use super::*;
 use crate::binary_transport::BinaryStageExecutionOptions;
 use crate::binary_transport::forwarded_stage_message;
@@ -14,7 +15,6 @@ use crate::frontend::NativeMtpDraftOrigin;
 use crate::frontend::NativeMtpVerifier;
 use crate::frontend::generation::EmbeddedStageZeroGeneration;
 use crate::frontend::generation::GenerationCacheStats;
-use crate::frontend::generation::LocalGeneration;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TokenControl;
@@ -45,23 +45,13 @@ use crate::frontend::wire_messages::embedded_prefill_message;
 use crate::frontend::wire_messages::embedded_verify_window_message;
 use crate::frontend::wire_messages::generation_config_message;
 use crate::telemetry::now_unix_nanos;
+use lifecycle::{EmbeddedDecodeSummary, PipelinedCompositeWindow, decode_uses_context_sideband};
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
 use serde_json::json;
 use skippy_protocol::binary::StageReplyStats;
-use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
-use skippy_protocol::binary::write_stage_message;
-
-struct PipelinedCompositeWindow {
-    window: VerifyWindow,
-    input_tokens: Vec<i32>,
-    proposal_tokens: Vec<i32>,
-    expected_free_target: Option<i32>,
-    native_mtp_token_count: usize,
-    dispatched: DispatchedEmbeddedStage,
-}
 
 impl StageOpenAiBackend {
     pub(super) fn generate_embedded_stage_zero_tokens(
@@ -70,21 +60,7 @@ impl StageOpenAiBackend {
         mut on_token: impl FnMut(i32) -> OpenAiResult<TokenControl>,
     ) -> OpenAiResult<GenerationCacheStats> {
         if request.config.downstream.is_none() {
-            return self.generate_local_tokens(
-                LocalGeneration {
-                    prompt_token_ids: request.prompt_token_ids,
-                    max_tokens: request.max_tokens,
-                    sampling: request.sampling,
-                    chat_sampling_metadata: request.chat_sampling_metadata,
-                    speculative: request.speculative,
-                    native_mtp_enabled: request.native_mtp_enabled,
-                    hook_request: request.hook_request,
-                    hook_runtime: request.hook_runtime,
-                    cancellation: request.cancellation,
-                    ids: request.ids,
-                },
-                on_token,
-            );
+            return self.generate_embedded_request_locally(request, on_token);
         }
 
         let wire_sampling = wire_sampling_config(request.sampling);
@@ -1986,151 +1962,38 @@ impl StageOpenAiBackend {
                     .observe_hybrid_proposal(pipeline.proposal(), pipeline.accepted_tokens());
                 native_mtp.clear_pending_draft();
             }
-            let mut decode_attrs = self.openai_attrs(request.ids);
-            decode_attrs.insert(
-                "llama_stage.decode_token_count".to_string(),
-                json!(decoded_tokens),
-            );
-            decode_attrs.insert(
-                "llama_stage.stage0_compute_ms".to_string(),
-                json!(decode_stage0_compute_ms),
-            );
-            decode_attrs.insert(
-                "llama_stage.runtime_lock_wait_ms".to_string(),
-                json!(decode_runtime_lock_wait_ms),
-            );
-            decode_attrs.insert(
-                "llama_stage.runtime_lock_wait_max_ms".to_string(),
-                json!(decode_runtime_lock_wait_max_ms),
-            );
-            decode_attrs.insert(
-                "llama_stage.runtime_lock_hold_ms".to_string(),
-                json!(decode_runtime_lock_hold_ms),
-            );
-            decode_attrs.insert(
-                "llama_stage.runtime_lock_hold_max_ms".to_string(),
-                json!(decode_runtime_lock_hold_max_ms),
-            );
-            decode_attrs.insert(
-                "llama_stage.runtime_lock_acquires".to_string(),
-                json!(decode_runtime_lock_acquires),
-            );
-            decode_attrs.insert(
-                "llama_stage.decode_batch_size_max".to_string(),
-                json!(decode_batch_size_max),
-            );
-            decode_attrs.insert(
-                "llama_stage.decode_batch_wait_ms".to_string(),
-                json!(decode_batch_wait_ms),
-            );
-            decode_attrs.insert(
-                "llama_stage.forward_write_ms".to_string(),
-                json!(decode_forward_write_ms),
-            );
-            decode_attrs.insert(
-                "llama_stage.activation_encode_ms".to_string(),
-                json!(decode_forward_activation_encode_ms),
-            );
-            decode_attrs.insert(
-                "llama_stage.output_activation_bytes".to_string(),
-                json!(decode_output_activation_bytes),
-            );
-            decode_attrs.insert(
-                "llama_stage.forward_activation_bytes".to_string(),
-                json!(decode_forward_activation_bytes),
-            );
-            decode_attrs.insert(
-                "llama_stage.downstream_wait_ms".to_string(),
-                json!(decode_downstream_wait_ms),
-            );
-            request
-                .speculative
-                .insert_telemetry_attrs(&mut decode_attrs);
-            speculative_stats.insert_attrs(&mut decode_attrs);
             let native_mtp_stats = native_mtp.stats();
-            cache_stats.native_mtp_stats = native_mtp_stats;
-            cache_stats.native_mtp_decode_telemetry = Some(NativeMtpDecodeTelemetry::new(
-                native_mtp_options,
-                native_mtp_counters,
-            ));
-            cache_stats.verify_window_pipeline_stats = Some(verify_window_scheduler.stats());
-            cache_stats.speculative_stats = Some(speculative_stats.clone());
-            cache_stats.predicted_ms = decode_timer.elapsed_ms();
-            native_mtp_stats.insert_attrs(&mut decode_attrs);
-            native_mtp_counters.insert_summary_attrs(&mut decode_attrs, native_mtp_options);
-            verify_window_scheduler.insert_policy_telemetry_attrs(&mut decode_attrs);
-            self.emit_openai_summary("stage.openai_decode", decode_timer, decode_attrs);
+            self.record_embedded_decode_summary(
+                &request,
+                &mut cache_stats,
+                decode_timer,
+                EmbeddedDecodeSummary {
+                    decoded_tokens,
+                    stage0_compute_ms: decode_stage0_compute_ms,
+                    runtime_lock_wait_ms: decode_runtime_lock_wait_ms,
+                    runtime_lock_wait_max_ms: decode_runtime_lock_wait_max_ms,
+                    runtime_lock_hold_ms: decode_runtime_lock_hold_ms,
+                    runtime_lock_hold_max_ms: decode_runtime_lock_hold_max_ms,
+                    runtime_lock_acquires: decode_runtime_lock_acquires,
+                    decode_batch_size_max,
+                    decode_batch_wait_ms,
+                    forward_write_ms: decode_forward_write_ms,
+                    activation_encode_ms: decode_forward_activation_encode_ms,
+                    output_activation_bytes: decode_output_activation_bytes,
+                    forward_activation_bytes: decode_forward_activation_bytes,
+                    downstream_wait_ms: decode_downstream_wait_ms,
+                    speculative_stats: &speculative_stats,
+                    native_mtp_stats,
+                    native_mtp_counters,
+                    native_mtp_options,
+                    verify_window_scheduler: &verify_window_scheduler,
+                },
+            );
             Ok(())
         })();
 
-        let stop_result = write_stage_message(
-            &mut lane.stream,
-            &StageWireMessage::stop_with_identity(request.wire_dtype, request_id, session_id),
-            request.wire_dtype,
-        )
-        .and_then(|_| recv_reply(&mut lane.stream).map(|reply| reply.kind))
-        .and_then(|kind| {
-            if kind == WireReplyKind::Ack {
-                Ok(())
-            } else {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("expected stop ACK, got {kind:?}"),
-                ))
-            }
-        });
-        let lock_timer = PhaseTimer::start();
-        if let Ok(mut runtime) = self.runtime.lock() {
-            let runtime_lock_wait_ms = lock_timer.elapsed_ms();
-            if let Ok(drop_stats) = runtime.drop_session_timed(&session_key) {
-                let mut attrs = self.openai_attrs(request.ids);
-                attrs.insert(
-                    "llama_stage.runtime_lock_wait_ms".to_string(),
-                    json!(runtime_lock_wait_ms),
-                );
-                attrs.insert(
-                    "llama_stage.session_reset_ms".to_string(),
-                    json!(drop_stats.reset_ms),
-                );
-                attrs.insert(
-                    "llama_stage.session_reset".to_string(),
-                    json!(drop_stats.reset_session),
-                );
-                attrs.insert(
-                    "llama_stage.lane_discarded".to_string(),
-                    json!(drop_stats.lane_discarded),
-                );
-                if let Some(reason) = drop_stats.lane_discard_reason.as_deref() {
-                    attrs.insert("llama_stage.lane_discard_reason".to_string(), json!(reason));
-                }
-                Self::insert_runtime_session_stats(
-                    &mut attrs,
-                    "llama_stage.runtime_sessions_after",
-                    &drop_stats.stats_after,
-                );
-                self.telemetry
-                    .emit_debug("stage.openai_session_stop", attrs);
-            }
-        }
-        let lane_id = lane.id;
-        let stop_result = stop_result.map_err(openai_io_error);
-        match (&result, &stop_result) {
-            (Ok(_), Ok(_)) => lane_pool.return_lane(lane),
-            _ => lane_pool.replace_lane(lane_id),
-        }
-        if result.is_ok() {
-            stop_result?;
-        }
+        self.finish_embedded_generation_session(&request, lane_pool, lane, &result, &session_key)?;
         result?;
         Ok(cache_stats)
     }
-}
-
-fn decode_uses_context_sideband(
-    context_token_ids: &[i32],
-    current: i32,
-    sideband_capacity: usize,
-) -> bool {
-    context_token_ids.len() <= sideband_capacity
-        && context_token_ids.last().copied() == Some(current)
 }

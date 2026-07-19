@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
-use std::fs::{self, File};
-use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::fs;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+
+mod artifact_io;
+
+use artifact_io::{file_sha256, safe_relative_path, sha256_bytes};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct PackagePreflightOptions {
@@ -1371,25 +1373,6 @@ fn partition_layers(layer_count: u32, stages: usize) -> Vec<(u32, u32)> {
         .collect()
 }
 
-fn safe_relative_path(path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(path);
-    if path.as_os_str().is_empty() {
-        return Err("path is empty".to_string());
-    }
-    if path.is_absolute() {
-        return Err("path is absolute".to_string());
-    }
-    if path.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::Prefix(_) | Component::RootDir
-        )
-    }) {
-        return Err("path escapes the package directory".to_string());
-    }
-    Ok(path.to_path_buf())
-}
-
 fn push_error(
     issues: &mut Vec<PreflightIssue>,
     code: impl Into<String>,
@@ -1410,37 +1393,10 @@ fn is_sha256(value: &str) -> bool {
     value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
-fn file_sha256(path: &Path) -> anyhow::Result<String> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(hex_lower(&hasher.finalize()))
-}
-
-fn sha256_bytes(bytes: &[u8]) -> String {
-    hex_lower(&Sha256::digest(bytes))
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn preflight_accepts_complete_package_and_reports_stage_parts() {
