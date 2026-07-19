@@ -66,6 +66,9 @@ pub enum ControlFrameError {
     MissingControlOwnership,
     MissingRequestId,
     InvalidOwnerControlErrorCode { got: i32 },
+    InvalidInventoryDisposition { got: i32 },
+    MissingInventoryModelRef,
+    InvalidInventoryOrder,
     DecodeError(String),
     WrongStreamType { expected: u8, got: u8 },
     ForgedSender,
@@ -139,6 +142,18 @@ impl std::fmt::Display for ControlFrameError {
             }
             ControlFrameError::InvalidOwnerControlErrorCode { got } => {
                 write!(f, "invalid owner control error code: {got}")
+            }
+            ControlFrameError::InvalidInventoryDisposition { got } => {
+                write!(f, "invalid inventory scan disposition: {got}")
+            }
+            ControlFrameError::MissingInventoryModelRef => {
+                write!(f, "inventory entry requires a canonical model ref")
+            }
+            ControlFrameError::InvalidInventoryOrder => {
+                write!(
+                    f,
+                    "inventory entries must be strictly sorted by canonical model ref"
+                )
             }
             ControlFrameError::DecodeError(msg) => write!(f, "protobuf decode error: {}", msg),
             ControlFrameError::WrongStreamType { expected, got } => write!(
@@ -480,7 +495,39 @@ impl ValidateControlFrame for crate::proto::node::OwnerControlRefreshInventoryRe
         self.snapshot
             .as_ref()
             .ok_or(ControlFrameError::MissingConfig)?
-            .validate_frame()
+            .validate_frame()?;
+        if let Some(inventory) = &self.inventory {
+            inventory.validate_frame()?;
+        }
+        Ok(())
+    }
+}
+
+impl ValidateControlFrame for crate::proto::node::OwnerControlRefreshInventory {
+    fn validate_frame(&self) -> Result<(), ControlFrameError> {
+        use crate::proto::node::OwnerControlRefreshInventoryDisposition;
+
+        if !matches!(
+            OwnerControlRefreshInventoryDisposition::try_from(self.disposition),
+            Ok(OwnerControlRefreshInventoryDisposition::Executed)
+                | Ok(OwnerControlRefreshInventoryDisposition::Coalesced)
+        ) {
+            return Err(ControlFrameError::InvalidInventoryDisposition {
+                got: self.disposition,
+            });
+        }
+        let mut previous = None;
+        for entry in &self.entries {
+            let canonical = entry.canonical_model_ref.trim();
+            if canonical.is_empty() {
+                return Err(ControlFrameError::MissingInventoryModelRef);
+            }
+            if previous.is_some_and(|value| value >= canonical) {
+                return Err(ControlFrameError::InvalidInventoryOrder);
+            }
+            previous = Some(canonical);
+        }
+        Ok(())
     }
 }
 
@@ -577,8 +624,16 @@ pub async fn connect_mesh(endpoint: &Endpoint, addr: EndpointAddr) -> Result<Con
 }
 
 pub async fn write_len_prefixed(send: &mut iroh::endpoint::SendStream, body: &[u8]) -> Result<()> {
+    ensure_control_frame_size(body)?;
     send.write_all(&(body.len() as u32).to_le_bytes()).await?;
     send.write_all(body).await?;
+    Ok(())
+}
+
+pub fn ensure_control_frame_size(body: &[u8]) -> Result<(), ControlFrameError> {
+    if body.len() > MAX_CONTROL_FRAME_BYTES {
+        return Err(ControlFrameError::OversizeFrame { size: body.len() });
+    }
     Ok(())
 }
 
@@ -690,13 +745,15 @@ pub fn owner_control_rejection_envelope(
 mod tests {
     use super::*;
     use crate::proto::node::{
-        ConfigApplyMode, NodeConfigSnapshot, NodeGpuConfig, NodeModelEntry,
+        CompactModelMetadata, ConfigApplyMode, NodeConfigSnapshot, NodeGpuConfig, NodeModelEntry,
         OwnerControlApplyConfigRequest, OwnerControlApplyConfigResponse,
         OwnerControlConfigSnapshot, OwnerControlConfigUpdate, OwnerControlEnvelope,
         OwnerControlError, OwnerControlErrorCode, OwnerControlGetConfigRequest,
-        OwnerControlGetConfigResponse, OwnerControlHandshake, OwnerControlRefreshInventoryRequest,
-        OwnerControlRefreshInventoryResponse, OwnerControlRequest, OwnerControlResponse,
-        OwnerControlWatchAccepted, OwnerControlWatchConfigResponse, SignedNodeOwnership,
+        OwnerControlGetConfigResponse, OwnerControlHandshake, OwnerControlInventoryEntry,
+        OwnerControlRefreshInventory, OwnerControlRefreshInventoryDisposition,
+        OwnerControlRefreshInventoryRequest, OwnerControlRefreshInventoryResponse,
+        OwnerControlRequest, OwnerControlResponse, OwnerControlWatchAccepted,
+        OwnerControlWatchConfigResponse, SignedNodeOwnership,
     };
 
     fn control_plane_test_config() -> NodeConfigSnapshot {
@@ -886,6 +943,7 @@ mod tests {
                 apply_config: None,
                 refresh_inventory: Some(OwnerControlRefreshInventoryResponse {
                     snapshot: Some(control_plane_test_snapshot()),
+                    inventory: None,
                 }),
             }),
             error: None,
@@ -1020,5 +1078,137 @@ mod tests {
             OwnerControlErrorCode::LegacyJsonUnsupported
         );
         assert_eq!(error.request_id, Some(99));
+    }
+
+    #[test]
+    fn outbound_control_frame_size_rejects_before_write() {
+        let oversized = vec![0u8; MAX_CONTROL_FRAME_BYTES + 1];
+
+        let err = ensure_control_frame_size(&oversized)
+            .expect_err("oversize outbound frame must fail before length/body write");
+
+        assert!(matches!(
+            err,
+            ControlFrameError::OversizeFrame { size } if size == MAX_CONTROL_FRAME_BYTES + 1
+        ));
+    }
+
+    #[test]
+    fn refresh_inventory_snapshot_only_frozen_bytes_remain_compatible() {
+        let mut frozen = vec![0x0a, 0x48, 0x0a, 0x20];
+        frozen.extend_from_slice(&[0x55; 32]);
+        frozen.extend_from_slice(&[0x10, 0x07, 0x1a, 0x20]);
+        frozen.extend_from_slice(&[0xa5; 32]);
+        frozen.extend_from_slice(&[0x22, 0x00]);
+        frozen.extend_from_slice(&[0x98, 0x06, 0x01]);
+
+        let decoded = OwnerControlRefreshInventoryResponse::decode(frozen.as_slice())
+            .expect("frozen snapshot-only response must decode");
+
+        decoded
+            .validate_frame()
+            .expect("snapshot-only response from an old server must remain valid");
+        assert!(decoded.inventory.is_none());
+        assert_eq!(decoded.snapshot.expect("snapshot").revision, 7);
+    }
+
+    #[test]
+    fn refresh_inventory_rich_response_roundtrips_in_sorted_order() {
+        let response = OwnerControlRefreshInventoryResponse {
+            snapshot: Some(control_plane_test_snapshot()),
+            inventory: Some(OwnerControlRefreshInventory {
+                entries: vec![
+                    inventory_entry("hf://mesh/alpha-GGUF:Q4_K_M", "alpha", 1024),
+                    inventory_entry("hf://mesh/beta-GGUF:Q8_0", "beta", 2048),
+                ],
+                disposition: OwnerControlRefreshInventoryDisposition::Executed as i32,
+            }),
+        };
+
+        response
+            .validate_frame()
+            .expect("rich response must validate");
+        let encoded = response.encode_to_vec();
+        let decoded = OwnerControlRefreshInventoryResponse::decode(encoded.as_slice())
+            .expect("rich response must decode");
+
+        assert_eq!(decoded, response);
+        assert_eq!(decoded.inventory.expect("inventory").entries.len(), 2);
+    }
+
+    #[test]
+    fn refresh_inventory_rejects_unsorted_or_unspecified_details() {
+        let mut inventory = OwnerControlRefreshInventory {
+            entries: vec![
+                inventory_entry("hf://mesh/beta", "beta", 2),
+                inventory_entry("hf://mesh/alpha", "alpha", 1),
+            ],
+            disposition: OwnerControlRefreshInventoryDisposition::Executed as i32,
+        };
+        assert!(matches!(
+            inventory.validate_frame(),
+            Err(ControlFrameError::InvalidInventoryOrder)
+        ));
+
+        inventory
+            .entries
+            .sort_by(|left, right| left.canonical_model_ref.cmp(&right.canonical_model_ref));
+        inventory.disposition = OwnerControlRefreshInventoryDisposition::Unspecified as i32;
+        assert!(matches!(
+            inventory.validate_frame(),
+            Err(ControlFrameError::InvalidInventoryDisposition { got: 0 })
+        ));
+    }
+
+    #[test]
+    fn metadata_rich_inventory_has_deterministic_bounded_size() {
+        let entries = (0..128)
+            .map(|index| {
+                let mut entry = inventory_entry(
+                    &format!("hf://mesh/model-{index:03}"),
+                    &format!("model-{index:03}"),
+                    index,
+                );
+                entry.metadata.as_mut().expect("metadata").model_key = "x".repeat(70_000);
+                entry
+            })
+            .collect();
+        let response = OwnerControlRefreshInventoryResponse {
+            snapshot: Some(control_plane_test_snapshot()),
+            inventory: Some(OwnerControlRefreshInventory {
+                entries,
+                disposition: OwnerControlRefreshInventoryDisposition::Coalesced as i32,
+            }),
+        };
+
+        response
+            .validate_frame()
+            .expect("synthetic response is valid");
+        let encoded = response.encode_to_vec();
+        assert_eq!(encoded.len(), response.encoded_len());
+        assert_eq!(encoded.len(), response.clone().encoded_len());
+        assert!(encoded.len() > MAX_CONTROL_FRAME_BYTES);
+        assert!(matches!(
+            ensure_control_frame_size(&encoded),
+            Err(ControlFrameError::OversizeFrame { size }) if size == encoded.len()
+        ));
+    }
+
+    fn inventory_entry(
+        canonical_model_ref: &str,
+        display_name: &str,
+        total_size_bytes: u64,
+    ) -> OwnerControlInventoryEntry {
+        OwnerControlInventoryEntry {
+            canonical_model_ref: canonical_model_ref.to_string(),
+            display_name: Some(display_name.to_string()),
+            total_size_bytes,
+            metadata: Some(CompactModelMetadata {
+                model_key: canonical_model_ref.to_string(),
+                architecture: "llama".to_string(),
+                quantization_type: "Q4_K_M".to_string(),
+                ..Default::default()
+            }),
+        }
     }
 }

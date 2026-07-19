@@ -36,7 +36,7 @@ pub use local::{
     model_ref_for_path, scan_installed_models, scan_installed_models_in, scan_local_models,
 };
 pub use maintenance::{run_update, warn_about_updates_for_paths};
-pub(crate) use profile::{served_model_metadata_for_model, served_model_metadata_for_path};
+pub(crate) use profile::served_model_metadata_for_model;
 pub use resolve::{
     ModelDetails, ShowVariantsProgress, canonicalize_interest_model_ref,
     download_model_ref_with_progress_details, download_model_ref_with_progress_details_direct,

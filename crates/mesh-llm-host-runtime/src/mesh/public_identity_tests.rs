@@ -5,7 +5,7 @@ use std::fs;
 /// work correctly.  Uses the real ~/.mesh-llm/ directory (same approach as
 /// the rotate_keys tests) and restores originals afterward.
 #[test]
-fn public_to_private_transition_clears_identity() {
+pub(crate) fn public_to_private_transition_clears_identity() {
     let dir = dirs::home_dir().unwrap().join(".mesh-llm");
     fs::create_dir_all(&dir).ok();
 
@@ -33,7 +33,7 @@ fn public_to_private_transition_clears_identity() {
     assert!(!was_previously_public(), "should be false when no marker");
 
     // --- Scenario 2: mark as public → marker exists ---
-    mark_was_public();
+    mark_was_public().expect("mark public identity");
     assert!(was_previously_public(), "should be true after marking");
 
     // Plant some identity files to verify clear removes them.
@@ -43,7 +43,7 @@ fn public_to_private_transition_clears_identity() {
     fs::write(dir.join("last-mesh"), b"test-last-mesh").unwrap();
 
     // --- Scenario 3: clear_public_identity removes everything ---
-    clear_public_identity();
+    clear_public_identity().expect("clear public identity");
     for name in &["key", "nostr.nsec", "mesh-id", "last-mesh", "was-public"] {
         assert!(
             !dir.join(name).exists(),
@@ -56,7 +56,7 @@ fn public_to_private_transition_clears_identity() {
     );
 
     // --- Scenario 4: clear on already-clean directory is fine ---
-    clear_public_identity(); // should not panic
+    clear_public_identity().expect("clear already-clean public identity");
 
     // Restore originals.
     for (path, orig) in paths.iter().zip(originals.iter()) {

@@ -74,8 +74,15 @@ function Require-WindowsX64 {
         throw "install.ps1 only supports native Windows. Use install.sh on macOS or Linux."
     }
 
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-    if ($arch -ne "X64") {
+    # Windows PowerShell 5.1 can expose RuntimeInformation while returning a
+    # null OSArchitecture value. Casting avoids calling ToString() on null and
+    # PROCESSOR_ARCHITECTURE provides the legacy Windows fallback.
+    $arch = [string][System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    if (-not $arch) {
+        $arch = [string]$env:PROCESSOR_ARCHITECTURE
+    }
+
+    if (-not $arch -or @("X64", "AMD64", "X86_64") -notcontains $arch) {
         throw "unsupported Windows architecture: $arch. Published Windows release bundles target x86_64."
     }
 }

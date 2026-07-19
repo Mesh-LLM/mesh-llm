@@ -102,6 +102,18 @@ pub enum RuntimeCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Scan and refresh inventory on a remote owner-control endpoint.
+    ScanRefresh {
+        /// Explicit owner-control endpoint token for the target node.
+        #[arg(long)]
+        endpoint: String,
+        /// Console/API port of the local mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print the raw JSON payload.
+        #[arg(long)]
+        json: bool,
+    },
     /// Refresh local inventory on a remote owner-control endpoint through the local management API.
     #[command(hide = true)]
     RefreshInventory {

@@ -62,6 +62,7 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("GET", "/api/runtime/config-control-state")
                 | ("GET", "/api/runtime/control-bootstrap")
                 | ("POST", "/api/runtime/control/get-config")
+                | ("POST", "/api/runtime/control/scan-refresh")
                 | ("POST", "/api/runtime/control/refresh-inventory")
                 | ("POST", "/api/runtime/control/apply-config")
                 | ("POST", "/api/runtime/config/validate")

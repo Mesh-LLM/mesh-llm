@@ -4468,7 +4468,7 @@ fn public_model_id(
     // route).
     let base_id = if let Some(descriptor) = descriptor
         && descriptor_can_produce_lossless_id(&descriptor.identity)
-        && let Some(id) = public_model_id_from_identity(&descriptor.identity)
+        && let Some(id) = mesh::public_model_id_from_identity(&descriptor.identity)
     {
         id
     } else if let Some(id) = public_model_id_from_local_path(model_name) {
@@ -4501,30 +4501,6 @@ fn descriptor_can_produce_lossless_id(identity: &mesh::ServedModelIdentity) -> b
     }
 }
 
-fn public_model_id_from_identity(identity: &mesh::ServedModelIdentity) -> Option<String> {
-    match identity.source_kind {
-        mesh::ModelSourceKind::HuggingFace => identity
-            .repository
-            .as_deref()
-            .and_then(|repo| public_huggingface_model_ref(repo, identity.artifact.as_deref()))
-            .or_else(|| {
-                identity
-                    .canonical_ref
-                    .as_deref()
-                    .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-                    .map(|model_ref| model_ref.display_id())
-            }),
-        mesh::ModelSourceKind::Catalog => identity
-            .canonical_ref
-            .as_deref()
-            .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-            .map(|model_ref| model_ref.display_id()),
-        mesh::ModelSourceKind::LocalGguf
-        | mesh::ModelSourceKind::DirectUrl
-        | mesh::ModelSourceKind::Unknown => None,
-    }
-}
-
 fn public_model_id_from_local_path(model_name: &str) -> Option<String> {
     let path = crate::models::find_model_path(model_name);
     if !path.is_file() {
@@ -4534,20 +4510,6 @@ fn public_model_id_from_local_path(model_name: &str) -> Option<String> {
         return None;
     }
     Some(crate::models::model_ref_for_path(&path))
-}
-
-fn public_huggingface_model_ref(repo: &str, artifact: Option<&str>) -> Option<String> {
-    // `artifact` can be either a GGUF filename (e.g. `Falcon-Q4_K_M.gguf`)
-    // or an already-extracted quant selector (e.g. `Q4_K_M` or
-    // `qwen2.5-3b-instruct-q4_k_m`, when the descriptor was built from
-    // a parsed `ModelRef::selector`). Handle both — if the artifact
-    // looks like a quant selector use it directly; otherwise try to
-    // pull a selector out of the filename.
-    let selector = artifact.and_then(|a| {
-        model_ref::quant_selector_from_gguf_file(a)
-            .or_else(|| (!a.is_empty() && !a.ends_with(".gguf")).then(|| a.to_string()))
-    });
-    Some(model_ref::format_model_ref(repo, None, selector.as_deref()))
 }
 
 pub async fn send_json_ok(mut stream: TcpStream, data: &serde_json::Value) -> std::io::Result<()> {
@@ -5163,16 +5125,52 @@ mod tests {
         let descriptors = vec![hf_descriptor(&models[0])];
 
         let body = models_list_json(&models, &descriptors, &[]);
+        let public_id = body["data"][0]["id"]
+            .as_str()
+            .expect("models list id should be a string");
 
         assert_eq!(
             body["data"][0]["id"],
-            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M"
+            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF@0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a:Q4_K_M"
         );
         assert_eq!(
             body["data"][0]["display_name"],
-            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M"
+            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF@0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a:Q4_K_M"
         );
         assert_eq!(body["data"][0]["owned_by"], "mesh-llm");
+
+        // Given the exact public identifier emitted by /v1/models.
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{{\"model\":{}}}",
+            serde_json::to_string(public_id).expect("public model id should serialize")
+        )
+        .into_bytes();
+        let mut request = BufferedHttpRequest {
+            raw,
+            method: "POST".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            client_path: "/v1/chat/completions".to_string(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: 0,
+            completion_tokens: None,
+            stream: None,
+            model_name: Some(public_id.to_string()),
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::None,
+        };
+
+        // When the request alias is rewritten, then it resolves to the internal model.
+        rewrite_public_model_alias(&mut request, &models, &descriptors);
+        request.ensure_body_json();
+        assert_eq!(
+            request
+                .body_json
+                .as_ref()
+                .and_then(|body| body["model"].as_str()),
+            Some(models[0].as_str())
+        );
     }
 
     #[test]
@@ -5182,8 +5180,8 @@ mod tests {
         // request back to that exact model. When a `ServedModelDescriptor`
         // for a HuggingFace model has no `artifact` field (because the
         // descriptor was built without inspecting the GGUF file on disk),
-        // `public_huggingface_model_ref` collapses the public ID to just
-        // the repo name — dropping the quant-tag suffix the internal
+        // descriptor-derived ID construction would collapse the public ID
+        // to just the repo name — dropping the quant-tag suffix the internal
         // `model_name` carries. The model is then advertised in `/v1/models`
         // under a shorter ID than the resolver knows how to route.
         //

@@ -45,6 +45,12 @@ class InstallPs1StaticTests(unittest.TestCase):
         self.assertNotIn("Choose-Flavor", contents)
         self.assertNotIn("native-runtimes.json", contents)
 
+    def test_architecture_probe_handles_windows_powershell_null(self) -> None:
+        contents = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertNotIn("::OSArchitecture.ToString()", contents)
+        self.assertIn("$env:PROCESSOR_ARCHITECTURE", contents)
+
 
 @unittest.skipUnless(PWSH, "pwsh not installed")
 class InstallPs1BehaviorTests(unittest.TestCase):

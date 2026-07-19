@@ -7,5 +7,6 @@ pub use builder::{
 pub use control_plane::{
     ConfigTransportSelection, ControlPlaneBootstrapOptions, ControlPlaneClientError,
     ControlPlaneConnection, ControlPlaneNegotiationError, ControlPlaneRetryPolicy,
-    OwnerControlClient, OwnerControlRemoteError, OwnerControlWatchEvent, OwnerControlWatchStream,
+    OwnerControlClient, OwnerControlRemoteError, OwnerControlScanRefreshResult,
+    OwnerControlWatchEvent, OwnerControlWatchStream,
 };

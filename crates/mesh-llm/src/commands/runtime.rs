@@ -93,6 +93,11 @@ pub(crate) async fn dispatch_runtime_command(
             port,
             json,
         }) => run_control_get_config(endpoint, *port, *json).await,
+        Some(RuntimeCommand::ScanRefresh {
+            endpoint,
+            port,
+            json,
+        }) => run_control_scan_refresh(endpoint, *port, *json).await,
         Some(RuntimeCommand::RefreshInventory {
             endpoint,
             port,
@@ -184,6 +189,27 @@ pub(crate) async fn run_control_refresh_inventory(
     )
     .await?;
     print_control_response("Owner-control inventory refresh", &body, json_output)
+}
+
+pub(crate) async fn run_control_scan_refresh(
+    endpoint: &str,
+    port: u16,
+    json_output: bool,
+) -> Result<()> {
+    let body = post_runtime_payload(
+        port,
+        "/api/runtime/control/scan-refresh",
+        &build_control_endpoint_request(endpoint),
+    )
+    .await?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    for line in control_scan_refresh_lines(&body) {
+        println!("{line}");
+    }
+    Ok(())
 }
 
 pub(crate) async fn run_control_apply_config(
@@ -432,6 +458,45 @@ fn control_bootstrap_lines(payload: &serde_json::Value) -> Vec<String> {
     lines
 }
 
+fn control_scan_refresh_lines(payload: &serde_json::Value) -> Vec<String> {
+    let disposition = payload["disposition"]
+        .as_str()
+        .unwrap_or("compatibility-limited");
+    let target = payload["target_node_id"].as_str().unwrap_or("unknown");
+    let entries = payload["inventory"].as_array();
+    let model_count = entries.map_or(0, Vec::len);
+    let total_bytes = entries
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry["total_size_bytes"].as_u64())
+        .map(u128::from)
+        .sum::<u128>();
+    let mut model_refs: Vec<&str> = entries
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry["canonical_model_ref"].as_str())
+        .collect();
+    model_refs.sort_unstable();
+
+    let mut lines = vec![
+        "🔐 Owner-control scan refresh".to_string(),
+        String::new(),
+        format!("Disposition: {disposition}"),
+        format!("Target: {target}"),
+        format!("Models: {model_count}"),
+        format!("Total bytes: {total_bytes}"),
+    ];
+    if !model_refs.is_empty() {
+        lines.push("Model refs:".to_string());
+        lines.extend(
+            model_refs
+                .into_iter()
+                .map(|model_ref| format!("  {model_ref}")),
+        );
+    }
+    lines
+}
+
 fn build_control_endpoint_request(endpoint: &str) -> serde_json::Value {
     json!({ "endpoint": endpoint })
 }
@@ -562,7 +627,8 @@ fn find_pid(processes: &[serde_json::Value], model: &serde_json::Value) -> Optio
 mod tests {
     use super::{
         build_apply_config_request, build_control_endpoint_request, build_guardrail_mode_request,
-        control_bootstrap_lines, display_backend_label, runtime_success_lines, yes_no,
+        control_bootstrap_lines, control_scan_refresh_lines, display_backend_label,
+        runtime_success_lines, yes_no,
     };
     use mesh_llm_cli::MeshGuardrailCliMode;
     use mesh_llm_host_runtime::command_support::plugin::{GpuAssignment, GpuConfig, MeshConfig};
@@ -669,6 +735,33 @@ mod tests {
         assert_eq!(
             build_control_endpoint_request("endpoint-token"),
             json!({ "endpoint": "endpoint-token" })
+        );
+    }
+
+    #[test]
+    fn control_scan_refresh_lines_are_sorted_and_deterministic() {
+        let payload = json!({
+            "target_node_id": "abcd",
+            "disposition": "executed",
+            "inventory": [
+                {"canonical_model_ref": "z/model", "total_size_bytes": 100},
+                {"canonical_model_ref": "a/model", "total_size_bytes": 42}
+            ]
+        });
+
+        assert_eq!(
+            control_scan_refresh_lines(&payload),
+            vec![
+                "🔐 Owner-control scan refresh".to_string(),
+                String::new(),
+                "Disposition: executed".to_string(),
+                "Target: abcd".to_string(),
+                "Models: 2".to_string(),
+                "Total bytes: 142".to_string(),
+                "Model refs:".to_string(),
+                "  a/model".to_string(),
+                "  z/model".to_string(),
+            ]
         );
     }
 

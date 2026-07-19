@@ -7,7 +7,7 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct HeartbeatFailurePolicy {
+pub(crate) struct HeartbeatFailurePolicy {
     pub(super) allow_recent_inbound_grace: bool,
     pub(super) failure_threshold: u32,
 }
@@ -78,13 +78,13 @@ impl RelayPeerHealth {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RelayReconnectReason {
+pub(crate) enum RelayReconnectReason {
     RelayRttDegraded,
     RelayOnlyTooLong,
 }
 
 impl RelayReconnectReason {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             RelayReconnectReason::RelayRttDegraded => "relay RTT degraded",
             RelayReconnectReason::RelayOnlyTooLong => "relay path aged out",
@@ -359,14 +359,14 @@ pub(crate) fn resolve_peer_down(
     if should_remove { Some(dead_id) } else { None }
 }
 
-fn default_heartbeat_failure_policy() -> HeartbeatFailurePolicy {
+pub(crate) fn default_heartbeat_failure_policy() -> HeartbeatFailurePolicy {
     HeartbeatFailurePolicy {
         allow_recent_inbound_grace: true,
         failure_threshold: 2,
     }
 }
 
-fn select_heartbeat_gossip_peers(
+pub(crate) fn select_heartbeat_gossip_peers(
     mut peers_and_conns: Vec<(EndpointId, Option<Connection>)>,
 ) -> Vec<(EndpointId, Option<Connection>)> {
     const GOSSIP_K: usize = 5;
@@ -378,7 +378,7 @@ fn select_heartbeat_gossip_peers(
     peers_and_conns
 }
 
-fn warn_heartbeat_retry(peer_id: EndpointId, count: u32, threshold: u32) {
+pub(crate) fn warn_heartbeat_retry(peer_id: EndpointId, count: u32, threshold: u32) {
     super::emit_mesh_warning(format!(
         "💛 Heartbeat: {} unreachable ({}/{}), will retry",
         peer_id.fmt_short(),
@@ -387,7 +387,7 @@ fn warn_heartbeat_retry(peer_id: EndpointId, count: u32, threshold: u32) {
     ));
 }
 
-fn warn_heartbeat_peer_down(peer_id: EndpointId, count: u32) {
+pub(crate) fn warn_heartbeat_peer_down(peer_id: EndpointId, count: u32) {
     super::emit_mesh_warning(format!(
         "💔 Heartbeat: {} unreachable ({} failure{}), removing + broadcasting death",
         peer_id.fmt_short(),
@@ -399,7 +399,7 @@ fn warn_heartbeat_peer_down(peer_id: EndpointId, count: u32) {
 impl Node {
     const RTT_REFRESH_SECS: u64 = 15;
 
-    async fn relay_refresh_target(
+    pub(crate) async fn relay_refresh_target(
         &self,
         peer_id: EndpointId,
     ) -> Option<(EndpointAddr, Connection)> {
@@ -409,7 +409,7 @@ impl Node {
         Some((peer.addr, conn))
     }
 
-    async fn dial_refreshed_peer_connection(
+    pub(crate) async fn dial_refreshed_peer_connection(
         &self,
         peer_id: EndpointId,
         addr: EndpointAddr,
@@ -438,7 +438,7 @@ impl Node {
         }
     }
 
-    async fn refreshed_connection_completed_gossip(
+    pub(crate) async fn refreshed_connection_completed_gossip(
         &self,
         peer_id: EndpointId,
         conn: &Connection,
@@ -459,7 +459,7 @@ impl Node {
         gossip_ok
     }
 
-    async fn install_refreshed_peer_connection(
+    pub(crate) async fn install_refreshed_peer_connection(
         &self,
         peer_id: EndpointId,
         existing_id: usize,
@@ -605,7 +605,7 @@ impl Node {
         });
     }
 
-    async fn run_heartbeat_cycle(
+    pub(crate) async fn run_heartbeat_cycle(
         &self,
         fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
     ) {
@@ -620,13 +620,13 @@ impl Node {
         self.gc_demand().await;
     }
 
-    async fn selected_heartbeat_peers(&self) -> Vec<(EndpointId, Option<Connection>)> {
+    pub(crate) async fn selected_heartbeat_peers(&self) -> Vec<(EndpointId, Option<Connection>)> {
         let peers_and_conns = self.heartbeat_peer_targets().await;
         tracing::debug!("Heartbeat tick: {} peers to check", peers_and_conns.len());
         select_heartbeat_gossip_peers(peers_and_conns)
     }
 
-    async fn heartbeat_peer_targets(&self) -> Vec<(EndpointId, Option<Connection>)> {
+    pub(crate) async fn heartbeat_peer_targets(&self) -> Vec<(EndpointId, Option<Connection>)> {
         let state = self.state.lock().await;
         state
             .peers
@@ -635,7 +635,11 @@ impl Node {
             .collect()
     }
 
-    async fn probe_heartbeat_peer(&self, peer_id: EndpointId, conn: Option<Connection>) -> bool {
+    pub(crate) async fn probe_heartbeat_peer(
+        &self,
+        peer_id: EndpointId,
+        conn: Option<Connection>,
+    ) -> bool {
         if let Some(conn) = conn {
             self.gossip_existing_heartbeat_connection(peer_id, conn)
                 .await
@@ -644,7 +648,7 @@ impl Node {
         }
     }
 
-    async fn gossip_existing_heartbeat_connection(
+    pub(crate) async fn gossip_existing_heartbeat_connection(
         &self,
         peer_id: EndpointId,
         conn: Connection,
@@ -670,7 +674,7 @@ impl Node {
         gossip_ok
     }
 
-    async fn reconnect_heartbeat_peer(&self, peer_id: EndpointId) -> bool {
+    pub(crate) async fn reconnect_heartbeat_peer(&self, peer_id: EndpointId) -> bool {
         let Some(addr) = self.heartbeat_peer_addr(peer_id).await else {
             return false;
         };
@@ -689,12 +693,16 @@ impl Node {
         }
     }
 
-    async fn heartbeat_peer_addr(&self, peer_id: EndpointId) -> Option<EndpointAddr> {
+    pub(crate) async fn heartbeat_peer_addr(&self, peer_id: EndpointId) -> Option<EndpointAddr> {
         let state = self.state.lock().await;
         state.peers.get(&peer_id).map(|peer| peer.addr.clone())
     }
 
-    async fn install_heartbeat_reconnect(&self, peer_id: EndpointId, new_conn: Connection) -> bool {
+    pub(crate) async fn install_heartbeat_reconnect(
+        &self,
+        peer_id: EndpointId,
+        new_conn: Connection,
+    ) -> bool {
         super::emit_mesh_info(format!(
             "💚 Heartbeat: reconnected to {}",
             peer_id.fmt_short()
@@ -710,14 +718,22 @@ impl Node {
         self.gossip_heartbeat_reconnect(peer_id, new_conn).await
     }
 
-    fn spawn_heartbeat_reconnect_dispatch(&self, peer_id: EndpointId, new_conn: Connection) {
+    pub(crate) fn spawn_heartbeat_reconnect_dispatch(
+        &self,
+        peer_id: EndpointId,
+        new_conn: Connection,
+    ) {
         let node = self.clone();
         tokio::spawn(async move {
             node.dispatch_streams(new_conn, peer_id).await;
         });
     }
 
-    async fn gossip_heartbeat_reconnect(&self, peer_id: EndpointId, new_conn: Connection) -> bool {
+    pub(crate) async fn gossip_heartbeat_reconnect(
+        &self,
+        peer_id: EndpointId,
+        new_conn: Connection,
+    ) -> bool {
         let protocol = connection_protocol(&new_conn);
         let gossip_ok = tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -738,7 +754,11 @@ impl Node {
         gossip_ok
     }
 
-    fn capture_heartbeat_reconnect_opened(&self, peer_id: EndpointId, new_conn: &Connection) {
+    pub(crate) fn capture_heartbeat_reconnect_opened(
+        &self,
+        peer_id: EndpointId,
+        new_conn: &Connection,
+    ) {
         self.capture_connection_event(ConnectionCaptureEvent {
             event: "peer_connection_opened",
             remote: peer_id,
@@ -752,7 +772,7 @@ impl Node {
         });
     }
 
-    fn capture_heartbeat_reconnect_failure(
+    pub(crate) fn capture_heartbeat_reconnect_failure(
         &self,
         peer_id: EndpointId,
         protocol: Option<ControlProtocol>,
@@ -775,7 +795,7 @@ impl Node {
         });
     }
 
-    async fn record_heartbeat_result(
+    pub(crate) async fn record_heartbeat_result(
         &self,
         peer_id: EndpointId,
         alive: bool,
@@ -788,7 +808,7 @@ impl Node {
         }
     }
 
-    async fn recover_heartbeat_peer(
+    pub(crate) async fn recover_heartbeat_peer(
         &self,
         peer_id: EndpointId,
         fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
@@ -809,7 +829,7 @@ impl Node {
         }
     }
 
-    async fn record_heartbeat_failure(
+    pub(crate) async fn record_heartbeat_failure(
         &self,
         peer_id: EndpointId,
         fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
@@ -831,7 +851,7 @@ impl Node {
         }
     }
 
-    async fn heartbeat_failure_context(
+    pub(crate) async fn heartbeat_failure_context(
         &self,
         peer_id: EndpointId,
     ) -> (bool, HeartbeatFailurePolicy) {
@@ -867,7 +887,7 @@ impl Node {
         (recently_seen, policy)
     }
 
-    async fn heartbeat_failure_policy(
+    pub(crate) async fn heartbeat_failure_policy(
         &self,
         peer: Option<&PeerInfo>,
         is_relay_only: bool,
@@ -880,7 +900,7 @@ impl Node {
         heartbeat_failure_policy_for_peer(&local_descriptors, &local_runtime, peer, is_relay_only)
     }
 
-    fn clear_inbound_alive_failure(
+    pub(crate) fn clear_inbound_alive_failure(
         &self,
         peer_id: EndpointId,
         fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
@@ -893,7 +913,7 @@ impl Node {
         }
     }
 
-    async fn confirm_heartbeat_peer_down(
+    pub(crate) async fn confirm_heartbeat_peer_down(
         &self,
         peer_id: EndpointId,
         count: u32,
@@ -916,7 +936,7 @@ impl Node {
         self.handle_peer_death(peer_id).await;
     }
 
-    async fn prune_stale_heartbeat_peers(&self) {
+    pub(crate) async fn prune_stale_heartbeat_peers(&self) {
         for stale_id in self.stale_heartbeat_peers().await {
             super::emit_mesh_warning(format!(
                 "🧹 Pruning stale peer {} (no direct or transitive contact in {}s)",
@@ -935,7 +955,7 @@ impl Node {
         }
     }
 
-    async fn stale_heartbeat_peers(&self) -> Vec<EndpointId> {
+    pub(crate) async fn stale_heartbeat_peers(&self) -> Vec<EndpointId> {
         let prune_cutoff =
             std::time::Instant::now() - std::time::Duration::from_secs(PEER_STALE_SECS * 2);
         let state = self.state.lock().await;
@@ -947,7 +967,7 @@ impl Node {
             .collect()
     }
 
-    async fn gc_heartbeat_state(&self) {
+    pub(crate) async fn gc_heartbeat_state(&self) {
         let expired_dead_peers = self.retain_live_heartbeat_state().await;
         for expired_id in expired_dead_peers {
             self.capture_peer_lifecycle_event(PeerLifecycleCaptureEvent {
@@ -963,7 +983,7 @@ impl Node {
         }
     }
 
-    async fn retain_live_heartbeat_state(&self) -> Vec<EndpointId> {
+    pub(crate) async fn retain_live_heartbeat_state(&self) -> Vec<EndpointId> {
         let mut state = self.state.lock().await;
         let expired_dead_peers: Vec<EndpointId> = state
             .dead_peers
@@ -1008,7 +1028,7 @@ impl Node {
     }
 
     /// Broadcast that a peer is down to all connected peers.
-    async fn broadcast_peer_down(&self, dead_id: EndpointId) {
+    pub(crate) async fn broadcast_peer_down(&self, dead_id: EndpointId) {
         let conns: Vec<(EndpointId, Connection)> = {
             let state = self.state.lock().await;
             state
@@ -1083,7 +1103,7 @@ impl Node {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
-    async fn refresh_peer_connection(
+    pub(crate) async fn refresh_peer_connection(
         &self,
         peer_id: EndpointId,
         reason: RelayReconnectReason,

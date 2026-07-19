@@ -4,7 +4,8 @@
 //! shared snapshots through this boundary.
 
 use super::inventory::{
-    InventoryScanCoordinator, replace_local_instances_snapshot, replace_local_inventory_snapshot,
+    InventoryScanCoordinator, InventoryScanDisposition, InventoryScanError, InventoryScanOutcome,
+    InventoryScanResult, replace_local_instances_snapshot, replace_local_inventory_snapshot,
 };
 use super::plugins::{
     PluginDataValue, PluginsSnapshotView, clear_plugin_data, clear_plugin_endpoints,
@@ -69,6 +70,15 @@ impl RuntimeDataCollector {
     #[cfg(test)]
     pub(crate) fn subscription_state(&self) -> RuntimeDataSubscriptionState {
         self.shared.subscriptions.state()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inventory_scan_waiter_count(&self) -> usize {
+        self.shared
+            .inventory_scan
+            .lock()
+            .expect("runtime data inventory scan lock poisoned")
+            .waiters_len()
     }
 
     pub(crate) fn mark_dirty(&self, dirty: RuntimeDataDirty) -> RuntimeDataSubscriptionState {
@@ -218,12 +228,21 @@ impl RuntimeDataCollector {
         })
     }
 
-    pub(crate) async fn coalesce_local_inventory_scan<F>(
-        &self,
-        load: F,
-    ) -> LocalModelInventorySnapshot
+    pub(crate) async fn coalesce_local_inventory_scan<F>(&self, load: F) -> InventoryScanResult
     where
         F: FnOnce() -> LocalModelInventorySnapshot + Send + 'static,
+    {
+        self.coalesce_local_inventory_scan_outcome(move || Ok(load()))
+            .await
+            .map(|outcome| outcome.snapshot)
+    }
+
+    pub(crate) async fn coalesce_local_inventory_scan_outcome<F>(
+        &self,
+        load: F,
+    ) -> Result<InventoryScanOutcome, InventoryScanError>
+    where
+        F: FnOnce() -> InventoryScanResult + Send + 'static,
     {
         let (rx, start_scan) = {
             let mut inventory_scan = self
@@ -237,15 +256,17 @@ impl RuntimeDataCollector {
         if start_scan {
             let collector = self.clone();
             tokio::spawn(async move {
-                let snapshot = match tokio::task::spawn_blocking(load).await {
-                    Ok(snapshot) => snapshot,
+                let scan_result = match tokio::task::spawn_blocking(load).await {
+                    Ok(result) => result,
                     Err(err) => {
                         tracing::warn!("Local inventory scan failed: {err}");
-                        LocalModelInventorySnapshot::default()
+                        Err(InventoryScanError::TaskPanicked(err.to_string()))
                     }
                 };
 
-                collector.replace_local_inventory_snapshot(snapshot.clone());
+                if let Ok(snapshot) = &scan_result {
+                    collector.replace_local_inventory_snapshot(snapshot.clone());
+                }
                 let waiters = {
                     let mut inventory_scan = collector
                         .shared
@@ -255,12 +276,20 @@ impl RuntimeDataCollector {
                     inventory_scan.finish()
                 };
                 for waiter in waiters {
-                    let _ = waiter.send(snapshot.clone());
+                    let _ = waiter.send(scan_result.clone());
                 }
             });
         }
 
-        rx.await.unwrap_or_else(|_| self.local_inventory_snapshot())
+        let snapshot = rx.await.map_err(|_| InventoryScanError::TaskCancelled)??;
+        Ok(InventoryScanOutcome {
+            snapshot,
+            disposition: if start_scan {
+                InventoryScanDisposition::Executed
+            } else {
+                InventoryScanDisposition::Coalesced
+            },
+        })
     }
 
     pub(crate) fn plugin_data_snapshot(&self) -> PluginDataSnapshot {

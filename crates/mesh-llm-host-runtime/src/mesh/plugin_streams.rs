@@ -1,12 +1,21 @@
 use anyhow::{Context, Result};
+use iroh::EndpointId;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use prost::Message;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
-use super::{Node, endpoint_id_hex};
+use super::Node;
 use crate::protocol::{STREAM_PLUGIN_MESH_STREAM, read_len_prefixed, write_len_prefixed};
 
-fn plugin_mesh_stream_error(message: impl Into<String>) -> crate::plugin::proto::ErrorResponse {
+pub(crate) fn endpoint_id_from_hex(peer_id: &str) -> Option<EndpointId> {
+    let bytes = hex::decode(peer_id).ok()?;
+    let bytes: [u8; 32] = bytes.as_slice().try_into().ok()?;
+    EndpointId::from_bytes(&bytes).ok()
+}
+
+pub(crate) fn plugin_mesh_stream_error(
+    message: impl Into<String>,
+) -> crate::plugin::proto::ErrorResponse {
     crate::plugin::proto::ErrorResponse {
         code: rmcp::model::ErrorCode::INTERNAL_ERROR.0,
         message: message.into(),
@@ -14,7 +23,7 @@ fn plugin_mesh_stream_error(message: impl Into<String>) -> crate::plugin::proto:
     }
 }
 
-fn open_stream_request_from_mesh_request(
+pub(crate) fn open_stream_request_from_mesh_request(
     request: &crate::plugin::proto::OpenMeshStreamRequest,
 ) -> crate::plugin::proto::OpenStreamRequest {
     crate::plugin::proto::OpenStreamRequest {
@@ -56,8 +65,9 @@ impl Node {
         }
 
         request.plugin_id = plugin_id;
-        let Some(conn) = self.connection_for_peer_hex(&request.target_peer_id).await else {
-            return Err(plugin_mesh_stream_error("target peer is not connected"));
+        let conn = match self.connection_for_peer_hex(&request.target_peer_id).await {
+            Some(conn) => conn,
+            None => return Err(plugin_mesh_stream_error("target peer is not routable")),
         };
         let listener = match crate::plugin::bind_local_listener(
             &crate::plugin::make_instance_id(),
@@ -128,17 +138,13 @@ impl Node {
         }
     }
 
-    async fn connection_for_peer_hex(&self, peer_id: &str) -> Option<Connection> {
-        let state = self.state.lock().await;
-        state
-            .connections
-            .iter()
-            .find(|(id, _)| endpoint_id_hex(**id) == peer_id)
-            .map(|(_, conn)| conn.clone())
+    pub(crate) async fn connection_for_peer_hex(&self, peer_id: &str) -> Option<Connection> {
+        let peer_id = endpoint_id_from_hex(peer_id)?;
+        self.connection_to_peer(peer_id).await.ok()
     }
 }
 
-async fn bridge_outbound_plugin_mesh_stream(
+pub(crate) async fn bridge_outbound_plugin_mesh_stream(
     listener: crate::plugin::LocalListener,
     conn: Connection,
     request: crate::plugin::proto::OpenMeshStreamRequest,
@@ -155,7 +161,7 @@ async fn bridge_outbound_plugin_mesh_stream(
     }
 }
 
-async fn bridge_quic_to_local_stream(
+pub(crate) async fn bridge_quic_to_local_stream(
     recv: RecvStream,
     local: crate::plugin::LocalStream,
 ) -> Result<()> {
@@ -173,7 +179,7 @@ async fn bridge_quic_to_local_stream(
     }
 }
 
-async fn bridge_local_stream_to_quic(
+pub(crate) async fn bridge_local_stream_to_quic(
     local: crate::plugin::LocalStream,
     send: SendStream,
 ) -> Result<()> {
@@ -191,7 +197,7 @@ async fn bridge_local_stream_to_quic(
     }
 }
 
-async fn bridge_local_stream_bidirectional(
+pub(crate) async fn bridge_local_stream_bidirectional(
     local: crate::plugin::LocalStream,
     send: SendStream,
     recv: RecvStream,
@@ -212,7 +218,7 @@ async fn bridge_local_stream_bidirectional(
     }
 }
 
-async fn copy_quic_to_local_write<S>(mut recv: RecvStream, stream: S) -> Result<()>
+pub(crate) async fn copy_quic_to_local_write<S>(mut recv: RecvStream, stream: S) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -222,7 +228,7 @@ where
     Ok(())
 }
 
-async fn copy_local_read_to_quic<S>(stream: S, mut send: SendStream) -> Result<()>
+pub(crate) async fn copy_local_read_to_quic<S>(stream: S, mut send: SendStream) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -232,7 +238,7 @@ where
     Ok(())
 }
 
-async fn bridge_stream_bidirectional<S>(
+pub(crate) async fn bridge_stream_bidirectional<S>(
     stream: S,
     mut send: SendStream,
     mut recv: RecvStream,
@@ -253,4 +259,19 @@ where
     };
     tokio::try_join!(to_mesh, from_mesh)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_id_from_hex_accepts_target_peer_ids() {
+        let peer_id = EndpointId::from(iroh::SecretKey::from_bytes(&[0x42; 32]).public());
+        let encoded = hex::encode(peer_id.as_bytes());
+
+        assert_eq!(endpoint_id_from_hex(&encoded), Some(peer_id));
+        assert_eq!(endpoint_id_from_hex("not-hex"), None);
+        assert_eq!(endpoint_id_from_hex(&hex::encode([0u8; 16])), None);
+    }
 }

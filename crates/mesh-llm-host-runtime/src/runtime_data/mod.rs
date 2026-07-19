@@ -18,6 +18,11 @@ mod subscriptions;
 pub(crate) use self::api_views::{collect_views, mesh_models, status_payload};
 pub(crate) use self::collector::RuntimeDataCollector;
 #[cfg(test)]
+pub(crate) use self::inventory::InventoryScanError;
+pub(crate) use self::inventory::{
+    InventoryScanDisposition, InventoryScanOutcome, InventoryScanResult, sorted_inventory_entries,
+};
+#[cfg(test)]
 pub(crate) use self::metrics::RuntimeLlamaMetricSample;
 pub(crate) use self::metrics::{
     RuntimeLlamaEndpointStatus, RuntimeLlamaMetricItem, RuntimeLlamaMetricsSnapshot,
@@ -36,12 +41,14 @@ pub(crate) use self::subscriptions::RuntimeDataDirty;
 
 #[cfg(test)]
 pub(crate) mod tests {
+    mod inventory;
     use super::api_views::{collect_views, mesh_models, status_payload};
     use super::processes::{RuntimeProcessSnapshot, runtime_process_payloads};
     use super::snapshots::{
         HardwareViewInput, ModelViewInput, PluginDataKey, PluginEndpointKey, StatusViewInput,
     };
     use super::subscriptions::{RuntimeDataDirty, RuntimeDataVersion};
+    use super::{InventoryScanDisposition, InventoryScanError, InventoryScanResult};
     use super::{RuntimeDataCollector, RuntimeDataSource};
     use super::{RuntimeLlamaEndpointStatus, RuntimeLlamaSlotSnapshot, RuntimeLlamaSlotsSnapshot};
     use crate::api::RuntimeProcessPayload;
@@ -1041,57 +1048,6 @@ pub(crate) mod tests {
         assert_eq!(payload[0].multimodal_status, Some("supported"));
         assert!(payload[0].vision);
         assert_eq!(payload[0].vision_status, Some("supported"));
-    }
-
-    #[tokio::test]
-    async fn runtime_data_inventory_single_flight_scan_coalesces() {
-        let collector = RuntimeDataCollector::new();
-        let scan_count = Arc::new(AtomicUsize::new(0));
-
-        let first = {
-            let collector = collector.clone();
-            let scan_count = scan_count.clone();
-            tokio::spawn(async move {
-                collector
-                    .coalesce_local_inventory_scan(move || {
-                        scan_count.fetch_add(1, Ordering::SeqCst);
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                        let mut snapshot = LocalModelInventorySnapshot::default();
-                        snapshot.model_names.insert("Qwen3-8B".into());
-                        snapshot
-                            .size_by_name
-                            .insert("Qwen3-8B".into(), 8_000_000_000);
-                        snapshot
-                    })
-                    .await
-            })
-        };
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let second = {
-            let collector = collector.clone();
-            tokio::spawn(async move {
-                collector
-                    .coalesce_local_inventory_scan(LocalModelInventorySnapshot::default)
-                    .await
-            })
-        };
-
-        let first_snapshot = first.await.expect("first inventory scan task should join");
-        let second_snapshot = second
-            .await
-            .expect("second inventory scan task should join");
-
-        assert_eq!(scan_count.load(Ordering::SeqCst), 1);
-        assert_eq!(first_snapshot, second_snapshot);
-        assert_eq!(collector.local_inventory_snapshot(), first_snapshot);
-        assert!(
-            collector
-                .local_inventory_snapshot()
-                .model_names
-                .contains("Qwen3-8B")
-        );
     }
 
     #[test]

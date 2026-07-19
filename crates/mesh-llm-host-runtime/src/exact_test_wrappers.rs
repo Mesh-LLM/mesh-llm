@@ -222,6 +222,11 @@ fn mesh_requirements_rejected_peer_messages_have_no_mesh_effect() {
 }
 
 #[test]
+fn mesh_requirements_gossip_rejects_direct_sender_before_payload_effects() {
+    mesh::tests::assert_mesh_requirements_gossip_rejects_direct_sender_before_payload_effects();
+}
+
+#[test]
 fn mesh_requirements_join_rejects_invalid_bootstrap_token() {
     mesh::tests::assert_mesh_requirements_join_rejects_invalid_bootstrap_token();
 }
@@ -234,6 +239,50 @@ fn mesh_requirements_join_accepts_matching_bootstrap_before_policy_state_install
 #[test]
 fn mesh_requirements_unrestricted_legacy_mesh_join_stays_compatible() {
     mesh::tests::assert_mesh_requirements_unrestricted_legacy_mesh_join_stays_compatible();
+}
+
+#[test]
+fn named_mesh_id_uses_documented_sha256_derivation() {
+    mesh::tests::assert_named_mesh_id_uses_documented_sha256_derivation();
+}
+
+#[test]
+#[serial_test::serial]
+fn persisted_random_mesh_id_is_preserved() {
+    mesh::tests::assert_persisted_random_mesh_id_is_preserved();
+}
+
+#[test]
+fn requirement_invite_signing_failure_uses_cached_fallback() {
+    mesh::tests::assert_requirement_invite_signing_failure_uses_cached_fallback();
+}
+
+#[test]
+#[serial_test::serial]
+fn malformed_genesis_policy_fails_closed() {
+    mesh::tests::assert_malformed_genesis_policy_fails_closed();
+}
+
+#[test]
+#[serial_test::serial]
+fn unverified_genesis_policy_fails_closed() {
+    mesh::tests::assert_unverified_genesis_policy_fails_closed();
+}
+
+#[test]
+#[serial_test::serial]
+fn mismatched_genesis_policy_fails_closed() {
+    mesh::tests::assert_mismatched_genesis_policy_fails_closed();
+}
+
+#[test]
+fn requirement_state_reads_coherent_snapshot() {
+    mesh::tests::assert_requirement_state_reads_coherent_snapshot();
+}
+
+#[test]
+fn concurrent_requirement_state_installs_do_not_overwrite() {
+    mesh::tests::assert_concurrent_requirement_state_installs_do_not_overwrite();
 }
 
 #[test]

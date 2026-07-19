@@ -18,15 +18,15 @@ pub(super) fn lan_ipv4_candidates(addr: &EndpointAddr) -> Vec<std::net::SocketAd
         .collect()
 }
 
-fn is_private_lan_ipv4(ip: &Ipv4Addr) -> bool {
+pub(crate) fn is_private_lan_ipv4(ip: &Ipv4Addr) -> bool {
     ip.is_private()
 }
 
-fn is_private_lan_interface_ipv4(ip: &Ipv4Addr) -> bool {
+pub(crate) fn is_private_lan_interface_ipv4(ip: &Ipv4Addr) -> bool {
     is_private_lan_ipv4(ip) && !is_container_bridge_ipv4(ip)
 }
 
-fn is_container_bridge_ipv4(ip: &Ipv4Addr) -> bool {
+pub(crate) fn is_container_bridge_ipv4(ip: &Ipv4Addr) -> bool {
     matches!(
         ip.octets(),
         [10, 88 | 89, _, _] | [10, 96..=111, _, _] | [10, 244, _, _] | [172, 17, _, _]
@@ -38,7 +38,7 @@ fn is_container_bridge_ipv4(ip: &Ipv4Addr) -> bool {
 /// 192.88.99.1 is a routable, globally-assigned target; connecting a UDP socket
 /// to it only drives route/source selection — it sends nothing. Returns `None`
 /// when there is no default route or the source is unspecified/loopback.
-fn default_route_source_ipv4() -> Option<Ipv4Addr> {
+pub(crate) fn default_route_source_ipv4() -> Option<Ipv4Addr> {
     let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     socket.connect((Ipv4Addr::new(192, 88, 99, 1), 9)).ok()?;
     match socket.local_addr().ok()?.ip() {
@@ -51,7 +51,7 @@ fn default_route_source_ipv4() -> Option<Ipv4Addr> {
 ///
 /// Skips loopback, link-local, point-to-point, and common container bridge
 /// addresses so the result is a host LAN interface peers can directly reach.
-fn first_private_lan_interface_ipv4() -> Option<Ipv4Addr> {
+pub(crate) fn first_private_lan_interface_ipv4() -> Option<Ipv4Addr> {
     let interfaces = if_addrs::get_if_addrs().ok()?;
     interfaces
         .into_iter()
@@ -68,7 +68,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn private_rfc1918_ranges_are_lan() {
+    pub(crate) fn private_rfc1918_ranges_are_lan() {
         for ip in [
             Ipv4Addr::new(10, 0, 0, 5),
             Ipv4Addr::new(10, 96, 0, 5),
@@ -82,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn public_cgnat_link_local_and_loopback_are_not_lan() {
+    pub(crate) fn public_cgnat_link_local_and_loopback_are_not_lan() {
         for ip in [
             Ipv4Addr::new(8, 8, 8, 8),
             Ipv4Addr::new(100, 64, 0, 1),
@@ -95,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn common_container_bridge_ranges_are_not_selected_as_local_interfaces() {
+    pub(crate) fn common_container_bridge_ranges_are_not_selected_as_local_interfaces() {
         for ip in [
             Ipv4Addr::new(172, 17, 0, 1),
             Ipv4Addr::new(10, 88, 0, 1),
@@ -110,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn public_candidate_classifier_excludes_private_and_cgnat() {
+    pub(crate) fn public_candidate_classifier_excludes_private_and_cgnat() {
         let public = SocketAddr::from(([203, 0, 113, 0], 9));
         assert!(!is_public_ipv4_candidate(&public));
         let real_public = SocketAddr::from(([9, 9, 9, 9], 9));
