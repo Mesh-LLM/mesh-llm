@@ -9,6 +9,7 @@ import { generateRequestId } from '@/lib/api/request-id'
 import type { ChatSSEEvent } from '@/lib/api/types'
 import { buildResponsesInput } from '@/features/chat/api/build-input'
 import type { ChatResponseMetadata } from '@/features/chat/api/response-metadata'
+import { isMeshVirtualModel, syntheticMoaProgressKey } from '@/features/chat/lib/moa-progress'
 
 function nowMs() {
   return performance.now()
@@ -175,6 +176,7 @@ async function* runConnect(
   const requestId = generateRequestId()
   const messageId = generateRequestId()
   const requestStartedAt = nowMs()
+  const meshVirtualModel = isMeshVirtualModel(model)
 
   yield { type: EventType.RUN_STARTED, threadId: requestId, runId: requestId }
 
@@ -203,12 +205,17 @@ async function* runConnect(
 
   let messageStarted = false
   let reasoningOpen = false
+  const seenMeshProgress = new Set<string>()
   let firstDeltaAt: number | undefined
 
   for await (const event of parseSSEStream(response.body, abortSignal)) {
     if (abortSignal?.aborted) break
 
     if (event.type === 'response.reasoning_text.delta') {
+      const progressKey = meshVirtualModel ? syntheticMoaProgressKey(event.delta) : undefined
+      if (progressKey && seenMeshProgress.has(progressKey)) continue
+
+      if (progressKey) seenMeshProgress.add(progressKey)
       firstDeltaAt ??= nowMs()
       if (!messageStarted) {
         messageStarted = true

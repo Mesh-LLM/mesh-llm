@@ -97,6 +97,7 @@ export interface PeerInfo {
   role?: string
   serving_models?: string[]
   hosted_models?: string[]
+  hosted_models_known?: boolean
   models?: string[]
   my_vram_gb?: number
   vram_gb?: number

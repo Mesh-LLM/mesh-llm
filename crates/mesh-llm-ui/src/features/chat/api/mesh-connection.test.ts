@@ -193,6 +193,52 @@ describe('createMeshConnectionAdapter', () => {
     expect(contentDeltas).toEqual([' Final answer.'])
   })
 
+  it('keeps each distinct mesh progress phase once for expandable details', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          createSSEStream([
+            'data: {"type":"response.reasoning_text.delta","delta":"Routing through mesh…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Routing through mesh…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Querying peer models…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Verifier found conflicting dates.\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Waiting on a slow peer…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Waiting on a slow peer…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Still gathering responses…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Hold on, this is taking a moment…\\n"}\n',
+            'data: {"type":"response.output_text.delta","delta":"Corroborated answer."}\n',
+            'data: [DONE]\n'
+          ]),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('mesh')
+    const chunks: StreamChunk[] = []
+    for await (const chunk of adapter.connect(createMessages(), undefined, undefined)) {
+      chunks.push(chunk)
+    }
+
+    const progressDeltas = chunks
+      .filter((chunk) => chunk.type === EventType.REASONING_MESSAGE_CONTENT)
+      .map((chunk) => (chunk.type === EventType.REASONING_MESSAGE_CONTENT ? chunk.delta : ''))
+    const answerDeltas = chunks
+      .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? chunk.delta : ''))
+
+    expect(progressDeltas).toEqual([
+      'Routing through mesh…\n',
+      'Querying peer models…\n',
+      'Verifier found conflicting dates.\n',
+      'Waiting on a slow peer…\n',
+      'Still gathering responses…\n',
+      'Hold on, this is taking a moment…\n'
+    ])
+    expect(answerDeltas).toEqual(['Corroborated answer.'])
+  })
+
   it('includes the latest system prompt in responses requests', async () => {
     let currentSystemPrompt = 'Be concise about mesh routing.'
     const fetchMock = vi.fn().mockResolvedValue(new Response(createSSEStream(['data: [DONE]\n']), { status: 200 }))

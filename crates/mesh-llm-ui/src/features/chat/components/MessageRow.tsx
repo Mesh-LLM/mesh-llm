@@ -17,6 +17,8 @@ import remarkGfm from 'remark-gfm'
 import type { MessageRole } from '@/features/app-tabs/types'
 import { cn } from '@/lib/cn'
 import { ResponseStatsBar } from '@/features/chat/components/ResponseStatsBar'
+import { ThinkingDisclosure } from '@/features/chat/components/ThinkingDisclosure'
+import { isMeshVirtualModel } from '@/features/chat/lib/moa-progress'
 import { splitAssistantThinking } from '@/features/chat/components/thinking-segments'
 
 export type MessageAttachmentAction = {
@@ -239,13 +241,16 @@ function AssistantMarkdown({
 function AssistantMessageContent({
   body,
   linksEnabled,
+  model,
   streaming
 }: {
   body: string
   linksEnabled: boolean
+  model?: string
   streaming: boolean
 }) {
-  const segments = splitAssistantThinking(body, { streaming })
+  const meshVirtualModel = isMeshVirtualModel(model)
+  const segments = splitAssistantThinking(body, { streaming: streaming && !meshVirtualModel })
 
   if (segments.length === 0) return null
 
@@ -255,7 +260,18 @@ function AssistantMessageContent({
         const key = `${segment.kind}-${index}`
 
         if (segment.kind === 'thinking') {
-          const active = streaming && segment.open
+          const hasResponseAfter = segments
+            .slice(index + 1)
+            .some((candidate) => candidate.kind === 'response' && candidate.text.length > 0)
+          const active = streaming && (segment.open || (meshVirtualModel && !hasResponseAfter))
+
+          if (meshVirtualModel) {
+            return (
+              <ThinkingDisclosure active={active} key={key}>
+                <AssistantMarkdown text={segment.text} linksEnabled={linksEnabled} variant="thinking" />
+              </ThinkingDisclosure>
+            )
+          }
 
           return (
             <div
@@ -431,7 +447,7 @@ export function MessageRow({
             </span>
           </div>
         ) : isResponse ? (
-          <AssistantMessageContent body={body} linksEnabled={true} streaming={isStreamingPlaceholder} />
+          <AssistantMessageContent body={body} linksEnabled={true} model={model} streaming={isStreamingPlaceholder} />
         ) : (
           body
         )}

@@ -409,6 +409,74 @@ describe('MessageRow', () => {
     expect(screen.getByText('Streaming response...')).toBeInTheDocument()
   })
 
+  it('keeps a noisy mesh consultation in one compact expandable row', async () => {
+    const user = userEvent.setup()
+    render(
+      <MessageRow
+        messageRole="assistant"
+        body={
+          '<think>Routing through mesh…\nQuerying peer models…\nWaiting on a slow peer…\nHold on, this is taking a moment…</think>'
+        }
+        timestamp="12:11"
+        model="mesh"
+        state="streaming"
+      />
+    )
+
+    const disclosure = screen.getByRole('button', {
+      name: 'Consulting peers and corroborating responses… Show details'
+    })
+    const rawTrace = screen.getByText(/Routing through mesh/)
+
+    expect(disclosure.closest('[data-thinking-state="active"]')).toBeInTheDocument()
+    expect(rawTrace).not.toBeVisible()
+    expect(screen.getByText('Streaming response...')).toBeVisible()
+
+    await user.click(disclosure)
+
+    const details = screen.getByRole('region', {
+      name: 'Consulting peers and corroborating responses… details'
+    })
+    expect(rawTrace).toBeVisible()
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true')
+    expect(details).toHaveAttribute('tabindex', '0')
+    details.focus()
+    expect(details).toHaveFocus()
+    expect(rawTrace).toHaveTextContent('Waiting on a slow peer…')
+    expect(rawTrace).toHaveTextContent('Hold on, this is taking a moment…')
+  })
+
+  it('keeps a fast mesh answer visible before any consultation progress arrives', () => {
+    render(
+      <MessageRow
+        messageRole="assistant"
+        body="Fast mesh answer is already streaming."
+        timestamp="12:11"
+        model="mesh"
+        state="streaming"
+      />
+    )
+
+    expect(screen.getByText('Fast mesh answer is already streaming.')).toBeVisible()
+    expect(screen.queryByText('Consulting peers and corroborating responses…')).not.toBeInTheDocument()
+    expect(screen.queryByText('Thinking…')).not.toBeInTheDocument()
+  })
+
+  it('labels completed mesh work as a folded peer consultation', () => {
+    render(
+      <MessageRow
+        messageRole="assistant"
+        body="<think>Routing through mesh…</think>Corroborated answer."
+        timestamp="12:11"
+        model="mesh"
+      />
+    )
+
+    expect(screen.getByRole('button', { name: 'Peer consultation Show details' })).toBeVisible()
+    expect(screen.getByText('Routing through mesh…')).not.toBeVisible()
+    expect(screen.getByText('Corroborated answer.')).toBeVisible()
+  })
+
   it('only opts the message body back into text selection', () => {
     const { container } = render(
       <MessageRow

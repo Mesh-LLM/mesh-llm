@@ -10,6 +10,8 @@ import { loadChatState, saveChatState, trimThreadMessages } from '@/features/cha
 import { ChatLayout } from '@/features/chat/layouts/ChatLayout'
 import { ChatPage, ChatPageContent } from '@/features/chat/pages/ChatPage'
 import { adaptModelsToSummary } from '@/features/network/api/models-adapter'
+import { useModelsQuery } from '@/features/network/api/use-models-query'
+import { useStatusQuery } from '@/features/network/api/use-status-query'
 import { DataModeProvider } from '@/lib/data-mode/DataModeContext'
 import { FeatureFlagProvider } from '@/lib/feature-flags'
 
@@ -98,7 +100,7 @@ const chatMock = vi.hoisted(() => {
     sendOptimisticUserMessageBeforeError: false,
     sendOptimisticAssistantPlaceholderBeforeError: false,
     reloadAssistantText: 'Retried assistant reply',
-    reloadStatus: 'ready' as const,
+    reloadStatus: 'ready' as 'ready' | 'submitted' | 'streaming' | 'error',
     reloadErrorMessage: undefined as string | undefined,
     stopCalls: [] as string[],
     sendCalls: [] as Array<{
@@ -176,11 +178,11 @@ vi.mock('@/features/chat/api/chat-storage', () => ({
 }))
 
 vi.mock('@/features/network/api/use-models-query', () => ({
-  useModelsQuery: vi.fn(() => ({ data: { mesh_models: [] }, isFetching: false, isError: false, refetch: vi.fn() }))
+  useModelsQuery: vi.fn()
 }))
 
 vi.mock('@/features/network/api/use-status-query', () => ({
-  useStatusQuery: vi.fn(() => ({ data: undefined }))
+  useStatusQuery: vi.fn()
 }))
 
 vi.mock('@/features/network/api/models-adapter', () => ({
@@ -471,6 +473,18 @@ describe('ChatPage', () => {
     vi.mocked(saveChatState).mockResolvedValue(undefined)
     vi.mocked(trimThreadMessages).mockImplementation((messages) => messages)
     vi.mocked(adaptModelsToSummary).mockReturnValue(CHAT_HARNESS.models)
+    vi.mocked(useModelsQuery).mockReturnValue({
+      data: { mesh_models: [] },
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useModelsQuery>)
+    vi.mocked(useStatusQuery).mockReturnValue({
+      data: undefined,
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useStatusQuery>)
     attachmentPreprocessingMock.describeImageForPrompt.mockReset()
     attachmentPreprocessingMock.extractPdfTextFromFile.mockReset()
     attachmentPreprocessingMock.describeScannedPdf.mockReset()
@@ -569,6 +583,104 @@ describe('ChatPage', () => {
 
     const options = await screen.findAllByRole('option')
     expect(options[0]).toHaveTextContent('Auto')
+  })
+
+  it('renders usable live chat with status-backed models while catalog enrichment is loading', async () => {
+    const user = userEvent.setup()
+    vi.mocked(useModelsQuery).mockReturnValue({
+      data: undefined,
+      isFetching: true,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useModelsQuery>)
+    vi.mocked(useStatusQuery).mockReturnValue({
+      data: {
+        llama_ready: false,
+        node_state: 'client',
+        serving_models: [],
+        peers: [{ hosted_models_known: false, serving_models: ['peer-model'] }]
+      },
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useStatusQuery>)
+
+    renderChatPage({ mode: 'live' })
+
+    expect(screen.getByText('Start Chatting')).toBeVisible()
+    expect(screen.getByLabelText('Prompt')).toBeEnabled()
+    const modelSelect = screen.getByRole('combobox', { name: 'Select model' })
+    expect(modelSelect).toHaveTextContent('Mesh — automatic')
+
+    await user.click(modelSelect)
+
+    expect(screen.getByRole('option', { name: /peer-model/ })).toBeVisible()
+  })
+
+  it('keeps live chat usable when catalog enrichment fails but runtime status is ready', () => {
+    vi.mocked(useModelsQuery).mockReturnValue({
+      data: undefined,
+      isFetching: false,
+      isError: true,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useModelsQuery>)
+    vi.mocked(useStatusQuery).mockReturnValue({
+      data: { llama_ready: true, serving_models: ['local-model'], peers: [] },
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useStatusQuery>)
+
+    renderChatPage({ mode: 'live' })
+
+    expect(screen.getByText('Start Chatting')).toBeVisible()
+    expect(screen.getByLabelText('Prompt')).toBeEnabled()
+  })
+
+  it('uses a warm catalog without waiting for runtime status', () => {
+    vi.mocked(adaptModelsToSummary).mockReturnValue([
+      { ...CHAT_HARNESS.models[0], name: 'catalog-model', status: 'warm' }
+    ])
+    vi.mocked(useModelsQuery).mockReturnValue({
+      data: { mesh_models: [{}] },
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useModelsQuery>)
+    vi.mocked(useStatusQuery).mockReturnValue({
+      data: undefined,
+      isFetching: true,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useStatusQuery>)
+
+    renderChatPage({ mode: 'live' })
+
+    expect(screen.getByText('Start Chatting')).toBeVisible()
+    expect(screen.getByLabelText('Prompt')).toBeEnabled()
+  })
+
+  it('keeps warm catalog chat usable if runtime status fails', () => {
+    vi.mocked(adaptModelsToSummary).mockReturnValue([
+      { ...CHAT_HARNESS.models[0], name: 'catalog-model', status: 'warm' }
+    ])
+    vi.mocked(useModelsQuery).mockReturnValue({
+      data: { mesh_models: [{}] },
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useModelsQuery>)
+    vi.mocked(useStatusQuery).mockReturnValue({
+      data: undefined,
+      isFetching: false,
+      isError: true,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useStatusQuery>)
+
+    renderChatPage({ mode: 'live' })
+
+    expect(screen.getByText('Start Chatting')).toBeVisible()
+    expect(screen.getByLabelText('Prompt')).toBeEnabled()
   })
 
   it('excludes cold live models from the chat model selector', async () => {
@@ -935,6 +1047,27 @@ describe('ChatPage', () => {
     })
   })
 
+  it('keeps retried mesh progress folded before response metadata arrives', async () => {
+    const user = userEvent.setup()
+
+    renderChatPage({ mode: 'live' })
+
+    await user.type(screen.getByLabelText('Prompt'), 'Check this with the mesh')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    await user.click(screen.getByRole('button', { name: 'Stop streaming' }))
+
+    chatMock.reloadAssistantText = 'Routing through mesh…</think>'
+    chatMock.reloadStatus = 'streaming'
+    await user.click(screen.getByRole('button', { name: 'Retry last' }))
+
+    const disclosure = await screen.findByRole('button', {
+      name: 'Consulting peers and corroborating responses… Show details'
+    })
+    expect(disclosure.closest('[data-thinking-state="active"]')).toBeInTheDocument()
+    expect(screen.getByText('Routing through mesh…')).not.toBeVisible()
+    expect(screen.queryByText('Thinking')).not.toBeInTheDocument()
+  })
+
   it('renders streamed thinking separately, formats final markdown, and persists the raw assistant body', async () => {
     const user = userEvent.setup()
     const streamedBody = 'Reasoning text.</think> The capital of France is **Paris**.'
@@ -945,8 +1078,12 @@ describe('ChatPage', () => {
     await user.type(screen.getByLabelText('Prompt'), 'Show final answer formatting')
     await user.click(screen.getByRole('button', { name: 'Send' }))
 
-    expect(await screen.findByText('Thinking')).toBeInTheDocument()
-    expect(screen.getByText('Reasoning text.')).toBeInTheDocument()
+    const reasoningDisclosure = await screen.findByRole('button', { name: 'Peer consultation Show details' })
+    expect(screen.getByText('Reasoning text.')).not.toBeVisible()
+
+    await user.click(reasoningDisclosure)
+
+    expect(screen.getByText('Reasoning text.')).toBeVisible()
 
     const paris = screen.getByText('Paris')
     expect(paris.tagName.toLowerCase()).toBe('strong')
