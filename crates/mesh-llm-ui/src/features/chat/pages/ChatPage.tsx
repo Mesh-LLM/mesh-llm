@@ -470,7 +470,10 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const modelsQuery = useModelsQuery({ enabled: mode === 'live' })
   const statusQuery = useStatusQuery({ enabled: liveMode })
   const liveStatus = statusQuery.data
-  const catalogModels = modelsQuery.data ? adaptModelsToSummary(modelsQuery.data.mesh_models) : undefined
+  const catalogModels = useMemo(
+    () => (modelsQuery.data ? adaptModelsToSummary(modelsQuery.data.mesh_models) : undefined),
+    [modelsQuery.data]
+  )
   const statusModels = useMemo(() => statusBackedChatModels(liveStatus), [liveStatus])
   const liveModels = catalogModels && catalogModels.length > 0 ? catalogModels : statusModels
   const displayModels = liveMode ? liveModels : data.models

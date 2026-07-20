@@ -31,6 +31,10 @@ describe('statusBackedChatModels', () => {
             serving_models: ['legacy-routable']
           },
           {
+            hosted_models: [],
+            serving_models: ['legacy-status-api-routable']
+          },
+          {
             hosted_models: ['hosted-routable'],
             hosted_models_known: true,
             serving_models: ['assigned-copy']
@@ -39,7 +43,11 @@ describe('statusBackedChatModels', () => {
       })
     )
 
-    expect(models.map((model) => model.name)).toEqual(['hosted-routable', 'legacy-routable'])
+    expect(models.map((model) => model.name)).toEqual([
+      'hosted-routable',
+      'legacy-routable',
+      'legacy-status-api-routable'
+    ])
   })
 
   it('includes only warm local model entries while retaining legacy strings', () => {

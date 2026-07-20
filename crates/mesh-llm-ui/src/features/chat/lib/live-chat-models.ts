@@ -19,7 +19,7 @@ function localRoutableModelNames(status: StatusPayload): string[] {
 
 function peerRoutableModelNames(peer: PeerInfo): string[] {
   const hosted = peer.hosted_models?.filter(Boolean) ?? []
-  if (hosted.length > 0 || peer.hosted_models_known !== false) return hosted
+  if (hosted.length > 0 || peer.hosted_models_known === true) return hosted
   return peer.serving_models?.filter(Boolean) ?? []
 }
 
