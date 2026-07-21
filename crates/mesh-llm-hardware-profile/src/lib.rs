@@ -323,17 +323,21 @@ fn detect_cuda_profile(gpus: &[HostGpuProfile]) -> Option<HostCudaProfile> {
 }
 
 fn detect_rocm_profile(gpus: &[HostGpuProfile]) -> Option<HostRocmProfile> {
-    detect_rocm_profile_with_arches(gpus, rocm::gpu_arches())
+    let mut gpu_arches = env_string_set("MESH_LLM_ROCM_GPU_ARCHES");
+    gpu_arches.extend(rocm::gpu_arches());
+    detect_rocm_profile_with_arches(
+        gpus,
+        gpu_arches,
+        std::env::var("MESH_LLM_ROCM_VERSION").ok(),
+    )
 }
 
 fn detect_rocm_profile_with_arches(
     gpus: &[HostGpuProfile],
-    detected_arches: BTreeSet<String>,
+    mut gpu_arches: BTreeSet<String>,
+    version: Option<String>,
 ) -> Option<HostRocmProfile> {
-    let mut gpu_arches = env_string_set("MESH_LLM_ROCM_GPU_ARCHES");
-    gpu_arches.extend(detected_arches);
     gpu_arches.extend(gpus.iter().filter_map(|gpu| gpu.rocm_gfx.clone()));
-    let version = std::env::var("MESH_LLM_ROCM_VERSION").ok();
     let has_rocm_label = gpus.iter().any(|gpu| {
         let label = gpu.display_name.to_ascii_lowercase();
         label.contains("amd") || label.contains("radeon") || label.contains("rocm")
@@ -701,10 +705,9 @@ mod tests {
 
     #[test]
     fn kfd_architecture_evidence_enables_rocm_without_inventory_synthesis() {
-        let _rocm_arches = EnvVarGuard::clear("MESH_LLM_ROCM_GPU_ARCHES");
-
-        let profile = detect_rocm_profile_with_arches(&[], BTreeSet::from(["gfx942".to_string()]))
-            .expect("KFD architecture should enable a ROCm runtime profile");
+        let profile =
+            detect_rocm_profile_with_arches(&[], BTreeSet::from(["gfx942".to_string()]), None)
+                .expect("KFD architecture should enable a ROCm runtime profile");
 
         assert_eq!(profile.gpu_arches, BTreeSet::from(["gfx942".to_string()]));
     }
@@ -716,9 +719,9 @@ mod tests {
             select_native_runtime_from_artifacts,
         };
 
-        let _rocm_arches = EnvVarGuard::clear("MESH_LLM_ROCM_GPU_ARCHES");
-        let rocm = detect_rocm_profile_with_arches(&[], BTreeSet::from(["gfx942".to_string()]))
-            .expect("MI300X KFD evidence should produce a ROCm profile");
+        let rocm =
+            detect_rocm_profile_with_arches(&[], BTreeSet::from(["gfx942".to_string()]), None)
+                .expect("MI300X KFD evidence should produce a ROCm profile");
         let runtime_profile = HostRuntimeProfile {
             os: "linux".to_string(),
             arch: "x86_64".to_string(),
