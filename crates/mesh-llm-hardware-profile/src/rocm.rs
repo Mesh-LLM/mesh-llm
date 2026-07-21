@@ -1,135 +1,143 @@
-use mesh_llm_native_runtime::HostGpuProfile;
+use std::collections::BTreeSet;
+#[cfg(any(target_os = "linux", test))]
+use std::path::Path;
 
-#[derive(Default)]
-struct RocmAgent {
-    name: Option<String>,
-    marketing_name: Option<String>,
-    device_type: Option<String>,
+#[cfg(target_os = "linux")]
+const KFD_TOPOLOGY_NODES: &str = "/sys/class/kfd/kfd/topology/nodes";
+
+/// Returns ROCm architecture evidence for native-runtime selection.
+///
+/// This deliberately does not construct GPU inventory. Once the selected
+/// native runtime is loaded, Skippy's backend ABI remains authoritative for
+/// device identity, ordering, memory, and runtime selectability.
+#[cfg(target_os = "linux")]
+pub(super) fn gpu_arches() -> BTreeSet<String> {
+    gpu_arches_from_topology(Path::new(KFD_TOPOLOGY_NODES))
 }
 
-pub(super) fn gpu_profiles_from_rocminfo(output: &str) -> Vec<HostGpuProfile> {
-    let mut profiles = Vec::new();
-    let mut agent = RocmAgent::default();
-
-    for line in output.lines().map(str::trim) {
-        if is_agent_header(line) {
-            push_gpu_profile(&mut profiles, &mut agent);
-            continue;
-        }
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim();
-        if value.is_empty() {
-            continue;
-        }
-        match key.trim().to_ascii_lowercase().as_str() {
-            "name" => agent.name = Some(value.to_string()),
-            "marketing name" => agent.marketing_name = Some(value.to_string()),
-            "device type" => agent.device_type = Some(value.to_string()),
-            _ => {}
-        }
-    }
-    push_gpu_profile(&mut profiles, &mut agent);
-
-    profiles
+#[cfg(not(target_os = "linux"))]
+pub(super) fn gpu_arches() -> BTreeSet<String> {
+    BTreeSet::new()
 }
 
-fn is_agent_header(line: &str) -> bool {
-    line.strip_prefix("Agent ")
-        .is_some_and(|index| index.trim().parse::<usize>().is_ok())
-}
-
-fn push_gpu_profile(profiles: &mut Vec<HostGpuProfile>, agent: &mut RocmAgent) {
-    let Some(gfx_arch) = agent.name.as_deref().and_then(parse_gfx_arch) else {
-        *agent = RocmAgent::default();
-        return;
+#[cfg(any(target_os = "linux", test))]
+fn gpu_arches_from_topology(root: &Path) -> BTreeSet<String> {
+    let Ok(nodes) = std::fs::read_dir(root) else {
+        return BTreeSet::new();
     };
-    let is_gpu = agent
-        .device_type
-        .as_deref()
-        .is_none_or(|kind| kind.eq_ignore_ascii_case("GPU"));
-    if is_gpu {
-        profiles.push(HostGpuProfile {
-            display_name: agent
-                .marketing_name
-                .take()
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| gfx_arch.clone()),
-            backend_device: None,
-            stable_id: None,
-            vram_bytes: None,
-            unified_memory: false,
-            probe: None,
-            cuda_sm: None,
-            rocm_gfx: Some(gfx_arch),
-        });
-    }
-    *agent = RocmAgent::default();
+
+    nodes
+        .flatten()
+        .filter_map(|entry| gfx_arch_from_kfd_node(&entry.path()))
+        .collect()
 }
 
-fn parse_gfx_arch(value: &str) -> Option<String> {
-    let token = value.split_whitespace().next()?;
-    let arch = token.split(':').next()?.trim().to_ascii_lowercase();
-    let suffix = arch.strip_prefix("gfx")?;
-    (!suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_alphanumeric())).then_some(arch)
+#[cfg(any(target_os = "linux", test))]
+fn gfx_arch_from_kfd_node(node: &Path) -> Option<String> {
+    let gpu_id = std::fs::read_to_string(node.join("gpu_id")).ok()?;
+    if gpu_id.trim().parse::<u64>().ok()? == 0 {
+        return None;
+    }
+
+    let properties = std::fs::read_to_string(node.join("properties")).ok()?;
+    let version = property_value(&properties, "gfx_target_version")?
+        .parse()
+        .ok()?;
+    gfx_arch_from_target_version(version)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn property_value<'a>(properties: &'a str, name: &str) -> Option<&'a str> {
+    properties.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        (fields.next()? == name).then(|| fields.next()).flatten()
+    })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn gfx_arch_from_target_version(version: u64) -> Option<String> {
+    if version == 0 {
+        return None;
+    }
+
+    let major = version / 10_000;
+    let minor = (version / 100) % 100;
+    let stepping = version % 100;
+    if major == 0 || minor > 0xf || stepping > 0xf {
+        return None;
+    }
+
+    Some(format!("gfx{major}{minor:x}{stepping:x}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
-    #[test]
-    fn parses_mi300x_agent_and_ignores_cpu_agent() {
-        let output = r#"
-*******
-Agent 1
-*******
-  Name:                    AMD EPYC 9654 96-Core Processor
-  Marketing Name:          AMD EPYC 9654 96-Core Processor
-  Device Type:             CPU
-*******
-Agent 2
-*******
-  Name:                    gfx942
-  Marketing Name:          AMD Instinct MI300X
-  Device Type:             GPU
-"#;
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
-        let profiles = gpu_profiles_from_rocminfo(output);
+    struct TopologyFixture {
+        root: std::path::PathBuf,
+    }
 
-        assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].display_name, "AMD Instinct MI300X");
-        assert_eq!(profiles[0].rocm_gfx.as_deref(), Some("gfx942"));
-        assert_eq!(profiles[0].backend_device, None);
+    impl TopologyFixture {
+        fn new() -> Self {
+            let suffix = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "mesh-llm-kfd-topology-{}-{suffix}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&root).expect("create KFD topology fixture");
+            Self { root }
+        }
+
+        fn add_node(&self, index: usize, gpu_id: u64, gfx_target_version: u64) {
+            let node = self.root.join(index.to_string());
+            std::fs::create_dir_all(&node).expect("create KFD node fixture");
+            std::fs::write(node.join("gpu_id"), format!("{gpu_id}\n"))
+                .expect("write KFD gpu_id fixture");
+            std::fs::write(
+                node.join("properties"),
+                format!(
+                    "vendor_id 4098\ndevice_id 29857\ngfx_target_version {gfx_target_version}\n"
+                ),
+            )
+            .expect("write KFD properties fixture");
+        }
+    }
+
+    impl Drop for TopologyFixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).ok();
+        }
     }
 
     #[test]
-    fn parses_multiple_gpu_agents_and_normalizes_feature_suffixes() {
-        let output = r#"
-Agent 1
-  Name: gfx942:sramecc+:xnack-
-  Marketing Name: AMD Instinct MI300X
-  Device Type: GPU
-Agent 2
-  Name: GFX1100
-  Marketing Name: AMD Radeon RX 7900 XTX
-  Device Type: GPU
-"#;
+    fn discovers_gpu_arches_and_ignores_cpu_nodes() {
+        let fixture = TopologyFixture::new();
+        fixture.add_node(0, 0, 0);
+        fixture.add_node(1, 51_844, 90_402);
+        fixture.add_node(2, 74_492, 110_000);
 
-        let profiles = gpu_profiles_from_rocminfo(output);
-
-        assert_eq!(profiles.len(), 2);
-        assert_eq!(profiles[0].rocm_gfx.as_deref(), Some("gfx942"));
-        assert_eq!(profiles[1].rocm_gfx.as_deref(), Some("gfx1100"));
+        assert_eq!(
+            gpu_arches_from_topology(&fixture.root),
+            BTreeSet::from(["gfx942".to_string(), "gfx1100".to_string()])
+        );
     }
 
     #[test]
-    fn uses_gfx_arch_when_marketing_name_is_unavailable() {
-        let profiles = gpu_profiles_from_rocminfo("Agent 1\n  Name: gfx1201\n");
+    fn formats_hexadecimal_kfd_stepping() {
+        assert_eq!(
+            gfx_arch_from_target_version(90_010).as_deref(),
+            Some("gfx90a")
+        );
+    }
 
-        assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].display_name, "gfx1201");
-        assert_eq!(profiles[0].rocm_gfx.as_deref(), Some("gfx1201"));
+    #[test]
+    fn rejects_missing_or_malformed_kfd_versions() {
+        assert_eq!(gfx_arch_from_target_version(0), None);
+        assert_eq!(gfx_arch_from_target_version(91_600), None);
+        assert_eq!(gfx_arch_from_target_version(90_016), None);
     }
 }

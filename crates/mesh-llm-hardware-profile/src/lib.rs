@@ -60,38 +60,20 @@ pub fn detected_native_runtime_flavors(
 }
 
 fn detect_gpus() -> Vec<HostGpuProfile> {
-    merge_detected_and_fallback_gpus(
-        detect_nvidia_gpu_profiles(),
-        detect_rocm_gpu_profiles(),
-        fallback_gpu_profiles(),
-    )
+    merge_nvidia_and_fallback_gpus(detect_nvidia_gpu_profiles(), fallback_gpu_profiles())
 }
 
-fn merge_detected_and_fallback_gpus(
+fn merge_nvidia_and_fallback_gpus(
     mut nvidia_gpus: Vec<HostGpuProfile>,
-    mut rocm_gpus: Vec<HostGpuProfile>,
     mut fallback_gpus: Vec<HostGpuProfile>,
 ) -> Vec<HostGpuProfile> {
-    if !nvidia_gpus.is_empty() {
-        fallback_gpus.retain(|gpu| !looks_like_nvidia_gpu_label(&gpu.display_name));
-    }
-    if !rocm_gpus.is_empty() {
-        fallback_gpus.retain(|fallback| {
-            !rocm_gpus
-                .iter()
-                .any(|detected| gpu_profiles_share_identity(detected, fallback))
-        });
+    if nvidia_gpus.is_empty() {
+        return fallback_gpus;
     }
 
-    nvidia_gpus.append(&mut rocm_gpus);
+    fallback_gpus.retain(|gpu| !looks_like_nvidia_gpu_label(&gpu.display_name));
     nvidia_gpus.extend(fallback_gpus);
     nvidia_gpus
-}
-
-fn detect_rocm_gpu_profiles() -> Vec<HostGpuProfile> {
-    command_output("rocminfo", &[])
-        .map(|output| rocm::gpu_profiles_from_rocminfo(&output))
-        .unwrap_or_default()
 }
 
 fn fallback_gpu_profiles() -> Vec<HostGpuProfile> {
@@ -117,21 +99,6 @@ fn fallback_gpu_profile_from_label(label: String) -> HostGpuProfile {
 fn looks_like_nvidia_gpu_label(label: &str) -> bool {
     let label = label.to_ascii_lowercase();
     label.contains("nvidia") || label.contains("cuda")
-}
-
-fn gpu_profiles_share_identity(left: &HostGpuProfile, right: &HostGpuProfile) -> bool {
-    if let (Some(left_id), Some(right_id)) = (&left.stable_id, &right.stable_id) {
-        return left_id.eq_ignore_ascii_case(right_id);
-    }
-
-    normalized_gpu_name(&left.display_name) == normalized_gpu_name(&right.display_name)
-}
-
-fn normalized_gpu_name(name: &str) -> String {
-    name.chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
 }
 
 fn detect_nvidia_gpu_profiles() -> Vec<HostGpuProfile> {
@@ -356,7 +323,15 @@ fn detect_cuda_profile(gpus: &[HostGpuProfile]) -> Option<HostCudaProfile> {
 }
 
 fn detect_rocm_profile(gpus: &[HostGpuProfile]) -> Option<HostRocmProfile> {
+    detect_rocm_profile_with_arches(gpus, rocm::gpu_arches())
+}
+
+fn detect_rocm_profile_with_arches(
+    gpus: &[HostGpuProfile],
+    detected_arches: BTreeSet<String>,
+) -> Option<HostRocmProfile> {
     let mut gpu_arches = env_string_set("MESH_LLM_ROCM_GPU_ARCHES");
+    gpu_arches.extend(detected_arches);
     gpu_arches.extend(gpus.iter().filter_map(|gpu| gpu.rocm_gfx.clone()));
     let version = std::env::var("MESH_LLM_ROCM_VERSION").ok();
     let has_rocm_label = gpus.iter().any(|gpu| {
@@ -725,6 +700,16 @@ mod tests {
     }
 
     #[test]
+    fn kfd_architecture_evidence_enables_rocm_without_inventory_synthesis() {
+        let _rocm_arches = EnvVarGuard::clear("MESH_LLM_ROCM_GPU_ARCHES");
+
+        let profile = detect_rocm_profile_with_arches(&[], BTreeSet::from(["gfx942".to_string()]))
+            .expect("KFD architecture should enable a ROCm runtime profile");
+
+        assert_eq!(profile.gpu_arches, BTreeSet::from(["gfx942".to_string()]));
+    }
+
+    #[test]
     fn fallback_profiles_do_not_synthesize_backend_ordinals() {
         let gpu = fallback_gpu_profile_from_label("AMD Radeon PRO W7900".to_string());
 
@@ -851,7 +836,7 @@ GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-80ded6bd-1a89-2628-3d94-902187dbab1d)
             profile("NVIDIA Corporation GB202 [GeForce RTX 5090]"),
             profile("AMD Radeon PRO W7900"),
         ];
-        let merged = merge_detected_and_fallback_gpus(nvidia_gpus, Vec::new(), fallback_gpus);
+        let merged = merge_nvidia_and_fallback_gpus(nvidia_gpus, fallback_gpus);
 
         let names = merged
             .iter()
@@ -859,29 +844,6 @@ GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-80ded6bd-1a89-2628-3d94-902187dbab1d)
             .collect::<Vec<_>>();
         assert_eq!(names, ["NVIDIA GeForce RTX 5090", "AMD Radeon PRO W7900"]);
         assert_eq!(merged[0].cuda_sm.as_deref(), Some("120"));
-    }
-
-    #[test]
-    fn rocm_probe_results_supply_arches_and_replace_fallback_labels() {
-        let rocm_gpus = rocm::gpu_profiles_from_rocminfo(
-            "Agent 1\nName: gfx942\nMarketing Name: AMD Instinct MI300X\nDevice Type: GPU\n",
-        );
-        let fallback_gpus = vec![
-            profile("AMD Instinct MI300X"),
-            profile("AMD Radeon PRO W7900"),
-            profile("NVIDIA GeForce RTX 4090"),
-        ];
-
-        let merged = merge_detected_and_fallback_gpus(Vec::new(), rocm_gpus, fallback_gpus);
-
-        assert_eq!(merged.len(), 3);
-        assert_eq!(merged[0].display_name, "AMD Instinct MI300X");
-        assert_eq!(merged[0].rocm_gfx.as_deref(), Some("gfx942"));
-        assert_eq!(merged[1].display_name, "AMD Radeon PRO W7900");
-        assert_eq!(merged[2].display_name, "NVIDIA GeForce RTX 4090");
-
-        let rocm = detect_rocm_profile(&merged).expect("ROCm profile");
-        assert_eq!(rocm.gpu_arches, BTreeSet::from(["gfx942".to_string()]));
     }
 
     #[test]
