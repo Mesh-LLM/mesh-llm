@@ -96,7 +96,7 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
 
     await page.addInitScript((preferences) => {
       window.localStorage.setItem('mesh-llm-ui-preview:preferences:v1', JSON.stringify(preferences))
-      window.localStorage.setItem('mesh-llm-ui-preview:data-mode:v1', 'live')
+      window.localStorage.setItem('mesh-llm-ui-preview:data-mode:v2', 'live')
     }, darkUiPreferences)
 
     try {
