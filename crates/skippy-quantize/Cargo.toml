@@ -21,3 +21,6 @@ llama-quant-ffi = { path = "../llama-quant-ffi" }
 serde.workspace = true
 serde_json.workspace = true
 skippy-ffi = { path = "../skippy-ffi" }
+
+[dev-dependencies]
+regex-lite = "0.1"

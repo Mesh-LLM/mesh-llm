@@ -182,6 +182,11 @@ impl<'a> HfLayerTensor<'a> {
             "self_attn.kv_a_proj_with_mqa.weight" => Ok(format!("blk.{bid}.attn_kv_a_mqa.weight")),
             "self_attn.kv_b_proj.weight" => Ok(format!("blk.{bid}.attn_kv_b.weight")),
             "self_attn.kv_a_layernorm.weight" => Ok(format!("blk.{bid}.attn_kv_a_norm.weight")),
+            "self_attn.indexer.k_norm.weight" => Ok(format!("blk.{bid}.indexer.k_norm.weight")),
+            "self_attn.indexer.k_norm.bias" => Ok(format!("blk.{bid}.indexer.k_norm.bias")),
+            "self_attn.indexer.weights_proj.weight" => Ok(format!("blk.{bid}.indexer.proj.weight")),
+            "self_attn.indexer.wk.weight" => Ok(format!("blk.{bid}.indexer.attn_k.weight")),
+            "self_attn.indexer.wq_b.weight" => Ok(format!("blk.{bid}.indexer.attn_q_b.weight")),
             "mlp.down_proj.weight" => Ok(format!("blk.{bid}.ffn_down.weight")),
             "mlp.gate_proj.weight" => Ok(format!("blk.{bid}.ffn_gate.weight")),
             "mlp.up_proj.weight" => Ok(format!("blk.{bid}.ffn_up.weight")),
@@ -227,6 +232,40 @@ mod tests {
                 .map_tensor_name("model.layers.7.mlp.shared_experts.gate_proj.weight")
                 .unwrap(),
             "blk.7.ffn_gate_shexp.weight"
+        );
+    }
+
+    #[test]
+    fn maps_glm_dsa_indexer_tensor_names() {
+        assert_eq!(
+            TensorNameMap::HfToGguf
+                .map_tensor_name("model.layers.7.self_attn.indexer.k_norm.weight")
+                .unwrap(),
+            "blk.7.indexer.k_norm.weight"
+        );
+        assert_eq!(
+            TensorNameMap::HfToGguf
+                .map_tensor_name("model.layers.7.self_attn.indexer.k_norm.bias")
+                .unwrap(),
+            "blk.7.indexer.k_norm.bias"
+        );
+        assert_eq!(
+            TensorNameMap::HfToGguf
+                .map_tensor_name("model.layers.7.self_attn.indexer.weights_proj.weight")
+                .unwrap(),
+            "blk.7.indexer.proj.weight"
+        );
+        assert_eq!(
+            TensorNameMap::HfToGguf
+                .map_tensor_name("model.layers.7.self_attn.indexer.wk.weight")
+                .unwrap(),
+            "blk.7.indexer.attn_k.weight"
+        );
+        assert_eq!(
+            TensorNameMap::HfToGguf
+                .map_tensor_name("model.layers.7.self_attn.indexer.wq_b.weight")
+                .unwrap(),
+            "blk.7.indexer.attn_q_b.weight"
         );
     }
 

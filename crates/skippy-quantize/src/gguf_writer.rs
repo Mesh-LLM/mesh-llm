@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::fs::{self, File};
 use std::io::{Seek, Write};
 use std::path::Path;
@@ -6,7 +6,10 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 
-use crate::float_convert::{FloatDType, convert_float_chunk, target_dtype_for_tensor};
+use crate::float_convert::{
+    FloatDType, convert_float_chunk, read_float_element, target_dtype_for_tensor,
+    write_float_element,
+};
 use crate::hf_checkpoint::{SafetensorFile, SafetensorTensorInfo, open_safetensor_files};
 use crate::tensor_map::{
     TensorNameMap, hf_layer_id, is_mtp_source_tensor, is_shared_mtp_context_tensor,
@@ -27,6 +30,13 @@ const GGUF_TYPE_UINT64: u32 = 10;
 const GGML_TYPE_F32: u32 = 0;
 const GGML_TYPE_F16: u32 = 1;
 const GGML_TYPE_BF16: u32 = 30;
+const GLM_DSA_INDEXER_TENSORS: &[&str] = &[
+    "indexer.k_norm.weight",
+    "indexer.k_norm.bias",
+    "indexer.proj.weight",
+    "indexer.attn_k.weight",
+    "indexer.attn_q_b.weight",
+];
 
 #[derive(Debug, Clone)]
 pub(crate) struct RawGgufWriteOptions {
@@ -119,11 +129,22 @@ fn prepare_raw_safetensors_gguf(
         "no safetensors files found under {}",
         source.display()
     );
+    let metadata_seed = options.metadata.clone();
+    let glm_dsa_kv_b_split = match metadata_seed.as_ref() {
+        Some(metadata) if is_glm_dsa_metadata(metadata) => {
+            match glm_dsa_kv_b_split_config(metadata)? {
+                Some(config) => GlmDsaKvBSplitMode::Config(config),
+                None => GlmDsaKvBSplitMode::MissingMetadata,
+            }
+        }
+        _ => GlmDsaKvBSplitMode::Disabled,
+    };
     let tensors = collect_tensor_sources(
         &files,
         options.tensor_name_map,
         options.output_type,
         options.tensor_selection,
+        glm_dsa_kv_b_split,
     )?;
     ensure!(
         !tensors.is_empty(),
@@ -131,18 +152,142 @@ fn prepare_raw_safetensors_gguf(
         source.display()
     );
     let total_tensor_count = tensors.len();
+    let mut metadata = metadata_seed.unwrap_or_else(|| raw_metadata(source, total_tensor_count));
+    enrich_glm_dsa_indexshare_metadata(&mut metadata, &tensors)?;
     let mut tensors = select_split_tensors(tensors, options.split)?;
     assign_gguf_offsets(&mut tensors)?;
-    let metadata = options
-        .metadata
-        .clone()
-        .unwrap_or_else(|| raw_metadata(source, total_tensor_count));
     let metadata = split_metadata(metadata, options.split, total_tensor_count)?;
     Ok(PreparedGgufWrite {
         files,
         tensors,
         metadata,
     })
+}
+
+fn enrich_glm_dsa_indexshare_metadata(
+    metadata: &mut Vec<GgufKv>,
+    tensors: &[TensorSource],
+) -> Result<()> {
+    if metadata_string(metadata, "general.architecture").as_deref() != Some("glm-dsa") {
+        return Ok(());
+    }
+    if metadata_has_key(metadata, "glm-dsa.attention.indexer.types")
+        || metadata_has_key(metadata, "glm-dsa.attention.indexer.top_k_frequency")
+    {
+        return Ok(());
+    }
+
+    let block_count = metadata_u32(metadata, "glm-dsa.block_count")
+        .context("GLM-DSA metadata missing glm-dsa.block_count")?;
+    let nextn_layers = metadata_u32(metadata, "glm-dsa.nextn_predict_layers").unwrap_or(0);
+    ensure!(
+        nextn_layers < block_count,
+        "GLM-DSA nextn_predict_layers {nextn_layers} must be less than block_count {block_count}"
+    );
+    let decoder_layers = block_count - nextn_layers;
+    let tensor_names = tensors
+        .iter()
+        .map(|tensor| tensor.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut roles = Vec::with_capacity(decoder_layers as usize);
+    for layer in 0..decoder_layers {
+        let indexer_count = GLM_DSA_INDEXER_TENSORS
+            .iter()
+            .filter(|suffix| tensor_names.contains(format!("blk.{layer}.{suffix}").as_str()))
+            .count();
+        ensure!(
+            indexer_count == 0 || indexer_count == GLM_DSA_INDEXER_TENSORS.len(),
+            "GLM-DSA layer {layer} has partial indexer tensor group ({indexer_count}/{})",
+            GLM_DSA_INDEXER_TENSORS.len()
+        );
+        roles.push(if indexer_count == GLM_DSA_INDEXER_TENSORS.len() {
+            "full".to_string()
+        } else {
+            "shared".to_string()
+        });
+    }
+    metadata.push(GgufKv::array_string(
+        "glm-dsa.attention.indexer.types",
+        roles,
+    ));
+    Ok(())
+}
+
+fn metadata_has_key(metadata: &[GgufKv], key: &str) -> bool {
+    metadata.iter().any(|kv| kv.key() == key)
+}
+
+fn metadata_string(metadata: &[GgufKv], key: &str) -> Option<String> {
+    metadata.iter().find_map(|kv| match kv {
+        GgufKv::String {
+            key: item_key,
+            value,
+        } if item_key == key => Some(value.clone()),
+        _ => None,
+    })
+}
+
+fn is_glm_dsa_metadata(metadata: &[GgufKv]) -> bool {
+    metadata_string(metadata, "general.architecture").as_deref() == Some("glm-dsa")
+}
+
+fn metadata_u32(metadata: &[GgufKv], key: &str) -> Option<u32> {
+    metadata.iter().find_map(|kv| match kv {
+        GgufKv::U32 {
+            key: item_key,
+            value,
+        } if item_key == key => Some(*value),
+        _ => None,
+    })
+}
+
+fn glm_dsa_kv_b_split_config(metadata: &[GgufKv]) -> Result<Option<GlmDsaKvBSplitConfig>> {
+    if !is_glm_dsa_metadata(metadata) {
+        return Ok(None);
+    }
+    let Some(head_count) = metadata_u32(metadata, "glm-dsa.attention.head_count") else {
+        return Ok(None);
+    };
+    let Some(key_length) = metadata_u32(metadata, "glm-dsa.attention.key_length_mla")
+        .or_else(|| metadata_u32(metadata, "glm-dsa.attention.key_length"))
+    else {
+        return Ok(None);
+    };
+    let Some(rope_dim) = metadata_u32(metadata, "glm-dsa.rope.dimension_count") else {
+        return Ok(None);
+    };
+    let Some(value_head_dim) = metadata_u32(metadata, "glm-dsa.attention.value_length") else {
+        return Ok(None);
+    };
+    let Some(kv_lora_rank) = metadata_u32(metadata, "glm-dsa.attention.kv_lora_rank") else {
+        return Ok(None);
+    };
+    ensure!(
+        key_length > rope_dim,
+        "glm-dsa.attention.key_length_mla must be greater than rope.dimension_count for kv_b split"
+    );
+    Ok(Some(GlmDsaKvBSplitConfig {
+        head_count: u64::from(head_count),
+        qk_nope_head_dim: u64::from(key_length - rope_dim),
+        value_head_dim: u64::from(value_head_dim),
+        kv_lora_rank: u64::from(kv_lora_rank),
+    }))
+}
+
+fn glm_dsa_kv_b_layer(name: &str) -> Result<Option<u32>> {
+    let Some(rest) = name.strip_prefix("model.layers.") else {
+        return Ok(None);
+    };
+    let Some((layer, suffix)) = rest.split_once('.') else {
+        return Ok(None);
+    };
+    if suffix != "self_attn.kv_b_proj.weight" {
+        return Ok(None);
+    }
+    layer
+        .parse::<u32>()
+        .map(Some)
+        .with_context(|| format!("parse GLM-DSA kv_b layer id in {name}"))
 }
 
 fn select_split_tensors(
@@ -289,6 +434,7 @@ fn collect_tensor_sources(
     tensor_name_map: TensorNameMap,
     output_type: Option<ConvertOutputType>,
     tensor_selection: TensorSelection,
+    glm_dsa_kv_b_split: GlmDsaKvBSplitMode,
 ) -> Result<Vec<TensorSource>> {
     let mut tensors = Vec::new();
     let mut expert_groups = BTreeMap::<ExpertGroupKey, ExpertGroup>::new();
@@ -313,6 +459,27 @@ fn collect_tensor_sources(
                     }
                 }
                 continue;
+            }
+            if let Some(layer) = glm_dsa_kv_b_layer(tensor.name())? {
+                match glm_dsa_kv_b_split {
+                    GlmDsaKvBSplitMode::Config(split) => {
+                        tensors.extend(TensorSource::from_glm_dsa_kv_b_split(
+                            file_index,
+                            tensor,
+                            layer,
+                            split,
+                            output_type,
+                        )?);
+                        continue;
+                    }
+                    GlmDsaKvBSplitMode::MissingMetadata => {
+                        anyhow::bail!(
+                            "GLM-DSA tensor {} requires attention head/value/rope/kv_lora metadata for kv_b split",
+                            tensor.name()
+                        );
+                    }
+                    GlmDsaKvBSplitMode::Disabled => {}
+                }
             }
             tensors.push(TensorSource::from_safetensor(
                 file_index,
@@ -377,6 +544,7 @@ impl TensorSource {
                 element_count,
                 source_byte_len: tensor.byte_len(),
                 target_byte_len: tensor_byte_len(element_count, target_dtype)?,
+                transform: TensorTransform::Identity,
             }],
             name,
             dims: tensor.shape().iter().rev().copied().collect(),
@@ -384,6 +552,89 @@ impl TensorSource {
             byte_len: tensor_byte_len(element_count, target_dtype)?,
             gguf_offset: 0,
         })
+    }
+
+    fn from_glm_dsa_kv_b_split(
+        file_index: usize,
+        tensor: &SafetensorTensorInfo,
+        layer: u32,
+        split: GlmDsaKvBSplitConfig,
+        output_type: Option<ConvertOutputType>,
+    ) -> Result<Vec<Self>> {
+        ensure!(
+            tensor.shape().len() == 2,
+            "GLM-DSA tensor {} must be rank-2 for kv_b split, got shape {:?}",
+            tensor.name(),
+            tensor.shape()
+        );
+        let expected_rows = split
+            .head_count
+            .checked_mul(split.qk_nope_head_dim + split.value_head_dim)
+            .context("GLM-DSA kv_b expected row count overflow")?;
+        ensure!(
+            tensor.shape()[0] == expected_rows && tensor.shape()[1] == split.kv_lora_rank,
+            "GLM-DSA tensor {} shape {:?} does not match expected [{expected_rows}, {}]",
+            tensor.name(),
+            tensor.shape(),
+            split.kv_lora_rank
+        );
+        let source_dtype = FloatDType::from_safetensor(tensor.dtype()).with_context(|| {
+            format!("unsupported dtype {} for {}", tensor.dtype(), tensor.name())
+        })?;
+        let target_dtype = target_dtype_for_tensor(source_dtype, output_type, tensor.shape())?;
+        let source_element_count = tensor_element_count(tensor)?;
+        let k_element_count = split
+            .head_count
+            .checked_mul(split.qk_nope_head_dim)
+            .and_then(|value| value.checked_mul(split.kv_lora_rank))
+            .context("GLM-DSA attn_k_b element count overflow")?;
+        let v_element_count = split
+            .head_count
+            .checked_mul(split.value_head_dim)
+            .and_then(|value| value.checked_mul(split.kv_lora_rank))
+            .context("GLM-DSA attn_v_b element count overflow")?;
+        Ok(vec![
+            Self {
+                segments: vec![TensorSegment {
+                    file_index,
+                    source_name: tensor.name().to_string(),
+                    source_dtype,
+                    target_dtype,
+                    element_count: source_element_count,
+                    source_byte_len: tensor.byte_len(),
+                    target_byte_len: tensor_byte_len(k_element_count, target_dtype)?,
+                    transform: TensorTransform::GlmDsaKvB {
+                        split,
+                        part: GlmDsaKvBPart::K,
+                    },
+                }],
+                name: format!("blk.{layer}.attn_k_b.weight"),
+                dims: vec![split.qk_nope_head_dim, split.kv_lora_rank, split.head_count],
+                ggml_type: ggml_type_for_dtype(target_dtype),
+                byte_len: tensor_byte_len(k_element_count, target_dtype)?,
+                gguf_offset: 0,
+            },
+            Self {
+                segments: vec![TensorSegment {
+                    file_index,
+                    source_name: tensor.name().to_string(),
+                    source_dtype,
+                    target_dtype,
+                    element_count: source_element_count,
+                    source_byte_len: tensor.byte_len(),
+                    target_byte_len: tensor_byte_len(v_element_count, target_dtype)?,
+                    transform: TensorTransform::GlmDsaKvB {
+                        split,
+                        part: GlmDsaKvBPart::V,
+                    },
+                }],
+                name: format!("blk.{layer}.attn_v_b.weight"),
+                dims: vec![split.kv_lora_rank, split.value_head_dim, split.head_count],
+                ggml_type: ggml_type_for_dtype(target_dtype),
+                byte_len: tensor_byte_len(v_element_count, target_dtype)?,
+                gguf_offset: 0,
+            },
+        ])
     }
 }
 
@@ -395,6 +646,37 @@ struct TensorSegment {
     element_count: u64,
     source_byte_len: u64,
     target_byte_len: u64,
+    transform: TensorTransform,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TensorTransform {
+    Identity,
+    GlmDsaKvB {
+        split: GlmDsaKvBSplitConfig,
+        part: GlmDsaKvBPart,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum GlmDsaKvBPart {
+    K,
+    V,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum GlmDsaKvBSplitMode {
+    Disabled,
+    MissingMetadata,
+    Config(GlmDsaKvBSplitConfig),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GlmDsaKvBSplitConfig {
+    head_count: u64,
+    qk_nope_head_dim: u64,
+    value_head_dim: u64,
+    kv_lora_rank: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -538,6 +820,7 @@ impl ExpertGroup {
                 element_count,
                 source_byte_len: tensor.byte_len(),
                 target_byte_len: tensor_byte_len(element_count, self.target_dtype)?,
+                transform: TensorTransform::Identity,
             },
         );
         ensure!(
@@ -636,6 +919,21 @@ pub(crate) enum GgufKv {
 }
 
 impl GgufKv {
+    fn key(&self) -> &str {
+        match self {
+            Self::ArrayF32 { key, .. }
+            | Self::ArrayI32 { key, .. }
+            | Self::ArrayString { key, .. }
+            | Self::Bool { key, .. }
+            | Self::F32 { key, .. }
+            | Self::I32 { key, .. }
+            | Self::String { key, .. }
+            | Self::U16 { key, .. }
+            | Self::U32 { key, .. }
+            | Self::U64 { key, .. } => key,
+        }
+    }
+
     pub(crate) fn array_f32(key: &str, value: Vec<f32>) -> Self {
         Self::ArrayF32 {
             key: key.to_string(),
@@ -848,6 +1146,10 @@ fn stream_segment(
     segment: &TensorSegment,
     buffer_size: usize,
 ) -> Result<u64> {
+    if let TensorTransform::GlmDsaKvB { split, part } = segment.transform {
+        return stream_glm_dsa_kv_b_split(writer, file, segment, buffer_size, split, part);
+    }
+
     if segment.source_dtype == segment.target_dtype {
         let copied = file.stream_tensor(&segment.source_name, writer, buffer_size)?;
         ensure!(
@@ -889,6 +1191,116 @@ fn stream_segment(
         segment.source_name
     );
     Ok(output_bytes)
+}
+
+fn stream_glm_dsa_kv_b_split(
+    writer: &mut File,
+    file: &SafetensorFile,
+    segment: &TensorSegment,
+    buffer_size: usize,
+    split: GlmDsaKvBSplitConfig,
+    part: GlmDsaKvBPart,
+) -> Result<u64> {
+    let mut source = Vec::with_capacity(
+        usize::try_from(segment.source_byte_len)
+            .context("GLM-DSA kv_b source byte length does not fit usize")?,
+    );
+    let mut source_bytes = 0_u64;
+    file.stream_tensor_chunks(&segment.source_name, buffer_size, |chunk| {
+        source.extend_from_slice(chunk);
+        source_bytes += chunk.len() as u64;
+        Ok(())
+    })?;
+    ensure!(
+        source_bytes == segment.source_byte_len,
+        "read {} bytes for {}, expected {}",
+        source_bytes,
+        segment.source_name,
+        segment.source_byte_len
+    );
+    ensure!(
+        source.len() % segment.source_dtype.byte_size() as usize == 0,
+        "GLM-DSA kv_b source split an element boundary"
+    );
+
+    let combined_head_dim = split.qk_nope_head_dim + split.value_head_dim;
+    let mut output_bytes = 0_u64;
+    let flush_limit = buffer_size.max(segment.target_dtype.byte_size() as usize);
+    let mut output = Vec::with_capacity(flush_limit);
+    for head in 0..split.head_count {
+        match part {
+            GlmDsaKvBPart::K => {
+                for lora in 0..split.kv_lora_rank {
+                    for qk in 0..split.qk_nope_head_dim {
+                        output_bytes += push_transformed_float(
+                            writer,
+                            &source,
+                            segment.source_dtype,
+                            segment.target_dtype,
+                            &mut output,
+                            flush_limit,
+                            (head * combined_head_dim + qk) * split.kv_lora_rank + lora,
+                        )?;
+                    }
+                }
+            }
+            GlmDsaKvBPart::V => {
+                for value in 0..split.value_head_dim {
+                    for lora in 0..split.kv_lora_rank {
+                        output_bytes += push_transformed_float(
+                            writer,
+                            &source,
+                            segment.source_dtype,
+                            segment.target_dtype,
+                            &mut output,
+                            flush_limit,
+                            (head * combined_head_dim + split.qk_nope_head_dim + value)
+                                * split.kv_lora_rank
+                                + lora,
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+    writer.write_all(&output)?;
+    ensure!(
+        output_bytes == segment.target_byte_len,
+        "wrote {} bytes for transformed {}, expected {}",
+        output_bytes,
+        segment.source_name,
+        segment.target_byte_len
+    );
+    Ok(output_bytes)
+}
+
+fn push_transformed_float(
+    writer: &mut File,
+    source: &[u8],
+    source_dtype: FloatDType,
+    target_dtype: FloatDType,
+    output: &mut Vec<u8>,
+    flush_limit: usize,
+    source_index: u64,
+) -> Result<u64> {
+    let source_index =
+        usize::try_from(source_index).context("GLM-DSA kv_b source index does not fit usize")?;
+    let source_width = source_dtype.byte_size() as usize;
+    ensure!(
+        source_index
+            .checked_add(1)
+            .and_then(|count| count.checked_mul(source_width))
+            .is_some_and(|end| end <= source.len()),
+        "GLM-DSA kv_b source index {source_index} is outside source tensor"
+    );
+    let value = read_float_element(source, source_dtype, source_index);
+    write_float_element(output, target_dtype, value);
+    let written = target_dtype.byte_size();
+    if output.len() >= flush_limit {
+        writer.write_all(output)?;
+        output.clear();
+    }
+    Ok(written)
 }
 
 fn aligned_chunk_size(buffer_size: usize, element_size: usize) -> usize {

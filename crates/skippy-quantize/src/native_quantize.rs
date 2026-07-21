@@ -736,6 +736,7 @@ mod tests {
             quant: Some("Q2_K".to_string()),
             output_type: None,
             tensor_type_file,
+            tensor_type_recipe: None,
         }
     }
 

@@ -24,6 +24,8 @@ pub struct Manifest {
     pub quant: Option<String>,
     pub output_type: Option<ConvertOutputType>,
     pub tensor_type_file: Option<PathBuf>,
+    #[serde(default)]
+    pub tensor_type_recipe: Option<String>,
 }
 
 pub fn ensure_manifest(path: &Path, manifest: &Manifest) -> Result<()> {
