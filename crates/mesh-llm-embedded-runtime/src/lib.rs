@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub use mesh_llm_host_runtime::initialize_host_runtime;
 pub use mesh_llm_host_runtime::sdk::{
     EmbeddedChatMessage, EmbeddedMeshAdmissionConfig, EmbeddedMeshDiscoveryMode,
     EmbeddedMeshHttpConfig, EmbeddedMeshLogFormat, EmbeddedMeshNetworkConfig,

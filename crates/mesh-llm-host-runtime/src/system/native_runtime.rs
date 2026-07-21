@@ -63,6 +63,38 @@ mod dynamic {
         }
     }
 
+    pub(crate) fn load_cached_native_runtime_for_embedded_serving()
+    -> Result<Option<LoadedNativeRuntime>> {
+        if skippy_runtime::native_runtime_loaded() {
+            return Ok(None);
+        }
+        let cache = default_native_runtime_cache()?;
+        let Some(plan) = resolve_installed_native_runtime_plan(
+            &cache,
+            &host_runtime_profile(),
+            crate::BUILD_VERSION,
+            crate::RELEASE_VERSION,
+            Some(&crate::system::native_runtime_install::current_skippy_abi_version()),
+            &RuntimeSelection::Recommended,
+        )?
+        else {
+            return Ok(None);
+        };
+        unsafe { skippy_runtime::load_native_runtime_libraries(&plan.libraries) }
+            .map_err(anyhow::Error::from)
+            .with_context(|| {
+                format!(
+                    "load cached native runtime {} from {} for embedded serving",
+                    plan.native_runtime_id,
+                    plan.root.display()
+                )
+            })?;
+        Ok(Some(LoadedNativeRuntime {
+            native_runtime_id: plan.native_runtime_id,
+            libraries: plan.libraries,
+        }))
+    }
+
     pub(crate) async fn try_load_installed_native_runtime(
         startup_selection: NativeRuntimeStartupSelection,
     ) -> Result<Option<LoadedNativeRuntime>> {

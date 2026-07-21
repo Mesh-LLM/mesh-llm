@@ -51,6 +51,8 @@ mesh-llm-sdk = { version = "0.72.1", features = ["serving"] }
 ```rust,no_run
 use mesh_llm_sdk::MeshNode;
 
+// Complete the explicit version-check/install flow below before starting.
+
 let node = MeshNode::builder()
     .serve()
     .model("unsloth/Qwen3-0.6B-GGUF:Q4_K_M")
@@ -65,9 +67,14 @@ let status = node.status().await?;
 node.shutdown().await?;
 ```
 
-## Native Runtime Install Example
+## Check and Install the Required Native Runtime
 
-Enable `serving` to use native-runtime install/update APIs:
+Embedded serving requires a native runtime matching both the exact
+`mesh-llm-sdk` release and its linked Skippy ABI. Re-run this check whenever the
+SDK is upgraded: `CURRENT_MESH_VERSION` changes with the crate release, so a
+runtime cached for the previous SDK version is not sufficient.
+
+Enable `serving` to use native-runtime cache and install APIs:
 
 ```toml
 [dependencies]
@@ -76,18 +83,50 @@ mesh-llm-sdk = { version = "0.72.1", features = ["serving"] }
 
 ```rust,no_run
 use mesh_llm_sdk::native_runtime::{
-    NativeRuntimeInstallOptions, RuntimeSelection, install_native_runtime,
+    CURRENT_MESH_VERSION, NativeRuntimeInstallOptions, RuntimeSelection,
+    current_skippy_abi_version, default_native_runtime_cache, install_native_runtime,
+    native_runtime_versions_match_current_sdk,
 };
+use mesh_llm_sdk::{MeshNode, initialize_host_runtime};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let outcome = install_native_runtime(NativeRuntimeInstallOptions {
-        selection: RuntimeSelection::Recommended,
-        ..Default::default()
-    })
-    .await?;
+    let required_abi = current_skippy_abi_version();
+    let cache = default_native_runtime_cache()?;
+    let matching_runtime = cache.installed()?.into_iter().find(|runtime| {
+        native_runtime_versions_match_current_sdk(
+            &runtime.mesh_version,
+            &runtime.manifest.runtime.skippy_abi,
+        )
+    });
 
-    println!("runtime: {}", outcome.runtime.path.display());
+    let runtime = match matching_runtime {
+        Some(runtime) => runtime,
+        None => {
+            eprintln!(
+                "installing native runtime for MeshLLM {CURRENT_MESH_VERSION} / Skippy ABI {required_abi}"
+            );
+            install_native_runtime(NativeRuntimeInstallOptions {
+                mesh_version: CURRENT_MESH_VERSION.to_string(),
+                skippy_abi_version: Some(required_abi),
+                selection: RuntimeSelection::Recommended,
+                ..Default::default()
+            })
+            .await?
+            .runtime
+        }
+    };
+
+    println!("runtime: {}", runtime.path.display());
+    initialize_host_runtime().await?;
+
+    let node = MeshNode::builder().serve().start().await?;
+    node.shutdown().await?;
     Ok(())
 }
 ```
+
+`install_native_runtime` is the explicit network/install step. Embedded node
+startup only loads a compatible cached runtime; it never downloads one. If the
+cache has no matching runtime, startup reports the required MeshLLM version,
+Skippy ABI, cache directory, and the install API to call before retrying.

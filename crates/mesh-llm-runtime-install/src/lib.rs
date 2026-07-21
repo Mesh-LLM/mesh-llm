@@ -142,6 +142,12 @@ pub fn current_skippy_abi_version() -> String {
     )
 }
 
+/// Returns whether native-runtime metadata matches the exact MeshLLM and
+/// Skippy ABI versions linked into this SDK build.
+pub fn native_runtime_versions_match_current_sdk(mesh_version: &str, skippy_abi: &str) -> bool {
+    mesh_version == CURRENT_MESH_VERSION && skippy_abi == current_skippy_abi_version()
+}
+
 pub fn default_native_runtime_cache() -> Result<NativeRuntimeCache> {
     native_runtime_cache(None)
 }
@@ -771,6 +777,23 @@ mod tests {
     #[test]
     fn current_mesh_version_uses_release_version() {
         assert_eq!(CURRENT_MESH_VERSION, mesh_llm_build_info::RELEASE_VERSION);
+    }
+
+    #[test]
+    fn sdk_runtime_version_check_requires_exact_mesh_and_skippy_versions() {
+        let current_abi = current_skippy_abi_version();
+        assert!(native_runtime_versions_match_current_sdk(
+            CURRENT_MESH_VERSION,
+            &current_abi
+        ));
+        assert!(!native_runtime_versions_match_current_sdk(
+            "0.0.0",
+            &current_abi
+        ));
+        assert!(!native_runtime_versions_match_current_sdk(
+            CURRENT_MESH_VERSION,
+            "0.0.0"
+        ));
     }
 
     #[test]
