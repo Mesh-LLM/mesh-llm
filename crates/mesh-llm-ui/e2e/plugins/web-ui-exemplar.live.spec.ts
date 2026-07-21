@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
-import { DATA_MODE_STORAGE_KEY } from '../support/data-mode'
+import { DATA_MODE_STORAGE_KEY } from '@e2e/support/data-mode'
 
 const pluginName = 'web-ui-exemplar'
 const pluginApi = `/api/plugins/${pluginName}`

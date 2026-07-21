@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
-import { DATA_MODE_STORAGE_KEY } from '../support/data-mode'
+import { DATA_MODE_STORAGE_KEY } from '@e2e/support/data-mode'
 
 const FEATURE_FLAGS_STORAGE_KEY = 'mesh-llm-ui-preview:feature-flags:v1'
 
