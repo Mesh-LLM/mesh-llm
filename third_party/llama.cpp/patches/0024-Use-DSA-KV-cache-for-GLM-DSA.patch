@@ -1,0 +1,41 @@
+From 847934296d90daed13b31e8b76b0a5f44b801b05 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Thu, 25 Jun 2026 15:58:34 +1000
+Subject: [PATCH 24/24] Use DSA KV cache for GLM-DSA
+
+---
+ src/llama-kv-cache.cpp | 5 +++--
+ src/llama-model.cpp    | 1 +
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 43e9492a..9df4984b 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -321,8 +321,9 @@ llama_kv_cache::llama_kv_cache(
+             ggml_is_quantized(type_k) &&
+             hparams.n_embd_head_k() % 64 == 0;
+ 
+-        // always create Hadamard rotation tensors for DeepSeek V3.2 DSA lightning indexer
+-        if (model.arch == LLM_ARCH_DEEPSEEK32 && hparams.n_embd_head_k_full == hparams.indexer_head_size) {
++        // always create Hadamard rotation tensors for the DSA lightning indexer
++        if ((model.arch == LLM_ARCH_DEEPSEEK32 || model.arch == LLM_ARCH_GLM_DSA) &&
++                hparams.n_embd_head_k_full == hparams.indexer_head_size) {
+             attn_rot_k = true;
+         }
+ 
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 5b83c0c0..a325a4ed 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -2061,6 +2061,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                 res = nullptr;
+             } break;
+         case LLM_ARCH_DEEPSEEK32:
++        case LLM_ARCH_GLM_DSA:
+             {
+                 res = new llama_kv_cache_dsa(
+                         *this,
+-- 
+2.54.0 (Apple Git-157)
+

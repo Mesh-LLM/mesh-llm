@@ -1,0 +1,2616 @@
+From e87de13ba5a2bb71fb5b1b874ca61d7338ec3f62 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 14 Jul 2026 09:16:19 +1000
+Subject: [PATCH 20/24] skippy: expose GLM-DSA staged runtime controls
+
+---
+ include/skippy.h    |   20 +
+ src/llama-graph.cpp |   45 +
+ src/llama-graph.h   |   43 +
+ src/skippy.cpp      | 2006 ++++++++++++++++++++++++++++++++++++++++---
+ 4 files changed, 1986 insertions(+), 128 deletions(-)
+
+diff --git a/include/skippy.h b/include/skippy.h
+index c9ecc349..cd0fe21a 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -43,6 +43,15 @@ enum skippy_activation_layout {
+ 
+ #define SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST   (UINT64_C(1) << 0)
+ #define SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP   (UINT64_C(1) << 1)
++#define SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K   (UINT64_C(1) << 3)
++
++#define SKIPPY_GLM_DSA_POLICY_PROFILE_NONE     0
++#define SKIPPY_GLM_DSA_POLICY_PROFILE_V1       1
++
++#define SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN                  (UINT32_C(1) << 0)
++#define SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL               (UINT32_C(1) << 1)
++#define SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN          (UINT32_C(1) << 2)
++#define SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL (UINT32_C(1) << 3)
+ 
+ struct skippy_model;
+ struct skippy_session;
+@@ -71,6 +80,8 @@ struct skippy_runtime_config {
+     enum skippy_load_mode load_mode;
+ 
+     bool disable_repack;
++    bool use_mmap_prefetch;
++    bool use_mmap_buffer;
+     bool filter_tensors_on_load;
+     bool include_embeddings;
+     bool include_output;
+@@ -79,6 +90,15 @@ struct skippy_runtime_config {
+     // "Vulkan1", or "CPU". When set, skippy loads the model only on that
+     // backend device instead of relying on llama.cpp default device ordering.
+     const char * selected_backend_device;
++
++    // Optional GLM-DSA execution policy resolved from package generation
++    // metadata. Zero values preserve llama.cpp built-in/env behavior.
++    int32_t  glm_dsa_policy_profile;
++    uint32_t glm_dsa_policy_flags;
++    int32_t  glm_dsa_short_prefill_max_tokens;
++    int32_t  glm_dsa_direct_sparse_decode_max_top_k;
++    uint64_t glm_dsa_dense_sparse_mask_max_bytes;
++    int32_t  glm_dsa_compact_flash_min_kv;
+ };
+ 
+ struct skippy_tensor_info {
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 6613747a..244a400a 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -25,6 +25,7 @@ static thread_local skippy_graph_filter g_skippy_graph_filter;
+ static thread_local skippy_activation_tokens g_skippy_activation_tokens;
+ static thread_local skippy_activation_rwkv7_v_first g_skippy_rwkv7_v_first;
+ static thread_local skippy_activation_gemma3n_altup g_skippy_gemma3n_altup;
++static thread_local skippy_activation_glm_dsa_top_k g_skippy_glm_dsa_top_k;
+ 
+ void skippy_graph_set_filter(const skippy_graph_filter & filter) {
+     g_skippy_graph_filter = filter;
+@@ -74,6 +75,18 @@ const skippy_activation_gemma3n_altup & skippy_graph_get_gemma3n_altup() {
+     return g_skippy_gemma3n_altup;
+ }
+ 
++void skippy_graph_set_glm_dsa_top_k(const skippy_activation_glm_dsa_top_k & values) {
++    g_skippy_glm_dsa_top_k = values;
++}
++
++void skippy_graph_clear_glm_dsa_top_k() {
++    g_skippy_glm_dsa_top_k = {};
++}
++
++const skippy_activation_glm_dsa_top_k & skippy_graph_get_glm_dsa_top_k() {
++    return g_skippy_glm_dsa_top_k;
++}
++
+ // dedup helpers
+ 
+ static ggml_tensor * build_attn_inp_kq_mask(
+@@ -213,6 +226,34 @@ bool llm_graph_input_gemma3n_altup::can_reuse(const llm_graph_params & params) {
+     return values && values->ne[0] == n_embd && values->ne[1] == params.ubatch.n_tokens && values->ne[2] == n_altup;
+ }
+ 
++void llm_graph_input_glm_dsa_top_k::set_input(const llama_ubatch * ubatch) {
++    const skippy_activation_glm_dsa_top_k & sideband = skippy_graph_get_glm_dsa_top_k();
++    GGML_ASSERT(sideband.values != nullptr);
++    GGML_ASSERT(sideband.token_count == ubatch->n_tokens);
++    GGML_ASSERT(sideband.n_top_k == n_top_k);
++    GGML_ASSERT(sideband.n_stream == n_stream);
++
++    ggml_backend_tensor_set(values, sideband.values, 0, sideband.token_count*n_top_k*ggml_element_size(values));
++}
++
++bool llm_graph_input_glm_dsa_top_k::can_reuse(const llm_graph_params & params) {
++    const auto * mctx = static_cast<const llama_kv_cache_dsa_context *>(params.mctx);
++    const int64_t params_n_stream = params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq;
++    if (mctx == nullptr || params_n_stream <= 0) {
++        return false;
++    }
++
++    const int64_t params_n_top_k = std::min<int64_t>(
++            mctx->get_lid()->get_n_kv(),
++            params.hparams.indexer_top_k);
++
++    return values &&
++           values->ne[0] == params_n_top_k &&
++           values->ne[1] == params.ubatch.n_tokens/params_n_stream &&
++           values->ne[2] == 1 &&
++           values->ne[3] == params_n_stream;
++}
++
+ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
+     // A filtered stage can omit positional work entirely. In that case the
+     // scheduler leaves this otherwise declared graph input unallocated.
+@@ -1325,6 +1366,7 @@ void llm_graph_result::reset() {
+     t_h_nextn     = nullptr;
+     t_skippy_rwkv7_v_first = nullptr;
+     t_skippy_gemma3n_altup = nullptr;
++    t_skippy_glm_dsa_top_k = nullptr;
+ 
+     t_layer_inp.resize(LLAMA_MAX_LAYERS);
+     std::fill(t_layer_inp.begin(), t_layer_inp.end(), nullptr);
+@@ -1377,6 +1419,9 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
+     if (t_skippy_gemma3n_altup != nullptr) {
+         ggml_set_output(t_skippy_gemma3n_altup);
+     }
++    if (t_skippy_glm_dsa_top_k != nullptr) {
++        ggml_set_output(t_skippy_glm_dsa_top_k);
++    }
+     {
+         const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
+         for (size_t il = 0; il < embeddings_layer_inp.size(); ++il) {
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index 2e0d9c3b..ab6e111e 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -30,12 +30,26 @@ class llama_memory_recurrent_context;
+ class llama_memory_hybrid_context;
+ class llama_memory_hybrid_iswa_context;
+ 
++enum skippy_glm_dsa_phase_hint : int32_t {
++    SKIPPY_GLM_DSA_PHASE_HINT_AUTO = 0,
++    SKIPPY_GLM_DSA_PHASE_HINT_PREFILL = 1,
++    SKIPPY_GLM_DSA_PHASE_HINT_DECODE = 2,
++    SKIPPY_GLM_DSA_PHASE_HINT_VERIFY = 3,
++};
++
+ struct skippy_graph_filter {
+     bool enabled = false;
+     int32_t layer_start = 0;
+     int32_t layer_end = 0;
+     bool include_embeddings = false;
+     bool include_output = false;
++    int32_t glm_dsa_policy_profile = 0;
++    uint32_t glm_dsa_policy_flags = 0;
++    int32_t glm_dsa_short_prefill_max_tokens = 0;
++    int32_t glm_dsa_direct_sparse_decode_max_top_k = 0;
++    uint64_t glm_dsa_dense_sparse_mask_max_bytes = 0;
++    int32_t glm_dsa_compact_flash_min_kv = 0;
++    int32_t glm_dsa_phase_hint = SKIPPY_GLM_DSA_PHASE_HINT_AUTO;
+ };
+ 
+ struct skippy_activation_tokens {
+@@ -56,6 +70,14 @@ struct skippy_activation_gemma3n_altup {
+     uint32_t n_altup = 0;
+ };
+ 
++struct skippy_activation_glm_dsa_top_k {
++    const int32_t * values = nullptr;
++    uint32_t token_count = 0;
++    uint32_t n_top_k = 0;
++    uint32_t n_stream = 0;
++    llama_pos pos_start = 0;
++};
++
+ void skippy_graph_set_filter(const skippy_graph_filter & filter);
+ void skippy_graph_clear_filter();
+ const skippy_graph_filter & skippy_graph_get_filter();
+@@ -68,6 +90,9 @@ const skippy_activation_rwkv7_v_first & skippy_graph_get_rwkv7_v_first();
+ void skippy_graph_set_gemma3n_altup(const skippy_activation_gemma3n_altup & values);
+ void skippy_graph_clear_gemma3n_altup();
+ const skippy_activation_gemma3n_altup & skippy_graph_get_gemma3n_altup();
++void skippy_graph_set_glm_dsa_top_k(const skippy_activation_glm_dsa_top_k & values);
++void skippy_graph_clear_glm_dsa_top_k();
++const skippy_activation_glm_dsa_top_k & skippy_graph_get_glm_dsa_top_k();
+ 
+ // certain models (typically multi-modal) can produce different types of graphs
+ enum llm_graph_type {
+@@ -234,6 +259,22 @@ private:
+     int64_t n_altup;
+ };
+ 
++class llm_graph_input_glm_dsa_top_k : public llm_graph_input_i {
++public:
++    llm_graph_input_glm_dsa_top_k(int64_t n_top_k, int64_t n_stream) : n_top_k(n_top_k), n_stream(n_stream) {}
++    virtual ~llm_graph_input_glm_dsa_top_k() = default;
++
++    void set_input(const llama_ubatch * ubatch) override;
++
++    bool can_reuse(const llm_graph_params & params) override;
++
++    ggml_tensor * values = nullptr; // runtime layout: I32 [n_top_k, n_batch, 1, n_stream]
++
++private:
++    int64_t n_top_k;
++    int64_t n_stream;
++};
++
+ class llm_graph_input_pos : public llm_graph_input_i {
+ public:
+     llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
+@@ -886,6 +927,7 @@ public:
+     ggml_tensor * get_h_nextn()     const { return t_h_nextn; }
+     ggml_tensor * get_skippy_rwkv7_v_first() const { return t_skippy_rwkv7_v_first; }
+     ggml_tensor * get_skippy_gemma3n_altup() const { return t_skippy_gemma3n_altup; }
++    ggml_tensor * get_skippy_glm_dsa_top_k() const { return t_skippy_glm_dsa_top_k; }
+ 
+     ggml_tensor * get_layer_inp(int il) const { return t_layer_inp[il]; }
+ 
+@@ -923,6 +965,7 @@ public:
+     ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
+     ggml_tensor * t_skippy_rwkv7_v_first = nullptr;
+     ggml_tensor * t_skippy_gemma3n_altup = nullptr;
++    ggml_tensor * t_skippy_glm_dsa_top_k = nullptr;
+ 
+     std::vector<ggml_tensor *> t_layer_inp;
+ 
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 46da7007..7e11d92b 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -9,6 +9,7 @@
+ #include "llama-ext.h"
+ #include "llama-graph.h"
+ #include "llama-kv-cache.h"
++#include "llama-kv-cache-dsa.h"
+ #include "llama-memory-hybrid.h"
+ #include "llama-memory-hybrid-iswa.h"
+ #include "llama-memory-recurrent.h"
+@@ -18,6 +19,7 @@
+ 
+ #include <algorithm>
+ #include <cerrno>
++#include <cctype>
+ #include <cmath>
+ #include <cstddef>
+ #include <cstdint>
+@@ -43,12 +45,79 @@
+ 
+ using json = nlohmann::ordered_json;
+ 
++enum skippy_glm_dsa_op_kind {
++    SKIPPY_GLM_DSA_OP_INDEXER = 0,
++    SKIPPY_GLM_DSA_OP_TOP_K = 1,
++    SKIPPY_GLM_DSA_OP_SPARSE_MASK_FILL = 2,
++    SKIPPY_GLM_DSA_OP_SPARSE_MASK_TOPK = 3,
++    SKIPPY_GLM_DSA_OP_SPARSE_MASK_ADD = 4,
++    SKIPPY_GLM_DSA_OP_DSA_SPARSE_ATTN = 5,
++    SKIPPY_GLM_DSA_OP_COMPACT_GET_ROWS = 6,
++    SKIPPY_GLM_DSA_OP_MLA_ATTENTION = 7,
++    SKIPPY_GLM_DSA_OP_ROUTED_MOE_ROUTE = 8,
++    SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE_UP = 9,
++    SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE = 10,
++    SKIPPY_GLM_DSA_OP_ROUTED_MOE_UP = 11,
++    SKIPPY_GLM_DSA_OP_ROUTED_MOE_ACT = 12,
++    SKIPPY_GLM_DSA_OP_ROUTED_MOE_DOWN = 13,
++    SKIPPY_GLM_DSA_OP_ROUTED_MOE_WEIGHTED = 14,
++    SKIPPY_GLM_DSA_OP_ROUTED_MOE_AGGREGATE = 15,
++    SKIPPY_GLM_DSA_OP_SHARED_EXPERT = 16,
++    SKIPPY_GLM_DSA_OP_COUNT = 17,
++    SKIPPY_GLM_DSA_OP_UNKNOWN = 255,
++};
++
++struct skippy_glm_dsa_op_stat {
++    uint64_t nodes = 0;
++    int64_t elapsed_us = 0;
++};
++
++static constexpr size_t SKIPPY_GLM_DSA_TIMING_GROUP_LIMIT = 96;
++static constexpr size_t SKIPPY_GLM_DSA_TIMING_GROUP_NAME_SIZE = 32;
++static constexpr size_t SKIPPY_GLM_DSA_HOT_TENSOR_LIMIT = 24;
++static constexpr size_t SKIPPY_GLM_DSA_HOT_TENSOR_NAME_SIZE = 64;
++
++struct skippy_glm_dsa_op_group {
++    bool used = false;
++    char name[SKIPPY_GLM_DSA_TIMING_GROUP_NAME_SIZE] = {};
++    skippy_glm_dsa_op_stat stats[SKIPPY_GLM_DSA_OP_COUNT] = {};
++};
++
++struct skippy_glm_dsa_hot_tensor {
++    bool used = false;
++    skippy_glm_dsa_op_kind kind = SKIPPY_GLM_DSA_OP_UNKNOWN;
++    enum ggml_op op = GGML_OP_NONE;
++    int64_t elapsed_us = 0;
++    int64_t ne[4] = {};
++    char name[SKIPPY_GLM_DSA_HOT_TENSOR_NAME_SIZE] = {};
++};
++
++struct skippy_glm_dsa_op_timing {
++    bool enabled = false;
++    bool print_timing = false;
++    bool trace_tensors = false;
++    bool trace_stats = false;
++    int32_t stage_index = -1;
++    size_t token_count = 0;
++    skippy_glm_dsa_op_kind pending_kind = SKIPPY_GLM_DSA_OP_UNKNOWN;
++    int64_t pending_start_us = 0;
++    uint32_t trace_value_limit = 8;
++    uint32_t trace_node_limit = 32;
++    uint32_t trace_stats_max_bytes = 32 * 1024 * 1024;
++    uint32_t trace_nodes = 0;
++    std::string trace_filter;
++    skippy_glm_dsa_op_stat stats[SKIPPY_GLM_DSA_OP_COUNT] = {};
++    skippy_glm_dsa_op_group groups[SKIPPY_GLM_DSA_TIMING_GROUP_LIMIT] = {};
++    skippy_glm_dsa_hot_tensor hot_tensors[SKIPPY_GLM_DSA_HOT_TENSOR_LIMIT] = {};
++};
++
+ struct skippy_model {
+     llama_model * model = nullptr;
+     llama_context * ctx = nullptr;
+     llama_model * mtp_model = nullptr;
+     llama_context * mtp_ctx = nullptr;
+     skippy_runtime_config config = {};
++    skippy_glm_dsa_op_timing glm_dsa_timing = {};
+     bool executable = true;
+     uint32_t lane_count = 1;
+     std::vector<bool> lane_in_use;
+@@ -936,14 +1005,27 @@ struct skippy_filter_scope {
+ };
+ 
+ struct skippy_graph_filter_scope {
+-    explicit skippy_graph_filter_scope(const skippy_runtime_config * config) {
+-        if (config != nullptr && config->filter_tensors_on_load) {
++    explicit skippy_graph_filter_scope(
++            const skippy_runtime_config * config,
++            int32_t glm_dsa_phase_hint = SKIPPY_GLM_DSA_PHASE_HINT_AUTO) {
++        const bool has_phase_hint = glm_dsa_phase_hint != SKIPPY_GLM_DSA_PHASE_HINT_AUTO;
++        if ((config != nullptr && (config->filter_tensors_on_load || config->glm_dsa_policy_profile != 0)) ||
++                has_phase_hint) {
+             skippy_graph_filter filter;
+-            filter.enabled = true;
+-            filter.layer_start = config->layer_start;
+-            filter.layer_end = config->layer_end;
+-            filter.include_embeddings = config->include_embeddings;
+-            filter.include_output = config->include_output;
++            if (config != nullptr) {
++                filter.enabled = config->filter_tensors_on_load;
++                filter.layer_start = config->layer_start;
++                filter.layer_end = config->layer_end;
++                filter.include_embeddings = config->include_embeddings;
++                filter.include_output = config->include_output;
++                filter.glm_dsa_policy_profile = config->glm_dsa_policy_profile;
++                filter.glm_dsa_policy_flags = config->glm_dsa_policy_flags;
++                filter.glm_dsa_short_prefill_max_tokens = config->glm_dsa_short_prefill_max_tokens;
++                filter.glm_dsa_direct_sparse_decode_max_top_k = config->glm_dsa_direct_sparse_decode_max_top_k;
++                filter.glm_dsa_dense_sparse_mask_max_bytes = config->glm_dsa_dense_sparse_mask_max_bytes;
++                filter.glm_dsa_compact_flash_min_kv = config->glm_dsa_compact_flash_min_kv;
++            }
++            filter.glm_dsa_phase_hint = glm_dsa_phase_hint;
+             skippy_graph_set_filter(filter);
+             enabled = true;
+         }
+@@ -1070,6 +1152,55 @@ struct skippy_gemma3n_altup_scope {
+     bool enabled = false;
+ };
+ 
++struct skippy_glm_dsa_top_k_scope {
++    skippy_glm_dsa_top_k_scope(
++            const skippy_activation_desc * desc,
++            const void * payload,
++            size_t hidden_bytes,
++            uint32_t n_top_k,
++            uint32_t n_stream,
++            llama_pos pos_start) {
++        if (desc != nullptr &&
++            payload != nullptr &&
++            (desc->flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
++            skippy_activation_glm_dsa_top_k sideband;
++            sideband.values = reinterpret_cast<const int32_t *>(static_cast<const uint8_t *>(payload) + hidden_bytes);
++            sideband.token_count = desc->token_count;
++            sideband.n_top_k = n_top_k;
++            sideband.n_stream = n_stream;
++            sideband.pos_start = pos_start;
++            skippy_graph_set_glm_dsa_top_k(sideband);
++            enabled = true;
++        }
++    }
++
++    skippy_glm_dsa_top_k_scope(
++            const int32_t * values,
++            uint32_t token_count,
++            uint32_t n_top_k,
++            uint32_t n_stream,
++            llama_pos pos_start) {
++        if (values != nullptr && token_count > 0 && n_top_k > 0 && n_stream > 0) {
++            skippy_activation_glm_dsa_top_k sideband;
++            sideband.values = values;
++            sideband.token_count = token_count;
++            sideband.n_top_k = n_top_k;
++            sideband.n_stream = n_stream;
++            sideband.pos_start = pos_start;
++            skippy_graph_set_glm_dsa_top_k(sideband);
++            enabled = true;
++        }
++    }
++
++    ~skippy_glm_dsa_top_k_scope() {
++        if (enabled) {
++            skippy_graph_clear_glm_dsa_top_k();
++        }
++    }
++
++    bool enabled = false;
++};
++
+ static bool skippy_is_filtered(const skippy_session * session) {
+     return session != nullptr &&
+            session->stage_model != nullptr &&
+@@ -1095,6 +1226,124 @@ static bool skippy_is_gemma3n_activation_model(const skippy_session * session) {
+     return session->stage_model->model->arch == LLM_ARCH_GEMMA3N;
+ }
+ 
++static bool skippy_is_glm_dsa_activation_model(const skippy_session * session) {
++    if (session == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr) {
++        return false;
++    }
++    return session->stage_model->model->arch == LLM_ARCH_GLM_DSA;
++}
++
++static bool skippy_glm_dsa_layer_has_indexer(const llama_layer & layer) {
++    const bool has_any =
++            layer.indexer_k_norm   ||
++            layer.indexer_k_norm_b ||
++            layer.indexer_proj     ||
++            layer.indexer_attn_k   ||
++            layer.indexer_attn_q_b;
++
++    const bool has_all =
++            layer.indexer_k_norm   &&
++            layer.indexer_k_norm_b &&
++            layer.indexer_proj     &&
++            layer.indexer_attn_k   &&
++            layer.indexer_attn_q_b;
++
++    return has_any == has_all && has_all;
++}
++
++static int skippy_glm_dsa_indexshare_freq() {
++    const char * value = getenv("LLAMA_GLM_DSA_INDEXSHARE_FREQ");
++    if (value == nullptr) {
++        return 1;
++    }
++
++    const int freq = atoi(value);
++    return freq > 0 ? freq : 1;
++}
++
++static bool skippy_glm_dsa_indexshare_pattern_layer_is_full(const char * pattern, int layer, bool * matched) {
++    *matched = false;
++    if (pattern == nullptr || pattern[0] == '\0') {
++        return false;
++    }
++
++    int layer_index = 0;
++    for (const char * p = pattern; *p != '\0'; ++p) {
++        const char value = static_cast<char>(std::toupper(static_cast<unsigned char>(*p)));
++        if (value != 'F' && value != 'S') {
++            continue;
++        }
++        if (layer_index == layer) {
++            *matched = true;
++            return value == 'F';
++        }
++        ++layer_index;
++    }
++
++    return false;
++}
++
++static bool skippy_glm_dsa_metadata_layer_uses_indexer(const llama_hparams & hparams, int32_t layer_index, bool * matched) {
++    *matched = false;
++    if (layer_index < 0 || static_cast<uint32_t>(layer_index) >= hparams.n_layer()) {
++        return false;
++    }
++
++    if (hparams.indexer_types_present) {
++        *matched = true;
++        return hparams.indexer_types[layer_index] == 1;
++    }
++
++    if (hparams.indexer_top_k_freq > 0) {
++        const uint32_t layer = static_cast<uint32_t>(layer_index);
++        const uint32_t offset = hparams.indexer_skip_top_k_offset;
++        *matched = true;
++        return layer < offset || (layer >= offset && ((layer - offset + 1) % hparams.indexer_top_k_freq) == 0);
++    }
++
++    return false;
++}
++
++static bool skippy_glm_dsa_layer_uses_indexer(const llama_hparams & hparams, int32_t layer_index, const llama_layer & layer) {
++    bool metadata_matched = false;
++    const bool metadata_full = skippy_glm_dsa_metadata_layer_uses_indexer(hparams, layer_index, &metadata_matched);
++    if (metadata_matched) {
++        return metadata_full;
++    }
++
++    bool pattern_matched = false;
++    const bool pattern_full = skippy_glm_dsa_indexshare_pattern_layer_is_full(
++            getenv("LLAMA_GLM_DSA_INDEXSHARE_PATTERN"),
++            layer_index,
++            &pattern_matched);
++    if (pattern_matched) {
++        return pattern_full;
++    }
++
++    if (!skippy_glm_dsa_layer_has_indexer(layer)) {
++        return false;
++    }
++
++    const int freq = skippy_glm_dsa_indexshare_freq();
++    return freq <= 1 || (layer_index % freq) == 0;
++}
++
++static bool skippy_glm_dsa_layer_starts_consumer_group(const skippy_session * session, int32_t layer_start) {
++    if (!skippy_is_glm_dsa_activation_model(session)) {
++        return false;
++    }
++    const skippy_runtime_config & config = session->stage_model->config;
++    const llama_model * model = session->stage_model->model;
++    return config.filter_tensors_on_load &&
++           layer_start > 0 &&
++           layer_start < static_cast<int32_t>(model->hparams.n_layer()) &&
++           !skippy_glm_dsa_layer_uses_indexer(model->hparams, layer_start, model->layers[layer_start]);
++}
++
++static bool skippy_glm_dsa_stage_starts_in_consumer_group(const skippy_session * session) {
++    return skippy_glm_dsa_layer_starts_consumer_group(session, session->stage_model->config.layer_start);
++}
++
+ static size_t skippy_activation_hidden_bytes(const skippy_session * session, size_t token_count) {
+     if (session == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr) {
+         return 0;
+@@ -1105,6 +1354,113 @@ static size_t skippy_activation_hidden_bytes(const skippy_session * session, siz
+            sizeof(float);
+ }
+ 
++static uint32_t skippy_glm_dsa_top_k_count_for_n_kv(const skippy_session * session, uint64_t n_kv) {
++    if (!skippy_is_glm_dsa_activation_model(session)) {
++        return 0;
++    }
++
++    // GLM-DSA top-k tensors are shaped from llama_kv_cache::get_n_kv(), not
++    // the logical sequence length. That graph width is padded to at least 256
++    // so the scheduler can reuse stable KV-cache graph shapes.
++    const uint64_t padded_n_kv = std::max<uint64_t>(256, GGML_PAD(n_kv, 256));
++    return static_cast<uint32_t>(
++            std::min<uint64_t>(padded_n_kv, session->stage_model->model->hparams.indexer_top_k));
++}
++
++static uint32_t skippy_glm_dsa_top_k_count(const skippy_session * session, size_t token_count) {
++    const uint64_t n_kv = static_cast<uint64_t>(std::max<int32_t>(session->n_past, 0)) + token_count;
++    return skippy_glm_dsa_top_k_count_for_n_kv(session, n_kv);
++}
++
++// Activation sidebands carry the actual top-k tensor width produced by
++// glm-dsa.cpp, not the padded graph-capacity width used for output buffers.
++static uint32_t skippy_glm_dsa_sideband_top_k_count_for_n_kv(
++        const skippy_session * session,
++        uint64_t n_kv) {
++    if (!skippy_is_glm_dsa_activation_model(session)) {
++        return 0;
++    }
++
++    return static_cast<uint32_t>(
++            std::min<uint64_t>(n_kv, session->stage_model->model->hparams.indexer_top_k));
++}
++
++static uint32_t skippy_glm_dsa_sideband_top_k_count(const skippy_session * session, size_t token_count) {
++    const uint64_t n_kv = static_cast<uint64_t>(std::max<int32_t>(session->n_past, 0)) + token_count;
++    return skippy_glm_dsa_sideband_top_k_count_for_n_kv(session, n_kv);
++}
++
++static uint32_t skippy_glm_dsa_n_stream(const skippy_session * session) {
++    GGML_UNUSED(session);
++    return 1;
++}
++
++static size_t skippy_glm_dsa_top_k_bytes_for_count(size_t token_count, uint32_t n_top_k) {
++    return static_cast<size_t>(n_top_k)*token_count*sizeof(int32_t);
++}
++
++static uint32_t skippy_glm_dsa_top_k_count_for_sideband_bytes(size_t token_count, size_t sideband_bytes) {
++    if (token_count == 0 || sideband_bytes == 0 || (sideband_bytes % sizeof(int32_t)) != 0) {
++        return 0;
++    }
++
++    const size_t sideband_i32 = sideband_bytes/sizeof(int32_t);
++    if ((sideband_i32 % token_count) != 0) {
++        return 0;
++    }
++
++    return static_cast<uint32_t>(std::min<size_t>(
++            sideband_i32/token_count,
++            std::numeric_limits<uint32_t>::max()));
++}
++
++static bool skippy_glm_dsa_sideband_top_k_count_is_valid(
++        size_t token_count,
++        uint32_t actual_top_k,
++        uint32_t expected_top_k) {
++    if (actual_top_k == 0 || expected_top_k == 0) {
++        return false;
++    }
++
++    // Prefill sidebands can be chunk-local: llama.cpp emits the actual
++    // per-chunk top-k width, while the receiving staged session may have a
++    // larger accumulated KV prefix.
++    if (token_count > 1) {
++        return actual_top_k <= expected_top_k;
++    }
++
++    // Decode producers export the actual top-k tensor width from their graph.
++    // The receiving session can have a larger accumulated KV prefix than the
++    // producer's current sideband width, especially when an OpenAI generation
++    // loop advances through cached or fused decode steps. The sideband is still
++    // valid as long as it is non-empty, token-major, and does not claim more
++    // rows than the receiver can make visible.
++    return actual_top_k <= expected_top_k;
++}
++
++static size_t skippy_glm_dsa_top_k_bytes(const skippy_session * session, size_t token_count) {
++    const uint32_t n_top_k = skippy_glm_dsa_top_k_count(session, token_count);
++    return skippy_glm_dsa_top_k_bytes_for_count(token_count, n_top_k);
++}
++
++static uint32_t skippy_glm_dsa_top_k_count_from_desc(
++        const skippy_session * session,
++        const skippy_activation_desc * desc) {
++    if (desc == nullptr || (desc->flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) == 0) {
++        return 0;
++    }
++
++    const size_t token_count = desc->token_count;
++    const size_t hidden_bytes = skippy_activation_hidden_bytes(session, token_count);
++    if (desc->payload_bytes < hidden_bytes) {
++        return 0;
++    }
++
++    return skippy_glm_dsa_top_k_count_for_sideband_bytes(
++            token_count,
++            static_cast<size_t>(desc->payload_bytes - hidden_bytes));
++}
++
+ static size_t skippy_gemma3n_altup_bytes(const skippy_session * session, size_t token_count) {
+     if (session == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr) {
+         return 0;
+@@ -1122,6 +1478,11 @@ static uint64_t skippy_output_activation_flags(
+     if (skippy_emits_activation_frame(session) && skippy_is_gemma3n_activation_model(session)) {
+         return SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP;
+     }
++    if (skippy_emits_activation_frame(session) &&
++        skippy_is_glm_dsa_activation_model(session) &&
++        skippy_glm_dsa_layer_starts_consumer_group(session, session->stage_model->config.layer_end)) {
++        return SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K;
++    }
+     if (!skippy_emits_activation_frame(session) || !skippy_is_rwkv7_activation_model(session)) {
+         return 0;
+     }
+@@ -1145,6 +1506,9 @@ static size_t skippy_activation_payload_bytes(
+         return skippy_gemma3n_altup_bytes(session, token_count);
+     }
+     size_t payload_bytes = hidden_bytes;
++    if ((flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
++        payload_bytes += skippy_glm_dsa_top_k_bytes(session, token_count);
++    }
+     if ((flags & SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST) != 0) {
+         payload_bytes += hidden_bytes;
+     }
+@@ -1155,11 +1519,12 @@ static bool skippy_has_activation_payload(const skippy_activation_desc * desc, c
+     return desc != nullptr && desc->payload_bytes > 0 && payload != nullptr;
+ }
+ 
+-static enum skippy_status skippy_validate_frame_input(
++static enum skippy_status skippy_validate_frame_input_sequences(
+         skippy_session * session,
+         const skippy_activation_desc * input_desc,
+         const void * input_payload,
+         size_t expected_token_count,
++        uint32_t expected_sequence_count,
+         struct skippy_error ** out_error) {
+     if (session == nullptr || session->stage_model == nullptr) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
+@@ -1185,7 +1550,7 @@ static enum skippy_status skippy_validate_frame_input(
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "activation frame must be version 1 F32 token-major");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+-    if (input_desc->sequence_count != 1 || input_desc->token_count != expected_token_count) {
++    if (input_desc->sequence_count != expected_sequence_count || input_desc->token_count != expected_token_count) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "activation frame token or sequence count does not match request");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+@@ -1194,131 +1559,1177 @@ static enum skippy_status skippy_validate_frame_input(
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+ 
+-    const uint64_t supported_flags = SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST | SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP;
+-    if ((input_desc->flags & ~supported_flags) != 0) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "activation frame has unsupported sideband flags");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    const uint64_t supported_flags =
++            SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST |
++            SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP |
++            SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K;
++    if ((input_desc->flags & ~supported_flags) != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "activation frame has unsupported sideband flags");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0 && !skippy_is_glm_dsa_activation_model(session)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "GLM-DSA top-k sideband is only valid for GLM-DSA stages");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (skippy_glm_dsa_stage_starts_in_consumer_group(session) &&
++        (input_desc->flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) == 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "GLM-DSA consumer slices require top-k sideband input");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0 &&
++        (input_desc->flags & (SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP | SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST)) != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "GLM-DSA top-k sideband cannot be combined with other activation sidebands");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP) != 0 && !skippy_is_gemma3n_activation_model(session)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "Gemma3n AltUp activation payload is only valid for Gemma3n stages");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (skippy_is_gemma3n_activation_model(session) && (input_desc->flags & SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP) == 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "non-first Gemma3n runtime slices require AltUp activation payload");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP) != 0 &&
++        (input_desc->flags & SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST) != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "Gemma3n AltUp and RWKV7 v_first activation flags cannot be combined");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST) != 0 && !skippy_is_rwkv7_activation_model(session)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "RWKV7 v_first sideband is only valid for RWKV7 stages");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (skippy_is_rwkv7_activation_model(session) && (input_desc->flags & SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST) == 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "non-first RWKV7 runtime slices require v_first activation sideband");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    const size_t hidden_bytes = skippy_activation_hidden_bytes(session, expected_token_count);
++    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
++        if (input_desc->payload_bytes < hidden_bytes) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "GLM-DSA activation frame is smaller than model hidden size");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        const size_t sideband_bytes = static_cast<size_t>(input_desc->payload_bytes - hidden_bytes);
++        const uint32_t actual_top_k = skippy_glm_dsa_top_k_count_for_sideband_bytes(expected_token_count, sideband_bytes);
++        if (actual_top_k == 0) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "GLM-DSA top-k sideband payload size is not token-major i32");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        const uint32_t expected_top_k = skippy_glm_dsa_sideband_top_k_count(session, expected_token_count);
++        if (!skippy_glm_dsa_sideband_top_k_count_is_valid(expected_token_count, actual_top_k, expected_top_k)) {
++            char message[256];
++            std::snprintf(
++                    message,
++                    sizeof(message),
++                    "GLM-DSA top-k sideband width does not match expected IndexShare width: expected=%u actual=%u tokens=%zu sideband_bytes=%zu",
++                    expected_top_k,
++                    actual_top_k,
++                    expected_token_count,
++                    sideband_bytes);
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message);
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++    } else {
++        const size_t expected_bytes = skippy_activation_payload_bytes(session, expected_token_count, input_desc->flags);
++        if (input_desc->payload_bytes != expected_bytes) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "activation frame payload size does not match model hidden size");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++    }
++
++    return SKIPPY_STATUS_OK;
++}
++
++static enum skippy_status skippy_validate_frame_input(
++        skippy_session * session,
++        const skippy_activation_desc * input_desc,
++        const void * input_payload,
++        size_t expected_token_count,
++        struct skippy_error ** out_error) {
++    return skippy_validate_frame_input_sequences(
++            session,
++            input_desc,
++            input_payload,
++            expected_token_count,
++            1,
++            out_error);
++}
++
++static enum skippy_status skippy_prepare_output_activation_frame(
++        skippy_session * session,
++        size_t token_count,
++        void * output_payload,
++        size_t output_payload_capacity,
++        size_t * out_output_payload_bytes,
++        skippy_activation_desc * output_desc,
++        const skippy_activation_desc * input_desc,
++        struct skippy_error ** out_error) {
++    const uint64_t output_flags = skippy_output_activation_flags(session, input_desc);
++    const size_t payload_bytes = skippy_emits_activation_frame(session) ?
++            skippy_activation_payload_bytes(session, token_count, output_flags) : 0;
++
++    if (out_output_payload_bytes != nullptr) {
++        *out_output_payload_bytes = payload_bytes;
++    }
++
++    if (payload_bytes > 0) {
++        if (output_payload == nullptr) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "output_payload is required for runtime-slice activation output");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        if (output_payload_capacity < payload_bytes) {
++            skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "output activation buffer is too small");
++            return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++        }
++    } else if (output_payload_capacity > 0 && output_payload == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "output_payload is required when output capacity is non-zero");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    if (output_desc != nullptr) {
++        *output_desc = {};
++        output_desc->version = 1;
++        output_desc->dtype = payload_bytes > 0 ? SKIPPY_ACTIVATION_DTYPE_F32 : SKIPPY_ACTIVATION_DTYPE_UNKNOWN;
++        output_desc->layout = payload_bytes > 0 ? SKIPPY_ACTIVATION_LAYOUT_TOKEN_MAJOR : SKIPPY_ACTIVATION_LAYOUT_OPAQUE;
++        output_desc->producer_stage_index = session != nullptr ? session->stage_model->config.stage_index : -1;
++        output_desc->layer_start = session != nullptr ? session->stage_model->config.layer_start : 0;
++        output_desc->layer_end = session != nullptr ? session->stage_model->config.layer_end : 0;
++        output_desc->token_count = static_cast<uint32_t>(std::min<size_t>(token_count, std::numeric_limits<uint32_t>::max()));
++        output_desc->sequence_count = token_count > 0 ? 1 : 0;
++        output_desc->payload_bytes = payload_bytes;
++        output_desc->flags = output_flags;
++    }
++
++    return SKIPPY_STATUS_OK;
++}
++
++static void skippy_glm_dsa_op_timing_begin(skippy_session * session, size_t token_count);
++static void skippy_glm_dsa_op_timing_end(skippy_session * session);
++
++static enum skippy_status skippy_decode_batch(
++        skippy_session * session,
++        llama_batch batch,
++        size_t token_count,
++        int32_t glm_dsa_phase_hint,
++        struct skippy_error ** out_error) {
++    if (session == nullptr || session->ctx == nullptr || token_count == 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and at least one token are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    skippy_graph_filter_scope graph_filter_scope(&session->stage_model->config, glm_dsa_phase_hint);
++    const char * phase_log = getenv("SKIPPY_GLM_DSA_LOG_DIRECT_SPARSE_DECISIONS");
++    if (phase_log != nullptr && atoi(phase_log) != 0) {
++        LLAMA_LOG_INFO(
++                "skippy: glm_dsa_phase_hint requested=%d active=%d tokens=%zu\n",
++                glm_dsa_phase_hint,
++                skippy_graph_get_filter().glm_dsa_phase_hint,
++                token_count);
++    }
++    skippy_glm_dsa_op_timing_begin(session, token_count);
++    const int32_t rc = llama_decode(session->ctx, batch);
++    skippy_glm_dsa_op_timing_end(session);
++    if (rc != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
++    session->n_past += static_cast<int32_t>(token_count);
++    return skippy_success(out_error);
++}
++
++static bool skippy_mtp_available(const skippy_session * session) {
++    return session != nullptr &&
++           session->stage_model != nullptr &&
++           session->stage_model->mtp_ctx != nullptr &&
++           session->stage_model->config.include_output;
++}
++
++static bool skippy_env_enabled(const char * name) {
++    const char * value = std::getenv(name);
++    if (value == nullptr || value[0] == '\0') {
++        return false;
++    }
++    return std::strcmp(value, "0") != 0 &&
++           std::strcmp(value, "false") != 0 &&
++           std::strcmp(value, "off") != 0 &&
++           std::strcmp(value, "no") != 0;
++}
++
++static bool skippy_env_disabled(const char * name) {
++    const char * value = std::getenv(name);
++    if (value == nullptr || value[0] == '\0') {
++        return false;
++    }
++    return std::strcmp(value, "0") == 0 ||
++           std::strcmp(value, "false") == 0 ||
++           std::strcmp(value, "FALSE") == 0 ||
++           std::strcmp(value, "off") == 0 ||
++           std::strcmp(value, "OFF") == 0 ||
++           std::strcmp(value, "no") == 0 ||
++           std::strcmp(value, "NO") == 0;
++}
++
++static uint32_t skippy_env_u32(const char * name, uint32_t fallback, uint32_t min_value, uint32_t max_value) {
++    const char * value = std::getenv(name);
++    if (value == nullptr || value[0] == '\0') {
++        return fallback;
++    }
++
++    char * end = nullptr;
++    errno = 0;
++    const unsigned long parsed = std::strtoul(value, &end, 10);
++    if (errno != 0 || end == value || *end != '\0') {
++        return fallback;
++    }
++
++    return std::min<uint32_t>(max_value, std::max<uint32_t>(min_value, static_cast<uint32_t>(parsed)));
++}
++
++static bool skippy_mtp_greedy_sampling_fastpath_enabled() {
++    return skippy_env_enabled("SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH");
++}
++
++static bool skippy_glm_dsa_op_timing_enabled() {
++    return skippy_env_enabled("SKIPPY_GLM_DSA_OP_TIMING");
++}
++
++static bool skippy_glm_dsa_tensor_trace_enabled() {
++    return skippy_env_enabled("SKIPPY_GLM_DSA_TENSOR_TRACE");
++}
++
++static bool skippy_glm_dsa_tensor_trace_stats_enabled() {
++    return skippy_env_enabled("SKIPPY_GLM_DSA_TENSOR_TRACE_STATS");
++}
++
++static bool skippy_glm_dsa_direct_sparse_decision_log_enabled() {
++    return skippy_env_enabled("SKIPPY_GLM_DSA_LOG_DIRECT_SPARSE_DECISIONS");
++}
++
++static bool skippy_glm_dsa_direct_sparse_attn_enabled() {
++    if (skippy_env_disabled("SKIPPY_GLM_DSA_ENABLE_DIRECT_SPARSE_ATTN") ||
++        skippy_env_enabled("SKIPPY_GLM_DSA_DISABLE_DIRECT_SPARSE_ATTN")) {
++        return false;
++    }
++
++    return true;
++}
++
++static bool skippy_glm_dsa_direct_sparse_prefill_enabled() {
++    if (skippy_env_disabled("SKIPPY_GLM_DSA_ENABLE_DIRECT_SPARSE_PREFILL") ||
++        skippy_env_enabled("SKIPPY_GLM_DSA_DISABLE_DIRECT_SPARSE_PREFILL")) {
++        return false;
++    }
++
++    return true;
++}
++
++static bool skippy_glm_dsa_unproven_large_direct_sparse_prefill_enabled() {
++    return skippy_env_enabled("SKIPPY_GLM_DSA_ENABLE_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL");
++}
++
++static uint32_t skippy_glm_dsa_direct_sparse_prefill_max_tokens() {
++    return skippy_env_u32("SKIPPY_GLM_DSA_DIRECT_SPARSE_PREFILL_MAX_TOKENS", 8, 1, 4096);
++}
++
++static uint64_t skippy_glm_dsa_dense_sparse_mask_max_bytes() {
++    const char * value = std::getenv("SKIPPY_GLM_DSA_DENSE_SPARSE_MASK_MAX_BYTES");
++    if (value == nullptr || value[0] == '\0') {
++        return 512ULL * 1024ULL * 1024ULL;
++    }
++
++    char * end = nullptr;
++    errno = 0;
++    const unsigned long long parsed = std::strtoull(value, &end, 10);
++    if (errno != 0 || end == value || *end != '\0' || parsed == 0) {
++        return UINT64_MAX;
++    }
++    return parsed;
++}
++
++static constexpr int64_t SKIPPY_GLM_DSA_DIRECT_SPARSE_DECODE_DEFAULT_MAX_TOP_K = 256;
++
++static int64_t skippy_glm_dsa_direct_sparse_decode_max_top_k() {
++    const char * value = std::getenv("SKIPPY_GLM_DSA_DIRECT_SPARSE_DECODE_MAX_TOP_K");
++    if (value == nullptr || value[0] == '\0') {
++        return SKIPPY_GLM_DSA_DIRECT_SPARSE_DECODE_DEFAULT_MAX_TOP_K;
++    }
++
++    char * end = nullptr;
++    errno = 0;
++    const long long parsed = std::strtoll(value, &end, 10);
++    if (errno != 0 || end == value || *end != '\0') {
++        return SKIPPY_GLM_DSA_DIRECT_SPARSE_DECODE_DEFAULT_MAX_TOP_K;
++    }
++
++    return parsed <= 0 ? INT64_MAX : parsed;
++}
++
++
++static bool skippy_name_starts_with(const char * name, const char * prefix) {
++    return name != nullptr && std::strncmp(name, prefix, std::strlen(prefix)) == 0;
++}
++
++static const char * skippy_glm_dsa_op_name(skippy_glm_dsa_op_kind kind) {
++    switch (kind) {
++        case SKIPPY_GLM_DSA_OP_INDEXER:
++            return "indexer";
++        case SKIPPY_GLM_DSA_OP_TOP_K:
++            return "top_k";
++        case SKIPPY_GLM_DSA_OP_SPARSE_MASK_FILL:
++            return "sparse_mask_fill";
++        case SKIPPY_GLM_DSA_OP_SPARSE_MASK_TOPK:
++            return "sparse_mask_topk";
++        case SKIPPY_GLM_DSA_OP_SPARSE_MASK_ADD:
++            return "sparse_mask_add";
++        case SKIPPY_GLM_DSA_OP_DSA_SPARSE_ATTN:
++            return "dsa_sparse_attn";
++        case SKIPPY_GLM_DSA_OP_COMPACT_GET_ROWS:
++            return "compact_get_rows";
++        case SKIPPY_GLM_DSA_OP_MLA_ATTENTION:
++            return "mla_attention";
++        case SKIPPY_GLM_DSA_OP_ROUTED_MOE_ROUTE:
++            return "routed_moe_route";
++        case SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE_UP:
++            return "routed_moe_gate_up";
++        case SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE:
++            return "routed_moe_gate";
++        case SKIPPY_GLM_DSA_OP_ROUTED_MOE_UP:
++            return "routed_moe_up";
++        case SKIPPY_GLM_DSA_OP_ROUTED_MOE_ACT:
++            return "routed_moe_act";
++        case SKIPPY_GLM_DSA_OP_ROUTED_MOE_DOWN:
++            return "routed_moe_down";
++        case SKIPPY_GLM_DSA_OP_ROUTED_MOE_WEIGHTED:
++            return "routed_moe_weighted";
++        case SKIPPY_GLM_DSA_OP_ROUTED_MOE_AGGREGATE:
++            return "routed_moe_aggregate";
++        case SKIPPY_GLM_DSA_OP_SHARED_EXPERT:
++            return "shared_expert";
++        case SKIPPY_GLM_DSA_OP_COUNT:
++        case SKIPPY_GLM_DSA_OP_UNKNOWN:
++            break;
++    }
++    return "unknown";
++}
++
++static skippy_glm_dsa_op_kind skippy_glm_dsa_op_kind_for_tensor(const char * name) {
++    if (skippy_name_starts_with(name, "top_k")) {
++        return SKIPPY_GLM_DSA_OP_TOP_K;
++    }
++    if (skippy_name_starts_with(name, "indexer_")) {
++        return SKIPPY_GLM_DSA_OP_INDEXER;
++    }
++    if (skippy_name_starts_with(name, "dsa_sparse_mask_fill")) {
++        return SKIPPY_GLM_DSA_OP_SPARSE_MASK_FILL;
++    }
++    if (skippy_name_starts_with(name, "dsa_sparse_mask_topk")) {
++        return SKIPPY_GLM_DSA_OP_SPARSE_MASK_TOPK;
++    }
++    if (skippy_name_starts_with(name, "dsa_sparse_mask")) {
++        return SKIPPY_GLM_DSA_OP_SPARSE_MASK_ADD;
++    }
++    if (skippy_name_starts_with(name, "dsa_sparse_attn")) {
++        return SKIPPY_GLM_DSA_OP_DSA_SPARSE_ATTN;
++    }
++    if (skippy_name_starts_with(name, "dsa_compact_")) {
++        return SKIPPY_GLM_DSA_OP_COMPACT_GET_ROWS;
++    }
++    if (skippy_name_starts_with(name, "kqv_out")) {
++        return SKIPPY_GLM_DSA_OP_MLA_ATTENTION;
++    }
++    if (skippy_name_starts_with(name, "ffn_moe_gate_up")) {
++        return SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE_UP;
++    }
++    if (skippy_name_starts_with(name, "ffn_moe_gate")) {
++        return SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE;
++    }
++    if (skippy_name_starts_with(name, "ffn_moe_up")) {
++        return SKIPPY_GLM_DSA_OP_ROUTED_MOE_UP;
++    }
++    if (skippy_name_starts_with(name, "ffn_moe_silu") ||
++            skippy_name_starts_with(name, "ffn_moe_swiglu") ||
++            skippy_name_starts_with(name, "ffn_moe_geglu") ||
++            skippy_name_starts_with(name, "ffn_moe_gelu") ||
++            skippy_name_starts_with(name, "ffn_moe_reglu") ||
++            skippy_name_starts_with(name, "ffn_moe_relu")) {
++        return SKIPPY_GLM_DSA_OP_ROUTED_MOE_ACT;
++    }
++    if (skippy_name_starts_with(name, "ffn_moe_down")) {
++        return SKIPPY_GLM_DSA_OP_ROUTED_MOE_DOWN;
++    }
++    if (skippy_name_starts_with(name, "ffn_moe_weighted")) {
++        return SKIPPY_GLM_DSA_OP_ROUTED_MOE_WEIGHTED;
++    }
++    if (skippy_name_starts_with(name, "ffn_moe_out")) {
++        return SKIPPY_GLM_DSA_OP_ROUTED_MOE_AGGREGATE;
++    }
++    if (skippy_name_starts_with(name, "ffn_moe_")) {
++        return SKIPPY_GLM_DSA_OP_ROUTED_MOE_ROUTE;
++    }
++    if (skippy_name_starts_with(name, "ffn_shexp") ||
++            skippy_name_starts_with(name, "ffn_up") ||
++            skippy_name_starts_with(name, "ffn_gate") ||
++            skippy_name_starts_with(name, "ffn_silu") ||
++            skippy_name_starts_with(name, "ffn_swiglu") ||
++            skippy_name_starts_with(name, "ffn_down")) {
++        return SKIPPY_GLM_DSA_OP_SHARED_EXPERT;
++    }
++    return SKIPPY_GLM_DSA_OP_UNKNOWN;
++}
++
++static void skippy_glm_dsa_group_name_for_tensor(
++        const char * tensor_name,
++        char * group_name,
++        size_t group_name_size) {
++    if (group_name == nullptr || group_name_size == 0) {
++        return;
++    }
++
++    group_name[0] = '\0';
++    if (tensor_name == nullptr || tensor_name[0] == '\0') {
++        std::snprintf(group_name, group_name_size, "global");
++        return;
++    }
++
++    const char * suffix = std::strrchr(tensor_name, '-');
++    if (suffix == nullptr || suffix[1] < '0' || suffix[1] > '9') {
++        std::snprintf(group_name, group_name_size, "global");
++        return;
++    }
++
++    const char * layer = suffix + 1;
++    size_t layer_len = 0;
++    while (layer[layer_len] >= '0' && layer[layer_len] <= '9') {
++        ++layer_len;
++    }
++    std::snprintf(group_name, group_name_size, "layer_%.*s", static_cast<int>(layer_len), layer);
++}
++
++static int skippy_glm_dsa_layer_from_group_name(const char * group_name) {
++    const char * prefix = "layer_";
++    if (!skippy_name_starts_with(group_name, prefix)) {
++        return -1;
++    }
++
++    const char * layer = group_name + std::strlen(prefix);
++    if (layer[0] == '\0') {
++        return -1;
++    }
++
++    char * end = nullptr;
++    errno = 0;
++    const long parsed = std::strtol(layer, &end, 10);
++    if (errno != 0 || end == layer || *end != '\0' || parsed < 0 || parsed > std::numeric_limits<int>::max()) {
++        return -1;
++    }
++
++    return static_cast<int>(parsed);
++}
++
++static void skippy_glm_dsa_log_direct_sparse_decision_for_tensor(
++        const skippy_glm_dsa_op_timing & timing,
++        const ggml_tensor * tensor,
++        skippy_glm_dsa_op_kind kind) {
++    if (!skippy_glm_dsa_direct_sparse_decision_log_enabled() || tensor == nullptr) {
++        return;
++    }
++
++    const ggml_tensor * top_k = nullptr;
++    bool use_direct = false;
++    if (kind == SKIPPY_GLM_DSA_OP_DSA_SPARSE_ATTN && tensor->op == GGML_OP_DSA_SPARSE_ATTN) {
++        top_k = tensor->src[4];
++        use_direct = true;
++    } else if ((kind == SKIPPY_GLM_DSA_OP_SPARSE_MASK_TOPK || kind == SKIPPY_GLM_DSA_OP_SPARSE_MASK_ADD) &&
++               tensor->op == GGML_OP_DSA_SPARSE_MASK) {
++        top_k = tensor->src[1];
++    } else {
++        return;
++    }
++
++    char group_name[SKIPPY_GLM_DSA_TIMING_GROUP_NAME_SIZE] = {};
++    skippy_glm_dsa_group_name_for_tensor(tensor->name, group_name, sizeof(group_name));
++    const int layer = skippy_glm_dsa_layer_from_group_name(group_name);
++    const int64_t sparse_batch = top_k != nullptr ? top_k->ne[1] : -1;
++    const int64_t sparse_streams = top_k != nullptr ? top_k->ne[2] : -1;
++    const uint32_t prefill_cap = skippy_glm_dsa_direct_sparse_prefill_max_tokens();
++    const bool prefill_enabled = skippy_glm_dsa_direct_sparse_prefill_enabled();
++    const ggml_tensor * dense_mask_shape = nullptr;
++    if (tensor->op == GGML_OP_DSA_SPARSE_ATTN) {
++        dense_mask_shape = tensor->src[3];
++    } else if (tensor->op == GGML_OP_DSA_SPARSE_MASK) {
++        dense_mask_shape = tensor;
++    }
++    const uint64_t dense_mask_bytes = dense_mask_shape != nullptr ? ggml_nbytes(dense_mask_shape) : 0;
++    const uint64_t dense_mask_limit = skippy_glm_dsa_dense_sparse_mask_max_bytes();
++    const int64_t sparse_kv = dense_mask_shape != nullptr ? dense_mask_shape->ne[1] : -1;
++    const int64_t sparse_top_k = top_k != nullptr ? top_k->ne[0] : -1;
++    const int64_t decode_max_top_k = skippy_glm_dsa_direct_sparse_decode_max_top_k();
++    const int64_t kv_topk_ratio = sparse_top_k > 0 ? sparse_kv / sparse_top_k : 0;
++    const bool direct_enabled = use_direct || skippy_glm_dsa_direct_sparse_attn_enabled();
++    const bool decode_shape =
++            sparse_streams > 0 &&
++            sparse_batch == 1 &&
++            timing.token_count == static_cast<size_t>(sparse_streams);
++    const bool prefill_shape =
++            prefill_enabled &&
++            sparse_batch >= 1 &&
++            sparse_batch <= static_cast<int64_t>(prefill_cap);
++    const bool large_prefill_shape =
++            prefill_enabled &&
++            skippy_glm_dsa_unproven_large_direct_sparse_prefill_enabled() &&
++            sparse_batch > static_cast<int64_t>(prefill_cap) &&
++            dense_mask_bytes > dense_mask_limit;
++    const bool token_shape_allowed = decode_shape || prefill_shape || large_prefill_shape;
++    const bool direct_top_k_too_large =
++            decode_shape &&
++            sparse_top_k > decode_max_top_k;
++    const char * phase =
++            decode_shape ? "decode" :
++            (prefill_shape || large_prefill_shape) ? "prefill" :
++            "other";
++    const char * selector_reason =
++            use_direct && decode_shape ? "decode" :
++            use_direct && prefill_shape ? "short_prefill" :
++            use_direct && large_prefill_shape ? "dense_mask_guard_large_prefill" :
++            !direct_enabled ? "direct_sparse_disabled" :
++            !token_shape_allowed ? "token_shape_not_allowed" :
++            direct_top_k_too_large ? "direct_sparse_top_k_too_large" :
++            !use_direct ? "dense_mask_fallback" :
++            "unknown";
++
++    LLAMA_LOG_INFO(
++            "skippy: glm_dsa_direct_sparse_decision layer=%d ubatch_tokens=%lld sparse_batch=%lld sparse_streams=%lld prefill_cap=%lld decode_max_top_k=%lld sparse_kv=%lld sparse_top_k=%lld min_kv_topk_ratio=%lld kv_topk_ratio=%lld dense_mask_bytes=%llu dense_mask_limit=%llu phase=%s selector_reason=%s direct_enabled=%d prefill_enabled=%d decode_shape=%d prefill_shape=%d large_prefill_shape=%d token_shape_allowed=%d backend_sparse_supported=%d kq_b_ok=%d sinks_ok=%d alibi_ok=%d soft_cap_ok=%d use_direct=%d\n",
++            layer,
++            static_cast<long long>(timing.token_count),
++            static_cast<long long>(sparse_batch),
++            static_cast<long long>(sparse_streams),
++            static_cast<long long>(prefill_cap),
++            static_cast<long long>(decode_max_top_k),
++            static_cast<long long>(sparse_kv),
++            static_cast<long long>(sparse_top_k),
++            0LL,
++            static_cast<long long>(kv_topk_ratio),
++            static_cast<unsigned long long>(dense_mask_bytes),
++            static_cast<unsigned long long>(dense_mask_limit),
++            phase,
++            selector_reason,
++            direct_enabled ? 1 : 0,
++            prefill_enabled ? 1 : 0,
++            decode_shape ? 1 : 0,
++            prefill_shape ? 1 : 0,
++            large_prefill_shape ? 1 : 0,
++            token_shape_allowed ? 1 : 0,
++            1,
++            1,
++            1,
++            1,
++            1,
++            use_direct ? 1 : 0);
++}
++
++static skippy_glm_dsa_op_group * skippy_glm_dsa_op_timing_group(
++        skippy_glm_dsa_op_timing & timing,
++        const char * group_name) {
++    if (group_name == nullptr || group_name[0] == '\0') {
++        return nullptr;
++    }
++
++    skippy_glm_dsa_op_group * unused = nullptr;
++    for (size_t i = 0; i < SKIPPY_GLM_DSA_TIMING_GROUP_LIMIT; ++i) {
++        skippy_glm_dsa_op_group & group = timing.groups[i];
++        if (!group.used) {
++            if (unused == nullptr) {
++                unused = &group;
++            }
++            continue;
++        }
++        if (std::strncmp(group.name, group_name, sizeof(group.name)) == 0) {
++            return &group;
++        }
++    }
++
++    if (unused == nullptr) {
++        return nullptr;
++    }
++
++    unused->used = true;
++    std::snprintf(unused->name, sizeof(unused->name), "%s", group_name);
++    return unused;
++}
++
++static void skippy_glm_dsa_record_group_timing(
++        skippy_glm_dsa_op_timing & timing,
++        skippy_glm_dsa_op_kind kind,
++        const char * tensor_name,
++        int64_t elapsed_us) {
++    char group_name[SKIPPY_GLM_DSA_TIMING_GROUP_NAME_SIZE] = {};
++    skippy_glm_dsa_group_name_for_tensor(tensor_name, group_name, sizeof(group_name));
++    skippy_glm_dsa_op_group * group = skippy_glm_dsa_op_timing_group(timing, group_name);
++    if (group == nullptr) {
++        return;
++    }
++
++    group->stats[kind].nodes += 1;
++    group->stats[kind].elapsed_us += elapsed_us;
++}
++
++static void skippy_glm_dsa_record_hot_tensor(
++        skippy_glm_dsa_op_timing & timing,
++        skippy_glm_dsa_op_kind kind,
++        const ggml_tensor * tensor,
++        int64_t elapsed_us) {
++    if (tensor == nullptr || elapsed_us <= 0) {
++        return;
++    }
++
++    size_t slot = SKIPPY_GLM_DSA_HOT_TENSOR_LIMIT;
++    for (size_t i = 0; i < SKIPPY_GLM_DSA_HOT_TENSOR_LIMIT; ++i) {
++        if (!timing.hot_tensors[i].used || elapsed_us > timing.hot_tensors[i].elapsed_us) {
++            slot = i;
++            break;
++        }
++    }
++    if (slot == SKIPPY_GLM_DSA_HOT_TENSOR_LIMIT) {
++        return;
++    }
++
++    for (size_t i = SKIPPY_GLM_DSA_HOT_TENSOR_LIMIT - 1; i > slot; --i) {
++        timing.hot_tensors[i] = timing.hot_tensors[i - 1];
++    }
++
++    skippy_glm_dsa_hot_tensor & record = timing.hot_tensors[slot];
++    record.used = true;
++    record.kind = kind;
++    record.op = tensor->op;
++    record.elapsed_us = elapsed_us;
++    for (int i = 0; i < 4; ++i) {
++        record.ne[i] = tensor->ne[i];
++    }
++    std::snprintf(record.name, sizeof(record.name), "%s", tensor->name);
++}
++
++static bool skippy_glm_dsa_tensor_has_buffer(const ggml_tensor * tensor) {
++    return tensor != nullptr &&
++           tensor->data != nullptr &&
++           (tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer) != nullptr;
++}
++
++static bool skippy_glm_dsa_trace_filter_matches(const std::string & filter, const char * name) {
++    if (filter.empty()) {
++        return true;
++    }
++    if (name == nullptr || name[0] == '\0') {
++        return false;
++    }
++
++    size_t start = 0;
++    while (start <= filter.size()) {
++        const size_t end = filter.find(',', start);
++        const size_t len = (end == std::string::npos ? filter.size() : end) - start;
++        if (len > 0 && std::string(name).find(filter.substr(start, len)) != std::string::npos) {
++            return true;
++        }
++        if (end == std::string::npos) {
++            break;
++        }
++        start = end + 1;
++    }
++    return false;
++}
++
++template<typename T>
++static bool skippy_glm_dsa_get_tensor_prefix(
++        const ggml_tensor * tensor,
++        std::vector<T> & values,
++        size_t value_count) {
++    if (tensor->nb[0] != sizeof(T)) {
++        return false;
++    }
++
++    values.resize(value_count);
++    size_t copied = 0;
++    for (int64_t i3 = 0; i3 < tensor->ne[3] && copied < value_count; ++i3) {
++        for (int64_t i2 = 0; i2 < tensor->ne[2] && copied < value_count; ++i2) {
++            for (int64_t i1 = 0; i1 < tensor->ne[1] && copied < value_count; ++i1) {
++                const size_t row_values = std::min<size_t>(
++                        static_cast<size_t>(tensor->ne[0]),
++                        value_count - copied);
++                const size_t offset =
++                        static_cast<size_t>(i1) * tensor->nb[1] +
++                        static_cast<size_t>(i2) * tensor->nb[2] +
++                        static_cast<size_t>(i3) * tensor->nb[3];
++                ggml_backend_tensor_get(
++                        tensor,
++                        values.data() + copied,
++                        offset,
++                        row_values * sizeof(T));
++                copied += row_values;
++            }
++        }
++    }
++    return copied == value_count;
++}
++
++static void skippy_glm_dsa_trace_tensor_values(std::string & line, const ggml_tensor * tensor, uint32_t limit) {
++    const size_t value_count = static_cast<size_t>(
++            std::min<int64_t>(static_cast<int64_t>(limit), std::max<int64_t>(0, ggml_nelements(tensor))));
++
++    line += " values=[";
++    if (value_count == 0) {
++        line += "]";
++        return;
++    }
++
++    if (!skippy_glm_dsa_tensor_has_buffer(tensor)) {
++        line += "unallocated]";
++        return;
++    }
++
++    switch (tensor->type) {
++        case GGML_TYPE_F32: {
++            std::vector<float> values;
++            if (!skippy_glm_dsa_get_tensor_prefix(tensor, values, value_count)) {
++                line += "unsupported-stride";
++                break;
++            }
++            for (size_t i = 0; i < value_count; ++i) {
++                line += format("%s%.9g", i == 0 ? "" : ",", static_cast<double>(values[i]));
++            }
++            break;
++        }
++        case GGML_TYPE_F16:
++        case GGML_TYPE_BF16: {
++            const ggml_type_traits * traits = ggml_get_type_traits(tensor->type);
++            if (traits == nullptr || traits->to_float == nullptr) {
++                line += format("unsupported:%s", ggml_type_name(tensor->type));
++                break;
++            }
++            std::vector<uint16_t> raw;
++            std::vector<float> values(value_count);
++            if (!skippy_glm_dsa_get_tensor_prefix(tensor, raw, value_count)) {
++                line += "unsupported-stride";
++                break;
++            }
++            traits->to_float(raw.data(), values.data(), value_count);
++            for (size_t i = 0; i < value_count; ++i) {
++                line += format("%s%.9g", i == 0 ? "" : ",", static_cast<double>(values[i]));
++            }
++            break;
++        }
++        case GGML_TYPE_I32: {
++            std::vector<int32_t> values;
++            if (!skippy_glm_dsa_get_tensor_prefix(tensor, values, value_count)) {
++                line += "unsupported-stride";
++                break;
++            }
++            for (size_t i = 0; i < value_count; ++i) {
++                line += format("%s%d", i == 0 ? "" : ",", values[i]);
++            }
++            break;
++        }
++        default:
++            line += format("unsupported:%s", ggml_type_name(tensor->type));
++            break;
++    }
++
++    line += "]";
++}
++
++static uint64_t skippy_glm_dsa_fnv1a64(const uint8_t * data, size_t size) {
++    uint64_t hash = 1469598103934665603ull;
++    for (size_t i = 0; i < size; ++i) {
++        hash ^= static_cast<uint64_t>(data[i]);
++        hash *= 1099511628211ull;
+     }
+-    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP) != 0 && !skippy_is_gemma3n_activation_model(session)) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "Gemma3n AltUp activation payload is only valid for Gemma3n stages");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    return hash;
++}
++
++static void skippy_glm_dsa_trace_numeric_stats_from_f32(std::string & line, const float * values, size_t count) {
++    double sum = 0.0;
++    double max_abs = 0.0;
++    for (size_t i = 0; i < count; ++i) {
++        const double value = static_cast<double>(values[i]);
++        sum += value;
++        max_abs = std::max(max_abs, std::fabs(value));
+     }
+-    if (skippy_is_gemma3n_activation_model(session) && (input_desc->flags & SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP) == 0) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "non-first Gemma3n runtime slices require AltUp activation payload");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    const double mean = count == 0 ? 0.0 : sum / static_cast<double>(count);
++    line += format(
++            " count=%zu sum=%.17g mean=%.17g max_abs=%.17g",
++            count,
++            sum,
++            mean,
++            max_abs);
++}
++
++static void skippy_glm_dsa_trace_tensor_stats(std::string & line, const ggml_tensor * tensor, uint32_t max_bytes) {
++    if (!skippy_glm_dsa_tensor_has_buffer(tensor)) {
++        line += " stats=unallocated";
++        return;
+     }
+-    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP) != 0 &&
+-        (input_desc->flags & SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST) != 0) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "Gemma3n AltUp and RWKV7 v_first activation flags cannot be combined");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
++
++    const size_t nbytes = ggml_nbytes(tensor);
++    if (nbytes > static_cast<size_t>(max_bytes)) {
++        line += format(" stats=skipped:nbytes>%u", max_bytes);
++        return;
+     }
+-    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST) != 0 && !skippy_is_rwkv7_activation_model(session)) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "RWKV7 v_first sideband is only valid for RWKV7 stages");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
++
++    std::vector<uint8_t> raw(nbytes);
++    ggml_backend_tensor_get(tensor, raw.data(), 0, nbytes);
++    const uint64_t hash = skippy_glm_dsa_fnv1a64(raw.data(), raw.size());
++    line += format(" stats=fnv64:%016llx", static_cast<unsigned long long>(hash));
++
++    const size_t count = static_cast<size_t>(std::max<int64_t>(0, ggml_nelements(tensor)));
++    switch (tensor->type) {
++        case GGML_TYPE_F32:
++            skippy_glm_dsa_trace_numeric_stats_from_f32(line, reinterpret_cast<const float *>(raw.data()), count);
++            break;
++        case GGML_TYPE_F16:
++        case GGML_TYPE_BF16: {
++            const ggml_type_traits * traits = ggml_get_type_traits(tensor->type);
++            if (traits == nullptr || traits->to_float == nullptr) {
++                break;
++            }
++            std::vector<float> values(count);
++            traits->to_float(raw.data(), values.data(), count);
++            skippy_glm_dsa_trace_numeric_stats_from_f32(line, values.data(), count);
++            break;
++        }
++        case GGML_TYPE_I32: {
++            double sum = 0.0;
++            double max_abs = 0.0;
++            const int32_t * values = reinterpret_cast<const int32_t *>(raw.data());
++            for (size_t i = 0; i < count; ++i) {
++                const double value = static_cast<double>(values[i]);
++                sum += value;
++                max_abs = std::max(max_abs, std::fabs(value));
++            }
++            const double mean = count == 0 ? 0.0 : sum / static_cast<double>(count);
++            line += format(
++                    " count=%zu sum=%.17g mean=%.17g max_abs=%.17g",
++                    count,
++                    sum,
++                    mean,
++                    max_abs);
++            break;
++        }
++        default:
++            break;
+     }
+-    if (skippy_is_rwkv7_activation_model(session) && (input_desc->flags & SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST) == 0) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "non-first RWKV7 runtime slices require v_first activation sideband");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
++}
++
++static void skippy_glm_dsa_dump_trace_tensor(
++        const skippy_glm_dsa_op_timing & timing,
++        const ggml_tensor * tensor) {
++    const char * dump_dir = std::getenv("SKIPPY_GLM_DSA_TENSOR_DUMP_DIR");
++    if (dump_dir == nullptr || dump_dir[0] == '\0' || timing.token_count != 1 ||
++            !skippy_glm_dsa_tensor_has_buffer(tensor)) {
++        return;
+     }
+ 
+-    const size_t expected_bytes = skippy_activation_payload_bytes(session, expected_token_count, input_desc->flags);
+-    if (input_desc->payload_bytes != expected_bytes) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "activation frame payload size does not match model hidden size");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    std::string filename = tensor->name;
++    for (char & c : filename) {
++        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_') {
++            c = '_';
++        }
+     }
++    filename += format(
++            "_%lld_%lld_%lld_%lld_%s.bin",
++            static_cast<long long>(tensor->ne[0]),
++            static_cast<long long>(tensor->ne[1]),
++            static_cast<long long>(tensor->ne[2]),
++            static_cast<long long>(tensor->ne[3]),
++            ggml_type_name(tensor->type));
+ 
+-    return SKIPPY_STATUS_OK;
++    const size_t nbytes = ggml_nbytes(tensor);
++    std::vector<uint8_t> raw(nbytes);
++    ggml_backend_tensor_get(tensor, raw.data(), 0, nbytes);
++    std::ofstream output(std::string(dump_dir) + "/" + filename, std::ios::binary | std::ios::trunc);
++    if (output) {
++        output.write(reinterpret_cast<const char *>(raw.data()), static_cast<std::streamsize>(raw.size()));
++    }
+ }
+ 
+-static enum skippy_status skippy_prepare_output_activation_frame(
+-        skippy_session * session,
+-        size_t token_count,
+-        void * output_payload,
+-        size_t output_payload_capacity,
+-        size_t * out_output_payload_bytes,
+-        skippy_activation_desc * output_desc,
+-        const skippy_activation_desc * input_desc,
+-        struct skippy_error ** out_error) {
+-    const uint64_t output_flags = skippy_output_activation_flags(session, input_desc);
+-    const size_t payload_bytes = skippy_emits_activation_frame(session) ?
+-            skippy_activation_payload_bytes(session, token_count, output_flags) : 0;
++static void skippy_glm_dsa_trace_tensor(
++        skippy_glm_dsa_op_timing & timing,
++        skippy_glm_dsa_op_kind kind,
++        const ggml_tensor * tensor) {
++    if (!timing.trace_tensors ||
++            timing.trace_nodes >= timing.trace_node_limit ||
++            !skippy_glm_dsa_trace_filter_matches(timing.trace_filter, tensor->name)) {
++        return;
++    }
+ 
+-    if (out_output_payload_bytes != nullptr) {
+-        *out_output_payload_bytes = payload_bytes;
++    timing.trace_nodes += 1;
++    skippy_glm_dsa_dump_trace_tensor(timing, tensor);
++    std::string line = format(
++            "skippy: glm_dsa_tensor_trace stage=%d tokens=%zu op=%s node=%u name=%s type=%s ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] contiguous=%d nbytes=%zu",
++            timing.stage_index,
++            timing.token_count,
++            skippy_glm_dsa_op_name(kind),
++            timing.trace_nodes,
++            tensor->name,
++            ggml_type_name(tensor->type),
++            static_cast<long long>(tensor->ne[0]),
++            static_cast<long long>(tensor->ne[1]),
++            static_cast<long long>(tensor->ne[2]),
++            static_cast<long long>(tensor->ne[3]),
++            static_cast<size_t>(tensor->nb[0]),
++            static_cast<size_t>(tensor->nb[1]),
++            static_cast<size_t>(tensor->nb[2]),
++            static_cast<size_t>(tensor->nb[3]),
++            ggml_is_contiguous(tensor) ? 1 : 0,
++            ggml_nbytes(tensor));
++    skippy_glm_dsa_trace_tensor_values(line, tensor, timing.trace_value_limit);
++    if (timing.trace_stats) {
++        skippy_glm_dsa_trace_tensor_stats(line, tensor, timing.trace_stats_max_bytes);
++    }
++    LLAMA_LOG_INFO("%s\n", line.c_str());
++}
++
++static bool skippy_glm_dsa_op_timing_cb(ggml_tensor * tensor, bool ask, void * user_data) {
++    skippy_model * model = static_cast<skippy_model *>(user_data);
++    if (model == nullptr || !model->glm_dsa_timing.enabled || tensor == nullptr) {
++        return false;
+     }
+ 
+-    if (payload_bytes > 0) {
+-        if (output_payload == nullptr) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "output_payload is required for runtime-slice activation output");
+-            return SKIPPY_STATUS_INVALID_ARGUMENT;
+-        }
+-        if (output_payload_capacity < payload_bytes) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "output activation buffer is too small");
+-            return SKIPPY_STATUS_BUFFER_TOO_SMALL;
+-        }
+-    } else if (output_payload_capacity > 0 && output_payload == nullptr) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "output_payload is required when output capacity is non-zero");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    skippy_glm_dsa_op_timing & timing = model->glm_dsa_timing;
++    const skippy_glm_dsa_op_kind kind = skippy_glm_dsa_op_kind_for_tensor(tensor->name);
++    const bool trace_match = timing.trace_tensors &&
++            skippy_glm_dsa_trace_filter_matches(timing.trace_filter, tensor->name);
++    if (kind == SKIPPY_GLM_DSA_OP_UNKNOWN && !trace_match) {
++        return false;
+     }
+ 
+-    if (output_desc != nullptr) {
+-        *output_desc = {};
+-        output_desc->version = 1;
+-        output_desc->dtype = payload_bytes > 0 ? SKIPPY_ACTIVATION_DTYPE_F32 : SKIPPY_ACTIVATION_DTYPE_UNKNOWN;
+-        output_desc->layout = payload_bytes > 0 ? SKIPPY_ACTIVATION_LAYOUT_TOKEN_MAJOR : SKIPPY_ACTIVATION_LAYOUT_OPAQUE;
+-        output_desc->producer_stage_index = session != nullptr ? session->stage_model->config.stage_index : -1;
+-        output_desc->layer_start = session != nullptr ? session->stage_model->config.layer_start : 0;
+-        output_desc->layer_end = session != nullptr ? session->stage_model->config.layer_end : 0;
+-        output_desc->token_count = static_cast<uint32_t>(std::min<size_t>(token_count, std::numeric_limits<uint32_t>::max()));
+-        output_desc->sequence_count = token_count > 0 ? 1 : 0;
+-        output_desc->payload_bytes = payload_bytes;
+-        output_desc->flags = output_flags;
++    // Tensor tracing can be used as a narrow synchronization probe. Keep the
++    // normal op-timing callback broad, but only split the graph at tensors the
++    // trace filter actually requests when timing is disabled.
++    if (timing.trace_tensors && !timing.print_timing && !trace_match) {
++        return false;
+     }
+ 
+-    return SKIPPY_STATUS_OK;
+-}
++    if (ask) {
++        timing.pending_kind = kind;
++        timing.pending_start_us = ggml_time_us();
++        return true;
++    }
+ 
+-static enum skippy_status skippy_decode_batch(
+-        skippy_session * session,
+-        llama_batch batch,
+-        size_t token_count,
+-        struct skippy_error ** out_error) {
+-    if (session == nullptr || session->ctx == nullptr || token_count == 0) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and at least one token are required");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    const int64_t elapsed_us = std::max<int64_t>(0, ggml_time_us() - timing.pending_start_us);
++    if (kind != SKIPPY_GLM_DSA_OP_UNKNOWN) {
++        timing.stats[kind].nodes += 1;
++        timing.stats[kind].elapsed_us += elapsed_us;
++        skippy_glm_dsa_record_group_timing(timing, kind, tensor->name, elapsed_us);
++        skippy_glm_dsa_record_hot_tensor(timing, kind, tensor, elapsed_us);
++        skippy_glm_dsa_log_direct_sparse_decision_for_tensor(timing, tensor, kind);
+     }
++    skippy_glm_dsa_trace_tensor(timing, kind, tensor);
++    timing.pending_kind = SKIPPY_GLM_DSA_OP_UNKNOWN;
++    timing.pending_start_us = 0;
++    return true;
++}
+ 
+-    skippy_graph_filter_scope graph_filter_scope(&session->stage_model->config);
+-    const int32_t rc = llama_decode(session->ctx, batch);
+-    if (rc != 0) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed");
+-        return SKIPPY_STATUS_RUNTIME_ERROR;
++static skippy_glm_dsa_op_stat skippy_glm_dsa_sparse_mask_stat_from_stats(const skippy_glm_dsa_op_stat stats[]) {
++    skippy_glm_dsa_op_stat stat = {};
++    stat.nodes += stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_FILL].nodes;
++    stat.nodes += stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_TOPK].nodes;
++    stat.nodes += stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_ADD].nodes;
++    stat.elapsed_us += stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_FILL].elapsed_us;
++    stat.elapsed_us += stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_TOPK].elapsed_us;
++    stat.elapsed_us += stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_ADD].elapsed_us;
++    return stat;
++}
++
++static skippy_glm_dsa_op_stat skippy_glm_dsa_sparse_mask_stat(const skippy_glm_dsa_op_timing & timing) {
++    return skippy_glm_dsa_sparse_mask_stat_from_stats(timing.stats);
++}
++
++static skippy_glm_dsa_op_stat skippy_glm_dsa_indexer_topk_stat_from_stats(const skippy_glm_dsa_op_stat stats[]) {
++    skippy_glm_dsa_op_stat stat = {};
++    stat.nodes += stats[SKIPPY_GLM_DSA_OP_INDEXER].nodes;
++    stat.nodes += stats[SKIPPY_GLM_DSA_OP_TOP_K].nodes;
++    stat.elapsed_us += stats[SKIPPY_GLM_DSA_OP_INDEXER].elapsed_us;
++    stat.elapsed_us += stats[SKIPPY_GLM_DSA_OP_TOP_K].elapsed_us;
++    return stat;
++}
++
++static skippy_glm_dsa_op_stat skippy_glm_dsa_indexer_topk_stat(const skippy_glm_dsa_op_timing & timing) {
++    return skippy_glm_dsa_indexer_topk_stat_from_stats(timing.stats);
++}
++
++static skippy_glm_dsa_op_stat skippy_glm_dsa_routed_moe_stat_from_stats(const skippy_glm_dsa_op_stat stats[]) {
++    skippy_glm_dsa_op_stat stat = {};
++    for (int i = SKIPPY_GLM_DSA_OP_ROUTED_MOE_ROUTE; i <= SKIPPY_GLM_DSA_OP_ROUTED_MOE_AGGREGATE; ++i) {
++        stat.nodes += stats[i].nodes;
++        stat.elapsed_us += stats[i].elapsed_us;
+     }
++    return stat;
++}
+ 
+-    session->n_past += static_cast<int32_t>(token_count);
+-    return skippy_success(out_error);
++static skippy_glm_dsa_op_stat skippy_glm_dsa_routed_moe_stat(const skippy_glm_dsa_op_timing & timing) {
++    return skippy_glm_dsa_routed_moe_stat_from_stats(timing.stats);
+ }
+ 
+-static bool skippy_mtp_available(const skippy_session * session) {
+-    return session != nullptr &&
+-           session->stage_model != nullptr &&
+-           session->stage_model->mtp_ctx != nullptr &&
+-           session->stage_model->config.include_output;
++static void skippy_glm_dsa_append_op_stat(std::string & line, const char * name, const skippy_glm_dsa_op_stat & stat) {
++    line += format(
++            " %s_nodes=%llu %s_us=%lld",
++            name,
++            static_cast<unsigned long long>(stat.nodes),
++            name,
++            static_cast<long long>(stat.elapsed_us));
+ }
+ 
+-static bool skippy_env_enabled(const char * name) {
+-    const char * value = std::getenv(name);
+-    if (value == nullptr || value[0] == '\0') {
+-        return false;
++static void skippy_glm_dsa_append_op_kind(
++        std::string & line,
++        skippy_glm_dsa_op_kind kind,
++        const skippy_glm_dsa_op_stat & stat) {
++    skippy_glm_dsa_append_op_stat(line, skippy_glm_dsa_op_name(kind), stat);
++}
++
++static void skippy_glm_dsa_print_op_group(
++        const skippy_glm_dsa_op_timing & timing,
++        const skippy_glm_dsa_op_group & group) {
++    uint64_t total_nodes = 0;
++    int64_t total_us = 0;
++    for (int i = 0; i < SKIPPY_GLM_DSA_OP_COUNT; ++i) {
++        total_nodes += group.stats[i].nodes;
++        total_us += group.stats[i].elapsed_us;
++    }
++    if (total_nodes == 0) {
++        return;
++    }
++
++    std::string line = format(
++            "skippy: glm_dsa_group_timing stage=%d tokens=%zu group=%s total_us=%lld",
++            timing.stage_index,
++            timing.token_count,
++            group.name,
++            static_cast<long long>(total_us));
++    skippy_glm_dsa_append_op_stat(line, "indexer_topk", skippy_glm_dsa_indexer_topk_stat_from_stats(group.stats));
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_INDEXER, group.stats[SKIPPY_GLM_DSA_OP_INDEXER]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_TOP_K, group.stats[SKIPPY_GLM_DSA_OP_TOP_K]);
++    skippy_glm_dsa_append_op_stat(line, "sparse_mask", skippy_glm_dsa_sparse_mask_stat_from_stats(group.stats));
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_SPARSE_MASK_FILL, group.stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_FILL]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_SPARSE_MASK_TOPK, group.stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_TOPK]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_SPARSE_MASK_ADD, group.stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_ADD]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_DSA_SPARSE_ATTN, group.stats[SKIPPY_GLM_DSA_OP_DSA_SPARSE_ATTN]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_COMPACT_GET_ROWS, group.stats[SKIPPY_GLM_DSA_OP_COMPACT_GET_ROWS]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_MLA_ATTENTION, group.stats[SKIPPY_GLM_DSA_OP_MLA_ATTENTION]);
++    skippy_glm_dsa_append_op_stat(line, "routed_moe", skippy_glm_dsa_routed_moe_stat_from_stats(group.stats));
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_ROUTE, group.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_ROUTE]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE_UP, group.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE_UP]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE, group.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_UP, group.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_UP]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_ACT, group.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_ACT]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_DOWN, group.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_DOWN]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_WEIGHTED, group.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_WEIGHTED]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_AGGREGATE, group.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_AGGREGATE]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_SHARED_EXPERT, group.stats[SKIPPY_GLM_DSA_OP_SHARED_EXPERT]);
++    LLAMA_LOG_INFO("%s\n", line.c_str());
++}
++
++static void skippy_glm_dsa_print_hot_tensors(const skippy_glm_dsa_op_timing & timing) {
++    for (size_t i = 0; i < SKIPPY_GLM_DSA_HOT_TENSOR_LIMIT; ++i) {
++        const skippy_glm_dsa_hot_tensor & record = timing.hot_tensors[i];
++        if (!record.used) {
++            return;
++        }
++
++        LLAMA_LOG_INFO(
++                "skippy: glm_dsa_hot_tensor stage=%d tokens=%zu rank=%zu op=%s kind=%s elapsed_us=%lld name=%s ne0=%lld ne1=%lld ne2=%lld ne3=%lld\n",
++                timing.stage_index,
++                timing.token_count,
++                i + 1,
++                ggml_op_name(record.op),
++                skippy_glm_dsa_op_name(record.kind),
++                static_cast<long long>(record.elapsed_us),
++                record.name[0] == '\0' ? "<unnamed>" : record.name,
++                static_cast<long long>(record.ne[0]),
++                static_cast<long long>(record.ne[1]),
++                static_cast<long long>(record.ne[2]),
++                static_cast<long long>(record.ne[3]));
+     }
+-    return std::strcmp(value, "0") != 0 &&
+-           std::strcmp(value, "false") != 0 &&
+-           std::strcmp(value, "off") != 0 &&
+-           std::strcmp(value, "no") != 0;
+ }
+ 
+-static bool skippy_mtp_greedy_sampling_fastpath_enabled() {
+-    return skippy_env_enabled("SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH");
++static void skippy_glm_dsa_op_timing_begin(skippy_session * session, size_t token_count) {
++    if (session == nullptr || session->stage_model == nullptr || !session->stage_model->glm_dsa_timing.enabled) {
++        return;
++    }
++
++    skippy_glm_dsa_op_timing & timing = session->stage_model->glm_dsa_timing;
++    const bool enabled = timing.enabled;
++    const bool print_timing = timing.print_timing;
++    const bool trace_tensors = timing.trace_tensors;
++    const bool trace_stats = timing.trace_stats;
++    const int32_t stage_index = timing.stage_index;
++    const uint32_t trace_value_limit = timing.trace_value_limit;
++    const uint32_t trace_node_limit = timing.trace_node_limit;
++    const uint32_t trace_stats_max_bytes = timing.trace_stats_max_bytes;
++    const std::string trace_filter = timing.trace_filter;
++    timing = skippy_glm_dsa_op_timing{};
++    timing.enabled = enabled;
++    timing.print_timing = print_timing;
++    timing.trace_tensors = trace_tensors;
++    timing.trace_stats = trace_stats;
++    timing.stage_index = stage_index;
++    timing.token_count = token_count;
++    timing.trace_value_limit = trace_value_limit;
++    timing.trace_node_limit = trace_node_limit;
++    timing.trace_stats_max_bytes = trace_stats_max_bytes;
++    timing.trace_filter = trace_filter;
++}
++
++static void skippy_glm_dsa_op_timing_end(skippy_session * session) {
++    if (session == nullptr || session->stage_model == nullptr || !session->stage_model->glm_dsa_timing.enabled) {
++        return;
++    }
++
++    const skippy_glm_dsa_op_timing & timing = session->stage_model->glm_dsa_timing;
++    uint64_t total_nodes = 0;
++    int64_t total_us = 0;
++    for (int i = 0; i < SKIPPY_GLM_DSA_OP_COUNT; ++i) {
++        total_nodes += timing.stats[i].nodes;
++        total_us += timing.stats[i].elapsed_us;
++    }
++    if (total_nodes == 0) {
++        return;
++    }
++    if (!timing.print_timing) {
++        return;
++    }
++
++    std::string line = format(
++            "skippy: glm_dsa_op_timing stage=%d tokens=%zu total_us=%lld",
++            timing.stage_index,
++            timing.token_count,
++            static_cast<long long>(total_us));
++    skippy_glm_dsa_append_op_stat(line, "indexer_topk", skippy_glm_dsa_indexer_topk_stat(timing));
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_INDEXER, timing.stats[SKIPPY_GLM_DSA_OP_INDEXER]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_TOP_K, timing.stats[SKIPPY_GLM_DSA_OP_TOP_K]);
++    skippy_glm_dsa_append_op_stat(line, "sparse_mask", skippy_glm_dsa_sparse_mask_stat(timing));
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_SPARSE_MASK_FILL, timing.stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_FILL]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_SPARSE_MASK_TOPK, timing.stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_TOPK]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_SPARSE_MASK_ADD, timing.stats[SKIPPY_GLM_DSA_OP_SPARSE_MASK_ADD]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_DSA_SPARSE_ATTN, timing.stats[SKIPPY_GLM_DSA_OP_DSA_SPARSE_ATTN]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_COMPACT_GET_ROWS, timing.stats[SKIPPY_GLM_DSA_OP_COMPACT_GET_ROWS]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_MLA_ATTENTION, timing.stats[SKIPPY_GLM_DSA_OP_MLA_ATTENTION]);
++    skippy_glm_dsa_append_op_stat(line, "routed_moe", skippy_glm_dsa_routed_moe_stat(timing));
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_ROUTE, timing.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_ROUTE]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE_UP, timing.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE_UP]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE, timing.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_GATE]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_UP, timing.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_UP]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_ACT, timing.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_ACT]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_DOWN, timing.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_DOWN]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_WEIGHTED, timing.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_WEIGHTED]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_ROUTED_MOE_AGGREGATE, timing.stats[SKIPPY_GLM_DSA_OP_ROUTED_MOE_AGGREGATE]);
++    skippy_glm_dsa_append_op_kind(line, SKIPPY_GLM_DSA_OP_SHARED_EXPERT, timing.stats[SKIPPY_GLM_DSA_OP_SHARED_EXPERT]);
++    LLAMA_LOG_INFO("%s\n", line.c_str());
++
++    for (size_t i = 0; i < SKIPPY_GLM_DSA_TIMING_GROUP_LIMIT; ++i) {
++        if (timing.groups[i].used) {
++            skippy_glm_dsa_print_op_group(timing, timing.groups[i]);
++        }
++    }
++    skippy_glm_dsa_print_hot_tensors(timing);
+ }
+ 
+ static void skippy_mtp_clear_session_state(skippy_session * session) {
+@@ -1460,6 +2871,7 @@ static enum skippy_status skippy_decode_tokens(
+         const llama_token * token_ids,
+         size_t token_count,
+         bool request_logits,
++        int32_t glm_dsa_phase_hint,
+         struct skippy_error ** out_error) {
+     (void) request_logits;
+ 
+@@ -1493,7 +2905,10 @@ static enum skippy_status skippy_decode_tokens(
+             /*seq_id   =*/ &seq_ids,
+             /*logits   =*/ &logits,
+         };
+-        enum skippy_status status = skippy_decode_batch(session, batch, 1, out_error);
++        enum skippy_status status = skippy_decode_batch(session, batch, 1, glm_dsa_phase_hint, out_error);
++        if (status == SKIPPY_STATUS_OK) {
++            status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, pos, out_error);
++        }
+         if (status == SKIPPY_STATUS_OK) {
+             status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, pos, out_error);
+         }
+@@ -1514,7 +2929,7 @@ static enum skippy_status skippy_decode_tokens(
+         batch.logits[i] = request_logits && i == n_tokens - 1 ? 1 : 0;
+     }
+ 
+-    enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
++    enum skippy_status status = skippy_decode_batch(session, batch, token_count, glm_dsa_phase_hint, out_error);
+     llama_batch_free(batch);
+     if (status == SKIPPY_STATUS_OK) {
+         status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, token_start, out_error);
+@@ -1554,7 +2969,12 @@ static enum skippy_status skippy_verify_token_batch(
+         batch.logits[i] = 1;
+     }
+ 
+-    enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
++    enum skippy_status status = skippy_decode_batch(
++            session,
++            batch,
++            token_count,
++            SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
++            out_error);
+     llama_batch_free(batch);
+     return status;
+ }
+@@ -2201,6 +3621,8 @@ static enum skippy_status skippy_copy_output_activation_frame(
+         void * output_payload,
+         const skippy_activation_desc * input_desc,
+         const void * input_payload,
++        size_t * out_output_payload_bytes,
++        skippy_activation_desc * output_desc,
+         struct skippy_error ** out_error) {
+     if (!skippy_emits_activation_frame(session)) {
+         return skippy_success(out_error);
+@@ -2208,6 +3630,7 @@ static enum skippy_status skippy_copy_output_activation_frame(
+ 
+     const uint64_t output_flags = skippy_output_activation_flags(session, input_desc);
+     const size_t hidden_bytes = skippy_activation_hidden_bytes(session, token_count);
++    size_t actual_payload_bytes = hidden_bytes;
+     if ((output_flags & SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP) != 0) {
+         llm_graph_result * res = session->ctx->get_gf_res_prev();
+         ggml_tensor * altup = res != nullptr ? res->get_skippy_gemma3n_altup() : nullptr;
+@@ -2221,6 +3644,12 @@ static enum skippy_status skippy_copy_output_activation_frame(
+             return SKIPPY_STATUS_RUNTIME_ERROR;
+         }
+         ggml_backend_tensor_get(altup, output_payload, 0, altup_bytes);
++        if (out_output_payload_bytes != nullptr) {
++            *out_output_payload_bytes = altup_bytes;
++        }
++        if (output_desc != nullptr) {
++            output_desc->payload_bytes = altup_bytes;
++        }
+         return skippy_success(out_error);
+     }
+ 
+@@ -2232,6 +3661,66 @@ static enum skippy_status skippy_copy_output_activation_frame(
+ 
+     std::memcpy(output_payload, embeddings, hidden_bytes);
+ 
++    if ((output_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
++        uint8_t * sideband_output = static_cast<uint8_t *>(output_payload) + hidden_bytes;
++        llm_graph_result * res = session->ctx->get_gf_res_prev();
++        ggml_tensor * top_k = res != nullptr ? res->get_skippy_glm_dsa_top_k() : nullptr;
++        if (top_k != nullptr) {
++            const size_t top_k_rows = top_k->ne[1]*top_k->ne[2]*top_k->ne[3];
++            if (top_k->type != GGML_TYPE_I32 || top_k->ne[0] <= 0 ||
++                    static_cast<uint64_t>(top_k->ne[0]) > std::numeric_limits<uint32_t>::max() ||
++                    top_k_rows != token_count) {
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "GLM-DSA top-k sideband tensor shape is not token-major i32");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++            const uint32_t visible_top_k = skippy_glm_dsa_sideband_top_k_count_for_n_kv(
++                    session,
++                    static_cast<uint64_t>(std::max<int32_t>(session->n_past, 0)));
++            const uint32_t output_top_k = static_cast<uint32_t>(
++                    std::min<uint64_t>(static_cast<uint64_t>(top_k->ne[0]), visible_top_k));
++            if (output_top_k == 0) {
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "GLM-DSA top-k sideband output has no visible entries");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++            const size_t top_k_bytes_per_row = static_cast<size_t>(output_top_k)*sizeof(int32_t);
++            const size_t top_k_bytes = token_count*top_k_bytes_per_row;
++            if (static_cast<int64_t>(output_top_k) == top_k->ne[0] && ggml_is_contiguous(top_k)) {
++                ggml_backend_tensor_get(top_k, sideband_output, 0, top_k_bytes);
++            } else {
++                for (size_t row = 0; row < token_count; ++row) {
++                    size_t rem = row;
++                    const size_t i1 = rem % static_cast<size_t>(top_k->ne[1]);
++                    rem /= static_cast<size_t>(top_k->ne[1]);
++                    const size_t i2 = rem % static_cast<size_t>(top_k->ne[2]);
++                    const size_t i3 = rem / static_cast<size_t>(top_k->ne[2]);
++                    const size_t src_offset = i1*top_k->nb[1] + i2*top_k->nb[2] + i3*top_k->nb[3];
++                    ggml_backend_tensor_get(
++                            top_k,
++                            sideband_output + row*top_k_bytes_per_row,
++                            src_offset,
++                            top_k_bytes_per_row);
++                }
++            }
++            actual_payload_bytes += top_k_bytes;
++        } else {
++            if (input_desc != nullptr && input_desc->payload_bytes < hidden_bytes) {
++                skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "GLM-DSA downstream slice input is smaller than hidden payload");
++                return SKIPPY_STATUS_INVALID_ARGUMENT;
++            }
++            const size_t top_k_bytes = input_desc != nullptr ?
++                    static_cast<size_t>(input_desc->payload_bytes - hidden_bytes) : 0;
++            if (input_desc == nullptr ||
++                input_payload == nullptr ||
++                (input_desc->flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) == 0 ||
++                input_desc->payload_bytes < hidden_bytes + top_k_bytes) {
++                skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "GLM-DSA downstream slice cannot forward missing top-k sideband");
++                return SKIPPY_STATUS_INVALID_ARGUMENT;
++            }
++            std::memcpy(sideband_output, static_cast<const uint8_t *>(input_payload) + hidden_bytes, top_k_bytes);
++            actual_payload_bytes += top_k_bytes;
++        }
++    }
++
+     if ((output_flags & SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST) != 0) {
+         uint8_t * sideband_output = static_cast<uint8_t *>(output_payload) + hidden_bytes;
+         const skippy_runtime_config & config = session->stage_model->config;
+@@ -2257,6 +3746,14 @@ static enum skippy_status skippy_copy_output_activation_frame(
+             }
+             std::memcpy(sideband_output, static_cast<const uint8_t *>(input_payload) + hidden_bytes, hidden_bytes);
+         }
++        actual_payload_bytes += hidden_bytes;
++    }
++
++    if (out_output_payload_bytes != nullptr) {
++        *out_output_payload_bytes = actual_payload_bytes;
++    }
++    if (output_desc != nullptr) {
++        output_desc->payload_bytes = actual_payload_bytes;
+     }
+     return skippy_success(out_error);
+ }
+@@ -2270,6 +3767,7 @@ static enum skippy_status skippy_decode_activation_frame(
+         size_t position_count,
+         size_t token_count,
+         bool request_logits,
++        int32_t glm_dsa_phase_hint,
+         struct skippy_error ** out_error) {
+     if (session == nullptr || session->ctx == nullptr || input_desc == nullptr || input_payload == nullptr || token_count == 0) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and activation frame input are required");
+@@ -2350,7 +3848,19 @@ static enum skippy_status skippy_decode_activation_frame(
+     skippy_rwkv7_v_first_scope rwkv7_v_first_scope(input_desc, input_payload, hidden_bytes, n_embd);
+     skippy_gemma3n_altup_scope gemma3n_altup_scope(input_desc, input_payload, n_embd, n_altup);
+     const llama_pos token_start = pos_storage.empty() ? session->n_past : pos_storage[0];
+-    enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
++    skippy_glm_dsa_top_k_scope glm_dsa_top_k_scope(
++            input_desc,
++            input_payload,
++            hidden_bytes,
++            skippy_glm_dsa_top_k_count_from_desc(session, input_desc),
++            skippy_glm_dsa_n_stream(session),
++            token_start);
++    enum skippy_status status = skippy_decode_batch(
++            session,
++            batch,
++            token_count,
++            glm_dsa_phase_hint,
++            out_error);
+     if (status == SKIPPY_STATUS_OK && token_ids != nullptr) {
+         status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, token_start, out_error);
+     }
+@@ -2416,7 +3926,19 @@ static enum skippy_status skippy_verify_activation_frame(
+     skippy_rwkv7_v_first_scope rwkv7_v_first_scope(input_desc, input_payload, hidden_bytes, n_embd);
+     skippy_gemma3n_altup_scope gemma3n_altup_scope(input_desc, input_payload, n_embd, n_altup);
+     const llama_pos token_start = session->n_past;
+-    enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
++    skippy_glm_dsa_top_k_scope glm_dsa_top_k_scope(
++            input_desc,
++            input_payload,
++            hidden_bytes,
++            skippy_glm_dsa_top_k_count_from_desc(session, input_desc),
++            skippy_glm_dsa_n_stream(session),
++            token_start);
++    enum skippy_status status = skippy_decode_batch(
++            session,
++            batch,
++            token_count,
++            SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
++            out_error);
+     if (!alias_input_payload) {
+         llama_batch_free(batch);
+     }
+@@ -2719,8 +4241,28 @@ static enum skippy_status skippy_finish_model_open(
+     params.type_v = config != nullptr && config->cache_type_v > 0 ? static_cast<ggml_type>(config->cache_type_v) : GGML_TYPE_F16;
+     params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
+     params.embeddings = config != nullptr && config->filter_tensors_on_load && !config->include_output;
++    const bool glm_dsa_op_timing_enabled = skippy_glm_dsa_op_timing_enabled();
++    const bool glm_dsa_tensor_trace_enabled = skippy_glm_dsa_tensor_trace_enabled();
++    if (model->arch == LLM_ARCH_GLM_DSA && (glm_dsa_op_timing_enabled || glm_dsa_tensor_trace_enabled)) {
++        stage_model->glm_dsa_timing.enabled = true;
++        stage_model->glm_dsa_timing.print_timing = glm_dsa_op_timing_enabled;
++        stage_model->glm_dsa_timing.trace_tensors = glm_dsa_tensor_trace_enabled;
++        stage_model->glm_dsa_timing.trace_stats = skippy_glm_dsa_tensor_trace_stats_enabled();
++        stage_model->glm_dsa_timing.trace_value_limit =
++                skippy_env_u32("SKIPPY_GLM_DSA_TENSOR_TRACE_VALUES", 8, 0, 4096);
++        stage_model->glm_dsa_timing.trace_node_limit =
++                skippy_env_u32("SKIPPY_GLM_DSA_TENSOR_TRACE_NODES", 32, 1, 1024);
++        stage_model->glm_dsa_timing.trace_stats_max_bytes =
++                skippy_env_u32("SKIPPY_GLM_DSA_TENSOR_TRACE_STATS_MAX_BYTES", 32 * 1024 * 1024, 0, 1024 * 1024 * 1024);
++        if (const char * trace_filter = std::getenv("SKIPPY_GLM_DSA_TENSOR_TRACE_FILTER")) {
++            stage_model->glm_dsa_timing.trace_filter = trace_filter;
++        }
++        stage_model->glm_dsa_timing.stage_index = config != nullptr ? config->stage_index : -1;
++        params.cb_eval = skippy_glm_dsa_op_timing_cb;
++        params.cb_eval_user_data = stage_model;
++    }
+     if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
+-        params.n_seq_max = std::max<uint32_t>(2, stage_model->lane_count * 2);
++        params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
+         params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, 2);
+         params.kv_unified = true;
+     }
+@@ -3414,7 +4956,13 @@ enum skippy_status skippy_prefill_chunk(
+         *out_output_activation_bytes = 0;
+     }
+ 
+-    return skippy_decode_tokens(session, token_ids, token_count, false, out_error);
++    return skippy_decode_tokens(
++            session,
++            token_ids,
++            token_count,
++            false,
++            SKIPPY_GLM_DSA_PHASE_HINT_PREFILL,
++            out_error);
+ }
+ 
+ enum skippy_status skippy_decode_step_sampled(
+@@ -3437,7 +4985,13 @@ enum skippy_status skippy_decode_step_sampled(
+         *out_output_activation_bytes = 0;
+     }
+ 
+-    enum skippy_status status = skippy_decode_tokens(session, &token_id, 1, true, out_error);
++    enum skippy_status status = skippy_decode_tokens(
++            session,
++            &token_id,
++            1,
++            true,
++            SKIPPY_GLM_DSA_PHASE_HINT_DECODE,
++            out_error);
+     if (status != SKIPPY_STATUS_OK) {
+         return status;
+     }
+@@ -3540,7 +5094,9 @@ enum skippy_status skippy_decode_batch_sampled(
+         batch.logits[i] = 1;
+     }
+ 
+-    skippy_graph_filter_scope graph_filter_scope(&first->stage_model->config);
++    skippy_graph_filter_scope graph_filter_scope(
++            &first->stage_model->config,
++            SKIPPY_GLM_DSA_PHASE_HINT_DECODE);
+     const int32_t rc = llama_decode(first->ctx, batch);
+     if (rc != 0) {
+         llama_batch_free(batch);
+@@ -3651,9 +5207,25 @@ static enum skippy_status skippy_prefill_chunk_frame_impl(
+     }
+ 
+     if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
+-        status = skippy_decode_activation_frame(session, input_desc, input_payload, token_ids, positions, position_count, token_count, request_logits, out_error);
++        status = skippy_decode_activation_frame(
++                session,
++                input_desc,
++                input_payload,
++                token_ids,
++                positions,
++                position_count,
++                token_count,
++                request_logits,
++                SKIPPY_GLM_DSA_PHASE_HINT_PREFILL,
++                out_error);
+     } else {
+-        status = skippy_decode_tokens(session, token_ids, token_count, request_logits, out_error);
++        status = skippy_decode_tokens(
++                session,
++                token_ids,
++                token_count,
++                request_logits,
++                SKIPPY_GLM_DSA_PHASE_HINT_PREFILL,
++                out_error);
+     }
+     if (status != SKIPPY_STATUS_OK) {
+         return status;
+@@ -3664,7 +5236,8 @@ static enum skippy_status skippy_prefill_chunk_frame_impl(
+                 skippy_sample_token(session, sampling) : -1;
+     }
+ 
+-    return skippy_copy_output_activation_frame(session, token_count, output_payload, input_desc, input_payload, out_error);
++    return skippy_copy_output_activation_frame(
++            session, token_count, output_payload, input_desc, input_payload, out_output_payload_bytes, output_desc, out_error);
+ }
+ 
+ enum skippy_status skippy_prefill_chunk_frame(
+@@ -3827,9 +5400,25 @@ enum skippy_status skippy_decode_step_frame_sampled(
+     }
+ 
+     if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
+-        status = skippy_decode_activation_frame(session, input_desc, input_payload, &token_id, nullptr, 0, 1, true, out_error);
++        status = skippy_decode_activation_frame(
++                session,
++                input_desc,
++                input_payload,
++                &token_id,
++                nullptr,
++                0,
++                1,
++                true,
++                SKIPPY_GLM_DSA_PHASE_HINT_DECODE,
++                out_error);
+     } else {
+-        status = skippy_decode_tokens(session, &token_id, 1, true, out_error);
++        status = skippy_decode_tokens(
++                session,
++                &token_id,
++                1,
++                true,
++                SKIPPY_GLM_DSA_PHASE_HINT_DECODE,
++                out_error);
+     }
+     if (status != SKIPPY_STATUS_OK) {
+         return status;
+@@ -3839,7 +5428,8 @@ enum skippy_status skippy_decode_step_frame_sampled(
+         *out_predicted_token = session->stage_model->config.include_output ? skippy_sample_token(session, sampling) : -1;
+     }
+ 
+-    return skippy_copy_output_activation_frame(session, 1, output_payload, input_desc, input_payload, out_error);
++    return skippy_copy_output_activation_frame(
++            session, 1, output_payload, input_desc, input_payload, out_output_payload_bytes, output_desc, out_error);
+ }
+ 
+ enum skippy_status skippy_decode_step_frame_sampled_mtp(
+@@ -3932,6 +5522,9 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+     }
+ 
+     const size_t hidden_bytes_per_request = skippy_activation_hidden_bytes(first, 1);
++    uint64_t batch_input_flags = 0;
++    uint32_t batch_input_top_k = 0;
++    uint64_t batch_output_flags = 0;
+     for (int32_t i = 0; i < n_tokens; ++i) {
+         skippy_session * session = sessions[i];
+         if (session == nullptr || session->ctx != first->ctx || session->stage_model != first->stage_model) {
+@@ -3944,14 +5537,30 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+         if (status != SKIPPY_STATUS_OK) {
+             return status;
+         }
+-        if (input_desc != nullptr && input_desc->flags != 0) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched activation decode does not support activation sidebands yet");
++        const uint64_t input_flags = input_desc != nullptr ? input_desc->flags : 0;
++        if ((input_flags & ~SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched activation decode only supports GLM-DSA input sidebands");
+             return SKIPPY_STATUS_UNSUPPORTED;
+         }
+-        if (skippy_output_activation_flags(session, input_desc) != 0) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched activation decode does not support output activation sidebands yet");
++        const uint32_t input_top_k = skippy_glm_dsa_top_k_count_from_desc(session, input_desc);
++        if (i == 0) {
++            batch_input_flags = input_flags;
++            batch_input_top_k = input_top_k;
++        } else if (input_flags != batch_input_flags || input_top_k != batch_input_top_k) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "batched activation inputs must use the same GLM-DSA sideband shape");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        const uint64_t output_flags = skippy_output_activation_flags(session, input_desc);
++        if ((output_flags & ~SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched activation decode only supports GLM-DSA output sidebands");
+             return SKIPPY_STATUS_UNSUPPORTED;
+         }
++        if (i == 0) {
++            batch_output_flags = output_flags;
++        } else if (output_flags != batch_output_flags) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "batched activation outputs must use the same sideband flags");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
+         status = skippy_prepare_output_activation_frame(
+                 session,
+                 1,
+@@ -3967,9 +5576,13 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+     }
+ 
+     std::vector<float> embd_storage;
++    std::vector<int32_t> glm_dsa_input_top_k_storage;
+     std::vector<llama_token> token_storage;
+     if (activation_input) {
+         embd_storage.resize(static_cast<size_t>(n_tokens)*n_embd_inp);
++        if ((batch_input_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
++            glm_dsa_input_top_k_storage.resize(static_cast<size_t>(n_tokens)*batch_input_top_k);
++        }
+         for (int32_t i = 0; i < n_tokens; ++i) {
+             const skippy_activation_desc * input_desc = input_descs[i];
+             const void * input_payload = input_payloads[i];
+@@ -3982,6 +5595,14 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+                 std::memcpy(dst, input_payload, static_cast<size_t>(n_embd)*sizeof(float));
+                 std::memset(dst + n_embd, 0, static_cast<size_t>(n_embd_inp - n_embd)*sizeof(float));
+             }
++            if (!glm_dsa_input_top_k_storage.empty()) {
++                const int32_t * top_k_src = reinterpret_cast<const int32_t *>(
++                        static_cast<const uint8_t *>(input_payload) + hidden_bytes_per_request);
++                std::memcpy(
++                        glm_dsa_input_top_k_storage.data() + static_cast<size_t>(i)*batch_input_top_k,
++                        top_k_src,
++                        static_cast<size_t>(batch_input_top_k)*sizeof(int32_t));
++            }
+         }
+     } else {
+         token_storage.assign(token_ids, token_ids + request_count);
+@@ -4019,7 +5640,16 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+     };
+ 
+     skippy_activation_tokens_scope activation_tokens_scope(token_ids, request_count);
+-    skippy_graph_filter_scope graph_filter_scope(&first->stage_model->config);
++    const llama_pos batch_pos_start = pos_storage.empty() ? first->n_past : pos_storage[0];
++    skippy_glm_dsa_top_k_scope glm_dsa_top_k_scope(
++            glm_dsa_input_top_k_storage.empty() ? nullptr : glm_dsa_input_top_k_storage.data(),
++            static_cast<uint32_t>(n_tokens),
++            batch_input_top_k,
++            1,
++            batch_pos_start);
++    skippy_graph_filter_scope graph_filter_scope(
++            &first->stage_model->config,
++            SKIPPY_GLM_DSA_PHASE_HINT_DECODE);
+     const int32_t rc = llama_decode(first->ctx, batch);
+     if (rc != 0) {
+         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed");
+@@ -4035,6 +5665,75 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+         }
+     }
+ 
++    std::vector<uint8_t> glm_dsa_top_k_storage;
++    std::vector<size_t> glm_dsa_top_k_offsets(request_count + 1, 0);
++    std::vector<size_t> glm_dsa_top_k_bytes_per_request(request_count, 0);
++    if ((batch_output_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
++        llm_graph_result * res = first->ctx->get_gf_res_prev();
++        ggml_tensor * top_k = res != nullptr ? res->get_skippy_glm_dsa_top_k() : nullptr;
++        if (top_k != nullptr) {
++            const size_t top_k_rows = top_k->ne[1]*top_k->ne[2]*top_k->ne[3];
++            if (top_k->type != GGML_TYPE_I32 || top_k->ne[0] <= 0 ||
++                    static_cast<uint64_t>(top_k->ne[0]) > std::numeric_limits<uint32_t>::max() ||
++                    top_k_rows != request_count) {
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "batched GLM-DSA top-k output is not request-major i32");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++            const size_t top_k_row_bytes = static_cast<size_t>(top_k->ne[0])*sizeof(int32_t);
++            bool full_rows = true;
++            for (size_t row = 0; row < request_count; ++row) {
++                const uint32_t visible_top_k = skippy_glm_dsa_sideband_top_k_count(sessions[row], 1);
++                const uint32_t request_top_k = static_cast<uint32_t>(std::min<int64_t>(top_k->ne[0], visible_top_k));
++                const size_t request_bytes = static_cast<size_t>(request_top_k)*sizeof(int32_t);
++                if (request_bytes == 0) {
++                    const std::string message = format(
++                            "batched GLM-DSA top-k output has no visible entries: request=%zu n_past=%d tensor_top_k=%lld visible_top_k=%u",
++                            row,
++                            sessions[row]->n_past,
++                            static_cast<long long>(top_k->ne[0]),
++                            visible_top_k);
++                    skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, message.c_str());
++                    return SKIPPY_STATUS_RUNTIME_ERROR;
++                }
++                glm_dsa_top_k_bytes_per_request[row] = request_bytes;
++                glm_dsa_top_k_offsets[row + 1] = glm_dsa_top_k_offsets[row] + request_bytes;
++                full_rows = full_rows && request_bytes == top_k_row_bytes;
++            }
++            glm_dsa_top_k_storage.resize(glm_dsa_top_k_offsets.back());
++            if (full_rows && ggml_is_contiguous(top_k)) {
++                ggml_backend_tensor_get(top_k, glm_dsa_top_k_storage.data(), 0, glm_dsa_top_k_storage.size());
++            } else {
++                for (size_t row = 0; row < request_count; ++row) {
++                    size_t rem = row;
++                    const size_t i1 = rem % static_cast<size_t>(top_k->ne[1]);
++                    rem /= static_cast<size_t>(top_k->ne[1]);
++                    const size_t i2 = rem % static_cast<size_t>(top_k->ne[2]);
++                    const size_t i3 = rem / static_cast<size_t>(top_k->ne[2]);
++                    const size_t src_offset = i1*top_k->nb[1] + i2*top_k->nb[2] + i3*top_k->nb[3];
++                    ggml_backend_tensor_get(
++                            top_k,
++                            glm_dsa_top_k_storage.data() + glm_dsa_top_k_offsets[row],
++                            src_offset,
++                            glm_dsa_top_k_bytes_per_request[row]);
++                }
++            }
++        } else if (!glm_dsa_input_top_k_storage.empty()) {
++            const size_t request_bytes = static_cast<size_t>(batch_input_top_k)*sizeof(int32_t);
++            for (size_t row = 0; row < request_count; ++row) {
++                glm_dsa_top_k_bytes_per_request[row] = request_bytes;
++                glm_dsa_top_k_offsets[row + 1] = glm_dsa_top_k_offsets[row] + request_bytes;
++            }
++            glm_dsa_top_k_storage.resize(glm_dsa_top_k_offsets.back());
++            std::memcpy(
++                    glm_dsa_top_k_storage.data(),
++                    glm_dsa_input_top_k_storage.data(),
++                    glm_dsa_top_k_storage.size());
++        } else {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "batched GLM-DSA top-k output was not available");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++    }
++
+     for (int32_t i = 0; i < n_tokens; ++i) {
+         skippy_session * session = sessions[i];
+         session->n_past += 1;
+@@ -4054,6 +5753,23 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+                     output_payloads[i],
+                     embeddings + static_cast<size_t>(i)*n_embd,
+                     hidden_bytes_per_request);
++            size_t actual_output_bytes = hidden_bytes_per_request;
++            const size_t request_top_k_bytes = glm_dsa_top_k_bytes_per_request[static_cast<size_t>(i)];
++            if (request_top_k_bytes > 0) {
++                uint8_t * output = static_cast<uint8_t *>(output_payloads[i]);
++                const size_t sideband_offset = glm_dsa_top_k_offsets[static_cast<size_t>(i)];
++                std::memcpy(
++                        output + hidden_bytes_per_request,
++                        glm_dsa_top_k_storage.data() + sideband_offset,
++                        request_top_k_bytes);
++                actual_output_bytes += request_top_k_bytes;
++            }
++            if (out_output_payload_bytes != nullptr) {
++                out_output_payload_bytes[i] = actual_output_bytes;
++            }
++            if (output_descs != nullptr) {
++                output_descs[i].payload_bytes = actual_output_bytes;
++            }
+         }
+     }
+ 
+@@ -4129,17 +5845,34 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+     if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
+         status = session->stage_model->config.include_output ?
+                 skippy_verify_activation_frame(session, input_desc, input_payload, token_ids, token_count, out_error) :
+-                skippy_decode_activation_frame(session, input_desc, input_payload, token_ids, nullptr, 0, token_count, false, out_error);
++                skippy_decode_activation_frame(
++                        session,
++                        input_desc,
++                        input_payload,
++                        token_ids,
++                        nullptr,
++                        0,
++                        token_count,
++                        false,
++                        SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
++                        out_error);
+     } else {
+         status = session->stage_model->config.include_output ?
+                 skippy_verify_token_batch(session, token_ids, token_count, out_error) :
+-                skippy_decode_tokens(session, token_ids, token_count, false, out_error);
++                skippy_decode_tokens(
++                        session,
++                        token_ids,
++                        token_count,
++                        false,
++                        SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
++                        out_error);
+     }
+     if (status != SKIPPY_STATUS_OK) {
+         return status;
+     }
+ 
+-    status = skippy_copy_output_activation_frame(session, token_count, output_payload, input_desc, input_payload, out_error);
++    status = skippy_copy_output_activation_frame(
++            session, token_count, output_payload, input_desc, input_payload, out_output_payload_bytes, output_desc, out_error);
+     if (status != SKIPPY_STATUS_OK) {
+         return status;
+     }
+@@ -4198,7 +5931,8 @@ enum skippy_status skippy_session_copy_output_activation_frame(
+     if (status != SKIPPY_STATUS_OK) {
+         return status;
+     }
+-    return skippy_copy_output_activation_frame(session, token_count, output_payload, nullptr, nullptr, out_error);
++    return skippy_copy_output_activation_frame(
++            session, token_count, output_payload, nullptr, nullptr, out_output_payload_bytes, output_desc, out_error);
+ }
+ 
+ static enum skippy_status skippy_validate_state_range(
+@@ -4566,6 +6300,13 @@ static llama_kv_cache * skippy_get_kv_cache(
+     if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
+         return kv;
+     }
++    if (auto * dsa = dynamic_cast<llama_kv_cache_dsa *>(memory)) {
++        llama_kv_cache * kv = dsa->get_mla();
++        if (kv == nullptr) {
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime has no GLM-DSA MLA KV cache");
++        }
++        return kv;
++    }
+ 
+     skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime memory type is not supported for native KV pages");
+     return nullptr;
+@@ -4635,6 +6376,10 @@ enum skippy_status skippy_import_kv_page(
+         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, error.c_str());
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
++    // KV residency determines graph topology for paths such as GLM-DSA, where
++    // the selected-index width is capped by the visible KV length. Do not reuse
++    // a graph that was built before this page was imported.
++    session->ctx->get_gf_res_prev()->reset();
+     session->n_past = std::max<int32_t>(
+             session->n_past,
+             static_cast<int32_t>(std::min<uint64_t>(
+@@ -4679,6 +6424,11 @@ enum skippy_status skippy_trim_session(
+             skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to trim hybrid ISWA memory suffix");
+             return SKIPPY_STATUS_RUNTIME_ERROR;
+         }
++    } else if (auto * dsa = dynamic_cast<llama_kv_cache_dsa *>(memory)) {
++        if (!dsa->seq_rm(session->seq_id, p0, -1)) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to trim GLM-DSA KV suffix");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
+     } else if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
+         if (!kv->seq_rm(session->seq_id, p0, -1)) {
+             skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to trim native KV suffix");
+-- 
+2.54.0 (Apple Git-157)
+
