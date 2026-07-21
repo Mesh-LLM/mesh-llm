@@ -188,4 +188,23 @@ mod tests {
         assert_eq!(facts[0].stable_id.as_deref(), Some("pci:0000:65:00.0"));
         assert_eq!(facts[1].backend_device.as_deref(), Some("HIP1"));
     }
+
+    #[test]
+    fn vulkan_backend_device_is_runtime_selectable_gpu_fact() {
+        let facts = gpu_facts_from_backend_devices(vec![BackendDevice {
+            name: "Vulkan0".to_string(),
+            description: Some("AMD Radeon RX 9070 XT".to_string()),
+            device_id: Some("0000:03:00.0".to_string()),
+            memory_free: 15_000_000_000,
+            memory_total: 17_179_869_184,
+            device_type: BackendDeviceType::Gpu,
+            caps: 0,
+        }]);
+
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].display_name, "AMD Radeon RX 9070 XT");
+        assert_eq!(facts[0].backend_device.as_deref(), Some("Vulkan0"));
+        assert_eq!(facts[0].vram_bytes, 17_179_869_184);
+        assert_eq!(facts[0].stable_id.as_deref(), Some("pci:0000:03:00.0"));
+    }
 }

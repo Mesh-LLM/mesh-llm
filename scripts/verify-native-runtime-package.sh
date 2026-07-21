@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP_ROOT=""
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
@@ -14,6 +15,7 @@ Verifies MeshLLM native runtime artifacts:
   - all runtime.libraries exist
   - library_sha256 matches the primary library
   - Linux shared-library RUNPATH/RPATH is relocatable and resolves packaged deps
+  - Windows non-system DLL imports are present in the artifact
   - archive checksum sidecar when present
 EOF
 }
@@ -152,7 +154,30 @@ if library_sha256:
 PY
     verify_macos_runtime_paths "$artifact_dir" "$manifest"
     verify_linux_runtime_paths "$artifact_dir" "$manifest"
+    verify_windows_runtime_dependencies "$artifact_dir" "$manifest"
     echo "verified native runtime artifact: $artifact_dir"
+}
+
+verify_windows_runtime_dependencies() {
+    local artifact_dir="$1"
+    local manifest="$2"
+    if ! "$(python_bin)" - "$manifest" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    runtime = json.load(fh)["runtime"]
+is_windows_vulkan = (
+    runtime["platform"].get("os") == "windows"
+    and runtime["backend"].get("kind") == "vulkan"
+)
+raise SystemExit(0 if is_windows_vulkan else 1)
+PY
+    then
+        return 0
+    fi
+    "$(python_bin)" "$SCRIPT_DIR/windows-native-runtime-deps.py" verify \
+        --lib-dir "$artifact_dir/lib"
 }
 
 verify_macos_runtime_paths() {

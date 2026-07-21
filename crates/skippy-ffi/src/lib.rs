@@ -7,6 +7,9 @@ pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
 pub const FEATURE_NGRAM_SIMPLE_DRAFT: u64 = 1 << 26;
 pub const FEATURE_NGRAM_CACHE_DRAFT: u64 = 1 << 27;
 
+#[cfg(feature = "dynamic-runtime")]
+mod dynamic_library;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AbiVersion {
@@ -752,7 +755,7 @@ mod dynamic {
                     let mut libraries = Vec::with_capacity(paths.len());
                     for path in paths {
                         libraries.push(
-                            unsafe { Library::new(path.as_ref()) }
+                            unsafe { crate::dynamic_library::load(path.as_ref()) }
                                 .map_err(|err| NativeRuntimeLoadError::Load(err.to_string()))?,
                         );
                     }
