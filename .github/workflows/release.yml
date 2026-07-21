@@ -474,8 +474,8 @@ jobs:
       image: rocm/dev-ubuntu-24.04:7.0-complete
     env:
       LLAMA_STAGE_BACKEND: rocm
-      LLAMA_STAGE_AMDGPU_TARGETS: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201
-      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-rocm-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1200_gfx1201
+      LLAMA_STAGE_AMDGPU_TARGETS: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-rocm-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
     steps:
       - name: Install base packages
@@ -503,7 +503,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-rocm7.0-dynamic-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1200_gfx1201-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-rocm7.0-dynamic-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -898,8 +898,8 @@ jobs:
       image: rocm/dev-ubuntu-24.04:7.0-complete
     env:
       LLAMA_STAGE_BACKEND: rocm
-      LLAMA_STAGE_AMDGPU_TARGETS: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201
-      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-rocm-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1200_gfx1201
+      LLAMA_STAGE_AMDGPU_TARGETS: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-rocm-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201
     steps:
       - name: Install base packages
         run: |
@@ -934,7 +934,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-rocm7.0-static-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1200_gfx1201-${{ hashFiles('scripts/build-linux.sh', 'scripts/build-linux-rocm.sh', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'Justfile', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-rocm7.0-static-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201-${{ hashFiles('scripts/build-linux.sh', 'scripts/build-linux-rocm.sh', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'Justfile', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -1224,7 +1224,7 @@ jobs:
             artifact_name: release-native-runtime-windows-x86_64-cuda12
           - name: ROCm
             backend: rocm
-            rocm_architectures: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201
+            rocm_architectures: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201
             artifact_name: release-native-runtime-windows-x86_64-rocm
           - name: Vulkan
             backend: vulkan
