@@ -76,7 +76,11 @@ fn merge_detected_and_fallback_gpus(
         fallback_gpus.retain(|gpu| !looks_like_nvidia_gpu_label(&gpu.display_name));
     }
     if !rocm_gpus.is_empty() {
-        fallback_gpus.retain(|gpu| !looks_like_rocm_gpu_label(&gpu.display_name));
+        fallback_gpus.retain(|fallback| {
+            !rocm_gpus
+                .iter()
+                .any(|detected| gpu_profiles_share_identity(detected, fallback))
+        });
     }
 
     nvidia_gpus.append(&mut rocm_gpus);
@@ -115,15 +119,19 @@ fn looks_like_nvidia_gpu_label(label: &str) -> bool {
     label.contains("nvidia") || label.contains("cuda")
 }
 
-fn looks_like_rocm_gpu_label(label: &str) -> bool {
-    let label = label.to_ascii_lowercase();
-    label.contains("amd")
-        || label.contains("radeon")
-        || label.contains("instinct")
-        || label.contains("rocm")
-        || label
-            .split_whitespace()
-            .any(|token| token.starts_with("gfx"))
+fn gpu_profiles_share_identity(left: &HostGpuProfile, right: &HostGpuProfile) -> bool {
+    if let (Some(left_id), Some(right_id)) = (&left.stable_id, &right.stable_id) {
+        return left_id.eq_ignore_ascii_case(right_id);
+    }
+
+    normalized_gpu_name(&left.display_name) == normalized_gpu_name(&right.display_name)
+}
+
+fn normalized_gpu_name(name: &str) -> String {
+    name.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn detect_nvidia_gpu_profiles() -> Vec<HostGpuProfile> {
@@ -859,16 +867,18 @@ GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-80ded6bd-1a89-2628-3d94-902187dbab1d)
             "Agent 1\nName: gfx942\nMarketing Name: AMD Instinct MI300X\nDevice Type: GPU\n",
         );
         let fallback_gpus = vec![
-            profile("AMD Corporation Device 74a1"),
+            profile("AMD Instinct MI300X"),
+            profile("AMD Radeon PRO W7900"),
             profile("NVIDIA GeForce RTX 4090"),
         ];
 
         let merged = merge_detected_and_fallback_gpus(Vec::new(), rocm_gpus, fallback_gpus);
 
-        assert_eq!(merged.len(), 2);
+        assert_eq!(merged.len(), 3);
         assert_eq!(merged[0].display_name, "AMD Instinct MI300X");
         assert_eq!(merged[0].rocm_gfx.as_deref(), Some("gfx942"));
-        assert_eq!(merged[1].display_name, "NVIDIA GeForce RTX 4090");
+        assert_eq!(merged[1].display_name, "AMD Radeon PRO W7900");
+        assert_eq!(merged[2].display_name, "NVIDIA GeForce RTX 4090");
 
         let rocm = detect_rocm_profile(&merged).expect("ROCm profile");
         assert_eq!(rocm.gpu_arches, BTreeSet::from(["gfx942".to_string()]));
