@@ -433,11 +433,10 @@ fn evaluate_rocm_requirements(
     // HIP release artifacts contain architecture-specific code objects and do
     // not have a portable kernel fallback. Accepting a partial match can leave
     // an enumerated GPU with no launchable kernels, which faults at inference.
-    if !requirements.gpu_arches.is_empty()
-        && rocm
-            .gpu_arches
-            .iter()
-            .any(|arch| !requirements.gpu_arches.contains(arch))
+    if rocm
+        .gpu_arches
+        .iter()
+        .any(|arch| !requirements.gpu_arches.contains(arch))
     {
         reasons.push(CandidateRejection::RocmGpuArchUnsupported {
             supported: requirements.gpu_arches.clone(),
@@ -660,6 +659,34 @@ mod tests {
                     "meshllm-runtime-linux-x86_64-rocm",
                     &["gfx1100", "gfx1101", "gfx1102"],
                 ),
+            ],
+        };
+
+        let selected = select_native_runtime(
+            &manifest,
+            &rocm_profile(&["gfx1103"]),
+            "0.68.0",
+            &RuntimeSelection::Recommended,
+        )
+        .expect("CPU runtime should remain a safe fallback");
+
+        assert_eq!(
+            selected.artifact.backend.kind,
+            NativeRuntimeBackendKind::Cpu
+        );
+    }
+
+    #[test]
+    fn rocm_runtime_without_packaged_arches_falls_back_to_cpu() {
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            skippy_abi: "0.1.25".to_string(),
+            artifacts: vec![
+                artifact(
+                    "meshllm-runtime-linux-x86_64-cpu",
+                    NativeRuntimeBackend::cpu(),
+                ),
+                rocm_runtime("meshllm-runtime-linux-x86_64-rocm", &[]),
             ],
         };
 
