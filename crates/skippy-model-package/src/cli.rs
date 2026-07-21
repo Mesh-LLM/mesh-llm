@@ -78,4 +78,14 @@ pub(crate) enum Command {
         #[arg(long)]
         verify_sha256: bool,
     },
+    ValidateGlmDsaContract {
+        package: PathBuf,
+        #[arg(long)]
+        require_generation_policy: bool,
+    },
+    RepairGlmDsaGenerationPolicy {
+        package: PathBuf,
+        #[arg(long)]
+        in_place: bool,
+    },
 }

@@ -234,6 +234,7 @@ pub struct GgufCompactMeta {
     pub feed_forward_length: u32,
     pub key_length: u32,
     pub value_length: u32,
+    pub kv_lora_rank: u32,
     pub tokenizer_model_name: String,
     pub rope_scale: f32,
     pub rope_freq_base: f32,
@@ -263,6 +264,26 @@ impl GgufCompactMeta {
 
     pub fn kv_cache_bytes_per_token_f16(&self) -> Option<u64> {
         GgufKvCacheQuant::f16().kv_cache_bytes_per_token(self)
+    }
+
+    fn kv_cache_head_count(&self) -> Option<u32> {
+        // GLM-DSA uses absorbed MLA: cache one compressed KV group rather
+        // than one expanded vector for every attention head.
+        if self.architecture == "glm-dsa" {
+            Some(1)
+        } else {
+            self.effective_kv_head_count()
+        }
+    }
+
+    fn kv_cache_value_length(&self) -> u32 {
+        // The cached V row is the compressed KV latent. The regular
+        // attention value length describes the expanded per-head value.
+        if self.architecture == "glm-dsa" && self.kv_lora_rank > 0 {
+            self.kv_lora_rank
+        } else {
+            self.value_length
+        }
     }
 }
 
@@ -371,7 +392,7 @@ impl GgufKvCacheQuant {
     }
 
     pub fn v_cache_bytes_per_token(self, meta: &GgufCompactMeta) -> Option<u64> {
-        cache_bytes_per_token(meta, meta.value_length, self.v)
+        cache_bytes_per_token(meta, meta.kv_cache_value_length(), self.v)
     }
 
     pub fn kv_cache_bytes_per_token(self, meta: &GgufCompactMeta) -> Option<u64> {
@@ -385,7 +406,7 @@ fn cache_bytes_per_token(
     vector_length: u32,
     cache_type: GgufKvCacheType,
 ) -> Option<u64> {
-    let kv_heads = u64::from(meta.effective_kv_head_count()?);
+    let kv_heads = u64::from(meta.kv_cache_head_count()?);
     let vector_length = u64::from((vector_length > 0).then_some(vector_length)?);
     let layers = u64::from((meta.layer_count > 0).then_some(meta.layer_count)?);
     let elements_per_layer = kv_heads.checked_mul(vector_length)?;
@@ -501,6 +522,10 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
         } else if key.ends_with(".attention.value_length") {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
                 meta.value_length = v;
+            }
+        } else if key.ends_with(".attention.kv_lora_rank") {
+            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
+                meta.kv_lora_rank = v;
             }
         } else if key.ends_with(".rope.scale") {
             if let Ok(Some(v)) = read_gguf_value_as_f32(&mut f, vtype) {
@@ -867,6 +892,21 @@ mod tests {
     }
 
     #[test]
+    fn scan_gguf_compact_meta_preserves_kv_lora_rank() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&1i64.to_le_bytes());
+        push_u32_kv(&mut bytes, "glm-dsa.attention.kv_lora_rank", 512);
+
+        let path = write_bytes("model-artifact-gguf-kv-lora-rank", &bytes);
+        let meta = scan_gguf_compact_meta(&path).expect("should parse GGUF");
+        assert_eq!(meta.kv_lora_rank, 512);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn scan_gguf_compact_meta_preserves_nextn_predict_layers() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"GGUF");
@@ -934,6 +974,33 @@ mod tests {
         assert_eq!(quant.k_cache_bytes_per_token(&meta), Some(13_056));
         assert_eq!(quant.v_cache_bytes_per_token(&meta), Some(27_648));
         assert_eq!(quant.kv_cache_bytes_per_token(&meta), Some(40_704));
+    }
+
+    #[test]
+    fn kv_cache_quant_prices_glm_dsa_absorbed_mla_shape() {
+        let meta = GgufCompactMeta {
+            architecture: "glm-dsa".to_string(),
+            head_count: 64,
+            kv_head_count: 64,
+            layer_count: 79,
+            key_length: 576,
+            value_length: 256,
+            kv_lora_rank: 512,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            GgufKvCacheQuant::Q4_0.k_cache_bytes_per_token(&meta),
+            Some(25_596)
+        );
+        assert_eq!(
+            GgufKvCacheQuant::Q4_0.v_cache_bytes_per_token(&meta),
+            Some(22_752)
+        );
+        assert_eq!(
+            GgufKvCacheQuant::Q4_0.kv_cache_bytes_per_token(&meta),
+            Some(48_348)
+        );
     }
 
     #[test]

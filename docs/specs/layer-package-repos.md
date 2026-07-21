@@ -185,6 +185,24 @@ Minimal shape:
     }
   },
   "generation": {
+    "policy": {
+      "profile": "glm-dsa-v1",
+      "decode": "compact-flash",
+      "short_prefill": "dense",
+      "long_prefill": "sparse-chunked",
+      "verify": "auto",
+      "indexshare": "required",
+      "experimental": {
+        "selected_row_flash": "evidence-gated",
+        "moe_weighted_down": "evidence-gated",
+        "moe_merged_shared_gate_up": "evidence-gated"
+      }
+    },
+    "thresholds": {
+      "short_prefill_max_tokens": 2048,
+      "compact_flash_min_kv": 1,
+      "dense_mask_max_bytes": 268435456
+    },
     "speculative_decoding": {
       "default": "mtp",
       "strategies": {
@@ -272,11 +290,392 @@ configured.
 ### Generation Defaults
 
 `generation` is optional and defaults to no package-owned generation policy.
-When present, it may declare `speculative_decoding` defaults:
+When present, it may declare package-authored runtime defaults. The package owns
+defaults that are specific to the artifact distribution, such as quant layout,
+preserved native tensors, validated sparse-attention paths, and native
+speculative decoding strategy.
+
+The `generation` object has two separate responsibilities:
+
+- `generation.policy` names the semantic execution profile and phase choices
+  that were validated for this artifact.
+- `generation.thresholds` supplies numeric resolver hints used to decide when a
+  phase choice applies.
+- `generation.speculative_decoding` declares package-owned native or draft
+  speculation strategy defaults, when the artifact actually contains or
+  references the required tensors/models.
+
+Use this split consistently:
+
+| Location | Meaning | Typical fields |
+| --- | --- | --- |
+| `generation.policy` | Portable, semantic execution decisions for this artifact. | `profile`, `decode`, `short_prefill`, `long_prefill`, `verify`, `indexshare` |
+| `generation.policy.experimental` | Named experimental policy paths that are valid only with explicit evidence and logging. | `selected_row_flash`, `moe_weighted_down`, `moe_merged_shared_gate_up` |
+| `generation.thresholds` | Numeric decision inputs for the policy resolver. | token limits, byte limits, minimum KV sizes |
+| `generation.speculative_decoding` | Package-owned speculation strategy defaults. | `default`, `strategies`, `native-mtp`, `prediction_depth`, `window_policy` |
+| GGUF metadata | Architecture and tensor-layout correctness contract. | attention dimensions, IndexShare roles, native MTP tensor layout |
+
+Keep these responsibilities separate. Policy fields should answer "which
+execution path is intended for this phase?" Threshold fields should answer
+"when should the runtime choose or reject that path?" For example,
+`decode: "compact-flash"` belongs under `generation.policy`, while
+`compact_flash_min_kv: 1` belongs under `generation.thresholds`.
+
+The `generation` object is intentionally generic. Do not add
+model-family-specific sub-objects such as `generation.glm_dsa`; use a stable
+`generation.policy.profile` instead. This keeps the manifest shape reusable for
+future sparse attention, native prediction, and verifier policies without
+creating one schema branch per model family.
+
+Keep backend tuning out of the manifest unless it can be expressed as portable
+policy or threshold data. Kernel names, Metal/CUDA dispatch choices, simdgroup
+tuning, row-height sweeps, and quant-kernel experiments are runtime capability
+or benchmark evidence. They should not become manifest fields such as
+`generation.metal` or `generation.glm_dsa`. When evidence graduates into a
+package default, record it as a profile version, a phase policy, a numeric
+threshold, or a speculation strategy.
+
+Runtime config and explicit CLI/environment overrides MAY override these
+defaults for experiments, but consumers SHOULD log the final resolved policy and
+the package recommendation that was overridden. If a consumer cannot execute the
+package-recommended path, it MUST choose a correctness-preserving fallback and
+emit the fallback reason.
+
+Generation policy is not a backend feature switch. Package authors MUST NOT use
+backend-specific fields to select Metal, CUDA, CPU, Vulkan, or Skippy kernels.
+Backends advertise capability and performance evidence to the resolver; the
+manifest records the package-level semantic policy and thresholds that make the
+resolver decision explainable.
+
+Consumers MUST NOT silently reinterpret unknown policy values as a supported
+path. Unknown profiles, phase values, or experimental policy switches should be
+reported as unsupported unless the runtime has an explicit compatibility rule
+for that value. Numeric threshold fields are hints and may be ignored by older
+consumers, but policy fields describe execution semantics and must be handled
+deliberately.
+
+Package writers SHOULD only emit a `generation.policy.profile` after they have
+validated the artifact shape that profile requires. For GLM-DSA this means the
+writer has found the GLM-DSA attention tensors, routed/shared MoE tensors,
+IndexShare metadata or equivalent role evidence, and any preserved native MTP
+tensors before advertising `glm-dsa-v1`. The writer may infer the default
+policy from GGUF metadata and tensor names, but it should not infer a more
+specific policy than the artifact can actually support.
+
+Serving resolvers SHOULD treat `generation` as input to a phase resolver, not
+as direct kernel wiring. A resolver first identifies the request phase, such as
+decode, short prefill, long prefill, or speculative verification. It then
+combines the package policy, thresholds, backend capability evidence, and
+request shape to select a path. The selected path, rejected package path, and
+fallback reason should be visible in logs or telemetry whenever the resolver
+does not use the package recommendation.
+
+Package generation defaults are not a substitute for model correctness
+metadata. Architecture-specific GGUF metadata and tensor layout still define
+whether a runtime may execute the model at all; `generation.policy` only
+chooses among valid execution paths for that artifact.
+
+#### Execution Policy
+
+Packages MAY declare `generation.policy` to describe the package-validated
+execution profile. This profile is a model execution policy, not a backend
+implementation detail. It should use stable semantic path names such as
+`compact-flash` rather than Metal/CUDA kernel names.
+
+The current proposed shape is:
+
+```json
+{
+  "generation": {
+    "policy": {
+      "profile": "glm-dsa-v1",
+      "decode": "compact-flash",
+      "short_prefill": "dense",
+      "long_prefill": "sparse-chunked",
+      "verify": "auto",
+      "indexshare": "required",
+      "experimental": {
+        "selected_row_flash": "evidence-gated"
+      }
+    },
+    "thresholds": {
+      "short_prefill_max_tokens": 2048,
+      "compact_flash_min_kv": 1,
+      "dense_mask_max_bytes": 268435456
+    }
+  }
+}
+```
+
+`profile` names the policy family and version. For GLM-DSA packages, use
+`glm-dsa-v1` until a later profile intentionally changes the meaning of the
+phase fields or thresholds. Other model families SHOULD use their own stable
+profile names instead of adding model-family-specific top-level objects under
+`generation`.
+
+The profile is also the compatibility boundary for package tooling. Writers may
+infer a known profile from GGUF metadata and tensors, but they must not invent
+backend-specific field names for one model family. If a later GLM-DSA package
+needs different phase semantics, create a new profile such as `glm-dsa-v2`
+instead of changing the meaning of `glm-dsa-v1`.
+
+Policy values are intentionally phase-specific:
+
+- `decode`: preferred one-token generation path. For GLM-DSA this is expected
+  to become `compact-flash` when compact selected-KV attention has parity on
+  the package.
+- `short_prefill`: preferred path below the short-prefill threshold. Packages
+  MAY select `dense` when sparse/indexer overhead is known to dominate.
+- `long_prefill`: preferred path above the short-prefill threshold. Packages
+  SHOULD avoid policies that materialize dense sparse masks for long context.
+- `verify`: preferred path for speculative verification spans. It MAY remain
+  `auto` until verifier-specific parity and performance are measured.
+- `indexshare`: whether Shared GLM-DSA layers require local IndexShare/top-k
+  state. `required` means a consumer must not silently recompute shared-layer
+  indexers unless an explicit fallback policy is selected and logged.
+- `experimental.selected_row_flash`: controls selected-row flash fusion. Use
+  `evidence-gated` until the package has reproducible wins for that path on the
+  target backend.
+- `experimental.moe_weighted_down`: controls moving MoE route weights before
+  the routed down projection instead of applying them in the output weighted
+  sum. Use `evidence-gated`; current evidence makes this a small graph-shape
+  experiment, not a replacement for expert matmul optimization.
+- `experimental.moe_merged_shared_gate_up`: controls merged shared-expert
+  gate/up execution. Use `evidence-gated` until the package/backend has
+  reproducible combined-FFN graph wins and parity evidence.
+
+Suggested semantic path values are:
+
+- `auto`: runtime chooses using package thresholds and backend capability.
+- `dense`: dense attention path; useful for short prefill when measured faster.
+- `direct-sparse`: direct GLM-DSA sparse attention.
+- `compact-flash`: compact selected K/V followed by flash attention.
+- `sparse-chunked`: chunked sparse prefill path for long prompts.
+- `fallback`: named correctness fallback when a native sparse backend is not
+  available.
+
+`generation.thresholds` are package recommendations. Consumers SHOULD treat
+them as input to the runtime policy resolver, not as hard schema limits. Every
+policy decision SHOULD emit telemetry containing the policy profile, phase,
+selected path, rejected path or fallback reason, `n_kv`, `top_k` when present,
+IndexShare role when present, backend, and any dense sparse-mask allocation
+avoided.
+
+Thresholds must be named for the resolver decision they inform, not for an
+implementation detail. For example, prefer `dense_mask_max_bytes` over a
+backend-specific allocation flag. This keeps the same package usable across
+Metal, CUDA, CPU, and future backends while still allowing each backend to make
+an evidence-based decision.
+
+Threshold units are part of the field contract:
+
+| Threshold | Unit | Resolver use |
+| --- | --- | --- |
+| `short_prefill_max_tokens` | tokens | Selects the short-prefill policy when the prompt/window is at or below this size. |
+| `compact_flash_min_kv` | KV rows | Rejects compact selected-KV flash below the minimum useful KV history. |
+| `dense_mask_max_bytes` | bytes | Rejects dense sparse-mask materialization when the estimated mask would exceed this budget. |
+
+#### Policy Resolution
+
+Consumers resolve generation policy in this order:
+
+1. Request/runtime override, when explicitly configured for an experiment.
+2. Package `generation.policy` and `generation.thresholds`.
+3. Runtime built-in default for the architecture.
+4. Correctness fallback when the preferred path is unsupported.
+
+The resolved policy is a runtime contract. Package tools may infer and write
+the policy from GGUF tensor shape, but serving code must not re-infer a
+different policy silently. For example, a GLM-DSA package with split
+`attn_k_b`, `attn_v_b`, and `attn_kv_a_mqa` tensors may advertise
+`glm-dsa-v1`; the runtime may still fall back from `compact-flash` to `dense`
+on a backend that lacks compact selected-KV attention, but it must log that
+fallback.
+
+Policy resolution telemetry SHOULD include the package profile and the exact
+decision inputs that changed the selected path: phase, backend, `n_tokens`,
+`n_kv`, `top_k`, estimated dense-mask bytes, selected threshold, selected path,
+fallback path, and fallback reason. This is required evidence for tuning
+package defaults; without it, benchmark results cannot explain whether a run
+used the intended GLM-DSA path or a correctness fallback.
+
+For `glm-dsa-v1`, the current phase intent is:
+
+| Phase | Recommended value | Intent |
+| --- | --- | --- |
+| `decode` | `compact-flash` | Avoid dense sparse-mask materialization during one-token decode. |
+| `short_prefill` | `dense` | Avoid paying sparse/indexer overhead when prompts are below the package threshold. |
+| `long_prefill` | `sparse-chunked` | Keep long-context prefill away from huge dense sparse masks. |
+| `verify` | `auto` | Let the runtime select a verifier path until verifier-specific parity is proven. |
+| `indexshare` | `required` | Reuse Full-layer top-k/index state for Shared GLM-DSA layers instead of silent recompute. |
+| `experimental.selected_row_flash` | `evidence-gated` | Enable compact selected-row flash only when package/backend evidence proves parity and a win. |
+| `experimental.moe_weighted_down` | `evidence-gated` | Enable weighted-down MoE graph shape only when package/backend evidence proves parity and a win. |
+| `experimental.moe_merged_shared_gate_up` | `evidence-gated` | Enable merged shared-expert gate/up only when package/backend evidence proves parity and a combined-graph win. |
+
+For `glm-dsa-v1`, the current threshold intent is:
+
+| Threshold | Meaning |
+| --- | --- |
+| `short_prefill_max_tokens` | Maximum prompt/window length that should prefer the short-prefill policy. |
+| `compact_flash_min_kv` | Minimum KV length where compact selected-KV flash attention is worth considering. |
+| `dense_mask_max_bytes` | Maximum dense sparse-mask allocation the runtime should permit before forcing a sparse fallback. |
+
+For GLM-DSA threshold tuning, consumers SHOULD reason from the package tensor
+sizes rather than from model names alone. The relevant first-order estimates
+are:
+
+| Quantity | Formula | Example |
+| --- | --- | --- |
+| Hidden activation bytes | `tokens * hidden_width * activation_bytes` | GLM-5.2 width `6144`: `12 KiB/token` at f16 or `24 KiB/token` at f32. |
+| IndexShare sideband bytes | `tokens * top_k * 4` | Width `768`: `3 KiB/token`, `384 KiB` for a 128-token chunk. |
+| Dense sparse-mask bytes | `tokens * visible_kv * 4` | At `128k` visible KV: `512 KiB/token`, `64 MiB` for a 128-token chunk, `1 GiB` for a 2048-token chunk. |
+
+These numbers are intentionally policy inputs, not schema requirements. A
+package with a different `attention.indexer.top_k`, hidden width, activation
+wire dtype, or context target will produce different thresholds. The important
+contract is that packages expose enough policy and threshold information for
+the runtime to explain why it selected dense, direct sparse, compact-flash, or
+fallback execution.
+
+Current GLM-DSA tuning is grounded in llama.cpp Metal backend fixtures around
+`kv=257,top_k=64`. On the one-token decode shape, compact selected-row flash
+measured `63.40 us/run`, direct sparse attention measured `106.57 us/run`, and
+dense masked flash measured `71.72 us/run`. That makes the compact selected-row
+path about `1.68x` faster than direct sparse and about `1.13x` faster than dense
+masked flash for this fixture.
+
+Exact-boundary fixtures where selected KV equals visible KV are more decisive
+than the base one-token fixture. Compact selected-row flash measured
+`61.90 us/run` at `kv=128,top_k=128`, `60.71 us/run` at
+`kv=256,top_k=256`, `61.24 us/run` at `kv=257,top_k=257`, and
+`57.99 us/run` at `kv=513,top_k=513`. Direct sparse measured
+`137.15 us/run`, `209.97 us/run`, `249.30 us/run`, and `711.10 us/run` on the
+same shapes. That makes compact selected-row flash about `2.2x`, `3.5x`,
+`4.1x`, and `12.3x` faster than direct sparse across those exact-boundary
+points. The literal `top_k >= visible_kv` boundary is a separate all-KV flash
+bypass in the llama.cpp graph, but ordinary one-token decode after prefill
+still exercises compact selected-KV flash because IndexShare top-k is selected
+from the previous KV state while attention sees previous+current KV. This is
+why `glm-dsa-v1` uses compact flash as the default decode route and reserves
+direct sparse decode for explicit runtime experiments.
+
+For the configured GLM-5.2 IndexShare width, the compact path is more
+important once visible KV grows beyond the `768` selected rows. The Metal
+fixtures measured compact selected-row flash at `55.11 us/run` for
+`kv=1024,top_k=768` and `55.62 us/run` for `kv=2048,top_k=768`. Direct sparse
+attention on the same `dk=576,dv=512,top_k=768` shapes measured
+`988.95 us/run` and `984.50 us/run`. That is roughly an `18x` decode-path win
+for compact selected-KV flash over direct sparse at the model-native top-k
+width.
+
+Short phase fixtures measured the opposite shape for direct sparse prefill:
+dense masked flash stayed around `68.58-70.80 us/run` for 4-16 token batches,
+while direct sparse measured `461.98-473.75 us/run`. That makes dense masked
+flash roughly `6.5-6.9x` faster on those short phase fixtures. This is why
+`glm-dsa-v1` keeps `short_prefill: "dense"` and `verify: "auto"` as the package
+defaults, with direct sparse prefill reserved for explicit runtime/package
+policy after backend evidence exists. Treat these as backend evidence for the
+current threshold defaults, not as portable constants across every device or
+quant.
+
+Once those attention phase gates are in place, the measured local GLM-5.2
+bottleneck shifts to MoE expert execution. The gated Metal MoE fixture
+estimates a routed FFN decode layer at `391.13 us`: routed gate/up/down matmuls
+account for `375.42 us` (`96.0%`), routed fused SwiGLU accounts for `5.35 us`
+(`1.4%`), and route/top-k plus weighted sum accounts for `10.36 us` (`2.6%`).
+The shared expert is equally important: a production-shaped fused GLU shared
+expert plus final add measured `405.32 us`, making the routed+shared FFN
+estimate `796.45 us` with the shared expert at `50.9%`. These numbers justify
+prioritizing backend `MUL_MAT_ID`/expert matmul and shared-expert work after
+sparse-attention correctness, but they do not require a new manifest object.
+Policy remains the semantic phase contract under `generation.policy`;
+performance cutoffs and byte/token limits remain numeric resolver inputs under
+`generation.thresholds`.
+A component breakdown also corrected a bad diagnostic path: the unfused
+`silu(gate) * up` whole-graph row measured `291.73 us`, but the normal
+llama.cpp shared expert path already uses `ggml_swiglu_split()`. The fused
+SwiGLU split row measured only `4.09 us` (`8.24 us` including final add), so
+custom activation fusion is not the next local target. Treat the fused GLU
+numbers as the production-shaped evidence and keep optimization pressure on
+routed q2/q3 `MUL_MAT_ID`, q2_K down quality experiments, and deeper expert
+matmul/layout work.
+The combined FFN fixture is the current Phase E decision gate because it keeps
+routed and shared expert execution in one production-shaped graph. With
+`n_embd=6144`, the q3_K routed down baseline measured `1147.21 us`; changing
+decoder routed down projections to q2_K measured `817.38 us` (`1.40x` faster),
+and keeping q3_K routed down while using merged shared gate/up measured
+`868.59 us` (`1.32x` faster). Route/top-k plus weights measured only `3.26 us`,
+weighted sum measured `6.69 us`, and routed fused SwiGLU measured `5.09 us`, so
+the next practical levers are whole-graph expert matmul/layout work and a
+quality-tested q2_K routed-down quant recipe. The q2_K routed-down recipe must
+exclude `blk.78`, the native NextN/MTP block, until quality and speculation
+tests prove that lowering the MTP block is acceptable. Treat these as
+optimization-priority evidence, not as a new model-family schema branch:
+quality-bearing quant changes still need separate evaluation under the normal
+benchmark flow.
+The Phase E report can be run with `GLM52_PHASE_E_REQUIRE_GATES=1` to fail
+loudly when production-shaped MoE evidence is missing. With
+`GLM52_PHASE_E_KERNEL_SWEEP=1`, the same gate also requires the dispatch-policy
+sweep rows. Forcing one-token q3_K routed down through Metal `mul_mm_id`
+measured `860.96 us`, compared with `164.46 us` on the default `mul_mv_id`
+path. q3_K `mul_mv_id` simdgroup tuning measured `164.46 us` at the default
+`nsg=2` and `163.92 us` for the best sampled row, which is noise-level rather
+than a real policy win. The row-height sweep kept that conclusion intact:
+default `nr0=4` measured `163.98 us`, which was also the best sampled row;
+`nr0=1` and `nr0=2` were both around `195-196 us`, and `nr0=8` was `166.20 us`.
+A fixed `k=2048` q3_K GLM-down specialization measured `164.04 us` at default
+`nsg=2` and `162.67 us` at `nsg=4`, only `1.01x` faster than ordinary default
+q3_K `mul_mv_id`. Keep q3_K down work focused on a deeper expert matmul/layout
+specialization or a quality-tested q2_K down alternative, not generic
+matrix-matrix cutoff, simdgroup, row-height, or fixed-block knobs.
+Production-shaped routed whole-graph consumer rows remain useful as harness
+history and as a guard against timing only a graph tail. They fixed an earlier
+perf-mode issue where the fixture had `run_whole_graph()` for correctness but
+timed only the final `GGML_OP_MOE_WEIGHTED_SUM` during perf. The newer combined
+FFN fixture supersedes those rows as the policy decision gate because it keeps
+routed and shared experts together. Keep
+`generation.policy.experimental.moe_weighted_down` at `evidence-gated`; it is
+not a package default. The q2_K down alternative is still the useful follow-up
+because it produced the clearest combined-graph speedup, but it needs quality
+validation before it can become a model-package quant policy.
+
+The IndexShare numbers are why `generation.policy.indexshare` is a first-class
+policy field instead of an implementation note. For GLM-5.2-style DSA with a
+`top_k` width of `768`, carrying the shared top-k sideband costs `3 KiB/token`.
+That is `384 KiB` for a 128-token chunk, `1.5 MiB` for 512 tokens, `6 MiB` for
+2048 tokens, and `384 MiB` for a full 128k-token window. By comparison, a dense
+float sparse mask over 128k visible KV costs `512 KiB/token`: `64 MiB` for 128
+tokens, `256 MiB` for 512 tokens, and `1 GiB` for 2048 tokens. IndexShare still
+has real bandwidth cost, but it is dramatically smaller than dense mask
+materialization and preserves the model's Full-layer routing decision for
+Shared layers.
+
+Generation policy consumers should therefore treat the GLM-DSA policy as a
+phase-aware resolver contract:
+
+- Decode starts with `compact-flash` when backend support exists, because the
+  compact selected-row path wins on measured one-token and post-prefill decode
+  shapes.
+- Short prefill starts with `dense`, because measured sparse/indexer overhead is
+  worse below the package threshold.
+- Long prefill starts with `sparse-chunked`, because dense masks become
+  memory-hostile as visible KV grows.
+- Verification starts with `auto` until verifier-specific sparse parity and
+  performance are measured.
+- IndexShare is `required`, because Shared layers should consume the model's
+  cached top-k decision rather than recomputing silently.
+
+#### Speculative Decoding
+
+When present, `generation` may also declare `speculative_decoding` defaults:
 
 - `default`: the strategy id the package recommends for this distribution.
 - `proposers`: a map of reusable proposal-source ids to configuration.
 - `strategies`: a map of strategy id to strategy configuration.
+
+This object is a sibling of `policy` and `thresholds`. It is not an
+experimental policy field, because speculation can be disabled, forced, or
+selected independently from the attention/MoE phase resolver.
 
 The current native MTP strategy shape is:
 
@@ -374,6 +773,9 @@ Native MTP strategy rules:
   conversion.
 - `window_policy` SHOULD be fixed to `1` until runtimes support wider native
   MTP heads.
+- package writers MUST NOT advertise a native MTP default unless validation has
+  found the required native prediction tensors in the selected package
+  artifacts.
 
 Draft-model speculation may use the same strategy map with `type:
 "draft-model"` and fields such as `draft_model` and adaptive `window_policy`.
