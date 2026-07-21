@@ -1461,7 +1461,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "${GH_TOKEN:-}" ]] || {
-            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN is required for cross-repository packaging" >&2
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to Mesh-LLM/mesh-packaging for cross-repository dispatch" >&2
             exit 1
           }
           jq -n \

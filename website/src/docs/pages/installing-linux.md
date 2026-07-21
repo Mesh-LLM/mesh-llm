@@ -29,6 +29,30 @@ These are directly downloadable release assets, not apt or pacman repositories;
 download the package's matching `.sha256` sidecar and verify it before installing
 with `apt install` or `pacman -U`.
 
+For Ubuntu, replace the placeholders with the version, architecture, and backend
+from the selected release asset. Architecture is `amd64` or `arm64`; copy the
+exact backend suffix, such as `cpu`, `vulkan`, or `cuda12.9.2`, from the release:
+
+```sh
+PACKAGE='mesh-llm-<version>-ubuntu-<architecture>-<backend>.deb'
+RELEASE_URL='https://github.com/Mesh-LLM/mesh-packaging/releases/download/packaging-v<version>'
+curl -fLO "$RELEASE_URL/$PACKAGE"
+curl -fLO "$RELEASE_URL/$PACKAGE.sha256"
+sha256sum --check "$PACKAGE.sha256"
+sudo apt install "./$PACKAGE"
+```
+
+For Arch Linux, use the matching `amd64` package and backend suffix:
+
+```sh
+PACKAGE='mesh-llm-<version>-arch-amd64-<backend>.pkg.tar.zst'
+RELEASE_URL='https://github.com/Mesh-LLM/mesh-packaging/releases/download/packaging-v<version>'
+curl -fLO "$RELEASE_URL/$PACKAGE"
+curl -fLO "$RELEASE_URL/$PACKAGE.sha256"
+sha256sum --check "$PACKAGE.sha256"
+sudo pacman -U "./$PACKAGE"
+```
+
 The same CPU, Vulkan, CUDA, and ROCm package variants are available as OCI
 images from [`ghcr.io/mesh-llm/mesh-llm`](https://github.com/orgs/Mesh-LLM/packages/container/package/mesh-llm).
 Immutable tags include the Mesh version, distro, architecture, and backend. See
