@@ -20,6 +20,24 @@ Check the install:
 mesh-llm --version
 ```
 
+## Native packages and containers
+
+Versioned Ubuntu 24.04 `.deb` and Arch Linux `.pkg.tar.zst` files are published
+as [Mesh packaging release assets](https://github.com/Mesh-LLM/mesh-packaging/releases).
+Choose the file whose distro, architecture, and backend suffix matches the host.
+These are directly downloadable release assets, not apt or pacman repositories;
+download the package's matching `.sha256` sidecar and verify it before installing
+with `apt install` or `pacman -U`.
+
+The same CPU, Vulkan, CUDA, and ROCm package variants are available as OCI
+images from [`ghcr.io/mesh-llm/mesh-llm`](https://github.com/orgs/Mesh-LLM/packages/container/package/mesh-llm).
+Immutable tags include the Mesh version, distro, architecture, and backend. See
+the [packaging matrix](https://github.com/Mesh-LLM/mesh-packaging/blob/main/docs/matrix.md)
+for the supported rows and exact tag scheme.
+
+Alpine packages are not published because Mesh release archives currently use
+glibc rather than musl.
+
 ## What the installer does
 
 The installer downloads the `mesh-llm` executable and adds `~/.local/bin` to your user `PATH` when needed. After install, run `mesh-llm setup` to finish runtime configuration and, if you want it, the background service.

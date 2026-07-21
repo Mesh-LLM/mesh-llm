@@ -22,11 +22,25 @@ mesh-llm --version
 
 ## Homebrew
 
-If you use Homebrew:
+Mesh publishes a versioned Homebrew formula for Apple Silicon with each
+[packaging release](https://github.com/Mesh-LLM/mesh-packaging/releases). The
+formula is a release asset rather than a tap, so download it before installing:
 
 ```sh
-brew install mesh-llm/tap/mesh-llm
+brew tap-new mesh-llm/release
+curl -fL https://github.com/Mesh-LLM/mesh-packaging/releases/latest/download/mesh-llm.rb \
+  -o "$(brew --repository mesh-llm/release)/Formula/mesh-llm.rb"
+brew install mesh-llm/release/mesh-llm
 ```
+
+Homebrew requires formulae to live in a tap. The first command creates a local
+tap; it does not clone or depend on a public `Mesh-LLM/homebrew-tap` repository.
+To update later, download the latest formula to the same path and run
+`brew upgrade mesh-llm`.
+
+The formula downloads the checksummed Metal release archive from
+`Mesh-LLM/mesh-llm`. Intel macOS is not available through Homebrew because the
+upstream release does not include an x86_64 macOS archive.
 
 ## What the installer does
 

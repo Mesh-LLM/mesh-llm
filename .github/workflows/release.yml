@@ -1453,7 +1453,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Dispatch verified release to mesh-agent-images
+      - name: Dispatch verified release to mesh-packaging
         env:
           GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -1481,7 +1481,7 @@ jobs:
             }' |
             gh api \
               --method POST \
-              repos/Mesh-LLM/mesh-agent-images/dispatches \
+              repos/Mesh-LLM/mesh-packaging/dispatches \
               --input -
 
   publish_crates_preflight:
