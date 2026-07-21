@@ -1,0 +1,49 @@
+From aacb3421872735fcd2f1a22e4560a60b44f53046 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 20 Jul 2026 03:51:17 +1000
+Subject: [PATCH 35/36] ggml: shrink GLM Q2 gate-up active dispatch
+
+---
+ ggml/src/ggml-metal/ggml-metal-ops.cpp | 6 ++++--
+ ggml/src/ggml-metal/ggml-metal.metal   | 6 ++++--
+ 2 files changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 91976954..646c983a 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -4556,9 +4556,11 @@ static int ggml_metal_op_mul_mv_id_gate_up_swiglu(
+             slots_per_threadgroup = 4;
+         }
+     }
++    const int active_slots =
++        args._pad0 > 0 && args._pad0 < ne20 ? args._pad0 : ne20;
+     const int64_t ne123 = pair_sg ?
+-        ((ne20 + slots_per_threadgroup - 1)/slots_per_threadgroup)*ne21 :
+-        ne20*ne21;
++        ((active_slots + slots_per_threadgroup - 1)/slots_per_threadgroup)*ne21 :
++        active_slots*ne21;
+     const int grid_x = pair_sg ? (ne01 + nr0 - 1)/nr0 : (ne01 + nr0*nsg - 1)/(nr0*nsg);
+     const int grid_y = (1 + nr1 - 1)/nr1;
+     const int grid_z = ne123;
+diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
+index 77119fc9..338e8f3e 100644
+--- a/ggml/src/ggml-metal/ggml-metal.metal
++++ b/ggml/src/ggml-metal/ggml-metal.metal
+@@ -10331,9 +10331,11 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_impl(
+         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+     const int nb = args.ne00/QK_K;
+ 
++    const int active_slots = args._pad0 > 0 && args._pad0 < args.nei0 ? args._pad0 : args.nei0;
++    const int slot_groups = (active_slots + slots_per_tg - 1) / slots_per_tg;
+     const int r0 = tgpig.x;
+-    const int token = tgpig.z / ((args.nei0 + slots_per_tg - 1) / slots_per_tg);
+-    const int slot_group = tgpig.z % ((args.nei0 + slots_per_tg - 1) / slots_per_tg);
++    const int token = tgpig.z / slot_groups;
++    const int slot_group = tgpig.z % slot_groups;
+     const int slot = slot_group * slots_per_tg + int(sgitg / 2);
+     const bool is_gate = (sgitg & 1) != 0;
+     const int first_row = r0 * nr0;
+-- 
+2.54.0 (Apple Git-157)
+

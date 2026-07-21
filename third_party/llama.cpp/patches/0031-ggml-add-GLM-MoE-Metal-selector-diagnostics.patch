@@ -1,0 +1,221 @@
+From 8797805107cd1e49bc018a498ce9d008493000f8 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 19 Jul 2026 16:31:29 +1000
+Subject: [PATCH 26/36] ggml: add GLM MoE Metal selector diagnostics
+
+---
+ ggml/src/ggml-metal/ggml-metal-ops.cpp | 75 +++++++++++++++++++++-----
+ tests/test-backend-ops.cpp             | 39 ++++++++++++--
+ 2 files changed, 98 insertions(+), 16 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 684efdc6..ab41e1ec 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -147,6 +147,11 @@ static bool ggml_metal_glm_dsa_moe_dual_lane_gate_slot4_enabled() {
+     return value && atoi(value) != 0;
+ }
+ 
++static bool ggml_metal_glm_dsa_moe_debug_terminal_outputs_enabled() {
++    const char * value = getenv("GGML_METAL_DEBUG_GLM_MOE_TERMINAL_OUTPUTS");
++    return value && atoi(value) != 0;
++}
++
+ static bool ggml_metal_glm_dsa_absorbed_qkv_phases_enabled() {
+     const char * value = getenv("GGML_METAL_EXPERIMENTAL_GLM_ABSORBED_QKV_PHASES");
+     return value && atoi(value) != 0;
+@@ -3731,6 +3736,17 @@ static int ggml_metal_op_glm_moe_two_phase(
+             ctx->enc, (phase_args.n_out + 255)/256, 1, 1, 256, 1, 1);
+         ctx->set_fused_range_outputs(motif.final_out_offset);
+     } else {
++        const bool debug_terminal_outputs =
++            ggml_metal_glm_dsa_moe_debug_terminal_outputs_enabled();
++        if (debug_terminal_outputs) {
++            ggml_metal_encode_glm_moe_shared_mul_mv(
++                ctx,
++                motif.shared_down,
++                ggml_metal_get_buffer_id(motif.shared_glu),
++                ggml_metal_get_buffer_id(motif.shared_down));
++            ggml_metal_op_concurrency_reset(ctx);
++        }
++
+         const char * down_kernel = "kernel_glm_moe_two_phase_down";
+         auto down_pipeline = ggml_metal_library_get_pipeline(ctx->lib, down_kernel);
+         if (!down_pipeline.pipeline) {
+@@ -3753,7 +3769,12 @@ static int ggml_metal_op_glm_moe_two_phase(
+         ggml_metal_encoder_set_threadgroup_memory_size(ctx->enc, 8*8*sizeof(float), 0);
+         ggml_metal_encoder_dispatch_threadgroups(
+             ctx->enc, (phase_args.n_out + 7)/8, 1, 1, 32, 8, 1);
+-        ctx->set_fused_range_outputs(motif.out_offset, motif.final_out_offset);
++        if (debug_terminal_outputs) {
++            ctx->set_fused_range_outputs(
++                motif.out_offset, motif.shared_down_offset, motif.final_out_offset);
++        } else {
++            ctx->set_fused_range_outputs(motif.out_offset, motif.final_out_offset);
++        }
+     }
+     ggml_metal_op_concurrency_reset(ctx);
+ 
+@@ -4288,25 +4309,52 @@ static int ggml_metal_op_mul_mv_id_gate_up_swiglu(
+     if (dst->type == GGML_TYPE_F16 && !pair_sg) {
+         return 0;
+     }
+-    const bool pair_sg_slot8 = pair_sg && dst->type == GGML_TYPE_F32 &&
++    const bool pair_sg_slot8_requested =
+         ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot8_enabled();
+-    const bool pair_sg_slot2 = pair_sg && dst->type == GGML_TYPE_F32 &&
++    const bool pair_sg_slot2_requested =
+         ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot2_enabled();
+-    const bool pair_sg_slot4_dual_default = pair_sg_default_shape && src1_override != nullptr;
++    const bool pair_sg_slot4_dual_requested =
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot4_dual_enabled();
++    const bool pair_sg_slot4_dual_r12_requested =
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot4_dual_r12_enabled();
++    const bool pair_sg_slot4_dual_r16_requested =
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot4_dual_r16_enabled();
++    const bool pair_sg_slot2_dual_requested =
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot2_dual_enabled();
++    const bool pair_sg_slot8_split_requested =
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot8_split_enabled();
++    const bool pair_sg_rowtile_requested =
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_rowtile_enabled();
++    const bool pair_sg_slot1_dual_default =
++        pair_sg_default_shape &&
++        !pair_sg_slot8_requested &&
++        !pair_sg_slot2_requested &&
++        !pair_sg_slot4_dual_requested &&
++        !pair_sg_slot4_dual_r12_requested &&
++        !pair_sg_slot4_dual_r16_requested &&
++        !pair_sg_slot2_dual_requested &&
++        !pair_sg_slot8_split_requested &&
++        !pair_sg_rowtile_requested;
++    const bool pair_sg_slot8 = pair_sg && dst->type == GGML_TYPE_F32 &&
++        pair_sg_slot8_requested;
++    const bool pair_sg_slot2 = pair_sg && dst->type == GGML_TYPE_F32 &&
++        pair_sg_slot2_requested;
++    const bool pair_sg_slot4_dual_default = pair_sg_default_shape &&
++        src1_override != nullptr &&
++        pair_sg_slot1_dual_default;
+     const bool pair_sg_slot4_dual = pair_sg && dst->type == GGML_TYPE_F32 &&
+-        (ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot4_dual_enabled() ||
+-         pair_sg_slot4_dual_default);
++        (pair_sg_slot4_dual_requested || pair_sg_slot4_dual_default);
+     const bool pair_sg_slot4_dual_r12 = pair_sg && dst->type == GGML_TYPE_F32 &&
+-        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot4_dual_r12_enabled();
++        pair_sg_slot4_dual_r12_requested;
+     const bool pair_sg_slot4_dual_r16 = pair_sg && dst->type == GGML_TYPE_F32 &&
+-        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot4_dual_r16_enabled();
++        pair_sg_slot4_dual_r16_requested;
+     const bool pair_sg_slot1_dual = pair_sg && dst->type == GGML_TYPE_F32 &&
+         (ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot1_dual_enabled() ||
+-         (pair_sg_default_shape && !pair_sg_slot4_dual_default));
++         (pair_sg_slot1_dual_default && !pair_sg_slot4_dual_default));
+     const bool pair_sg_slot2_dual = pair_sg && dst->type == GGML_TYPE_F32 &&
+-        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot2_dual_enabled();
++        pair_sg_slot2_dual_requested;
+     const bool pair_sg_slot8_split = pair_sg && dst->type == GGML_TYPE_F32 &&
+-        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot8_split_enabled();
++        pair_sg_slot8_split_requested;
+     const bool pair_sg_share_y = pair_sg && dst->type == GGML_TYPE_F32 &&
+         ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_share_y_enabled() &&
+         ne00 == 6144 &&
+@@ -4351,7 +4399,7 @@ static int ggml_metal_op_mul_mv_id_gate_up_swiglu(
+         ne21 == 1 &&
+         src1->type == GGML_TYPE_F32;
+     const bool pair_sg_rowtile = pair_sg && dst->type == GGML_TYPE_F32 &&
+-        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_rowtile_enabled() &&
++        pair_sg_rowtile_requested &&
+         ne00 == 6144 &&
+         ne01 == 2048 &&
+         ne20 == 8 &&
+@@ -4893,7 +4941,8 @@ static int ggml_metal_op_mul_mv_id_weighted_reduce(
+         enc, ggml_metal_get_buffer_id(down->src[2]));
+ 
+     const bool use_output_scratch =
+-        down->src[0]->type == GGML_TYPE_Q3_K && !preserve_routed_input;
++        down->src[0]->type == GGML_TYPE_Q3_K &&
++        !preserve_routed_input;
+     const ggml_metal_buffer_id weighted_reduce_dst = use_output_scratch ?
+         fusion_scratch : ggml_metal_get_buffer_id(weighted_sum);
+ 
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 56fb7b23..53489947 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -9575,6 +9575,7 @@ struct test_glm_ffn_consumer : public test_case {
+     ggml_tensor * selected_experts = nullptr;
+     ggml_tensor * weights = nullptr;
+     ggml_tensor * routed_out = nullptr;
++    ggml_tensor * shexp_out = nullptr;
+     ggml_tensor * out = nullptr;
+ 
+     test_glm_ffn_consumer(
+@@ -9762,9 +9763,9 @@ struct test_glm_ffn_consumer : public test_case {
+             }
+         }
+ 
+-        ggml_tensor * shexp = ggml_mul_mat(ctx, downs, act);
+-        ggml_set_name(shexp, "ffn_shexp");
+-        return shexp;
++        shexp_out = ggml_mul_mat(ctx, downs, act);
++        ggml_set_name(shexp_out, "ffn_shexp");
++        return shexp_out;
+     }
+ 
+     ggml_tensor * build_graph(ggml_context * ctx) override {
+@@ -9851,6 +9852,36 @@ struct test_glm_ffn_two_phase_consumer : public test_glm_ffn_consumer {
+     }
+ };
+ 
++struct test_glm_ffn_terminal_diagnostic : public test_glm_ffn_two_phase_consumer {
++    explicit test_glm_ffn_terminal_diagnostic(bool two_phase, const char * variant)
++        : test_glm_ffn_two_phase_consumer(two_phase, variant) {}
++
++    std::string op_desc(ggml_tensor * t) override {
++        GGML_UNUSED(t);
++        return std::string("GLM_FFN_TERMINAL_DIAGNOSTIC_") + variant;
++    }
++
++    std::vector<ggml_tensor *> fusion_test_nodes() override {
++        return { selected_experts, weights, routed_out, shexp_out, out };
++    }
++
++    test_status_t eval(
++            ggml_backend_t backend1,
++            ggml_backend_t backend2,
++            const char * op_names_filter,
++            printer * output_printer) override {
++        scoped_test_env terminal_outputs_env("GGML_METAL_DEBUG_GLM_MOE_TERMINAL_OUTPUTS", "1");
++        return test_glm_ffn_two_phase_consumer::eval(
++            backend1, backend2, op_names_filter, output_printer);
++    }
++
++    bool eval_perf(ggml_backend_t backend, const char * op_names_filter, printer * output_printer) override {
++        scoped_test_env terminal_outputs_env("GGML_METAL_DEBUG_GLM_MOE_TERMINAL_OUTPUTS", "1");
++        return test_glm_ffn_two_phase_consumer::eval_perf(
++            backend, op_names_filter, output_printer);
++    }
++};
++
+ struct test_glm_ffn_dual_lane_consumer : public test_glm_ffn_consumer {
+     const bool dual_lane;
+     const char * variant;
+@@ -15150,6 +15181,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+     test_cases.emplace_back(new test_glm_ffn_chain_native_down(true, "CANDIDATE"));
+     test_cases.emplace_back(new test_glm_ffn_chain_two_phase(true, "CANDIDATE"));
+     test_cases.emplace_back(new test_glm_ffn_two_phase_consumer(true, "CANDIDATE"));
++    test_cases.emplace_back(new test_glm_ffn_terminal_diagnostic(true, "CANDIDATE"));
+     test_cases.emplace_back(new test_glm_ffn_dual_lane_consumer(true, "CANDIDATE"));
+ 
+     return test_cases;
+@@ -15520,6 +15552,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+                 GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, 6144, 2048, true, true));
+     test_cases.emplace_back(new test_glm_ffn_consumer(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K,
+                 GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, 6144, 2048, true, false, true));
++    test_cases.emplace_back(new test_glm_ffn_terminal_diagnostic(true, "CANDIDATE"));
+     test_cases.emplace_back(new test_glm_ffn_consumer(GGML_TYPE_TQ2_0, GGML_TYPE_TQ2_0, GGML_TYPE_TQ2_0,
+                 GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, 6144, 2048, true, false));
+     test_cases.emplace_back(new test_glm_ffn_consumer(GGML_TYPE_Q1_0, GGML_TYPE_Q1_0, GGML_TYPE_Q1_0,
+-- 
+2.54.0 (Apple Git-157)
+
