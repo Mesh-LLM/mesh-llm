@@ -41,6 +41,9 @@ fn readme_keeps_explicit_check_install_initialize_start_order() {
         .expect("README should start embedded serving after initialization");
 
     assert!(check < install && install < initialize && initialize < start);
-    assert!(readme.contains("startup only loads a compatible cached runtime"));
+    assert!(!readme.contains("cache.installed()?.into_iter().find"));
+    assert!(readme.contains("resolves the\nrecommended runtime against the current host profile"));
+    assert!(readme.contains("runtime.load_plan()?"));
+    assert!(readme.contains("startup only loads a compatible cached\nruntime"));
     assert!(readme.contains("it never downloads one"));
 }
