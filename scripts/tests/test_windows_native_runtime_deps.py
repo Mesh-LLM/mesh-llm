@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 import pathlib
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -13,6 +15,17 @@ SPEC = importlib.util.spec_from_file_location("windows_native_runtime_deps", SCR
 DEPS = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(DEPS)
+
+
+def bash_executable() -> str:
+    if os.name != "nt":
+        return shutil.which("bash") or "bash"
+    git = shutil.which("git")
+    if git:
+        candidate = pathlib.Path(git).parent.parent / "bin" / "bash.exe"
+        if candidate.is_file():
+            return str(candidate)
+    raise RuntimeError("Git Bash is required for native-runtime verifier tests")
 
 
 def write_pe(path: pathlib.Path, imports: list[str]) -> None:
@@ -107,7 +120,7 @@ class WindowsNativeRuntimeDepsTests(unittest.TestCase):
             (artifact / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
             result = subprocess.run(
-                ["bash", VERIFY_SCRIPT.as_posix(), artifact.as_posix()],
+                [bash_executable(), VERIFY_SCRIPT.as_posix(), artifact.as_posix()],
                 check=False,
                 capture_output=True,
                 text=True,
