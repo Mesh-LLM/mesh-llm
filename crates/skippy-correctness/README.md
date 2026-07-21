@@ -113,6 +113,17 @@ skippy-correctness native-mtp-open-ai-ab \
   --stage1-endpoint-addr 192.168.0.10:19172 \
   --layer-end 48 \
   --split-layer 24
+
+skippy-correctness glm-dsa-stage0-trace \
+  --model /Volumes/External/models/huggingface/.../GLM-5.2-Q2_K-MTP-Q8-layers/snapshots/main \
+  --stage-model /Volumes/External/models/huggingface/.../GLM-5.2-Q2_K-MTP-Q8-layers/snapshots/main \
+  --model-id meshllm/GLM-5.2-Q2_K-MTP-Q8-layers \
+  --stage-load-mode layer-package \
+  --ctx-size 1024 \
+  --n-gpu-layers 999 \
+  --stage-server-bin target/release/skippy-server \
+  --prompt-bin target/release/skippy-prompt \
+  --report-out reports/glm-dsa-stage0-trace.json
 ```
 
 All commands emit JSON, optionally write the same JSON with `--report-out`, and
@@ -216,6 +227,13 @@ same activation/cache contracts without requiring a monolithic full GGUF.
   HTTP 200, baseline/n=1/batched output content is byte-identical, native MTP
   metrics are observed for n=1 and batched runs, and the batched run emits
   `stage.openai_native_mtp_verify` events.
+- `glm-dsa-stage0-trace` runs a package-backed GLM-DSA stage-0 slice twice:
+  fused sparse-mask mode and direct sparse-attention mode. It starts a local
+  fake downstream binary stage, drives `skippy-prompt binary`, captures
+  `glm_dsa_tensor_trace` / `glm_dsa_op_timing` logs, and emits a JSON report
+  with fake-downstream top-k sideband counts plus fused-vs-direct speed ratios.
+  This is a diagnostic loop for GLM-DSA fast-path work, not a full-model
+  correctness proof.
 - For lab split config generation, use `--stage0-endpoint-addr` and
   `--stage1-endpoint-addr` when the address a peer should dial differs from the
   local bind. Use `--stage0-model` and `--stage1-model` when the same model is
