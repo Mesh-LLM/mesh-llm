@@ -73,6 +73,7 @@ jobs:
               - '.github/cache-version.txt'
               - '.github/workflows/ci.yml'
               - '.github/workflows/smoke.yml'
+              - '.github/actions/compute-changes/action.yml'
 
             ui:
               - 'crates/mesh-llm-ui/**'
@@ -148,6 +149,7 @@ jobs:
               - 'Justfile'
               - '.github/cache-version.txt'
               - '.github/actions/setup-windows-rocm-sdk/**'
+              - '.github/actions/compute-changes/action.yml'
               - '.github/workflows/ci.yml'
               - '.github/workflows/windows-warm-caches.yml'
 

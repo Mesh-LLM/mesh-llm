@@ -119,18 +119,6 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/cache-version.txt'
-            windows_gpu:
-              - 'crates/skippy-ffi/**'
-              - 'scripts/build-windows.ps1'
-              - 'scripts/install-windows-sdk.ps1'
-              - 'scripts/package-native-runtime.sh'
-              - 'scripts/verify-native-runtime-package.sh'
-              - 'scripts/windows-native-runtime-deps.py'
-              - 'scripts/tests/test_windows_native_runtime_deps.py'
-              - 'third_party/llama.cpp/**'
-              - '.github/cache-version.txt'
-              - '.github/actions/setup-windows-rocm-sdk/**'
-
             docs:
               - 'docs/**'
               - '**.md'
