@@ -167,21 +167,25 @@ mod tests {
     }
 
     #[test]
-    fn hip_backend_device_is_runtime_selectable_gpu_fact() {
-        let facts = gpu_facts_from_backend_devices(vec![BackendDevice {
-            name: "HIP0".to_string(),
-            description: Some("AMD Instinct MI300X".to_string()),
-            device_id: Some("0000:65:00.0".to_string()),
-            memory_free: 200_000_000_000,
-            memory_total: 206_158_430_208,
-            device_type: BackendDeviceType::Accelerator,
-            caps: 0,
-        }]);
+    fn rocm_and_hip_backend_devices_are_runtime_selectable_gpu_facts() {
+        let facts = gpu_facts_from_backend_devices(vec![
+            BackendDevice {
+                name: "ROCm0".to_string(),
+                description: Some("AMD Instinct MI300X".to_string()),
+                device_id: Some("0000:65:00.0".to_string()),
+                memory_free: 200_000_000_000,
+                memory_total: 206_158_430_208,
+                device_type: BackendDeviceType::Accelerator,
+                caps: 0,
+            },
+            backend_device("HIP1", BackendDeviceType::Accelerator, 24_000_000_000),
+        ]);
 
-        assert_eq!(facts.len(), 1);
+        assert_eq!(facts.len(), 2);
         assert_eq!(facts[0].display_name, "AMD Instinct MI300X");
-        assert_eq!(facts[0].backend_device.as_deref(), Some("HIP0"));
+        assert_eq!(facts[0].backend_device.as_deref(), Some("ROCm0"));
         assert_eq!(facts[0].vram_bytes, 206_158_430_208);
         assert_eq!(facts[0].stable_id.as_deref(), Some("pci:0000:65:00.0"));
+        assert_eq!(facts[1].backend_device.as_deref(), Some("HIP1"));
     }
 }

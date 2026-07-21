@@ -238,6 +238,39 @@ fn gpu_tune_falls_back_to_backend_device_for_non_pinnable_hardware_default() {
 }
 
 #[test]
+fn gpu_tune_accepts_hip_alias_for_rocm_backend_device() {
+    let config = config_with_defaults_and_model(
+        HardwareConfig {
+            device: Some("HIP0".to_string()),
+            ..HardwareConfig::default()
+        },
+        ModelConfigEntry::default(),
+    );
+    let target = sample_target(true);
+    let survey = survey_with_gpus(vec![sample_gpu(0, "uuid:AMD-abc123-def456", Some("ROCm0"))]);
+
+    let evaluation = evaluate_with_probe(
+        &config,
+        &target,
+        &survey,
+        TuneMlockProbe::Supported {
+            limit: TuneMlockLimit::Unlimited,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        evaluation.evaluated_device.target,
+        TuneDeviceTarget::Gpu(TuneGpuTarget {
+            index: 0,
+            display_name: "GPU 0".to_string(),
+            stable_id: Some("uuid:AMD-abc123-def456".to_string()),
+            backend_device: Some("ROCm0".to_string()),
+        })
+    );
+}
+
+#[test]
 fn gpu_tune_backend_fallback_failure_merges_diagnostics_for_non_pinnable_hardware_default() {
     let config = config_with_defaults_and_model(
         HardwareConfig {

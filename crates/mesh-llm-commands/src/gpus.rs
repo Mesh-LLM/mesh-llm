@@ -352,7 +352,7 @@ mod tests {
     fn human_output_formats_rocm_gpu_without_omitting_backend_details() {
         let mut gpu = sample_gpu(0);
         gpu.display_name = "AMD Instinct MI300X".to_string();
-        gpu.backend_device = Some("HIP0".to_string());
+        gpu.backend_device = Some("ROCm0".to_string());
         gpu.stable_id = Some("pci:0000:65:00.0".to_string());
         gpu.pci_bdf = Some("0000:65:00.0".to_string());
         gpu.vendor_uuid = None;
@@ -364,7 +364,7 @@ mod tests {
 
         assert_eq!(
             format_gpus(&hw),
-            "🖥️ GPU 0\n  Name: AMD Instinct MI300X\n  Stable ID: pci:0000:65:00.0\n  Backend device: HIP0\n  VRAM: 24 GB\n  Bandwidth: unavailable\n  Unified memory: no\n  PCI BDF: 0000:65:00.0"
+            "🖥️ GPU 0\n  Name: AMD Instinct MI300X\n  Stable ID: pci:0000:65:00.0\n  Backend device: ROCm0\n  VRAM: 24 GB\n  Bandwidth: unavailable\n  Unified memory: no\n  PCI BDF: 0000:65:00.0"
         );
     }
 
@@ -372,7 +372,7 @@ mod tests {
     fn human_output_keeps_every_rocm_gpu() {
         let mut first = sample_gpu(0);
         first.display_name = "AMD Instinct MI300X".to_string();
-        first.backend_device = Some("HIP0".to_string());
+        first.backend_device = Some("ROCm0".to_string());
         let mut second = sample_gpu(1);
         second.display_name = "AMD Instinct MI300X".to_string();
         second.backend_device = Some("HIP1".to_string());
@@ -384,7 +384,7 @@ mod tests {
         let output = format_gpus(&hw);
 
         assert_eq!(output.matches("🖥️ GPU ").count(), 2);
-        assert!(output.contains("Backend device: HIP0"));
+        assert!(output.contains("Backend device: ROCm0"));
         assert!(output.contains("Backend device: HIP1"));
     }
 

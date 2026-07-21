@@ -88,20 +88,11 @@ pub fn resolve_requested_device_from_available(
     requested: &str,
 ) -> Result<String> {
     if !available.is_empty() {
-        if available.iter().any(|candidate| candidate == requested) {
-            return Ok(requested.to_string());
-        }
-
-        let is_amd_requested = requested.starts_with("ROCm") || requested.starts_with("HIP");
-        if is_amd_requested {
-            let alt_device = if requested.starts_with("ROCm") {
-                requested.replace("ROCm", "HIP")
-            } else {
-                requested.replace("HIP", "ROCm")
-            };
-            if available.iter().any(|candidate| candidate == &alt_device) {
-                return Ok(alt_device);
-            }
+        if let Some(candidate) = available
+            .iter()
+            .find(|candidate| backend_device_names_match(candidate, requested))
+        {
+            return Ok(candidate.clone());
         }
 
         anyhow::bail!(
@@ -112,6 +103,60 @@ pub fn resolve_requested_device_from_available(
     }
 
     Ok(requested.to_string())
+}
+
+/// Matches backend device identifiers while treating ROCm and HIP prefixes as
+/// aliases for the same numbered AMD device.
+pub fn backend_device_names_match(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+        || amd_backend_ordinal(left)
+            .zip(amd_backend_ordinal(right))
+            .is_some_and(|(left_ordinal, right_ordinal)| left_ordinal == right_ordinal)
+}
+
+fn amd_backend_ordinal(device: &str) -> Option<&str> {
+    let ordinal = if device
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("rocm"))
+    {
+        device.get(4..)?
+    } else if device
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("hip"))
+    {
+        device.get(3..)?
+    } else {
+        return None;
+    };
+
+    (!ordinal.is_empty() && ordinal.chars().all(|ch| ch.is_ascii_digit())).then_some(ordinal)
+}
+
+#[cfg(test)]
+mod backend_device_tests {
+    use super::*;
+
+    #[test]
+    fn rocm_and_hip_device_names_are_numbered_aliases() {
+        assert!(backend_device_names_match("ROCm0", "HIP0"));
+        assert!(backend_device_names_match("hip12", "rocm12"));
+        assert!(!backend_device_names_match("ROCm0", "HIP1"));
+        assert!(!backend_device_names_match("HIPster", "ROCm0"));
+    }
+
+    #[test]
+    fn requested_amd_alias_resolves_to_runtime_emitted_name() {
+        let binary = Path::new("mesh-llm");
+
+        assert_eq!(
+            resolve_requested_device_from_available(&["ROCm0".into()], binary, "HIP0").unwrap(),
+            "ROCm0"
+        );
+        assert_eq!(
+            resolve_requested_device_from_available(&["HIP1".into()], binary, "ROCm1").unwrap(),
+            "HIP1"
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
