@@ -1,0 +1,63 @@
+From 11fb71bbe0c6a1b525097a455d75810f0a4e43e4 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 19 Jul 2026 11:27:53 +1000
+Subject: [PATCH 25/36] ggml: default GLM MoE two-phase Metal path
+
+---
+ ggml/src/ggml-metal/ggml-metal-ops.cpp |  9 ++++++++-
+ tests/test-backend-ops.cpp             | 12 ++++++++++++
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 36378f8e..684efdc6 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -127,7 +127,14 @@ static bool ggml_metal_glm_dsa_moe_private_scratch_enabled() {
+ 
+ static bool ggml_metal_glm_dsa_moe_two_phase_enabled() {
+     const char * value = getenv("GGML_METAL_EXPERIMENTAL_GLM_MOE_TWO_PHASE");
+-    return value && atoi(value) != 0;
++    if (value) {
++        return atoi(value) != 0;
++    }
++    value = getenv("GGML_METAL_DISABLE_GLM_MOE_TWO_PHASE");
++    if (value) {
++        return atoi(value) == 0;
++    }
++    return true;
+ }
+ 
+ static bool ggml_metal_glm_dsa_moe_dual_lane_enabled() {
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 8618ea52..56fb7b23 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -9832,6 +9832,17 @@ struct test_glm_ffn_two_phase_consumer : public test_glm_ffn_consumer {
+         return std::string("GLM_FFN_TWO_PHASE_") + variant;
+     }
+ 
++    test_status_t eval(
++            ggml_backend_t backend1,
++            ggml_backend_t backend2,
++            const char * op_names_filter,
++            printer * output_printer) override {
++        scoped_test_env motif_reference_env("GGML_METAL_ENABLE_GLM_MOE_DECODE_MOTIF_REFERENCE", "0");
++        scoped_test_env two_phase_env(
++            "GGML_METAL_EXPERIMENTAL_GLM_MOE_TWO_PHASE", two_phase ? "1" : "0");
++        return test_case::eval(backend1, backend2, op_names_filter, output_printer);
++    }
++
+     bool eval_perf(ggml_backend_t backend, const char * op_names_filter, printer * output_printer) override {
+         scoped_test_env motif_reference_env("GGML_METAL_ENABLE_GLM_MOE_DECODE_MOTIF_REFERENCE", "0");
+         scoped_test_env two_phase_env(
+@@ -15138,6 +15149,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+ 
+     test_cases.emplace_back(new test_glm_ffn_chain_native_down(true, "CANDIDATE"));
+     test_cases.emplace_back(new test_glm_ffn_chain_two_phase(true, "CANDIDATE"));
++    test_cases.emplace_back(new test_glm_ffn_two_phase_consumer(true, "CANDIDATE"));
+     test_cases.emplace_back(new test_glm_ffn_dual_lane_consumer(true, "CANDIDATE"));
+ 
+     return test_cases;
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,65 @@
+From 6208005ffe6bdc5b2d187f2d6c31138773bfdbc9 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 20 Jul 2026 13:10:00 +1000
+Subject: [PATCH 33/36] ggml: make GLM MoE roofline honor active experts
+
+---
+ ggml/src/ggml-metal/ggml-metal-ops.cpp | 18 ++++++++++++------
+ 1 file changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 9469192d..2121075e 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -2026,7 +2026,12 @@ static int ggml_metal_op_glm_moe_q2_selected_weight_scan(
+     ggml_metal_routed_moe_decode_contract contract;
+     GGML_ASSERT(ggml_metal_make_routed_moe_decode_contract("glm_dsa", motif, contract));
+ 
++    const int max_active_experts = ggml_metal_glm_dsa_moe_max_active_experts();
++    const int active_top_k =
++        max_active_experts > 0 && max_active_experts < contract.top_k ?
++        max_active_experts : int(contract.top_k);
+     const uint64_t top_k = uint64_t(contract.top_k);
++    const uint64_t active_top_k_u64 = uint64_t(active_top_k);
+     const uint64_t q2_k_block_bytes = ggml_type_size(GGML_TYPE_Q2_K);
+     const auto stored_bytes = [storage_block_bytes, q2_k_block_bytes](uint64_t bytes, ggml_type type) {
+         if (type != GGML_TYPE_Q2_K) {
+@@ -2043,7 +2048,7 @@ static int ggml_metal_op_glm_moe_q2_selected_weight_scan(
+         /*.down_expert_bytes  =*/ stored_bytes(contract.selected_down_weight_bytes/top_k, contract.down_w->type),
+         /*.down_expert_stride =*/ contract.down_w->nb[2],
+         /*.ids_nb1            =*/ contract.ids->nb[1],
+-        /*.top_k              =*/ int32_t(contract.top_k),
++        /*.top_k              =*/ int32_t(active_top_k),
+         /*.n_tokens           =*/ int32_t(contract.n_tokens),
+         /*.n_experts          =*/ int32_t(contract.n_expert),
+         /*.chunks_per_expert  =*/ chunks_per_expert,
+@@ -2062,7 +2067,7 @@ static int ggml_metal_op_glm_moe_q2_selected_weight_scan(
+     ggml_metal_encoder_dispatch_threadgroups(
+         ctx->enc,
+         chunks_per_expert,
+-        int(contract.top_k),
++        active_top_k,
+         int(contract.n_tokens),
+         256,
+         1,
+@@ -2073,12 +2078,13 @@ static int ggml_metal_op_glm_moe_q2_selected_weight_scan(
+         GGML_LOG_INFO(
+             "ggml_metal: moe_dispatch op=glm_moe_q2_selected_weight_roofline tensor=%s selected_weight_bytes=%llu storage_block_bytes=%d chunks_per_expert=%d threadgroups=%lld threads_per_threadgroup=256\n",
+             ggml_metal_tensor_name(contract.out),
+-            (unsigned long long) (stored_bytes(contract.selected_gate_weight_bytes, contract.gate_w->type) +
+-                                  stored_bytes(contract.selected_up_weight_bytes, contract.up_w->type) +
+-                                  stored_bytes(contract.selected_down_weight_bytes, contract.down_w->type)),
++            (unsigned long long) (active_top_k_u64 * (
++                                  stored_bytes(contract.selected_gate_weight_bytes/top_k, contract.gate_w->type) +
++                                  stored_bytes(contract.selected_up_weight_bytes/top_k, contract.up_w->type) +
++                                  stored_bytes(contract.selected_down_weight_bytes/top_k, contract.down_w->type))),
+             storage_block_bytes,
+             chunks_per_expert,
+-            contract.top_k*contract.n_tokens*chunks_per_expert);
++            active_top_k*contract.n_tokens*chunks_per_expert);
+     }
+ 
+     return motif.n_fuse;
+-- 
+2.54.0 (Apple Git-157)
+

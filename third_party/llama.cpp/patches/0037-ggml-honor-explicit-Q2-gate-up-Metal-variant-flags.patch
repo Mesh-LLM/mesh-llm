@@ -1,0 +1,42 @@
+From 8fec61c2696f179dbe598552bef7da0237ebedbb Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 20 Jul 2026 10:44:00 +1000
+Subject: [PATCH 32/36] ggml: honor explicit Q2 gate/up Metal variant flags
+
+---
+ ggml/src/ggml-metal/ggml-metal-ops.cpp | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 2e42a168..9469192d 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -4345,6 +4345,15 @@ static int ggml_metal_op_mul_mv_id_gate_up_swiglu(
+         ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_slot8_split_enabled();
+     const bool pair_sg_rowtile_requested =
+         ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_rowtile_enabled();
++    const bool pair_sg_special_requested =
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_share_y_enabled() ||
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_vecscale_enabled() ||
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_q8_act_enabled() ||
++        ggml_metal_glm_dsa_q2_gate_up_prequant_q8_enabled() ||
++        ggml_metal_glm_dsa_q2_gate_up_inblock_repack_enabled() ||
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_half_y_enabled() ||
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_r16_enabled() ||
++        ggml_metal_glm_dsa_q2_gate_up_swiglu_pair_sg_r12_enabled();
+     const bool pair_sg_slot1_dual_default =
+         pair_sg_default_shape &&
+         !pair_sg_slot8_requested &&
+@@ -4354,7 +4363,8 @@ static int ggml_metal_op_mul_mv_id_gate_up_swiglu(
+         !pair_sg_slot4_dual_r16_requested &&
+         !pair_sg_slot2_dual_requested &&
+         !pair_sg_slot8_split_requested &&
+-        !pair_sg_rowtile_requested;
++        !pair_sg_rowtile_requested &&
++        !pair_sg_special_requested;
+     const bool pair_sg_slot8 = pair_sg && dst->type == GGML_TYPE_F32 &&
+         pair_sg_slot8_requested;
+     const bool pair_sg_slot2 = pair_sg && dst->type == GGML_TYPE_F32 &&
+-- 
+2.54.0 (Apple Git-157)
+

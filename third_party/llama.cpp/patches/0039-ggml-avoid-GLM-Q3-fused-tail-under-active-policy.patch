@@ -1,0 +1,98 @@
+From dd76e903b54de937336fbea5f1758753a379109f Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 20 Jul 2026 14:05:00 +1000
+Subject: [PATCH 34/36] ggml: avoid GLM Q3 fused tail under active policy
+
+---
+ ggml/src/ggml-metal/ggml-metal-ops.cpp |  3 ++
+ tests/test-backend-ops.cpp             | 46 ++++++++++++++++++++++++++
+ 2 files changed, 49 insertions(+)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 2121075e..91976954 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -2738,6 +2738,9 @@ static bool ggml_metal_glm_moe_can_fuse_swiglu_q3_down(const ggml_metal_glm_moe_
+     if (!ggml_metal_glm_dsa_moe_swiglu_q3_down_fusion_enabled()) {
+         return false;
+     }
++    if (ggml_metal_glm_dsa_moe_max_active_experts() > 0) {
++        return false;
++    }
+     if (motif.has_weighted_down ||
+             motif.gate == nullptr || motif.up == nullptr ||
+             motif.glu == nullptr || motif.down == nullptr || motif.out == nullptr ||
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 44f36f73..1bbd3713 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -7660,6 +7660,44 @@ struct test_glm_moe_routed_q2_final_output : public test_topk_moe_glm_component
+     }
+ };
+ 
++struct test_glm_moe_routed_q2q3_final_output : public test_topk_moe_glm_component {
++    const bool use_native_route;
++    const bool use_direct_top_k;
++
++    explicit test_glm_moe_routed_q2q3_final_output(bool native_route = false, bool direct_top_k = false)
++        : test_topk_moe_glm_component(
++                6,
++                GGML_TYPE_Q2_K,
++                GGML_TYPE_Q2_K,
++                GGML_TYPE_Q3_K,
++                6144,
++                2048,
++                true,
++                false,
++                native_route,
++                direct_top_k),
++          use_native_route(native_route),
++          use_direct_top_k(direct_top_k) {}
++
++    std::string op_desc(ggml_tensor * t) override {
++        GGML_UNUSED(t);
++        if (use_direct_top_k && use_native_route) {
++            return "GLM_MOE_ROUTED_MOTIF_Q2Q3_DIRECT_TOPK_NATIVE_ROUTE_GLM";
++        }
++        if (use_direct_top_k) {
++            return "GLM_MOE_ROUTED_MOTIF_Q2Q3_DIRECT_TOPK_GLM";
++        }
++        if (use_native_route) {
++            return "GLM_MOE_ROUTED_MOTIF_Q2Q3_NATIVE_ROUTE_GLM";
++        }
++        return "GLM_MOE_ROUTED_MOTIF_Q2Q3_GLM";
++    }
++
++    std::vector<ggml_tensor *> fusion_test_nodes() override {
++        return { selected_experts, weights, ffn_out };
++    }
++};
++
+ struct test_glm_moe_q2_weight_roofline : public test_glm_moe_routed_q2_final_output {
+     const bool bypass_route;
+     const char * variant;
+@@ -14996,6 +15034,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+     test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(true, false));
+     test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(false, true));
+     test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(true, true));
++    test_cases.emplace_back(new test_glm_moe_routed_q2q3_final_output(false, false));
++    test_cases.emplace_back(new test_glm_moe_routed_q2q3_final_output(true, false));
++    test_cases.emplace_back(new test_glm_moe_routed_q2q3_final_output(false, true));
++    test_cases.emplace_back(new test_glm_moe_routed_q2q3_final_output(true, true));
+     test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_A"));
+     test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(true,  "FIXED_IDS"));
+     test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_B"));
+@@ -15489,6 +15531,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+     test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(true, false));
+     test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(false, true));
+     test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(true, true));
++    test_cases.emplace_back(new test_glm_moe_routed_q2q3_final_output(false, false));
++    test_cases.emplace_back(new test_glm_moe_routed_q2q3_final_output(true, false));
++    test_cases.emplace_back(new test_glm_moe_routed_q2q3_final_output(false, true));
++    test_cases.emplace_back(new test_glm_moe_routed_q2q3_final_output(true, true));
+     test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_A"));
+     test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(true,  "FIXED_IDS"));
+     test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_B"));
+-- 
+2.54.0 (Apple Git-157)
+

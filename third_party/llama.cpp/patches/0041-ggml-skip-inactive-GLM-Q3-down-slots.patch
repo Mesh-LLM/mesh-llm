@@ -1,0 +1,25 @@
+From 00fa96c1d75aa4ee9885eb64d88cbebe861d9fe5 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 20 Jul 2026 05:30:42 +1000
+Subject: [PATCH 36/36] ggml: skip inactive GLM Q3 down slots
+
+---
+ ggml/src/ggml-metal/ggml-metal.metal | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
+index 338e8f3e..3bdec47f 100644
+--- a/ggml/src/ggml-metal/ggml-metal.metal
++++ b/ggml/src/ggml-metal/ggml-metal.metal
+@@ -11802,7 +11802,7 @@ void kernel_mul_mv_id_q3_K_weighted_reduce_slots_sg_impl(
+     float sumf1[nr0] = {0.f};
+     float sumf2[nr0] = {0.f};
+ 
+-    if (slot < args.nei0 && token < args.nei1) {
++    if (slot < n_slots && slot < args.nei0 && token < args.nei1) {
+         const int32_t expert_id = ((device const int32_t *) (ids + token*args.nbi1))[slot];
+         if (expert_id >= 0 && expert_id < args.ne02) {
+             const uint64_t offset0 = uint64_t(expert_id)*args.nb02 + uint64_t(first_row)*args.nb01;
+-- 
+2.54.0 (Apple Git-157)
+

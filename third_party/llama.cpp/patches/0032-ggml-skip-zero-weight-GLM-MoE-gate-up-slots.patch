@@ -1,0 +1,45 @@
+From 4523e19eecd43c47ca650939bb0c2dfc87c43920 Mon Sep 17 00:00:00 2001
+From: James Dumay <james@mesh-llm.local>
+Date: Sun, 19 Jul 2026 00:00:00 +1000
+Subject: [PATCH 27/36] ggml: skip zero-weight GLM MoE gate-up slots
+
+---
+ ggml/src/ggml-metal/ggml-metal.metal | 14 ++++++++------
+ 1 file changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
+index b7b7e065..1b62d0dc 100644
+--- a/ggml/src/ggml-metal/ggml-metal.metal
++++ b/ggml/src/ggml-metal/ggml-metal.metal
+@@ -10773,9 +10773,15 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_dual_impl(
+         return;
+     }
+ 
+-    if (slot < args.nei0 && token < args.nei1) {
++    const bool valid_output = slot < args.nei0 && token < args.nei1;
++    const float route_weight = valid_output && args.weighted != 0 ?
++        ((device const float *) (weights + uint64_t(slot)*args.weights_nb1 + uint64_t(token)*args.weights_nb2))[0] :
++        1.0f;
++
++    if (valid_output) {
+         const int32_t expert_id = ((device const int32_t *) (ids + token*args.nbi1))[slot];
+-        const bool active_slot = args._pad0 <= 0 || slot < args._pad0;
++        const bool active_slot = (args._pad0 <= 0 || slot < args._pad0) &&
++            (args.weighted == 0 || route_weight != 0.0f);
+         if (active_slot && expert_id >= 0 && expert_id < args.ne02) {
+             const uint64_t offset0 = uint64_t(expert_id)*args.nb02 + uint64_t(first_row)*args.nb01;
+             const uint64_t offset1 = uint64_t(slot % args.ne11)*args.nb11 + uint64_t(token)*args.nb12;
+@@ -10936,10 +10942,6 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_dual_impl(
+         }
+     }
+ 
+-    const bool valid_output = slot < args.nei0 && token < args.nei1;
+-    const float route_weight = valid_output && args.weighted != 0 ?
+-        ((device const float *) (weights + uint64_t(slot)*args.weights_nb1 + uint64_t(token)*args.weights_nb2))[0] :
+-        1.0f;
+     for (int row = 0; row < nr0; ++row) {
+         const float up_value = simd_sum(sum_up[row]);
+         const float gate_value = simd_sum(sum_gate[row]);
+-- 
+2.54.0 (Apple Git-157)
+
