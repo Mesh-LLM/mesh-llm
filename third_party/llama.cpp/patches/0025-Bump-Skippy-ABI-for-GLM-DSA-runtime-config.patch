@@ -1,0 +1,25 @@
+From 0fb232f0f632084ab4fce7ed82ad12e4afe6a56f Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 21 Jul 2026 15:31:56 +1000
+Subject: [PATCH] Bump Skippy ABI for GLM DSA runtime config
+
+---
+ include/skippy/common.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 771d1c78..590d8ead 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -26,7 +26,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 32
++#define SKIPPY_ABI_VERSION_PATCH 33
+ 
+ enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
+-- 
+2.54.0 (Apple Git-157)
+

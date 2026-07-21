@@ -132,10 +132,18 @@ impl RuntimeConfig {
                 flash_attn_type: self.flash_attn_type as i32,
                 load_mode: self.load_mode,
                 disable_repack: false,
+                use_mmap_prefetch: false,
+                use_mmap_buffer: false,
                 filter_tensors_on_load: self.filter_tensors_on_load,
                 include_embeddings: self.include_embeddings,
                 include_output: self.include_output,
                 selected_backend_device: selected_backend_device_ptr,
+                glm_dsa_policy_profile: 0,
+                glm_dsa_policy_flags: 0,
+                glm_dsa_short_prefill_max_tokens: 0,
+                glm_dsa_direct_sparse_decode_max_top_k: 0,
+                glm_dsa_dense_sparse_mask_max_bytes: 0,
+                glm_dsa_compact_flash_min_kv: 0,
             },
             _selected_backend_device: selected_backend_device,
         })
@@ -308,6 +316,22 @@ mod tests {
             unsafe { std::ffi::CStr::from_ptr(raw.raw.selected_backend_device).to_string_lossy() };
 
         assert_eq!(device, "MTL0");
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_defaults_glm_dsa_controls_to_disabled() -> anyhow::Result<()> {
+        let raw = RuntimeConfig::default().as_raw()?.raw;
+
+        assert!(!raw.use_mmap_prefetch);
+        assert!(!raw.use_mmap_buffer);
+        assert_eq!(raw.glm_dsa_policy_profile, 0);
+        assert_eq!(raw.glm_dsa_policy_flags, 0);
+        assert_eq!(raw.glm_dsa_short_prefill_max_tokens, 0);
+        assert_eq!(raw.glm_dsa_direct_sparse_decode_max_top_k, 0);
+        assert_eq!(raw.glm_dsa_dense_sparse_mask_max_bytes, 0);
+        assert_eq!(raw.glm_dsa_compact_flash_min_kv, 0);
+        assert!(raw.selected_backend_device.is_null());
         Ok(())
     }
 
