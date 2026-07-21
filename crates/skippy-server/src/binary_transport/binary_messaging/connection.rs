@@ -757,25 +757,23 @@ pub(super) fn handle_binary_connection(
                     && config.downstream.is_some()
                 {
                     let base = binary_message_base(config, &session_key, &message);
-                    if let Some(activation) = kv.record_resident_activation(
+                    let activations = kv.record_resident_activation(
                         config,
                         &base,
                         0,
                         &tokens,
                         activation_width,
                         &output,
-                    ) {
-                        record.recorded_activations = record.recorded_activations.saturating_add(1);
-                        record.recorded_activation_bytes = record
-                            .recorded_activation_bytes
-                            .saturating_add(activation.payload_bytes as u64);
-                        record.evicted_activation_entries = record
-                            .evicted_activation_entries
-                            .saturating_add(activation.evicted_entries);
-                        record.evicted_activation_bytes = record
-                            .evicted_activation_bytes
-                            .saturating_add(activation.evicted_bytes);
-                    }
+                    );
+                    crate::binary_transport::activation_cache::add_binary_activation_records(
+                        &mut record,
+                        config,
+                        kv,
+                        telemetry,
+                        &session_key,
+                        &message,
+                        &activations,
+                    );
                 }
                 record
             } else {
