@@ -1273,7 +1273,8 @@ fn runtime_config_from_stage_config(
             LoadMode::ArtifactSlice => RuntimeLoadMode::ArtifactSlice,
         },
         projector_path: config.projector_path.clone(),
-        include_embeddings: config.layer_start == 0,
+        include_embeddings: config.layer_start == 0
+            || (config.load_mode == LoadMode::LayerPackage && config.downstream.is_none()),
         include_output: config.downstream.is_none(),
         filter_tensors_on_load: config.filter_tensors_on_load,
     })
@@ -1318,11 +1319,14 @@ fn open_stage_model_from_parts_with_events(
 mod tests {
     use anyhow::{Result, bail};
     use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig, StageDevice};
-    use skippy_runtime::FlashAttentionType as RuntimeFlashAttentionType;
+    use skippy_runtime::{
+        ActivationDesc, ActivationFrame, FlashAttentionType as RuntimeFlashAttentionType,
+        RuntimeActivationDType, RuntimeActivationLayout, SamplingConfig,
+    };
 
     use super::{
-        RuntimeLaunchOverrides, create_indexed_lane_resource, runtime_config_from_stage_config,
-        should_attach_package_projector,
+        RuntimeLaunchOverrides, create_indexed_lane_resource, load_runtime_with_overrides,
+        runtime_config_from_stage_config, should_attach_package_projector,
     };
 
     #[test]
@@ -1512,7 +1516,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_omits_input_embeddings_for_final_non_first_stage() {
+    fn runtime_config_keeps_package_embeddings_for_final_non_first_stage() {
         let config = StageConfig {
             run_id: "run-a".to_string(),
             topology_id: "topology-a".to_string(),
@@ -1541,7 +1545,12 @@ mod tests {
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
             filter_tensors_on_load: true,
-            selected_device: None,
+            selected_device: Some(StageDevice {
+                backend_device: "CPU".into(),
+                stable_id: None,
+                index: None,
+                vram_bytes: None,
+            }),
             kv_cache: None,
             native_mtp_enabled: true,
             load_mode: LoadMode::LayerPackage,
@@ -1557,8 +1566,102 @@ mod tests {
         let runtime_config =
             runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default()).unwrap();
 
-        assert!(!runtime_config.include_embeddings);
+        assert!(runtime_config.include_embeddings);
         assert!(runtime_config.include_output);
+    }
+
+    #[test]
+    fn glm52_final_stage_package_executes_native_mtp_when_fixture_is_set() -> anyhow::Result<()> {
+        let Some(package_path) = std::env::var_os("SKIPPY_GLM52_MTP_PACKAGE") else {
+            eprintln!("skipping: SKIPPY_GLM52_MTP_PACKAGE is not set");
+            return Ok(());
+        };
+        let package_path = std::path::PathBuf::from(package_path);
+        if !package_path.join("model-package.json").is_file() {
+            eprintln!(
+                "skipping: {} does not look like a layer package",
+                package_path.display()
+            );
+            return Ok(());
+        }
+
+        let config = StageConfig {
+            run_id: "glm52-mtp-smoke".to_string(),
+            topology_id: "glm52-mtp-smoke-topology".to_string(),
+            model_id: "meshllm/GLM-5.2-Q2_K-MTP-Q8-layers".to_string(),
+            package_ref: Some(package_path.to_string_lossy().to_string()),
+            manifest_sha256: None,
+            source_model_path: None,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path: Some(package_path.to_string_lossy().to_string()),
+            projector_path: None,
+            stage_id: "stage-final".to_string(),
+            stage_index: 1,
+            layer_start: 78,
+            layer_end: 79,
+            ctx_size: 128,
+            lane_count: 1,
+            n_batch: Some(1),
+            n_ubatch: Some(1),
+            n_gpu_layers: 0,
+            mmap: Some(true),
+            mlock: false,
+            cache_type_k: "f16".to_string(),
+            cache_type_v: "f16".to_string(),
+            flash_attn_type: FlashAttentionType::Disabled,
+            filter_tensors_on_load: true,
+            selected_device: Some(StageDevice {
+                backend_device: "CPU".into(),
+                stable_id: None,
+                index: None,
+                vram_bytes: None,
+            }),
+            kv_cache: None,
+            native_mtp_enabled: true,
+            load_mode: LoadMode::LayerPackage,
+            bind_addr: "127.0.0.1:0".to_string(),
+            upstream: Some(PeerConfig {
+                stage_id: "stage-prev".to_string(),
+                stage_index: 0,
+                endpoint: "tcp://127.0.0.1:19000".to_string(),
+            }),
+            downstream: None,
+        };
+
+        let runtime = load_runtime_with_overrides(&config, &RuntimeLaunchOverrides::default())?
+            .expect("GLM final stage should load from the package");
+        let mut runtime = runtime.lock().expect("runtime mutex poisoned");
+        let hidden_bytes = 6144 * std::mem::size_of::<f32>();
+        let input = ActivationFrame {
+            desc: ActivationDesc {
+                version: 1,
+                dtype: RuntimeActivationDType::F32,
+                layout: RuntimeActivationLayout::TokenMajor,
+                producer_stage_index: 0,
+                layer_start: 0,
+                layer_end: 78,
+                token_count: 1,
+                sequence_count: 1,
+                payload_bytes: hidden_bytes as u64,
+                flags: 0,
+            },
+            payload: vec![0; hidden_bytes],
+        };
+        let sampling = SamplingConfig {
+            temperature: 0.0,
+            ..SamplingConfig::default()
+        };
+        let (predicted, draft, _output) =
+            runtime.decode_frame_sampled_mtp("smoke", 1, Some(&sampling), Some(&input), 0, 1)?;
+        let draft = draft.expect("GLM final stage should return a native MTP draft");
+
+        assert!(predicted >= 0);
+        assert_eq!(draft.token_ids.len(), 1);
+        assert!(draft.token_ids[0] >= 0);
+        Ok(())
     }
 
     #[test]
