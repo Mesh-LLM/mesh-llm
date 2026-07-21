@@ -107,13 +107,13 @@ class WindowsNativeRuntimeDepsTests(unittest.TestCase):
             (artifact / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
             result = subprocess.run(
-                ["bash", str(VERIFY_SCRIPT), artifact.as_posix()],
+                ["bash", VERIFY_SCRIPT.as_posix(), artifact.as_posix()],
                 check=False,
                 capture_output=True,
                 text=True,
             )
 
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("verified native runtime artifact", result.stdout)
 
 
