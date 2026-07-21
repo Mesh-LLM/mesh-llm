@@ -107,7 +107,7 @@ class WindowsNativeRuntimeDepsTests(unittest.TestCase):
             (artifact / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
             result = subprocess.run(
-                ["bash", str(VERIFY_SCRIPT), str(artifact)],
+                ["bash", str(VERIFY_SCRIPT), artifact.as_posix()],
                 check=False,
                 capture_output=True,
                 text=True,
