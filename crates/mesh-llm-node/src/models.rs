@@ -126,21 +126,7 @@ struct CatalogModel {
 }
 
 pub fn default_huggingface_cache_dir() -> PathBuf {
-    if let Some(path) = env_path("HF_HUB_CACHE").or_else(|| env_path("HUGGINGFACE_HUB_CACHE")) {
-        return path;
-    }
-    if let Some(path) = env_path("HF_HOME") {
-        return path.join("hub");
-    }
-    if let Some(path) = env_path("XDG_CACHE_HOME") {
-        return path.join("huggingface").join("hub");
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".cache")
-        .join("huggingface")
-        .join("hub")
+    model_hf::huggingface_hub_cache_dir()
 }
 
 pub fn scan_installed_models(cache_dir: impl AsRef<Path>) -> Vec<InstalledModel> {
@@ -156,12 +142,6 @@ pub fn scan_installed_models(cache_dir: impl AsRef<Path>) -> Vec<InstalledModel>
     });
     models.dedup_by(|left, right| left.model_ref == right.model_ref && left.path == right.path);
     models
-}
-
-fn env_path(name: &str) -> Option<PathBuf> {
-    let value = std::env::var_os(name)?;
-    let path = PathBuf::from(value);
-    (!path.as_os_str().is_empty()).then_some(path)
 }
 
 fn scan_dir(root: &Path, dir: &Path, models: &mut Vec<InstalledModel>) {
