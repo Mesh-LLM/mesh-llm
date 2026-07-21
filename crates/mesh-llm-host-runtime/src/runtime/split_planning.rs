@@ -734,6 +734,39 @@ mod tests {
     }
 
     #[test]
+    fn resource_planner_assigns_mi300x_a_capacity_weighted_share() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let mi300x = participant(1, 192 * GIB);
+        let smaller_accelerator = participant(2, 48 * GIB);
+        let participants = vec![mi300x, smaller_accelerator];
+        let package = package(100, 200 * GIB);
+
+        let plan = plan_runtime_slice_topology_with_resources(
+            "mi300x-topology-test",
+            "unsloth/Qwen3.5-122B-A10B-MTP-GGUF:UD-Q8_K_XL",
+            &package,
+            &participants,
+            &[],
+            SplitTopologyResourceInputs {
+                native_context_length: 1,
+                kv_bytes_per_token: 1,
+                ctx_size_override: Some(1),
+                parallel_override: Some(1),
+            },
+        )
+        .expect("MI300X and smaller accelerator should form a valid topology");
+
+        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(plan.stages[0].node_id, mi300x.node_id);
+        assert_eq!(plan.stages[1].node_id, smaller_accelerator.node_id);
+        assert!(
+            plan.stages[0].parameter_bytes >= plan.stages[1].parameter_bytes * 3,
+            "the 192 GiB MI300X should receive most of the model weight: {:?}",
+            plan.stages
+        );
+    }
+
+    #[test]
     fn resource_planner_prefers_lower_tpot_stage_count_from_participant_rtt() {
         // Node VRAM is sized so the 40GB model fits on two nodes at the minimum
         // context (65536) but needs three at the native context (262144), so

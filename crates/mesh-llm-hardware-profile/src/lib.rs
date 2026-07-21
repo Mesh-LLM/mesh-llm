@@ -710,6 +710,65 @@ mod tests {
     }
 
     #[test]
+    fn mi300x_kfd_evidence_selects_rocm_over_cpu_runtime() {
+        use mesh_llm_native_runtime::{
+            NativeRuntimeArtifact, NativeRuntimeBackend, NativeRuntimePlatform, RuntimeSelection,
+            select_native_runtime_from_artifacts,
+        };
+
+        let _rocm_arches = EnvVarGuard::clear("MESH_LLM_ROCM_GPU_ARCHES");
+        let rocm = detect_rocm_profile_with_arches(&[], BTreeSet::from(["gfx942".to_string()]))
+            .expect("MI300X KFD evidence should produce a ROCm profile");
+        let runtime_profile = HostRuntimeProfile {
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            target_triple: None,
+            available_flavors: detected_native_runtime_flavors(&[], None, Some(&rocm), None),
+            gpus: Vec::new(),
+            cuda: None,
+            rocm: Some(rocm),
+            vulkan: None,
+        };
+        let artifact = |id: &str, backend: NativeRuntimeBackend| NativeRuntimeArtifact {
+            id: id.to_string(),
+            mesh_version: Some("test".to_string()),
+            skippy_abi: "test-abi".to_string(),
+            platform: NativeRuntimePlatform {
+                os: "linux".to_string(),
+                arch: "x86_64".to_string(),
+                target: None,
+            },
+            backend,
+            rank: 0,
+            libraries: vec!["lib/libmeshllm_ffi.so".to_string()],
+            url: None,
+            sha256: None,
+            signature: None,
+        };
+        let artifacts = vec![
+            artifact("runtime-cpu", NativeRuntimeBackend::cpu()),
+            artifact(
+                "runtime-rocm",
+                NativeRuntimeBackend::rocm(vec!["gfx942".to_string()]),
+            ),
+        ];
+
+        let selected = select_native_runtime_from_artifacts(
+            &artifacts,
+            &runtime_profile,
+            "test",
+            Some("test-abi"),
+            &RuntimeSelection::Recommended,
+        )
+        .expect("MI300X should select the compatible ROCm runtime");
+
+        assert_eq!(
+            selected.artifact.backend.kind,
+            NativeRuntimeBackendKind::Rocm
+        );
+    }
+
+    #[test]
     fn fallback_profiles_do_not_synthesize_backend_ordinals() {
         let gpu = fallback_gpu_profile_from_label("AMD Radeon PRO W7900".to_string());
 
