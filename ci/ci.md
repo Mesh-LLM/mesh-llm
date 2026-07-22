@@ -200,6 +200,58 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   secret. It carries no pull request trigger and does not run release or smoke
   jobs.
 
+## Prebuilt runner image contract
+
+Linux CI environments are maintained in
+[`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images)
+and published as multi-architecture images at
+`ghcr.io/mesh-llm/mesh-llm-cuda-runner`. The two variants are built from the
+same core toolchain:
+
+- `public-*` runs as a job-level `container:` on an `ubuntu-24.04`
+  GitHub-hosted runner.
+- `self-hosted-*` is the ARC runner pod image for the `mesh-llm-amd64` and
+  `mesh-llm-arm64` K3s scale sets. Jobs targeting these labels run directly in
+  that pod and must not wrap it in a second job container.
+
+Production workflows and Flux resources should consume an immutable timestamp,
+source-revision tag, or digest. Once pulled, unchanged image layers are reusable
+from the container runtime's cache. This removes repeated operating-system
+package installation from the job path and reduces failures caused by package
+mirrors, repository metadata, transient downloads, or host drift.
+
+ARC pods benefit directly from the persistent image cache on each K3s node.
+GitHub-hosted runners may still start on a cold host and pull the image, so
+their local layer cache is opportunistic rather than guaranteed; immutable,
+shared layers still make those pulls deterministic and cacheable by the
+available container and registry infrastructure.
+
+The runner-image build checks out a requested MeshLLM revision, discovers its
+Cargo, Node, Python, and Go manifests, and injects an environment-specific,
+content-addressed manifest bundle. It then warms the locked dependency caches.
+That process improves startup time, but does not move dependency ownership out
+of MeshLLM's checked-in manifests.
+
+| Dependency need | Authoritative location | Required change |
+| --- | --- | --- |
+| Rust, Node, Python, or Go project/test dependency | MeshLLM manifest and lockfile | Update and validate the manifest/lockfile in this repository. |
+| Shared Linux package or CLI used by both runner types | `profiles/common.yml` in `mesh-llm-runner-images` | Update the YAML profile, rebuild all architectures, and publish a new image. |
+| Public-only or self-hosted-only system capability | `profiles/public.yml` or `profiles/self-hosted.yml` | Update the environment profile, verify its architecture matrix, and publish a new image. |
+| Toolchain or capability requiring custom installation | Owning installer in `mesh-llm-runner-images` | Update the installer and image verification, then roll forward the pinned consumer. |
+| Truly job-scoped external service | Pinned action or service container | Document why it cannot be part of a manifest or runner image. |
+
+The key review rule is: **a missing dependency must cause a manifest,
+lockfile, runner profile, or runner installer update; it must not be repaired by
+adding a one-off package installation to a MeshLLM workflow.** New workflow-local
+`apt-get`, `pip`, global `npm`, `cargo install`, or downloaded-tool bootstrap
+steps—and setup actions that download an already-standardized toolchain—should
+be rejected. Existing setup blocks are migration debt and should be removed as
+each lane adopts the runner image, not copied into new jobs.
+
+An emergency exception must be temporary and include a reason, owner, and
+linked removal issue or expiry date. It is not an alternative dependency
+management path.
+
 ## Public website deployment
 
 - `website-pages.yml` deploys the public static site through GitHub Pages' Actions

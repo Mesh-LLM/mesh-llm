@@ -36,6 +36,35 @@ reason about.
 - If workflow changes affect crate/test routing, update
   `tools/xtask/src/main.rs` invariants in the same change.
 
+## Runner image and dependency policy
+
+- Linux CI should use the multi-architecture runner images published by
+  [`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images):
+  the `public-*` variant through job-level `container:` on GitHub-hosted
+  runners, and the `self-hosted-*` variant as the ARC runner pod image. Do not
+  add another job container around an ARC runner pod.
+- Pin production consumers to an immutable image tag or digest. Floating
+  `public-latest` and `self-hosted-latest` tags are for evaluation and explicit
+  maintenance flows, not for silently changing the environment of required CI.
+- **Never resolve a missing CI dependency by adding an ad hoc installer to an
+  individual workflow.** Do not add new `apt-get install`, `pip install`,
+  `npm install --global`, `cargo install`, downloaded binaries, setup scripts,
+  setup actions that download an already-standardized toolchain, or equivalent
+  host mutation as a one-job fix.
+- Put application and test dependencies in MeshLLM's checked-in manifests and
+  lockfiles. Put shared system packages and runner tools in the runner image's
+  YAML profiles (`profiles/common.yml`, `profiles/public.yml`, and
+  `profiles/self-hosted.yml`) or its owning installer script. Rebuild, verify,
+  and publish the image, then update the workflow or Flux image reference.
+- Locked project dependency installation remains valid job work. The runner
+  image build discovers MeshLLM's Cargo, Node, Python, and Go manifests and
+  warms their caches, but the checked-in manifest remains authoritative.
+- Treat existing workflow-local host setup as migration debt. Do not copy it
+  into new jobs. Remove it when the relevant lane adopts the prebuilt image.
+- Temporary incident workarounds must be clearly marked with a reason, owner,
+  and linked removal issue or expiry date. Review must reject an undocumented
+  or permanent workflow-only package workaround.
+
 ## Artifact and cache policy
 
 - PR and smoke-only CI artifacts must use short retention. The current policy is

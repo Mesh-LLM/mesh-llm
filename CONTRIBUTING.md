@@ -169,6 +169,20 @@ CI uses [`dorny/paths-filter`](https://github.com/dorny/paths-filter) to skip jo
 
 For the current PR build topology, see [`ci/ci.md`](ci/ci.md). For workflow-editing rules agents must follow, see [`.github/AGENTS.md`](.github/AGENTS.md).
 
+Linux CI is moving to prebuilt public and self-hosted images from
+[`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images).
+These images share a multi-architecture core environment, warm dependencies
+from MeshLLM's checked-in manifests, and allow container runtimes to reuse
+cached image layers where the runner host or K3s node retains them instead of
+reinstalling host packages in every job.
+
+If CI is missing a dependency, update the appropriate MeshLLM manifest and
+lockfile or the runner image's YAML profile/installer, then publish and pin a
+new runner image. Do not add a one-off `apt-get`, `pip`, global `npm`,
+`cargo install`, downloaded binary, or similar setup step to an individual
+workflow. Existing workflow-local setup is migration debt, not a pattern for
+new jobs.
+
 ### What triggers what
 
 | Changed paths | `PR Quality Checks` | `PR Builds` CPU/artifact rows | Backend target rows |
