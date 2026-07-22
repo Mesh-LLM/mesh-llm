@@ -46,7 +46,7 @@ skippy-model-package write-package org/repo:Q4_K_M --out-dir model-package/
 skippy-model-package write-package org/repo:Q4_K_M --projector mmproj-model-f16.gguf --out-dir model-package/
 skippy-model-package validate model.gguf slices/stage-*.gguf
 skippy-model-package validate-package model.gguf model-package/
-skippy-model-package glm-dsa-contract model-package/
+skippy-model-package validate-glm-dsa-contract model-package/
 ```
 
 `write` and `write-stages` call the llama C ABI, which uses llama.cpp GGUF
@@ -65,15 +65,17 @@ backed `model-hf` adapter, downloads the resolved source artifact, and records
 the resolved repo, revision, primary file, canonical ref, distribution id, and
 artifact file set in `model-package.json`.
 
-When the source artifact carries model-specific generation requirements,
-`write-package` should record them in the manifest's `generation` section.
-Use `generation.policy` for stable semantic execution choices such as
-`decode: "compact-flash"` or `indexshare: "required"`, and use
-`generation.thresholds` for numeric resolver inputs such as
-`short_prefill_max_tokens`, `compact_flash_min_kv`, and
-`dense_mask_max_bytes`. Do not add model-family-specific objects such as
-`generation.glm_dsa`; package writers should use a versioned policy profile
-such as `glm-dsa-v1`.
+`write-package` currently records supported source-model speculation metadata
+under `generation.speculative_decoding`; it does not populate GLM-DSA execution
+policy or threshold fields. For GLM-DSA packages, run
+`repair-glm-dsa-generation-policy model-package/ --in-place` to add
+`generation.policy` and `generation.thresholds`, then validate the strict
+contract. Policy uses stable semantic execution choices such as
+`decode: "compact-flash"` or `indexshare: "required"`, while thresholds carry
+numeric resolver inputs such as `short_prefill_max_tokens`,
+`compact_flash_min_kv`, and `dense_mask_max_bytes`. Do not add
+model-family-specific objects such as `generation.glm_dsa`; use a versioned
+policy profile such as `glm-dsa-v1`.
 
 Generation defaults should be grounded in gated package/backend evidence, not
 single diagnostic microbench rows. For GLM-DSA MoE tuning, production-shaped
@@ -116,8 +118,9 @@ resumed artifact.
 and sizes, declared tensor counts/bytes, layer coverage, duplicate layers, and
 exact owned tensor coverage against the source model.
 
-`glm-dsa-contract` is the local pre-spend gate for GLM-5.2-style artifacts. It
-checks GGUF metadata, tensor completeness, native MTP preservation, and
-Full/Shared IndexShare roles. New GLM-DSA artifacts must expose roles through
-`glm-dsa.attention.indexer.types` or frequency/offset metadata; tensor-presence
-inference is reported as a compatibility fallback and fails the contract gate.
+`validate-glm-dsa-contract` is the local pre-spend gate for GLM-5.2-style
+artifacts. It checks GGUF metadata, tensor completeness, native MTP
+preservation, and Full/Shared IndexShare roles. New GLM-DSA artifacts must
+expose roles through `glm-dsa.attention.indexer.types` or frequency/offset
+metadata; tensor-presence inference is reported as a compatibility fallback
+and fails the contract gate.

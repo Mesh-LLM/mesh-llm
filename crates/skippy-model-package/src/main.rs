@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 
 mod cli;
+mod generation_manifest;
 mod gguf_header;
 mod glm_dsa_contract;
 mod glm_dsa_generation_policy;
@@ -96,6 +97,11 @@ fn main() -> Result<()> {
                 },
             )?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+            anyhow::ensure!(
+                report.valid,
+                "GLM-DSA contract validation failed for {}",
+                package.display()
+            );
             Ok(())
         }
         Command::RepairGlmDsaGenerationPolicy { package, in_place } => {

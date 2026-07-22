@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 
 mod artifact_io;
 
+use crate::generation_manifest::{
+    PackageGeneration, PackageGenerationExperimentalPolicy, PackageGenerationPolicy,
+    PackageGenerationThresholds,
+};
 use artifact_io::{file_sha256, safe_relative_path, sha256_bytes};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -192,7 +196,7 @@ struct PackageManifest {
     #[serde(default)]
     activation_width: Option<u32>,
     #[serde(default)]
-    generation: Option<PackageGeneration>,
+    generation: Option<PackageGeneration<PackageSpeculativeDecoding>>,
     shared: PackageShared,
     #[serde(default)]
     projectors: Vec<PackageProjector>,
@@ -211,47 +215,6 @@ struct PackageShared {
     metadata: PackageArtifact,
     embeddings: PackageArtifact,
     output: PackageArtifact,
-}
-
-#[derive(Debug, Deserialize)]
-struct PackageGeneration {
-    #[serde(default)]
-    policy: Option<PackageGenerationPolicy>,
-    #[serde(default)]
-    thresholds: Option<PackageGenerationThresholds>,
-    #[serde(default)]
-    speculative_decoding: Option<PackageSpeculativeDecoding>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PackageGenerationPolicy {
-    profile: String,
-    decode: String,
-    short_prefill: String,
-    long_prefill: String,
-    verify: String,
-    #[serde(default)]
-    indexshare: Option<String>,
-    #[serde(default)]
-    experimental: Option<PackageGenerationExperimentalPolicy>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PackageGenerationExperimentalPolicy {
-    #[serde(default)]
-    selected_row_flash: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PackageGenerationThresholds {
-    #[serde(default)]
-    short_prefill_max_tokens: Option<u32>,
-    #[serde(default)]
-    direct_sparse_decode_max_top_k: Option<u32>,
-    #[serde(default)]
-    compact_flash_min_kv: Option<u32>,
-    #[serde(default)]
-    dense_mask_max_bytes: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -544,7 +507,7 @@ fn validate_manifest_header(manifest: &PackageManifest, report: &mut PackagePref
 }
 
 fn validate_generation(
-    generation: Option<&PackageGeneration>,
+    generation: Option<&PackageGeneration<PackageSpeculativeDecoding>>,
     layer_count: u32,
     report: &mut PackagePreflightReport,
 ) {
@@ -1050,7 +1013,9 @@ fn validate_window_policy(
     }
 }
 
-fn preflight_generation(generation: &PackageGeneration) -> PreflightGeneration {
+fn preflight_generation(
+    generation: &PackageGeneration<PackageSpeculativeDecoding>,
+) -> PreflightGeneration {
     PreflightGeneration {
         policy: generation.policy.as_ref().map(preflight_generation_policy),
         thresholds: generation

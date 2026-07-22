@@ -8,6 +8,16 @@ use model_ref::split_gguf_shard_info;
 use serde::{Deserialize, Serialize};
 use skippy_runtime::ModelInfo;
 
+use crate::generation_manifest::{
+    GLM_DSA_COMPACT_FLASH_MIN_KV, GLM_DSA_DENSE_MASK_MAX_BYTES,
+    GLM_DSA_DIRECT_SPARSE_DECODE_MAX_TOP_K, GLM_DSA_POLICY_DECODE, GLM_DSA_POLICY_INDEXSHARE,
+    GLM_DSA_POLICY_LONG_PREFILL, GLM_DSA_POLICY_PROFILE, GLM_DSA_POLICY_SELECTED_ROW_FLASH,
+    GLM_DSA_POLICY_SHORT_PREFILL, GLM_DSA_POLICY_VERIFY, GLM_DSA_SHORT_PREFILL_MAX_TOKENS,
+    PackageGeneration, PackageGenerationThresholds,
+};
+#[cfg(test)]
+use crate::generation_manifest::{PackageGenerationExperimentalPolicy, PackageGenerationPolicy};
+
 const MAX_GGUF_STRING_BYTES: u64 = 1_000_000;
 const MAX_GGUF_ARRAY_ELEMENTS: u64 = 1_000_000;
 const MAX_GGUF_ARRAY_DEPTH: usize = 64;
@@ -82,18 +92,6 @@ const NEXTN_TENSORS: &[&str] = &[
     "nextn.hnorm.weight",
 ];
 
-const GLM_DSA_POLICY_PROFILE: &str = "glm-dsa-v1";
-const GLM_DSA_POLICY_DECODE: &str = "compact-flash";
-const GLM_DSA_POLICY_SHORT_PREFILL: &str = "dense";
-const GLM_DSA_POLICY_LONG_PREFILL: &str = "sparse-chunked";
-const GLM_DSA_POLICY_VERIFY: &str = "auto";
-const GLM_DSA_POLICY_INDEXSHARE: &str = "required";
-const GLM_DSA_POLICY_SELECTED_ROW_FLASH: &str = "evidence-gated";
-const GLM_DSA_SHORT_PREFILL_MAX_TOKENS: u32 = 2048;
-const GLM_DSA_DIRECT_SPARSE_DECODE_MAX_TOP_K: u32 = 256;
-const GLM_DSA_COMPACT_FLASH_MIN_KV: u32 = 1;
-const GLM_DSA_DENSE_MASK_MAX_BYTES: u64 = 256 * 1024 * 1024;
-
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct GlmDsaContractOptions {
     pub(crate) require_generation_policy: bool,
@@ -165,45 +163,6 @@ struct ContractInput {
 struct PackageManifest {
     #[serde(default)]
     generation: Option<PackageGeneration>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PackageGeneration {
-    #[serde(default)]
-    policy: Option<PackageGenerationPolicy>,
-    #[serde(default)]
-    thresholds: Option<PackageGenerationThresholds>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PackageGenerationPolicy {
-    profile: String,
-    decode: String,
-    short_prefill: String,
-    long_prefill: String,
-    verify: String,
-    #[serde(default)]
-    indexshare: Option<String>,
-    #[serde(default)]
-    experimental: Option<PackageGenerationExperimentalPolicy>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PackageGenerationExperimentalPolicy {
-    #[serde(default)]
-    selected_row_flash: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PackageGenerationThresholds {
-    #[serde(default)]
-    short_prefill_max_tokens: Option<u32>,
-    #[serde(default)]
-    direct_sparse_decode_max_top_k: Option<u32>,
-    #[serde(default)]
-    compact_flash_min_kv: Option<u32>,
-    #[serde(default)]
-    dense_mask_max_bytes: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -512,6 +471,7 @@ fn validate_metadata(metadata: &GgufMetadata, report: &mut GlmDsaContractReport)
             report.metadata_errors.push(format!("missing {key}"));
         }
     }
+    validate_cross_field_metadata(metadata, report);
 
     let Some(block_count) = metadata.u32s.get("glm-dsa.block_count").copied() else {
         return;
@@ -574,6 +534,27 @@ fn validate_metadata(metadata: &GgufMetadata, report: &mut GlmDsaContractReport)
             "missing IndexShare role metadata; expected indexer.types or top_k_frequency/skip_top_k_offset"
                 .to_string(),
         );
+    }
+}
+
+fn validate_cross_field_metadata(metadata: &GgufMetadata, report: &mut GlmDsaContractReport) {
+    if let (Some(indexer_key_length), Some(rope_dimension_count)) = (
+        metadata.u32s.get("glm-dsa.attention.indexer.key_length"),
+        metadata.u32s.get("glm-dsa.rope.dimension_count"),
+    ) && indexer_key_length <= rope_dimension_count
+    {
+        report.metadata_errors.push(format!(
+            "glm-dsa.attention.indexer.key_length {indexer_key_length} must be greater than glm-dsa.rope.dimension_count {rope_dimension_count}"
+        ));
+    }
+    if let (Some(expert_used_count), Some(expert_count)) = (
+        metadata.u32s.get("glm-dsa.expert_used_count"),
+        metadata.u32s.get("glm-dsa.expert_count"),
+    ) && expert_used_count > expert_count
+    {
+        report.metadata_errors.push(format!(
+            "glm-dsa.expert_used_count {expert_used_count} must not exceed glm-dsa.expert_count {expert_count}"
+        ));
     }
 }
 
@@ -657,6 +638,7 @@ fn validate_decoder_layer(
     for suffix in BASE_LAYER_TENSORS {
         require_layer_tensor(tensors, layer, suffix, &mut report.tensor_errors);
     }
+    reject_unsplit_kv_b(tensors, layer, &mut report.tensor_errors);
 
     if layer < dense_lead {
         for suffix in DENSE_FFN_TENSORS {
@@ -706,6 +688,7 @@ fn validate_mtp_layers(
         for suffix in BASE_LAYER_TENSORS {
             require_layer_tensor(tensors, layer, suffix, &mut report.tensor_errors);
         }
+        reject_unsplit_kv_b(tensors, layer, &mut report.tensor_errors);
         for suffix in MOE_LAYER_TENSORS {
             require_layer_tensor(tensors, layer, suffix, &mut report.tensor_errors);
         }
@@ -720,6 +703,14 @@ fn validate_mtp_layers(
                 INDEXER_TENSORS.len()
             ));
         }
+    }
+}
+
+fn reject_unsplit_kv_b(tensors: &BTreeSet<String>, layer: u32, errors: &mut Vec<String>) {
+    if tensors.contains(&format!("blk.{layer}.attn_kv_b.weight")) {
+        errors.push(format!(
+            "blk.{layer} has stale unsplit attn_kv_b.weight; GLM-DSA sparse attention requires split attn_k_b/attn_v_b only"
+        ));
     }
 }
 
@@ -1269,6 +1260,64 @@ mod tests {
     }
 
     #[test]
+    fn rejects_indexer_key_length_not_greater_than_rope_dimension() {
+        let mut input = mock_input(false);
+        input
+            .metadata
+            .u32s
+            .insert("glm-dsa.attention.indexer.key_length".to_string(), 128);
+        input
+            .metadata
+            .u32s
+            .insert("glm-dsa.rope.dimension_count".to_string(), 128);
+
+        let report = validate_contract(input, GlmDsaContractOptions::default());
+
+        assert!(!report.valid);
+        assert!(report.metadata_errors.iter().any(|error| {
+            error.contains("indexer.key_length 128 must be greater than")
+                && error.contains("rope.dimension_count 128")
+        }));
+    }
+
+    #[test]
+    fn rejects_expert_used_count_above_expert_count() {
+        let mut input = mock_input(false);
+        input
+            .metadata
+            .u32s
+            .insert("glm-dsa.expert_count".to_string(), 8);
+        input
+            .metadata
+            .u32s
+            .insert("glm-dsa.expert_used_count".to_string(), 9);
+
+        let report = validate_contract(input, GlmDsaContractOptions::default());
+
+        assert!(!report.valid);
+        assert!(report.metadata_errors.iter().any(|error| {
+            error.contains("expert_used_count 9 must not exceed")
+                && error.contains("expert_count 8")
+        }));
+    }
+
+    #[test]
+    fn rejects_stale_unsplit_kv_b_tensor() {
+        let mut input = mock_input(false);
+        input.tensors.insert("blk.1.attn_kv_b.weight".to_string());
+
+        let report = validate_contract(input, GlmDsaContractOptions::default());
+
+        assert!(!report.valid);
+        assert!(
+            report
+                .tensor_errors
+                .iter()
+                .any(|error| { error.contains("blk.1 has stale unsplit attn_kv_b.weight") })
+        );
+    }
+
+    #[test]
     fn rejects_partial_indexer_group() {
         let input = mock_input(true);
         let report = validate_contract(input, GlmDsaContractOptions::default());
@@ -1544,6 +1593,9 @@ mod tests {
             metadata.u32s.insert((*key).to_string(), 1);
         }
         metadata
+            .u32s
+            .insert("glm-dsa.attention.indexer.key_length".to_string(), 2);
+        metadata
             .f32s
             .insert("glm-dsa.attention.layer_norm_rms_epsilon".to_string(), 1e-5);
         metadata
@@ -1574,6 +1626,7 @@ mod tests {
                 compact_flash_min_kv: Some(GLM_DSA_COMPACT_FLASH_MIN_KV),
                 dense_mask_max_bytes: Some(GLM_DSA_DENSE_MASK_MAX_BYTES),
             }),
+            speculative_decoding: None,
         }
     }
 

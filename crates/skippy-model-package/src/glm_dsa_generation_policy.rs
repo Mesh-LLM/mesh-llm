@@ -5,19 +5,13 @@ use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::generation_manifest::{
+    GLM_DSA_COMPACT_FLASH_MIN_KV, GLM_DSA_DENSE_MASK_MAX_BYTES,
+    GLM_DSA_DIRECT_SPARSE_DECODE_MAX_TOP_K, GLM_DSA_POLICY_DECODE, GLM_DSA_POLICY_INDEXSHARE,
+    GLM_DSA_POLICY_LONG_PREFILL, GLM_DSA_POLICY_PROFILE, GLM_DSA_POLICY_SELECTED_ROW_FLASH,
+    GLM_DSA_POLICY_SHORT_PREFILL, GLM_DSA_POLICY_VERIFY, GLM_DSA_SHORT_PREFILL_MAX_TOKENS,
+};
 use crate::glm_dsa_contract::{self, GlmDsaContractOptions, GlmDsaContractReport};
-
-const GLM_DSA_POLICY_PROFILE: &str = "glm-dsa-v1";
-const GLM_DSA_POLICY_DECODE: &str = "compact-flash";
-const GLM_DSA_POLICY_SHORT_PREFILL: &str = "dense";
-const GLM_DSA_POLICY_LONG_PREFILL: &str = "sparse-chunked";
-const GLM_DSA_POLICY_VERIFY: &str = "auto";
-const GLM_DSA_POLICY_INDEXSHARE: &str = "required";
-const GLM_DSA_POLICY_SELECTED_ROW_FLASH: &str = "evidence-gated";
-const GLM_DSA_SHORT_PREFILL_MAX_TOKENS: u32 = 2048;
-const GLM_DSA_DIRECT_SPARSE_DECODE_MAX_TOP_K: u32 = 256;
-const GLM_DSA_COMPACT_FLASH_MIN_KV: u32 = 1;
-const GLM_DSA_DENSE_MASK_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 struct GlmDsaGenerationPolicyRepairOutput {
