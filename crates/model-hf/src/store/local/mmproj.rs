@@ -230,18 +230,11 @@ mod tests {
 
     #[test]
     fn mmproj_path_prefers_bf16_generic_precision_variants() {
-        let temp = std::env::temp_dir().join(format!(
-            "mesh-llm-mmproj-precision-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&temp).unwrap();
-        let model = temp.join("Qwen3.5-0.8B-Q4_K_M.gguf");
-        let f32 = temp.join("mmproj-F32.gguf");
-        let f16 = temp.join("mmproj-F16.gguf");
-        let bf16 = temp.join("mmproj-BF16.gguf");
+        let temp = tempfile::tempdir().unwrap();
+        let model = temp.path().join("Qwen3.5-0.8B-Q4_K_M.gguf");
+        let f32 = temp.path().join("mmproj-F32.gguf");
+        let f16 = temp.path().join("mmproj-F16.gguf");
+        let bf16 = temp.path().join("mmproj-BF16.gguf");
         std::fs::write(&model, b"model").unwrap();
         std::fs::write(&f32, b"mmproj").unwrap();
         std::fs::write(&f16, b"mmproj").unwrap();
@@ -249,23 +242,14 @@ mod tests {
 
         let found = find_mmproj_path("Qwen3.5-0.8B-Q4_K_M", &model);
         assert_eq!(found.as_deref(), Some(bf16.as_path()));
-
-        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
     fn resolve_mmproj_path_prefers_explicit_override() {
-        let temp = std::env::temp_dir().join(format!(
-            "mesh-llm-mmproj-override-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&temp).unwrap();
-        let model = temp.join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
-        let sibling = temp.join("mmproj-sibling.gguf");
-        let explicit = temp.join("mmproj-explicit.gguf");
+        let temp = tempfile::tempdir().unwrap();
+        let model = temp.path().join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+        let sibling = temp.path().join("mmproj-sibling.gguf");
+        let explicit = temp.path().join("mmproj-explicit.gguf");
         std::fs::write(&model, b"model").unwrap();
         std::fs::write(&sibling, b"mmproj").unwrap();
         std::fs::write(&explicit, b"mmproj").unwrap();
@@ -276,8 +260,6 @@ mod tests {
             Some(explicit.as_path()),
         );
         assert_eq!(found.as_deref(), Some(explicit.as_path()));
-
-        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
@@ -285,50 +267,32 @@ mod tests {
         // When multiple named mmproj candidates exist (model-name prefix matches
         // both), quant-aware selection should pick the one whose filename contains
         // the same quantization as the model (Q4_K_M in this case).
-        let temp = std::env::temp_dir().join(format!(
-            "mesh-llm-mmproj-quant-named-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&temp).unwrap();
-        let model = temp.join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
-        let q4_mmproj = temp.join("mmproj-Qwen3VL-2B-Instruct-Q4_K_M.gguf");
-        let q8_mmproj = temp.join("mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf");
+        let temp = tempfile::tempdir().unwrap();
+        let model = temp.path().join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+        let q4_mmproj = temp.path().join("mmproj-Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+        let q8_mmproj = temp.path().join("mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf");
         std::fs::write(&model, b"model").unwrap();
         std::fs::write(&q4_mmproj, b"mmproj").unwrap();
         std::fs::write(&q8_mmproj, b"mmproj").unwrap();
 
         let found = find_mmproj_path("Qwen3VL-2B-Instruct-Q4_K_M", &model);
         assert_eq!(found.as_deref(), Some(q4_mmproj.as_path()));
-
-        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
     fn mmproj_path_prefers_quant_matched_generic_sibling() {
         // When there are no model-name-aware matches but the siblings include
         // a projector with the same quant as the model, select that one.
-        let temp = std::env::temp_dir().join(format!(
-            "mesh-llm-mmproj-quant-sibling-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&temp).unwrap();
-        let model = temp.join("my-model-Q4_K_M.gguf");
+        let temp = tempfile::tempdir().unwrap();
+        let model = temp.path().join("my-model-Q4_K_M.gguf");
         // Generic projector names without a matching model prefix
-        let q4_mmproj = temp.join("mmproj-Q4_K_M.gguf");
-        let q8_mmproj = temp.join("mmproj-Q8_0.gguf");
+        let q4_mmproj = temp.path().join("mmproj-Q4_K_M.gguf");
+        let q8_mmproj = temp.path().join("mmproj-Q8_0.gguf");
         std::fs::write(&model, b"model").unwrap();
         std::fs::write(&q4_mmproj, b"mmproj").unwrap();
         std::fs::write(&q8_mmproj, b"mmproj").unwrap();
 
         let found = find_mmproj_path("my-model-Q4_K_M", &model);
         assert_eq!(found.as_deref(), Some(q4_mmproj.as_path()));
-
-        let _ = std::fs::remove_dir_all(&temp);
     }
 }

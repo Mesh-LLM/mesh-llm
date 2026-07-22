@@ -56,7 +56,25 @@ test('top navigation stays on one row at every responsive breakpoint', async ({ 
     await expect
       .poll(async () => {
         const metrics = await readTopNavMetrics(page)
-        return metrics.headerHeight <= 60 && metrics.controlTopSpread <= 3 && !metrics.horizontalOverflow
+        let responsiveControlsReady: boolean
+        if (width < 768) {
+          responsiveControlsReady = !metrics.apiTargetVisible && metrics.actionsMenuVisible
+        } else if (width < 1024) {
+          responsiveControlsReady = metrics.apiTargetVisible && metrics.actionsMenuVisible
+        } else {
+          responsiveControlsReady =
+            metrics.apiTargetVisible &&
+            !metrics.actionsMenuVisible &&
+            metrics.joinButtonVisible &&
+            metrics.themeButtonVisible
+        }
+
+        return (
+          metrics.headerHeight <= 60 &&
+          metrics.controlTopSpread <= 3 &&
+          !metrics.horizontalOverflow &&
+          responsiveControlsReady
+        )
       })
       .toBe(true)
 

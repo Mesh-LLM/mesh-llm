@@ -49,13 +49,28 @@ fn build_output(fp32: Option<f64>, fp16: Option<f64>) -> BenchmarkOutput {
     }
 }
 
+struct BenchmarkChildOverrideGuard;
+
+impl Drop for BenchmarkChildOverrideGuard {
+    fn drop(&mut self) {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(BENCHMARK_CHILD_ENV) };
+    }
+}
+
 fn with_benchmark_child_override<T>(path: &Path, f: impl FnOnce() -> T) -> T {
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(BENCHMARK_CHILD_ENV, path) };
-    let result = f();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var(BENCHMARK_CHILD_ENV) };
-    result
+    let _guard = BenchmarkChildOverrideGuard;
+    f()
+}
+
+fn unique_temp_json_path(stem: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    std::env::temp_dir().join(format!("{stem}-{}-{nanos}.json", std::process::id()))
 }
 
 #[cfg(unix)]
@@ -319,7 +334,7 @@ fn test_hardware_changed_gpu_name() {
 // 14. Cache round-trip: save → load → hardware_changed returns false for same hw
 #[test]
 fn test_fingerprint_cache_roundtrip() {
-    let path = std::env::temp_dir().join("mesh-llm-test-fingerprint-roundtrip.json");
+    let path = unique_temp_json_path("mesh-llm-test-fingerprint-roundtrip");
     let fp = make_fingerprint(
         vec![GpuBandwidth {
             name: "NVIDIA A100".into(),
@@ -344,7 +359,7 @@ fn test_fingerprint_cache_roundtrip() {
 
 #[test]
 fn test_try_save_fingerprint_overwrites_existing_cache() {
-    let path = std::env::temp_dir().join("mesh-llm-test-fingerprint-overwrite.json");
+    let path = unique_temp_json_path("mesh-llm-test-fingerprint-overwrite");
     std::fs::write(&path, "stale").expect("seed existing cache");
 
     let fp = make_fingerprint(
@@ -549,7 +564,7 @@ fn test_old_cache_format_fails_parse() {
         "p50_gbps": 1935.2,
         "timestamp_secs": 1700000000
     }"#;
-    let path = std::env::temp_dir().join("mesh-llm-test-fingerprint-old-format.json");
+    let path = unique_temp_json_path("mesh-llm-test-fingerprint-old-format");
     std::fs::write(&path, old_json).expect("write should succeed");
     let result = load_fingerprint(&path);
     let _ = std::fs::remove_file(&path);
@@ -721,7 +736,7 @@ fn test_old_fingerprint_cache_loads_without_tflops() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/pre-tops-fingerprint.json"
     ));
-    let path = std::env::temp_dir().join("mesh-llm-test-fingerprint-pre-tops.json");
+    let path = unique_temp_json_path("mesh-llm-test-fingerprint-pre-tops");
     std::fs::write(&path, json).expect("write should succeed");
 
     let fingerprint = load_fingerprint(&path).expect("old-format fingerprint should parse");
