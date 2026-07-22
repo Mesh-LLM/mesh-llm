@@ -214,11 +214,15 @@ same core toolchain:
   `mesh-llm-arm64` K3s scale sets. Jobs targeting these labels run directly in
   that pod and must not wrap it in a second job container.
 
-Production workflows and Flux resources should consume an immutable timestamp,
-source-revision tag, or digest. Once pulled, unchanged image layers are reusable
-from the container runtime's cache. This removes repeated operating-system
-package installation from the job path and reduces failures caused by package
-mirrors, repository metadata, transient downloads, or host drift.
+Production workflows and Flux resources must pin the multi-architecture OCI
+digest, using `ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:<digest>`. Timestamp,
+source-revision, and `*-latest` tags are discovery or evaluation inputs only;
+the registry publishing path does not enforce or document no-retag protection.
+Resolve the selected tag to its published digest before updating a production
+consumer. Once pulled, unchanged image layers are reusable from the container
+runtime's cache. This removes repeated operating-system package installation
+from the job path and reduces failures caused by package mirrors, repository
+metadata, transient downloads, or host drift.
 
 ARC pods benefit directly from the persistent image cache on each K3s node.
 GitHub-hosted runners may still start on a cold host and pull the image, so

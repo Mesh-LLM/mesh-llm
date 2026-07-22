@@ -43,9 +43,11 @@ reason about.
   the `public-*` variant through job-level `container:` on GitHub-hosted
   runners, and the `self-hosted-*` variant as the ARC runner pod image. Do not
   add another job container around an ARC runner pod.
-- Pin production consumers to an immutable image tag or digest. Floating
-  `public-latest` and `self-hosted-latest` tags are for evaluation and explicit
-  maintenance flows, not for silently changing the environment of required CI.
+- Pin production consumers by OCI digest, for example
+  `ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:<digest>`. Tags, including
+  timestamp, source-revision, `public-latest`, and `self-hosted-latest`, are
+  discovery or evaluation inputs only; resolve them to the published
+  multi-architecture digest before updating required CI or Flux resources.
 - **Never resolve a missing CI dependency by adding an ad hoc installer to an
   individual workflow.** Do not add new `apt-get install`, `pip install`,
   `npm install --global`, `cargo install`, downloaded binaries, setup scripts,

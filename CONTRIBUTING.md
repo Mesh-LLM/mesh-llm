@@ -177,8 +177,8 @@ cached image layers where the runner host or K3s node retains them instead of
 reinstalling host packages in every job.
 
 If CI is missing a dependency, update the appropriate MeshLLM manifest and
-lockfile or the runner image's YAML profile/installer, then publish and pin a
-new runner image. Do not add a one-off `apt-get`, `pip`, global `npm`,
+lockfile or the runner image's YAML profile/installer, then publish the image
+and pin its OCI digest. Do not add a one-off `apt-get`, `pip`, global `npm`,
 `cargo install`, downloaded binary, or similar setup step to an individual
 workflow. Existing workflow-local setup is migration debt, not a pattern for
 new jobs.

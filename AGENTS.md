@@ -496,8 +496,8 @@ every job.
   manifest and lockfile here. If CI needs a shared operating-system package,
   compiler, CLI, or runner capability, update `profiles/common.yml`,
   `profiles/public.yml`, `profiles/self-hosted.yml`, or the owning installer in
-  `mesh-llm-runner-images`, then publish and consume a new immutable image tag
-  or digest.
+  `mesh-llm-runner-images`, then publish the image and pin its multi-architecture
+  OCI digest in production consumers.
 - Workflow steps should install only the repository dependencies declared by
   the checked-in manifests (for example `cargo`, `pnpm`, or `npm` locked
   installs). The runner-image build reads those manifests and warms their
