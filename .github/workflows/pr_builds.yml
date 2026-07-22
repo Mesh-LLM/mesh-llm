@@ -40,6 +40,7 @@ jobs:
       affected_crates: ${{ steps.compute.outputs.affected_crates }}
       test_crates: ${{ steps.compute.outputs.test_crates }}
       batches_json: ${{ steps.compute.outputs.batches_json }}
+      test_batches_json: ${{ steps.compute.outputs.test_batches_json }}
       all_rust: ${{ steps.compute.outputs.all_rust }}
       docs_only: ${{ steps.compute.outputs.docs_only }}
       rust_changed: ${{ steps.compute.outputs.rust_changed }}
@@ -423,6 +424,73 @@ jobs:
             echo "::warning::sccache reported zero compile requests; check RUSTC_WRAPPER wiring if this was not a fully reused target cache."
           fi
 
+  rust_crate_tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.rust_changed == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    name: Rust crate tests (${{ matrix.batch.idx }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: ${{ fromJson(needs.changes.outputs.test_batches_json) }}
+    env:
+      LLAMA_STAGE_BACKEND: cpu
+      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
+      MESH_LLM_SKIP_UI: "1"
+      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake jq ninja-build pkg-config libssl-dev libdbus-1-dev lld
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: pr-rust-crate-tests-${{ matrix.batch.idx }}
+          save-if: "false"
+      - name: Prepare UI placeholder
+        run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
+      - name: Prepare patched llama.cpp source checkout
+        if: ${{ contains(matrix.batch.crates, 'skippy-quantize') }}
+        run: scripts/prepare-llama.sh pinned
+      - name: Ensure ABI cache directory
+        run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
+      - name: Cache patched llama.cpp ABI build
+        id: rust_tests_llama_cache
+        uses: actions/cache@v5
+        with:
+          path: .deps/llama.cpp/build-stage-abi-static
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-abi-cpu-${{ hashFiles('scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
+      - name: Prepare patched llama.cpp ABI checkout
+        if: ${{ steps.rust_tests_llama_cache.outputs.cache-hit != 'true' }}
+        run: scripts/prepare-llama.sh pinned
+      - name: Build patched llama.cpp ABI libraries
+        if: ${{ steps.rust_tests_llama_cache.outputs.cache-hit != 'true' }}
+        run: scripts/build-llama.sh
+      - name: Run crate tests
+        env:
+          TEST_CRATES: ${{ toJson(matrix.batch.crates) }}
+        run: |
+          mapfile -t crates < <(jq -r '.[]' <<<"$TEST_CRATES")
+          for crate in "${crates[@]}"; do
+            echo "::group::cargo test -p $crate"
+            cargo test -p "$crate"
+            echo "::endgroup::"
+          done
+      - name: Show sccache stats
+        if: ${{ always() }}
+        run: sccache --show-stats || true
+
   linux_test_groups:
     needs: [changes, linux_cpu_artifact]
     if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.linux_inference_artifact_required == 'true' }}
@@ -437,12 +505,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - group: sdk-api
-            cache_key: linux-tests-sdk-api
-          - group: skippy
-            cache_key: linux-tests-skippy
-          - group: unit
-            cache_key: linux-tests-unit
           - group: protocol
             cache_key: linux-tests-protocol
           - group: skippy-smoke
@@ -532,66 +594,6 @@ jobs:
           key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-ci-smoke-models-SmolLM2-135M-Instruct.Q4_K_M.gguf-Falcon-H1-0.5B-Instruct-Q4_K_M.gguf-${{ hashFiles('.github/cache-version.txt') }}
           restore-keys: |
             ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-ci-smoke-models-
-
-      - name: SDK and API crate tests
-        if: ${{ matrix.group == 'sdk-api' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-config') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-commands') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-events') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-hardware-profile') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-runtime-install') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-native-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-routing') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-types') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-sdk') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-cli') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-tui') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-embedded-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-console-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-ffi') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-nodejs')) }}
-        run: |
-          should_test() {
-            local crate="$1"
-            [ "$ALL_RUST" = "true" ] || jq -e --arg crate "$crate" 'index($crate) != null' <<<"$AFFECTED" >/dev/null
-          }
-
-          for c in mesh-llm-client mesh-llm-api-client mesh-llm-api-server mesh-llm-config mesh-llm-commands mesh-llm-events mesh-llm-hardware-profile mesh-llm-runtime-install mesh-llm-native-runtime mesh-llm-routing mesh-llm-types mesh-llm-cli mesh-llm-tui mesh-llm-embedded-runtime mesh-llm-sdk mesh-llm-console-server mesh-llm-ffi mesh-llm-nodejs; do
-            if should_test "$c"; then
-              cargo test -p "$c"
-            else
-              echo "Skipping $c; not affected"
-            fi
-          done
-
-      - name: Skippy crate tests
-        if: ${{ matrix.group == 'skippy' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-protocol') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'openai-frontend') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-topology') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-model-package') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-prompt') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'metrics-server')) }}
-        run: |
-          should_test() {
-            local crate="$1"
-            [ "$ALL_RUST" = "true" ] || jq -e --arg crate "$crate" 'index($crate) != null' <<<"$AFFECTED" >/dev/null
-          }
-
-          flags_for() {
-            case "$1" in
-              skippy-protocol|skippy-server|openai-frontend) printf '%s' '--lib' ;;
-              *) printf '%s' '' ;;
-            esac
-          }
-
-          for c in skippy-protocol skippy-server openai-frontend skippy-runtime skippy-topology skippy-model-package skippy-prompt metrics-server; do
-            if should_test "$c"; then
-              extra_flag="$(flags_for "$c")"
-              if [ -n "$extra_flag" ]; then
-                cargo test -p "$c" "$extra_flag"
-              else
-                cargo test -p "$c"
-              fi
-            else
-              echo "Skipping $c; not affected"
-            fi
-          done
-
-      - name: Unit tests
-        if: ${{ matrix.group == 'unit' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-host-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm')) }}
-        run: |
-          should_test() {
-            local crate="$1"
-            [ "$ALL_RUST" = "true" ] || jq -e --arg crate "$crate" 'index($crate) != null' <<<"$AFFECTED" >/dev/null
-          }
-
-          for c in model-artifact mesh-llm-host-runtime mesh-llm; do
-            if should_test "$c"; then
-              cargo test -p "$c" --lib
-            else
-              echo "Skipping $c; not affected"
-            fi
-          done
 
       - name: Protocol compatibility matrix
         if: ${{ matrix.group == 'protocol' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-protocol')) }}

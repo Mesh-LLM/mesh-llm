@@ -1,4 +1,4 @@
-import { devices, expect, test, type Page } from '@playwright/test'
+import { devices, expect, test, type Page } from '../fixtures/base'
 import { DATA_MODE_STORAGE_KEY } from '@e2e/support/data-mode'
 
 const API_ORIGIN = 'http://127.0.0.1:3131'

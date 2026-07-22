@@ -340,7 +340,7 @@ mod tests {
 
         assert!(is_timeout_error(&error), "unexpected error: {error:#}");
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_probe_http_response_local_tolerates_slow_first_byte() {
         use tokio::io::AsyncWriteExt;
 

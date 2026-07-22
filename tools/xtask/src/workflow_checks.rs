@@ -5,6 +5,7 @@ use crate::command::{
 use crate::repo_consistency::{script_workspace_members, workspace_package_names};
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 pub(crate) fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     let readme = fs::read_to_string(repo_root.join("README.md"))?;
@@ -377,7 +378,7 @@ pub(crate) fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<
     )?;
     check_release_dispatch_version_preparation(&release_workflow)?;
     check_release_container_safe_directories(&release_workflow)?;
-    check_ci_crate_test_coverage(&pr_builds_workflow)?;
+    check_ci_crate_test_coverage(&ci_workflow, &pr_builds_workflow, &compute_changes_action)?;
 
     Ok(())
 }
@@ -493,79 +494,98 @@ fn check_windows_abi_cache_key_alignment(
     Ok(())
 }
 
-fn check_ci_crate_test_coverage(ci_workflow: &str) -> DynResult<()> {
-    const REQUIRED_TEST_CRATES: &[(&str, &str)] = &[
-        ("mesh-llm-client", "mesh client crate tests"),
-        ("mesh-llm-api-client", "mesh LLM client API crate tests"),
-        ("mesh-llm-api-server", "mesh LLM API crate tests"),
-        ("mesh-llm-config", "mesh LLM config crate tests"),
-        ("mesh-llm-commands", "mesh LLM command handler crate tests"),
-        ("mesh-llm-events", "mesh LLM events crate tests"),
-        (
-            "mesh-llm-hardware-profile",
-            "mesh LLM hardware profile crate tests",
-        ),
-        (
-            "mesh-llm-runtime-install",
-            "mesh LLM runtime install crate tests",
-        ),
-        (
-            "mesh-llm-native-runtime",
-            "mesh LLM native runtime crate tests",
-        ),
-        ("mesh-llm-routing", "mesh LLM routing crate tests"),
-        ("mesh-llm-types", "mesh LLM shared types crate tests"),
-        ("mesh-llm-cli", "mesh LLM CLI crate tests"),
-        ("mesh-llm-tui", "mesh LLM TUI crate tests"),
-        (
-            "mesh-llm-embedded-runtime",
-            "mesh LLM embedded runtime crate tests",
-        ),
-        ("mesh-llm-sdk", "mesh LLM Rust SDK crate tests"),
-        (
-            "mesh-llm-console-server",
-            "mesh LLM console server crate tests",
-        ),
-        ("mesh-llm-ffi", "mesh LLM FFI crate tests"),
-        ("mesh-llm-nodejs", "mesh LLM Node.js crate tests"),
-        ("skippy-protocol", "skippy protocol crate tests"),
-        ("skippy-server", "skippy server crate tests"),
-        ("openai-frontend", "OpenAI frontend crate tests"),
-        ("skippy-runtime", "skippy runtime crate tests"),
-        ("skippy-topology", "skippy topology crate tests"),
-        ("skippy-model-package", "skippy model-package crate tests"),
-        ("skippy-prompt", "skippy prompt crate tests"),
-        ("metrics-server", "metrics server crate tests"),
-    ];
-    const LIB_ONLY_CRATE_PATTERN: &str = "skippy-protocol|skippy-server|openai-frontend)";
+fn check_ci_crate_test_coverage(
+    ci_workflow: &str,
+    pr_builds_workflow: &str,
+    compute_changes_action: &str,
+) -> DynResult<()> {
+    ensure_contains(
+        compute_changes_action,
+        "TEST_BATCHES=$(bash scripts/plan-test-batches.sh --all --bins 4)",
+        "all-workspace Cargo test batch planning",
+    )?;
+    ensure_contains(
+        compute_changes_action,
+        "if [[ \"${{ inputs.event_name }}\" != \"pull_request\" ]] || [[ \"$ALL_RUST\" == \"true\" ]]; then",
+        "main and dispatch exhaustive Cargo test routing",
+    )?;
+    ensure_contains(
+        compute_changes_action,
+        "TEST_BATCHES=$(bash scripts/plan-test-batches.sh --crates-json \"$AFFECTED_CRATES\" --bins 4)",
+        "affected-crate Cargo test batch planning",
+    )?;
+    ensure_contains(
+        compute_changes_action,
+        "echo \"test_batches_json=$TEST_BATCHES\"",
+        "Cargo test batch output",
+    )?;
 
-    ensure_contains(
-        ci_workflow,
-        "cargo test -p \"$c\"",
-        "CI dynamic crate test command",
-    )?;
-    ensure_contains(
-        ci_workflow,
-        "for c in mesh-llm-client mesh-llm-api-client mesh-llm-api-server mesh-llm-config mesh-llm-commands mesh-llm-events mesh-llm-hardware-profile mesh-llm-runtime-install mesh-llm-native-runtime mesh-llm-routing mesh-llm-types mesh-llm-cli mesh-llm-tui mesh-llm-embedded-runtime mesh-llm-sdk mesh-llm-console-server mesh-llm-ffi mesh-llm-nodejs; do",
-        "CI SDK/API crate test loop",
-    )?;
-    ensure_contains(
-        ci_workflow,
-        "for c in skippy-protocol skippy-server openai-frontend skippy-runtime skippy-topology skippy-model-package skippy-prompt metrics-server; do",
-        "CI Skippy crate test loop",
-    )?;
-    ensure_contains(
-        ci_workflow,
-        LIB_ONLY_CRATE_PATTERN,
-        "CI lib-only crate test flag selector",
-    )?;
-    ensure_contains(ci_workflow, "--lib", "CI lib-only crate test flag")?;
-
-    for (crate_name, context) in REQUIRED_TEST_CRATES {
-        ensure_contains(ci_workflow, crate_name, &format!("CI {context}"))?;
+    for (workflow, context) in [(ci_workflow, "main CI"), (pr_builds_workflow, "PR Builds")] {
+        ensure_contains(
+            workflow,
+            "test_batches_json: ${{ steps.compute.outputs.test_batches_json }}",
+            &format!("{context} test batch output"),
+        )?;
+        ensure_contains(
+            workflow,
+            "rust_crate_tests:",
+            &format!("{context} Rust crate test job"),
+        )?;
+        ensure_contains(
+            workflow,
+            "batch: ${{ fromJson(needs.changes.outputs.test_batches_json) }}",
+            &format!("{context} Rust crate test matrix"),
+        )?;
+        ensure_contains(
+            workflow,
+            "cargo test -p \"$crate\"",
+            &format!("{context} per-crate test command"),
+        )?;
     }
 
     Ok(())
+}
+
+pub(crate) fn check_ci_crate_test_coverage_files(repo_root: &Path) -> DynResult<()> {
+    let ci_workflow = fs::read_to_string(repo_root.join(".github/workflows/ci.yml"))?;
+    let pr_builds_workflow = fs::read_to_string(repo_root.join(".github/workflows/pr_builds.yml"))?;
+    let compute_changes_action =
+        fs::read_to_string(repo_root.join(".github/actions/compute-changes/action.yml"))?;
+    check_ci_crate_test_coverage(&ci_workflow, &pr_builds_workflow, &compute_changes_action)?;
+    check_test_batch_planner_covers_workspace(repo_root)
+}
+
+fn check_test_batch_planner_covers_workspace(repo_root: &Path) -> DynResult<()> {
+    let output = Command::new("bash")
+        .current_dir(repo_root)
+        .args(["scripts/plan-test-batches.sh", "--all", "--bins", "4"])
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "test batch planner failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+
+    let batches: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let mut actual = std::collections::BTreeSet::new();
+    for crate_name in batches
+        .as_array()
+        .ok_or("test batch planner output must be an array")?
+        .iter()
+        .flat_map(|batch| batch["crates"].as_array().into_iter().flatten())
+    {
+        let crate_name = crate_name
+            .as_str()
+            .ok_or("test batch planner crate names must be strings")?;
+        if !actual.insert(crate_name.to_owned()) {
+            return Err(format!("test batch planner duplicated crate `{crate_name}`").into());
+        }
+    }
+
+    let expected = workspace_package_names(repo_root)?;
+    ensure_set_eq(&expected, &actual, "Cargo test batch workspace coverage")
 }
 
 pub(crate) fn check_ci_script_workspace_members(repo_root: &Path) -> DynResult<()> {

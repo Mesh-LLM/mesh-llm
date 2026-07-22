@@ -39,6 +39,17 @@ Local actions:
   model restoration for smoke consumers.
 - `.github/actions/setup-windows-rocm-sdk` owns reusable Windows ROCm setup.
 
+Routing and test-planning scripts:
+
+- `scripts/affected-crates.sh` computes affected crates and reverse dependents.
+- `scripts/plan-clippy-batches.sh` owns weighted Clippy sharding and retains a
+  checked workspace-member list for fail-open/all-rust planning.
+- `scripts/plan-test-batches.sh` owns weighted crate-test sharding. It derives
+  workspace membership from `cargo metadata`; new crates must not be added to a
+  workflow-owned test allowlist.
+- `scripts/test-portable.sh` owns the portable non-Cargo test aggregate used by
+  the local `test-all` path.
+
 ## Runner and image contract
 
 GitHub-hosted labels currently used:

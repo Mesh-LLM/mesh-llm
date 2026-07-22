@@ -89,11 +89,16 @@ update the skill resources in the same change.
   benchmark, or SDK smoke lanes without a matching product input.
 - Keep Clippy sharding driven by `scripts/plan-clippy-batches.sh`; do not add
   hand-maintained static batches.
+- Keep crate-test sharding driven by `scripts/plan-test-batches.sh`. It derives
+  workspace membership from `cargo metadata`; do not add a workflow-owned test
+  crate allowlist. Pull requests test affected crates and reverse dependents;
+  main and manual dispatch test every workspace member exactly once.
 - When adding, removing, renaming, or splitting a workspace crate, update
   `.github/actions/compute-changes`, `scripts/affected-crates.sh`,
   `scripts/plan-clippy-batches.sh`, Docker copy lists,
   `scripts/publish-crates.sh`, workflow crate lists, and xtask consistency
-  expectations together.
+  expectations together. Do not add new crates to `plan-test-batches.sh`; its
+  metadata-derived membership and default weight handle them automatically.
 - If a consumer downloads an artifact, its producer must be reachable in the
   same workflow graph under every matching condition. Use `needs` and explicit
   result checks; do not rely on job ordering by file position.
@@ -278,6 +283,8 @@ Also:
 - Run `shellcheck` on changed shell scripts and substantial extracted Bash.
 - Run `cargo run -p xtask -- repo-consistency ci-crate-lists` for PR routing,
   affected-crate, Clippy batch, workspace, or crate-list changes.
+  This also verifies that generated crate-test batches cover every workspace
+  member exactly once.
 - Run `cargo run -p xtask -- repo-consistency release-targets` for release
   target, packaging, Docker, or release-workflow changes.
 - Run `cargo run -p xtask -- repo-consistency publish-crates` for crate

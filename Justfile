@@ -391,6 +391,12 @@ test-all:
     #!/usr/bin/env bash
     set -euo pipefail
 
+    # A full workspace gate otherwise leaves hundreds of incompatible
+    # incremental feature graphs behind. CI already builds non-incrementally;
+    # use the same bounded-disk behavior here unless explicitly overridden.
+    export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+    dynamic_target_dir="${MESH_TEST_ALL_DYNAMIC_TARGET_DIR:-$PWD/target/test-all-dynamic}"
+
     native_backend="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-${LLAMA_BACKEND:-}}}"
     if [[ -z "$native_backend" ]]; then
         case "$(uname -s)" in
@@ -422,39 +428,35 @@ test-all:
     echo "=== GPU bench Rust feature check ==="
     MESH_LLM_GPU_BENCH_RUST_ONLY=1 just with-lld cargo check -p mesh-llm-gpu-bench --features cuda,hip,intel
     echo ""
-    echo "=== 3/10 Clippy ==="
-    clippy_crates=()
-    while IFS= read -r crate; do
-        clippy_crates+=("$crate")
-    done < <(bash scripts/plan-clippy-batches.sh --all --bins 1 | jq -r '.[].crates[]')
-    for crate in "${clippy_crates[@]}"; do
-        echo "--- $crate ---"
-        just with-lld cargo clippy -p "$crate" --all-targets -- -D warnings
-    done
-    echo ""
-    echo "=== 4/10 Rust tests ==="
-    echo "--- mesh-llm-plugin lib ---"
-    just with-lld cargo test -p mesh-llm-plugin --lib
-    echo "--- mesh-llm-plugin-manager lib ---"
-    just with-lld cargo test -p mesh-llm-plugin-manager --lib
-    echo "--- mesh-llm-config lib ---"
-    just with-lld cargo test -p mesh-llm-config --lib
-    echo "--- mesh-llm-cli lib ---"
-    just with-lld cargo test -p mesh-llm-cli --lib
-    echo "--- mesh-llm-commands lib ---"
-    just with-lld cargo test -p mesh-llm-commands --lib
-    echo "--- mesh-llm-host-runtime lib ---"
-    just with-lld cargo test -p mesh-llm-host-runtime --lib
-    echo "--- mesh-llm-console-server lib ---"
-    just with-lld cargo test -p mesh-llm-console-server --lib
-    echo "--- mesh-llm ---"
-    just with-lld cargo test -p mesh-llm
-    echo "--- mesh-llm-protocol ---"
-    just with-lld cargo test -p mesh-llm-protocol
-    echo "--- mesh-llm-client ---"
-    just with-lld cargo test -p mesh-llm-client
-    echo "--- skippy-runtime lib ---"
-    just with-lld cargo test -p skippy-runtime --lib
+    echo "=== 3-4/10 Rust validation ==="
+    # Keep Clippy and tests adjacent for each compatible feature graph. Switching
+    # dynamic -> static -> dynamic -> static forces Cargo to relink both graphs.
+    echo "--- Dynamic-runtime bindings: Clippy ---"
+    CARGO_TARGET_DIR="$dynamic_target_dir" just with-lld cargo clippy \
+        -p mesh-llm-ffi \
+        -p mesh-llm-nodejs \
+        -p skippy-ffi \
+        -p skippy-quantize \
+        --all-targets -- -D warnings
+    echo "--- Dynamic-runtime bindings: tests ---"
+    CARGO_TARGET_DIR="$dynamic_target_dir" just with-lld cargo test \
+        -p mesh-llm-ffi \
+        -p mesh-llm-nodejs \
+        -p skippy-ffi \
+        -p skippy-quantize
+    echo "--- Static development workspace: Clippy ---"
+    just with-lld cargo clippy --workspace --all-targets \
+        --exclude mesh-llm-ffi \
+        --exclude mesh-llm-nodejs \
+        --exclude skippy-ffi \
+        --exclude skippy-quantize \
+        -- -D warnings
+    echo "--- Static development workspace: tests ---"
+    just with-lld cargo test --workspace \
+        --exclude mesh-llm-ffi \
+        --exclude mesh-llm-nodejs \
+        --exclude skippy-ffi \
+        --exclude skippy-quantize
     echo ""
     echo "=== 5/10 Plugin author exemplar ==="
     just with-lld cargo run --quiet --manifest-path docs/plugins/exemplars/web-ui/Cargo.toml -- --print-package-manifest > target/web-ui-exemplar-manifest.json
@@ -462,61 +464,11 @@ test-all:
     node --check docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.js
     (cd "{{ ui_dir }}" && pnpm exec tsc --ignoreConfig --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --lib ES2022,DOM ../../docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.ts)
     echo ""
-    echo "=== 6/10 ESLint + Prettier ==="
-    (cd "{{ ui_dir }}" && pnpm run lint)
-    echo ""
-    echo "=== 7/10 UI type check (tsc) ==="
-    (cd "{{ ui_dir }}" && pnpm run typecheck)
-    echo ""
-    echo "=== 8/10 UI unit tests (vitest) ==="
-    (cd "{{ ui_dir }}" && pnpm test)
-    echo ""
-    echo "=== 9/10 UI and website production builds ==="
-    (cd "{{ ui_dir }}" && pnpm run build)
-    (cd "{{ website_dir }}" && npm run build)
+    echo "=== 6-9/10 Parallel portable checks and builds ==="
+    scripts/test-portable.sh
     echo ""
     echo "=== 10/10 E2E smoke tests (Playwright) ==="
-    if curl -sf http://127.0.0.1:3131/api/status >/dev/null 2>&1; then
-        (cd "{{ ui_dir }}" && pnpm run test:e2e)
-    else
-        echo "No server on port 3131 — starting UI dev server with public mesh..."
-
-        # Start dev server in background, capture PID tree for cleanup
-        MESH_UI_API_ORIGIN="https://public.meshllm.cloud" VITE_API_URL="https://public.meshllm.cloud" bash -c 'cd "{{ ui_dir }}" && pnpm exec vite --host 0.0.0.0 --port 5173' &
-        DEV_PID=$!
-
-        # Wait for dev server to be ready (up to 30s)
-        READY=false
-        for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:5173/ >/dev/null 2>&1; then
-                READY=true
-                break
-            fi
-            sleep 1
-        done
-
-        # Cleanup function - always stop the dev server
-        cleanup_dev() {
-            kill $DEV_PID 2>/dev/null || true
-            wait $DEV_PID >/dev/null 2>&1 || true
-        }
-
-        if [ "$READY" = true ]; then
-            if (cd "{{ ui_dir }}" && PLAYWRIGHT_PORT=5173 pnpm run test:e2e e2e/smoke/home.spec.ts e2e/smoke/topnav-responsive.spec.ts); then
-                E2E_EXIT=0
-            else
-                E2E_EXIT=$?
-            fi
-            cleanup_dev
-            echo "Stopped UI dev server."
-
-            exit $E2E_EXIT
-        else
-            cleanup_dev
-            echo "ERROR: UI dev server didn't start in time; E2E validation did not run."
-            exit 1
-        fi
-    fi
+    (cd "{{ ui_dir }}" && pnpm run test:e2e)
     echo ""
     echo "All checks passed."
 

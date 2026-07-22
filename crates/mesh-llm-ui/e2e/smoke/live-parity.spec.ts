@@ -1,4 +1,4 @@
-import { expect, test, type Page, type TestInfo } from '@playwright/test'
+import { expect, test, type Page, type TestInfo } from '../fixtures/base'
 import { DATA_MODE_STORAGE_KEY } from '@e2e/support/data-mode'
 
 const API_ORIGIN = 'http://127.0.0.1:3131'
@@ -157,7 +157,7 @@ async function installLiveBackend(page: Page, scenario: BackendScenario = {}) {
         const request = input instanceof Request ? input : new Request(input, init)
         const url = new URL(request.url, window.location.href)
 
-        if (url.origin !== apiOrigin) {
+        if (url.origin !== apiOrigin && url.origin !== window.location.origin) {
           return originalFetch(input, init)
         }
 
@@ -304,7 +304,7 @@ test('live shell metadata shows status-backed API and invite instructions', asyn
   await installLiveBackend(page)
 
   await page.goto(resolveAppUrl('/chat', testInfo))
-  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Chat', exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: 'API target instructions' }).click()
   const apiCard = page.getByLabel('API access')
@@ -362,7 +362,7 @@ test('live chat send, stream, stop, and retry work end to end', async ({ page },
   })
 
   await page.goto(resolveAppUrl('/chat', testInfo))
-  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Chat', exact: true })).toBeVisible()
 
   await page.locator('#prompt-composer').fill('hello mesh')
   await page.getByTestId('chat-send').click()
@@ -399,7 +399,7 @@ test('streaming failure leaves partial text and recoverable chat state', async (
   })
 
   await page.goto(resolveAppUrl('/chat', testInfo))
-  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Chat', exact: true })).toBeVisible()
 
   await page.locator('#prompt-composer').fill('hello mesh')
   await page.getByTestId('chat-send').click()
@@ -414,7 +414,7 @@ test('live chat uploads an attachment before sending the parity request', async 
   await installLiveBackend(page)
 
   await page.goto(resolveAppUrl('/chat', testInfo))
-  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Chat', exact: true })).toBeVisible()
   await expect(page.getByTestId('chat-send')).toBeVisible()
 
   await page.locator('input[type="file"]').setInputFiles(CLIP_FIXTURE_PATH)
@@ -435,15 +435,15 @@ test('live chat uploads an attachment before sending the parity request', async 
 
   expect(backendState.responseRequests).toHaveLength(1)
   expect(backendState.responseRequests[0]).toMatchObject({
-    model: LIVE_STATUS.model_name,
+    model: 'mesh',
     stream: true
   })
 
   const responseInput = backendState.responseRequests[0]?.input
   expect(Array.isArray(responseInput)).toBe(true)
-  const firstMessage = (responseInput as Array<Record<string, unknown>>)[0]
-  expect(firstMessage?.role).toBe('user')
-  const content = firstMessage?.content as Array<Record<string, unknown>>
+  const userMessage = (responseInput as Array<Record<string, unknown>>).find((message) => message.role === 'user')
+  expect(userMessage).toBeDefined()
+  const content = userMessage?.content as Array<Record<string, unknown>>
   expect(content[0]).toEqual({ type: 'input_text', text: 'Keep this prompt' })
   expect(content[1]).toMatchObject({ type: 'input_audio' })
   expect(String(content[1]?.audio_url ?? '')).toMatch(/^mesh:\/\/blob\/[^/]+\/blob-token-123$/)
@@ -458,7 +458,7 @@ test('attachment upload failure keeps the prompt and skips the chat request', as
   })
 
   await page.goto(resolveAppUrl('/chat', testInfo))
-  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Chat', exact: true })).toBeVisible()
 
   await page.locator('input[type="file"]').setInputFiles(CLIP_FIXTURE_PATH)
   await expect(page.getByText('1 attachment ready')).toBeVisible()

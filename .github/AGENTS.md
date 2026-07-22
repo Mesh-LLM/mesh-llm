@@ -12,4 +12,4 @@ current topology. If a rule changes, update the skill first; if implementation
 or topology changes, update the inventory and `ci/ci.md` in the same change.
 
 Do not add duplicate CI rules here. This file exists to make the skill the
-mandatory starting point for every edit under `.github/`.
+mandatory starting point for every CI-related edit under `.github/`.

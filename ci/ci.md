@@ -8,6 +8,7 @@ flowchart TD
         Files["changed files"]
         Affected["affected crates + reverse deps"]
         ClippyBins["clippy binpack\nplan-clippy-batches.sh"]
+        TestBins["crate-test binpack\nplan-test-batches.sh"]
         Backend["backend_changed?"]
         BackendRecipe["backend_recipe_changed?"]
         InferenceArtifact["inference_artifact_required?"]
@@ -22,6 +23,7 @@ flowchart TD
 
     PR --> Files --> Affected
     Affected --> ClippyBins
+    Affected --> TestBins
     Files --> Backend
     Files --> BackendRecipe
     Files --> WindowsCPU
@@ -69,7 +71,8 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
         direction TB
         subgraph Producers["top-level target jobs"]
             LinuxCPU["linux_cpu_artifact\ndebug mesh-llm · CLI smoke\n→ ci-linux-inference-binaries"]
-            LinuxTests["linux_test_groups matrix\nSDK/API · Skippy · unit · protocol · Skippy smoke"]
+            RustCrateTests["rust_crate_tests matrix\nmetadata-derived crate suites"]
+            LinuxTests["linux_test_groups matrix\nprotocol · Skippy smoke"]
             LinuxTargets["linux_targets matrix\nCUDA / ROCm / Vulkan rows build when backend_changed"]
             WindowsTargets["windows_targets matrix\nCPU / CUDA / ROCm / Vulkan\nfull builds only for Windows inputs"]
             MacCPU["macos_cpu_artifact\nmacOS Metal build · CLI smoke\n→ ci-macos-inference-binaries"]
@@ -88,6 +91,7 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
     Docs -. "true: gate heavy jobs" .-> PRCI
     InferenceArtifact --> LinuxCPU
     Affected --> LinuxTests
+    TestBins --> RustCrateTests
     InferenceArtifact --> MacCPU
     Affected --> MacTests
     Backend --> LinuxTargets
@@ -155,10 +159,14 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   command reference.
 - `pr_builds.yml` is named **PR Builds** and owns PR target jobs plus integration
   and smoke validation. Linux and macOS CPU artifact jobs upload the binaries
-  that downstream smoke jobs consume before long validation groups finish;
-  Linux test groups run SDK/API, Skippy, unit, protocol, and Skippy smoke work
-  as parallel matrix rows. Linux/macOS backend matrices remain separate from the
-  CPU artifact producers.
+  that downstream smoke jobs consume before long validation groups finish.
+  Every affected Rust workspace crate is assigned to a generated
+  `rust_crate_tests` matrix and runs its complete `cargo test -p <crate>` suite;
+  protocol compatibility and Skippy smoke remain separate integration rows.
+  Linux/macOS backend matrices remain separate from the CPU artifact producers.
+- Pull requests test affected crates plus their reverse dependents. Main pushes
+  and manual dispatches assign every Cargo workspace member to the matrix, so a
+  targeted-routing mistake cannot permanently hide a crate suite.
 - `rust_changed` is not an artifact-build signal. Rust tooling changes such as
   `tools/xtask/**` still run PR Quality formatting/clippy, but PR Builds only
   builds `mesh-llm` artifacts when `inference_artifact_required` is true: a

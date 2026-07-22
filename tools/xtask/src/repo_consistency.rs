@@ -221,6 +221,7 @@ pub(crate) fn check_release_targets_command() -> DynResult<()> {
 pub(crate) fn check_ci_crate_lists_command() -> DynResult<()> {
     let repo_root = repo_root()?;
     workflow_checks::check_ci_script_workspace_members(&repo_root)?;
+    workflow_checks::check_ci_crate_test_coverage_files(&repo_root)?;
     check_attestation_default_version(&repo_root)?;
     println!("repo consistency checks passed: ci-crate-lists");
     Ok(())

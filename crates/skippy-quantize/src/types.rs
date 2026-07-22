@@ -341,6 +341,7 @@ pub enum TensorType {
     F32,
     F16,
     Q1_0,
+    Q2_0,
     Q4_0,
     Q4_1,
     Q5_0,
@@ -380,6 +381,7 @@ impl TensorType {
             Self::F32 => Some(llama_quant_ffi::GgmlType::F32),
             Self::F16 => Some(llama_quant_ffi::GgmlType::F16),
             Self::Q1_0 => Some(llama_quant_ffi::GgmlType::Q1_0),
+            Self::Q2_0 => Some(llama_quant_ffi::GgmlType::Q2_0),
             Self::Q4_0 => Some(llama_quant_ffi::GgmlType::Q4_0),
             Self::Q4_1 => Some(llama_quant_ffi::GgmlType::Q4_1),
             Self::Q5_0 => Some(llama_quant_ffi::GgmlType::Q5_0),
@@ -418,6 +420,7 @@ impl TensorType {
         Self::F32,
         Self::F16,
         Self::Q1_0,
+        Self::Q2_0,
         Self::Q4_0,
         Self::Q4_1,
         Self::Q5_0,
@@ -456,6 +459,7 @@ impl TensorType {
             Self::F32 => "F32",
             Self::F16 => "F16",
             Self::Q1_0 => "Q1_0",
+            Self::Q2_0 => "Q2_0",
             Self::Q4_0 => "Q4_0",
             Self::Q4_1 => "Q4_1",
             Self::Q5_0 => "Q5_0",
@@ -496,6 +500,7 @@ impl TensorType {
             "F32" => Some(Self::F32),
             "F16" => Some(Self::F16),
             "Q10" => Some(Self::Q1_0),
+            "Q20" => Some(Self::Q2_0),
             "Q40" => Some(Self::Q4_0),
             "Q41" => Some(Self::Q4_1),
             "Q50" => Some(Self::Q5_0),
@@ -597,6 +602,7 @@ mod tests {
     #[test]
     fn accepts_raw_tensor_types_but_not_ftype_mixtures() {
         assert!(TensorType::parse("Q1_0").is_some());
+        assert!(TensorType::parse("Q2_0").is_some());
         assert!(TensorType::parse("Q3_K").is_some());
         assert!(TensorType::parse("q4_K").is_some());
         assert!(TensorType::parse("Q6_K").is_some());
