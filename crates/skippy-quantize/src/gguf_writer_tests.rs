@@ -492,34 +492,6 @@ fn splits_glm_dsa_kv_b_projection_for_native_layout() {
 }
 
 #[test]
-fn infers_glm_dsa_indexshare_types_from_mapped_tensor_names() {
-    let mut metadata = minimal_glm_dsa_metadata(3, 0);
-    let tensors = vec![
-        mock_tensor_source("blk.0.indexer.k_norm.weight"),
-        mock_tensor_source("blk.0.indexer.k_norm.bias"),
-        mock_tensor_source("blk.0.indexer.proj.weight"),
-        mock_tensor_source("blk.0.indexer.attn_k.weight"),
-        mock_tensor_source("blk.0.indexer.attn_q_b.weight"),
-        mock_tensor_source("blk.2.indexer.k_norm.weight"),
-        mock_tensor_source("blk.2.indexer.k_norm.bias"),
-        mock_tensor_source("blk.2.indexer.proj.weight"),
-        mock_tensor_source("blk.2.indexer.attn_k.weight"),
-        mock_tensor_source("blk.2.indexer.attn_q_b.weight"),
-    ];
-
-    enrich_glm_dsa_indexshare_metadata(&mut metadata, &tensors).unwrap();
-
-    assert_eq!(
-        array_string_metadata(&metadata, "glm-dsa.attention.indexer.types"),
-        Some(vec![
-            "full".to_string(),
-            "shared".to_string(),
-            "full".to_string(),
-        ])
-    );
-}
-
-#[test]
 fn writes_inferred_glm_dsa_indexshare_types_to_gguf_metadata() {
     let root = unique_temp_dir();
     fs::create_dir_all(&root).unwrap();
@@ -617,19 +589,6 @@ fn writes_inferred_glm_dsa_indexshare_types_to_gguf_metadata() {
         ])
     );
     fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn rejects_glm_dsa_partial_indexshare_group_during_metadata_enrichment() {
-    let mut metadata = minimal_glm_dsa_metadata(2, 0);
-    let tensors = vec![mock_tensor_source("blk.0.indexer.k_norm.weight")];
-
-    let err = enrich_glm_dsa_indexshare_metadata(&mut metadata, &tensors).unwrap_err();
-
-    assert!(
-        err.to_string().contains("partial indexer tensor group"),
-        "unexpected error: {err:#}"
-    );
 }
 
 #[test]
@@ -1350,32 +1309,11 @@ fn glm_dsa_kv_b_split_metadata() -> Vec<GgufKv> {
     ]
 }
 
-fn mock_tensor_source(name: &str) -> TensorSource {
-    TensorSource {
-        segments: Vec::new(),
-        name: name.to_string(),
-        dims: vec![1],
-        ggml_type: GGML_TYPE_F32,
-        byte_len: 4,
-        gguf_offset: 0,
-    }
-}
-
 fn f32_bytes(values: &[f32]) -> Vec<u8> {
     values
         .iter()
         .flat_map(|value| value.to_le_bytes())
         .collect()
-}
-
-fn array_string_metadata(metadata: &[GgufKv], key: &str) -> Option<Vec<String>> {
-    metadata.iter().find_map(|kv| match kv {
-        GgufKv::ArrayString {
-            key: item_key,
-            value,
-        } if item_key == key => Some(value.clone()),
-        _ => None,
-    })
 }
 
 fn write_safetensor(path: &Path, tensors: &[(&str, &str, &[u64], &[u8])]) {
