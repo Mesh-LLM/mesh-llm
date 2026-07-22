@@ -1,4 +1,4 @@
-From f282fbb9fc57691165670cf758ef1e0fa95c9bf6 Mon Sep 17 00:00:00 2001
+From dfe419c41613f4cd640998b391899a145abdfc10 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 14 Jul 2026 09:15:57 +1000
 Subject: [PATCH 19/24] ggml: add GLM-DSA sparse execution primitives
@@ -10,7 +10,7 @@ Subject: [PATCH 19/24] ggml: add GLM-DSA sparse execution primitives
  ggml/src/ggml-cpu/ggml-cpu.c              |    91 +-
  ggml/src/ggml-cpu/ops.cpp                 |   500 +-
  ggml/src/ggml-cpu/ops.h                   |     6 +
- ggml/src/ggml-metal/ggml-metal-common.cpp |   192 +-
+ ggml/src/ggml-metal/ggml-metal-common.cpp |     7 +-
  ggml/src/ggml-metal/ggml-metal-context.m  |   232 +-
  ggml/src/ggml-metal/ggml-metal-device.cpp |  3334 ++++-
  ggml/src/ggml-metal/ggml-metal-device.h   |    83 +-
@@ -22,7 +22,7 @@ Subject: [PATCH 19/24] ggml: add GLM-DSA sparse execution primitives
  ggml/src/ggml-metal/ggml-metal.metal      |  9996 ++++++++++++---
  ggml/src/ggml.c                           |   235 +-
  src/llama-hparams.h                       |     4 +
- 18 files changed, 23588 insertions(+), 5284 deletions(-)
+ 18 files changed, 23411 insertions(+), 5276 deletions(-)
 
 diff --git a/ggml/include/ggml-rpc.h b/ggml/include/ggml-rpc.h
 index 16ca3394..82d27410 100644
@@ -932,7 +932,7 @@ index 4c1642a6..31a8740f 100644
  void ggml_compute_forward_map_custom2(const struct ggml_compute_params * params, struct ggml_tensor * dst);
  void ggml_compute_forward_map_custom3(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 diff --git a/ggml/src/ggml-metal/ggml-metal-common.cpp b/ggml/src/ggml-metal/ggml-metal-common.cpp
-index 2eb9820b..bed46df3 100644
+index 2eb9820b..30069090 100644
 --- a/ggml/src/ggml-metal/ggml-metal-common.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-common.cpp
 @@ -3,6 +3,8 @@
@@ -944,224 +944,25 @@ index 2eb9820b..bed46df3 100644
  #include <vector>
  
  // represents a memory range (i.e. an interval from a starting address p0 to an ending address p1 in a given buffer pb)
-@@ -206,6 +208,175 @@ struct node_info {
+@@ -206,6 +208,10 @@ struct node_info {
      }
  };
  
-+static bool ggml_metal_topk_moe_route_fusion_enabled() {
-+    const char * value = getenv("GGML_METAL_ENABLE_TOPK_MOE_ROUTE_FUSION");
-+    if (value) {
-+        return atoi(value) != 0;
-+    }
-+    value = getenv("SKIPPY_GLM_DSA_ENABLE_METAL_TOPK_MOE_FUSION");
-+    if (value) {
-+        return atoi(value) != 0;
-+    }
-+    value = getenv("GGML_METAL_DISABLE_TOPK_MOE_ROUTE_FUSION");
-+    if (value && atoi(value) != 0) {
-+        return false;
-+    }
-+    value = getenv("SKIPPY_GLM_DSA_DISABLE_METAL_TOPK_MOE_FUSION");
-+    if (value && atoi(value) != 0) {
-+        return false;
-+    }
-+    return true;
-+}
-+
-+static bool ggml_metal_topk_moe_route_pack_enabled() {
-+    const char * value = getenv("GGML_METAL_ENABLE_TOPK_MOE_ROUTE_PACK");
-+    if (value && atoi(value) != 0) {
-+        return true;
-+    }
-+    value = getenv("SKIPPY_GLM_DSA_ENABLE_METAL_TOPK_MOE_ROUTE_PACK");
-+    return value && atoi(value) != 0;
-+}
-+
-+static bool ggml_metal_topk_moe_route_pack_unsafe_enabled() {
-+    const char * value = getenv("GGML_METAL_ENABLE_UNSAFE_TOPK_MOE_ROUTE_PACK");
-+    if (value && atoi(value) != 0) {
-+        return true;
-+    }
-+    value = getenv("SKIPPY_GLM_DSA_ENABLE_UNSAFE_METAL_TOPK_MOE_ROUTE_PACK");
-+    return value && atoi(value) != 0;
-+}
-+
-+static bool ggml_metal_dispatch_log_enabled() {
-+    const char * value = getenv("GGML_METAL_MOE_DISPATCH_LOG");
-+    if (value && atoi(value) != 0) {
-+        return true;
-+    }
-+    value = getenv("SKIPPY_GLM_DSA_LOG_METAL_DISPATCH");
-+    return value && atoi(value) != 0;
-+}
-+
-+static void ggml_metal_log_topk_moe_route_candidate(const ggml_cgraph * gf, int i, const char * reason) {
-+    if (!ggml_metal_dispatch_log_enabled() || i >= gf->n_nodes) {
-+        return;
-+    }
-+
-+    const ggml_tensor * node = gf->nodes[i];
-+    if (node->name[0] == '\0' || std::strstr(node->name, "ffn_moe_probs") == nullptr) {
-+        return;
-+    }
-+
-+    char ops[512] = {};
-+    size_t offset = 0;
-+    for (int j = i; j < gf->n_nodes && j < i + 14 && offset < sizeof(ops); ++j) {
-+        const ggml_tensor * t = gf->nodes[j];
-+        const int written = snprintf(
-+                ops + offset,
-+                sizeof(ops) - offset,
-+                "%s%s/%s",
-+                j == i ? "" : ",",
-+                ggml_op_name(t->op),
-+                t->name[0] == '\0' ? "<unnamed>" : t->name);
-+        if (written < 0) {
-+            break;
-+        }
-+        offset += (size_t) written;
-+    }
-+
-+    GGML_LOG_INFO(
-+            "ggml_metal: moe_dispatch op=topk_moe_route_pack tensor=%s candidate=%s reason=%s grid_x=1 grid_y=1 grid_z=1 threads_x=1\n",
-+            node->name,
-+            ops,
-+            reason);
-+}
-+
-+static int ggml_metal_topk_moe_route_pack_len(const ggml_cgraph * gf, int i) {
-+    // Route packing only changes graph reorder grouping; it does not itself
-+    // emit the fused route kernel. Keep the known-broken pack path behind an
-+    // explicit unsafe debug switch until route fusion is represented by a real
-+    // backend op or the encoder can reliably consume the packed subgraph.
-+    if (!ggml_metal_topk_moe_route_fusion_enabled() ||
-+            !ggml_metal_topk_moe_route_pack_enabled() ||
-+            !ggml_metal_topk_moe_route_pack_unsafe_enabled() ||
-+            i + 11 > gf->n_nodes) {
-+        return 1;
-+    }
-+
-+    ggml_tensor * sigmoid = gf->nodes[i];
-+    if (sigmoid->op != GGML_OP_UNARY || ggml_get_unary_op(sigmoid) != GGML_UNARY_OP_SIGMOID) {
-+        return 1;
-+    }
-+
-+    ggml_tensor * reshape_probs = gf->nodes[i + 1];
-+    ggml_tensor * biased_probs  = gf->nodes[i + 2];
-+    ggml_tensor * argsort       = gf->nodes[i + 3];
-+    ggml_tensor * ids           = gf->nodes[i + 4];
-+    ggml_tensor * get_rows      = gf->nodes[i + 5];
-+    ggml_tensor * weights_2d    = gf->nodes[i + 6];
-+    ggml_tensor * weights_sum   = gf->nodes[i + 7];
-+    ggml_tensor * clamp         = gf->nodes[i + 8];
-+    ggml_tensor * div           = gf->nodes[i + 9];
-+    ggml_tensor * weights_3d    = gf->nodes[i + 10];
-+
-+    if (reshape_probs->op != GGML_OP_RESHAPE || reshape_probs->src[0] != sigmoid ||
-+            biased_probs->op != GGML_OP_ADD || biased_probs->src[0] != sigmoid ||
-+            argsort->op != GGML_OP_ARGSORT || argsort->src[0] != biased_probs ||
-+            ids->op != GGML_OP_VIEW || ids->src[0] != argsort ||
-+            get_rows->op != GGML_OP_GET_ROWS || get_rows->src[0] != reshape_probs || get_rows->src[1] != ids ||
-+            weights_2d->op != GGML_OP_RESHAPE || weights_2d->src[0] != get_rows ||
-+            weights_sum->op != GGML_OP_SUM_ROWS || weights_sum->src[0] != weights_2d ||
-+            clamp->op != GGML_OP_CLAMP || clamp->src[0] != weights_sum ||
-+            div->op != GGML_OP_DIV || div->src[0] != weights_2d || div->src[1] != clamp ||
-+            weights_3d->op != GGML_OP_RESHAPE || weights_3d->src[0] != div ||
-+            ids->ne[0] <= 0 || ids->ne[0] > 16 || sigmoid->ne[0] > 1024) {
-+        ggml_metal_log_topk_moe_route_candidate(gf, i, "shape_or_sequence");
-+        return 1;
-+    }
-+
-+    int n_fuse = 11;
-+    if (i + 11 < gf->n_nodes) {
-+        ggml_tensor * scale = gf->nodes[i + 11];
-+        if (scale->op == GGML_OP_SCALE && scale->src[0] == weights_3d) {
-+            n_fuse = 12;
-+        }
-+    }
-+
-+    const ggml_op ops_with_scale[] = {
-+        GGML_OP_UNARY,
-+        GGML_OP_RESHAPE,
-+        GGML_OP_ADD,
-+        GGML_OP_ARGSORT,
-+        GGML_OP_VIEW,
-+        GGML_OP_GET_ROWS,
-+        GGML_OP_RESHAPE,
-+        GGML_OP_SUM_ROWS,
-+        GGML_OP_CLAMP,
-+        GGML_OP_DIV,
-+        GGML_OP_RESHAPE,
-+        GGML_OP_SCALE,
-+    };
-+    const ggml_op ops_without_scale[] = {
-+        GGML_OP_UNARY,
-+        GGML_OP_RESHAPE,
-+        GGML_OP_ADD,
-+        GGML_OP_ARGSORT,
-+        GGML_OP_VIEW,
-+        GGML_OP_GET_ROWS,
-+        GGML_OP_RESHAPE,
-+        GGML_OP_SUM_ROWS,
-+        GGML_OP_CLAMP,
-+        GGML_OP_DIV,
-+        GGML_OP_RESHAPE,
-+    };
-+    const int outputs[] = { i + 4, i + n_fuse - 1 };
-+    if (!ggml_can_fuse_subgraph(gf, i, n_fuse, n_fuse == 12 ? ops_with_scale : ops_without_scale, outputs, 2)) {
-+        ggml_metal_log_topk_moe_route_candidate(gf, i, "can_fuse");
-+        return 1;
-+    }
-+
-+    ggml_metal_log_topk_moe_route_candidate(gf, i, "packed");
-+    return n_fuse;
-+}
++// TODO(GLM-DSA Metal fused-route milestone): keep route packing disabled until
++// it is represented by a backend op or the encoder can safely consume the
++// packed subgraph.
 +
  static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node_info> & nodes) {
      // helper to add node src and dst ranges
      const auto & h_add = [](ggml_mem_ranges_t mrs, const node_info & node) {
-@@ -391,14 +562,17 @@ void ggml_graph_optimize(ggml_cgraph * gf) {
-             /*.fused =*/ {},
-         };
- 
-+        int f = ggml_metal_topk_moe_route_pack_len(gf, i);
-+
-         // fuse only ops that start with these operations
-         // can be expanded when needed
--        if (node.op() == GGML_OP_ADD ||
-+        if (f == 1 && (
-+            node.op() == GGML_OP_ADD ||
-             node.op() == GGML_OP_NORM ||
--            node.op() == GGML_OP_RMS_NORM) {
-+            node.op() == GGML_OP_RMS_NORM)) {
-             ops[0] = node.op();
- 
--            int f = i + 1;
-+            f = i + 1;
-             while (f < n && f < i + MAX_FUSE) {
-                 // conservatively allow fusing only these ops
-                 // can be expanded when needed
-@@ -418,14 +592,14 @@ void ggml_graph_optimize(ggml_cgraph * gf) {
+@@ -418,7 +424,6 @@ void ggml_graph_optimize(ggml_cgraph * gf) {
                      break;
                  }
              }
-+        }
- 
--            // add the fused tensors into the node info so we can unfuse them later
--            for (int k = 1; k < f; k++) {
--                ++i;
-+        // add the fused tensors into the node info so we can unfuse them later
-+        for (int k = 1; k < f; k++) {
-+            ++i;
- 
--                // the .dst() becomes the last fused tensor
--                node.add_fused(gf->nodes[i]);
--            }
-+            // the .dst() becomes the last fused tensor
-+            node.add_fused(gf->nodes[i]);
-         }
- 
-         nodes.push_back(std::move(node));
+-
+             // add the fused tensors into the node info so we can unfuse them later
+             for (int k = 1; k < f; k++) {
+                 ++i;
 diff --git a/ggml/src/ggml-metal/ggml-metal-context.m b/ggml/src/ggml-metal/ggml-metal-context.m
 index 32d97cd5..083949ce 100644
 --- a/ggml/src/ggml-metal/ggml-metal-context.m
@@ -31681,4 +31482,3 @@ index 8be5f28f..92626b4d 100644
      uint32_t dsv4_o_group_count        = 0;
 -- 
 2.54.0 (Apple Git-157)
-

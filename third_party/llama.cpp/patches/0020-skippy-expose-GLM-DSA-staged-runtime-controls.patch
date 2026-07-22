@@ -1990,15 +1990,12 @@ index 46da7007..7e11d92b 100644
          struct skippy_error ** out_error) {
      (void) request_logits;
  
-@@ -1493,7 +2905,10 @@ static enum skippy_status skippy_decode_tokens(
+@@ -1493,7 +2905,7 @@ static enum skippy_status skippy_decode_tokens(
              /*seq_id   =*/ &seq_ids,
              /*logits   =*/ &logits,
          };
 -        enum skippy_status status = skippy_decode_batch(session, batch, 1, out_error);
 +        enum skippy_status status = skippy_decode_batch(session, batch, 1, glm_dsa_phase_hint, out_error);
-+        if (status == SKIPPY_STATUS_OK) {
-+            status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, pos, out_error);
-+        }
          if (status == SKIPPY_STATUS_OK) {
              status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, pos, out_error);
          }
@@ -2613,4 +2610,3 @@ index 46da7007..7e11d92b 100644
              skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to trim native KV suffix");
 -- 
 2.54.0 (Apple Git-157)
-
