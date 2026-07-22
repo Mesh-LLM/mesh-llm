@@ -559,7 +559,7 @@ fn read_sampling_config(mut reader: impl Read) -> io::Result<StageSamplingConfig
     Ok(sampling)
 }
 
-const REPLY_STATS_FIELD_COUNT: usize = 39;
+const REPLY_STATS_FIELD_COUNT: usize = 23;
 const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
 
 fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
@@ -588,16 +588,12 @@ fn read_reply_stats(mut reader: impl Read) -> io::Result<StageReplyStats> {
 }
 
 fn write_reply_window(mut writer: impl Write, window: StageReplyWindow) -> io::Result<()> {
-    write_i32(&mut writer, window.window_id)?;
-    write_i32(&mut writer, window.accepted_len)?;
-    write_i32(&mut writer, window.correction_token)
+    write_i32(&mut writer, window.window_id)
 }
 
 fn read_reply_window(mut reader: impl Read) -> io::Result<StageReplyWindow> {
     Ok(StageReplyWindow {
         window_id: read_i32(&mut reader)?,
-        accepted_len: read_i32(&mut reader)?,
-        correction_token: read_i32(&mut reader)?,
     })
 }
 
@@ -612,20 +608,6 @@ fn reply_stats_fields(stats: StageReplyStats) -> [i64; REPLY_STATS_FIELD_COUNT] 
         stats.kv_recorded_bytes,
         stats.kv_hit_stage_mask,
         stats.kv_record_stage_mask,
-        stats.checkpoint_flush_us,
-        stats.checkpoint_prefill_drain_us,
-        stats.checkpoint_local_us,
-        stats.checkpoint_downstream_write_us,
-        stats.checkpoint_downstream_wait_us,
-        stats.checkpoint_total_us,
-        stats.checkpoint_prefill_drained_replies,
-        stats.restore_flush_us,
-        stats.restore_prefill_drain_us,
-        stats.restore_local_us,
-        stats.restore_downstream_write_us,
-        stats.restore_downstream_wait_us,
-        stats.restore_total_us,
-        stats.restore_prefill_drained_replies,
         stats.verify_window_compute_us,
         stats.verify_window_forward_write_us,
         stats.verify_window_downstream_wait_us,
@@ -634,8 +616,6 @@ fn reply_stats_fields(stats: StageReplyStats) -> [i64; REPLY_STATS_FIELD_COUNT] 
         stats.verify_window_request_count,
         stats.verify_window_token_count,
         stats.verify_window_max_tokens,
-        stats.verify_window_checkpointed_requests,
-        stats.verify_window_skip_checkpoint_requests,
         stats.prefill_edge_write_us_max,
         stats.prefill_edge_wait_us_max,
         stats.prefill_edge_total_us_max,
@@ -656,36 +636,20 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         kv_recorded_bytes: fields[6],
         kv_hit_stage_mask: fields[7],
         kv_record_stage_mask: fields[8],
-        checkpoint_flush_us: fields[9],
-        checkpoint_prefill_drain_us: fields[10],
-        checkpoint_local_us: fields[11],
-        checkpoint_downstream_write_us: fields[12],
-        checkpoint_downstream_wait_us: fields[13],
-        checkpoint_total_us: fields[14],
-        checkpoint_prefill_drained_replies: fields[15],
-        restore_flush_us: fields[16],
-        restore_prefill_drain_us: fields[17],
-        restore_local_us: fields[18],
-        restore_downstream_write_us: fields[19],
-        restore_downstream_wait_us: fields[20],
-        restore_total_us: fields[21],
-        restore_prefill_drained_replies: fields[22],
-        verify_window_compute_us: fields[23],
-        verify_window_forward_write_us: fields[24],
-        verify_window_downstream_wait_us: fields[25],
-        verify_window_total_us: fields[26],
-        verify_window_stage_count: fields[27],
-        verify_window_request_count: fields[28],
-        verify_window_token_count: fields[29],
-        verify_window_max_tokens: fields[30],
-        verify_window_checkpointed_requests: fields[31],
-        verify_window_skip_checkpoint_requests: fields[32],
-        prefill_edge_write_us_max: fields[33],
-        prefill_edge_wait_us_max: fields[34],
-        prefill_edge_total_us_max: fields[35],
-        prefill_edge_stage_index: fields[36],
-        prefill_edge_activation_bytes_max: fields[37],
-        prefill_edge_observation_count: fields[38],
+        verify_window_compute_us: fields[9],
+        verify_window_forward_write_us: fields[10],
+        verify_window_downstream_wait_us: fields[11],
+        verify_window_total_us: fields[12],
+        verify_window_stage_count: fields[13],
+        verify_window_request_count: fields[14],
+        verify_window_token_count: fields[15],
+        verify_window_max_tokens: fields[16],
+        prefill_edge_write_us_max: fields[17],
+        prefill_edge_wait_us_max: fields[18],
+        prefill_edge_total_us_max: fields[19],
+        prefill_edge_stage_index: fields[20],
+        prefill_edge_activation_bytes_max: fields[21],
+        prefill_edge_observation_count: fields[22],
     }
 }
 

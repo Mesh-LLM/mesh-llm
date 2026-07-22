@@ -93,11 +93,7 @@ fn native_mtp_cache_generation() -> PackageGenerationInfo {
             proposer: None,
             primary: Some("mtp".to_string()),
             extender: Some("cache".to_string()),
-            extension_policy: Some(PackageExtensionPolicyInfo {
-                initial_tokens: 2,
-                max_tokens: 8,
-                tail_backoff_proposals: 5,
-            }),
+            extension_policy: Some(PackageExtensionPolicyInfo { max_tokens: 8 }),
         },
     );
     PackageGenerationInfo {
@@ -405,7 +401,6 @@ verify_window_pipeline_depth = 2
         .ngram
         .as_ref()
         .expect("cache proposer should resolve");
-    assert_eq!(ngram.kind, skippy_server::NgramProposerKind::Cache);
     assert_eq!(ngram.min_ngram, 2);
     assert_eq!(ngram.max_ngram, 4);
     assert_eq!(ngram.max_proposal_tokens, 9);
@@ -415,9 +410,7 @@ verify_window_pipeline_depth = 2
         .extension
         .as_ref()
         .expect("extension policy should resolve");
-    assert_eq!(extension.initial_tokens, 2);
     assert_eq!(extension.max_tokens, 7);
-    assert_eq!(extension.tail_backoff_proposals, 5);
     assert_eq!(resolved.speculative.decode.verify_window.min_tokens, 1);
     assert_eq!(resolved.speculative.decode.verify_window.max_tokens, 6);
     assert_eq!(resolved.speculative.decode.verify_window.pipeline_depth, 2);
@@ -450,8 +443,6 @@ strategy = "ngram-cache"
         .to_embedded_openai_args(4096, true)
         .expect("package cache strategy should build OpenAI args");
     assert_eq!(openai.speculative_window, 6);
-    assert_eq!(openai.ngram_min, 2);
-    assert_eq!(openai.ngram_max, 6);
     assert_eq!(
         openai.speculative.ngram.as_ref().map(|ngram| ngram.kind),
         Some(skippy_server::NgramProposerKind::Cache)
@@ -489,8 +480,6 @@ strategy = "ngram-suffix"
         .to_embedded_openai_args(4096, true)
         .expect("package suffix strategy should build OpenAI args");
     assert_eq!(openai.speculative_window, 48);
-    assert_eq!(openai.ngram_min, 5);
-    assert_eq!(openai.ngram_max, 48);
     assert_eq!(
         openai.speculative.ngram.as_ref().map(|ngram| ngram.kind),
         Some(skippy_server::NgramProposerKind::Suffix)
@@ -503,7 +492,6 @@ fn direct_native_mtp_can_use_a_request_local_cache_extension() {
         r#"
 [defaults.speculative]
 strategy = "mtp"
-ngram_proposer = "cache"
 ngram_min = 2
 ngram_max = 4
 ngram_max_proposal_tokens = 6
@@ -533,14 +521,11 @@ ngram_max_proposal_tokens = 6
         .extension
         .as_ref()
         .expect("direct cache strategy should synthesize an extension plan");
-    assert_eq!(extension.initial_tokens, 2);
     assert_eq!(extension.max_tokens, 6);
     let openai = resolved
         .to_embedded_openai_args(4096, true)
         .expect("direct cache strategy should build OpenAI args");
     assert!(openai.native_mtp_enabled);
-    assert_eq!(openai.ngram_min, 2);
-    assert_eq!(openai.ngram_max, 6);
     assert_eq!(
         openai.speculative.ngram.as_ref().map(|ngram| ngram.kind),
         Some(skippy_server::NgramProposerKind::Cache)
@@ -557,9 +542,7 @@ ngram_proposer = "suffix"
 ngram_min = 5
 ngram_max = 32
 ngram_max_proposal_tokens = 48
-extension_initial_tokens = 2
 extension_max_tokens = 48
-extension_tail_backoff_proposals = 2
 verify_window_min_tokens = 1
 verify_window_max_tokens = 32
 verify_window_pipeline_depth = 2
@@ -599,9 +582,7 @@ verify_window_pipeline_depth = 2
         .extension
         .as_ref()
         .expect("suffix strategy should synthesize an extension plan");
-    assert_eq!(extension.initial_tokens, 2);
     assert_eq!(extension.max_tokens, 48);
-    assert_eq!(extension.tail_backoff_proposals, 2);
     assert_eq!(resolved.speculative.decode.verify_window.max_tokens, 32);
     assert_eq!(resolved.speculative.decode.verify_window.pipeline_depth, 2);
 }
@@ -680,47 +661,6 @@ ngram_max_proposal_tokens = 6
 }
 
 #[test]
-fn direct_simple_strategy_resolves_without_native_mtp() {
-    let mesh_config = parse_config(
-        r#"
-[defaults.speculative]
-strategy = "ngram-simple"
-ngram_min = 2
-ngram_max = 6
-ngram_max_proposal_tokens = 8
-"#,
-    );
-    let model_file = temp_model_file();
-
-    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
-        mesh_config: &mesh_config,
-        model_id: "meshllm/coding-model",
-        model_path: model_file.path(),
-        model_bytes: 4 * 1024 * 1024 * 1024,
-        allocatable_memory_bytes: None,
-        request_defaults: None,
-        package_generation: None,
-    })
-    .expect("direct simple strategy should resolve without native MTP");
-
-    assert!(!resolved.speculative.native_mtp_enabled);
-    assert_eq!(
-        resolved.speculative.decode.effective_strategy,
-        "ngram-simple"
-    );
-    let openai = resolved
-        .to_embedded_openai_args(4096, true)
-        .expect("direct simple strategy should build OpenAI args");
-    assert_eq!(openai.speculative_window, 8);
-    assert_eq!(openai.ngram_min, 2);
-    assert_eq!(openai.ngram_max, 8);
-    assert_eq!(
-        openai.speculative.ngram.as_ref().map(|ngram| ngram.kind),
-        Some(skippy_server::NgramProposerKind::Simple)
-    );
-}
-
-#[test]
 fn direct_suffix_strategy_resolves_without_native_mtp() {
     let mesh_config = parse_config(
         r#"
@@ -754,53 +694,9 @@ ngram_max_proposal_tokens = 48
         .to_embedded_openai_args(4096, true)
         .expect("direct suffix strategy should build OpenAI args");
     assert_eq!(openai.speculative_window, 48);
-    assert_eq!(openai.ngram_min, 5);
-    assert_eq!(openai.ngram_max, 48);
     assert_eq!(
         openai.speculative.ngram.as_ref().map(|ngram| ngram.kind),
         Some(skippy_server::NgramProposerKind::Suffix)
-    );
-}
-
-#[test]
-fn direct_native_mtp_can_use_a_simple_ngram_extension() {
-    let mesh_config = parse_config(
-        r#"
-[defaults.speculative]
-strategy = "mtp"
-ngram_proposer = "simple"
-ngram_min = 2
-ngram_max = 6
-ngram_max_proposal_tokens = 6
-"#,
-    );
-    let model_file = temp_model_file_with_tensor_names(&["blk.23.nextn.eh_proj.weight"], None);
-
-    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
-        mesh_config: &mesh_config,
-        model_id: "meshllm/GLM-4.7-Flash-MTP-GGUF",
-        model_path: model_file.path(),
-        model_bytes: 4 * 1024 * 1024 * 1024,
-        allocatable_memory_bytes: None,
-        request_defaults: None,
-        package_generation: None,
-    })
-    .expect("direct native MTP with simple N-gram extension should resolve");
-
-    assert!(resolved.speculative.native_mtp_enabled);
-    assert_eq!(
-        resolved.speculative.decode.effective_strategy,
-        "native-mtp+ngram-simple"
-    );
-    assert!(resolved.speculative.decode.extension.is_some());
-    let openai = resolved
-        .to_embedded_openai_args(4096, true)
-        .expect("direct simple strategy should build OpenAI args");
-    assert_eq!(openai.ngram_min, 2);
-    assert_eq!(openai.ngram_max, 6);
-    assert_eq!(
-        openai.speculative.ngram.as_ref().map(|ngram| ngram.kind),
-        Some(skippy_server::NgramProposerKind::Simple)
     );
 }
 

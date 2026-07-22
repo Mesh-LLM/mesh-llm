@@ -142,10 +142,10 @@ pub(crate) fn render_benchmark_speculative(
             append_prob(&mut base, "split", *draft_split_probability);
             base
         }
-        TuneBenchmarkSpeculativeCandidate::Ngram {
+        TuneBenchmarkSpeculativeCandidate::MtpNgram {
             ngram_min,
             ngram_max,
-        } => format!("ngram:min={ngram_min}:max={ngram_max}"),
+        } => format!("mtp+ngram:min={ngram_min}:max={ngram_max}"),
     }
 }
 

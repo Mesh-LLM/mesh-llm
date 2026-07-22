@@ -6,7 +6,6 @@ use skippy_protocol::binary::StageStateHeader;
 use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireActivationDType;
 use skippy_protocol::binary::WireMessageKind;
-use skippy_protocol::binary::state_flags;
 
 pub(super) struct DecodeMessageArgs {
     pub(super) request_id: u64,
@@ -138,7 +137,6 @@ pub(super) struct VerifyWindowMessageArgs<'a> {
     pub(super) decode_step: usize,
     pub(super) tokens: &'a [i32],
     pub(super) sampling: Option<WireSamplingConfig>,
-    pub(super) checkpoint: bool,
 }
 
 pub(super) fn embedded_verify_window_message(
@@ -158,9 +156,6 @@ pub(super) fn embedded_verify_window_message(
         .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?;
     state.current_token = args.tokens[0];
     state.source_stage_index = -1;
-    if !args.checkpoint {
-        state.flags |= state_flags::SKIP_VERIFY_CHECKPOINT;
-    }
     Ok(StageWireMessage {
         kind: WireMessageKind::VerifyWindow,
         pos_start: i32::try_from(args.pos_start)
@@ -177,45 +172,6 @@ pub(super) fn embedded_verify_window_message(
         activation: Vec::new(),
         raw_bytes: Vec::new(),
     })
-}
-
-pub(super) fn embedded_session_control_message(
-    wire_dtype: WireActivationDType,
-    kind: WireMessageKind,
-    request_id: u64,
-    session_id: u64,
-) -> StageWireMessage {
-    StageWireMessage {
-        kind,
-        pos_start: 0,
-        token_count: 0,
-        state: StageStateHeader::new(kind, wire_dtype),
-        request_id,
-        session_id,
-        sampling: None,
-        chat_sampling_metadata: None,
-        tokens: Vec::new(),
-        positions: Vec::new(),
-        activation: Vec::new(),
-        raw_bytes: Vec::new(),
-    }
-}
-
-pub(super) fn embedded_trim_session_message(
-    wire_dtype: WireActivationDType,
-    request_id: u64,
-    session_id: u64,
-    token_count: usize,
-) -> OpenAiResult<StageWireMessage> {
-    let mut message = embedded_session_control_message(
-        wire_dtype,
-        WireMessageKind::TrimSession,
-        request_id,
-        session_id,
-    );
-    message.token_count = i32::try_from(token_count)
-        .map_err(|_| OpenAiError::backend("trim token count exceeds i32"))?;
-    Ok(message)
 }
 
 pub(super) fn generation_config_message(

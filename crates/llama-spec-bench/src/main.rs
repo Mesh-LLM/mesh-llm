@@ -41,8 +41,6 @@ struct Args {
     json_out: Option<PathBuf>,
     #[arg(long)]
     allow_mismatch: bool,
-    #[arg(long)]
-    debug_projection: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -80,20 +78,12 @@ struct Summary {
     baseline_decode_ms: f64,
     speculative_target_decode_ms: f64,
     speculative_draft_decode_ms: f64,
-    projected_rollback_verify_ms: f64,
-    projected_rollback_total_ms: f64,
-    projected_scratch_prefill_ms: f64,
-    projected_scratch_verify_ms: f64,
-    projected_scratch_total_ms: f64,
     baseline_tokens_per_second: f64,
     speculative_target_tokens_per_second: f64,
     draft_tokens_per_second: f64,
-    projected_rollback_tokens_per_second: f64,
-    projected_scratch_tokens_per_second: f64,
-    projected_rollback_speedup_vs_current_spec: f64,
-    projected_scratch_speedup_vs_current_spec: f64,
+    speculative_total_tokens_per_second: f64,
+    speculative_speedup_vs_baseline: f64,
     mean_accepted_tokens_per_window: f64,
-    projected_rollback_rewinds: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,12 +108,6 @@ struct PromptReport {
     speculative_target_decode_ms: f64,
     speculative_draft_decode_ms: f64,
     speculative_ttft_ms: f64,
-    projected_rollback_verify_ms: f64,
-    projected_rollback_total_ms: f64,
-    projected_scratch_prefill_ms: f64,
-    projected_scratch_verify_ms: f64,
-    projected_scratch_total_ms: f64,
-    projected_rollback_rewinds: usize,
     baseline_text_preview: String,
     speculative_text_preview: String,
 }
@@ -145,7 +129,6 @@ struct SpecGeneration {
     target_decode_ms: f64,
     draft_decode_ms: f64,
     ttft_ms: f64,
-    projection: BatchProjectionStats,
 }
 
 #[derive(Debug, Default)]
@@ -154,31 +137,6 @@ struct SpecStats {
     draft_tokens: usize,
     accepted_tokens: usize,
     rejected_tokens: usize,
-}
-
-#[derive(Debug, Default)]
-struct BatchProjectionStats {
-    rollback_verify_ms: f64,
-    scratch_prefill_ms: f64,
-    scratch_verify_ms: f64,
-    rollback_rewinds: usize,
-}
-
-#[derive(Debug, Default)]
-struct BatchProjection {
-    stats: BatchProjectionStats,
-    predicted_tokens: Vec<i32>,
-}
-
-#[derive(Debug, Clone)]
-struct ProjectionDebug {
-    prompt_id: String,
-    window_index: usize,
-    generated_tokens: usize,
-    context_tokens: usize,
-    context_tail: Vec<i32>,
-    proposals: Vec<i32>,
-    verify_inputs: Vec<i32>,
 }
 
 fn main() -> Result<()> {
@@ -328,9 +286,6 @@ fn run_prompt_pair(
             prompt_tokens: &target_tokens,
             max_new_tokens: args.max_new_tokens,
             window: args.speculative_window,
-            prompt_token_count: target_tokens.len(),
-            prompt_id: &prompt.id,
-            debug_projection: args.debug_projection,
         },
     )
     .with_context(|| format!("speculative target/draft generation for {}", prompt.id))?;
@@ -364,15 +319,6 @@ fn run_prompt_pair(
         speculative_target_decode_ms: speculative.target_decode_ms,
         speculative_draft_decode_ms: speculative.draft_decode_ms,
         speculative_ttft_ms: speculative.ttft_ms,
-        projected_rollback_verify_ms: speculative.projection.rollback_verify_ms,
-        projected_rollback_total_ms: speculative.draft_decode_ms
-            + speculative.projection.rollback_verify_ms,
-        projected_scratch_prefill_ms: speculative.projection.scratch_prefill_ms,
-        projected_scratch_verify_ms: speculative.projection.scratch_verify_ms,
-        projected_scratch_total_ms: speculative.draft_decode_ms
-            + speculative.projection.scratch_prefill_ms
-            + speculative.projection.scratch_verify_ms,
-        projected_rollback_rewinds: speculative.projection.rollback_rewinds,
         baseline_text_preview: preview_text(target, &baseline.tokens)?,
         speculative_text_preview: preview_text(target, &speculative.tokens)?,
     })
@@ -418,9 +364,6 @@ struct SpeculativeRun<'a> {
     prompt_tokens: &'a [i32],
     max_new_tokens: usize,
     window: usize,
-    prompt_token_count: usize,
-    prompt_id: &'a str,
-    debug_projection: bool,
 }
 
 fn generate_speculative(
@@ -430,7 +373,6 @@ fn generate_speculative(
 ) -> Result<SpecGeneration> {
     let mut target_session = target.create_session()?;
     let mut draft_session = draft.create_session()?;
-    let mut projection_session = target.create_session()?;
     let target_prefill_started = Instant::now();
     if run.prompt_tokens.len() > 1 {
         target_session.prefill_chunk(&run.prompt_tokens[..run.prompt_tokens.len() - 1])?;
@@ -447,7 +389,6 @@ fn generate_speculative(
     let mut target_decode_ms = 0.0;
     let mut draft_decode_ms = 0.0;
     let mut ttft_ms = 0.0;
-    let mut projection = BatchProjectionStats::default();
     let started = Instant::now();
 
     while generated.len() < run.max_new_tokens {
@@ -463,46 +404,13 @@ fn generate_speculative(
         }
         stats.draft_tokens += proposals.len();
 
-        let batch_projection = measure_batch_projection(
-            &mut target_session,
-            &mut projection_session,
-            &context,
-            &proposals,
-            run.prompt_token_count,
-            ProjectionDebug {
-                prompt_id: run.prompt_id.to_string(),
-                window_index: stats.windows,
-                generated_tokens: generated.len(),
-                context_tokens: context.len(),
-                context_tail: tail_tokens(&context, 16),
-                proposals: proposals.clone(),
-                verify_inputs: verify_inputs_for_proposals(&context, &proposals),
-            },
-            run.debug_projection,
-        )?;
-        projection.rollback_verify_ms += batch_projection.stats.rollback_verify_ms;
-        projection.scratch_prefill_ms += batch_projection.stats.scratch_prefill_ms;
-        projection.scratch_verify_ms += batch_projection.stats.scratch_verify_ms;
-
         let mut rejected = false;
         let base_current = *context.last().expect("context is never empty");
         let mut target_current = base_current;
-        for (batch_index, proposal) in proposals.into_iter().enumerate() {
+        for proposal in proposals {
             let target_started = Instant::now();
             let verified = target_session.decode_step(target_current)?;
             target_decode_ms += elapsed_ms(target_started);
-            let Some(batch_verified) = batch_projection.predicted_tokens.get(batch_index) else {
-                bail!(
-                    "batched target verification returned too few tokens: got {} expected at least {}",
-                    batch_projection.predicted_tokens.len(),
-                    batch_index + 1
-                );
-            };
-            if *batch_verified != verified {
-                bail!(
-                    "batched target verification mismatch at window token {batch_index}: serial={verified} batch={batch_verified}"
-                );
-            }
             if generated.is_empty() {
                 ttft_ms = elapsed_ms(started);
             }
@@ -513,7 +421,6 @@ fn generate_speculative(
             } else {
                 stats.rejected_tokens += 1;
                 rejected = true;
-                projection.rollback_rewinds += 1;
             }
             generated.push(verified);
             context.push(verified);
@@ -546,83 +453,6 @@ fn generate_speculative(
         target_decode_ms,
         draft_decode_ms,
         ttft_ms,
-        projection,
-    })
-}
-
-fn measure_batch_projection(
-    rollback_session: &mut StageSession,
-    scratch_session: &mut StageSession,
-    context_tokens: &[i32],
-    proposals: &[i32],
-    prompt_token_count: usize,
-    debug: ProjectionDebug,
-    debug_projection: bool,
-) -> Result<BatchProjection> {
-    if proposals.is_empty() {
-        return Ok(BatchProjection::default());
-    }
-    let mut verify_inputs = Vec::with_capacity(proposals.len());
-    verify_inputs.push(*context_tokens.last().expect("context is never empty"));
-    verify_inputs.extend(proposals.iter().take(proposals.len().saturating_sub(1)));
-
-    let rollback_started = Instant::now();
-    let predicted_tokens = rollback_session.verify_tokens_rewound(&verify_inputs)?;
-    let rollback_verify_ms = elapsed_ms(rollback_started);
-
-    let prefill_started = Instant::now();
-    reset_scratch_to_context(scratch_session, context_tokens, prompt_token_count)?;
-    let scratch_prefill_ms = elapsed_ms(prefill_started);
-    let (rollback_serial, scratch_serial) = if debug_projection {
-        let rollback_serial = verify_tokens_serial_rewound(rollback_session, &verify_inputs)?;
-        let scratch_serial = verify_tokens_serial_rewound(scratch_session, &verify_inputs)?;
-        (Some(rollback_serial), Some(scratch_serial))
-    } else {
-        (None, None)
-    };
-
-    let scratch_started = Instant::now();
-    let scratch_predicted_tokens = scratch_session.verify_tokens(&verify_inputs)?;
-    let scratch_verify_ms = elapsed_ms(scratch_started);
-    if debug_projection {
-        eprintln!(
-            "projection debug prompt={} window={} generated={} context_tokens={} context_tail={:?} verify_inputs={:?} proposals={:?} rollback_batch={:?} scratch_batch={:?} rollback_serial={:?} scratch_serial={:?}",
-            debug.prompt_id,
-            debug.window_index,
-            debug.generated_tokens,
-            debug.context_tokens,
-            debug.context_tail,
-            debug.verify_inputs,
-            debug.proposals,
-            predicted_tokens,
-            scratch_predicted_tokens,
-            rollback_serial,
-            scratch_serial
-        );
-    }
-    if scratch_predicted_tokens != predicted_tokens {
-        let mismatch_index = first_mismatch(&scratch_predicted_tokens, &predicted_tokens);
-        bail!(
-            "scratch and rollback batched verification disagreed for prompt={} window={} generated={} context_tokens={} first_mismatch={:?} context_tail={:?} verify_inputs={:?} proposals={:?} scratch={scratch_predicted_tokens:?} rollback={predicted_tokens:?}",
-            debug.prompt_id,
-            debug.window_index,
-            debug.generated_tokens,
-            debug.context_tokens,
-            mismatch_index,
-            debug.context_tail,
-            debug.verify_inputs,
-            debug.proposals
-        );
-    }
-
-    Ok(BatchProjection {
-        stats: BatchProjectionStats {
-            rollback_verify_ms,
-            scratch_prefill_ms,
-            scratch_verify_ms,
-            rollback_rewinds: 0,
-        },
-        predicted_tokens,
     })
 }
 
@@ -632,59 +462,6 @@ fn reset_draft_to_context(session: &mut StageSession, context_tokens: &[i32]) ->
         session.prefill_chunk(&context_tokens[..context_tokens.len() - 1])?;
     }
     Ok(())
-}
-
-fn reset_scratch_to_context(
-    session: &mut StageSession,
-    context_tokens: &[i32],
-    prompt_token_count: usize,
-) -> Result<()> {
-    session.reset()?;
-    if context_tokens.len() <= 1 {
-        return Ok(());
-    }
-    let prompt_prefix_count = prompt_token_count
-        .saturating_sub(1)
-        .min(context_tokens.len() - 1);
-    if prompt_prefix_count > 0 {
-        session.prefill_chunk(&context_tokens[..prompt_prefix_count])?;
-    }
-    for token_id in &context_tokens[prompt_prefix_count..context_tokens.len() - 1] {
-        session.decode_step(*token_id)?;
-    }
-    Ok(())
-}
-
-fn verify_tokens_serial_rewound(session: &mut StageSession, token_ids: &[i32]) -> Result<Vec<i32>> {
-    let checkpoint = session.checkpoint()?;
-    let mut predicted = Vec::with_capacity(token_ids.len());
-    let result = (|| {
-        for token_id in token_ids {
-            predicted.push(session.decode_step(*token_id)?);
-        }
-        Ok(predicted)
-    })();
-    let restore_result = session.restore_checkpoint(&checkpoint);
-    match (result, restore_result) {
-        (Ok(predicted), Ok(())) => Ok(predicted),
-        (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(error),
-    }
-}
-
-fn verify_inputs_for_proposals(context_tokens: &[i32], proposals: &[i32]) -> Vec<i32> {
-    if proposals.is_empty() {
-        return Vec::new();
-    }
-    let mut verify_inputs = Vec::with_capacity(proposals.len());
-    verify_inputs.push(*context_tokens.last().expect("context is never empty"));
-    verify_inputs.extend(proposals.iter().take(proposals.len().saturating_sub(1)));
-    verify_inputs
-}
-
-fn tail_tokens(tokens: &[i32], limit: usize) -> Vec<i32> {
-    let start = tokens.len().saturating_sub(limit);
-    tokens[start..].to_vec()
 }
 
 fn first_mismatch(left: &[i32], right: &[i32]) -> Option<usize> {
@@ -717,12 +494,6 @@ fn summarize(prompts: &[PromptReport]) -> Summary {
         summary.baseline_decode_ms += prompt.baseline_decode_ms;
         summary.speculative_target_decode_ms += prompt.speculative_target_decode_ms;
         summary.speculative_draft_decode_ms += prompt.speculative_draft_decode_ms;
-        summary.projected_rollback_verify_ms += prompt.projected_rollback_verify_ms;
-        summary.projected_rollback_total_ms += prompt.projected_rollback_total_ms;
-        summary.projected_scratch_prefill_ms += prompt.projected_scratch_prefill_ms;
-        summary.projected_scratch_verify_ms += prompt.projected_scratch_verify_ms;
-        summary.projected_scratch_total_ms += prompt.projected_scratch_total_ms;
-        summary.projected_rollback_rewinds += prompt.projected_rollback_rewinds;
     }
     summary.accept_rate = if summary.draft_tokens == 0 {
         0.0
@@ -737,20 +508,12 @@ fn summarize(prompts: &[PromptReport]) -> Summary {
     );
     summary.draft_tokens_per_second =
         tokens_per_second(summary.draft_tokens, summary.speculative_draft_decode_ms);
-    summary.projected_rollback_tokens_per_second = tokens_per_second(
-        summary.speculative_generated_total,
-        summary.projected_rollback_total_ms,
-    );
-    summary.projected_scratch_tokens_per_second = tokens_per_second(
-        summary.speculative_generated_total,
-        summary.projected_scratch_total_ms,
-    );
     let current_spec_total_ms =
         summary.speculative_target_decode_ms + summary.speculative_draft_decode_ms;
-    summary.projected_rollback_speedup_vs_current_spec =
-        speedup(current_spec_total_ms, summary.projected_rollback_total_ms);
-    summary.projected_scratch_speedup_vs_current_spec =
-        speedup(current_spec_total_ms, summary.projected_scratch_total_ms);
+    summary.speculative_total_tokens_per_second =
+        tokens_per_second(summary.speculative_generated_total, current_spec_total_ms);
+    summary.speculative_speedup_vs_baseline =
+        speedup(summary.baseline_decode_ms, current_spec_total_ms);
     summary.mean_accepted_tokens_per_window = if summary.speculative_windows == 0 {
         0.0
     } else {
@@ -783,66 +546,35 @@ fn print_human_summary(report: &Report) {
         summary.accept_rate * 100.0,
         summary.mean_accepted_tokens_per_window
     );
-    eprintln!(
-        "  projection    rollback_rewinds={} measured with rollback and scratch batched verification",
-        summary.projected_rollback_rewinds
-    );
     eprintln!();
     eprintln!(
-        "{:<28} {:>12} {:>12} {:>11} {:>11} {:>10}",
-        "path", "total_ms", "tok/s", "vs_target", "vs_current", "notes"
+        "{:<28} {:>12} {:>12} {:>11} {:>10}",
+        "path", "total_ms", "tok/s", "vs_target", "notes"
     );
-    eprintln!("{}", "-".repeat(92));
+    eprintln!("{}", "-".repeat(78));
     eprintln!(
-        "{:<28} {:>12.2} {:>12.2} {:>10.2}x {:>10.2}x {:>10}",
+        "{:<28} {:>12.2} {:>12.2} {:>10.2}x {:>10}",
         "target baseline",
         summary.baseline_decode_ms,
         summary.baseline_tokens_per_second,
         1.0,
-        speedup(current_spec_total_ms, summary.baseline_decode_ms),
         "actual"
     );
     eprintln!(
-        "{:<28} {:>12.2} {:>12.2} {:>10.2}x {:>10.2}x {:>10}",
-        "current serial speculative",
+        "{:<28} {:>12.2} {:>12.2} {:>10.2}x {:>10}",
+        "target/draft speculative",
         current_spec_total_ms,
-        tokens_per_second(summary.speculative_generated_total, current_spec_total_ms),
-        speedup(summary.baseline_decode_ms, current_spec_total_ms),
-        1.0,
+        summary.speculative_total_tokens_per_second,
+        summary.speculative_speedup_vs_baseline,
         "actual"
-    );
-    eprintln!(
-        "{:<28} {:>12.2} {:>12.2} {:>10.2}x {:>10.2}x {:>10}",
-        "batched rollback",
-        summary.projected_rollback_total_ms,
-        summary.projected_rollback_tokens_per_second,
-        speedup(
-            summary.baseline_decode_ms,
-            summary.projected_rollback_total_ms
-        ),
-        summary.projected_rollback_speedup_vs_current_spec,
-        "projected"
-    );
-    eprintln!(
-        "{:<28} {:>12.2} {:>12.2} {:>10.2}x {:>10.2}x {:>10}",
-        "batched scratch",
-        summary.projected_scratch_total_ms,
-        summary.projected_scratch_tokens_per_second,
-        speedup(
-            summary.baseline_decode_ms,
-            summary.projected_scratch_total_ms
-        ),
-        summary.projected_scratch_speedup_vs_current_spec,
-        "projected"
     );
     eprintln!();
     eprintln!(
-        "  components    current_target_verify={:.2}ms current_draft={:.2}ms rollback_verify={:.2}ms scratch_prefill={:.2}ms scratch_verify={:.2}ms",
+        "  components    target_verify={:.2}ms draft_propose={:.2}ms target_only={:.2} tok/s draft_only={:.2} tok/s",
         summary.speculative_target_decode_ms,
         summary.speculative_draft_decode_ms,
-        summary.projected_rollback_verify_ms,
-        summary.projected_scratch_prefill_ms,
-        summary.projected_scratch_verify_ms
+        summary.speculative_target_tokens_per_second,
+        summary.draft_tokens_per_second
     );
 }
 

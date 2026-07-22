@@ -5,7 +5,6 @@ use anyhow::Result;
 use anyhow::bail;
 use skippy_protocol::StageConfig;
 use skippy_protocol::StageTopology;
-use skippy_protocol::binary::LLAMA_TOKEN_NULL;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::StageReplyWindow;
@@ -87,23 +86,10 @@ pub(super) fn send_stage_reply(stream: &mut TcpStream, reply: StageReply) -> Res
 
 pub(super) fn reply_window_for_message(
     message: &skippy_protocol::binary::StageWireMessage,
-    predicted_tokens: &[i32],
 ) -> StageReplyWindow {
     if message.kind == skippy_protocol::binary::WireMessageKind::VerifyWindow {
-        let accepted_len = message
-            .tokens
-            .iter()
-            .skip(1)
-            .zip(predicted_tokens)
-            .take_while(|(input, predicted)| input == predicted)
-            .count();
         StageReplyWindow {
             window_id: message.state.seq_id,
-            accepted_len: i32::try_from(accepted_len).unwrap_or(i32::MAX),
-            correction_token: predicted_tokens
-                .get(accepted_len)
-                .copied()
-                .unwrap_or(LLAMA_TOKEN_NULL),
         }
     } else {
         Default::default()
@@ -116,7 +102,7 @@ mod tests {
     use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
 
     #[test]
-    fn verify_window_reply_reports_accepted_prefix_and_correction() {
+    fn verify_window_reply_reports_only_the_coordinator_window_id() {
         let kind = WireMessageKind::VerifyWindow;
         let mut state = StageStateHeader::new(kind, WireActivationDType::F16);
         state.seq_id = 42;
@@ -135,10 +121,8 @@ mod tests {
             raw_bytes: Vec::new(),
         };
 
-        let reply = reply_window_for_message(&message, &[11, 99, 100]);
+        let reply = reply_window_for_message(&message);
 
         assert_eq!(reply.window_id, 42);
-        assert_eq!(reply.accepted_len, 1);
-        assert_eq!(reply.correction_token, 99);
     }
 }

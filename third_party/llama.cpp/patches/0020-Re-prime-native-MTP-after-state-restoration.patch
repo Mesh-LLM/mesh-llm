@@ -1,0 +1,110 @@
+From 595a5b64c64f85f6dba0a0a61de1868a8b0d78d6 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 21 Jul 2026 01:38:34 +1000
+Subject: [PATCH] Re-prime native MTP after state restoration
+
+---
+ src/skippy.cpp | 31 ++++++++++++++++++++++++++++++-
+ 1 file changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 32fb95ad..7f561a8d 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -74,6 +74,7 @@ struct skippy_session {
+     uint64_t grammar_generated_start = 0;
+     size_t sampling_accepted_token_count = 0;
+     int32_t mtp_next_pos = 0;
++    bool mtp_prefix_valid = true;
+     bool mtp_has_pending_h = false;
+     std::vector<float> mtp_pending_h;
+     bool mtp_has_pending_draft = false;
+@@ -1321,6 +1322,7 @@ static void skippy_mtp_clear_session_state(skippy_session * session) {
+         return;
+     }
+     session->mtp_next_pos = session->n_past;
++    session->mtp_prefix_valid = session->n_past == 0;
+     session->mtp_has_pending_h = false;
+     session->mtp_pending_h.clear();
+     session->mtp_has_pending_draft = false;
+@@ -1356,6 +1358,23 @@ static enum skippy_status skippy_mtp_sync_target_tokens(
+         session->mtp_has_pending_h = false;
+     }
+ 
++    if (!session->mtp_prefix_valid && !session->mtp_has_pending_h) {
++        const float * h_last = llama_get_embeddings_nextn_ith(session->ctx, static_cast<int32_t>(token_count - 1));
++        if (h_last == nullptr) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "target pre-norm hidden row was not available");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        std::memcpy(session->mtp_pending_h.data(), h_last, row_bytes);
++        session->mtp_has_pending_h = true;
++        session->mtp_next_pos = token_start + static_cast<int32_t>(token_count);
++        session->mtp_has_pending_draft = false;
++        session->mtp_pending_draft_pos = 0;
++        session->mtp_pending_draft_token = -1;
++        return skippy_success(out_error);
++    }
++
++    const bool reprime_prefix = !session->mtp_prefix_valid;
++
+     if (session->mtp_has_pending_draft) {
+         const llama_pos token_end = token_start + static_cast<llama_pos>(token_count);
+         if (session->mtp_pending_draft_pos >= token_start &&
+@@ -1436,6 +1455,9 @@ static enum skippy_status skippy_mtp_sync_target_tokens(
+     }
+     std::memcpy(session->mtp_pending_h.data(), h_last, row_bytes);
+     session->mtp_has_pending_h = true;
++    if (reprime_prefix) {
++        session->mtp_prefix_valid = true;
++    }
+     return skippy_success(out_error);
+ }
+ 
+@@ -2086,7 +2108,10 @@ static enum skippy_status skippy_mtp_propose_next(
+             0,
+         };
+     }
+-    if (!skippy_mtp_available(session) || predicted_token < 0 || !session->mtp_has_pending_h) {
++    if (!skippy_mtp_available(session) ||
++            !session->mtp_prefix_valid ||
++            predicted_token < 0 ||
++            !session->mtp_has_pending_h) {
+         return skippy_success(out_error);
+     }
+ 
+@@ -4219,6 +4244,7 @@ static void skippy_update_session_state_after_import(
+     if (session->signal_history.size() > static_cast<size_t>(session->n_past)) {
+         session->signal_history.resize(static_cast<size_t>(session->n_past));
+     }
++    skippy_mtp_clear_session_state(session);
+ }
+ 
+ enum skippy_status skippy_export_state(
+@@ -4623,6 +4649,7 @@ enum skippy_status skippy_import_kv_page(
+             static_cast<int32_t>(std::min<uint64_t>(
+                     desc->token_start + desc->token_count,
+                     static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))));
++    skippy_mtp_clear_session_state(session);
+     session->ctx->synchronize();
+ 
+     return skippy_success(out_error);
+@@ -4831,6 +4858,7 @@ enum skippy_status skippy_session_restore_prefix(
+         session->token_history.assign(token_ids, token_ids + token_count);
+     }
+     session->signal_history.clear();
++    skippy_mtp_clear_session_state(session);
+     session->ctx->synchronize();
+     return skippy_success(out_error);
+ }
+@@ -4926,6 +4954,7 @@ enum skippy_status skippy_session_create_from_resident_prefix(
+     if (token_count > 0) {
+         session->token_history.assign(token_ids, token_ids + token_count);
+     }
++    skippy_mtp_clear_session_state(session);
+     model->ctx->synchronize();
+     *out_session = session;
+     return skippy_success(out_error);
+-- 
+2.54.0 (Apple Git-157)
+

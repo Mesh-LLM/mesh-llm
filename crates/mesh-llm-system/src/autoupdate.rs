@@ -10,8 +10,10 @@ mod release_fetch;
 pub use release_fetch::{latest_release_version, version_newer};
 
 use platform_probe::{installed_bundle_flavor, preferred_bundle_flavor_for_current_host};
+#[cfg(not(windows))]
+use release_fetch::INSTALL_SCRIPT_URL;
 use release_fetch::{
-    INSTALL_SCRIPT_URL, InstallOutcome, PostInstallAction, RELEASES_URL, ReleaseAssetPreference,
+    InstallOutcome, PostInstallAction, RELEASES_URL, ReleaseAssetPreference,
     current_release_target, describe_requested_update, exec_current_binary, install_latest_bundle,
     latest_release_info, mesh_binary_name, path_is_writable, platform_has_release_assets,
     release_asset_candidates, release_has_any_platform_asset, resolve_release_asset_name,

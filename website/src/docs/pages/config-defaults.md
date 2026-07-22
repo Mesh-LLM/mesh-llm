@@ -47,7 +47,7 @@ prefill_chunking      = "auto"           # Prefill chunking policy
 prefill_chunk_size    = 0                 # Fixed prefill chunk size (0 = auto)
 
 [defaults.speculative]
-mode                 = "auto"            # "auto", "disabled", "draft", or "ngram"
+mode                 = "auto"            # "auto", "disabled", or "draft"
 draft_model          = ""                # Path or repo for a draft model
 draft_max_tokens     = 0                 # Maximum draft-token window
 draft_min_tokens     = 0                 # Minimum draft-token window

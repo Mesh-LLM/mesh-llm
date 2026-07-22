@@ -14,6 +14,7 @@ mod topology;
 
 use crate::runtime::survey;
 use std::{
+    env,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -73,6 +74,29 @@ pub(crate) use stage::{
 };
 #[cfg(test)]
 pub(crate) use topology::{StageTopologyParticipant, plan_package_identity_topology};
+
+const BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS";
+
+fn benchmark_downstream_wire_condition() -> Result<WireCondition> {
+    let delay_ms = match env::var(BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV) {
+        Ok(value) => parse_benchmark_downstream_wire_delay_ms(&value)?,
+        Err(env::VarError::NotPresent) => 0.0,
+        Err(env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("{BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV} must be valid UTF-8")
+        }
+    };
+    WireCondition::new(delay_ms, None)
+}
+
+fn parse_benchmark_downstream_wire_delay_ms(value: &str) -> Result<f64> {
+    let delay_ms = value.parse::<f64>().with_context(|| {
+        format!("{BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV} must be a finite non-negative number")
+    })?;
+    if !delay_ms.is_finite() || delay_ms < 0.0 {
+        anyhow::bail!("{BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV} must be a finite non-negative number");
+    }
+    Ok(delay_ms)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SkippyModelState {
@@ -167,6 +191,12 @@ pub(crate) struct SkippyTelemetryOptions {
     pub(crate) metrics_otlp_grpc: Option<String>,
     pub(crate) queue_capacity: usize,
     pub(crate) level: TelemetryLevel,
+}
+
+impl Default for SkippyTelemetryOptions {
+    fn default() -> Self {
+        Self::off()
+    }
 }
 
 impl SkippyTelemetryOptions {
@@ -428,8 +458,6 @@ fn embedded_openai_args_from(
         adaptive_speculative_window: embedded_args.adaptive_speculative_window,
         draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
         speculative: embedded_args.speculative,
-        ngram_min: embedded_args.ngram_min,
-        ngram_max: embedded_args.ngram_max,
         native_mtp_enabled: embedded_args.native_mtp_enabled,
         native_mtp_draft_model_path: embedded_args.native_mtp_draft_model_path,
         native_mtp_max_tokens: embedded_args.native_mtp_max_tokens,
@@ -438,7 +466,7 @@ fn embedded_openai_args_from(
         wire_dtype: embedded_args.wire_dtype,
         reply_credit_limit: embedded_args.reply_credit_limit,
         downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
-        downstream_wire_condition: WireCondition::new(0.0, None)?,
+        downstream_wire_condition: benchmark_downstream_wire_condition()?,
         prediction_returns,
         telemetry,
         hook_policy,
@@ -1173,6 +1201,22 @@ mod tests {
     use skippy_server::runtime_state::RuntimeSessionStats;
     use skippy_server::telemetry::TelemetryStats;
 
+    #[test]
+    fn benchmark_wire_delay_accepts_finite_non_negative_values() {
+        assert_eq!(parse_benchmark_downstream_wire_delay_ms("0").unwrap(), 0.0);
+        assert_eq!(
+            parse_benchmark_downstream_wire_delay_ms("25.5").unwrap(),
+            25.5
+        );
+    }
+
+    #[test]
+    fn benchmark_wire_delay_rejects_invalid_values() {
+        for value in ["-1", "NaN", "inf", "not-a-number"] {
+            assert!(parse_benchmark_downstream_wire_delay_ms(value).is_err());
+        }
+    }
+
     #[derive(Default)]
     struct RecordingHostBackend {
         seen_chat: Mutex<Option<ChatCompletionRequest>>,
@@ -1258,7 +1302,6 @@ mod tests {
                 tracked_token_counts: 0,
                 max_session_tokens: 2048,
                 total_session_tokens: 0,
-                checkpoints: 0,
                 lanes: vec![],
             },
             telemetry: TelemetryStats {

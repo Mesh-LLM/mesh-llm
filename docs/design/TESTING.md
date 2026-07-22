@@ -43,7 +43,7 @@ mesh-llm serve
 - If `[[models]]` is empty, `mesh-llm serve` should print a `⚠️` warning, show help, and exit cleanly
 - Explicit `--model` or `--gguf` should ignore configured `[[models]]`
 - Explicit `--ctx-size` should override configured `ctx_size`
-- `mesh-llm benchmark tune` is the measured local model-serving tuning companion for these startup configs. It only accepts already-downloaded targets, rejects remote-only or not-downloaded refs without fetching them, and runs isolated throughput trials. For speculative decoding changes, run a small sweep that includes the disabled baseline plus `mtp`, draft, or ngram candidates as applicable, then inspect trial logs/telemetry for native MTP or draft acceptance statistics in addition to decode tok/s.
+- `mesh-llm benchmark tune` is the measured local model-serving tuning companion for these startup configs. It only accepts already-downloaded targets, rejects remote-only or not-downloaded refs without fetching them, and runs isolated throughput trials. For speculative decoding changes, run a small sweep that includes the disabled baseline plus `mtp`, `mtp-ngram`, or draft candidates as applicable, then inspect trial logs/telemetry for native MTP or draft acceptance statistics in addition to decode tok/s.
 
 ### 0b. Pinned startup smoke
 
@@ -357,7 +357,9 @@ mesh-llm serve \
 >
 > Use real flags only: `--split`, `--max-vram`, `--join`, `--bind-port`,
 > `--port`, `--console`. There is no `--layer-range` flag — layer placement
-> is decided by the runtime from advertised VRAM, not pinned by CLI.
+> is normally decided by the runtime from advertised VRAM. Maintainer runs that
+> require exact placement can supply a complete topology manifest with
+> `--split-topology-lock <path>`; see `docs/SKIPPY_SPLITS.md`.
 
 #### Multi-interface Docker/Linux bind-IP validation
 

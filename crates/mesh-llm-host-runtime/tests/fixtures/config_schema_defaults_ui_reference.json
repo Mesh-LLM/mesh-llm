@@ -820,21 +820,7 @@
       }
     },
     {
-      "canonical_path": "defaults.speculative.extension_initial_tokens",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.speculative.extension_max_tokens",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.speculative.extension_tail_backoff_proposals",
       "support": "supported",
       "source": {
         "kind": "built_in"

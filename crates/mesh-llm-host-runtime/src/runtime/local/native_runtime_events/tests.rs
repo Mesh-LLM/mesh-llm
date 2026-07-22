@@ -156,8 +156,22 @@ fn native_model_open_reporter_emits_visibility_only_events() {
     }
 
     let events = sink.take_events();
-    assert_eq!(events.len(), 4, "every native callback should stay visible");
-    assert!(events.iter().all(|event| {
+    let model_events = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                OutputEvent::Info { message, .. } | OutputEvent::Warning { message, .. }
+                    if message.contains("'model-a'")
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        model_events.len(),
+        4,
+        "every native callback should stay visible"
+    );
+    assert!(model_events.iter().all(|event| {
         matches!(
             event,
             OutputEvent::Info { .. } | OutputEvent::Warning { .. }

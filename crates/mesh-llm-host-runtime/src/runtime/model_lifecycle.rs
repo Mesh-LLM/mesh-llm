@@ -404,6 +404,7 @@ pub(super) async fn run_auto_load_runtime_model(
                 .and_then(|m| m.flash_attention)
                 .unwrap_or(FlashAttentionType::Auto),
             parallel_override,
+            split_topology_lock: None,
             planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: skippy_telemetry_options(ctx.options),

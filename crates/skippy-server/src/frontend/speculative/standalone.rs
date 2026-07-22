@@ -1,8 +1,6 @@
 use openai_frontend::{OpenAiError, OpenAiResult};
 
-use super::{
-    HistoryNgramProposer, NgramProposerKind, SpeculativeDecodeConfig, propose_ngram_tokens,
-};
+use super::{HistoryNgramProposer, NgramProposerKind, SpeculativeDecodeConfig};
 
 /// A standalone N-gram draft plus the proposer kind that produced it.
 pub(in crate::frontend) struct ConfiguredNgramProposal {
@@ -36,9 +34,6 @@ pub(in crate::frontend) fn propose_configured_ngram_tokens(
     };
     let proposal_limit = proposal_limit.min(ngram.max_proposal_tokens);
     let tokens = match ngram.kind {
-        NgramProposerKind::Simple => {
-            propose_ngram_tokens(committed_history, ngram.min_ngram, proposal_limit)?
-        }
         NgramProposerKind::Cache | NgramProposerKind::Suffix => history_proposer
             .as_mut()
             .ok_or_else(|| OpenAiError::backend("configured history N-gram proposer is missing"))?
@@ -79,28 +74,14 @@ mod tests {
 
     #[test]
     fn standalone_limits_apply_to_every_ngram_kind() {
-        for kind in [
-            NgramProposerKind::Simple,
-            NgramProposerKind::Cache,
-            NgramProposerKind::Suffix,
-        ] {
+        for kind in [NgramProposerKind::Cache, NgramProposerKind::Suffix] {
             let config = config(kind, 3, 8);
             assert_eq!(standalone_ngram_proposal_limit(&config), 3);
         }
     }
 
     #[test]
-    fn simple_is_a_standalone_proposer() {
-        let proposal = propose(
-            &config(NgramProposerKind::Simple, 2, 4),
-            &[1, 2, 3, 4, 9, 2, 3, 4],
-        );
-        assert_eq!(proposal.source, "simple");
-        assert_eq!(proposal.tokens, vec![9, 2, 3]);
-    }
-
-    #[test]
-    fn cache_is_a_standalone_proposer_without_simple_fallback() {
+    fn cache_is_a_standalone_proposer() {
         let proposal = propose(
             &config(NgramProposerKind::Cache, 2, 4),
             &[1, 2, 3, 1, 2, 3, 1, 2],

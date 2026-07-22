@@ -6,8 +6,8 @@ use super::summary::BinaryMessageObservation;
 use super::summary::BinaryRequestSummary;
 use super::telemetry::UpstreamReplyWriteSpan;
 use super::telemetry::{
-    SessionControlTiming, emit_upstream_reply_write_span, insert_runtime_session_stats,
-    record_prefill_edge_transport, record_session_control_timing, record_verify_window_timing,
+    emit_upstream_reply_write_span, insert_runtime_session_stats, record_prefill_edge_transport,
+    record_verify_window_timing,
 };
 use crate::binary_transport::BinaryStageExecutionOptions;
 use crate::binary_transport::DecodeFrameBatcher;
@@ -27,19 +27,15 @@ use crate::binary_transport::kv_eviction::evict_binary_resident_prefix_for_decod
 use crate::binary_transport::restore_prefill_decode::handle_binary_restore_prefill_decode_control;
 use crate::binary_transport::run_binary_stage_message;
 use crate::binary_transport::send_client_ready_hello_if_enabled;
-use crate::binary_transport::stage_execution::binary_auto_align_session_enabled;
 use crate::binary_transport::stage_execution::binary_message_attrs;
 use crate::binary_transport::stage_execution::binary_message_base;
 use crate::binary_transport::stage_execution::binary_message_session_id;
 use crate::binary_transport::stage_execution::decode_record_tokens_sideband;
 use crate::binary_transport::stage_execution::elapsed_ms;
-use crate::binary_transport::stage_execution::elapsed_us;
 use crate::binary_transport::stage_execution::empty_activation_frame;
 use crate::binary_transport::stage_execution::input_activation_frame;
 use crate::binary_transport::stage_execution::insert_optional_unix_nanos;
 use crate::binary_transport::stage_execution::is_decode_frame_batch_candidate;
-use crate::binary_transport::stage_execution::message_allows_session_auto_align;
-use crate::binary_transport::stage_execution::message_pos_start_as_token_count;
 use crate::binary_transport::stage_execution::nanos_delta_ms;
 use crate::binary_transport::stage_execution::runtime_sampling_config;
 use crate::binary_transport::stage_execution::split_native_mtp_reply;
@@ -47,7 +43,7 @@ use crate::binary_transport::stage_execution::stage_mask;
 use crate::binary_transport::stage_execution::token_sideband_or_fill;
 use crate::binary_transport::stage_output_activation_capacity;
 use crate::binary_transport::write_stage_message_conditioned;
-use crate::kv_integration::KvStageIntegration;
+use crate::kv_integration::{KvStageIntegration, model_requires_recurrent_state};
 use crate::runtime_state::RuntimeState;
 use crate::telemetry::Telemetry;
 use crate::telemetry::now_unix_nanos;
@@ -67,7 +63,6 @@ use skippy_protocol::binary::read_stage_message;
 use skippy_protocol::binary::recv_reply;
 use skippy_protocol::binary::send_reply_ack;
 use skippy_protocol::binary::send_reply_ack_with_stats;
-use skippy_protocol::binary::state_flags;
 use std::collections::BTreeMap;
 use std::io;
 use std::net::TcpStream;
@@ -108,6 +103,7 @@ pub(super) fn handle_binary_connection(
     }
 
     let connection_session_id = BINARY_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let positional_speculation_supported = !model_requires_recurrent_state(config);
     let max_deferred_prefill_replies =
         reply_credit_limit.unwrap_or_else(|| max_inflight.saturating_sub(1));
     let mut pending_prefill_replies = 0usize;
@@ -116,10 +112,12 @@ pub(super) fn handle_binary_connection(
     let mut accumulated_prefill_tokens: BTreeMap<String, Vec<i32>> = BTreeMap::new();
     let mut prediction_return_streams: BTreeMap<(u64, u64), TcpStream> = BTreeMap::new();
     let mut next_message = Some(first_message);
-    let mut async_forwarder = if async_prefill_forward {
+    let mut async_forwarder = if async_prefill_forward || max_inflight > 1 {
         downstream
             .as_ref()
-            .map(|downstream| AsyncForwarder::new(downstream, telemetry.clone()))
+            .map(|downstream| {
+                AsyncForwarder::new(downstream, telemetry.clone(), max_inflight.max(1))
+            })
             .transpose()
             .context("create async activation forwarder")?
     } else {
@@ -150,6 +148,12 @@ pub(super) fn handle_binary_connection(
         let message_started = Instant::now();
         let session_id = binary_message_session_id(connection_session_id, &message);
         let session_key = session_id.to_string();
+        if message.kind == WireMessageKind::VerifyWindow && !positional_speculation_supported {
+            bail!(
+                "stage-state v10 positional speculation requires an attention-only stage; {} contains recurrent state",
+                config.stage_id
+            );
+        }
         if telemetry.is_debug_enabled() {
             let mut recv_attrs = binary_message_attrs(config, session_id, &message);
             recv_attrs.insert(
@@ -283,47 +287,28 @@ pub(super) fn handle_binary_connection(
         }
 
         if message.kind.is_session_control() {
-            let control_started = Instant::now();
             let mut control_stats = std::mem::take(&mut pending_reply_stats);
-            let flush_started = Instant::now();
             if let Some(forwarder) = async_forwarder.as_mut() {
                 forwarder
                     .flush()
                     .context("flush async forwards before session control")?;
             }
-            let flush_us = elapsed_us(flush_started);
-            let pending_prefill_before_control = pending_prefill_replies;
-            let drain_started = Instant::now();
             drain_deferred_prefill_replies(
                 downstream.as_mut(),
                 &mut pending_prefill_replies,
                 &mut control_stats,
             )
             .context("drain deferred replies before session control")?;
-            let prefill_drain_us = elapsed_us(drain_started);
-            let prefill_drained_replies =
-                pending_prefill_before_control.saturating_sub(pending_prefill_replies);
-            let local_started = Instant::now();
             {
                 let mut runtime = runtime.lock().expect("runtime lock poisoned");
                 match message.kind {
-                    WireMessageKind::CheckpointSession => runtime
-                        .checkpoint_session(&session_key)
-                        .context("checkpoint binary stage session")?,
-                    WireMessageKind::RestoreSession => runtime
-                        .restore_session(&session_key)
-                        .context("restore binary stage session")?,
                     WireMessageKind::TrimSession => runtime
                         .trim_session(&session_key, message.token_count.max(0) as u64)
                         .context("trim binary stage session")?,
                     _ => unreachable!("session control checked above"),
                 }
             }
-            let local_us = elapsed_us(local_started);
-            let mut downstream_write_us = 0;
-            let mut downstream_wait_us = 0;
             if let Some(downstream) = downstream.as_mut() {
-                let downstream_write_started = Instant::now();
                 write_stage_message_conditioned(
                     &mut *downstream,
                     &message,
@@ -331,29 +316,13 @@ pub(super) fn handle_binary_connection(
                     downstream_wire_condition,
                 )
                 .context("forward session control")?;
-                downstream_write_us = elapsed_us(downstream_write_started);
-                let downstream_wait_started = Instant::now();
                 let reply =
                     recv_reply(&mut *downstream).context("session control downstream ACK")?;
-                downstream_wait_us = elapsed_us(downstream_wait_started);
                 if reply.kind != WireReplyKind::Ack {
                     bail!("session control expected downstream ACK");
                 }
                 control_stats.merge(reply.stats);
             }
-            record_session_control_timing(
-                &mut control_stats,
-                message.kind,
-                SessionControlTiming {
-                    flush_us,
-                    prefill_drain_us,
-                    local_us,
-                    downstream_write_us,
-                    downstream_wait_us,
-                    total_us: elapsed_us(control_started),
-                    prefill_drained_replies: prefill_drained_replies as i64,
-                },
-            );
             send_reply_ack_with_stats(&mut *upstream, control_stats)
                 .context("session control ack")?;
             continue;
@@ -531,10 +500,7 @@ pub(super) fn handle_binary_connection(
         let mut session_auto_align_count = 0usize;
         let mut session_auto_align_ms = 0.0;
         let mut session_auto_align_trimmed_tokens = 0u64;
-        if binary_auto_align_session_enabled()
-            && message_allows_session_auto_align(&message)
-            && let Some(target_token_count) = message_pos_start_as_token_count(&message)
-        {
+        if let Some(target_token_count) = message.authoritative_session_position() {
             let align_started = Instant::now();
             let align = {
                 let mut runtime = runtime.lock().expect("runtime lock poisoned");
@@ -626,31 +592,6 @@ pub(super) fn handle_binary_connection(
             } else {
                 elapsed_ms(input_decode_started)
             };
-            if message.kind == WireMessageKind::VerifyWindow
-                && (message.state.flags & state_flags::SKIP_VERIFY_CHECKPOINT) == 0
-            {
-                let checkpoint_started = Instant::now();
-                {
-                    let mut runtime = runtime.lock().expect("runtime lock poisoned");
-                    runtime
-                        .checkpoint_session(&session_key)
-                        .context("checkpoint binary stage session before verify window")?;
-                }
-                let checkpoint_us = elapsed_us(checkpoint_started);
-                record_session_control_timing(
-                    &mut message_reply_stats,
-                    WireMessageKind::CheckpointSession,
-                    SessionControlTiming {
-                        flush_us: 0,
-                        prefill_drain_us: 0,
-                        local_us: checkpoint_us,
-                        downstream_write_us: 0,
-                        downstream_wait_us: 0,
-                        total_us: checkpoint_us,
-                        prefill_drained_replies: 0,
-                    },
-                );
-            }
             compute_start_unix_nanos = now_unix_nanos() as u64;
             let compute_started = Instant::now();
             let use_decode_frame_batch =
@@ -661,8 +602,18 @@ pub(super) fn handle_binary_connection(
                     .copied()
                     .unwrap_or(message.state.current_token);
                 let sampling = runtime_sampling_config(message.sampling.as_ref());
+                let target_token_count =
+                    message.authoritative_session_position().ok_or_else(|| {
+                        anyhow::anyhow!("batched decode frame has no authoritative position")
+                    })?;
                 let outcome = decode_frame_batcher
-                    .decode(&session_key, token_id, sampling.as_ref(), input)
+                    .decode(
+                        &session_key,
+                        target_token_count,
+                        token_id,
+                        sampling.as_ref(),
+                        input,
+                    )
                     .context("execute batched binary decode frame")?;
                 runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
                 runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
@@ -681,6 +632,8 @@ pub(super) fn handle_binary_connection(
                     message.kind,
                     restored_prefill,
                     executable_token_ids.len(),
+                    (message.state.prompt_token_count.max(0) as usize)
+                        .saturating_sub(message.pos_start.max(0) as usize),
                 );
                 if eviction_plan.required {
                     proactive_eviction = Some(evict_binary_resident_prefix_for_decode(
@@ -911,7 +864,11 @@ pub(super) fn handle_binary_connection(
             let forward_start_unix_nanos = now_unix_nanos() as u64;
             forward_write_start_unix_nanos = Some(forward_start_unix_nanos);
             let forward_started = Instant::now();
-            if async_prefill_forward && early_prefill_ack && max_deferred_prefill_replies > 0 {
+            let async_verify_forward =
+                message.kind == WireMessageKind::VerifyWindow && max_inflight > 1;
+            if (async_prefill_forward && early_prefill_ack && max_deferred_prefill_replies > 0)
+                || async_verify_forward
+            {
                 forward_mode = "async_enqueue";
                 if telemetry.is_debug_enabled() {
                     downstream_write_attrs.insert(
@@ -1094,7 +1051,7 @@ pub(super) fn handle_binary_connection(
             let reply_start_unix_nanos = now_unix_nanos() as u64;
             upstream_reply_start_unix_nanos.get_or_insert(reply_start_unix_nanos);
             let reply_started = Instant::now();
-            let reply_window = reply_window_for_message(&message, &predicted_tokens);
+            let reply_window = reply_window_for_message(&message);
             let reply = StageReply {
                 kind: reply_kind,
                 predicted: predicted_token,

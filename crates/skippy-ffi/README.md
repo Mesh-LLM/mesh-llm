@@ -52,7 +52,7 @@ same Rust crate.
 
 ## ABI Contract
 
-The staged ABI is versioned as `0.1.32`. The patch header in
+The staged ABI is versioned as `0.1.31`. The patch header in
 `third_party/llama.cpp/patches/` and the Rust constants in
 `crates/skippy-ffi/src/lib.rs` are the source of truth, so keep this README
 aligned with those files instead of treating it as canonical prose.
@@ -66,10 +66,7 @@ The runtime-event additions are part of that `0.1.26` bump. They add versioned
 argument on the `_with_events` model-open entrypoints instead of extending
 `RuntimeConfig`.
 
-Version `0.1.31` adds `skippy_ngram_simple_draft`, a stateless adapter for
-llama.cpp's upstream self-speculative `ngram-simple` proposer.
-
-Version `0.1.32` adds a request-owned adapter for llama.cpp's upstream
+Version `0.1.31` adds a request-owned adapter for llama.cpp's upstream
 `ngram-cache` proposer. Callers reset or append only target-committed tokens;
 an optional provisional continuation is read-only input to drafting.
 
@@ -142,7 +139,6 @@ read it directly:
 | `BATCH_VERIFY_FRAME` | `1 << 13` | `skippy_verify_tokens_frame` |
 | `LOGIT_BIAS` | `1 << 15` | `SamplingConfig.logit_bias` |
 | `SESSION_TRIM` | `1 << 16` | `skippy_trim_session` |
-| `SESSION_CHECKPOINT` | `1 << 17` | Native checkpoint/restore calls |
 | `PACKAGE_PART_LOAD` | `1 << 18` | Ordered GGUF package part loading |
 | `GENERATION_SIGNALS` | `1 << 19` | Generation progress and cancellation signal hooks |
 | `EXTERNAL_MEDIA_PREFILL` | `1 << 20` | Multimodal prefill from externally materialized media chunks |
@@ -151,8 +147,7 @@ read it directly:
 | `BACKEND_DEVICES` | `1 << 23` | Backend-device capability reporting |
 | `RUNTIME_EVENTS` | `1 << 24` | `_with_events` model-open entrypoints and runtime-event callbacks |
 | `NATIVE_MTP_N1` | `1 << 25` | Typed, non-frame native MTP draft sideband |
-| `NGRAM_SIMPLE_DRAFT` | `1 << 26` | llama.cpp upstream `ngram-simple` proposal over accepted token history |
-| `NGRAM_CACHE_DRAFT` | `1 << 27` | Stateful request-local llama.cpp `ngram-cache` proposer |
+| `NGRAM_CACHE_DRAFT` | `1 << 26` | Stateful request-local llama.cpp `ngram-cache` proposer |
 
 Runtime-event compatibility expectations are narrow on purpose:
 
@@ -199,8 +194,6 @@ hook currently bound by this crate.
 | `skippy_model_free` | Releases a model handle. |
 | `skippy_session_create` | Creates a decode session/context from an opened model. |
 | `skippy_session_reset` | Clears session state so the session can be reused. |
-| `skippy_checkpoint_session` | Records a native session checkpoint and returns the checkpoint token count. |
-| `skippy_restore_session_checkpoint` | Restores the native checkpoint when the requested token count matches. |
 | `skippy_session_configure_chat_sampling` | Configures session-local sampling with llama.cpp chat metadata so tool-call grammars constrain generated tokens. |
 | `skippy_session_free` | Releases a session handle. |
 | `skippy_trim_session` | Trims session state to a token count. |
@@ -226,7 +219,6 @@ hook currently bound by this crate.
 
 | Function | Purpose |
 | --- | --- |
-| `skippy_ngram_simple_draft` | Calls llama.cpp's upstream `ngram-simple` proposer with accepted history and returns only the proposed continuation. It owns no persistent cache state. |
 | `skippy_ngram_cache_create` / `free` | Allocates or releases a request-owned cache handle. |
 | `skippy_ngram_cache_reset` / `append` | Rebuilds or extends the cache with target-committed token history only. |
 | `skippy_ngram_cache_draft` | Drafts after committed history and an optional non-mutating continuation prefix, such as a native MTP candidate. |

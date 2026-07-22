@@ -1,0 +1,241 @@
+From b56e6f768f917feef60e2a7578d62091ae03d9bd Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 20 Jul 2026 14:07:56 +1000
+Subject: [PATCH 2/2] Remove legacy session checkpoint ABI
+
+---
+ include/skippy.h        |  10 ----
+ include/skippy/common.h |   1 -
+ src/skippy.cpp          | 115 ----------------------------------------
+ 3 files changed, 126 deletions(-)
+
+diff --git a/include/skippy.h b/include/skippy.h
+index 6b6c4889..50c08515 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -272,16 +272,6 @@ LLAMA_API enum skippy_status skippy_session_reset(
+         struct skippy_session * session,
+         struct skippy_error ** out_error);
+ 
+-LLAMA_API enum skippy_status skippy_checkpoint_session(
+-        struct skippy_session * session,
+-        uint64_t * out_token_count,
+-        struct skippy_error ** out_error);
+-
+-LLAMA_API enum skippy_status skippy_restore_session_checkpoint(
+-        struct skippy_session * session,
+-        uint64_t token_count,
+-        struct skippy_error ** out_error);
+-
+ LLAMA_API enum skippy_status skippy_session_free(
+         struct skippy_session * session,
+         struct skippy_error ** out_error);
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index e976f91e..17b7203c 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,6 @@ enum skippy_feature {
+     SKIPPY_FEATURE_RECURRENT_STATE        = 1 << 14,
+     SKIPPY_FEATURE_LOGIT_BIAS             = 1 << 15,
+     SKIPPY_FEATURE_SESSION_TRIM           = 1 << 16,
+-    SKIPPY_FEATURE_SESSION_CHECKPOINT     = 1 << 17,
+     SKIPPY_FEATURE_PACKAGE_PART_LOAD      = 1 << 18,
+     SKIPPY_FEATURE_GENERATION_SIGNALS     = 1 << 19,
+     SKIPPY_FEATURE_EXTERNAL_MEDIA_PREFILL = 1 << 20,
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 79e3e73f..32fb95ad 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -59,16 +59,11 @@ struct skippy_session {
+     skippy_model * stage_model = nullptr;
+     llama_context * ctx = nullptr;
+     int32_t seq_id = 0;
+-    int32_t checkpoint_seq_id = 1;
+     int32_t n_past = 0;
+     bool borrowed_sequence = false;
+     int32_t borrowed_prefix_tokens = 0;
+     bool preserve_prefix_on_free = false;
+     int32_t preserve_prefix_tokens = 0;
+-    bool checkpoint_valid = false;
+-    int32_t checkpoint_n_past = 0;
+-    size_t checkpoint_token_history_size = 0;
+-    size_t checkpoint_signal_history_size = 0;
+     std::vector<llama_token> token_history;
+     std::vector<skippy_token_signal> signal_history;
+     llama_sampler * sampling_chain = nullptr;
+@@ -2452,7 +2447,6 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_RECURRENT_STATE |
+            SKIPPY_FEATURE_LOGIT_BIAS |
+            SKIPPY_FEATURE_SESSION_TRIM |
+-           SKIPPY_FEATURE_SESSION_CHECKPOINT |
+            SKIPPY_FEATURE_PACKAGE_PART_LOAD |
+            SKIPPY_FEATURE_GENERATION_SIGNALS |
+            SKIPPY_FEATURE_EXTERNAL_MEDIA_PREFILL |
+@@ -3086,12 +3080,9 @@ enum skippy_status skippy_session_create(
+     session->stage_model = model;
+     session->ctx = model->ctx;
+     session->seq_id = seq_id;
+-    session->checkpoint_seq_id = seq_id + static_cast<int32_t>(model->lane_count);
+     session->borrowed_sequence = false;
+     session->borrowed_prefix_tokens = 0;
+     session->n_past = 0;
+-    session->checkpoint_valid = false;
+-    session->checkpoint_n_past = 0;
+     session->mtp_next_pos = 0;
+     if (skippy_mtp_available(session)) {
+         session->mtp_pending_h.assign(static_cast<size_t>(llama_model_n_embd(model->model)), 0.0f);
+@@ -3258,12 +3249,7 @@ enum skippy_status skippy_session_reset(
+         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to reset execution lane");
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
+-    if (!session->borrowed_sequence) {
+-        llama_memory_seq_rm(memory, session->checkpoint_seq_id, -1, -1);
+-    }
+     session->n_past = session->borrowed_sequence ? session->borrowed_prefix_tokens : 0;
+-    session->checkpoint_valid = false;
+-    session->checkpoint_n_past = 0;
+     if (session->borrowed_sequence) {
+         if (session->token_history.size() > static_cast<size_t>(session->borrowed_prefix_tokens)) {
+             session->token_history.resize(static_cast<size_t>(session->borrowed_prefix_tokens));
+@@ -3291,7 +3277,6 @@ enum skippy_status skippy_session_free(
+                             session->seq_id,
+                             static_cast<llama_pos>(session->preserve_prefix_tokens),
+                             -1);
+-                    llama_memory_seq_rm(memory, session->checkpoint_seq_id, -1, -1);
+                 }
+                 session->ctx->synchronize();
+             } else {
+@@ -4234,7 +4219,6 @@ static void skippy_update_session_state_after_import(
+     if (session->signal_history.size() > static_cast<size_t>(session->n_past)) {
+         session->signal_history.resize(static_cast<size_t>(session->n_past));
+     }
+-    session->checkpoint_valid = false;
+ }
+ 
+ enum skippy_status skippy_export_state(
+@@ -4847,10 +4831,6 @@ enum skippy_status skippy_session_restore_prefix(
+         session->token_history.assign(token_ids, token_ids + token_count);
+     }
+     session->signal_history.clear();
+-    session->checkpoint_valid = false;
+-    session->checkpoint_n_past = 0;
+-    session->checkpoint_token_history_size = 0;
+-    session->checkpoint_signal_history_size = 0;
+     session->ctx->synchronize();
+     return skippy_success(out_error);
+ }
+@@ -4940,12 +4920,9 @@ enum skippy_status skippy_session_create_from_resident_prefix(
+     session->stage_model = model;
+     session->ctx = model->ctx;
+     session->seq_id = seq_id;
+-    session->checkpoint_seq_id = seq_id + static_cast<int32_t>(model->lane_count);
+     session->n_past = static_cast<int32_t>(token_count);
+     session->borrowed_sequence = false;
+     session->borrowed_prefix_tokens = 0;
+-    session->checkpoint_valid = false;
+-    session->checkpoint_n_past = 0;
+     if (token_count > 0) {
+         session->token_history.assign(token_ids, token_ids + token_count);
+     }
+@@ -4974,98 +4951,6 @@ enum skippy_status skippy_session_drop_sequence(
+     return skippy_success(out_error);
+ }
+ 
+-enum skippy_status skippy_checkpoint_session(
+-        struct skippy_session * session,
+-        uint64_t * out_token_count,
+-        struct skippy_error ** out_error) {
+-    if (session == nullptr || session->ctx == nullptr) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
+-    }
+-    if (out_token_count == nullptr) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "out_token_count is required");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
+-    }
+-
+-    skippy_error * recurrent_error = nullptr;
+-    llama_memory_recurrent * recurrent = skippy_get_recurrent_memory(session, &recurrent_error);
+-    if (recurrent_error != nullptr) {
+-        if (out_error != nullptr) {
+-            *out_error = recurrent_error;
+-        } else {
+-            skippy_error_free(recurrent_error);
+-        }
+-        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
+-    }
+-    if (recurrent != nullptr) {
+-        if (llama_n_seq_max(session->ctx) < 2) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "native recurrent checkpoint requires n_seq_max >= 2");
+-            return SKIPPY_STATUS_UNSUPPORTED;
+-        }
+-        recurrent->seq_cp(session->seq_id, session->checkpoint_seq_id, -1, -1);
+-    }
+-
+-    session->checkpoint_valid = true;
+-    session->checkpoint_n_past = session->n_past;
+-    session->checkpoint_token_history_size = session->token_history.size();
+-    session->checkpoint_signal_history_size = session->signal_history.size();
+-    *out_token_count = static_cast<uint64_t>(session->n_past);
+-    return skippy_success(out_error);
+-}
+-
+-enum skippy_status skippy_restore_session_checkpoint(
+-        struct skippy_session * session,
+-        uint64_t token_count,
+-        struct skippy_error ** out_error) {
+-    if (session == nullptr || session->ctx == nullptr) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
+-    }
+-    if (!session->checkpoint_valid) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session checkpoint is not available");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
+-    }
+-    if (token_count != static_cast<uint64_t>(session->checkpoint_n_past)) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session checkpoint token count mismatch");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
+-    }
+-
+-    enum skippy_status status = skippy_trim_session(session, token_count, out_error);
+-    if (status != SKIPPY_STATUS_OK) {
+-        return status;
+-    }
+-
+-    skippy_error * recurrent_error = nullptr;
+-    llama_memory_recurrent * recurrent = skippy_get_recurrent_memory(session, &recurrent_error);
+-    if (recurrent_error != nullptr) {
+-        if (out_error != nullptr) {
+-            *out_error = recurrent_error;
+-        } else {
+-            skippy_error_free(recurrent_error);
+-        }
+-        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
+-    }
+-    if (recurrent != nullptr) {
+-        if (llama_n_seq_max(session->ctx) < 2) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "native recurrent checkpoint requires n_seq_max >= 2");
+-            return SKIPPY_STATUS_UNSUPPORTED;
+-        }
+-        recurrent->seq_cp(session->checkpoint_seq_id, session->seq_id, -1, -1);
+-        recurrent->seq_rm(session->checkpoint_seq_id, -1, -1);
+-        session->ctx->synchronize();
+-    }
+-
+-    session->n_past = session->checkpoint_n_past;
+-    if (session->token_history.size() > session->checkpoint_token_history_size) {
+-        session->token_history.resize(session->checkpoint_token_history_size);
+-    }
+-    if (session->signal_history.size() > session->checkpoint_signal_history_size) {
+-        session->signal_history.resize(session->checkpoint_signal_history_size);
+-    }
+-    session->checkpoint_valid = false;
+-    return skippy_success(out_error);
+-}
+-
+ enum skippy_status skippy_tokenize(
+         struct skippy_model * model,
+         const char * text,
+-- 
+2.54.0 (Apple Git-157)
+

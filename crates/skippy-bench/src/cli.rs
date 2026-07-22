@@ -144,6 +144,11 @@ pub struct EvalRunArgs {
     pub metrics_http: String,
     #[arg(long)]
     pub metrics_run_id: Option<String>,
+    #[arg(
+        long,
+        help = "Finalize metrics-server telemetry without downloading its full raw-span report"
+    )]
+    pub metrics_finalize_only: bool,
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -579,7 +584,27 @@ mod tests {
 
     use clap::Parser;
 
-    use super::{Cli, CommandKind, FocusedRuntimeScenario};
+    use super::{Cli, CommandKind, EvalCommandKind, FocusedRuntimeScenario};
+
+    #[test]
+    fn parses_eval_run_metrics_finalize_only() {
+        let cli = Cli::try_parse_from([
+            "skippy-bench",
+            "eval",
+            "run",
+            "speed-bench",
+            "--metrics-finalize-only",
+        ])
+        .unwrap();
+
+        let CommandKind::Eval(eval) = cli.command else {
+            panic!("expected eval subcommand");
+        };
+        let EvalCommandKind::Run(args) = eval.command else {
+            panic!("expected eval run subcommand");
+        };
+        assert!(args.metrics_finalize_only);
+    }
 
     #[test]
     fn parses_focused_runtime_schema_smoke_command() {

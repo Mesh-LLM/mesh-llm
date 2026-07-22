@@ -79,11 +79,12 @@ pub(super) fn run_eval(args: EvalRunArgs) -> Result<()> {
         report.stdout_path = Some(stdout_path.display().to_string());
         report.stderr_path = Some(stderr_path.display().to_string());
         report.metrics = collect_metrics(definition, &run_dir, duration_ms);
-        report.telemetry = telemetry_or_unavailable(
-            &metrics_http,
-            &metrics_run_id,
-            collect_telemetry(&metrics_http, &metrics_run_id, &run_dir),
-        );
+        let telemetry = if args.metrics_finalize_only {
+            telemetry_report::finalize_only(&metrics_http, &metrics_run_id)
+        } else {
+            collect_telemetry(&metrics_http, &metrics_run_id, &run_dir)
+        };
+        report.telemetry = telemetry_or_unavailable(&metrics_http, &metrics_run_id, telemetry);
     }
 
     let report_path = run_dir.join("run.json");

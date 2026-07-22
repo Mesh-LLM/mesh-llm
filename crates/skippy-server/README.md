@@ -154,8 +154,9 @@ unload or replan.
   `--openai-adaptive-speculative-window`. The draft model runs locally in the
   stage0 process as a complete model without stage tensor filtering, and
   proposal windows are verified through the existing staged `VerifyWindow` binary
-  request, so acceptance, rejection, checkpoint, restore, draft-propose, and
-  recovery costs are visible on OpenAI-path spans. The draft runner is
+  request. Rejected suffixes are resolved by the next message's absolute
+  position, so acceptance, rejection, position rewind, draft-propose, and stale
+  work are visible on OpenAI-path spans. The draft runner is
   single-session guarded; use this first as a depth-1 measurement knob before
   promoting it for concurrent serving.
 - Benchy usage lives in [`docs/skippy/LLAMA_BENCHY.md`](../../docs/skippy/LLAMA_BENCHY.md).

@@ -11,11 +11,7 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use skippy_coordinator::{ClaimDecision, ClaimFence, LoadClaimRef};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig};
-use skippy_server::{
-    EmbeddedServerHandle,
-    binary_transport::{BinaryStageOptions, WireCondition},
-    telemetry::TelemetryLevel,
-};
+use skippy_server::{EmbeddedServerHandle, binary_transport::BinaryStageOptions};
 use tokio::{
     sync::{Mutex, mpsc},
     task::JoinHandle,
@@ -44,6 +40,7 @@ struct StageControlState {
     preparations: Arc<Mutex<HashMap<String, StagePreparationStatus>>>,
     preparation_tasks: HashMap<String, StagePreparationTask>,
     package_prefetcher: Option<Arc<dyn StagePackagePrefetcher>>,
+    telemetry: super::SkippyTelemetryOptions,
 }
 
 struct StagePreparationTask {
@@ -58,11 +55,13 @@ pub(crate) trait StagePackagePrefetcher: Send + Sync {
 
 pub(crate) fn spawn_stage_control_loop(
     package_prefetcher: Option<Arc<dyn StagePackagePrefetcher>>,
+    telemetry: super::SkippyTelemetryOptions,
 ) -> mpsc::UnboundedSender<StageControlCommand> {
     let (tx, mut rx) = mpsc::unbounded_channel::<StageControlCommand>();
     tokio::spawn(async move {
         let mut state = StageControlState {
             package_prefetcher,
+            telemetry,
             ..Default::default()
         };
         while let Some(command) = rx.recv().await {
@@ -369,13 +368,13 @@ impl StageControlState {
             bind_addr,
             activation_width: effective_load.activation_width,
             wire_dtype: effective_load.wire_dtype.into(),
-            metrics_otlp_grpc: None,
-            telemetry_queue_capacity: 0,
-            telemetry_level: TelemetryLevel::Off,
+            metrics_otlp_grpc: self.telemetry.metrics_otlp_grpc.clone(),
+            telemetry_queue_capacity: self.telemetry.queue_capacity,
+            telemetry_level: self.telemetry.level,
             max_inflight: effective_load.lane_count as usize,
             reply_credit_limit: None,
             async_prefill_forward: true,
-            downstream_wire_condition: WireCondition::new(0.0, None)?,
+            downstream_wire_condition: super::benchmark_downstream_wire_condition()?,
             downstream_connect_timeout_secs: 30,
             native_mtp_enabled: effective_load.native_mtp_enabled,
             openai: None,

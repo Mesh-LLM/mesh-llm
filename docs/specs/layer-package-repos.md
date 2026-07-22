@@ -321,9 +321,7 @@ without changing the MTP source:
       "primary": "mtp",
       "extender": "cache",
       "extension_policy": {
-        "initial_tokens": 2,
-        "max_tokens": 8,
-        "tail_backoff_proposals": 5
+        "max_tokens": 8
       }
     }
   }
@@ -352,9 +350,8 @@ The package schema separates a proposer match length from its output budget:
 | `initial_tokens` / `max_tokens` | composite extension policy | Bound the adaptive N-gram tail after an MTP prefix. |
 | `tail_backoff_proposals` | composite extension policy | Sets how many proposals to back off after an unhelpful tail. |
 
-`ngram-simple` looks up continuations in the accepted prompt/history. It can
-be published for any compatible tokenizer. `ngram-cache` is a request-local
-incremental lookup that can also start after a provisional MTP prefix; its
+`ngram-cache` is a request-local incremental lookup that starts after a
+provisional MTP prefix; its
 match window is intentionally capped at four tokens by the current llama.cpp
 ABI. `ngram-suffix` uses a request-local exact-seed index to select the longest
 earlier suffix, up to 64 tokens, and can also start after a provisional MTP

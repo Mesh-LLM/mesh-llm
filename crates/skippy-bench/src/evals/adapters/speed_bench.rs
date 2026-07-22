@@ -7,6 +7,7 @@ const AUTH_LAUNCHER: &str = r#"from __future__ import annotations
 import os
 import runpy
 import sys
+import hashlib
 import json
 import threading
 from urllib.parse import urlparse
@@ -37,6 +38,39 @@ timings_path = os.environ.get("SKIPPY_BENCH_RESPONSE_TIMINGS_PATH")
 timings_lock = threading.Lock()
 original_json = requests.models.Response.json
 
+def sha256_json(value):
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+def request_sha256(response):
+    try:
+        body = response.request.body
+        if isinstance(body, bytes):
+            body = body.decode("utf-8")
+        payload = json.loads(body)
+        user_messages = [
+            {"role": message.get("role"), "content": message.get("content")}
+            for message in payload.get("messages", [])
+            if isinstance(message, dict) and message.get("role") == "user"
+        ]
+        return sha256_json({
+            "messages": user_messages,
+            "model": payload.get("model"),
+            "max_tokens": payload.get("max_tokens"),
+        })
+    except Exception:
+        return None
+
+def response_sha256(response):
+    try:
+        choices = response.get("choices")
+        choice = choices[0]
+        message = choice.get("message")
+        content = message.get("content") if isinstance(message, dict) else choice.get("text")
+        return sha256_json({"content": content, "finish_reason": choice.get("finish_reason")})
+    except Exception:
+        return None
+
 def capture_response_timings(self, *args, **kwargs):
     response = original_json(self, *args, **kwargs)
     timings = response.get("timings") if isinstance(response, dict) else None
@@ -45,15 +79,20 @@ def capture_response_timings(self, *args, **kwargs):
         and isinstance(timings, dict)
         and not getattr(self, "_skippy_timings_captured", False)
     ):
-        # Preserve only scalar timing counters; never copy request or response content.
+        # Preserve only scalar timing counters and one-way hashes; never copy content.
         safe_timings = {
             key: value
             for key, value in timings.items()
             if isinstance(key, str) and isinstance(value, (bool, int, float))
         }
+        record = {
+            "request_sha256": request_sha256(self),
+            "response_sha256": response_sha256(response),
+            "timings": safe_timings,
+        }
         with timings_lock:
             with open(timings_path, "a", encoding="utf-8") as output:
-                output.write(json.dumps({"timings": safe_timings}, sort_keys=True) + "\\n")
+                output.write(json.dumps(record, sort_keys=True) + "\n")
         self._skippy_timings_captured = True
     return response
 
@@ -119,4 +158,24 @@ pub(in crate::evals) fn speed_bench_command(
         )
         .secret_env("SKIPPY_BENCH_API_KEY", args.api_key.clone());
     Ok(command)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AUTH_LAUNCHER;
+
+    #[test]
+    fn response_timings_are_written_as_json_lines() {
+        assert!(
+            AUTH_LAUNCHER.contains(r#"sort_keys=True) + "\n")"#),
+            "launcher must emit a real newline between timing records"
+        );
+        assert!(
+            !AUTH_LAUNCHER.contains(r#"sort_keys=True) + "\\n")"#),
+            "launcher must not emit a literal backslash-n separator"
+        );
+        assert!(AUTH_LAUNCHER.contains("request_sha256"));
+        assert!(AUTH_LAUNCHER.contains("response_sha256"));
+        assert!(AUTH_LAUNCHER.contains("json.dumps(record"));
+    }
 }

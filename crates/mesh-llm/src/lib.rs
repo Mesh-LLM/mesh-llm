@@ -169,6 +169,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         no_draft: cli.no_draft,
         speculative_overrides,
         split: cli.split,
+        split_topology_lock: cli.split_topology_lock,
         ctx_size: cli.ctx_size,
         max_vram: cli.max_vram,
         no_enumerate_host: cli.no_enumerate_host,
@@ -208,16 +209,13 @@ fn speculative_overrides_from_cli(
     };
     let mut overrides = mesh_llm_host_runtime::plugin::SpeculativeConfig::default();
     overrides.strategy = cli.speculative_strategy.clone();
-    overrides.ngram_proposer = cli
-        .speculative_ngram_proposer
-        .map(mesh_llm_cli::SpeculativeNgramProposerCli::as_str)
-        .map(str::to_string);
     overrides.ngram_min = cli.speculative_ngram_min;
     overrides.ngram_max = cli.speculative_ngram_max;
     overrides.ngram_max_proposal_tokens = cli.speculative_ngram_max_proposal_tokens;
-    overrides.extension_initial_tokens = cli.speculative_extension_initial_tokens;
+    overrides.ngram_proposer = cli
+        .speculative_ngram_proposer
+        .map(|proposer| proposer.as_str().to_string());
     overrides.extension_max_tokens = cli.speculative_extension_max_tokens;
-    overrides.extension_tail_backoff_proposals = cli.speculative_extension_tail_backoff_proposals;
     overrides.native_mtp_reject_cooldown_tokens = cli.speculative_native_mtp_reject_cooldown_tokens;
     overrides.native_mtp_suppress_cooldown_drafts = suppress_cooldown_drafts;
     overrides.native_mtp_suppress_cooldown_draft_limit =
@@ -374,8 +372,6 @@ mod cli_entrypoint_tests {
             "serve",
             "--speculative-strategy",
             "mtp",
-            "--speculative-ngram-proposer",
-            "cache",
             "--speculative-ngram-min",
             "2",
             "--speculative-ngram-max",
@@ -389,7 +385,6 @@ mod cli_entrypoint_tests {
             .expect("speculative flags produce an override");
 
         assert_eq!(config.strategy.as_deref(), Some("mtp"));
-        assert_eq!(config.ngram_proposer.as_deref(), Some("cache"));
         assert_eq!(config.ngram_min, Some(2));
         assert_eq!(config.ngram_max, Some(6));
         assert_eq!(config.ngram_max_proposal_tokens, Some(5));

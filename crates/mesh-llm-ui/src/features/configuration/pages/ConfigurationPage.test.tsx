@@ -1166,7 +1166,7 @@ describe('ConfigurationPage', () => {
           canonical_path: 'defaults.speculative.mode',
           owner: 'built_in',
           source: { kind: 'built_in' },
-          value_schema: { kind: 'enum', values: ['draft', 'ngram'] },
+          value_schema: { kind: 'enum', values: ['draft', 'disabled'] },
           support: 'supported',
           control_surfaces: ['config_file', 'owner_control'],
           apply_mode: 'dynamic_apply',
@@ -1221,7 +1221,7 @@ describe('ConfigurationPage', () => {
       version: 1,
       defaults: {
         speculative: {
-          mode: 'ngram',
+          mode: 'disabled',
           draft_max_tokens: 16
         }
       }
@@ -1277,7 +1277,7 @@ describe('ConfigurationPage', () => {
     )
     expect(screen.getByText('defaults.speculative.draft_max_tokens')).toHaveClass('toml-warning-path')
     expect(getTomlSource().value).toContain('[defaults.speculative]')
-    expect(getTomlSource().value).toContain('mode = "ngram"')
+    expect(getTomlSource().value).toContain('mode = "disabled"')
     expect(getTomlSource().value).toContain('draft_max_tokens = 16')
 
     validationSpy.mockRestore()

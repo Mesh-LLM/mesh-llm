@@ -1,5 +1,6 @@
 use super::coordinator::*;
 use super::loading::*;
+use super::recovery::*;
 use super::test_support::*;
 use super::*;
 use crate::inference::election;
@@ -1273,6 +1274,22 @@ fn split_loss_recovery_withdraws_when_split_and_local_paths_are_unavailable() {
 
     assert_eq!(
         split_loss_recovery_decision(&active, &[make_id(1)], &[], None, false),
+        SplitLossRecoveryDecision::Withdraw
+    );
+}
+
+#[test]
+fn locked_split_withdraws_instead_of_replanning_or_falling_back() {
+    let active = SplitTopologyGeneration::new(
+        "topology-a".into(),
+        "run-a".into(),
+        1,
+        vec![participant(1), participant(2)],
+        vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)],
+    );
+
+    assert_eq!(
+        split_locked_loss_recovery_decision(&active, &[make_id(1)], &[]),
         SplitLossRecoveryDecision::Withdraw
     );
 }

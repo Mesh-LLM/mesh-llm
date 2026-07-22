@@ -155,12 +155,12 @@ pub(crate) fn apply_speculative_overrides(
                 spec_table["draft_split_probability"] = toml_edit::value(*probability);
             }
         }
-        TuneBenchmarkSpeculativeCandidate::Ngram {
+        TuneBenchmarkSpeculativeCandidate::MtpNgram {
             ngram_min,
             ngram_max,
         } => {
-            spec_table["strategy"] = toml_edit::value("disabled");
-            spec_table["mode"] = toml_edit::value("ngram");
+            spec_table["strategy"] = toml_edit::value("mtp");
+            spec_table["mode"] = toml_edit::value("auto");
             spec_table["ngram_min"] = toml_edit::value(i64::from(*ngram_min));
             spec_table["ngram_max"] = toml_edit::value(i64::from(*ngram_max));
         }

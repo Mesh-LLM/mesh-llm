@@ -1,11 +1,13 @@
 use crate::inference::skippy;
 use anyhow::{Context, Result};
 use skippy_coordinator::topology::{
-    TopologyNode, TopologyPlanningInput, TopologyStagePlan, minimum_valid_context, plan_topology,
+    LockedTopologyStage, TopologyNode, TopologyPlanningInput, TopologyStagePlan,
+    minimum_valid_context, plan_locked_topology, plan_topology,
 };
 use std::collections::HashMap;
 
 use super::local::{SplitParticipant, SplitParticipantExclusion};
+use super::split_topology_lock::LockedSplitStageAssignment;
 
 // Fixed per-node reserve the split planner will not fill with weights or KV.
 //
@@ -96,7 +98,20 @@ pub(super) struct PlannedRuntimeSliceTopology {
 }
 
 pub(super) fn plan_split_topology(input: SplitTopologyPlanInput) -> Result<SplitTopologyPlan> {
-    let plan = plan_topology(&TopologyPlanningInput {
+    let plan =
+        plan_topology(&topology_planning_input(input)).context("plan skippy split topology")?;
+
+    Ok(SplitTopologyPlan {
+        context_length: plan.context_length,
+        parallel_lanes: plan.parallel_lanes,
+        estimated_decode_network_ms_per_token: plan.estimated_decode_network_ms_per_token,
+        decode_tpot_target_met: plan.decode_tpot_target_met,
+        stages: plan.stages,
+    })
+}
+
+fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInput {
+    TopologyPlanningInput {
         native_context_length: input.native_context_length,
         layer_count: input.layer_count,
         model_weight_bytes: input.model_weight_bytes,
@@ -117,16 +132,7 @@ pub(super) fn plan_split_topology(input: SplitTopologyPlanInput) -> Result<Split
         context_length_override: input.context_length_override,
         parallel_lanes_override: input.parallel_lanes_override,
         target_decode_tpot_ms: input.target_decode_tpot_ms,
-    })
-    .context("plan skippy split topology")?;
-
-    Ok(SplitTopologyPlan {
-        context_length: plan.context_length,
-        parallel_lanes: plan.parallel_lanes,
-        estimated_decode_network_ms_per_token: plan.estimated_decode_network_ms_per_token,
-        decode_tpot_target_met: plan.decode_tpot_target_met,
-        stages: plan.stages,
-    })
+    }
 }
 
 pub(super) fn default_runtime_headroom_bytes(vram_bytes: u64) -> u64 {
@@ -191,6 +197,56 @@ pub(super) fn plan_runtime_slice_topology_with_resources(
         decode_tpot_target_met = plan.decode_tpot_target_met,
         stages = ?split_stage_plan_labels(&stages),
         "planned resource-aware split runtime topology"
+    );
+    Ok(PlannedRuntimeSliceTopology {
+        stages,
+        context_length: plan.context_length,
+        slots: plan.parallel_lanes,
+    })
+}
+
+pub(super) fn plan_locked_runtime_slice_topology_with_resources(
+    topology_id: &str,
+    model_ref: &str,
+    package: &skippy::SkippyPackageIdentity,
+    participants: &[SplitParticipant],
+    excluded: &[SplitParticipantExclusion],
+    resources: SplitTopologyResourceInputs,
+    locked_stages: &[LockedSplitStageAssignment],
+) -> Result<PlannedRuntimeSliceTopology> {
+    tracing::info!(
+        topology_id,
+        model_ref,
+        participants = ?split_participant_labels(participants),
+        layer_count = package.layer_count,
+        native_context_length = resources.native_context_length,
+        "planning locked resource-aware split runtime topology"
+    );
+
+    let participant_by_id = participant_index_by_id(participants);
+    let locked_stages = locked_stages
+        .iter()
+        .map(|stage| LockedTopologyStage {
+            node_id: stage.node_id.to_string(),
+            layer_start: stage.layer_start,
+            layer_end: stage.layer_end,
+        })
+        .collect::<Vec<_>>();
+    let input = runtime_slice_plan_input(package, participants, resources);
+    let plan = plan_locked_topology(&topology_planning_input(input), &locked_stages)
+        .context("validate locked skippy split topology")?;
+    let mut stages = map_runtime_slice_stages(plan.stages, &participant_by_id)?;
+    stages.sort_by_key(|stage| stage.stage_index);
+    validate_split_capacity(model_ref, package, participants, &stages, excluded)?;
+    tracing::info!(
+        topology_id,
+        model_ref,
+        context_length = plan.context_length,
+        slots = plan.parallel_lanes,
+        estimated_decode_network_ms_per_token = plan.estimated_decode_network_ms_per_token,
+        decode_tpot_target_met = plan.decode_tpot_target_met,
+        stages = ?split_stage_plan_labels(&stages),
+        "validated locked split runtime topology"
     );
     Ok(PlannedRuntimeSliceTopology {
         stages,

@@ -509,6 +509,7 @@ max_tokens = 222
         n_ubatch_override: None,
         flash_attention_override: FlashAttentionType::Auto,
         parallel_override: None,
+        split_topology_lock: None,
         planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         openai_guardrail_policy: openai_guardrail_policy_handle(
             openai_frontend::GuardrailMode::Disabled,

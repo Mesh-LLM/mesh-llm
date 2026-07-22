@@ -606,7 +606,7 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         basic_setting(&format!("{prefix}.strategy"), ConfigValueSchema::String),
         basic_setting(
             &format!("{prefix}.mode"),
-            string_enum(["auto", "disabled", "draft", "ngram"]),
+            string_enum(["auto", "disabled", "draft"]),
         ),
         basic_setting(&format!("{prefix}.draft_model"), ConfigValueSchema::Path),
         basic_setting(
@@ -668,22 +668,14 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         basic_setting(&format!("{prefix}.ngram_max"), ConfigValueSchema::Integer),
         basic_setting(
             &format!("{prefix}.ngram_proposer"),
-            string_enum(["simple", "cache", "suffix"]),
+            string_enum(["cache", "suffix"]),
         ),
         basic_setting(
             &format!("{prefix}.ngram_max_proposal_tokens"),
             ConfigValueSchema::Integer,
         ),
         basic_setting(
-            &format!("{prefix}.extension_initial_tokens"),
-            ConfigValueSchema::Integer,
-        ),
-        basic_setting(
             &format!("{prefix}.extension_max_tokens"),
-            ConfigValueSchema::Integer,
-        ),
-        basic_setting(
-            &format!("{prefix}.extension_tail_backoff_proposals"),
             ConfigValueSchema::Integer,
         ),
         basic_setting(
@@ -1429,10 +1421,7 @@ mod tests {
         let ngram_max = schema_setting("defaults.speculative.ngram_max");
         let mirostat_entropy = schema_setting("defaults.request_defaults.mirostat_entropy");
 
-        assert_static_choices(
-            "defaults.speculative.mode",
-            &["auto", "disabled", "draft", "ngram"],
-        );
+        assert_static_choices("defaults.speculative.mode", &["auto", "disabled", "draft"]);
         assert_static_choices(
             "defaults.speculative.draft_selection_policy",
             &["manual", "auto"],
@@ -1581,7 +1570,7 @@ mod tests {
             ),
             (
                 "defaults.speculative.mode",
-                vec!["auto", "disabled", "draft", "ngram"],
+                vec!["auto", "disabled", "draft"],
             ),
             (
                 "defaults.speculative.draft_selection_policy",

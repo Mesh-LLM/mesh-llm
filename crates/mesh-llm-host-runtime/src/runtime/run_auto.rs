@@ -598,9 +598,10 @@ pub(super) async fn start_run_auto_node_and_plugins(
     .await?;
     node.set_swarm_capture_recorder(swarm_capture);
     attach_local_release_attestation(&node).await?;
-    node.set_stage_control_sender(skippy::spawn_stage_control_loop(Some(Arc::new(
-        node.clone(),
-    ))))
+    node.set_stage_control_sender(skippy::spawn_stage_control_loop(
+        Some(Arc::new(node.clone())),
+        skippy_telemetry_options(options),
+    ))
     .await;
     node.start_accepting();
     node.set_display_name(node_display_name(options, &node))
@@ -995,6 +996,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(
         n_ubatch: primary_n_ubatch,
         flash_attention: primary_flash_attention,
         parallel_override: primary_parallel_override,
+        split_topology_lock: options.split_topology_lock.clone(),
         resource_planning_profile,
         openai_guardrail_policy: runtime_state.openai_guardrail_policy.clone(),
         split: options.split,

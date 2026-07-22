@@ -1125,6 +1125,7 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
                 extra_model.parallel,
                 &ctx.config.gpu,
             ),
+            split_topology_lock: ctx.options.split_topology_lock.clone(),
             resource_planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             split: ctx.options.split,

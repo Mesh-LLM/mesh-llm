@@ -115,9 +115,7 @@ pub(crate) struct PackageSpeculativeStrategy {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct PackageExtensionPolicy {
-    pub(crate) initial_tokens: u32,
     pub(crate) max_tokens: u32,
-    pub(crate) tail_backoff_proposals: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

@@ -20,6 +20,7 @@ mod run_auto;
 mod runtime_registry;
 mod serving_surface;
 mod split_planning;
+mod split_topology_lock;
 mod startup_handles;
 mod startup_identity;
 mod startup_models;

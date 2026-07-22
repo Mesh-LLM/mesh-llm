@@ -86,12 +86,11 @@ const dependencySettings = [
     control: {
       kind: 'choice',
       name: 'speculation_mode',
-      value: 'ngram',
+      value: 'off',
       presentation: 'segmented',
       options: [
         { value: 'off', label: 'off' },
-        { value: 'draft_model', label: 'draft model' },
-        { value: 'ngram', label: 'n-gram' }
+        { value: 'draft_model', label: 'draft model' }
       ]
     }
   },
@@ -863,7 +862,7 @@ describe('DefaultsTab', () => {
     const { rerender } = renderDefaultsTab({
       data: CONFIGURATION_DEFAULTS,
       values: {
-        'speculation-mode': 'ngram'
+        'speculation-mode': 'off'
       }
     })
 

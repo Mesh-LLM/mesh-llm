@@ -30,19 +30,10 @@ impl From<ReplLoadMode> for RuntimeLoadMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-pub enum NgramProposalMode {
-    TransitionPool,
-    HistoryMatch,
-}
-
 #[derive(Parser)]
 pub struct PromptArgs {
     #[arg(long, default_value = "target/debug/metrics-server")]
     pub metrics_server_bin: PathBuf,
-    #[arg(long, default_value = "target/debug/ngram-pool-server")]
-    pub ngram_pool_server_bin: PathBuf,
     #[arg(long, default_value = "target/debug/skippy-server")]
     pub stage_server_bin: PathBuf,
     #[arg(long, default_value = "target/debug/skippy-model-package")]
@@ -95,34 +86,6 @@ pub struct PromptArgs {
     pub speculative_window: usize,
     #[arg(long)]
     pub adaptive_speculative_window: bool,
-    #[arg(long)]
-    pub ngram_speculative: bool,
-    #[arg(long, value_enum, default_value = "transition-pool")]
-    pub ngram_proposal_mode: NgramProposalMode,
-    #[arg(long, default_value_t = 24)]
-    pub spec_ngram_size_n: usize,
-    #[arg(long, default_value_t = 1)]
-    pub ngram_history_min_hits: u32,
-    #[arg(long, default_value_t = 12)]
-    pub draft_min: usize,
-    #[arg(long, default_value_t = 48)]
-    pub draft_max: usize,
-    #[arg(long, default_value_t = DEFAULT_MIN_WINNER_COUNT)]
-    pub ngram_min_winner_count: u32,
-    #[arg(long, default_value_t = DEFAULT_MIN_CONFIDENCE)]
-    pub ngram_min_confidence: f32,
-    #[arg(long, default_value_t = DEFAULT_MIN_MARGIN)]
-    pub ngram_min_margin: u32,
-    #[arg(long, default_value_t = DEFAULT_CONFIDENCE_STEP)]
-    pub ngram_confidence_step: f32,
-    #[arg(long, default_value_t = DEFAULT_CONFIDENCE_STEP_TOKENS)]
-    pub ngram_confidence_step_tokens: usize,
-    #[arg(long, default_value_t = DEFAULT_MAX_CONFIDENCE)]
-    pub ngram_max_confidence: f32,
-    #[arg(long, default_value_t = DEFAULT_COUNT_STEP_TOKENS)]
-    pub ngram_count_step_tokens: usize,
-    #[arg(long, default_value_t = DEFAULT_MARGIN_STEP_TOKENS)]
-    pub ngram_margin_step_tokens: usize,
     #[arg(long, default_value = "lookup-record")]
     pub kv_mode: String,
     #[arg(long, default_value_t = 512)]
@@ -155,8 +118,6 @@ pub struct PromptArgs {
     pub history_path: Option<PathBuf>,
     #[arg(long)]
     pub session_id: Option<String>,
-    #[arg(long)]
-    pub ngram_pool_uds_path: Option<PathBuf>,
     #[arg(long, default_value_t = 80)]
     pub log_tail_lines: usize,
     #[arg(long)]
@@ -210,34 +171,6 @@ pub struct BinaryReplArgs {
     pub speculative_window: usize,
     #[arg(long)]
     pub adaptive_speculative_window: bool,
-    #[arg(long)]
-    pub ngram_speculative: bool,
-    #[arg(long, value_enum, default_value = "transition-pool")]
-    pub ngram_proposal_mode: NgramProposalMode,
-    #[arg(long, default_value_t = 24)]
-    pub spec_ngram_size_n: usize,
-    #[arg(long, default_value_t = 1)]
-    pub ngram_history_min_hits: u32,
-    #[arg(long, default_value_t = 12)]
-    pub draft_min: usize,
-    #[arg(long, default_value_t = 48)]
-    pub draft_max: usize,
-    #[arg(long, default_value_t = DEFAULT_MIN_WINNER_COUNT)]
-    pub ngram_min_winner_count: u32,
-    #[arg(long, default_value_t = DEFAULT_MIN_CONFIDENCE)]
-    pub ngram_min_confidence: f32,
-    #[arg(long, default_value_t = DEFAULT_MIN_MARGIN)]
-    pub ngram_min_margin: u32,
-    #[arg(long, default_value_t = DEFAULT_CONFIDENCE_STEP)]
-    pub ngram_confidence_step: f32,
-    #[arg(long, default_value_t = DEFAULT_CONFIDENCE_STEP_TOKENS)]
-    pub ngram_confidence_step_tokens: usize,
-    #[arg(long, default_value_t = DEFAULT_MAX_CONFIDENCE)]
-    pub ngram_max_confidence: f32,
-    #[arg(long, default_value_t = DEFAULT_COUNT_STEP_TOKENS)]
-    pub ngram_count_step_tokens: usize,
-    #[arg(long, default_value_t = DEFAULT_MARGIN_STEP_TOKENS)]
-    pub ngram_margin_step_tokens: usize,
     #[arg(
         long,
         help = "Set mmap explicitly with --mmap true or --mmap false; unlike --mlock, omitting --mmap keeps the runtime default"
@@ -253,8 +186,6 @@ pub struct BinaryReplArgs {
     pub history_path: Option<PathBuf>,
     #[arg(long)]
     pub session_id: Option<String>,
-    #[arg(long)]
-    pub ngram_pool_uds_path: Option<PathBuf>,
     #[arg(long)]
     pub native_logs: bool,
     #[arg(

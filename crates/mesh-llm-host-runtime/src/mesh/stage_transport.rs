@@ -1045,11 +1045,29 @@ impl Node {
         skippy_protocol::validate_stage_transport_open(&open)
             .map_err(|e| anyhow::anyhow!("StageTransportOpen validation error: {e}"))?;
         let conn = self.stage_connection_to_peer(peer_id).await?;
-        let snapshot = split_stage_path_snapshot_from_connection(&conn)
-            .with_peer_path_fallback(self.peer_stage_path_fallback(peer_id).await);
-        if let Some(rejection) = snapshot.stage_path_rejection() {
-            anyhow::bail!(
-                "stage transport path to {} is not eligible for split serving: {}",
+        // Do NOT re-apply the formation-time RTT/path eligibility ceiling
+        // (MAX_SPLIT_RTT_MS) to operational streams here. This function only runs
+        // from the post-formation stage-transport bridge, and split admission
+        // already gates path eligibility using gossiped, hysteresis-smoothed peer
+        // RTT plus re-election (see api/split_readiness.rs and node RTT handling).
+        //
+        // Re-checking the *instantaneous* per-connection RTT snapshot on every
+        // fresh stream caused transient failures under normal WAN jitter: pooled
+        // forward lanes (opened once at low RTT and reused) kept working, while
+        // per-request direct-prediction-return sinks — which open a fresh bridge
+        // stream each request — were rejected whenever the snapshot briefly read
+        // above the ceiling. That aborted the bridge task, dropped the accepted
+        // return-sink TCP connection, and surfaced as a ready-handshake timeout on
+        // stage 0, degrading/​502-ing an already-admitted split. A transiently slow
+        // or relay path still *works* (just slower); sustained degradation is
+        // handled by re-election, not by killing individual operational streams.
+        if let Some(rejection) = split_stage_path_snapshot_from_connection(&conn)
+            .with_peer_path_fallback(self.peer_stage_path_fallback(peer_id).await)
+            .stage_path_rejection()
+        {
+            tracing::warn!(
+                "stage transport path to {} reports {} on a formed split; proceeding \
+                 (operational streams tolerate transient path degradation)",
                 peer_id.fmt_short(),
                 rejection.as_str()
             );

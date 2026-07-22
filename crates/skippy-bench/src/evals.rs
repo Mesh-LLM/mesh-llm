@@ -503,6 +503,7 @@ mod tests {
             run_id: None,
             metrics_http: "http://127.0.0.1:18080".to_string(),
             metrics_run_id: None,
+            metrics_finalize_only: false,
             dry_run: true,
         };
         let root = PathBuf::from("/tmp/skippy-cache");
@@ -592,6 +593,7 @@ mod tests {
             run_id: None,
             metrics_http: "http://127.0.0.1:18080".to_string(),
             metrics_run_id: None,
+            metrics_finalize_only: false,
             dry_run: true,
         };
         let command = terminal_bench_command(&args, Path::new("/tmp/skippy-run"));
@@ -964,6 +966,7 @@ mod tests {
             run_id: None,
             metrics_http: "http://127.0.0.1:18080".to_string(),
             metrics_run_id: None,
+            metrics_finalize_only: false,
             dry_run: true,
         }
     }

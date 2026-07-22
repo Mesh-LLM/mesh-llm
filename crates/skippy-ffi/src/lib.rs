@@ -1,11 +1,10 @@
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 32;
+pub const ABI_VERSION_PATCH: u32 = 31;
 pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
 pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
-pub const FEATURE_NGRAM_SIMPLE_DRAFT: u64 = 1 << 26;
-pub const FEATURE_NGRAM_CACHE_DRAFT: u64 = 1 << 27;
+pub const FEATURE_NGRAM_CACHE_DRAFT: u64 = 1 << 26;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -798,7 +797,6 @@ mod dynamic {
         llama_model_quantize_default_params() -> LlamaModelQuantizeParams;
         llama_model_quantize(fname_inp: *const c_char, fname_out: *const c_char, params: *const LlamaModelQuantizeParams) -> u32;
         skippy_error_free(error: *mut Error);
-        skippy_ngram_simple_draft(token_ids: *const i32, token_count: usize, sampled_token: i32, ngram_size: u16, max_draft_tokens: u16, output_tokens: *mut i32, output_token_capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
         skippy_ngram_cache_create(ngram_min: u16, ngram_max: u16, out_cache: *mut *mut NgramCache, out_error: *mut *mut Error) -> Status;
         skippy_ngram_cache_free(cache: *mut NgramCache);
         skippy_ngram_cache_reset(cache: *mut NgramCache, token_ids: *const i32, token_count: usize, out_error: *mut *mut Error) -> Status;
@@ -821,8 +819,6 @@ mod dynamic {
         skippy_session_sample_current(session: *mut Session, sampling: *const SamplingConfig, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
         skippy_session_configure_chat_sampling(session: *mut Session, sampling: *const SamplingConfig, metadata_json: *const c_char, prompt_token_count: u64, out_error: *mut *mut Error) -> Status;
         skippy_session_reset(session: *mut Session, out_error: *mut *mut Error) -> Status;
-        skippy_checkpoint_session(session: *mut Session, out_token_count: *mut u64, out_error: *mut *mut Error) -> Status;
-        skippy_restore_session_checkpoint(session: *mut Session, token_count: u64, out_error: *mut *mut Error) -> Status;
         skippy_session_free(session: *mut Session, out_error: *mut *mut Error) -> Status;
         skippy_prefill_chunk(session: *mut Session, token_ids: *const i32, token_count: usize, input_activations: *const c_void, input_activation_bytes: usize, output_activations: *mut c_void, output_activation_capacity: usize, out_output_activation_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
         skippy_verify_tokens(session: *mut Session, token_ids: *const i32, token_count: usize, output_tokens: *mut i32, output_token_capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
@@ -1188,18 +1184,6 @@ unsafe extern "C" {
 
     pub fn skippy_error_free(error: *mut Error);
 
-    pub fn skippy_ngram_simple_draft(
-        token_ids: *const i32,
-        token_count: usize,
-        sampled_token: i32,
-        ngram_size: u16,
-        max_draft_tokens: u16,
-        output_tokens: *mut i32,
-        output_token_capacity: usize,
-        out_token_count: *mut usize,
-        out_error: *mut *mut Error,
-    ) -> Status;
-
     pub fn skippy_ngram_cache_create(
         ngram_min: u16,
         ngram_max: u16,
@@ -1322,18 +1306,6 @@ unsafe extern "C" {
     ) -> Status;
 
     pub fn skippy_session_reset(session: *mut Session, out_error: *mut *mut Error) -> Status;
-
-    pub fn skippy_checkpoint_session(
-        session: *mut Session,
-        out_token_count: *mut u64,
-        out_error: *mut *mut Error,
-    ) -> Status;
-
-    pub fn skippy_restore_session_checkpoint(
-        session: *mut Session,
-        token_count: u64,
-        out_error: *mut *mut Error,
-    ) -> Status;
 
     pub fn skippy_session_free(session: *mut Session, out_error: *mut *mut Error) -> Status;
 

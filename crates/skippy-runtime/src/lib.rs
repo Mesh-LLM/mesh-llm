@@ -36,12 +36,12 @@ pub use logging::{
 };
 pub use native::StageModel;
 pub use native_mtp::NativeMtpDraft;
-pub use ngram::{Cache as NgramCache, NGRAM_CACHE_MAX_NGRAM, simple_draft as ngram_simple_draft};
+pub use ngram::{Cache as NgramCache, NGRAM_CACHE_MAX_NGRAM};
 pub use runtime_events::{
     RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind, RuntimeEventFailureCode,
     RuntimeEventKind, RuntimeEventProgressUnit,
 };
-pub use session::{DecodeBatchRequest, StageSession, StageSessionCheckpoint};
+pub use session::{DecodeBatchRequest, StageSession};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
 pub use skippy_ffi::{
     ActivationDType as RuntimeActivationDType, ActivationLayout as RuntimeActivationLayout,

@@ -88,7 +88,7 @@ mesh-llm benchmark tune --model /models/qwen3-8b.gguf --mmap-values auto,true,fa
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --flash-attention on,off
 mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types auto
 mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types mtp --debug-telemetry --json
-mesh-llm benchmark tune --model /models/qwen3-8b.gguf --speculative-types draft,ngram,disabled --spec-draft-models /models/qwen3-draft.gguf --spec-draft-max-tokens 4,8,16
+mesh-llm benchmark tune --model /models/qwen3-mtp.gguf --speculative-types mtp,mtp-ngram,disabled --spec-draft-max-tokens 4,8,16
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --throughput-tolerance-pct 2.5
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --apply
 mesh-llm benchmark tune --model /models/qwen3-8b.gguf --apply --replace-existing
@@ -96,7 +96,7 @@ mesh-llm benchmark tune --model /models/qwen3-8b.gguf --launch-args
 ```
 
 If `--mmap-values` is omitted, benchmark tune tries `auto`, `true`, and `false`. If `--mlock-values` is omitted, it tries `false` and only tries `true` when the current mlock limit can cover the evaluated budget. If `--flash-attention` is omitted, flash attention is not varied during the sweep; when supplied (e.g. `--flash-attention on,off`), trial count doubles and the recommendation applies the best flash attention setting.
-If `--speculative-types` is omitted, benchmark tune uses `auto`: native MTP is tried first for MTP-looking targets, locally discoverable draft models are tried when available, ngram candidates are tried as a model-free fallback, and a disabled baseline is included for comparison. Use `--speculative-types mtp,draft,ngram,disabled` to force an explicit speculative sweep, or `--no-speculative-tune` to reproduce the old disabled-baseline-only sweep.
+If `--speculative-types` is omitted, benchmark tune uses `auto`: native MTP and the bounded MTP + request-local N-gram cache composite are tried for MTP-looking targets, locally discoverable draft models are tried when available, and a disabled baseline is included for comparison. Use `--speculative-types mtp,mtp-ngram,draft,disabled` to force an explicit speculative sweep, or `--no-speculative-tune` to run only the disabled baseline.
 Use `--apply` to write the recommended settings into `~/.mesh-llm/config.toml`, and combine with `--replace-existing` to overwrite existing writable recommendation fields. `--launch-args` prints generated `mesh-llm serve` arguments for local launch without writing config.
 Use `--debug-telemetry` when proving speculative decoding behavior: each trial log includes Skippy debug telemetry, including `llama_stage.native_mtp.*` summary attributes for MTP drafted, accepted, rejected, and accept-rate counts.
 
@@ -321,7 +321,7 @@ lifecycle_health_interval_ms    = 5000      # health-check interval (ms)
 # --- Speculative decoding ------------------------------------------------
 [defaults.speculative]
 strategy                   = "auto"          # auto disabled mtp or a package strategy id
-mode                       = "auto"          # legacy draft-model mode: auto disabled draft ngram
+mode                       = "auto"          # external draft-model mode: auto disabled draft
 draft_selection_policy     = "auto"          # auto manual heuristic
 pairing_fault              = "warn_disable"  # warn_disable fail_open fail_closed
 draft_acceptance_threshold = 0.0             # 0.0 = use runtime default
@@ -352,9 +352,7 @@ spec_default               = "auto"          # bool or "auto"
 # ngram_min                 = 2
 # ngram_max                 = 4
 # ngram_max_proposal_tokens = 6        # output budget, separate from ngram_max
-# extension_initial_tokens  = 2        # requires native MTP plus an N-gram proposer
-# extension_max_tokens      = 6
-# extension_tail_backoff_proposals = 2
+# extension_max_tokens      = 6        # fixed request-local continuation horizon
 
 # Target VerifyWindow and native-MTP recovery controls
 # verify_window_min_tokens                    = 1
@@ -737,13 +735,10 @@ model = "meshllm/GLM-4.7-Flash-MTP-GGUF:Q4_K_M"
 
 [models.speculative]
 strategy = "mtp"
-ngram_proposer = "cache"
 ngram_min = 2
 ngram_max = 4
 ngram_max_proposal_tokens = 6
-extension_initial_tokens = 2
 extension_max_tokens = 6
-extension_tail_backoff_proposals = 2
 verify_window_min_tokens = 1
 verify_window_max_tokens = 6
 verify_window_pipeline_depth = 2
@@ -751,10 +746,10 @@ verify_window_pipeline_depth = 2
 
 `ngram_min` and `ngram_max` determine the history match length.
 `ngram_max_proposal_tokens` is separately the maximum continuation length.
-The request-local `cache` proposer is limited to `ngram_max <= 4`; `simple`
-searches accepted history instead. Extension settings require both native MTP
-and an N-gram proposer. All combinations are verified together by the target,
-so tuning these values changes speculative work, not output correctness.
+The request-local cache is limited to `ngram_max <= 4`. N-gram settings require
+native MTP and create one composite proposal; standalone N-gram speculation is
+not supported. All combinations are verified together by the target, so tuning
+these values changes speculative work, not output correctness.
 
 A third proposer, `suffix`, is a pure-Rust longest-suffix matcher
 ("prompt-lookup decoding"). Unlike `simple`/`cache` it is not bound by

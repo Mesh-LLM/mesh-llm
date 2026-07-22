@@ -61,19 +61,13 @@ pub(super) fn apply_speculative_behavior(
         }
         "ngram_min" => {
             set_numeric(setting, Some(1.0), None, Some(1.0), None);
-            push_mode_dependency(setting, prefix, "ngram", suffix);
         }
         "ngram_max" => {
             set_numeric(setting, Some(1.0), None, Some(1.0), None);
             push_range_constraint(setting, Some(format!("{prefix}.ngram_min")), None);
-            push_mode_dependency(setting, prefix, "ngram", suffix);
         }
-        "ngram_proposer" | "ngram_max_proposal_tokens" => {
-            push_mode_dependency(setting, prefix, "ngram", suffix);
-        }
-        "extension_initial_tokens"
+        "ngram_max_proposal_tokens"
         | "extension_max_tokens"
-        | "extension_tail_backoff_proposals"
         | "native_mtp_reject_cooldown_tokens"
         | "native_mtp_suppress_cooldown_drafts"
         | "native_mtp_suppress_cooldown_draft_limit"

@@ -68,6 +68,7 @@ pub(super) struct StartupLocalModelTask {
     pub(super) n_ubatch: Option<u32>,
     pub(super) flash_attention: FlashAttentionType,
     pub(super) parallel_override: Option<usize>,
+    pub(super) split_topology_lock: Option<PathBuf>,
     pub(super) resource_planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) split: bool,
@@ -184,6 +185,24 @@ pub(super) enum StartupLoopControl {
     Continue,
     Break,
     Return,
+    /// Tear down the current split runtime, then re-enter the launch phase
+    /// (wait for eligible split participants again) instead of ending the
+    /// model task. Used when a split topology is withdrawn but the model
+    /// cannot fit locally: the peer may come back, and a healthy standing-by
+    /// worker must not require a manual restart of both sides.
+    RelaunchSplit,
+}
+
+/// Outcome of the local-model event loop, consumed by
+/// `startup_local_model_loop` to decide between clean teardown, immediate
+/// return, and split relaunch.
+pub(super) enum StartupLoopOutcome {
+    /// Tear down and end the model task.
+    Shutdown,
+    /// End the model task without the shared teardown (already handled).
+    Exit,
+    /// Tear down, then loop back to the launch phase and wait for peers.
+    RelaunchSplit,
 }
 
 pub(super) struct StartupPreparedLaunch {
@@ -222,6 +241,7 @@ pub(super) struct StartupLaunchRuntimeContext<'a> {
     pub(super) n_ubatch: Option<u32>,
     pub(super) flash_attention: FlashAttentionType,
     pub(super) parallel_override: Option<usize>,
+    pub(super) split_topology_lock: Option<&'a Path>,
     pub(super) resource_planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
@@ -697,6 +717,7 @@ pub(super) async fn startup_handle_local_fallback_event(
             n_ubatch_override: ctx.n_ubatch,
             flash_attention_override: ctx.flash_attention,
             parallel_override: ctx.parallel_override,
+            split_topology_lock: None,
             planning_profile: ctx.resource_planning_profile,
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: ctx.skippy_telemetry.clone(),
@@ -880,7 +901,7 @@ pub(super) async fn startup_handle_split_event(
                 .await;
             let _ = emit_event(OutputEvent::Warning {
                 message: format!(
-                    "Split runtime topology '{}' lost required stage peer(s); withdrawing model '{}'",
+                    "Split runtime topology '{}' lost required stage peer(s); withdrawing model '{}' and waiting for peers to relaunch",
                     event.topology_id, state.loaded_name
                 ),
                 context: Some(format!(
@@ -893,7 +914,7 @@ pub(super) async fn startup_handle_split_event(
                 )),
             });
             let _ = event.ack.send(SplitCoordinatorAck::Accepted);
-            StartupLoopControl::Break
+            StartupLoopControl::RelaunchSplit
         }
     }
 }
@@ -1032,6 +1053,7 @@ pub(super) async fn startup_launch_runtime(
         n_ubatch,
         flash_attention,
         parallel_override,
+        split_topology_lock,
         resource_planning_profile,
         openai_guardrail_policy,
         skippy_telemetry,
@@ -1060,6 +1082,7 @@ pub(super) async fn startup_launch_runtime(
         n_ubatch_override: n_ubatch,
         flash_attention_override: flash_attention,
         parallel_override,
+        split_topology_lock,
         planning_profile: resource_planning_profile,
         openai_guardrail_policy: openai_guardrail_policy.clone(),
         skippy_telemetry: skippy_telemetry.clone(),
@@ -1174,6 +1197,7 @@ pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
         n_ubatch,
         flash_attention,
         parallel_override,
+        split_topology_lock,
         resource_planning_profile,
         openai_guardrail_policy,
         split,
@@ -1215,15 +1239,72 @@ pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
     else {
         return;
     };
-    let Some((launch_handles, launch_started)) =
-        startup_launch_runtime(StartupLaunchRuntimeContext {
+    loop {
+        let Some((launch_handles, launch_started)) =
+            startup_launch_runtime(StartupLaunchRuntimeContext {
+                node: &node,
+                config: &config,
+                target_tx: &target_tx,
+                model_path: &model_path,
+                model_ref: &model_ref,
+                model_name: &model_name,
+                instance_id: &instance_id,
+                mmproj_path: mmproj_path.as_ref(),
+                ctx_size,
+                pinned_gpu: pinned_gpu.as_ref(),
+                runtime_capacity_ledger: &runtime_capacity_ledger,
+                cache_type_k: cache_type_k.as_deref(),
+                cache_type_v: cache_type_v.as_deref(),
+                n_batch,
+                n_ubatch,
+                flash_attention,
+                parallel_override,
+                split_topology_lock: split_topology_lock.as_deref(),
+                resource_planning_profile,
+                openai_guardrail_policy: openai_guardrail_policy.clone(),
+                skippy_telemetry: &skippy_telemetry,
+                survey_telemetry: &survey_telemetry,
+                console_state: console_state.as_ref(),
+                startup_load_gate: &startup_load_gate,
+                stop_rx: &mut stop_rx,
+                local_capacity,
+                model_bytes,
+                runtime_plan,
+                launch_kind,
+            })
+            .await
+        else {
+            return;
+        };
+        let StartupLaunchHandles {
+            loaded_name,
+            handle,
+            death_rx,
+            split_cleanup,
+            split_event_rx,
+            mut coordinator_task,
+            capacity_reservation,
+        } = launch_handles;
+
+        let survey_loaded_model = survey_telemetry.model(survey::SurveyModelSpec {
+            model: &loaded_name,
+            model_path: Some(&model_path),
+            launch_kind,
+            pinned_gpu: pinned_gpu.as_ref(),
+            backend: Some(&handle.backend),
+            context_length: Some(u64::from(handle.context_length)),
+        });
+        survey_telemetry.record_launch_success(&survey_loaded_model, launch_started.elapsed());
+
+        let ctx = StartupLoopContext {
             node: &node,
             config: &config,
+            tunnel_mgr: &tunnel_mgr,
             target_tx: &target_tx,
             model_path: &model_path,
             model_ref: &model_ref,
-            model_name: &model_name,
             instance_id: &instance_id,
+            primary_model_name: &primary_model_name,
             mmproj_path: mmproj_path.as_ref(),
             ctx_size,
             pinned_gpu: pinned_gpu.as_ref(),
@@ -1238,109 +1319,97 @@ pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
             openai_guardrail_policy: openai_guardrail_policy.clone(),
             skippy_telemetry: &skippy_telemetry,
             survey_telemetry: &survey_telemetry,
-            console_state: console_state.as_ref(),
-            startup_load_gate: &startup_load_gate,
-            stop_rx: &mut stop_rx,
-            local_capacity,
-            model_bytes,
-            runtime_plan,
             launch_kind,
-        })
+            dashboard_processes: &dashboard_processes,
+            dashboard_context_usage: &dashboard_context_usage,
+            runtime_instance_registry: &runtime_instance_registry,
+            console_state: console_state.as_ref(),
+            api_port,
+            runtime_data_producer: runtime_data_producer.as_ref(),
+        };
+        startup_publish_loaded_runtime(&ctx, &loaded_name, &handle, &startup_ready_reporter).await;
+
+        maybe_spawn_startup_interactive_handler(
+            input_handler_enabled,
+            &loaded_name,
+            &primary_model_name,
+            &interactive_started,
+            interactive_control_tx.clone(),
+            interactive_console_state.clone(),
+        );
+
+        let mut state = StartupLoopState {
+            loaded_name,
+            handle: Some(handle),
+            death_rx,
+            split_cleanup,
+            split_event_rx,
+            survey_loaded_model,
+            capacity_reservation,
+            survey_exited_unexpectedly: false,
+        };
+        let mut context_usage_tick =
+            tokio::time::interval(DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL);
+        context_usage_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let outcome = startup_run_local_model_event_loop(
+            &ctx,
+            &mut state,
+            StartupLoopEventContext {
+                context_usage_tick: &mut context_usage_tick,
+                stop_rx: &mut stop_rx,
+                local_capacity,
+                model_bytes,
+            },
+        )
+        .await;
+
+        if !startup_resolve_loop_outcome(
+            outcome,
+            &ctx,
+            &mut state,
+            &mut coordinator_task,
+            &stop_rx,
+            &model_name,
+        )
         .await
-    else {
-        return;
-    };
-    let StartupLaunchHandles {
-        loaded_name,
-        handle,
-        death_rx,
-        split_cleanup,
-        split_event_rx,
-        mut coordinator_task,
-        capacity_reservation,
-    } = launch_handles;
-
-    let survey_loaded_model = survey_telemetry.model(survey::SurveyModelSpec {
-        model: &loaded_name,
-        model_path: Some(&model_path),
-        launch_kind,
-        pinned_gpu: pinned_gpu.as_ref(),
-        backend: Some(&handle.backend),
-        context_length: Some(u64::from(handle.context_length)),
-    });
-    survey_telemetry.record_launch_success(&survey_loaded_model, launch_started.elapsed());
-
-    let ctx = StartupLoopContext {
-        node: &node,
-        config: &config,
-        tunnel_mgr: &tunnel_mgr,
-        target_tx: &target_tx,
-        model_path: &model_path,
-        model_ref: &model_ref,
-        instance_id: &instance_id,
-        primary_model_name: &primary_model_name,
-        mmproj_path: mmproj_path.as_ref(),
-        ctx_size,
-        pinned_gpu: pinned_gpu.as_ref(),
-        runtime_capacity_ledger: &runtime_capacity_ledger,
-        cache_type_k: cache_type_k.as_deref(),
-        cache_type_v: cache_type_v.as_deref(),
-        n_batch,
-        n_ubatch,
-        flash_attention,
-        parallel_override,
-        resource_planning_profile,
-        openai_guardrail_policy,
-        skippy_telemetry: &skippy_telemetry,
-        survey_telemetry: &survey_telemetry,
-        launch_kind,
-        dashboard_processes: &dashboard_processes,
-        dashboard_context_usage: &dashboard_context_usage,
-        runtime_instance_registry: &runtime_instance_registry,
-        console_state: console_state.as_ref(),
-        api_port,
-        runtime_data_producer: runtime_data_producer.as_ref(),
-    };
-    startup_publish_loaded_runtime(&ctx, &loaded_name, &handle, &startup_ready_reporter).await;
-
-    maybe_spawn_startup_interactive_handler(
-        input_handler_enabled,
-        &loaded_name,
-        &primary_model_name,
-        &interactive_started,
-        interactive_control_tx,
-        interactive_console_state,
-    );
-
-    let mut state = StartupLoopState {
-        loaded_name,
-        handle: Some(handle),
-        death_rx,
-        split_cleanup,
-        split_event_rx,
-        survey_loaded_model,
-        capacity_reservation,
-        survey_exited_unexpectedly: false,
-    };
-    let mut context_usage_tick = tokio::time::interval(DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL);
-    context_usage_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-    if !startup_run_local_model_event_loop(
-        &ctx,
-        &mut state,
-        StartupLoopEventContext {
-            context_usage_tick: &mut context_usage_tick,
-            stop_rx: &mut stop_rx,
-            local_capacity,
-            model_bytes,
-        },
-    )
-    .await
-    {
-        return;
+        {
+            return;
+        }
     }
+}
 
-    startup_shutdown_local_model_loop(&ctx, &mut state, &mut coordinator_task).await;
+/// Handles the outcome of one event-loop pass. Returns `true` when the model
+/// task should loop back to the launch phase (split relaunch), `false` when
+/// the task should end.
+async fn startup_resolve_loop_outcome(
+    outcome: StartupLoopOutcome,
+    ctx: &StartupLoopContext<'_>,
+    state: &mut StartupLoopState,
+    coordinator_task: &mut Option<tokio::task::JoinHandle<()>>,
+    stop_rx: &tokio::sync::watch::Receiver<bool>,
+    model_name: &str,
+) -> bool {
+    match outcome {
+        StartupLoopOutcome::Exit => false,
+        StartupLoopOutcome::Shutdown => {
+            startup_shutdown_local_model_loop(ctx, state, coordinator_task).await;
+            false
+        }
+        StartupLoopOutcome::RelaunchSplit => {
+            startup_shutdown_local_model_loop(ctx, state, coordinator_task).await;
+            if *stop_rx.borrow() {
+                return false;
+            }
+            let _ = emit_event(OutputEvent::Info {
+                message: format!(
+                    "Split model '{model_name}' withdrawn; waiting for eligible peers to relaunch"
+                ),
+                context: None,
+            });
+            true
+        }
+    }
 }
 
 pub(super) async fn startup_publish_loaded_runtime(
@@ -1383,7 +1452,7 @@ pub(super) async fn startup_run_local_model_event_loop(
     ctx: &StartupLoopContext<'_>,
     state: &mut StartupLoopState,
     event_ctx: StartupLoopEventContext<'_>,
-) -> bool {
+) -> StartupLoopOutcome {
     let StartupLoopEventContext {
         context_usage_tick,
         stop_rx,
@@ -1406,7 +1475,7 @@ pub(super) async fn startup_run_local_model_event_loop(
                     message: format!("Startup model '{}' exited unexpectedly", state.loaded_name),
                     context: Some(format!("model={} port={port}", state.loaded_name)),
                 });
-                return true;
+                return StartupLoopOutcome::Shutdown;
             }
             event = async {
                 if let Some(rx) = state.split_event_rx.as_mut() {
@@ -1421,13 +1490,14 @@ pub(super) async fn startup_run_local_model_event_loop(
                 };
                 match startup_handle_split_event(ctx, state, event, local_capacity, model_bytes).await {
                     StartupLoopControl::Continue => continue,
-                    StartupLoopControl::Break => return true,
-                    StartupLoopControl::Return => return false,
+                    StartupLoopControl::Break => return StartupLoopOutcome::Shutdown,
+                    StartupLoopControl::Return => return StartupLoopOutcome::Exit,
+                    StartupLoopControl::RelaunchSplit => return StartupLoopOutcome::RelaunchSplit,
                 }
             }
             res = stop_rx.changed() => {
                 let _ = res;
-                return true;
+                return StartupLoopOutcome::Shutdown;
             }
         }
     }

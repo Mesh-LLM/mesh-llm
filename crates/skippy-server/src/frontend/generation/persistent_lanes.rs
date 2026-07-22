@@ -51,10 +51,11 @@ pub(in crate::frontend) struct PrefillTransportEstimate {
     pub(in crate::frontend) observations: u64,
 }
 
-/// Bounds the blocking ready handshake without affecting later generation
-/// reads on the persistent lane.
+/// Bounds the blocking ready handshake before the steady-state I/O deadline is
+/// installed on the persistent lane.
 pub(in crate::frontend) const LANE_READY_READ_TIMEOUT: Duration = Duration::from_secs(20);
 pub(in crate::frontend) const LANE_STEADY_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+pub(in crate::frontend) const LANE_STEADY_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl PersistentStageLanePool {
     const PREFILL_TRANSPORT_EWMA_ALPHA: f64 = 0.25;
@@ -79,7 +80,10 @@ impl PersistentStageLanePool {
         });
         let timer = PhaseTimer::start();
         for _ in 0..capacity {
-            let lane = pool.connect_lane(LANE_READY_READ_TIMEOUT)?;
+            let lane = pool.connect_lane(
+                Duration::from_secs(pool.timeout_secs),
+                LANE_READY_READ_TIMEOUT,
+            )?;
             pool.return_lane(lane);
         }
         let mut attrs = lifecycle_attrs(config);
@@ -116,7 +120,7 @@ impl PersistentStageLanePool {
         let lane = match live_pooled {
             Some(lane) => lane,
             None => self
-                .connect_lane(LANE_STEADY_CONNECT_TIMEOUT)
+                .connect_lane(LANE_STEADY_CONNECT_TIMEOUT, LANE_STEADY_CONNECT_TIMEOUT)
                 .map_err(openai_backend_error)?,
         };
         let mut attrs = BTreeMap::from([
@@ -226,7 +230,7 @@ impl PersistentStageLanePool {
             "llama_stage.openai_downstream_retired_lane_id".to_string(),
             json!(retired_lane_id),
         );
-        match self.connect_lane(LANE_STEADY_CONNECT_TIMEOUT) {
+        match self.connect_lane(LANE_STEADY_CONNECT_TIMEOUT, LANE_STEADY_CONNECT_TIMEOUT) {
             Ok(lane) => {
                 attrs.insert(
                     "llama_stage.openai_downstream_lane_id".to_string(),
@@ -262,12 +266,13 @@ impl PersistentStageLanePool {
 
     pub(in crate::frontend) fn connect_lane(
         &self,
+        connect_timeout: Duration,
         ready_timeout: Duration,
     ) -> Result<PersistentStageLane> {
         let lane_id = self.next_lane_id.fetch_add(1, Ordering::Relaxed);
         let timer = PhaseTimer::start();
         let stream = self
-            .connect_lane_once(lane_id, ready_timeout)
+            .connect_lane_once(lane_id, connect_timeout, ready_timeout)
             .inspect_err(|error| {
             eprintln!(
                 "openai downstream lane handshake failed: stage_id={} lane_id={lane_id}: {error:#}",
@@ -299,8 +304,13 @@ impl PersistentStageLanePool {
         })
     }
 
-    fn connect_lane_once(&self, lane_id: u64, ready_timeout: Duration) -> Result<TcpStream> {
-        let mut stream = connect_binary_downstream(&self.config, self.timeout_secs)?
+    fn connect_lane_once(
+        &self,
+        lane_id: u64,
+        connect_timeout: Duration,
+        ready_timeout: Duration,
+    ) -> Result<TcpStream> {
+        let mut stream = connect_binary_downstream(&self.config, connect_timeout.as_secs().max(1))?
             .ok_or_else(|| anyhow!("embedded stage0 has no downstream"))?;
         let local_addr = stream.local_addr().ok();
         let peer_addr = stream.peer_addr().ok();
@@ -311,12 +321,24 @@ impl PersistentStageLanePool {
         send_client_ready_hello_if_enabled(&mut stream)
             .context("send persistent downstream lane client ready hello")?;
         receive_persistent_lane_ready(&mut stream, ready_timeout)?;
+        configure_persistent_lane_io_deadlines(&stream)?;
         eprintln!(
             "openai downstream lane received ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
             self.config.stage_id
         );
         Ok(stream)
     }
+}
+
+pub(in crate::frontend) fn configure_persistent_lane_io_deadlines(
+    stream: &TcpStream,
+) -> Result<()> {
+    stream
+        .set_read_timeout(Some(LANE_STEADY_IO_TIMEOUT))
+        .context("set persistent downstream lane read timeout")?;
+    stream
+        .set_write_timeout(Some(LANE_STEADY_IO_TIMEOUT))
+        .context("set persistent downstream lane write timeout")
 }
 
 pub(in crate::frontend) fn receive_persistent_lane_ready(

@@ -306,7 +306,7 @@ fn trial_config_pins_resolved_model_path_for_huggingface_cache_targets() {
 }
 
 #[test]
-fn trial_config_renders_ngram_speculative_candidate() {
+fn trial_config_renders_mtp_ngram_speculative_candidate() {
     let prepared = prepared_plan_fixture("/tmp/model.gguf", Vec::new(), Vec::new());
     let candidate = TuneBenchmarkCandidate {
         ctx_size: 4096,
@@ -316,9 +316,9 @@ fn trial_config_renders_ngram_speculative_candidate() {
         cache_type_v: TuneKvCacheType::Q8_0,
         mmap: TuneBoolOrAutoValue::Disabled,
         mlock: false,
-        speculative: TuneBenchmarkSpeculativeCandidate::Ngram {
-            ngram_min: 12,
-            ngram_max: 48,
+        speculative: TuneBenchmarkSpeculativeCandidate::MtpNgram {
+            ngram_min: 2,
+            ngram_max: 4,
         },
         flash_attention: None,
     };
@@ -336,10 +336,10 @@ fn trial_config_renders_ngram_speculative_candidate() {
         .and_then(|model| model.speculative.as_ref())
         .expect("speculative config exists");
 
-    assert_eq!(speculative.strategy.as_deref(), Some("disabled"));
-    assert_eq!(speculative.mode.as_deref(), Some("ngram"));
-    assert_eq!(speculative.ngram_min, Some(12));
-    assert_eq!(speculative.ngram_max, Some(48));
+    assert_eq!(speculative.strategy.as_deref(), Some("mtp"));
+    assert_eq!(speculative.mode.as_deref(), Some("auto"));
+    assert_eq!(speculative.ngram_min, Some(2));
+    assert_eq!(speculative.ngram_max, Some(4));
 }
 
 #[test]
@@ -481,21 +481,9 @@ fn benchmark_candidates_auto_prioritizes_native_mtp_for_mtp_targets() {
                 draft_acceptance_threshold: None,
                 draft_split_probability: None,
             },
-            TuneBenchmarkSpeculativeCandidate::Ngram {
-                ngram_min: 12,
-                ngram_max: 48,
-            },
-            TuneBenchmarkSpeculativeCandidate::Ngram {
-                ngram_min: 12,
-                ngram_max: 64,
-            },
-            TuneBenchmarkSpeculativeCandidate::Ngram {
-                ngram_min: 24,
-                ngram_max: 48,
-            },
-            TuneBenchmarkSpeculativeCandidate::Ngram {
-                ngram_min: 24,
-                ngram_max: 64,
+            TuneBenchmarkSpeculativeCandidate::MtpNgram {
+                ngram_min: 2,
+                ngram_max: 4,
             },
             TuneBenchmarkSpeculativeCandidate::Disabled,
         ]
@@ -530,7 +518,7 @@ fn benchmark_candidates_no_speculative_tune_uses_disabled_baseline_only() {
 }
 
 #[test]
-fn benchmark_candidates_auto_includes_ngram_fallback_for_plain_targets() {
+fn benchmark_candidates_auto_skips_mtp_ngram_for_plain_targets() {
     let target_dir = tempfile::tempdir().expect("target tempdir");
     let target_path = target_dir.path().join("qwen-target.gguf");
     let prepared =
@@ -556,18 +544,12 @@ fn benchmark_candidates_auto_includes_ngram_fallback_for_plain_targets() {
 
     assert_eq!(
         speculation,
-        vec![
-            TuneBenchmarkSpeculativeCandidate::Ngram {
-                ngram_min: 2,
-                ngram_max: 4,
-            },
-            TuneBenchmarkSpeculativeCandidate::Disabled,
-        ]
+        vec![TuneBenchmarkSpeculativeCandidate::Disabled]
     );
 }
 
 #[test]
-fn benchmark_candidates_auto_orders_draft_before_ngram_when_discovered() {
+fn benchmark_candidates_auto_skips_mtp_ngram_for_plain_draft_target() {
     let target_dir = tempfile::tempdir().expect("target tempdir");
     let target_path = target_dir.path().join("qwen-target.gguf");
     let prepared =
@@ -604,10 +586,6 @@ fn benchmark_candidates_auto_orders_draft_before_ngram_when_discovered() {
                 draft_acceptance_threshold: None,
                 draft_split_probability: None,
             },
-            TuneBenchmarkSpeculativeCandidate::Ngram {
-                ngram_min: 2,
-                ngram_max: 4,
-            },
             TuneBenchmarkSpeculativeCandidate::Disabled,
         ]
     );
@@ -616,7 +594,7 @@ fn benchmark_candidates_auto_orders_draft_before_ngram_when_discovered() {
 #[test]
 fn benchmark_candidates_explicit_speculative_sweeps_draft_and_ngram_settings() {
     let target_dir = tempfile::tempdir().expect("target tempdir");
-    let target_path = target_dir.path().join("qwen-target.gguf");
+    let target_path = target_dir.path().join("qwen-mtp-target.gguf");
     let prepared =
         prepared_plan_fixture(&target_path.display().to_string(), Vec::new(), Vec::new());
     let prepared = [prepared];
@@ -630,13 +608,13 @@ fn benchmark_candidates_explicit_speculative_sweeps_draft_and_ngram_settings() {
         mlock_values: &[mesh_llm_cli::benchmark::BenchmarkBool::Disabled],
         speculative_types: &[
             mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Draft,
-            mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Ngram,
+            mesh_llm_cli::benchmark::BenchmarkSpeculativeType::MtpNgram,
         ],
         spec_draft_models: std::slice::from_ref(&draft_model),
         spec_draft_max_tokens: &[4],
         spec_draft_min_tokens: &[2],
-        spec_ngram_min: &[12],
-        spec_ngram_max: &[48],
+        spec_ngram_min: &[2],
+        spec_ngram_max: &[4],
         ..benchmark_request_fixture(&config, &prepared)
     };
 
@@ -656,9 +634,9 @@ fn benchmark_candidates_explicit_speculative_sweeps_draft_and_ngram_settings() {
                 draft_acceptance_threshold: None,
                 draft_split_probability: None,
             },
-            TuneBenchmarkSpeculativeCandidate::Ngram {
-                ngram_min: 12,
-                ngram_max: 48,
+            TuneBenchmarkSpeculativeCandidate::MtpNgram {
+                ngram_min: 2,
+                ngram_max: 4,
             },
         ]
     );

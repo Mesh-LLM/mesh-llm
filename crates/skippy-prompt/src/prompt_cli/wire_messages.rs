@@ -74,7 +74,6 @@ fn send_verify_window(
     pos_start: usize,
     decode_index: usize,
     tokens: &[i32],
-    checkpoint: bool,
 ) -> Result<VerifyWindowReply> {
     if tokens.is_empty() {
         bail!("verify window requires at least one token");
@@ -87,9 +86,6 @@ fn send_verify_window(
     state.decode_step = i32::try_from(decode_index).context("decode step exceeds i32")?;
     state.current_token = tokens[0];
     state.source_stage_index = -1;
-    if !checkpoint {
-        state.flags |= state_flags::SKIP_VERIFY_CHECKPOINT;
-    }
     let message = StageWireMessage {
         kind: WireMessageKind::VerifyWindow,
         pos_start: i32::try_from(pos_start).context("verify window position exceeds i32")?,
@@ -249,30 +245,6 @@ fn print_stats(stats: Stats) {
             format_stage_mask(stats.reply_stats.kv_hit_stage_mask),
             format_stage_mask(stats.reply_stats.kv_record_stage_mask)
         );
-        if stats.reply_stats.restore_total_us > 0 {
-            eprintln!(
-                "  kv       restore_ms total={:.2} flush={:.2} prefill_drain={:.2} local={:.2} downstream_write={:.2} downstream_wait={:.2} drained_replies={}",
-                us_to_ms(stats.reply_stats.restore_total_us),
-                us_to_ms(stats.reply_stats.restore_flush_us),
-                us_to_ms(stats.reply_stats.restore_prefill_drain_us),
-                us_to_ms(stats.reply_stats.restore_local_us),
-                us_to_ms(stats.reply_stats.restore_downstream_write_us),
-                us_to_ms(stats.reply_stats.restore_downstream_wait_us),
-                stats.reply_stats.restore_prefill_drained_replies
-            );
-        }
-        if stats.reply_stats.checkpoint_total_us > 0 {
-            eprintln!(
-                "  kv       checkpoint_ms total={:.2} flush={:.2} prefill_drain={:.2} local={:.2} downstream_write={:.2} downstream_wait={:.2} drained_replies={}",
-                us_to_ms(stats.reply_stats.checkpoint_total_us),
-                us_to_ms(stats.reply_stats.checkpoint_flush_us),
-                us_to_ms(stats.reply_stats.checkpoint_prefill_drain_us),
-                us_to_ms(stats.reply_stats.checkpoint_local_us),
-                us_to_ms(stats.reply_stats.checkpoint_downstream_write_us),
-                us_to_ms(stats.reply_stats.checkpoint_downstream_wait_us),
-                stats.reply_stats.checkpoint_prefill_drained_replies
-            );
-        }
     } else {
         eprintln!("  reuse    exact_prefix=not_reported record=not_reported");
         eprintln!("  kv       no lookup/record events reported");
@@ -299,14 +271,13 @@ fn print_stats(stats: Stats) {
                 / stats.speculative_stats.rejected_windows as f64
         };
         eprintln!(
-            "  spec     full_accept_windows={} accepted_stop_windows={} rejected_windows={} early_reject_windows={} tail_reject_windows={} early_reject_stop_windows={} repair_required_windows={} avg_reject_pos={:.2}",
+            "  spec     full_accept_windows={} accepted_stop_windows={} rejected_windows={} early_reject_windows={} tail_reject_windows={} early_reject_stop_windows={} avg_reject_pos={:.2}",
             stats.speculative_stats.full_accept_windows,
             stats.speculative_stats.accepted_stop_windows,
             stats.speculative_stats.rejected_windows,
             stats.speculative_stats.early_reject_windows,
             stats.speculative_stats.tail_reject_windows,
             stats.speculative_stats.early_reject_stop_windows,
-            stats.speculative_stats.repair_required_windows,
             avg_reject_pos
         );
         if stats.speculative_stats.adaptive_window_max > 0 {
@@ -365,57 +336,6 @@ fn print_stats(stats: Stats) {
                 primary_verify_tok_s
             );
         }
-        if stats.speculative_stats.recovery_restores > 0 {
-            if stats.speculative_stats.checkpoint_ms > 0.0 {
-                eprintln!(
-                    "  spec     checkpoint_ms={:.2} recovery_restores={} recovery_decode_repairs={} recovery_decode_ms={:.2} recovery_reverify_tokens={} recovery_ms={:.2}",
-                    stats.speculative_stats.checkpoint_ms,
-                    stats.speculative_stats.recovery_restores,
-                    stats.speculative_stats.recovery_decode_repairs,
-                    stats.speculative_stats.recovery_decode_elapsed_ms,
-                    stats.speculative_stats.recovery_reverify_tokens,
-                    stats.speculative_stats.recovery_ms
-                );
-            } else {
-                eprintln!(
-                    "  spec     recovery_restores={} recovery_decode_repairs={} recovery_decode_ms={:.2} recovery_reverify_tokens={} recovery_ms={:.2}",
-                    stats.speculative_stats.recovery_restores,
-                    stats.speculative_stats.recovery_decode_repairs,
-                    stats.speculative_stats.recovery_decode_elapsed_ms,
-                    stats.speculative_stats.recovery_reverify_tokens,
-                    stats.speculative_stats.recovery_ms
-                );
-            }
-        } else if stats.speculative_stats.checkpoint_ms > 0.0 {
-            eprintln!(
-                "  spec     checkpoint_ms={:.2}",
-                stats.speculative_stats.checkpoint_ms
-            );
-        }
-        if stats.reply_stats.checkpoint_total_us > 0 {
-            eprintln!(
-                "  spec     checkpoint_breakdown_ms total={:.2} flush={:.2} prefill_drain={:.2} local={:.2} downstream_write={:.2} downstream_wait={:.2} drained_replies={}",
-                us_to_ms(stats.reply_stats.checkpoint_total_us),
-                us_to_ms(stats.reply_stats.checkpoint_flush_us),
-                us_to_ms(stats.reply_stats.checkpoint_prefill_drain_us),
-                us_to_ms(stats.reply_stats.checkpoint_local_us),
-                us_to_ms(stats.reply_stats.checkpoint_downstream_write_us),
-                us_to_ms(stats.reply_stats.checkpoint_downstream_wait_us),
-                stats.reply_stats.checkpoint_prefill_drained_replies
-            );
-        }
-        if stats.reply_stats.restore_total_us > 0 {
-            eprintln!(
-                "  spec     restore_breakdown_ms total={:.2} flush={:.2} prefill_drain={:.2} local={:.2} downstream_write={:.2} downstream_wait={:.2} drained_replies={}",
-                us_to_ms(stats.reply_stats.restore_total_us),
-                us_to_ms(stats.reply_stats.restore_flush_us),
-                us_to_ms(stats.reply_stats.restore_prefill_drain_us),
-                us_to_ms(stats.reply_stats.restore_local_us),
-                us_to_ms(stats.reply_stats.restore_downstream_write_us),
-                us_to_ms(stats.reply_stats.restore_downstream_wait_us),
-                stats.reply_stats.restore_prefill_drained_replies
-            );
-        }
         if stats.reply_stats.verify_window_total_us > 0 {
             let verify_total_ms = us_to_ms(stats.reply_stats.verify_window_total_us);
             let verify_tok_s = if verify_total_ms > 0.0 {
@@ -439,70 +359,14 @@ fn print_stats(stats: Stats) {
                 0.0
             };
             eprintln!(
-                "  spec     verify_batch_stats protocol_requests={} protocol_tokens={} max_span={} avg_span={:.2} checkpointed_requests={} skip_checkpoint_requests={}",
+                "  spec     verify_batch_stats protocol_requests={} protocol_tokens={} max_span={} avg_span={:.2}",
                 stats.reply_stats.verify_window_request_count,
                 stats.reply_stats.verify_window_token_count,
                 stats.reply_stats.verify_window_max_tokens,
-                protocol_avg_span,
-                stats.reply_stats.verify_window_checkpointed_requests,
-                stats.reply_stats.verify_window_skip_checkpoint_requests
-            );
-        }
-        if stats.speculative_stats.recovery_reverify_elapsed_ms > 0.0 {
-            eprintln!(
-                "  spec     recovery_reverify_breakdown_ms elapsed={:.2} write={:.2} wait={:.2} stage_compute={:.2} stage_forward={:.2} stage_downstream_wait={:.2} stages={}",
-                stats.speculative_stats.recovery_reverify_elapsed_ms,
-                stats.speculative_stats.recovery_reverify_write_ms,
-                stats.speculative_stats.recovery_reverify_wait_ms,
-                us_to_ms(stats.speculative_stats.recovery_reverify_compute_us),
-                us_to_ms(stats.speculative_stats.recovery_reverify_forward_write_us),
-                us_to_ms(stats.speculative_stats.recovery_reverify_downstream_wait_us),
-                stats.speculative_stats.recovery_reverify_stage_count
+                protocol_avg_span
             );
         }
     }
-}
-
-fn send_session_control(
-    stream: &mut TcpStream,
-    wire_dtype: WireActivationDType,
-    prompt_index: usize,
-    request_id: u64,
-    session_id: u64,
-    kind: WireMessageKind,
-) -> Result<SessionControlReply> {
-    if !kind.is_session_control() {
-        bail!("session control requires a session-control message kind");
-    }
-    let started = Instant::now();
-    let mut state = StageStateHeader::new(kind, wire_dtype);
-    state.seq_id = i32::try_from(prompt_index).context("prompt index exceeds i32")?;
-    state.source_stage_index = -1;
-    let message = StageWireMessage {
-        kind,
-        pos_start: 0,
-        token_count: 0,
-        state,
-        request_id,
-        session_id,
-        sampling: None,
-        chat_sampling_metadata: None,
-        tokens: Vec::new(),
-        positions: Vec::new(),
-        activation: Vec::new(),
-        raw_bytes: Vec::new(),
-    };
-    write_stage_message(&mut *stream, &message, wire_dtype)
-        .with_context(|| format!("send session control {kind:?}"))?;
-    let reply =
-        recv_reply(&mut *stream).with_context(|| format!("receive session control {kind:?}"))?;
-    if reply.kind != WireReplyKind::Ack {
-        bail!("expected session-control ACK, got {:?}", reply.kind);
-    }
-    Ok(SessionControlReply {
-        stats: reply.stats,
-        elapsed_ms: elapsed_ms(started),
-    })
 }
 
 fn send_try_restore_prefill(

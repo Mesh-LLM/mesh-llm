@@ -223,6 +223,24 @@ fn steady_state_lane_reconnect_deadline_is_much_shorter_than_warmup() {
 }
 
 #[test]
+fn persistent_lane_steady_state_io_is_bounded() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || listener.accept().unwrap().0);
+    let client = std::net::TcpStream::connect(address).unwrap();
+    let peer = server.join().unwrap();
+
+    configure_persistent_lane_io_deadlines(&client).unwrap();
+
+    assert_eq!(client.read_timeout().unwrap(), Some(LANE_STEADY_IO_TIMEOUT));
+    assert_eq!(
+        client.write_timeout().unwrap(),
+        Some(LANE_STEADY_IO_TIMEOUT)
+    );
+    drop(peer);
+}
+
+#[test]
 fn steady_state_ready_handshake_times_out_fast_for_silent_downstream() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

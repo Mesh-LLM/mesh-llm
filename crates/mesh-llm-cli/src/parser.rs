@@ -6,7 +6,7 @@ mod validation;
 pub use commands::{
     AuthCommand, BinaryFlavor, Cli, Command, ConfigCommand, DiscoveryScope, DoctorCommand,
     GpuCommand, MeshDiscoveryMode, MeshGuardrailCliMode, PluginCommand, SkillAgentArg,
-    SkillCommand, SpeculativeNgramProposerCli, TrustCommand, TrustPolicy,
+    SkillCommand, TrustCommand, TrustPolicy,
 };
 pub use normalization::{
     NormalizedRuntimeArgs, RuntimeSurface, legacy_runtime_surface_warning,
@@ -98,8 +98,44 @@ pub fn assert_mesh_requirements_docs_examples_parse() {
 
 #[cfg(test)]
 mod tests {
+    use super::Cli;
+    use clap::Parser;
+
     #[test]
     fn mesh_requirements_docs_examples_parse() {
         super::assert_mesh_requirements_docs_examples_parse();
+    }
+
+    #[test]
+    fn split_topology_lock_requires_split_mode() {
+        let error = Cli::try_parse_from([
+            "mesh-llm",
+            "--model",
+            "model.gguf",
+            "--split-topology-lock",
+            "topology.json",
+        ])
+        .expect_err("topology lock without --split should fail");
+
+        assert!(error.to_string().contains("--split"));
+    }
+
+    #[test]
+    fn split_topology_lock_parses_with_split_mode() {
+        let cli = Cli::try_parse_from([
+            "mesh-llm",
+            "--model",
+            "model.gguf",
+            "--split",
+            "--split-topology-lock",
+            "topology.json",
+        ])
+        .expect("locked split CLI should parse");
+
+        assert!(cli.split);
+        assert_eq!(
+            cli.split_topology_lock,
+            Some(std::path::PathBuf::from("topology.json"))
+        );
     }
 }

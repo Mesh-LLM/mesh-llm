@@ -155,28 +155,23 @@ chunk and every normal decode token.
 
 ## E. State Lifecycle Efficiency
 
-- [ ] Reduce checkpoint and restore round trips for speculative decode.
-  - Avoid checkpointing every `VerifySpan` when a cheaper journal or suffix
-    trim can preserve correctness.
-  - Use `SKIP_VERIFY_CHECKPOINT` only when the repair path is proven safe.
-
-- [ ] Add speculative journals.
-  - Record enough per-stage state to commit or discard a verify span without a
-    full restore where possible.
-
-- [ ] Improve suffix trim semantics.
-  - Make rejected speculative suffix rollback cheaper than full session restore.
-  - Validate recurrent-state families separately from transformer-only KV.
+- [x] Make speculative positions authoritative in stage-state v9.
+  - Decode and `VerifyWindow` messages carry the absolute position each stage
+    must have before execution.
+  - Stages ahead of that position rewind attention KV locally.
+  - Speculation never checkpoints, restores, trims by control message, or
+    replays a rejected prefix.
+  - Recurrent-state stages reject positional speculation instead of falling
+    back to the removed checkpoint protocol.
 
 - [ ] Add checkpoint hierarchy.
-  - Keep coarse prompt checkpoints and lightweight decode-span checkpoints.
+  - Keep coarse prompt checkpoints for non-speculative session/cache workflows.
   - Evict checkpoint state with explicit memory accounting.
 
 - [ ] Track state-control latency separately from activation latency.
   - Emit checkpoint, restore, trim, prefix-restore, and decode-fuse timings per
     stage.
-  - Use these metrics to decide whether direct final replies or journaled
-    rollback should land first.
+  - Keep speculative position-rewind counts and trimmed-token totals separate.
 
 ## Validation Gates
 

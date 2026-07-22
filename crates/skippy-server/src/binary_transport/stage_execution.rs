@@ -32,7 +32,6 @@ use skippy_runtime::{
 
 use super::socket::{connect_downstream_socket, downstream_source_ip, resolve_downstream_endpoint};
 
-const AUTO_ALIGN_SESSION_ENV: &str = "SKIPPY_STAGE_AUTO_ALIGN_SESSION";
 const CLIENT_READY_HELLO_ENV: &str = "SKIPPY_STAGE_CLIENT_READY_HELLO";
 const CLIENT_READY_HELLO_OPT_IN_PEEK_MS: u64 = 500;
 
@@ -226,39 +225,6 @@ pub(in crate::binary_transport) fn split_native_mtp_reply(
     }))
 }
 
-pub(in crate::binary_transport) fn binary_auto_align_session_enabled() -> bool {
-    truthy_env(env::var(AUTO_ALIGN_SESSION_ENV).ok().as_deref())
-}
-
-fn truthy_env(value: Option<&str>) -> bool {
-    matches!(
-        value.map(|value| value.trim().to_ascii_lowercase()),
-        Some(value)
-            if matches!(
-                value.as_str(),
-                "1" | "true" | "on" | "enable" | "enabled" | "yes"
-            )
-    )
-}
-
-pub(in crate::binary_transport) fn message_allows_session_auto_align(
-    message: &StageWireMessage,
-) -> bool {
-    matches!(
-        message.kind,
-        WireMessageKind::DecodeEmbd
-            | WireMessageKind::DecodeReadout
-            | WireMessageKind::DecodeLightCtx
-            | WireMessageKind::VerifyWindow
-    )
-}
-
-pub(in crate::binary_transport) fn message_pos_start_as_token_count(
-    message: &StageWireMessage,
-) -> Option<u64> {
-    u64::try_from(message.pos_start).ok()
-}
-
 pub(crate) fn stage_output_activation_capacity(
     config: &StageConfig,
     token_count: i32,
@@ -279,7 +245,7 @@ pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     predicted_token_count: usize,
 ) -> usize {
     const REPLY_HEADER_BYTES: usize = 3 * std::mem::size_of::<i32>();
-    const REPLY_STATS_BYTES: usize = 34 * std::mem::size_of::<i64>();
+    const REPLY_STATS_BYTES: usize = 23 * std::mem::size_of::<i64>();
     let token_count = match reply_kind {
         WireReplyKind::Ack => 0,
         WireReplyKind::PredictedToken => 1,
@@ -342,11 +308,6 @@ pub(in crate::binary_transport) fn nanos_delta_ms(
     end_unix_nanos: u64,
 ) -> f64 {
     end_unix_nanos.saturating_sub(start_unix_nanos) as f64 / 1_000_000.0
-}
-
-pub(in crate::binary_transport) fn elapsed_us(started: Instant) -> i64 {
-    let micros = started.elapsed().as_micros();
-    micros.min(i64::MAX as u128) as i64
 }
 
 pub(in crate::binary_transport) fn ms_to_us(ms: f64) -> i64 {
@@ -553,8 +514,6 @@ pub(crate) fn run_binary_stage_message(
         | WireMessageKind::StateImport
         | WireMessageKind::StateExport
         | WireMessageKind::ConfigureGeneration
-        | WireMessageKind::CheckpointSession
-        | WireMessageKind::RestoreSession
         | WireMessageKind::TrimSession
         | WireMessageKind::ProbePrefill
         | WireMessageKind::RestorePrefill

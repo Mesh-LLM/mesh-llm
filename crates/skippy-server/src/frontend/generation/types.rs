@@ -87,10 +87,6 @@ impl OpenAiBackendMode {
             Self::EmbeddedStageZero { .. } => "embedded-stage0",
         }
     }
-
-    pub(in crate::frontend) fn reserves_local_kv_tokens(&self) -> bool {
-        matches!(self, Self::LocalRuntime)
-    }
 }
 
 pub(in crate::frontend) struct PhaseTimer {
@@ -215,13 +211,6 @@ pub(in crate::frontend) struct EmbeddedFusedFirstDecode {
     pub(in crate::frontend) message_kind: &'static str,
 }
 
-pub(in crate::frontend) struct EmbeddedSessionControl {
-    pub(in crate::frontend) elapsed_ms: f64,
-    pub(in crate::frontend) local_ms: f64,
-    pub(in crate::frontend) downstream_write_ms: f64,
-    pub(in crate::frontend) downstream_wait_ms: f64,
-}
-
 pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) prompt_tokens: u32,
     pub(in crate::frontend) completion_tokens: u32,
@@ -300,7 +289,7 @@ impl GeneratedText {
         if let Some(telemetry) = self.native_mtp_decode_telemetry {
             telemetry.insert_response_timings(&mut timings);
         }
-        if let Some(stats) = self.verify_window_pipeline_stats {
+        if let Some(stats) = self.verify_window_pipeline_stats.as_ref() {
             stats.insert_response_timings(&mut timings);
         }
         if let Some(stats) = self.speculative_stats.as_ref() {

@@ -243,25 +243,13 @@ impl ResolvedSkippyConfig {
                 None
             },
             speculative_window: self.speculative_window_for_embedded(mode),
-            adaptive_speculative_window: false,
+            adaptive_speculative_window: mode == "draft",
             draft_n_gpu_layers: if mode == "draft" || self.speculative.native_mtp_enabled {
                 self.speculative.draft_n_gpu_layers
             } else {
                 None
             },
             speculative: self.speculative_decode_config(),
-            ngram_min: self
-                .speculative
-                .decode
-                .ngram
-                .as_ref()
-                .map_or(0, |ngram| ngram.min_ngram),
-            ngram_max: self
-                .speculative
-                .decode
-                .ngram
-                .as_ref()
-                .map_or(0, |ngram| ngram.max_proposal_tokens),
             native_mtp_enabled: self.speculative.native_mtp_enabled,
             native_mtp_draft_model_path: if self.speculative.native_mtp_enabled {
                 self.speculative.draft_model_path.clone()
@@ -316,9 +304,7 @@ impl ResolvedSkippyConfig {
                 .decode
                 .ngram
                 .as_ref()
-                .map_or(self.speculative.ngram_max as usize, |ngram| {
-                    ngram.max_proposal_tokens
-                }),
+                .map_or(0, |ngram| ngram.max_proposal_tokens),
             _ => 0,
         }
     }
@@ -420,8 +406,6 @@ impl ResolvedEmbeddedOpenAiArgs {
                 },
                 ..SpeculativeDecodeConfig::default()
             },
-            ngram_min: 0,
-            ngram_max: 0,
             native_mtp_enabled,
             native_mtp_draft_model_path: None,
             native_mtp_max_tokens: if native_mtp_enabled {
@@ -480,8 +464,6 @@ impl ResolvedEmbeddedOpenAiArgs {
                 },
                 ..SpeculativeDecodeConfig::default()
             },
-            ngram_min: 0,
-            ngram_max: 0,
             native_mtp_enabled,
             native_mtp_draft_model_path: None,
             native_mtp_max_tokens: if native_mtp_enabled {
@@ -524,8 +506,6 @@ impl ResolvedEmbeddedOpenAiArgs {
             adaptive_speculative_window: self.adaptive_speculative_window,
             draft_n_gpu_layers: self.draft_n_gpu_layers,
             speculative: self.speculative,
-            ngram_min: self.ngram_min,
-            ngram_max: self.ngram_max,
             native_mtp_enabled: self.native_mtp_enabled,
             native_mtp_draft_model_path: self.native_mtp_draft_model_path,
             native_mtp_max_tokens: self.native_mtp_max_tokens,

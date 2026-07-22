@@ -80,6 +80,56 @@ curl -sS http://127.0.0.1:9447/v1/chat/completions \
   -d '{"model":"meshllm/Qwen3-8B-Q4_K_M-layers","messages":[{"role":"user","content":"Reply with OK"}],"max_tokens":16}'
 ```
 
+## Lock node order and layer ranges
+
+Maintainer and benchmark runs can replace automatic placement with an exact,
+fail-closed topology. Create the same JSON file on every serving node:
+
+```json
+{
+  "version": 1,
+  "model": "hf://meshllm/example-layers@immutable-revision",
+  "manifest_sha256": "<sha256 of model-package.json>",
+  "stages": [
+    {
+      "node": "micstudio.local",
+      "layer_start": 0,
+      "layer_end": 31
+    },
+    {
+      "node": "studio54-3.local",
+      "layer_start": 31,
+      "layer_end": 47
+    }
+  ]
+}
+```
+
+`node` accepts either a full iroh endpoint id or an advertised hostname. Node
+selectors must resolve uniquely among eligible split participants. Ranges are
+half-open: `layer_start` is inclusive and `layer_end` is exclusive. They must be
+non-empty, contiguous, cover `0..layer_count`, and assign each node once. The
+model and manifest digest must match the resolved package.
+
+Pass the lock together with `--split` on every node:
+
+```bash
+mesh-llm serve \
+  --model hf://meshllm/example-layers@immutable-revision \
+  --split \
+  --split-topology-lock /path/to/topology-lock.json
+```
+
+The normal context, KV-cache, headroom, and VRAM checks still apply. Startup
+fails if the locked ranges do not fit. Once running, membership changes do not
+replace the stages or collapse the model to a local fallback. If a locked stage
+is lost, the topology becomes unavailable and is withdrawn after the normal
+stage-loss grace period.
+
+Use `skippy-model-package preflight <package-dir> --verify-sha256` to obtain the
+manifest digest for a local package. Confirm the realized assignments through
+`GET /api/runtime/stages`.
+
 ## Use a local GGUF
 
 Direct GGUFs still work:

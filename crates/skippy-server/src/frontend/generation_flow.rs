@@ -93,39 +93,34 @@ impl StageOpenAiBackend {
             return Err(OpenAiError::invalid_request("prompt produced no tokens"));
         }
         let max_tokens = max_tokens.resolve(prompt_token_ids.len(), self.ctx_size)?;
-        let _token_budget_reservation = if self.mode.reserves_local_kv_tokens() {
-            let token_admit_timer = PhaseTimer::start();
-            let reservation = self.generation_token_budget.reserve(
-                GenerationTokenBudgetRequest::new(prompt_token_ids.len(), max_tokens),
-                GENERATION_ADMISSION_TIMEOUT,
-            )?;
-            let mut token_admit_attrs = self.openai_attrs(&ids);
-            token_admit_attrs.insert(
-                "llama_stage.prompt_token_count".to_string(),
-                json!(prompt_token_ids.len()),
-            );
-            token_admit_attrs.insert("llama_stage.max_tokens".to_string(), json!(max_tokens));
-            token_admit_attrs.insert(
-                "llama_stage.kv_reserved_tokens".to_string(),
-                json!(reservation.tokens()),
-            );
-            token_admit_attrs.insert(
-                "llama_stage.kv_active_reserved_tokens".to_string(),
-                json!(reservation.active_tokens_after_reservation()),
-            );
-            token_admit_attrs.insert(
-                "llama_stage.kv_capacity_tokens".to_string(),
-                json!(self.generation_token_budget.capacity_tokens()),
-            );
-            self.emit_openai_phase(
-                "stage.openai_generation_token_admit",
-                token_admit_timer,
-                token_admit_attrs,
-            );
-            Some(reservation)
-        } else {
-            None
-        };
+        let token_admit_timer = PhaseTimer::start();
+        let token_budget_reservation = self.generation_token_budget.reserve(
+            GenerationTokenBudgetRequest::new(prompt_token_ids.len(), max_tokens),
+            GENERATION_ADMISSION_TIMEOUT,
+        )?;
+        let mut token_admit_attrs = self.openai_attrs(&ids);
+        token_admit_attrs.insert(
+            "llama_stage.prompt_token_count".to_string(),
+            json!(prompt_token_ids.len()),
+        );
+        token_admit_attrs.insert("llama_stage.max_tokens".to_string(), json!(max_tokens));
+        token_admit_attrs.insert(
+            "llama_stage.kv_reserved_tokens".to_string(),
+            json!(token_budget_reservation.tokens()),
+        );
+        token_admit_attrs.insert(
+            "llama_stage.kv_active_reserved_tokens".to_string(),
+            json!(token_budget_reservation.active_tokens_after_reservation()),
+        );
+        token_admit_attrs.insert(
+            "llama_stage.kv_capacity_tokens".to_string(),
+            json!(self.generation_token_budget.capacity_tokens()),
+        );
+        self.emit_openai_phase(
+            "stage.openai_generation_token_admit",
+            token_admit_timer,
+            token_admit_attrs,
+        );
         let chat_sampling_metadata = prompt.chat_parse_metadata.as_deref();
 
         let emulation_active = emulation_generation_active(hook_request.as_ref(), &prompt);
@@ -857,8 +852,29 @@ impl StageOpenAiBackend {
                 let stage0_timer = PhaseTimer::start();
                 let batch_outcome = self
                     .decode_frame_batcher
-                    .decode(&session_key, current, Some(&request.sampling), None)
+                    .decode(
+                        &session_key,
+                        u64::try_from(message.pos_start).map_err(|_| {
+                            OpenAiError::backend("negative authoritative decode position")
+                        })?,
+                        current,
+                        request.sampling.enabled.then_some(&request.sampling),
+                        None,
+                    )
                     .map_err(openai_backend_error)?;
+                if let Some(alignment) = batch_outcome.session_alignment {
+                    let mut attrs = self.openai_attrs(&request.ids);
+                    attrs.insert(
+                        "llama_stage.session_auto_align_before_tokens".to_string(),
+                        json!(alignment.before_token_count),
+                    );
+                    attrs.insert(
+                        "llama_stage.session_auto_align_after_tokens".to_string(),
+                        json!(alignment.after_token_count),
+                    );
+                    self.telemetry
+                        .emit_debug("stage.openai_session_auto_align", attrs);
+                }
                 decode_runtime_lock_wait_ms += batch_outcome.runtime_lock_wait_ms;
                 decode_runtime_lock_hold_ms += batch_outcome.runtime_lock_hold_ms;
                 decode_runtime_lock_acquires += 1;

@@ -24,6 +24,8 @@ const OTLP_ENDPOINT_ENV: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
 const OTLP_METRICS_ENDPOINT_ENV: &str = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
 #[cfg(any(debug_assertions, test))]
 const TELEMETRY_ATTRIBUTE_ALLOWLIST: &[&str] = &[
+    "llama_stage.verify_window.direct_return_reverse_fallback",
+    "llama_stage.verify_window.direct_return_upstream_opened",
     "mesh_llm.architecture",
     "mesh_llm.attempt_outcome",
     "mesh_llm.backend",
@@ -1408,6 +1410,8 @@ mod tests {
         assert_eq!(
             keys,
             BTreeSet::from([
+                "llama_stage.verify_window.direct_return_reverse_fallback",
+                "llama_stage.verify_window.direct_return_upstream_opened",
                 "mesh_llm.architecture",
                 "mesh_llm.attempt_outcome",
                 "mesh_llm.backend",

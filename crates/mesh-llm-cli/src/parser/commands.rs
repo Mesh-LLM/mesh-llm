@@ -397,7 +397,6 @@ impl MeshGuardrailCliMode {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum SpeculativeNgramProposerCli {
-    Simple,
     Cache,
     Suffix,
 }
@@ -405,7 +404,6 @@ pub enum SpeculativeNgramProposerCli {
 impl SpeculativeNgramProposerCli {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Simple => "simple",
             Self::Cache => "cache",
             Self::Suffix => "suffix",
         }
@@ -542,19 +540,15 @@ pub struct Cli {
     pub auto_update: bool,
 
     // ── Advanced options (hidden from default --help) ─────────────
-    /// Override speculative decoding (`mtp`, `ngram-simple`, `ngram-cache`, `ngram-suffix`, or a package strategy id).
+    /// Override speculative decoding (`mtp`, `ngram-cache`, `ngram-suffix`, or a package strategy id).
     #[arg(long, hide = true)]
     pub speculative_strategy: Option<String>,
 
-    /// Override the N-gram proposer kind for this invocation.
-    #[arg(long, value_enum, hide = true)]
-    pub speculative_ngram_proposer: Option<SpeculativeNgramProposerCli>,
-
-    /// Minimum matching N-gram length for a direct N-gram proposer.
+    /// Minimum matching N-gram length for the request-local MTP cache extension.
     #[arg(long, hide = true)]
     pub speculative_ngram_min: Option<u32>,
 
-    /// Maximum matching N-gram length for a direct N-gram proposer.
+    /// Maximum matching N-gram length for the request-local MTP cache extension.
     #[arg(long, hide = true)]
     pub speculative_ngram_max: Option<u32>,
 
@@ -562,17 +556,13 @@ pub struct Cli {
     #[arg(long, hide = true)]
     pub speculative_ngram_max_proposal_tokens: Option<u32>,
 
-    /// Initial N-gram extension length for a composite MTP strategy.
-    #[arg(long, hide = true)]
-    pub speculative_extension_initial_tokens: Option<u32>,
+    /// Standalone N-gram proposer kind (`cache` or `suffix`).
+    #[arg(long, hide = true, value_enum)]
+    pub speculative_ngram_proposer: Option<SpeculativeNgramProposerCli>,
 
     /// Maximum N-gram extension length for a composite MTP strategy.
     #[arg(long, hide = true)]
     pub speculative_extension_max_tokens: Option<u32>,
-
-    /// Consecutive weak extensions before the composite strategy backs off.
-    #[arg(long, hide = true)]
-    pub speculative_extension_tail_backoff_proposals: Option<u32>,
 
     /// Native MTP rejection cooldown in generated tokens.
     #[arg(long, hide = true)]
@@ -621,6 +611,10 @@ pub struct Cli {
     /// Force tensor split even if the model fits on one node.
     #[arg(long, hide = true)]
     pub split: bool,
+
+    /// Pin split-serving node order and layer ranges from a JSON topology lock.
+    #[arg(long, value_name = "PATH", requires = "split", hide = true)]
+    pub split_topology_lock: Option<PathBuf>,
 
     /// Override context size (tokens). Default: auto-scaled to available VRAM.
     #[arg(long, hide = true)]
@@ -1162,8 +1156,6 @@ mod tests {
             "serve",
             "--speculative-strategy",
             "mtp-cache",
-            "--speculative-ngram-proposer",
-            "cache",
             "--speculative-ngram-min",
             "2",
             "--speculative-ngram-max",
@@ -1176,10 +1168,6 @@ mod tests {
         ]);
         let cli = Cli::try_parse_from(normalized.normalized).expect("clap parse");
         assert_eq!(cli.speculative_strategy.as_deref(), Some("mtp-cache"));
-        assert_eq!(
-            cli.speculative_ngram_proposer,
-            Some(SpeculativeNgramProposerCli::Cache)
-        );
         assert_eq!(cli.speculative_ngram_min, Some(2));
         assert_eq!(cli.speculative_ngram_max, Some(6));
         assert_eq!(cli.speculative_extension_max_tokens, Some(8));
@@ -1282,7 +1270,7 @@ mod tests {
             "--mlock-values",
             "true,false",
             "--speculative-types",
-            "mtp,draft,ngram,disabled",
+            "mtp,draft,mtp-ngram,disabled",
             "--spec-draft-models",
             "/models/qwen-draft.gguf",
             "--spec-draft-max-tokens",
@@ -1290,9 +1278,9 @@ mod tests {
             "--spec-draft-min-tokens",
             "1,2",
             "--spec-ngram-min",
-            "12,24",
+            "2,3",
             "--spec-ngram-max",
-            "48,64",
+            "3,4",
             "--throughput-tolerance-pct",
             "2.5",
             "--max-tokens",
@@ -1359,7 +1347,7 @@ mod tests {
             vec![
                 crate::benchmark::BenchmarkSpeculativeType::Mtp,
                 crate::benchmark::BenchmarkSpeculativeType::Draft,
-                crate::benchmark::BenchmarkSpeculativeType::Ngram,
+                crate::benchmark::BenchmarkSpeculativeType::MtpNgram,
                 crate::benchmark::BenchmarkSpeculativeType::Disabled,
             ]
         );
@@ -1370,8 +1358,8 @@ mod tests {
         );
         assert_eq!(tune.spec_draft_max_tokens, vec![4, 8]);
         assert_eq!(tune.spec_draft_min_tokens, vec![1, 2]);
-        assert_eq!(tune.spec_ngram_min, vec![12, 24]);
-        assert_eq!(tune.spec_ngram_max, vec![48, 64]);
+        assert_eq!(tune.spec_ngram_min, vec![2, 3]);
+        assert_eq!(tune.spec_ngram_max, vec![3, 4]);
     }
 
     #[test]
@@ -1399,8 +1387,8 @@ mod tests {
             ("--spec-draft-models", "/models/draft.gguf"),
             ("--spec-draft-max-tokens", "8"),
             ("--spec-draft-min-tokens", "2"),
-            ("--spec-ngram-min", "12"),
-            ("--spec-ngram-max", "48"),
+            ("--spec-ngram-min", "2"),
+            ("--spec-ngram-max", "4"),
         ] {
             let err = Cli::try_parse_from([
                 "mesh-llm",

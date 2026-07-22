@@ -1,7 +1,7 @@
-From 45b9de4d71288fafc9edefd4676ae89bce851145 Mon Sep 17 00:00:00 2001
+From 6f8336c5b93f9c7888162e36497a8c00d4bcf569 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Fri, 17 Jul 2026 09:23:50 +1000
-Subject: [PATCH 18/18] Expose stateful N-gram cache ABI
+Date: Mon, 20 Jul 2026 14:07:01 +1000
+Subject: [PATCH 1/2] Expose stateful N-gram cache ABI
 
 ---
  common/ngram-cache.cpp  | 136 ++++++++++++++++++++++++++++++++++++++++
@@ -166,7 +166,7 @@ index dce54b36..a0447210 100644
                                std::vector<llama_token> & inp, int nnew, bool print_progress) {
      const int64_t t_start_ms = ggml_time_ms();
 diff --git a/include/skippy.h b/include/skippy.h
-index f8511885..c9ecc349 100644
+index c5a4c4b7..6b6c4889 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -48,6 +48,7 @@ struct skippy_model;
@@ -177,9 +177,9 @@ index f8511885..c9ecc349 100644
  
  struct skippy_runtime_config {
      int32_t stage_index;
-@@ -158,6 +159,40 @@ LLAMA_API enum skippy_status skippy_ngram_simple_draft(
-         size_t * out_token_count,
-         struct skippy_error ** out_error);
+@@ -144,6 +145,40 @@ struct skippy_native_mtp_draft {
+     int64_t proposal_compute_us;
+ };
  
 +// Stateful, request-local adapter for llama.cpp's ngram-cache proposer.
 +// The cache is updated only with committed history. `continuation_prefix`
@@ -219,36 +219,36 @@ index f8511885..c9ecc349 100644
          const char * path,
          const struct skippy_runtime_config * config,
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index c9c310c0..771d1c78 100644
+index b7186bc9..e976f91e 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -26,7 +26,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 31
-+#define SKIPPY_ABI_VERSION_PATCH 32
+-#define SKIPPY_ABI_VERSION_PATCH 30
++#define SKIPPY_ABI_VERSION_PATCH 31
  
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
-@@ -56,6 +56,7 @@ enum skippy_feature {
+@@ -55,6 +55,7 @@ enum skippy_feature {
+     SKIPPY_FEATURE_BACKEND_DEVICES        = 1 << 23,
      SKIPPY_FEATURE_RUNTIME_EVENTS         = 1 << 24,
      SKIPPY_FEATURE_NATIVE_MTP_N1          = 1 << 25,
-     SKIPPY_FEATURE_NGRAM_SIMPLE_DRAFT     = 1 << 26,
-+    SKIPPY_FEATURE_NGRAM_CACHE_DRAFT      = 1 << 27,
++    SKIPPY_FEATURE_NGRAM_CACHE_DRAFT      = 1 << 26,
  };
  
  enum skippy_status {
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 1344df3a..46da7007 100644
+index 5f5596ce..79e3e73f 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
-@@ -2459,7 +2459,8 @@ uint64_t skippy_abi_features(void) {
+@@ -2458,7 +2458,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_EXTERNAL_MEDIA_PREFILL |
             SKIPPY_FEATURE_RUNTIME_EVENTS |
             SKIPPY_FEATURE_BACKEND_DEVICES |
-            SKIPPY_FEATURE_NATIVE_MTP_N1 |
--           SKIPPY_FEATURE_NGRAM_SIMPLE_DRAFT;
-+           SKIPPY_FEATURE_NGRAM_SIMPLE_DRAFT |
+-           SKIPPY_FEATURE_NATIVE_MTP_N1;
++           SKIPPY_FEATURE_NATIVE_MTP_N1 |
 +           SKIPPY_FEATURE_NGRAM_CACHE_DRAFT;
  }
  

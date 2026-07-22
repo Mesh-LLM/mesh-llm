@@ -10,8 +10,8 @@ use skippy_runtime::{
     ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
     FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, MediaInput,
     MediaPrefill, MediaPrefillFrame, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
-    RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel, StageSession,
-    StageSessionCheckpoint, TokenSignal, parse_cache_type,
+    RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel, StageSession, TokenSignal,
+    parse_cache_type,
 };
 
 use crate::package::select_package_parts;
@@ -45,7 +45,6 @@ pub struct RuntimeState {
     sessions: BTreeMap<String, RuntimeLaneSession>,
     idle_sessions: Vec<RuntimeLaneSession>,
     session_token_counts: BTreeMap<String, u64>,
-    session_checkpoints: BTreeMap<String, StageSessionCheckpoint>,
     session_resident_prefixes: BTreeMap<String, ResidentLanePrefix>,
 }
 
@@ -72,7 +71,6 @@ pub struct RuntimeSessionStats {
     pub tracked_token_counts: usize,
     pub max_session_tokens: u64,
     pub total_session_tokens: u64,
-    pub checkpoints: usize,
     pub lanes: Vec<RuntimeSessionLaneStats>,
 }
 
@@ -473,29 +471,6 @@ impl RuntimeState {
         Ok((predicted_tokens, combine_activation_frames(&output_frames)?))
     }
 
-    pub fn checkpoint_session(&mut self, session_id: &str) -> Result<()> {
-        let checkpoint = self.session(session_id)?.checkpoint()?;
-        self.session_checkpoints
-            .insert(session_id.to_string(), checkpoint);
-        Ok(())
-    }
-
-    pub fn restore_session(&mut self, session_id: &str) -> Result<()> {
-        let checkpoint = self
-            .session_checkpoints
-            .get(session_id)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("missing checkpoint for session {session_id}"))?;
-        let token_count = {
-            let session = self.session(session_id)?;
-            session.restore_checkpoint(&checkpoint)?;
-            session.token_count()
-        };
-        self.session_token_counts
-            .insert(session_id.to_string(), token_count);
-        Ok(())
-    }
-
     pub fn trim_session(&mut self, session_id: &str, token_count: u64) -> Result<()> {
         let session = self.session(session_id)?;
         session.trim_session(token_count)?;
@@ -597,9 +572,8 @@ impl RuntimeState {
     ///    `StageSession::drop`, which calls `skippy_session_free` on
     ///    the C side — the authoritative path for releasing native KV
     ///    cells held by that sequence id.
-    ///  - `session_token_counts`, `session_checkpoints`, and
-    ///    `session_resident_prefixes` for `session_id` are always
-    ///    removed.
+    ///  - `session_token_counts` and `session_resident_prefixes` for
+    ///    `session_id` are always removed.
     ///  - The function always returns `Ok` so per-request cleanup at
     ///    callsites never propagates a reset failure as a request
     ///    error. The outcome is reported via [`RuntimeSessionDropStats`]
@@ -607,8 +581,7 @@ impl RuntimeState {
     ///    telemetry.
     ///
     /// Previously a reset error propagated `?` through this function,
-    /// which left `session_token_counts` and `session_checkpoints`
-    /// holding stale entries and dropped the lane on the floor without
+    /// which left `session_token_counts` holding stale entries and dropped the lane on the floor without
     /// any record. That accumulated bookkeeping drift over time and
     /// could leave the native KV cache reporting "all slots in use"
     /// long after the owning sessions were gone, producing
@@ -667,7 +640,6 @@ impl RuntimeState {
         // `sessions` (idempotent cleanup, stale callers) must still
         // clear any stray resident-prefix entry under that id.
         self.session_token_counts.remove(session_id);
-        self.session_checkpoints.remove(session_id);
         self.session_resident_prefixes.remove(session_id);
 
         Ok(RuntimeSessionDropStats {
@@ -716,7 +688,6 @@ impl RuntimeState {
             tracked_token_counts: self.session_token_counts.len(),
             max_session_tokens,
             total_session_tokens,
-            checkpoints: self.session_checkpoints.len(),
             lanes,
         }
     }
@@ -1198,7 +1169,6 @@ pub fn load_runtime_with_overrides(
         sessions: BTreeMap::new(),
         idle_sessions: Vec::new(),
         session_token_counts: BTreeMap::new(),
-        session_checkpoints: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
     }))))
 }
@@ -1247,7 +1217,6 @@ pub fn load_runtime_with_overrides_and_open_events(
         sessions: BTreeMap::new(),
         idle_sessions: Vec::new(),
         session_token_counts: BTreeMap::new(),
-        session_checkpoints: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
     }))))
 }

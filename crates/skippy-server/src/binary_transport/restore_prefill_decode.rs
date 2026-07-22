@@ -161,6 +161,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
             BinaryProactiveEvictionPlan {
                 required: true,
                 ensure_session_before_eviction: false,
+                target_tokens: None,
             },
         )?;
         let (predicted, _, output) = run_binary_stage_message(

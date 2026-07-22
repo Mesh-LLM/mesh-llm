@@ -23,6 +23,10 @@ pub mod attr {
         "skippy.kv.proactive_eviction_target_tokens";
     pub const KV_PROACTIVE_EVICTED_ENTRIES: &str = "skippy.kv.proactive_evicted_entries";
     pub const KV_PROACTIVE_EVICTED_TOKENS: &str = "skippy.kv.proactive_evicted_tokens";
+    pub const VERIFY_WINDOW_DIRECT_RETURN_UPSTREAM_OPENED: &str =
+        "llama_stage.verify_window.direct_return_upstream_opened";
+    pub const VERIFY_WINDOW_DIRECT_RETURN_REVERSE_FALLBACK: &str =
+        "llama_stage.verify_window.direct_return_reverse_fallback";
 }
 
 pub mod metric {

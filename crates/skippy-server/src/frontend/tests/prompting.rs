@@ -243,6 +243,8 @@ fn generated_text_timings_report_standalone_speculative_totals() {
 #[test]
 fn generated_text_timings_prefer_composite_proposal_totals() {
     let mut counters = NativeMtpDecodeCounters::default();
+    let context = [1, 2, 3, 1, 2, 3, 1, 2];
+    let mut cache = HistoryNgramProposer::new_cache(2, 2).unwrap();
     let options = NativeMtpDecodeOptions {
         max_draft_tokens: 1,
         min_draft_tokens: 0,
@@ -252,17 +254,13 @@ fn generated_text_timings_prefer_composite_proposal_totals() {
         ngram_hybrid: true,
         ngram_proposer: "cache",
         ngram_size: 2,
-        ngram_initial_extension_tokens: 2,
         ngram_max_proposal_tokens: 4,
-        ngram_tail_backoff_proposals: 2,
         verify_window_min_tokens: 1,
         verify_window_max_tokens: 4,
     };
-    let proposal = CompositeProposalProvider::from_options(options).propose(
-        &[],
-        &[0, 0, 2, 3, 9, 1, 7, 8, 2, 3],
-        4,
-    );
+    let proposal = CompositeProposalProvider::from_options(options)
+        .propose_with_ngram_extension(&[], &context, 4, 4, Some(&mut cache))
+        .unwrap();
     counters.observe_hybrid_proposal(&proposal, 4);
     let output = GeneratedText {
         prompt_tokens: 4,

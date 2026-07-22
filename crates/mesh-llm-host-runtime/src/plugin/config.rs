@@ -1374,7 +1374,7 @@ parallel = 2
 activation_wire_dtype = "f16"
 
 [defaults.speculative]
-mode = "ngram"
+mode = "disabled"
 
 [defaults.request_defaults]
 temperature = 0.2
@@ -1405,7 +1405,7 @@ model = "Qwen3-8B-Q4_K_M"
         );
         assert_eq!(
             defaults.speculative.and_then(|v| v.mode),
-            Some("ngram".into())
+            Some("disabled".into())
         );
     }
 

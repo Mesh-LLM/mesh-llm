@@ -124,7 +124,7 @@ pub(crate) enum TuneBenchmarkSpeculativeCandidate {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         draft_split_probability: Option<f64>,
     },
-    Ngram {
+    MtpNgram {
         ngram_min: u32,
         ngram_max: u32,
     },

@@ -151,20 +151,12 @@ describe('buildTOML', () => {
       defaults: CONFIGURATION_DEFAULTS,
       defaultsValues: { 'speculation-mode': 'auto', 'incompatible-pairing-behavior': 'fail_closed' }
     })
-    const ngramToml = buildTOML([], [], [], {
-      defaults: CONFIGURATION_DEFAULTS,
-      defaultsValues: { 'speculation-mode': 'ngram', 'incompatible-pairing-behavior': 'fail_closed' }
-    })
-
     expect(draftToml).toContain('[defaults.speculative]')
     expect(draftToml).toContain('mode = "draft"')
     expect(draftToml).toContain('draft_max_tokens = 32')
     expect(draftToml).not.toContain('pairing_fault = "warn_disable"')
     expect(autoToml).not.toContain('[defaults.speculative]')
     expect(autoToml).not.toContain('pairing_fault')
-    expect(ngramToml).toContain('mode = "ngram"')
-    expect(ngramToml).not.toContain('pairing_fault')
-    expect(ngramToml).not.toContain('draft_selection_policy')
   })
 
   it('keeps preserve-existing disabled values, omits omit-when-disabled values, and serializes rejected disabled values for validation', () => {
@@ -239,14 +231,14 @@ describe('buildTOML', () => {
           label: 'Speculative mode',
           description: 'Speculative runtime mode.',
           inheritedLabel: 'Inherited by speculative defaults',
-          valueSchema: { kind: 'enum', values: ['draft', 'ngram'] },
+          valueSchema: { kind: 'enum', values: ['draft', 'disabled'] },
           control: {
             kind: 'choice',
             name: 'mode',
-            value: 'ngram',
+            value: 'disabled',
             options: [
               { value: 'draft', label: 'draft' },
-              { value: 'ngram', label: 'ngram' }
+              { value: 'disabled', label: 'disabled' }
             ]
           },
           baselineValue: 'draft'
@@ -313,7 +305,7 @@ describe('buildTOML', () => {
     expect(toml).toContain('[defaults]')
     expect(toml).toContain('gpu_id = "cuda:0"')
     expect(toml).toContain('rpc_backend = "remote"')
-    expect(toml).toContain('mode = "ngram"')
+    expect(toml).toContain('mode = "disabled"')
     expect(toml).not.toContain('draft_max_tokens = 24')
   })
 

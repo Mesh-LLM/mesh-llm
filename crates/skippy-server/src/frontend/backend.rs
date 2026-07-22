@@ -387,7 +387,6 @@ impl StageOpenAiBackend {
             format!("{prefix}.tracked_token_counts"),
             json!(stats.tracked_token_counts),
         );
-        attrs.insert(format!("{prefix}.checkpoints"), json!(stats.checkpoints));
     }
 
     pub(super) fn emit_openai_phase(

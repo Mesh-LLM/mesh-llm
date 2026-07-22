@@ -422,7 +422,7 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Diagnost
     }
     validate_optional_enum(
         config.mode.as_deref(),
-        &["auto", "disabled", "draft", "ngram"],
+        &["auto", "disabled", "draft"],
         &format!("{base_path}.mode"),
     )?;
     validate_model_identifier(
@@ -544,7 +544,7 @@ fn validate_speculative_proposer_controls(
 ) -> DiagnosticResult {
     validate_optional_enum(
         config.ngram_proposer.as_deref(),
-        &["simple", "cache", "suffix"],
+        &["cache", "suffix"],
         &format!("{base_path}.ngram_proposer"),
     )?;
     let suffix_selected = config.ngram_proposer.as_deref() == Some("suffix")
@@ -576,32 +576,9 @@ fn validate_speculative_proposer_controls(
 
 fn validate_extension_controls(config: &SpeculativeConfig, base_path: &str) -> DiagnosticResult {
     validate_optional_u32_range(
-        config.extension_initial_tokens,
-        &format!("{base_path}.extension_initial_tokens"),
-        1,
-        10_000_000,
-    )?;
-    validate_optional_u32_range(
         config.extension_max_tokens,
         &format!("{base_path}.extension_max_tokens"),
         1,
-        10_000_000,
-    )?;
-    if let (Some(initial), Some(max)) =
-        (config.extension_initial_tokens, config.extension_max_tokens)
-        && initial > max
-    {
-        return Err(validation_diagnostic(
-            &format!("{base_path}.extension_initial_tokens"),
-            format!(
-                "{base_path}.extension_initial_tokens must be less than or equal to {base_path}.extension_max_tokens"
-            ),
-        ));
-    }
-    validate_optional_u32_range(
-        config.extension_tail_backoff_proposals,
-        &format!("{base_path}.extension_tail_backoff_proposals"),
-        0,
         10_000_000,
     )
 }
@@ -967,31 +944,11 @@ strategy = "mystery-oracle"
     }
 
     #[test]
-    fn speculative_strategy_native_mtp_n1_alias_parses_as_mtp() {
-        let config: MeshConfig = toml::from_str(
-            r#"
-[defaults.speculative]
-strategy = "native-mtp-n1"
-"#,
-        )
-        .expect("config should parse before validation");
-
-        let strategy = config
-            .defaults
-            .as_ref()
-            .and_then(|defaults| defaults.speculative.as_ref())
-            .and_then(|speculative| speculative.strategy.as_deref());
-        assert_eq!(strategy, Some("mtp"));
-        validate_config(&config).expect("normalized speculative strategy should not fail");
-        assert!(validate_config_diagnostics(&config).is_empty());
-    }
-
-    #[test]
     fn speculative_strategy_raw_name_is_deferred_to_package_resolution() {
         let config = MeshConfig {
             defaults: Some(ModelConfigDefaults {
                 speculative: Some(SpeculativeConfig {
-                    strategy: Some("native-mtp-n1".to_string()),
+                    strategy: Some("package-strategy".to_string()),
                     ..SpeculativeConfig::default()
                 }),
                 ..ModelConfigDefaults::default()

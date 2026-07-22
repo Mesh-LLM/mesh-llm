@@ -1,0 +1,62 @@
+From ce5f8e97f7be0a9e3ce2f6a5f97ebc035a749cf1 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 21 Jul 2026 02:44:00 +1000
+Subject: [PATCH] Fix N-gram confidence threshold indexing
+
+When the configured N-gram range starts above one, ngrams_primary is a
+zero-based slice of that range. Indexing the confidence tables directly by
+the slice position therefore applies the one-gram threshold to the configured
+minimum. Use the actual N-gram size so ranges such as 3..=4 retain their
+intended sample thresholds.
+---
+ common/ngram-cache.cpp | 11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/common/ngram-cache.cpp b/common/ngram-cache.cpp
+index a0447210..ce5f8e97 100644
+--- a/common/ngram-cache.cpp
++++ b/common/ngram-cache.cpp
+@@ -233,12 +233,13 @@ static llama_token try_draft(common_ngram_cache & nc_static, const common_ngram
+ // Try to draft a token from primary cache (context/dynamic), validate with static cache:
+ static llama_token try_draft(
+     common_ngram_cache & nc_primary, const std::vector<common_ngram> & ngrams_primary, common_ngram_cache_part & part_static,
+-    const int * min_sample_size, const int * min_percent) {
++    const int * min_sample_size, const int * min_percent, int ngram_min) {
+ 
+     llama_token drafted_token = LLAMA_TOKEN_NULL;
+ 
+     for (int i = ngrams_primary.size()-1; i >= 0 && drafted_token == LLAMA_TOKEN_NULL; --i) {
+         const common_ngram ngram_primary = ngrams_primary[i];
++        const int threshold_index = ngram_min + i - 1;
+ 
+         common_ngram_cache::iterator part_primary_it = nc_primary.find(ngram_primary);
+         if (part_primary_it == nc_primary.end()) {
+@@ -267,10 +268,10 @@ static llama_token try_draft(
+             sum_count_primary += count_primary;
+         }
+ 
+-        if (sum_count_primary < min_sample_size[i]) {
++        if (sum_count_primary < min_sample_size[threshold_index]) {
+             continue;
+         }
+-        if (100*max_count_primary < min_percent[i]*sum_count_primary) {
++        if (100*max_count_primary < min_percent[threshold_index]*sum_count_primary) {
+             continue;;
+         }
+         drafted_token = max_token;
+@@ -315,10 +316,10 @@ void common_ngram_cache_draft(
+             ngrams_cd.push_back(ngram_cd);
+         }
+         if (drafted_token == LLAMA_TOKEN_NULL) {
+-            drafted_token = try_draft(nc_context, ngrams_cd, part_static, draft_min_sample_size_lax, draft_min_percent_lax);
++            drafted_token = try_draft(nc_context, ngrams_cd, part_static, draft_min_sample_size_lax, draft_min_percent_lax, ngram_min);
+         }
+         if (drafted_token == LLAMA_TOKEN_NULL) {
+-            drafted_token = try_draft(nc_dynamic, ngrams_cd, part_static, draft_min_sample_size_strict, draft_min_percent_strict);
++            drafted_token = try_draft(nc_dynamic, ngrams_cd, part_static, draft_min_sample_size_strict, draft_min_percent_strict, ngram_min);
+         }
+         if (drafted_token == LLAMA_TOKEN_NULL) {
+             drafted_token = try_draft(nc_static, ngram_static);
+-- 
+2.54.0 (Apple Git-157)
+

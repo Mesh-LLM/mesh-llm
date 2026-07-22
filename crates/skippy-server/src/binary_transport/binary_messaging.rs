@@ -32,7 +32,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
 use skippy_protocol::binary::{WireMessageKind, read_stage_message, send_ready};
 
-mod async_forwarder;
+pub(in crate::binary_transport) mod async_forwarder;
 mod connection;
 pub(in crate::binary_transport) mod reply;
 mod summary;
@@ -159,8 +159,6 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                 adaptive_speculative_window: openai_options.adaptive_speculative_window,
                 draft_n_gpu_layers: openai_options.draft_n_gpu_layers,
                 speculative: openai_options.speculative.clone(),
-                ngram_min: embedded_ngram_limits(&openai_options.speculative).0,
-                ngram_max: embedded_ngram_limits(&openai_options.speculative).1,
                 native_mtp_enabled: native_mtp_enabled
                     && openai_options.speculative.native_mtp.enabled,
                 native_mtp_draft_model_path: None,
@@ -281,55 +279,4 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         });
     }
     Ok(())
-}
-
-/// Standalone N-gram (min, max) limits forwarded to the embedded OpenAI frontend.
-fn embedded_ngram_limits(speculative: &frontend::SpeculativeDecodeConfig) -> (usize, usize) {
-    speculative
-        .ngram
-        .as_ref()
-        .map_or((0, 0), |ngram| (ngram.min_ngram, ngram.max_proposal_tokens))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::frontend::{NgramProposalConfig, NgramProposerKind, SpeculativeDecodeConfig};
-
-    fn speculative_config(kind: NgramProposerKind) -> SpeculativeDecodeConfig {
-        SpeculativeDecodeConfig {
-            effective_strategy: format!("ngram-{}", kind.as_str()),
-            ngram: Some(NgramProposalConfig {
-                kind,
-                min_ngram: 3,
-                max_ngram: 4,
-                max_proposal_tokens: 64,
-            }),
-            ..SpeculativeDecodeConfig::default()
-        }
-    }
-
-    #[test]
-    fn embedded_ngram_limits_pass_through_for_all_proposer_kinds() {
-        for kind in [
-            NgramProposerKind::Simple,
-            NgramProposerKind::Cache,
-            NgramProposerKind::Suffix,
-        ] {
-            assert_eq!(
-                embedded_ngram_limits(&speculative_config(kind)),
-                (3, 64),
-                "proposer kind {} should keep its configured proposal limit",
-                kind.as_str()
-            );
-        }
-    }
-
-    #[test]
-    fn embedded_ngram_limits_default_to_zero_without_ngram_config() {
-        assert_eq!(
-            embedded_ngram_limits(&SpeculativeDecodeConfig::default()),
-            (0, 0)
-        );
-    }
 }

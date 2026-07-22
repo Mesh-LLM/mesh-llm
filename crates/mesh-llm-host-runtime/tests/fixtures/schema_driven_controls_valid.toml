@@ -44,7 +44,6 @@ prefill_chunking = "schedule"
 prefill_chunk_schedule = "128,256"
 
 [defaults.speculative]
-mode = "ngram"
 ngram_min = 2
 ngram_max = 4
 

@@ -124,11 +124,24 @@ pub(super) fn resolve_speculative_config(
             model_id,
             model_path,
         )?;
-    } else if mode == "ngram" || (mode == "auto" && (ngram_min > 0 || ngram_max > 0)) {
-        resolve_ngram_speculative_mode(&mut mode, ngram_min, ngram_max)?;
     } else {
         mode = "disabled".to_string();
         draft_model_path = None;
+    }
+    let decode = resolve_decode_config(DecodeResolutionInput {
+        requested_strategy: &strategy,
+        native_mtp_enabled,
+        draft_max_tokens: effective_draft_max_tokens,
+        draft_min_tokens,
+        model_config,
+        global_config,
+        package_generation,
+    })?;
+    // A standalone N-gram plan (no native MTP, no draft model) runs in the
+    // legacy `ngram` mode so the embedded frontend derives its window from the
+    // proposer's proposal limit.
+    if !native_mtp_enabled && mode != "draft" && decode.ngram.is_some() {
+        mode = "ngram".to_string();
     }
     Ok(ResolvedSpeculativeConfig {
         strategy: strategy.clone(),
@@ -140,19 +153,7 @@ pub(super) fn resolve_speculative_config(
         draft_min_tokens,
         explicit,
         draft_n_gpu_layers,
-        ngram_min,
-        ngram_max,
-        decode: resolve_decode_config(DecodeResolutionInput {
-            requested_strategy: &strategy,
-            native_mtp_enabled,
-            draft_max_tokens: effective_draft_max_tokens,
-            draft_min_tokens,
-            legacy_ngram_min: ngram_min,
-            legacy_ngram_max: ngram_max,
-            model_config,
-            global_config,
-            package_generation,
-        })?,
+        decode,
     })
 }
 
@@ -177,7 +178,7 @@ fn resolve_native_mtp_strategy(
             }
             true
         }
-        "ngram-simple" | "ngram-cache" | "ngram-suffix" => false,
+        "ngram-cache" | "ngram-suffix" => false,
         "disabled" => false,
         package_strategy if package_strategy_exists(package_generation, package_strategy) => {
             let speculative = package_generation
@@ -186,7 +187,7 @@ fn resolve_native_mtp_strategy(
             strategy_uses_native_mtp(speculative, package_strategy)
         }
         _ => bail!(
-            "skippy speculative.strategy must be auto, disabled, mtp, ngram-simple, ngram-cache, ngram-suffix, or a strategy declared by model-package.json"
+            "skippy speculative.strategy must be auto, disabled, mtp, ngram-cache, ngram-suffix, or a strategy declared by model-package.json"
         ),
     };
     Ok((strategy, native_mtp_enabled))
@@ -197,8 +198,6 @@ struct DecodeResolutionInput<'a> {
     native_mtp_enabled: bool,
     draft_max_tokens: u32,
     draft_min_tokens: u32,
-    legacy_ngram_min: u32,
-    legacy_ngram_max: u32,
     model_config: Option<&'a SpeculativeConfig>,
     global_config: Option<&'a SpeculativeConfig>,
     package_generation: Option<&'a PackageGenerationInfo>,
@@ -223,20 +222,12 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
         input.model_config.and_then(|config| config.ngram_min),
         input.global_config.and_then(|config| config.ngram_min),
     )
-    .unwrap_or(input.legacy_ngram_min);
+    .unwrap_or_default();
     let ngram_max = pick_optional_u32(
         input.model_config.and_then(|config| config.ngram_max),
         input.global_config.and_then(|config| config.ngram_max),
     )
-    .unwrap_or(input.legacy_ngram_max);
-    let ngram_proposer = pick_owned(
-        input
-            .model_config
-            .and_then(|config| config.ngram_proposer.clone()),
-        input
-            .global_config
-            .and_then(|config| config.ngram_proposer.clone()),
-    );
+    .unwrap_or_default();
     let ngram_max_proposal_tokens = pick_optional_u32(
         input
             .model_config
@@ -245,7 +236,15 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
             .global_config
             .and_then(|config| config.ngram_max_proposal_tokens),
     );
-    if config.ngram.is_some() || ngram_min > 0 || ngram_max > 0 || ngram_proposer.is_some() {
+    let ngram_proposer = input
+        .model_config
+        .and_then(|config| config.ngram_proposer.clone())
+        .or_else(|| {
+            input
+                .global_config
+                .and_then(|config| config.ngram_proposer.clone())
+        });
+    if config.ngram.is_some() || ngram_min > 0 || ngram_max > 0 {
         let existing = config.ngram.as_ref();
         let min_ngram = nonzero_or(
             ngram_min,
@@ -260,13 +259,11 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
         }
         let kind = match ngram_proposer.as_deref() {
             Some("cache") => NgramProposerKind::Cache,
-            Some("simple") => NgramProposerKind::Simple,
             Some("suffix") => NgramProposerKind::Suffix,
             None => existing.map_or_else(
                 || match input.requested_strategy {
-                    "ngram-cache" => NgramProposerKind::Cache,
                     "ngram-suffix" => NgramProposerKind::Suffix,
-                    _ => NgramProposerKind::Simple,
+                    _ => NgramProposerKind::Cache,
                 },
                 |ngram| ngram.kind,
             ),
@@ -283,37 +280,25 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
             max_ngram: max_ngram as usize,
             max_proposal_tokens,
         });
-        if config.effective_strategy == "disabled" {
-            config.effective_strategy = ngram_effective_strategy(kind).to_string();
-        }
     }
 
     if config.native_mtp.enabled
         && let Some(ngram) = config.ngram.as_ref()
     {
         config.effective_strategy = match ngram.kind {
-            NgramProposerKind::Simple => "native-mtp+ngram-simple",
             NgramProposerKind::Cache => "native-mtp+ngram-cache",
             NgramProposerKind::Suffix => "native-mtp+ngram-suffix",
         }
         .to_string();
         if config.extension.is_none() {
             config.extension = Some(NgramExtensionConfig {
-                initial_tokens: ngram.max_proposal_tokens.clamp(1, 2),
                 max_tokens: ngram.max_proposal_tokens,
-                tail_backoff_proposals: 0,
             });
         }
+    } else if let Some(ngram) = config.ngram.as_ref() {
+        config.effective_strategy = ngram_effective_strategy(ngram.kind).to_string();
     }
 
-    let extension_initial = pick_optional_u32(
-        input
-            .model_config
-            .and_then(|config| config.extension_initial_tokens),
-        input
-            .global_config
-            .and_then(|config| config.extension_initial_tokens),
-    );
     let extension_max = pick_optional_u32(
         input
             .model_config
@@ -322,28 +307,14 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
             .global_config
             .and_then(|config| config.extension_max_tokens),
     );
-    let extension_backoff = pick_optional_u32(
-        input
-            .model_config
-            .and_then(|config| config.extension_tail_backoff_proposals),
-        input
-            .global_config
-            .and_then(|config| config.extension_tail_backoff_proposals),
-    );
-    if extension_initial.is_some() || extension_max.is_some() || extension_backoff.is_some() {
+    if extension_max.is_some() {
         let Some(extension) = config.extension.as_mut() else {
             bail!(
                 "skippy speculative extension controls require native MTP and an N-gram proposer"
             );
         };
-        if let Some(value) = extension_initial {
-            extension.initial_tokens = value as usize;
-        }
         if let Some(value) = extension_max {
             extension.max_tokens = value as usize;
-        }
-        if let Some(value) = extension_backoff {
-            extension.tail_backoff_proposals = value as usize;
         }
     }
     if config.extension.is_some() && (!config.native_mtp.enabled || config.ngram.is_none()) {
@@ -432,27 +403,33 @@ fn package_decode_config(
     let Some(strategy) = speculative.strategies.get(strategy_name) else {
         return Ok(None);
     };
-    let mut native_mtp = None;
-    let mut ngram = None;
-    match strategy.strategy_type.as_str() {
-        "native-mtp" => {
-            native_mtp = Some(native_proposer_config(
+    let (native_mtp, ngram) = match strategy.strategy_type.as_str() {
+        "native-mtp" => (
+            native_proposer_config(
                 strategy
                     .proposer
                     .as_deref()
                     .and_then(|name| speculative.proposers.get(name)),
                 strategy,
-            )?);
-        }
-        "ngram-simple" | "ngram-cache" | "ngram-suffix" => {
-            ngram = Some(ngram_proposer_config(
+            )?,
+            None,
+        ),
+        "ngram-cache" | "ngram-suffix" => (
+            NativeMtpProposalConfig {
+                enabled: false,
+                max_draft_tokens: 0,
+                min_draft_tokens: 0,
+                reject_cooldown_tokens: 0,
+                suppress_cooldown_drafts: false,
+                suppress_cooldown_draft_limit: 0,
+            },
+            Some(ngram_proposer_config(
                 strategy
                     .proposer
                     .as_deref()
                     .and_then(|name| speculative.proposers.get(name)),
-                strategy.strategy_type.as_str(),
-            )?);
-        }
+            )?),
+        ),
         "composite" => {
             let primary = strategy
                 .primary
@@ -468,14 +445,13 @@ fn package_decode_config(
                         "package speculative strategy {strategy_name} has no N-gram extender"
                     )
                 })?;
-            native_mtp = Some(native_proposer_config(Some(primary), strategy)?);
-            ngram = Some(ngram_proposer_config(
-                Some(extender),
-                extender.proposer_type.as_str(),
-            )?);
+            (
+                native_proposer_config(Some(primary), strategy)?,
+                Some(ngram_proposer_config(Some(extender))?),
+            )
         }
         other => bail!("package speculative strategy {strategy_name} has unsupported type {other}"),
-    }
+    };
     let extension = strategy.extension_policy.as_ref().map(extension_config);
     let verify_window = strategy
         .window_policy
@@ -486,8 +462,7 @@ fn package_decode_config(
             max_tokens: 4,
             pipeline_depth: 1,
         });
-    let effective_strategy = match (native_mtp.is_some(), ngram.as_ref().map(|value| value.kind)) {
-        (true, Some(NgramProposerKind::Simple)) => "native-mtp+ngram-simple",
+    let effective_strategy = match (native_mtp.enabled, ngram.as_ref().map(|value| value.kind)) {
         (true, Some(NgramProposerKind::Cache)) => "native-mtp+ngram-cache",
         (true, Some(NgramProposerKind::Suffix)) => "native-mtp+ngram-suffix",
         (true, None) => "native-mtp",
@@ -497,14 +472,7 @@ fn package_decode_config(
     Ok(Some(SpeculativeDecodeConfig {
         requested_strategy: requested_strategy.to_string(),
         effective_strategy: effective_strategy.to_string(),
-        native_mtp: native_mtp.unwrap_or(NativeMtpProposalConfig {
-            enabled: false,
-            max_draft_tokens: 1,
-            min_draft_tokens: 0,
-            reject_cooldown_tokens: 0,
-            suppress_cooldown_drafts: false,
-            suppress_cooldown_draft_limit: 0,
-        }),
+        native_mtp,
         ngram,
         extension,
         verify_window,
@@ -544,19 +512,14 @@ fn native_proposer_config(
 
 fn ngram_proposer_config(
     proposer: Option<&PackageSpeculativeProposerInfo>,
-    expected_type: &str,
 ) -> Result<NgramProposalConfig> {
     let proposer = proposer
         .ok_or_else(|| anyhow::anyhow!("package N-gram strategy must reference a proposer"))?;
     let kind = match proposer.proposer_type.as_str() {
-        "ngram-simple" => NgramProposerKind::Simple,
         "ngram-cache" => NgramProposerKind::Cache,
         "ngram-suffix" => NgramProposerKind::Suffix,
         other => bail!("package N-gram proposer has unsupported type {other}"),
     };
-    if expected_type != "composite" && expected_type != proposer.proposer_type {
-        bail!("package N-gram strategy type does not match its proposer");
-    }
     let min_ngram = proposer
         .ngram_min
         .ok_or_else(|| anyhow::anyhow!("package N-gram proposer has no ngram_min"))?;
@@ -574,9 +537,7 @@ fn ngram_proposer_config(
 
 fn extension_config(policy: &PackageExtensionPolicyInfo) -> NgramExtensionConfig {
     NgramExtensionConfig {
-        initial_tokens: policy.initial_tokens as usize,
         max_tokens: policy.max_tokens as usize,
-        tail_backoff_proposals: policy.tail_backoff_proposals as usize,
     }
 }
 
@@ -590,7 +551,6 @@ fn verify_window_config(policy: &PackageWindowPolicyInfo) -> VerifyWindowConfig 
 
 fn ngram_effective_strategy(kind: NgramProposerKind) -> &'static str {
     match kind {
-        NgramProposerKind::Simple => "ngram-simple",
         NgramProposerKind::Cache => "ngram-cache",
         NgramProposerKind::Suffix => "ngram-suffix",
     }
@@ -732,25 +692,6 @@ fn resolve_draft_speculative_mode(
             _ => unreachable!(),
         }
     }
-    Ok(())
-}
-
-const NGRAM_WINDOW_MAX: u32 = 1024;
-
-fn resolve_ngram_speculative_mode(mode: &mut String, ngram_min: u32, ngram_max: u32) -> Result<()> {
-    if ngram_min == 0 {
-        bail!("skippy speculative ngram mode requires ngram_min > 0");
-    }
-    if ngram_max == 0 {
-        bail!("skippy speculative ngram mode requires ngram_max > 0");
-    }
-    if ngram_min > ngram_max {
-        bail!("skippy speculative ngram_min must be less than or equal to ngram_max");
-    }
-    if ngram_max > NGRAM_WINDOW_MAX {
-        bail!("skippy speculative ngram_max must not exceed {NGRAM_WINDOW_MAX}");
-    }
-    *mode = "ngram".to_string();
     Ok(())
 }
 

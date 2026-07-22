@@ -5,7 +5,7 @@ Local target/draft speculative decoding checker and benchmark.
 `llama-spec-bench` compares a target GGUF model with a draft GGUF model on a
 prompt set. It checks tokenizer compatibility, verifies speculative output
 against baseline target decoding, measures acceptance behavior, and reports
-projected verification costs.
+the measured target and draft costs of the serial diagnostic loop.
 
 ## Architecture Role
 
@@ -46,7 +46,7 @@ sequenceDiagram
         D-->>B: proposed tokens
         B->>T: verify proposals
         T-->>B: accepted prefix or rejection
-        B->>B: update acceptance and projection stats
+        B->>B: update acceptance stats
     end
     B->>B: compare against baseline target tokens
 ```
@@ -79,7 +79,8 @@ speculative output mismatch makes the command fail.
 - accepted/rejected draft token counts
 - acceptance rate and mean accepted tokens per window
 - baseline and speculative decode timing
-- projected rollback and scratch verification costs
+- measured target verification and draft proposal costs
+- measured speculative throughput and speedup versus target-only decoding
 - per-prompt text previews and mismatch index
 
 The default corpus path is

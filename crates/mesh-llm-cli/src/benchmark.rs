@@ -52,7 +52,7 @@ pub struct BenchmarkTuneCommand {
     /// Flash attention values to benchmark independently: on, off.
     #[arg(long = "flash-attention", value_delimiter = ',')]
     pub flash_attention: Vec<BenchmarkFlashAttention>,
-    /// Speculative decoding types to benchmark: auto, disabled, mtp, draft, ngram.
+    /// Speculative decoding types to benchmark: auto, disabled, mtp, draft, mtp-ngram.
     #[arg(
         long = "speculative-types",
         value_delimiter = ',',
@@ -83,10 +83,10 @@ pub struct BenchmarkTuneCommand {
     /// Candidate minimum draft-token windows for MTP and draft speculation.
     #[arg(long = "spec-draft-min-tokens", value_delimiter = ',')]
     pub spec_draft_min_tokens: Vec<u32>,
-    /// Candidate minimum ngram draft-token counts for ngram speculation.
+    /// Candidate minimum match lengths for MTP + N-gram speculation.
     #[arg(long = "spec-ngram-min", value_delimiter = ',')]
     pub spec_ngram_min: Vec<u32>,
-    /// Candidate maximum ngram draft-token counts for ngram speculation.
+    /// Candidate maximum match lengths for MTP + N-gram speculation.
     #[arg(long = "spec-ngram-max", value_delimiter = ',')]
     pub spec_ngram_max: Vec<u32>,
     /// Candidate draft-acceptance-threshold values for speculative draft sweeps.
@@ -158,8 +158,7 @@ pub enum BenchmarkSpeculativeType {
     Disabled,
     Mtp,
     Draft,
-    #[value(alias = "ngram-mod")]
-    Ngram,
+    MtpNgram,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

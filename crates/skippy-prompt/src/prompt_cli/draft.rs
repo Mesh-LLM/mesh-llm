@@ -1,28 +1,3 @@
-struct NgramSource;
-
-impl NgramSource {
-    fn open(_args: &BinaryReplArgs, _session_id: &str) -> Result<Self> {
-        bail!("ngram speculative prompting is not imported into mesh-llm")
-    }
-
-    fn observe_sequence(&mut self, _session_id: &str, _tokens: &[i32]) -> Result<()> {
-        Ok(())
-    }
-
-    fn observe_accepted(&mut self, _session_id: &str, _context_tokens: &[i32]) -> Result<()> {
-        Ok(())
-    }
-
-    fn propose(
-        &mut self,
-        _session_id: &str,
-        _context_tokens: &[i32],
-        _remaining: usize,
-    ) -> Result<Vec<i32>> {
-        Ok(Vec::new())
-    }
-}
-
 struct DraftRunner {
     path: PathBuf,
     window: usize,

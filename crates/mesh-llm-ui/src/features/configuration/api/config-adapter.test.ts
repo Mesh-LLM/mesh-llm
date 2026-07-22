@@ -1822,7 +1822,7 @@ describe('adaptStatusToConfiguration', () => {
         {
           ...schemaSetting('defaults.speculative.mode', 'speculative-mode', {
             kind: 'enum',
-            values: ['draft', 'ngram']
+            values: ['draft', 'disabled']
           }),
           presentation: {
             label: 'Speculative mode',
@@ -1859,7 +1859,7 @@ describe('adaptStatusToConfiguration', () => {
       version: 1,
       defaults: {
         speculative: {
-          mode: 'ngram',
+          mode: 'disabled',
           draft_max_tokens: 16
         }
       }
@@ -1872,7 +1872,7 @@ describe('adaptStatusToConfiguration', () => {
       version: 1,
       defaults: {
         speculative: {
-          mode: 'ngram'
+          mode: 'disabled'
         }
       }
     })

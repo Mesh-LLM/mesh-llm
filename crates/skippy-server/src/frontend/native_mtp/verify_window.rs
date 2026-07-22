@@ -5,12 +5,12 @@ use skippy_protocol::binary::{StageNativeMtpDraft, WireReplyKind};
 
 use super::super::{
     AdaptiveVerifyWindow, BufferedCompositeProposal, CompositeProposalProvider,
-    EmbeddedSessionControl, EmbeddedStageZeroGeneration, HistoryNgramProposer,
-    NativeMtpDecodeCounters, NativeMtpDecodeOptions, NativeMtpDraft, NativeMtpDraftOrigin,
-    NativeMtpTrimAction, NativeMtpVerifier, NgramSidecarController, PendingNativeMtpDraft,
-    PhaseTimer, StageOpenAiBackend, TokenControl, VerifyWindowMessageArgs, VerifyWindowScheduler,
-    WireSamplingConfig, classify_native_mtp_verify_window, embedded_verify_window_message,
-    ms_to_us, native_mtp_trim_action, token_is_eog_with_runtime,
+    EmbeddedStageZeroGeneration, HistoryNgramProposer, NativeMtpDecodeCounters,
+    NativeMtpDecodeOptions, NativeMtpDraft, NativeMtpDraftOrigin, NativeMtpVerifier,
+    NgramSidecarController, PendingNativeMtpDraft, PhaseTimer, StageOpenAiBackend, TokenControl,
+    VerifyWindowMessageArgs, VerifyWindowScheduler, WireSamplingConfig,
+    classify_native_mtp_verify_window, embedded_verify_window_message, ms_to_us,
+    token_is_eog_with_runtime,
 };
 
 /// Control signal returned after processing a batched native MTP verify step.
@@ -104,11 +104,20 @@ impl StageOpenAiBackend {
             }
             *proposal_buffer = Some(BufferedCompositeProposal::new(proposal));
         }
+        let requested_verify_width = proposal_buffer
+            .as_ref()
+            .map(|buffer| adaptive_verify_window.width(buffer.remaining_len()))
+            .unwrap_or_default();
+        let remaining_native_mtp_tokens = proposal_buffer
+            .as_ref()
+            .map(BufferedCompositeProposal::remaining_native_mtp_tokens)
+            .unwrap_or_default();
+        let verify_width = ngram_sidecar_controller.verify_width(requested_verify_width);
         let proposal_tokens = {
             let buffer = proposal_buffer
                 .as_ref()
                 .expect("proposal buffer initialized");
-            buffer.verify_tokens(adaptive_verify_window.width(buffer.remaining_len()))
+            buffer.verify_tokens(verify_width)
         };
         if proposal_tokens.is_empty() {
             return Ok(NativeMtpVerifyWindowControl::NoProposal);
@@ -127,7 +136,6 @@ impl StageOpenAiBackend {
                 decode_step: *decoded_tokens,
                 tokens: &verify_inputs,
                 sampling: wire_sampling.clone(),
-                checkpoint: false,
             },
         )?;
         let verify = self.execute_embedded_stage_message(
@@ -199,32 +207,15 @@ impl StageOpenAiBackend {
             && native_mtp_verify_decision.accepted_proposal_tokens == proposal_tokens.len()
             && committed_positions == consumed_positions
             && !reached_stop;
-        if let Some((profile_width, pipeline_continues)) =
-            proposal_buffer.as_ref().and_then(|buffer| {
-                prospective_pipeline_observation(
-                    buffer,
-                    adaptive_verify_window.width(buffer.remaining_len()),
-                    verify_window_scheduler.depth(),
-                    native_mtp_verify_decision.accepted_proposal_tokens,
-                    &verify.reply.predicted_tokens,
-                )
-            })
-        {
-            verify_window_scheduler.observe_pipeline_profile(
-                profile_width,
-                pipeline_continues,
-                verify.stats.stage0_compute_ms,
-                verify.stats.downstream_wait_ms,
-            );
-        }
-        let native_mtp_prefix_rejected = proposal_buffer.as_ref().is_some_and(|buffer| {
+        let decision_rejected_native_mtp_prefix = proposal_buffer.as_ref().is_some_and(|buffer| {
             buffer.native_mtp_prefix_rejected_after(
                 native_mtp_verify_decision.accepted_proposal_tokens,
             )
         });
-        let (buffer_exhausted, accepted_proposal_tokens) = {
+        let dependent_target_is_native = remaining_native_mtp_tokens > proposal_tokens.len();
+        let (buffer_exhausted, accepted_proposal_tokens, dependent_target_rejected) = {
             let buffer = proposal_buffer.as_mut().expect("proposal buffer retained");
-            if fully_accepted_window {
+            let dependent_target_rejected = if fully_accepted_window {
                 buffer.accept_window(
                     &proposal_tokens,
                     verify
@@ -232,14 +223,21 @@ impl StageOpenAiBackend {
                         .predicted_tokens
                         .get(proposal_tokens.len())
                         .copied(),
-                );
+                )
             } else {
                 buffer.reject_window(native_mtp_verify_decision.accepted_proposal_tokens);
-            }
+                false
+            };
             let accepted_proposal_tokens = buffer.accepted_tokens();
             let buffer_exhausted = buffer.is_empty();
-            (buffer_exhausted, accepted_proposal_tokens)
+            (
+                buffer_exhausted,
+                accepted_proposal_tokens,
+                dependent_target_rejected,
+            )
         };
+        let native_mtp_prefix_rejected = decision_rejected_native_mtp_prefix
+            || (dependent_target_rejected && dependent_target_is_native);
         let previous_verify_width = adaptive_verify_window.current_tokens();
         let window_adjusted = adaptive_verify_window.observe(fully_accepted_window);
         native_mtp_counters.observe_adaptive_verify_window(
@@ -247,10 +245,7 @@ impl StageOpenAiBackend {
             previous_verify_width,
             adaptive_verify_window.current_tokens(),
         );
-        if native_mtp_verify_decision.rejected
-            && native_mtp_prefix_rejected
-            && native_mtp_options.reject_cooldown_tokens > 0
-        {
+        if native_mtp_prefix_rejected && native_mtp_options.reject_cooldown_tokens > 0 {
             *native_mtp_reject_cooldown_remaining = native_mtp_options.reject_cooldown_tokens;
             *native_mtp_suppress_cooldown_drafts_remaining =
                 native_mtp_options.suppress_cooldown_draft_limit;
@@ -259,6 +254,7 @@ impl StageOpenAiBackend {
         let verify_next_mtp_draft_available = verify_next_mtp_draft.is_some();
         let verify_next_mtp_draft_adopted = buffer_exhausted
             && fully_accepted_window
+            && !native_mtp_prefix_rejected
             && *decoded_tokens < request.max_tokens as usize
             && verify_next_mtp_draft.is_some();
         native_mtp_counters.observe_verify_next_draft(
@@ -275,31 +271,13 @@ impl StageOpenAiBackend {
             let buffer = proposal_buffer
                 .take()
                 .expect("empty proposal buffer retained");
-            if ngram_sidecar_controller.observe_tail_outcome(
-                buffer.proposal(),
-                accepted_proposal_tokens,
-                native_mtp_options.ngram_tail_backoff_proposals,
-            ) {
+            if ngram_sidecar_controller
+                .observe_tail_outcome(buffer.proposal(), accepted_proposal_tokens)
+            {
                 native_mtp_counters.observe_ngram_tail_rejection();
             }
             native_mtp_counters
                 .observe_hybrid_proposal(buffer.proposal(), buffer.accepted_tokens());
-        }
-        let mut trim_control: Option<EmbeddedSessionControl> = None;
-        match native_mtp_trim_action(committed_positions, consumed_positions) {
-            NativeMtpTrimAction::None => {}
-            NativeMtpTrimAction::FullSession => {
-                let target_token_count = prefill_token_count + *decoded_tokens;
-                let trim = self.trim_embedded_stage_session(
-                    request,
-                    downstream,
-                    session_key,
-                    request_id,
-                    session_id,
-                    target_token_count,
-                )?;
-                trim_control = Some(trim);
-            }
         }
         *decode_stage0_compute_ms += verify.stats.stage0_compute_ms;
         *decode_runtime_lock_wait_ms += verify.stats.runtime_lock_wait_ms;
@@ -400,6 +378,10 @@ impl StageOpenAiBackend {
                 serde_json::json!(committed_positions),
             );
             token_attrs.insert(
+                "llama_stage.native_mtp.dependent_target_rejected".to_string(),
+                serde_json::json!(dependent_target_rejected),
+            );
+            token_attrs.insert(
                 "llama_stage.native_mtp.reject_cooldown_tokens".to_string(),
                 serde_json::json!(native_mtp_options.reject_cooldown_tokens),
             );
@@ -407,24 +389,6 @@ impl StageOpenAiBackend {
                 "llama_stage.native_mtp.reject_cooldown_remaining".to_string(),
                 serde_json::json!(*native_mtp_reject_cooldown_remaining),
             );
-            if let Some(trim) = trim_control.as_ref() {
-                token_attrs.insert(
-                    "llama_stage.native_mtp.trim_ms".to_string(),
-                    serde_json::json!(trim.elapsed_ms),
-                );
-                token_attrs.insert(
-                    "llama_stage.native_mtp.trim_local_ms".to_string(),
-                    serde_json::json!(trim.local_ms),
-                );
-                token_attrs.insert(
-                    "llama_stage.native_mtp.trim_downstream_write_ms".to_string(),
-                    serde_json::json!(trim.downstream_write_ms),
-                );
-                token_attrs.insert(
-                    "llama_stage.native_mtp.trim_downstream_wait_ms".to_string(),
-                    serde_json::json!(trim.downstream_wait_ms),
-                );
-            }
             token_attrs.insert(
                 "llama_stage.stage0_compute_ms".to_string(),
                 serde_json::json!(verify.stats.stage0_compute_ms),
@@ -487,32 +451,9 @@ fn next_native_mtp_draft(
         .flatten()
 }
 
-fn prospective_pipeline_observation(
-    buffer: &BufferedCompositeProposal,
-    adaptive_verify_width: usize,
-    pipeline_depth: usize,
-    accepted_proposal_tokens: usize,
-    predicted_tokens: &[i32],
-) -> Option<(usize, bool)> {
-    if buffer.accepted_tokens() > 0 {
-        return None;
-    }
-    let width = buffer
-        .proposal()
-        .parallel_verify_width(adaptive_verify_width, pipeline_depth)?;
-    let expected_free_target = buffer.expected_free_target(width)?;
-    let continues = accepted_proposal_tokens >= width
-        && predicted_tokens.get(width) == Some(&expected_free_target);
-    Some((width, continues))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        BufferedCompositeProposal, native_mtp_verify_window_inputs, next_native_mtp_draft,
-        prospective_pipeline_observation,
-    };
-    use crate::frontend::NativeMtpHybridProposal;
+    use super::{native_mtp_verify_window_inputs, next_native_mtp_draft};
     use skippy_protocol::binary::StageNativeMtpDraft;
 
     #[test]
@@ -547,47 +488,5 @@ mod tests {
 
         assert_eq!(draft.tokens, vec![11]);
         assert_eq!(draft.proposal_compute_us, 12);
-    }
-
-    #[test]
-    fn full_sync_window_profiles_the_narrower_parallel_width() {
-        let buffer = BufferedCompositeProposal::new(NativeMtpHybridProposal::from_parts(
-            vec![9, 1, 2, 3],
-            1,
-            true,
-        ));
-
-        assert_eq!(
-            prospective_pipeline_observation(&buffer, 4, 2, 4, &[9, 1, 2, 3, 4]),
-            Some((2, true))
-        );
-    }
-
-    #[test]
-    fn later_sync_rejection_preserves_valid_parallel_prefix_evidence() {
-        let buffer = BufferedCompositeProposal::new(NativeMtpHybridProposal::from_parts(
-            vec![9, 1, 2, 3],
-            1,
-            true,
-        ));
-
-        assert_eq!(
-            prospective_pipeline_observation(&buffer, 4, 2, 3, &[9, 1, 2, 99, 4]),
-            Some((2, true))
-        );
-    }
-
-    #[test]
-    fn mismatched_parallel_free_target_records_no_continuation() {
-        let buffer = BufferedCompositeProposal::new(NativeMtpHybridProposal::from_parts(
-            vec![9, 1, 2, 3],
-            1,
-            true,
-        ));
-
-        assert_eq!(
-            prospective_pipeline_observation(&buffer, 4, 2, 2, &[9, 1, 99, 3, 4]),
-            Some((2, false))
-        );
     }
 }

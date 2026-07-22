@@ -21,11 +21,6 @@ pub struct DecodeBatchRequest<'a> {
     pub sampling: Option<&'a SamplingConfig>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StageSessionCheckpoint {
-    token_count: u64,
-}
-
 // The experimental C ABI owns synchronization internally for model/session use.
 // Rust stage-server access is additionally serialized behind a Mutex.
 unsafe impl Send for StageSession {}
@@ -41,34 +36,6 @@ impl StageSession {
             return Err(anyhow!("skippy session has no valid batch size"));
         }
         usize::try_from(n_batch).context("session batch size exceeds usize")
-    }
-
-    /// Captures the current position and asks the native runtime to keep an
-    /// in-session recurrent checkpoint. Attention KV is restored by trimming
-    /// the speculative suffix back to this position.
-    pub fn checkpoint(&mut self) -> Result<StageSessionCheckpoint> {
-        let mut token_count = 0u64;
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_checkpoint_session(self.raw, &mut token_count, &mut error)
-        };
-        ensure_ok(status, error)?;
-        self.token_count = token_count;
-        Ok(StageSessionCheckpoint { token_count })
-    }
-
-    pub fn restore_checkpoint(&mut self, checkpoint: &StageSessionCheckpoint) -> Result<()> {
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_restore_session_checkpoint(
-                self.raw,
-                checkpoint.token_count,
-                &mut error,
-            )
-        };
-        ensure_ok(status, error)?;
-        self.token_count = checkpoint.token_count;
-        Ok(())
     }
 
     pub fn reset(&mut self) -> Result<()> {
@@ -365,19 +332,19 @@ impl StageSession {
         Ok(predicted)
     }
 
-    /// Runs batched verification and restores the prior checkpoint.
+    /// Runs batched verification and trims the speculative suffix.
     pub fn verify_tokens_rewound(&mut self, token_ids: &[i32]) -> Result<Vec<i32>> {
         if token_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let checkpoint = self.checkpoint()?;
+        let token_count = self.token_count;
         match self.verify_tokens(token_ids) {
             Ok(predicted) => {
-                self.restore_checkpoint(&checkpoint)?;
+                self.trim_session(token_count)?;
                 Ok(predicted)
             }
             Err(error) => {
-                let _ = self.restore_checkpoint(&checkpoint);
+                let _ = self.trim_session(token_count);
                 Err(error)
             }
         }

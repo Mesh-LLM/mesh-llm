@@ -11,6 +11,7 @@ mod socket;
 mod stage_execution;
 mod wire;
 
+pub(crate) use self::binary_messaging::async_forwarder::{AsyncForwardReceipt, AsyncForwarder};
 pub use self::binary_messaging::{
     serve_binary, serve_binary_stage, serve_binary_stage_with_shutdown,
 };
@@ -25,4 +26,5 @@ pub(crate) use self::stage_execution::{
     send_client_ready_hello_if_enabled, stage_output_activation_capacity,
 };
 pub use self::wire::WireCondition;
+pub(crate) use self::wire::write_stage_message_after_propagation;
 pub(crate) use self::wire::write_stage_message_conditioned;

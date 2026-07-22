@@ -208,6 +208,57 @@ Switches:
 - `--trust-policy <TRUST_POLICY>`: override peer ownership trust policy.
 - `--trust-owner <TRUST_OWNER>`: add trusted owner IDs on top of the local trust store.
 
+### Locked split topology
+
+Automatic split planning chooses nodes and layer boundaries from the capacity
+currently advertised by the mesh. For controlled lab benchmarks, use a
+topology lock so every host runs the same node order and layer ranges across
+repeated runs, branches, and binaries.
+
+Copy the same versioned JSON file to every serving host:
+
+```json
+{
+  "version": 1,
+  "model": "hf://meshllm/example-layers@immutable-revision",
+  "manifest_sha256": "<sha256 of model-package.json>",
+  "stages": [
+    {
+      "node": "micstudio.local",
+      "layer_start": 0,
+      "layer_end": 31
+    },
+    {
+      "node": "studio54-3.local",
+      "layer_start": 31,
+      "layer_end": 47
+    }
+  ]
+}
+```
+
+Then pass the lock with `--split` on every host:
+
+```bash
+mesh-llm serve \
+  --model hf://meshllm/example-layers@immutable-revision \
+  --split \
+  --split-topology-lock /path/to/topology-lock.json
+```
+
+The runtime verifies the resolved package and manifest digest, resolves each
+node selector uniquely, requires contiguous ranges covering the full model,
+and applies the normal context, KV-cache, headroom, and VRAM checks to those
+exact assignments. A node selector may be a full iroh endpoint ID or an
+advertised hostname. Ranges are half-open: `layer_start` is inclusive and
+`layer_end` is exclusive.
+
+The lock is fail-closed, not a placement hint. If the requested topology cannot
+be reproduced, startup fails. If an assigned stage is later lost, mesh-llm
+withdraws the route after the normal grace period instead of replanning or
+falling back to a local model. This prevents benchmark results from silently
+mixing different execution topologies.
+
 ### Speculative decoding overrides
 
 Advanced `serve` invocations can temporarily override a package or config-file
@@ -217,18 +268,16 @@ continue to come from the selected model, defaults, or model package.
 ```bash
 mesh-llm serve meshllm/GLM-4.7-Flash-MTP-GGUF:Q4_K_M --split --no-draft \
   --speculative-strategy mtp \
-  --speculative-ngram-proposer cache \
   --speculative-ngram-min 2 \
   --speculative-ngram-max 4 \
-  --speculative-ngram-max-proposal-tokens 6 \
-  --speculative-extension-initial-tokens 2 \
-  --speculative-extension-max-tokens 6 \
-  --speculative-verify-window-pipeline-depth 2
+  --speculative-ngram-max-proposal-tokens 32 \
+  --speculative-extension-initial-tokens 4 \
+  --speculative-extension-max-tokens 32 \
+  --speculative-verify-window-pipeline-depth 8
 ```
 
-- `--speculative-strategy <STRATEGY>`: select `auto`, `disabled`, `mtp`, a built-in direct-GGUF N-gram strategy, or a strategy declared by the model package.
-- `--speculative-ngram-proposer <simple|cache>`: choose the N-gram implementation. The cache proposer is request-local.
-- `--speculative-ngram-min <N>` / `--speculative-ngram-max <N>`: set the history match bounds.
+- `--speculative-strategy <STRATEGY>`: select `auto`, `disabled`, `mtp`, or a strategy declared by the model package. N-gram is a request-local extension of native MTP, not a standalone strategy.
+- `--speculative-ngram-min <N>` / `--speculative-ngram-max <N>`: set the request-local cache history match bounds used to extend native MTP.
 - `--speculative-ngram-max-proposal-tokens <N>`: cap the N-gram continuation proposed at once.
 - `--speculative-extension-initial-tokens <N>` / `--speculative-extension-max-tokens <N>`: set the adaptive N-gram tail bounds when extending native MTP.
 - `--speculative-extension-tail-backoff-proposals <N>`: pause extension attempts after a rejected N-gram tail.
@@ -236,7 +285,7 @@ mesh-llm serve meshllm/GLM-4.7-Flash-MTP-GGUF:Q4_K_M --split --no-draft \
 - `--speculative-native-mtp-suppress-cooldown-drafts`: suppress native drafts during cooldown; `--speculative-native-mtp-allow-cooldown-drafts` explicitly disables a configured suppression policy.
 - `--speculative-native-mtp-suppress-cooldown-draft-limit <N>`: cap the native drafts suppressed by one cooldown.
 - `--speculative-verify-window-min-tokens <N>` / `--speculative-verify-window-max-tokens <N>`: set adaptive verification window bounds.
-- `--speculative-verify-window-pipeline-depth <N>`: set the maximum in-flight asynchronous verification windows.
+- `--speculative-verify-window-pipeline-depth <N>`: set the global maximum in-flight verification windows. Live request heads consume this capacity; optional N-gram windows are admitted with bounded, fair credits and fall back to native MTP when requests already fill the pipeline.
 
 ## Commands
 
@@ -629,13 +678,13 @@ Core tuning switches:
 
 Speculative decoding tuning switches:
 
-- `--speculative-types <TYPES>`: speculative decoding types to sweep (`auto`, `disabled`, `mtp`, `draft`, `ngram`; comma-separated). Conflicts with `--no-speculative-tune`.
+- `--speculative-types <TYPES>`: speculative decoding types to sweep (`auto`, `disabled`, `mtp`, `draft`, `mtp-ngram`; comma-separated). Conflicts with `--no-speculative-tune`.
 - `--no-speculative-tune`: disable speculative decoding sweeps and only benchmark the disabled baseline.
 - `--spec-draft-models <PATHS>`: candidate draft GGUF paths for speculative draft mode (comma-separated).
 - `--spec-draft-max-tokens <N>`: candidate maximum draft-token windows for MTP and draft speculation (comma-separated).
 - `--spec-draft-min-tokens <N>`: candidate minimum draft-token windows for MTP and draft speculation (comma-separated).
-- `--spec-ngram-min <N>`: candidate minimum ngram draft-token counts (comma-separated).
-- `--spec-ngram-max <N>`: candidate maximum ngram draft-token counts (comma-separated).
+- `--spec-ngram-min <N>`: candidate minimum cache match lengths for `mtp-ngram` (comma-separated).
+- `--spec-ngram-max <N>`: candidate maximum cache match lengths for `mtp-ngram` (comma-separated).
 
 Additional switches:
 

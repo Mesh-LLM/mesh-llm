@@ -153,19 +153,6 @@ fn even_stage_ranges(stage_count: usize, layer_end: u32) -> Result<Vec<(u32, u32
     Ok(ranges)
 }
 
-fn wait_for_socket(socket_path: &Path, timeout_secs: u64) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
-    loop {
-        if socket_path.exists() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            bail!("timed out waiting for socket {}", socket_path.display());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-}
-
 fn write_json(path: &Path, value: &serde_json::Value) -> Result<()> {
     fs::write(path, serde_json::to_vec_pretty(value)?)
         .with_context(|| format!("write {}", path.display()))

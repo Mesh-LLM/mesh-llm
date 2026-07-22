@@ -95,9 +95,7 @@ pub struct PackageSpeculativeStrategyInfo {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PackageExtensionPolicyInfo {
-    pub initial_tokens: u32,
     pub max_tokens: u32,
-    pub tail_backoff_proposals: u32,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -281,9 +279,7 @@ struct PackageSpeculativeStrategy {
 
 #[derive(Debug, Deserialize)]
 struct PackageExtensionPolicy {
-    initial_tokens: u32,
     max_tokens: u32,
-    tail_backoff_proposals: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -662,9 +658,7 @@ fn package_speculative_strategy_info(
         extension_policy: strategy
             .extension_policy
             .map(|policy| PackageExtensionPolicyInfo {
-                initial_tokens: policy.initial_tokens,
                 max_tokens: policy.max_tokens,
-                tail_backoff_proposals: policy.tail_backoff_proposals,
             }),
     }
 }

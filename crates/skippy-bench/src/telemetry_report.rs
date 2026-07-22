@@ -39,6 +39,10 @@ struct CreateRunResponse {
 #[derive(Deserialize)]
 struct RunStatusResponse {
     status: String,
+    #[serde(default)]
+    request_count: Option<u64>,
+    #[serde(default)]
+    span_count: Option<u64>,
 }
 
 pub fn pending(metrics_http: &str, metrics_run_id: &str) -> BenchTelemetry {
@@ -134,6 +138,31 @@ pub fn finalize_and_collect(
         report_path,
         report,
     ))
+}
+
+pub fn finalize_only(metrics_http: &str, metrics_run_id: &str) -> Result<BenchTelemetry> {
+    let client = reqwest::blocking::Client::new();
+    let base = metrics_http.trim_end_matches('/');
+    let status = client
+        .post(format!("{base}/v1/runs/{metrics_run_id}/finalize"))
+        .send()
+        .with_context(|| format!("finalize metrics-server run {metrics_run_id}"))?
+        .error_for_status()
+        .with_context(|| format!("metrics-server rejected finalize for run {metrics_run_id}"))?
+        .json::<RunStatusResponse>()
+        .context("decode finalized metrics-server run status")?;
+    Ok(BenchTelemetry {
+        metrics_http: Some(metrics_http.to_string()),
+        metrics_run_id: metrics_run_id.to_string(),
+        status: "finalized",
+        detail: Some(
+            "metrics finalized server-side without downloading the full raw-span report"
+                .to_string(),
+        ),
+        request_count: status.request_count,
+        span_count: status.span_count,
+        ..BenchTelemetry::default()
+    })
 }
 
 pub fn unavailable(
@@ -348,13 +377,54 @@ fn nanos_to_ms(nanos: i64) -> f64 {
 mod tests {
     use std::{
         fs,
+        io::{Read, Write},
+        net::TcpListener,
         path::PathBuf,
+        thread,
         time::{SystemTime, UNIX_EPOCH},
     };
 
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn finalize_only_posts_once_without_fetching_the_report() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let count = stream.read(&mut buffer).unwrap();
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..count]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let body = r#"{"status":"finalized","request_count":17,"span_count":2048}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+
+        let telemetry = finalize_only(&format!("http://{address}"), "run-finalize-only").unwrap();
+        let request = server.join().unwrap();
+
+        assert!(request.starts_with("POST /v1/runs/run-finalize-only/finalize HTTP/1.1\r\n"));
+        assert_eq!(telemetry.status, "finalized");
+        assert_eq!(telemetry.request_count, Some(17));
+        assert_eq!(telemetry.span_count, Some(2048));
+        assert!(telemetry.report_path.is_none());
+    }
 
     #[test]
     fn telemetry_report_extracts_ttft_and_request_latency() {

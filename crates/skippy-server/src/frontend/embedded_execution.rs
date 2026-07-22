@@ -1,3 +1,5 @@
+use crate::binary_transport::AsyncForwardReceipt;
+use crate::binary_transport::AsyncForwarder;
 use crate::binary_transport::BinaryStageExecutionOptions;
 use crate::binary_transport::PredictionReturnReceiver;
 use crate::binary_transport::forwarded_stage_message_timed;
@@ -6,7 +8,6 @@ use crate::binary_transport::stage_output_activation_capacity;
 use crate::binary_transport::write_stage_message_conditioned;
 use crate::frontend::generation::EmbeddedExecutionStats;
 use crate::frontend::generation::EmbeddedLocalOutput;
-use crate::frontend::generation::EmbeddedSessionControl;
 use crate::frontend::generation::EmbeddedStageExecution;
 use crate::frontend::generation::EmbeddedStageZeroGeneration;
 use crate::frontend::generation::PhaseTimer;
@@ -14,23 +15,28 @@ use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::util::ms_to_us;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::openai_io_error;
-use crate::frontend::wire_messages::embedded_session_control_message;
-use crate::frontend::wire_messages::embedded_trim_session_message;
+use crate::telemetry::now_unix_nanos;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
+use serde_json::json;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireMessageKind;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
-use skippy_protocol::binary::state_flags;
 use std::net::TcpStream;
 use std::time::Duration;
 use std::time::Instant;
 
 const DIRECT_RETURN_FALLBACK_POLL: Duration = Duration::from_millis(10);
-const DIRECT_RETURN_FALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
+// A dead downstream tunnel can leave both the persistent lane and the direct
+// return reader open without producing EOF. Bound every reply wait so the
+// request reaches lane replacement and session teardown instead of occupying
+// a generation permit indefinitely. This is deliberately much larger than a
+// normal WAN verify traversal while remaining shorter than the HTTP client's
+// request timeout.
+const DIRECT_RETURN_FALLBACK_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) struct DispatchedEmbeddedStage {
     started: Instant,
@@ -38,6 +44,7 @@ pub(super) struct DispatchedEmbeddedStage {
     execution: EmbeddedExecutionStats,
     message_kind: WireMessageKind,
     token_count: i32,
+    forward_receipt: Option<AsyncForwardReceipt>,
 }
 
 impl StageOpenAiBackend {
@@ -56,6 +63,7 @@ impl StageOpenAiBackend {
             session_key,
             message,
             token_ids,
+            None,
         )?;
         self.complete_dispatched_stage_message(request, downstream, dispatched, expected_reply)
     }
@@ -67,9 +75,10 @@ impl StageOpenAiBackend {
         session_key: &str,
         message: &StageWireMessage,
         token_ids: &[i32],
+        async_forwarder: Option<&mut AsyncForwarder>,
     ) -> OpenAiResult<DispatchedEmbeddedStage> {
         let started = Instant::now();
-        let mut stats = StageReplyStats::default();
+        let stats = StageReplyStats::default();
         let stage0_timer = PhaseTimer::start();
         let output = {
             let lock_timer = PhaseTimer::start();
@@ -79,19 +88,22 @@ impl StageOpenAiBackend {
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
             let lock_wait_ms = lock_timer.elapsed_ms();
             let hold_timer = PhaseTimer::start();
-            if message.kind == WireMessageKind::VerifyWindow
-                && (message.state.flags & state_flags::SKIP_VERIFY_CHECKPOINT) == 0
+            if let Some(target_token_count) = message.authoritative_session_position()
+                && let Some(align) = runtime
+                    .align_session_to_token_count_if_ahead(session_key, target_token_count)
+                    .map_err(openai_backend_error)?
             {
-                let checkpoint_timer = PhaseTimer::start();
-                runtime
-                    .checkpoint_session(session_key)
-                    .map_err(openai_backend_error)?;
-                let checkpoint_us = ms_to_us(checkpoint_timer.elapsed_ms());
-                stats.checkpoint_local_us += checkpoint_us;
-                stats.checkpoint_total_us += checkpoint_us;
-                stats.verify_window_checkpointed_requests += 1;
-            } else if message.kind == WireMessageKind::VerifyWindow {
-                stats.verify_window_skip_checkpoint_requests += 1;
+                let mut attrs = self.openai_attrs(request.ids);
+                attrs.insert(
+                    "llama_stage.session_auto_align_before_tokens".to_string(),
+                    json!(align.before_token_count),
+                );
+                attrs.insert(
+                    "llama_stage.session_auto_align_after_tokens".to_string(),
+                    json!(align.after_token_count),
+                );
+                self.telemetry
+                    .emit_debug("stage.openai_session_auto_align", attrs);
             }
             let output = run_binary_stage_message(
                 &mut runtime,
@@ -121,6 +133,26 @@ impl StageOpenAiBackend {
             }
         };
         let stage0_compute_ms = stage0_timer.elapsed_ms();
+        if self.telemetry.is_debug_enabled() {
+            let mut attrs = self.openai_attrs(request.ids);
+            attrs.insert(
+                "llama_stage.message_kind".to_string(),
+                json!(format!("{:?}", message.kind)),
+            );
+            attrs.insert(
+                "llama_stage.token_count".to_string(),
+                json!(message.token_count),
+            );
+            if let Some(window_id) = message.verify_window_id() {
+                attrs.insert("llama_stage.verify_window_id".to_string(), json!(window_id));
+            }
+            self.telemetry.emit_debug_span(
+                "stage.openai_stage0_llama_decode",
+                attrs,
+                stage0_timer.start_unix_nanos,
+                now_unix_nanos() as u64,
+            );
+        }
         let forwarded = forwarded_stage_message_timed(
             request.config,
             message,
@@ -129,14 +161,29 @@ impl StageOpenAiBackend {
             request.activation_width,
         )
         .map_err(openai_backend_error)?;
+        let forward_activation_bytes = forwarded.message.activation.len();
         let write_timer = PhaseTimer::start();
-        write_stage_message_conditioned(
-            &mut *downstream,
-            &forwarded.message,
-            request.wire_dtype,
-            request.downstream_wire_condition,
-        )
-        .map_err(openai_io_error)?;
+        let forward_receipt = if let Some(forwarder) = async_forwarder {
+            Some(
+                forwarder
+                    .send_tracked(
+                        forwarded.message,
+                        request.wire_dtype,
+                        request.downstream_wire_condition,
+                        self.openai_attrs(request.ids),
+                    )
+                    .map_err(openai_backend_error)?,
+            )
+        } else {
+            write_stage_message_conditioned(
+                &mut *downstream,
+                &forwarded.message,
+                request.wire_dtype,
+                request.downstream_wire_condition,
+            )
+            .map_err(openai_io_error)?;
+            None
+        };
         let forward_write_ms = write_timer.elapsed_ms();
         Ok(DispatchedEmbeddedStage {
             started,
@@ -147,12 +194,13 @@ impl StageOpenAiBackend {
                 runtime_lock_hold_ms: output.runtime_lock_hold_ms,
                 activation_encode_ms: forwarded.activation_encode_ms,
                 output_activation_bytes: output.output.payload.len(),
-                forward_activation_bytes: forwarded.message.activation.len(),
+                forward_activation_bytes,
                 forward_write_ms,
                 downstream_wait_ms: 0.0,
             },
             message_kind: message.kind,
             token_count: message.token_count,
+            forward_receipt,
         })
     }
 
@@ -196,6 +244,10 @@ impl StageOpenAiBackend {
         expected_reply: WireReplyKind,
         require_direct_return: bool,
     ) -> OpenAiResult<EmbeddedStageExecution> {
+        if let Some(receipt) = dispatched.forward_receipt.take() {
+            dispatched.execution.forward_write_ms =
+                receipt.finish().map_err(openai_backend_error)?;
+        }
         let wait_timer = PhaseTimer::start();
         let reply = if require_direct_return {
             receive_direct_prediction_return(request.prediction_return.as_ref(), expected_reply)?
@@ -234,107 +286,6 @@ impl StageOpenAiBackend {
             elapsed_ms: dispatched.started.elapsed().as_secs_f64() * 1000.0,
         })
     }
-
-    pub(super) fn restore_embedded_stage_session(
-        &self,
-        request: &EmbeddedStageZeroGeneration<'_>,
-        downstream: &mut TcpStream,
-        session_key: &str,
-        request_id: u64,
-        session_id: u64,
-    ) -> OpenAiResult<EmbeddedSessionControl> {
-        let timer = PhaseTimer::start();
-        let local_timer = PhaseTimer::start();
-        {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            runtime
-                .restore_session(session_key)
-                .map_err(openai_backend_error)?;
-        }
-        let local_ms = local_timer.elapsed_ms();
-        let message = embedded_session_control_message(
-            request.wire_dtype,
-            WireMessageKind::RestoreSession,
-            request_id,
-            session_id,
-        );
-        let write_timer = PhaseTimer::start();
-        write_stage_message_conditioned(
-            &mut *downstream,
-            &message,
-            request.wire_dtype,
-            request.downstream_wire_condition,
-        )
-        .map_err(openai_io_error)?;
-        let downstream_write_ms = write_timer.elapsed_ms();
-        let wait_timer = PhaseTimer::start();
-        let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
-        let downstream_wait_ms = wait_timer.elapsed_ms();
-        if reply.kind != WireReplyKind::Ack {
-            return Err(OpenAiError::backend(format!(
-                "restore expected ACK from downstream, got {:?}",
-                reply.kind
-            )));
-        }
-        Ok(EmbeddedSessionControl {
-            elapsed_ms: timer.elapsed_ms(),
-            local_ms,
-            downstream_write_ms,
-            downstream_wait_ms,
-        })
-    }
-
-    pub(super) fn trim_embedded_stage_session(
-        &self,
-        request: &EmbeddedStageZeroGeneration<'_>,
-        downstream: &mut TcpStream,
-        session_key: &str,
-        request_id: u64,
-        session_id: u64,
-        token_count: usize,
-    ) -> OpenAiResult<EmbeddedSessionControl> {
-        let timer = PhaseTimer::start();
-        let local_timer = PhaseTimer::start();
-        {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            runtime
-                .trim_session(session_key, token_count as u64)
-                .map_err(openai_backend_error)?;
-        }
-        let local_ms = local_timer.elapsed_ms();
-        let message =
-            embedded_trim_session_message(request.wire_dtype, request_id, session_id, token_count)?;
-        let write_timer = PhaseTimer::start();
-        write_stage_message_conditioned(
-            &mut *downstream,
-            &message,
-            request.wire_dtype,
-            request.downstream_wire_condition,
-        )
-        .map_err(openai_io_error)?;
-        let downstream_write_ms = write_timer.elapsed_ms();
-        let wait_timer = PhaseTimer::start();
-        let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
-        let downstream_wait_ms = wait_timer.elapsed_ms();
-        if reply.kind != WireReplyKind::Ack {
-            return Err(OpenAiError::backend(format!(
-                "trim expected ACK from downstream, got {:?}",
-                reply.kind
-            )));
-        }
-        Ok(EmbeddedSessionControl {
-            elapsed_ms: timer.elapsed_ms(),
-            local_ms,
-            downstream_write_ms,
-            downstream_wait_ms,
-        })
-    }
 }
 
 fn receive_direct_prediction_return(
@@ -344,21 +295,14 @@ fn receive_direct_prediction_return(
     let prediction_return = prediction_return.ok_or_else(|| {
         OpenAiError::backend("direct prediction return was required but is not configured")
     })?;
-    let started = Instant::now();
-    loop {
-        if let Some(reply) = prediction_return
-            .try_recv_expected(expected_reply)
-            .map_err(openai_backend_error)?
-        {
-            return Ok(reply);
-        }
-        if started.elapsed() >= DIRECT_RETURN_FALLBACK_TIMEOUT {
-            return Err(OpenAiError::backend(format!(
+    prediction_return
+        .recv_expected_timeout(expected_reply, DIRECT_RETURN_FALLBACK_TIMEOUT)
+        .map_err(openai_backend_error)?
+        .ok_or_else(|| {
+            OpenAiError::backend(format!(
                 "timed out waiting for {expected_reply:?} reply from direct prediction return"
-            )));
-        }
-        std::thread::sleep(DIRECT_RETURN_FALLBACK_POLL);
-    }
+            ))
+        })
 }
 
 pub(crate) fn receive_embedded_stage_reply(
@@ -404,6 +348,15 @@ fn poll_direct_or_downstream_reply(
             break Ok(reply);
         }
         if downstream_reply_available(downstream)? {
+            // `peek` only proves that the first byte has arrived. Tunnelled
+            // replies may be fragmented, so retaining the short poll timeout
+            // while decoding the complete frame turns an ordinary partial
+            // arrival into EWOULDBLOCK. Once downstream wins the race, give
+            // the frame the remainder of the bounded fallback deadline.
+            let remaining = DIRECT_RETURN_FALLBACK_TIMEOUT.saturating_sub(started.elapsed());
+            downstream
+                .set_read_timeout(Some(remaining.max(DIRECT_RETURN_FALLBACK_POLL)))
+                .map_err(openai_io_error)?;
             break receive_downstream_stage_reply_one_of(downstream, expected_replies);
         }
         if started.elapsed() >= DIRECT_RETURN_FALLBACK_TIMEOUT {
@@ -591,5 +544,46 @@ mod tests {
         }
 
         assert_eq!(stream.read_timeout().unwrap(), original);
+    }
+
+    #[test]
+    fn direct_return_fallback_accepts_fragmented_downstream_reply() {
+        use std::io::Write;
+
+        let request_id = 91;
+        let session_id = 92;
+        let hub = Arc::new(PredictionReturnHub::default());
+        let receiver = hub.register(request_id, session_id).unwrap();
+        let (mut downstream, mut downstream_peer) = connected_stream_pair();
+        let mut bytes = Vec::new();
+        skippy_protocol::binary::send_reply_message(
+            &mut bytes,
+            &StageReply {
+                kind: WireReplyKind::PredictedTokens,
+                predicted: 0,
+                predicted_tokens: vec![17, 23],
+                native_mtp_draft: None,
+                window: Default::default(),
+                stats: StageReplyStats::default(),
+            },
+        )
+        .unwrap();
+        let writer = std::thread::spawn(move || {
+            downstream_peer.write_all(&bytes[..1]).unwrap();
+            downstream_peer.flush().unwrap();
+            std::thread::sleep(DIRECT_RETURN_FALLBACK_POLL * 3);
+            downstream_peer.write_all(&bytes[1..]).unwrap();
+        });
+
+        let reply = receive_embedded_stage_reply_one_of(
+            &mut downstream,
+            Some(&receiver),
+            &[WireReplyKind::PredictedTokens],
+        )
+        .unwrap();
+
+        assert_eq!(reply.predicted_tokens, vec![17, 23]);
+        assert_eq!(downstream.read_timeout().unwrap(), None);
+        writer.join().unwrap();
     }
 }

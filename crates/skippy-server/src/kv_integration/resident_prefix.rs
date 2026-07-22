@@ -8,7 +8,7 @@ use super::{
 };
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ResidentPrefixDecodeEviction {
+pub struct ResidentPrefixEviction {
     pub target_tokens: u64,
     pub evicted_entries: usize,
     pub evicted_tokens: u64,
@@ -149,6 +149,31 @@ impl KvStageIntegration {
         Ok(None)
     }
 
+    /// Evict enough resident-prefix entries to release `target_tokens` KV
+    /// cells, or all currently releasable entries.
+    pub fn evict_resident_prefix_for_tokens(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        target_tokens: u64,
+    ) -> Result<ResidentPrefixEviction> {
+        if self.payload != StagePrefixCachePayload::ResidentKv {
+            return Ok(ResidentPrefixEviction::default());
+        }
+        let mut cache = self
+            .resident
+            .lock()
+            .expect("resident prefix cache lock poisoned");
+        let mut drop_fn = |seq_id: i32| runtime.drop_resident_prefix_sequence(session_id, seq_id);
+        let evictions = cache.evict_lru_until_tokens(target_tokens, &mut drop_fn)?;
+        let evicted_tokens = evictions.iter().map(|eviction| eviction.token_count).sum();
+        Ok(ResidentPrefixEviction {
+            target_tokens,
+            evicted_entries: evictions.len(),
+            evicted_tokens,
+        })
+    }
+
     /// Evict enough resident-prefix entries to free at least one native
     /// decode batch worth of KV cells, or all currently releasable entries.
     ///
@@ -160,23 +185,9 @@ impl KvStageIntegration {
         &self,
         runtime: &mut RuntimeState,
         session_id: &str,
-    ) -> Result<ResidentPrefixDecodeEviction> {
-        if self.payload != StagePrefixCachePayload::ResidentKv {
-            return Ok(ResidentPrefixDecodeEviction::default());
-        }
+    ) -> Result<ResidentPrefixEviction> {
         let target_tokens = runtime.session_batch_size(session_id)? as u64;
-        let mut cache = self
-            .resident
-            .lock()
-            .expect("resident prefix cache lock poisoned");
-        let mut drop_fn = |seq_id: i32| runtime.drop_resident_prefix_sequence(session_id, seq_id);
-        let evictions = cache.evict_lru_until_tokens(target_tokens, &mut drop_fn)?;
-        let evicted_tokens = evictions.iter().map(|eviction| eviction.token_count).sum();
-        Ok(ResidentPrefixDecodeEviction {
-            target_tokens,
-            evicted_entries: evictions.len(),
-            evicted_tokens,
-        })
+        self.evict_resident_prefix_for_tokens(runtime, session_id, target_tokens)
     }
 
     pub fn release_resident_prefix(&self, page_id: &str) {

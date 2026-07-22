@@ -237,7 +237,7 @@ pub(crate) fn benchmark_speculative_values(
             mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Draft => {
                 push_draft_speculative_candidates(&mut candidates, request, prepared);
             }
-            mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Ngram => {
+            mesh_llm_cli::benchmark::BenchmarkSpeculativeType::MtpNgram => {
                 push_ngram_speculative_candidates(&mut candidates, request);
             }
         }
@@ -264,7 +264,7 @@ pub(crate) fn speculative_type_priority(
         mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Auto => 0,
         mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Mtp => 1,
         mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Draft => 2,
-        mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Ngram => 3,
+        mesh_llm_cli::benchmark::BenchmarkSpeculativeType::MtpNgram => 3,
         mesh_llm_cli::benchmark::BenchmarkSpeculativeType::Disabled => 4,
     }
 }
@@ -276,9 +276,9 @@ pub(crate) fn push_auto_speculative_candidates(
 ) {
     if looks_like_mtp_target(prepared) {
         push_mtp_speculative_candidates(candidates, request, prepared);
+        push_ngram_speculative_candidates(candidates, request);
     }
     push_draft_speculative_candidates(candidates, request, prepared);
-    push_ngram_speculative_candidates(candidates, request);
     candidates.push(TuneBenchmarkSpeculativeCandidate::Disabled);
 }
 
@@ -446,12 +446,12 @@ pub(crate) fn push_ngram_speculative_candidates(
     candidates: &mut Vec<TuneBenchmarkSpeculativeCandidate>,
     request: &TuneBenchmarkRunRequest<'_>,
 ) {
-    let ngram_min_values = positive_or_default(request.spec_ngram_min, &[12, 24]);
-    let ngram_max_values = positive_or_default(request.spec_ngram_max, &[48, 64]);
+    let ngram_min_values = positive_or_default(request.spec_ngram_min, &[2]);
+    let ngram_max_values = positive_or_default(request.spec_ngram_max, &[4]);
     for ngram_min in &ngram_min_values {
         for ngram_max in &ngram_max_values {
             if ngram_min <= ngram_max {
-                candidates.push(TuneBenchmarkSpeculativeCandidate::Ngram {
+                candidates.push(TuneBenchmarkSpeculativeCandidate::MtpNgram {
                     ngram_min: *ngram_min,
                     ngram_max: *ngram_max,
                 });
@@ -631,10 +631,10 @@ pub(crate) fn speculative_candidate_sort_key(
             fmt_prob(*draft_acceptance_threshold),
             fmt_prob(*draft_split_probability),
         ),
-        TuneBenchmarkSpeculativeCandidate::Ngram {
+        TuneBenchmarkSpeculativeCandidate::MtpNgram {
             ngram_min,
             ngram_max,
-        } => format!("2:ngram:{ngram_min}:{ngram_max}"),
+        } => format!("2:mtp-ngram:{ngram_min}:{ngram_max}"),
         TuneBenchmarkSpeculativeCandidate::Disabled => "9:disabled".to_string(),
     }
 }

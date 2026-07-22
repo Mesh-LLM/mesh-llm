@@ -243,30 +243,6 @@ fn prompt_repl_launch(args: PromptArgs) -> Result<()> {
     );
     children.push(ChildGuard::spawn(metrics)?);
 
-    let ngram_pool_uds_path = if args.ngram_speculative {
-        let socket_path = args
-            .ngram_pool_uds_path
-            .clone()
-            .unwrap_or_else(|| run_dir.join("ngram-pool.sock"));
-        let mut ngram_pool = Command::new(&args.ngram_pool_server_bin);
-        ngram_pool.args(["serve", "--uds-path", path_str(&socket_path)?]);
-        configure_process_log(&mut ngram_pool, &run_dir.join("ngram-pool-server.log"))?;
-        eprintln!(
-            "launch: starting ngram-pool-server socket={} log={}",
-            socket_path.display(),
-            run_dir.join("ngram-pool-server.log").display()
-        );
-        children.push(ChildGuard::spawn(ngram_pool)?);
-        eprintln!(
-            "launch: waiting for ngram pool socket {}",
-            socket_path.display()
-        );
-        wait_for_socket(&socket_path, args.startup_timeout_secs)?;
-        Some(socket_path)
-    } else {
-        None
-    };
-
     if remote {
         rsync_remote_stage_inputs(&args, &stages, &model_package_dir, hf_package_ref)?;
         eprintln!(
@@ -356,22 +332,8 @@ fn prompt_repl_launch(args: PromptArgs) -> Result<()> {
         draft_model_path: args.draft_model_path,
         speculative_window: args.speculative_window,
         adaptive_speculative_window: args.adaptive_speculative_window,
-        ngram_speculative: args.ngram_speculative,
-        ngram_proposal_mode: args.ngram_proposal_mode,
-        spec_ngram_size_n: args.spec_ngram_size_n,
-        ngram_history_min_hits: args.ngram_history_min_hits,
-        draft_min: args.draft_min,
-        draft_max: args.draft_max,
-        ngram_min_winner_count: args.ngram_min_winner_count,
-        ngram_min_confidence: args.ngram_min_confidence,
-        ngram_min_margin: args.ngram_min_margin,
-        ngram_confidence_step: args.ngram_confidence_step,
-        ngram_confidence_step_tokens: args.ngram_confidence_step_tokens,
-        ngram_max_confidence: args.ngram_max_confidence,
-        ngram_count_step_tokens: args.ngram_count_step_tokens,
         mmap: None,
         mlock: false,
-        ngram_margin_step_tokens: args.ngram_margin_step_tokens,
         startup_timeout_secs: args.startup_timeout_secs,
         decode_timeout_secs: args.decode_timeout_secs,
         history_path: Some(
@@ -379,7 +341,6 @@ fn prompt_repl_launch(args: PromptArgs) -> Result<()> {
                 .unwrap_or_else(|| args.run_root.join("prompt-history.txt")),
         ),
         session_id: args.session_id,
-        ngram_pool_uds_path,
         native_logs: args.native_logs,
         raw_prompt: args.raw_prompt,
         no_think: args.no_think,

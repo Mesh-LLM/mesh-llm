@@ -76,7 +76,7 @@ fn effective_cache_payload(
     }
 }
 
-fn model_requires_recurrent_state(config: &StageConfig) -> bool {
+pub(crate) fn model_requires_recurrent_state(config: &StageConfig) -> bool {
     let Some(path) = kv_cache_inspection_path(config) else {
         return false;
     };

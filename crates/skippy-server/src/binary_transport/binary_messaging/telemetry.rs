@@ -10,7 +10,6 @@ use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireMessageKind;
 use skippy_protocol::binary::WireReplyKind;
-use skippy_protocol::binary::state_flags;
 use std::collections::BTreeMap;
 
 pub(super) struct UpstreamReplyWriteSpan {
@@ -19,17 +18,6 @@ pub(super) struct UpstreamReplyWriteSpan {
     pub(super) start_unix_nanos: u64,
     pub(super) end_unix_nanos: u64,
     pub(super) write_ms: f64,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct SessionControlTiming {
-    pub(super) flush_us: i64,
-    pub(super) prefill_drain_us: i64,
-    pub(super) local_us: i64,
-    pub(super) downstream_write_us: i64,
-    pub(super) downstream_wait_us: i64,
-    pub(super) total_us: i64,
-    pub(super) prefill_drained_replies: i64,
 }
 
 pub(super) fn emit_upstream_reply_write_span(
@@ -96,35 +84,6 @@ pub(super) fn insert_runtime_session_stats(
         format!("{prefix}.tracked_token_counts"),
         json!(stats.tracked_token_counts),
     );
-    attrs.insert(format!("{prefix}.checkpoints"), json!(stats.checkpoints));
-}
-
-pub(super) fn record_session_control_timing(
-    stats: &mut StageReplyStats,
-    kind: WireMessageKind,
-    timing: SessionControlTiming,
-) {
-    match kind {
-        WireMessageKind::CheckpointSession => {
-            stats.checkpoint_flush_us += timing.flush_us;
-            stats.checkpoint_prefill_drain_us += timing.prefill_drain_us;
-            stats.checkpoint_local_us += timing.local_us;
-            stats.checkpoint_downstream_write_us += timing.downstream_write_us;
-            stats.checkpoint_downstream_wait_us += timing.downstream_wait_us;
-            stats.checkpoint_total_us += timing.total_us;
-            stats.checkpoint_prefill_drained_replies += timing.prefill_drained_replies;
-        }
-        WireMessageKind::RestoreSession => {
-            stats.restore_flush_us += timing.flush_us;
-            stats.restore_prefill_drain_us += timing.prefill_drain_us;
-            stats.restore_local_us += timing.local_us;
-            stats.restore_downstream_write_us += timing.downstream_write_us;
-            stats.restore_downstream_wait_us += timing.downstream_wait_us;
-            stats.restore_total_us += timing.total_us;
-            stats.restore_prefill_drained_replies += timing.prefill_drained_replies;
-        }
-        _ => {}
-    }
 }
 
 pub(super) fn record_prefill_edge_transport(
@@ -168,9 +127,4 @@ pub(super) fn record_verify_window_timing(
     stats.verify_window_request_count += 1;
     stats.verify_window_token_count += token_count;
     stats.verify_window_max_tokens = stats.verify_window_max_tokens.max(token_count);
-    if (message.state.flags & state_flags::SKIP_VERIFY_CHECKPOINT) == 0 {
-        stats.verify_window_checkpointed_requests += 1;
-    } else {
-        stats.verify_window_skip_checkpoint_requests += 1;
-    }
 }

@@ -6,7 +6,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
-        mpsc::TryRecvError,
+        mpsc::{RecvTimeoutError, TryRecvError},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -215,21 +215,27 @@ impl PredictionReturnReceiver {
         });
     }
 
-    pub(crate) fn try_recv_expected(&self, expected: WireReplyKind) -> Result<Option<StageReply>> {
-        self.try_recv_one_of(std::slice::from_ref(&expected))
+    pub(crate) fn recv_expected_timeout(
+        &self,
+        expected: WireReplyKind,
+        timeout: Duration,
+    ) -> Result<Option<StageReply>> {
+        let reply = match self.receiver.recv_timeout(timeout) {
+            Ok(Ok(reply)) => reply,
+            Ok(Err(error)) => return Err(anyhow!(error)),
+            Err(RecvTimeoutError::Timeout) => return Ok(None),
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(anyhow!("prediction return channel disconnected"));
+            }
+        };
+        validate_expected_reply(reply, std::slice::from_ref(&expected)).map(Some)
     }
 
     pub(crate) fn try_recv_one_of(&self, expected: &[WireReplyKind]) -> Result<Option<StageReply>> {
         let Some(reply) = self.try_recv()? else {
             return Ok(None);
         };
-        if !expected.contains(&reply.kind) {
-            bail!(
-                "expected one of {expected:?} from direct prediction return, got {:?}",
-                reply.kind
-            );
-        }
-        Ok(Some(reply))
+        validate_expected_reply(reply, expected).map(Some)
     }
 
     fn try_recv(&self) -> Result<Option<StageReply>> {
@@ -242,6 +248,16 @@ impl PredictionReturnReceiver {
             }
         }
     }
+}
+
+fn validate_expected_reply(reply: StageReply, expected: &[WireReplyKind]) -> Result<StageReply> {
+    if !expected.contains(&reply.kind) {
+        bail!(
+            "expected one of {expected:?} from direct prediction return, got {:?}",
+            reply.kind
+        );
+    }
+    Ok(reply)
 }
 
 impl Drop for PredictionReturnReceiver {
@@ -302,14 +318,24 @@ impl PredictionReturnSinks {
 /// Read timeout for the return-sink ready handshake. `recv_ready` is a blocking
 /// `read_exact`; without this a stalled downstream connection hangs the open
 /// forever, which mid-generation blocks the request from ever falling back to
-/// the upstream reply. Kept short so a genuinely stalled peer fails fast to the
-/// fallback; cleared afterwards so the sink's normal reads stay blocking.
+/// the upstream reply. Cleared afterwards so the sink's normal reads stay
+/// blocking.
+///
+/// Budget sizing (20s): over a WAN mesh the return sink connects to a LOCAL
+/// bridge alias, but the remote `ready` byte only arrives after the bridge
+/// COLD-establishes a fresh stage QUIC connection (up to ~10s) and the remote
+/// inbound handler then dials its local binary server. A 5s budget timed out
+/// during that cold setup (observed EAGAIN on a healthy ~26ms WAN split), even
+/// though the pooled forward lanes — which get a 20s initial connect budget and
+/// are then reused — succeeded on the same bridge. Matching the forward-lane
+/// budget lets the cold return path complete instead of failing to the slower
+/// upstream-reply fallback.
 ///
 /// This is a *single bounded deadline*, not a retry budget: the sink is opened
 /// on the generation hot path, and `connect_downstream_socket` already bounds
 /// the connect itself, so wrapping this in an outer retry only compounds the
 /// worst-case stall (see PR #1011 review).
-const RETURN_SINK_READY_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const RETURN_SINK_READY_READ_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Connect to `return_addr`, complete the ready handshake, and send the
 /// prediction-return open message. Single bounded attempt — on failure the
@@ -477,10 +503,28 @@ mod tests {
 
         send_reply_predicted_with_stats(&mut client, 42, Default::default()).unwrap();
 
-        let reply = poll_test_reply(&receiver, WireReplyKind::PredictedToken);
+        let reply = receiver
+            .recv_expected_timeout(WireReplyKind::PredictedToken, Duration::from_secs(1))
+            .unwrap()
+            .expect("prediction return reply");
         assert_eq!(reply.predicted, 42);
         drop(client);
         handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn blocking_prediction_return_receive_times_out_without_polling() {
+        let hub = Arc::new(PredictionReturnHub::default());
+        let receiver = hub.register(53, 59).unwrap();
+        let started = std::time::Instant::now();
+
+        assert!(
+            receiver
+                .recv_expected_timeout(WireReplyKind::PredictedTokens, Duration::from_millis(10),)
+                .unwrap()
+                .is_none()
+        );
+        assert!(started.elapsed() >= Duration::from_millis(8));
     }
 
     #[test]
@@ -498,11 +542,7 @@ mod tests {
                 token_ids: vec![43],
                 proposal_compute_us: 123,
             }),
-            window: skippy_protocol::binary::StageReplyWindow {
-                window_id: 7,
-                accepted_len: 2,
-                correction_token: 123,
-            },
+            window: skippy_protocol::binary::StageReplyWindow { window_id: 7 },
             stats: Default::default(),
         };
         send_direct_prediction_return(&mut server, reply).unwrap();
@@ -519,8 +559,6 @@ mod tests {
             })
         );
         assert_eq!(received.window.window_id, 7);
-        assert_eq!(received.window.accepted_len, 2);
-        assert_eq!(received.window.correction_token, 123);
     }
 
     #[test]
@@ -571,19 +609,5 @@ mod tests {
                 .is_none()
         );
         drop(client);
-    }
-
-    fn poll_test_reply(receiver: &PredictionReturnReceiver, expected: WireReplyKind) -> StageReply {
-        let started = std::time::Instant::now();
-        loop {
-            if let Some(reply) = receiver.try_recv_expected(expected).unwrap() {
-                return reply;
-            }
-            assert!(
-                started.elapsed() < Duration::from_secs(1),
-                "timed out waiting for prediction return reply"
-            );
-            thread::sleep(Duration::from_millis(1));
-        }
     }
 }

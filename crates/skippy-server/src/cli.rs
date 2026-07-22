@@ -131,13 +131,9 @@ pub struct ServeBinaryArgs {
         help = "Override n_gpu_layers for the embedded OpenAI draft model. Defaults to the stage config n_gpu_layers."
     )]
     pub openai_draft_n_gpu_layers: Option<i32>,
-    #[arg(long, default_value_t = 0)]
-    pub openai_ngram_min: usize,
-    #[arg(long, default_value_t = 0)]
-    pub openai_ngram_max: usize,
     #[arg(
         long,
-        help = "JSON file containing a complete resolved speculative decode plan. This replaces the legacy --openai-ngram-* tuning flags."
+        help = "JSON file containing the complete resolved speculative decode plan."
     )]
     pub openai_speculative_config: Option<PathBuf>,
 }

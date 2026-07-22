@@ -145,27 +145,6 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
     let default_session_id = args.session_id.clone().unwrap_or_else(default_session_id);
     let default_wire_session_id = stable_wire_id(&[default_session_id.as_bytes()]);
     eprintln!("session_id={default_session_id} wire_session_id={default_wire_session_id}");
-    let mut ngram = if args.ngram_speculative {
-        eprintln!(
-            "ngram speculative enabled: mode={:?} n={} history_min_hits={} draft_min={} draft_max={} min_count={} min_confidence={:.2} min_margin={} confidence_step={:.2}/{} max_confidence={:.2} count_step={} margin_step={}",
-            args.ngram_proposal_mode,
-            args.spec_ngram_size_n,
-            args.ngram_history_min_hits,
-            args.draft_min,
-            args.draft_max,
-            args.ngram_min_winner_count,
-            args.ngram_min_confidence,
-            args.ngram_min_margin,
-            args.ngram_confidence_step,
-            args.ngram_confidence_step_tokens,
-            args.ngram_max_confidence,
-            args.ngram_count_step_tokens,
-            args.ngram_margin_step_tokens
-        );
-        Some(NgramSource::open(&args, &default_session_id)?)
-    } else {
-        None
-    };
     let interrupt = install_prompt_interrupt_handler()?;
     let mut history = PromptHistory::load(args.history_path.as_deref())?;
     let mut prompt_input = prompt_input(&history)?;
@@ -202,7 +181,6 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
                 tokenizer: &tokenizer,
                 chat_template_model: chat_template_model.as_ref(),
                 draft: draft.as_mut(),
-                ngram: ngram.as_mut(),
                 interrupt: &interrupt,
                 wire_dtype,
                 session_id: &prompt_session_id,
@@ -267,7 +245,6 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
                 tokenizer: &tokenizer,
                 chat_template_model: chat_template_model.as_ref(),
                 draft: draft.as_mut(),
-                ngram: ngram.as_mut(),
                 interrupt: &interrupt,
                 wire_dtype,
                 session_id: &default_session_id,
@@ -287,7 +264,6 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             tokenizer: &tokenizer,
             chat_template_model: chat_template_model.as_ref(),
             draft: draft.as_mut(),
-            ngram: ngram.as_mut(),
             interrupt: &interrupt,
             wire_dtype,
             session_id: &default_session_id,

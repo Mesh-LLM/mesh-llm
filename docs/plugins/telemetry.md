@@ -148,6 +148,8 @@ to an OTLP record.
 | `mesh_llm.guardrail.outcome` | guardrail outcome | Bounded enum: `pass_through`, `valid`, `rescued`, `retried`, `failed`, or `metrics_only_failure`. |
 | `mesh_llm.guardrail.parser_stage` | guardrail outcome | Bounded enum: `none`, `json_exact`, `json_fenced`, or `json_substring`. |
 | `mesh_llm.guardrail.attempt_bucket` | guardrail outcome | Bounded retry bucket: `1`, `2`, or `3_plus`. |
+| `llama_stage.verify_window.direct_return_upstream_opened` | Skippy decode summary | Boolean indicating that the preferred upstream-opened v10 prediction-return sink completed its handshake. |
+| `llama_stage.verify_window.direct_return_reverse_fallback` | Skippy decode summary | Boolean indicating that the final stage used the bounded reverse-open v10 prediction-return fallback after the preferred sink was unavailable. |
 
 ## Review Checklist
 

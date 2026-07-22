@@ -396,6 +396,14 @@ pub(super) fn validate_runtime_cli_model_options(options: &RuntimeOptions) -> Re
             mmproj.display()
         );
     }
+    if let Some(path) = &options.split_topology_lock {
+        anyhow::ensure!(options.split, "--split-topology-lock requires --split");
+        anyhow::ensure!(
+            path.is_file(),
+            "split topology lock path is not a file: {}",
+            path.display()
+        );
+    }
     Ok(())
 }
 
@@ -406,6 +414,12 @@ pub(super) async fn prepare_runtime_startup(
 ) -> Result<Option<PreparedRuntimeStartup>> {
     validate_runtime_cli_model_options(options)?;
     let startup_specs = build_startup_model_specs(options, config)?;
+    if options.split_topology_lock.is_some() {
+        anyhow::ensure!(
+            startup_specs.len() == 1,
+            "--split-topology-lock requires exactly one startup model"
+        );
+    }
     if should_show_serve_config_help(explicit_surface, options, &startup_specs) {
         let config_path = plugin::config_path(options.config.as_deref()).unwrap_or_else(|_| {
             dirs::home_dir()

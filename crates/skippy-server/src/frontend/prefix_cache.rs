@@ -21,6 +21,10 @@ use crate::frontend::wire_messages::embedded_prefix_cache_message;
 use crate::frontend::wire_messages::embedded_restore_prefill_decode_message;
 use crate::frontend::wire_messages::openai_stage_mask;
 use crate::kv_integration::KvStageIntegration;
+use crate::kv_integration::proactive_eviction_attrs;
+use crate::kv_integration::proactive_eviction_error_kind;
+use anyhow::Context;
+use anyhow::anyhow;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
 use serde_json::Value;
@@ -194,6 +198,69 @@ impl StageOpenAiBackend {
             chat_template_id: ids.cache.namespace(),
             seq: Some(ids.session_id),
         }
+    }
+
+    pub(super) fn evict_embedded_stage0_resident_prefix(
+        &self,
+        session_id: &str,
+        ids: &OpenAiGenerationIds,
+        target_tokens: Option<u64>,
+    ) -> OpenAiResult<()> {
+        let Some(kv) = self.kv.as_ref() else {
+            return Ok(());
+        };
+        let eviction = (|| {
+            let mut runtime = self
+                .runtime
+                .lock()
+                .map_err(|_| anyhow!("runtime lock poisoned"))?;
+            runtime
+                .ensure_session_active(session_id)
+                .context("activate embedded stage-0 session before resident-prefix eviction")?;
+            if let Some(target_tokens) = target_tokens {
+                kv.evict_resident_prefix_for_tokens(&mut runtime, session_id, target_tokens)
+            } else {
+                kv.evict_resident_prefix_for_decode_batch(&mut runtime, session_id)
+            }
+        })();
+        let (status, error_kind, target_tokens, evicted_entries, evicted_tokens) = match &eviction {
+            Ok(eviction) => (
+                if eviction.evicted_entries > 0 {
+                    "evicted"
+                } else {
+                    "noop"
+                },
+                None,
+                eviction.target_tokens,
+                eviction.evicted_entries,
+                eviction.evicted_tokens,
+            ),
+            Err(error) => (
+                "error",
+                Some(proactive_eviction_error_kind(error)),
+                target_tokens.unwrap_or_default(),
+                0,
+                0,
+            ),
+        };
+        let mut attrs = self.openai_attrs(ids);
+        attrs.extend(proactive_eviction_attrs(
+            status,
+            error_kind,
+            target_tokens,
+            evicted_entries,
+            evicted_tokens,
+        ));
+        if error_kind.is_some() || evicted_entries > 0 || evicted_tokens > 0 {
+            self.telemetry
+                .emit("stage.openai_kv_record_decision", attrs);
+        } else {
+            self.telemetry
+                .emit_debug("stage.openai_kv_record_decision", attrs);
+        }
+        eviction
+            .map(|_| ())
+            .map_err(|error| openai_backend_error(error.context("evict embedded stage-0 KV")))
     }
 
     pub(super) fn restore_embedded_stage0_prefill(

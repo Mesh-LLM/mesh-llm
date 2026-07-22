@@ -1,5 +1,6 @@
 mod coordinator;
 mod loading;
+mod recovery;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -18,9 +19,11 @@ use super::local_package::{
 };
 use super::split_planning::{
     PlannedRuntimeSliceTopology, RuntimeSliceStagePlan, SplitTopologyResourceInputs,
-    plan_runtime_slice_topology_with_resources, split_participant_exclusion_labels,
-    split_participant_labels, split_participants_for_stages, split_stage_plan_labels,
+    plan_locked_runtime_slice_topology_with_resources, plan_runtime_slice_topology_with_resources,
+    split_participant_exclusion_labels, split_participant_labels, split_participants_for_stages,
+    split_stage_plan_labels,
 };
+use super::split_topology_lock::load_locked_split_assignments;
 use crate::inference::skippy;
 use crate::mesh;
 use crate::models;
@@ -34,8 +37,9 @@ const SPLIT_COORDINATOR_LEASE_SECS: u64 = 4 * 60 * 60;
 
 use coordinator::{
     SplitTopologyCoordinator, SplitTopologyGeneration, spawn_split_topology_coordinator,
-    split_stages_meet_minimum, stop_split_generation,
+    stop_split_generation,
 };
+use recovery::split_stages_meet_minimum;
 
 fn split_coordinator_lease_until_unix_ms() -> u64 {
     super::local::current_time_unix_ms()
@@ -150,6 +154,7 @@ pub(super) async fn start_runtime_split_model(
         compact_meta,
         kv_bytes_per_token,
         planned_topology,
+        topology_locked,
     } = split_setup;
     let stages = planned_topology.stages;
     let planned_participants =
@@ -255,6 +260,7 @@ pub(super) async fn start_runtime_split_model(
         survey_telemetry: spec.survey_telemetry.clone(),
         event_tx: coordinator_tx,
         stage_loss_first_seen: None,
+        topology_locked,
     }));
 
     Ok(SplitRuntimeStart::Started(Box::new(loaded)))
@@ -266,6 +272,7 @@ struct SplitRuntimeStartPreparation {
     compact_meta: models::gguf::GgufCompactMeta,
     kv_bytes_per_token: u64,
     planned_topology: PlannedRuntimeSliceTopology,
+    topology_locked: bool,
 }
 
 async fn prepare_split_runtime_start(
@@ -291,25 +298,47 @@ async fn prepare_split_runtime_start(
         spec.cache_type_k_override,
         spec.cache_type_v_override,
     )?;
-    let planned_topology = plan_runtime_slice_topology_with_resources(
-        topology_id,
-        model_ref,
-        &package,
-        &participant_snapshot.participants,
-        &participant_snapshot.excluded,
-        SplitTopologyResourceInputs {
-            native_context_length: compact_meta.context_length,
-            kv_bytes_per_token,
-            ctx_size_override: spec.ctx_size_override,
-            parallel_override: spec.parallel_override,
-        },
-    )?;
+    let resources = SplitTopologyResourceInputs {
+        native_context_length: compact_meta.context_length,
+        kv_bytes_per_token,
+        ctx_size_override: spec.ctx_size_override,
+        parallel_override: spec.parallel_override,
+    };
+    let planned_topology = if let Some(path) = spec.split_topology_lock {
+        let locked_stages = load_locked_split_assignments(
+            path,
+            spec.node,
+            model_ref,
+            &package,
+            &participant_snapshot.participants,
+        )
+        .await?;
+        plan_locked_runtime_slice_topology_with_resources(
+            topology_id,
+            model_ref,
+            &package,
+            &participant_snapshot.participants,
+            &participant_snapshot.excluded,
+            resources,
+            &locked_stages,
+        )?
+    } else {
+        plan_runtime_slice_topology_with_resources(
+            topology_id,
+            model_ref,
+            &package,
+            &participant_snapshot.participants,
+            &participant_snapshot.excluded,
+            resources,
+        )?
+    };
     Ok(SplitRuntimeStartPreparation {
         package,
         participant_snapshot,
         compact_meta,
         kv_bytes_per_token,
         planned_topology,
+        topology_locked: spec.split_topology_lock.is_some(),
     })
 }
 

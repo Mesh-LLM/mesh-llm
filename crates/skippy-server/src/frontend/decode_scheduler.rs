@@ -1,10 +1,8 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::time::Instant;
 
 use openai_frontend::{OpenAiError, OpenAiResult};
-
-const PIPELINE_PROFILE_MIN_OBSERVATIONS: usize = 8;
-const PIPELINE_PROFILE_MAX_OBSERVATIONS: usize = 32;
-const PIPELINE_PROFIT_MARGIN: f64 = 1.15;
+use skippy_metrics::attr as attr_key;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct VerifyWindowPipelineConfig {
@@ -23,23 +21,38 @@ impl VerifyWindowPipelineConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct VerifyWindowPipelineStats {
     depth: usize,
     direct_prediction_return: bool,
+    direct_prediction_return_upstream_opened: bool,
+    direct_prediction_return_reverse_fallback: bool,
     opened_windows: usize,
     max_in_flight: usize,
+    recovery_epochs: usize,
+    stale_marked: usize,
     stale_discarded: usize,
     stale_drain_ms: f64,
-    policy_observed_windows: usize,
-    policy_continuation_windows: usize,
-    policy_permit_checks: usize,
-    policy_permits: usize,
-    policy_suppressed: usize,
+    stale_stage0_compute_ms: f64,
+    stale_forward_write_ms: f64,
+    stale_downstream_wait_ms: f64,
+    stale_verify_elapsed_ms: f64,
+    horizon_refill_attempts: usize,
+    horizon_refill_successes: usize,
+    horizon_refill_tokens: usize,
+    horizon_refill_misses: usize,
+    occupancy_ms_by_depth: Vec<f64>,
+    occupancy_total_ms: f64,
+    occupancy_parallel_ms: f64,
+    occupancy_full_ms: f64,
+    occupancy_average_in_flight: f64,
 }
 
 impl VerifyWindowPipelineStats {
-    pub(super) fn insert_response_timings(self, timings: &mut BTreeMap<String, serde_json::Value>) {
+    pub(super) fn insert_response_timings(
+        &self,
+        timings: &mut BTreeMap<String, serde_json::Value>,
+    ) {
         timings.insert(
             "verify_window_depth".to_string(),
             serde_json::json!(self.depth),
@@ -47,6 +60,14 @@ impl VerifyWindowPipelineStats {
         timings.insert(
             "verify_window_direct_prediction_return".to_string(),
             serde_json::json!(self.direct_prediction_return),
+        );
+        timings.insert(
+            "verify_window_direct_prediction_return_upstream_opened".to_string(),
+            serde_json::json!(self.direct_prediction_return_upstream_opened),
+        );
+        timings.insert(
+            "verify_window_direct_prediction_return_reverse_fallback".to_string(),
+            serde_json::json!(self.direct_prediction_return_reverse_fallback),
         );
         timings.insert(
             "verify_window_opened".to_string(),
@@ -57,6 +78,14 @@ impl VerifyWindowPipelineStats {
             serde_json::json!(self.max_in_flight),
         );
         timings.insert(
+            "verify_window_recovery_epochs".to_string(),
+            serde_json::json!(self.recovery_epochs),
+        );
+        timings.insert(
+            "verify_window_stale_marked".to_string(),
+            serde_json::json!(self.stale_marked),
+        );
+        timings.insert(
             "verify_window_stale_discarded".to_string(),
             serde_json::json!(self.stale_discarded),
         );
@@ -65,81 +94,76 @@ impl VerifyWindowPipelineStats {
             serde_json::json!(self.stale_drain_ms),
         );
         timings.insert(
-            "verify_window_policy_observed_windows".to_string(),
-            serde_json::json!(self.policy_observed_windows),
+            "verify_window_stale_stage0_compute_ms".to_string(),
+            serde_json::json!(self.stale_stage0_compute_ms),
         );
         timings.insert(
-            "verify_window_policy_continuation_windows".to_string(),
-            serde_json::json!(self.policy_continuation_windows),
+            "verify_window_stale_forward_write_ms".to_string(),
+            serde_json::json!(self.stale_forward_write_ms),
         );
         timings.insert(
-            "verify_window_policy_permit_checks".to_string(),
-            serde_json::json!(self.policy_permit_checks),
+            "verify_window_stale_downstream_wait_ms".to_string(),
+            serde_json::json!(self.stale_downstream_wait_ms),
         );
         timings.insert(
-            "verify_window_policy_permits".to_string(),
-            serde_json::json!(self.policy_permits),
+            "verify_window_stale_verify_elapsed_ms".to_string(),
+            serde_json::json!(self.stale_verify_elapsed_ms),
         );
         timings.insert(
-            "verify_window_policy_suppressed".to_string(),
-            serde_json::json!(self.policy_suppressed),
+            "verify_window_horizon_refill_attempts".to_string(),
+            serde_json::json!(self.horizon_refill_attempts),
+        );
+        timings.insert(
+            "verify_window_horizon_refill_successes".to_string(),
+            serde_json::json!(self.horizon_refill_successes),
+        );
+        timings.insert(
+            "verify_window_horizon_refill_tokens".to_string(),
+            serde_json::json!(self.horizon_refill_tokens),
+        );
+        timings.insert(
+            "verify_window_horizon_refill_misses".to_string(),
+            serde_json::json!(self.horizon_refill_misses),
+        );
+        timings.insert(
+            "verify_window_occupancy_ms_by_depth".to_string(),
+            serde_json::json!(self.occupancy_ms_by_depth),
+        );
+        timings.insert(
+            "verify_window_occupancy_total_ms".to_string(),
+            serde_json::json!(self.occupancy_total_ms),
+        );
+        timings.insert(
+            "verify_window_occupancy_parallel_ms".to_string(),
+            serde_json::json!(self.occupancy_parallel_ms),
+        );
+        timings.insert(
+            "verify_window_occupancy_parallel_fraction".to_string(),
+            serde_json::json!(fraction(
+                self.occupancy_parallel_ms,
+                self.occupancy_total_ms
+            )),
+        );
+        timings.insert(
+            "verify_window_occupancy_full_ms".to_string(),
+            serde_json::json!(self.occupancy_full_ms),
+        );
+        timings.insert(
+            "verify_window_occupancy_full_fraction".to_string(),
+            serde_json::json!(fraction(self.occupancy_full_ms, self.occupancy_total_ms)),
+        );
+        timings.insert(
+            "verify_window_occupancy_average_in_flight".to_string(),
+            serde_json::json!(self.occupancy_average_in_flight),
         );
     }
 }
 
-#[derive(Debug, Default)]
-struct VerifyWindowWidthProfile {
-    observations: VecDeque<VerifyWindowProfileObservation>,
-    continuation_windows: usize,
-    stage0_compute_ms: f64,
-    downstream_wait_ms: f64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct VerifyWindowProfileObservation {
-    continues: bool,
-    stage0_compute_ms: f64,
-    downstream_wait_ms: f64,
-}
-
-impl VerifyWindowWidthProfile {
-    fn observe(&mut self, continues: bool, stage0_compute_ms: f64, downstream_wait_ms: f64) {
-        let observation = VerifyWindowProfileObservation {
-            continues,
-            stage0_compute_ms: stage0_compute_ms.max(0.0),
-            downstream_wait_ms: downstream_wait_ms.max(0.0),
-        };
-        self.observations.push_back(observation);
-        self.continuation_windows = self
-            .continuation_windows
-            .saturating_add(usize::from(continues));
-        self.stage0_compute_ms += observation.stage0_compute_ms;
-        self.downstream_wait_ms += observation.downstream_wait_ms;
-        if self.observations.len() > PIPELINE_PROFILE_MAX_OBSERVATIONS {
-            let expired = self
-                .observations
-                .pop_front()
-                .expect("profile exceeded its non-empty bound");
-            self.continuation_windows = self
-                .continuation_windows
-                .saturating_sub(usize::from(expired.continues));
-            self.stage0_compute_ms -= expired.stage0_compute_ms;
-            self.downstream_wait_ms -= expired.downstream_wait_ms;
-        }
-    }
-
-    fn is_profitable(&self) -> bool {
-        if self.observations.len() < PIPELINE_PROFILE_MIN_OBSERVATIONS {
-            return false;
-        }
-        let observations = self.observations.len() as f64;
-        let continuation_rate = self.continuation_windows as f64 / observations;
-        let average_stage0_ms = self.stage0_compute_ms / observations;
-        let average_downstream_ms = self.downstream_wait_ms / observations;
-        let expected_overlap_ms = continuation_rate * average_downstream_ms;
-        let expected_stale_ms =
-            (1.0 - continuation_rate) * average_stage0_ms.max(average_downstream_ms);
-        expected_overlap_ms > expected_stale_ms * PIPELINE_PROFIT_MARGIN
+fn fraction(numerator: f64, denominator: f64) -> f64 {
+    if denominator > 0.0 {
+        numerator / denominator
+    } else {
+        0.0
     }
 }
 
@@ -156,7 +180,8 @@ pub(super) struct VerifyWindowScheduler {
     next_id: i32,
     in_flight: VecDeque<VerifyWindow>,
     stats: VerifyWindowPipelineStats,
-    width_profiles: BTreeMap<usize, VerifyWindowWidthProfile>,
+    occupancy_ms_by_depth: Vec<f64>,
+    occupancy_changed: Instant,
 }
 
 impl VerifyWindowScheduler {
@@ -169,99 +194,69 @@ impl VerifyWindowScheduler {
                 depth: config.depth(),
                 ..VerifyWindowPipelineStats::default()
             },
-            width_profiles: BTreeMap::new(),
+            occupancy_ms_by_depth: vec![0.0; config.depth().saturating_add(1)],
+            occupancy_changed: Instant::now(),
         }
     }
 
     pub(super) fn has_capacity(&self) -> bool {
-        self.in_flight.len() < self.config.depth
+        self.in_flight.len() < self.config.depth()
     }
 
     pub(super) fn depth(&self) -> usize {
         self.config.depth()
     }
 
-    pub(super) fn mark_direct_prediction_return(&mut self) {
+    pub(super) fn mark_direct_prediction_return(&mut self, upstream_opened: bool) {
         self.stats.direct_prediction_return = true;
+        self.stats.direct_prediction_return_upstream_opened = upstream_opened;
+        self.stats.direct_prediction_return_reverse_fallback = !upstream_opened;
     }
 
-    pub(super) fn observe_pipeline_profile(
-        &mut self,
-        width: usize,
-        continues: bool,
-        stage0_compute_ms: f64,
-        downstream_wait_ms: f64,
-    ) {
-        if width == 0 {
+    pub(super) fn supports_pipelining(&self, width: usize) -> bool {
+        self.config.depth() > 1 && width > 0
+    }
+
+    pub(super) fn record_horizon_refill(&mut self, appended_tokens: usize) {
+        self.stats.horizon_refill_attempts = self.stats.horizon_refill_attempts.saturating_add(1);
+        if appended_tokens == 0 {
+            self.stats.horizon_refill_misses = self.stats.horizon_refill_misses.saturating_add(1);
             return;
         }
-        self.stats.policy_observed_windows = self.stats.policy_observed_windows.saturating_add(1);
-        self.stats.policy_continuation_windows = self
+        self.stats.horizon_refill_successes = self.stats.horizon_refill_successes.saturating_add(1);
+        self.stats.horizon_refill_tokens = self
             .stats
-            .policy_continuation_windows
-            .saturating_add(usize::from(continues));
-        self.width_profiles.entry(width).or_default().observe(
-            continues,
-            stage0_compute_ms,
-            downstream_wait_ms,
-        );
+            .horizon_refill_tokens
+            .saturating_add(appended_tokens);
     }
 
-    pub(super) fn has_profitable_pipeline_width(&self) -> bool {
-        self.config.depth() > 1
-            && self
-                .width_profiles
-                .values()
-                .any(VerifyWindowWidthProfile::is_profitable)
-    }
-
-    pub(super) fn permit_pipeline_width(&mut self, width: usize) -> bool {
-        self.stats.policy_permit_checks = self.stats.policy_permit_checks.saturating_add(1);
-        let permitted = self.config.depth() > 1
-            && self
-                .width_profiles
-                .get(&width)
-                .is_some_and(VerifyWindowWidthProfile::is_profitable);
-        if permitted {
-            self.stats.policy_permits = self.stats.policy_permits.saturating_add(1);
-        } else {
-            self.stats.policy_suppressed = self.stats.policy_suppressed.saturating_add(1);
-        }
-        permitted
-    }
-
-    pub(super) fn insert_policy_telemetry_attrs(
+    pub(super) fn insert_pipeline_telemetry_attrs(
         &self,
         attrs: &mut BTreeMap<String, serde_json::Value>,
     ) {
         attrs.insert(
-            "llama_stage.verify_window.pipeline_policy_observed_windows".to_string(),
-            serde_json::json!(self.stats.policy_observed_windows),
+            attr_key::VERIFY_WINDOW_DIRECT_RETURN_UPSTREAM_OPENED.to_string(),
+            serde_json::json!(self.stats.direct_prediction_return_upstream_opened),
         );
         attrs.insert(
-            "llama_stage.verify_window.pipeline_policy_continuation_windows".to_string(),
-            serde_json::json!(self.stats.policy_continuation_windows),
+            attr_key::VERIFY_WINDOW_DIRECT_RETURN_REVERSE_FALLBACK.to_string(),
+            serde_json::json!(self.stats.direct_prediction_return_reverse_fallback),
         );
         attrs.insert(
-            "llama_stage.verify_window.pipeline_policy_permit_checks".to_string(),
-            serde_json::json!(self.stats.policy_permit_checks),
+            "llama_stage.verify_window.horizon_refill_attempts".to_string(),
+            serde_json::json!(self.stats.horizon_refill_attempts),
         );
         attrs.insert(
-            "llama_stage.verify_window.pipeline_policy_permits".to_string(),
-            serde_json::json!(self.stats.policy_permits),
+            "llama_stage.verify_window.horizon_refill_successes".to_string(),
+            serde_json::json!(self.stats.horizon_refill_successes),
         );
         attrs.insert(
-            "llama_stage.verify_window.pipeline_policy_suppressed".to_string(),
-            serde_json::json!(self.stats.policy_suppressed),
+            "llama_stage.verify_window.horizon_refill_tokens".to_string(),
+            serde_json::json!(self.stats.horizon_refill_tokens),
         );
         attrs.insert(
-            "llama_stage.verify_window.pipeline_policy_profitable_widths".to_string(),
-            serde_json::json!(
-                self.width_profiles
-                    .values()
-                    .filter(|profile| profile.is_profitable())
-                    .count()
-            ),
+            "llama_stage.verify_window.horizon_refill_misses".to_string(),
+            serde_json::json!(self.stats.horizon_refill_misses),
         );
     }
 
@@ -285,6 +280,7 @@ impl VerifyWindowScheduler {
             base_position,
             decode_step,
         };
+        self.record_occupancy();
         self.in_flight.push_back(window.clone());
         self.stats.opened_windows = self.stats.opened_windows.saturating_add(1);
         self.stats.max_in_flight = self.stats.max_in_flight.max(self.in_flight.len());
@@ -303,12 +299,14 @@ impl VerifyWindowScheduler {
                 window.id
             )));
         }
+        self.record_occupancy();
         Ok(self.in_flight.pop_front().expect("checked non-empty queue"))
     }
 
     #[cfg(test)]
     pub(super) fn discard_stale(&mut self) -> usize {
         let discarded = self.in_flight.len();
+        self.record_occupancy();
         self.in_flight.clear();
         self.stats.stale_discarded = self.stats.stale_discarded.saturating_add(discarded);
         discarded
@@ -317,6 +315,30 @@ impl VerifyWindowScheduler {
     pub(super) fn record_stale_discarded(&mut self, count: usize, drain_ms: f64) {
         self.stats.stale_discarded = self.stats.stale_discarded.saturating_add(count);
         self.stats.stale_drain_ms += drain_ms;
+    }
+
+    pub(super) fn mark_recovery_epoch(&mut self, stale_count: usize) {
+        self.stats.recovery_epochs = self.stats.recovery_epochs.saturating_add(1);
+        self.mark_stale(stale_count);
+    }
+
+    pub(super) fn mark_stale(&mut self, stale_count: usize) {
+        self.stats.stale_marked = self.stats.stale_marked.saturating_add(stale_count);
+    }
+
+    pub(super) fn record_stale_execution(
+        &mut self,
+        drain_ms: f64,
+        stage0_compute_ms: f64,
+        forward_write_ms: f64,
+        downstream_wait_ms: f64,
+        verify_elapsed_ms: f64,
+    ) {
+        self.record_stale_discarded(1, drain_ms);
+        self.stats.stale_stage0_compute_ms += stage0_compute_ms.max(0.0);
+        self.stats.stale_forward_write_ms += forward_write_ms.max(0.0);
+        self.stats.stale_downstream_wait_ms += downstream_wait_ms.max(0.0);
+        self.stats.stale_verify_elapsed_ms += verify_elapsed_ms.max(0.0);
     }
 
     pub(super) fn in_flight_len(&self) -> usize {
@@ -328,13 +350,65 @@ impl VerifyWindowScheduler {
     }
 
     pub(super) fn stats(&self) -> VerifyWindowPipelineStats {
-        self.stats
+        let mut stats = self.stats.clone();
+        let mut occupancy_ms_by_depth = self.occupancy_ms_by_depth.clone();
+        let current_interval_ms = self.occupancy_changed.elapsed().as_secs_f64() * 1_000.0;
+        if let Some(bucket) = occupancy_ms_by_depth.get_mut(self.in_flight.len()) {
+            *bucket += current_interval_ms;
+        }
+        let occupancy_total_ms = occupancy_ms_by_depth.iter().sum::<f64>();
+        let occupancy_parallel_ms = occupancy_ms_by_depth.iter().skip(2).sum::<f64>();
+        let occupancy_full_ms = occupancy_ms_by_depth
+            .get(self.config.depth())
+            .copied()
+            .unwrap_or_default();
+        let weighted_ms = occupancy_ms_by_depth
+            .iter()
+            .enumerate()
+            .map(|(depth, elapsed_ms)| depth as f64 * elapsed_ms)
+            .sum::<f64>();
+        stats.occupancy_ms_by_depth = occupancy_ms_by_depth;
+        stats.occupancy_total_ms = occupancy_total_ms;
+        stats.occupancy_parallel_ms = occupancy_parallel_ms;
+        stats.occupancy_full_ms = occupancy_full_ms;
+        stats.occupancy_average_in_flight = fraction(weighted_ms, occupancy_total_ms);
+        stats
+    }
+
+    fn record_occupancy(&mut self) {
+        let elapsed_ms = self.occupancy_changed.elapsed().as_secs_f64() * 1_000.0;
+        if let Some(bucket) = self.occupancy_ms_by_depth.get_mut(self.in_flight.len()) {
+            *bucket += elapsed_ms;
+        }
+        self.occupancy_changed = Instant::now();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn records_preferred_and_reverse_direct_return_paths() {
+        let mut preferred = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 2 });
+        preferred.mark_direct_prediction_return(true);
+        assert!(preferred.stats().direct_prediction_return);
+        assert!(preferred.stats().direct_prediction_return_upstream_opened);
+        assert!(!preferred.stats().direct_prediction_return_reverse_fallback);
+
+        let mut reverse = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 2 });
+        reverse.mark_direct_prediction_return(false);
+        let mut timings = BTreeMap::new();
+        reverse.stats().insert_response_timings(&mut timings);
+        assert_eq!(
+            timings["verify_window_direct_prediction_return_reverse_fallback"],
+            true
+        );
+        assert_eq!(
+            timings["verify_window_direct_prediction_return_upstream_opened"],
+            false
+        );
+    }
 
     #[test]
     fn bounds_depth_and_requires_fifo_reply_ids() {
@@ -370,106 +444,97 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_policy_waits_for_enough_width_specific_evidence() {
-        let mut scheduler = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 2 });
-        for _ in 0..PIPELINE_PROFILE_MIN_OBSERVATIONS - 1 {
-            scheduler.observe_pipeline_profile(2, true, 20.0, 80.0);
-        }
-        assert!(!scheduler.has_profitable_pipeline_width());
-        assert!(!scheduler.permit_pipeline_width(2));
+    fn stale_recovery_tracks_marked_and_completed_work_separately() {
+        let mut scheduler = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 3 });
+        let first = scheduler.open(10, 0).unwrap();
+        let second = scheduler.open(11, 1).unwrap();
+        let third = scheduler.open(12, 2).unwrap();
 
-        scheduler.observe_pipeline_profile(2, true, 20.0, 80.0);
-        assert!(scheduler.has_profitable_pipeline_width());
-        assert!(scheduler.permit_pipeline_width(2));
+        scheduler.complete_next(first.id).unwrap();
+        scheduler.mark_recovery_epoch(2);
+        scheduler.complete_next(second.id).unwrap();
+        scheduler.record_stale_execution(3.0, 4.0, 5.0, 6.0, 15.0);
+        scheduler.complete_next(third.id).unwrap();
+        scheduler.record_stale_execution(7.0, 8.0, 9.0, 10.0, 27.0);
+
+        let stats = scheduler.stats();
+        assert_eq!(stats.recovery_epochs, 1);
+        assert_eq!(stats.stale_marked, 2);
+        assert_eq!(stats.stale_discarded, 2);
+        assert_eq!(stats.stale_drain_ms, 10.0);
+        assert_eq!(stats.stale_stage0_compute_ms, 12.0);
+        assert_eq!(stats.stale_forward_write_ms, 14.0);
+        assert_eq!(stats.stale_downstream_wait_ms, 16.0);
+        assert_eq!(stats.stale_verify_elapsed_ms, 42.0);
     }
 
     #[test]
-    fn pipeline_policy_suppresses_low_acceptance_local_work() {
-        let mut scheduler = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 2 });
-        for index in 0..PIPELINE_PROFILE_MIN_OBSERVATIONS {
-            scheduler.observe_pipeline_profile(2, index < 2, 31.0, 24.0);
+    fn configured_depth_is_the_fill_target() {
+        let mut scheduler = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 8 });
+
+        assert!(scheduler.supports_pipelining(4));
+        assert_eq!(scheduler.depth(), 8);
+
+        for position in 0..8 {
+            scheduler.open(100 + position, position).unwrap();
         }
-
-        assert!(!scheduler.has_profitable_pipeline_width());
-        assert!(!scheduler.permit_pipeline_width(2));
-        assert_eq!(scheduler.stats().policy_permit_checks, 1);
-        assert_eq!(scheduler.stats().policy_permits, 0);
-        assert_eq!(scheduler.stats().policy_suppressed, 1);
-    }
-
-    #[test]
-    fn pipeline_policy_profiles_each_verify_width_independently() {
-        let mut scheduler = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 2 });
-        for index in 0..PIPELINE_PROFILE_MIN_OBSERVATIONS {
-            scheduler.observe_pipeline_profile(1, index < 7, 20.0, 80.0);
-            scheduler.observe_pipeline_profile(2, index < 2, 31.0, 24.0);
-        }
-
-        assert!(scheduler.has_profitable_pipeline_width());
-        assert!(scheduler.permit_pipeline_width(1));
-        assert!(!scheduler.permit_pipeline_width(2));
+        assert!(!scheduler.has_capacity());
+        assert!(scheduler.open(108, 8).is_err());
     }
 
     #[test]
     fn pipeline_depth_one_never_admits_dependent_work() {
-        let mut scheduler = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 1 });
-        for _ in 0..PIPELINE_PROFILE_MIN_OBSERVATIONS {
-            scheduler.observe_pipeline_profile(2, true, 20.0, 80.0);
-        }
+        let scheduler = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 1 });
 
-        assert!(!scheduler.has_profitable_pipeline_width());
-        assert!(!scheduler.permit_pipeline_width(2));
+        assert!(!scheduler.supports_pipelining(2));
     }
 
     #[test]
-    fn pipeline_policy_adapts_when_recent_acceptance_changes() {
+    fn fixed_fill_counters_are_exposed_in_response_timings() {
         let mut scheduler = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 2 });
-        for _ in 0..PIPELINE_PROFILE_MAX_OBSERVATIONS {
-            scheduler.observe_pipeline_profile(2, true, 20.0, 80.0);
-        }
-        assert!(scheduler.permit_pipeline_width(2));
-
-        for _ in 0..PIPELINE_PROFILE_MAX_OBSERVATIONS {
-            scheduler.observe_pipeline_profile(2, false, 20.0, 80.0);
-        }
-        assert!(!scheduler.permit_pipeline_width(2));
-    }
-
-    #[test]
-    fn pipeline_policy_counters_are_exposed_in_response_timings() {
-        let mut scheduler = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 2 });
-        for _ in 0..PIPELINE_PROFILE_MIN_OBSERVATIONS {
-            scheduler.observe_pipeline_profile(2, true, 20.0, 80.0);
-        }
-        assert!(scheduler.permit_pipeline_width(2));
+        assert!(scheduler.supports_pipelining(2));
+        scheduler.record_horizon_refill(7);
+        scheduler.record_horizon_refill(0);
         let mut timings = BTreeMap::new();
         scheduler.stats().insert_response_timings(&mut timings);
 
-        assert_eq!(
-            timings["verify_window_policy_observed_windows"],
-            serde_json::json!(PIPELINE_PROFILE_MIN_OBSERVATIONS)
-        );
-        assert_eq!(
-            timings["verify_window_policy_continuation_windows"],
-            serde_json::json!(PIPELINE_PROFILE_MIN_OBSERVATIONS)
-        );
-        assert_eq!(timings["verify_window_policy_permit_checks"], 1);
-        assert_eq!(timings["verify_window_policy_permits"], 1);
-        assert_eq!(timings["verify_window_policy_suppressed"], 0);
-
+        assert_eq!(timings["verify_window_horizon_refill_attempts"], 2);
+        assert_eq!(timings["verify_window_horizon_refill_successes"], 1);
+        assert_eq!(timings["verify_window_horizon_refill_tokens"], 7);
+        assert_eq!(timings["verify_window_horizon_refill_misses"], 1);
         let mut attrs = BTreeMap::new();
-        scheduler.insert_policy_telemetry_attrs(&mut attrs);
+        scheduler.insert_pipeline_telemetry_attrs(&mut attrs);
         assert_eq!(
-            attrs["llama_stage.verify_window.pipeline_policy_observed_windows"],
-            serde_json::json!(PIPELINE_PROFILE_MIN_OBSERVATIONS)
+            attrs["llama_stage.verify_window.horizon_refill_attempts"],
+            2
         );
         assert_eq!(
-            attrs["llama_stage.verify_window.pipeline_policy_continuation_windows"],
-            serde_json::json!(PIPELINE_PROFILE_MIN_OBSERVATIONS)
-        );
-        assert_eq!(
-            attrs["llama_stage.verify_window.pipeline_policy_profitable_widths"],
+            attrs["llama_stage.verify_window.horizon_refill_successes"],
             1
         );
+        assert_eq!(attrs["llama_stage.verify_window.horizon_refill_tokens"], 7);
+        assert_eq!(attrs["llama_stage.verify_window.horizon_refill_misses"], 1);
+    }
+
+    #[test]
+    fn occupancy_timings_measure_parallel_and_full_depth_time() {
+        let mut scheduler = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 2 });
+        scheduler.occupancy_changed = Instant::now() - std::time::Duration::from_millis(2);
+        let first = scheduler.open(10, 0).unwrap();
+        scheduler.occupancy_changed = Instant::now() - std::time::Duration::from_millis(3);
+        let second = scheduler.open(11, 1).unwrap();
+        scheduler.occupancy_changed = Instant::now() - std::time::Duration::from_millis(4);
+
+        let stats = scheduler.stats();
+        assert_eq!(stats.occupancy_ms_by_depth.len(), 3);
+        assert!(stats.occupancy_ms_by_depth[0] >= 1.5);
+        assert!(stats.occupancy_ms_by_depth[1] >= 2.5);
+        assert!(stats.occupancy_ms_by_depth[2] >= 3.5);
+        assert!(stats.occupancy_parallel_ms >= 3.5);
+        assert!(stats.occupancy_full_ms >= 3.5);
+        assert!(stats.occupancy_average_in_flight > 1.0);
+
+        assert_eq!(scheduler.complete_next(first.id).unwrap(), first);
+        assert_eq!(scheduler.complete_next(second.id).unwrap(), second);
     }
 }

@@ -41,12 +41,11 @@ pub struct NativeMtpProposalConfig {
     pub suppress_cooldown_draft_limit: usize,
 }
 
-/// Which N-gram draft proposer to run: llama.cpp `simple`/`cache`, or the
+/// Which N-gram draft proposer to run: llama.cpp request-local `cache`, or the
 /// pure-Rust longest-suffix `suffix`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NgramProposerKind {
-    Simple,
     Cache,
     Suffix,
 }
@@ -55,7 +54,6 @@ impl NgramProposerKind {
     /// Stable string name used in config and telemetry.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Simple => "simple",
             Self::Cache => "cache",
             Self::Suffix => "suffix",
         }
@@ -79,9 +77,7 @@ pub struct NgramProposalConfig {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NgramExtensionConfig {
-    pub initial_tokens: usize,
     pub max_tokens: usize,
-    pub tail_backoff_proposals: usize,
 }
 
 /// Pipelined verify-window sizing.
@@ -154,14 +150,14 @@ impl SpeculativeDecodeConfig {
             );
         }
         if self.extension.is_some() && (!self.native_mtp.enabled || self.ngram.is_none()) {
-            bail!("N-gram extension requires both native MTP and an N-gram proposer");
+            bail!(
+                "composite speculation requires native MTP and an extension policy backed by an N-gram proposer"
+            );
         }
         if let Some(extension) = &self.extension
-            && (extension.initial_tokens == 0
-                || extension.initial_tokens > extension.max_tokens
-                || extension.max_tokens == 0)
+            && extension.max_tokens == 0
         {
-            bail!("N-gram extension requires 0 < initial_tokens <= max_tokens");
+            bail!("N-gram extension requires max_tokens > 0");
         }
         if self.verify_window.min_tokens == 0
             || self.verify_window.min_tokens > self.verify_window.max_tokens
@@ -205,11 +201,7 @@ mod standalone_speculative_config_tests {
     #[test]
     fn standalone_speculative_config_rejects_invalid_composite_plan() {
         let config = SpeculativeDecodeConfig {
-            extension: Some(NgramExtensionConfig {
-                initial_tokens: 2,
-                max_tokens: 4,
-                tail_backoff_proposals: 1,
-            }),
+            extension: Some(NgramExtensionConfig { max_tokens: 4 }),
             ..SpeculativeDecodeConfig::default()
         };
 
@@ -218,7 +210,7 @@ mod standalone_speculative_config_tests {
         assert!(
             error
                 .to_string()
-                .contains("requires both native MTP and an N-gram proposer")
+                .contains("requires native MTP and an extension policy")
         );
     }
 
@@ -238,11 +230,7 @@ mod standalone_speculative_config_tests {
                 max_ngram: 4,
                 max_proposal_tokens: 6,
             }),
-            extension: Some(NgramExtensionConfig {
-                initial_tokens: 2,
-                max_tokens: 6,
-                tail_backoff_proposals: 2,
-            }),
+            extension: Some(NgramExtensionConfig { max_tokens: 6 }),
             ..SpeculativeDecodeConfig::default()
         };
 
@@ -344,7 +332,6 @@ pub(super) struct OpenAiSpeculativeStats {
     pub(super) early_reject_windows: usize,
     pub(super) tail_reject_windows: usize,
     pub(super) early_reject_stop_windows: usize,
-    pub(super) repair_required_windows: usize,
     pub(super) first_reject_position_sum: usize,
     pub(super) primary_verify_requests: usize,
     pub(super) primary_verify_tokens: usize,
@@ -357,19 +344,8 @@ pub(super) struct OpenAiSpeculativeStats {
     pub(super) primary_verify_downstream_wait_ms: f64,
     pub(super) primary_verify_output_activation_bytes: usize,
     pub(super) primary_verify_forward_activation_bytes: usize,
-    pub(super) checkpoint_ms: f64,
     pub(super) draft_reset_ms: f64,
     pub(super) draft_propose_ms: f64,
-    pub(super) recovery_restores: usize,
-    pub(super) recovery_decode_repairs: usize,
-    pub(super) recovery_decode_elapsed_ms: f64,
-    pub(super) recovery_reverify_tokens: usize,
-    pub(super) recovery_ms: f64,
-    pub(super) recovery_restore_ms: f64,
-    pub(super) recovery_restore_local_ms: f64,
-    pub(super) recovery_restore_downstream_write_ms: f64,
-    pub(super) recovery_restore_downstream_wait_ms: f64,
-    pub(super) recovery_reverify_elapsed_ms: f64,
     pub(super) adaptive_window_start: usize,
     pub(super) adaptive_window_final: usize,
     pub(super) adaptive_window_max: usize,
@@ -381,31 +357,32 @@ pub(super) struct OpenAiSpeculativeStats {
     pub(super) adaptive_window_enabled: bool,
 }
 
-/// Uses llama.cpp's stateless N-gram proposer over target-accepted history.
-pub(super) fn propose_ngram_tokens(
-    history: &[i32],
-    min_match_tokens: usize,
-    max_proposed_tokens: usize,
-) -> OpenAiResult<Vec<i32>> {
-    skippy_runtime::ngram_simple_draft(history, min_match_tokens, max_proposed_tokens)
-        .map_err(openai_backend_error)
-}
-
 /// Request-local, cache-based N-gram proposer. It mirrors only committed
 /// history into native state; speculative candidates remain read-only inputs.
 pub(super) struct CachedNgramProposer {
-    cache: skippy_runtime::NgramCache,
+    cache: Option<skippy_runtime::NgramCache>,
     committed_history: Vec<i32>,
+    ngram_min: usize,
+    ngram_max: usize,
 }
 
 impl CachedNgramProposer {
     /// Creates a cache-backed proposer with the given match bounds.
     pub(super) fn new(ngram_min: usize, ngram_max: usize) -> OpenAiResult<Self> {
-        let cache =
-            skippy_runtime::NgramCache::new(ngram_min, ngram_max).map_err(openai_backend_error)?;
+        if ngram_min == 0
+            || ngram_min > ngram_max
+            || ngram_max > skippy_runtime::NGRAM_CACHE_MAX_NGRAM
+        {
+            return Err(OpenAiError::backend(format!(
+                "cache N-gram proposer requires 0 < ngram_min <= ngram_max <= {}",
+                skippy_runtime::NGRAM_CACHE_MAX_NGRAM
+            )));
+        }
         Ok(Self {
-            cache,
+            cache: None,
             committed_history: Vec::new(),
+            ngram_min,
+            ngram_max,
         })
     }
 
@@ -418,17 +395,30 @@ impl CachedNgramProposer {
     ) -> OpenAiResult<Vec<i32>> {
         self.sync(committed_history)?;
         self.cache
+            .as_mut()
+            .expect("N-gram cache initialized by sync")
             .draft_after(continuation_prefix, max_proposed_tokens)
             .map_err(openai_backend_error)
     }
 
     /// Mirrors committed history into native cache state (append or reset).
     fn sync(&mut self, committed_history: &[i32]) -> OpenAiResult<()> {
-        if committed_history.starts_with(&self.committed_history) {
+        if self.cache.is_none() {
+            self.cache = Some(
+                skippy_runtime::NgramCache::new(self.ngram_min, self.ngram_max)
+                    .map_err(openai_backend_error)?,
+            );
+        }
+        let cache = self.cache.as_mut().expect("N-gram cache initialized");
+        if self.committed_history.is_empty() {
+            cache
+                .reset(committed_history)
+                .map_err(openai_backend_error)?;
+        } else if committed_history.starts_with(&self.committed_history) {
             let appended = &committed_history[self.committed_history.len()..];
-            self.cache.append(appended).map_err(openai_backend_error)?;
+            cache.append(appended).map_err(openai_backend_error)?;
         } else {
-            self.cache
+            cache
                 .reset(committed_history)
                 .map_err(openai_backend_error)?;
         }
@@ -472,7 +462,6 @@ impl HistoryNgramProposer {
             return Ok(None);
         };
         match ngram.kind {
-            NgramProposerKind::Simple => Ok(None),
             NgramProposerKind::Cache => CachedNgramProposer::new(ngram.min_ngram, ngram.max_ngram)
                 .map(HistoryNgramProposerImpl::Cache)
                 .map(Self::new)
@@ -642,7 +631,6 @@ impl OpenAiSpeculativeStats {
             VerifyWindowDecisionKind::EarlyReject => {
                 self.observe_reject(decision);
                 self.early_reject_windows += 1;
-                self.repair_required_windows += 1;
                 self.shrink_adaptive_window(adaptive_window, adaptive_enabled, decision);
             }
             VerifyWindowDecisionKind::EarlyRejectStop => {
@@ -654,9 +642,9 @@ impl OpenAiSpeculativeStats {
     }
 
     pub(super) fn observe_reject(&mut self, decision: VerifyWindowDecision) {
-        if let Some(repair_input_count) = decision.repair_input_count {
+        if decision.rejected() {
             self.rejected_windows += 1;
-            self.first_reject_position_sum += repair_input_count;
+            self.first_reject_position_sum += decision.commit_count;
         }
     }
 
@@ -681,12 +669,12 @@ impl OpenAiSpeculativeStats {
         if !adaptive_enabled {
             return;
         }
-        let Some(repair_input_count) = decision.repair_input_count else {
+        if !decision.rejected() {
             return;
-        };
+        }
         let next_window = (*adaptive_window)
             .saturating_sub(1)
-            .max(repair_input_count)
+            .max(decision.commit_count)
             .max(1);
         if next_window < *adaptive_window {
             *adaptive_window = next_window;
@@ -742,10 +730,6 @@ impl OpenAiSpeculativeStats {
             json!(self.tail_reject_windows),
         );
         attrs.insert(
-            "llama_stage.spec.repair_required_windows".to_string(),
-            json!(self.repair_required_windows),
-        );
-        attrs.insert(
             "llama_stage.spec.draft_reset_ms".to_string(),
             json!(self.draft_reset_ms),
         );
@@ -790,30 +774,6 @@ impl OpenAiSpeculativeStats {
             json!(self.primary_verify_forward_activation_bytes),
         );
         attrs.insert(
-            "llama_stage.spec.checkpoint_ms".to_string(),
-            json!(self.checkpoint_ms),
-        );
-        attrs.insert(
-            "llama_stage.spec.recovery_restores".to_string(),
-            json!(self.recovery_restores),
-        );
-        attrs.insert(
-            "llama_stage.spec.recovery_ms".to_string(),
-            json!(self.recovery_ms),
-        );
-        attrs.insert(
-            "llama_stage.spec.recovery_restore_local_ms".to_string(),
-            json!(self.recovery_restore_local_ms),
-        );
-        attrs.insert(
-            "llama_stage.spec.recovery_restore_downstream_write_ms".to_string(),
-            json!(self.recovery_restore_downstream_write_ms),
-        );
-        attrs.insert(
-            "llama_stage.spec.recovery_restore_downstream_wait_ms".to_string(),
-            json!(self.recovery_restore_downstream_wait_ms),
-        );
-        attrs.insert(
             "llama_stage.spec.adaptive_enabled".to_string(),
             json!(self.adaptive_window_enabled),
         );
@@ -853,28 +813,6 @@ mod ngram_tests {
     use super::*;
 
     #[test]
-    fn proposes_tokens_after_latest_matching_suffix() {
-        let history = [1, 2, 3, 4, 9, 2, 3, 4];
-
-        assert_eq!(propose_ngram_tokens(&history, 2, 2).unwrap(), vec![9, 2]);
-    }
-
-    #[test]
-    fn returns_empty_without_enough_history() {
-        assert!(propose_ngram_tokens(&[1, 2, 3], 2, 4).unwrap().is_empty());
-        assert!(
-            propose_ngram_tokens(&[1, 2, 1, 2], 0, 4)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            propose_ngram_tokens(&[1, 2, 1, 2], 1, 0)
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[test]
     fn cache_proposer_syncs_only_the_committed_prefix() {
         let mut proposer = CachedNgramProposer::new(2, 2).unwrap();
         let history = [1, 2, 3, 1, 2, 3, 1, 2];
@@ -911,7 +849,6 @@ pub(super) enum VerifyWindowDecisionKind {
 pub(super) struct VerifyWindowDecision {
     pub(super) kind: VerifyWindowDecisionKind,
     pub(super) accepted_before_reject: usize,
-    pub(super) repair_input_count: Option<usize>,
     pub(super) commit_count: usize,
 }
 
@@ -923,10 +860,6 @@ impl VerifyWindowDecision {
                 | VerifyWindowDecisionKind::EarlyReject
                 | VerifyWindowDecisionKind::EarlyRejectStop
         )
-    }
-
-    pub(super) fn requires_repair(self) -> bool {
-        self.kind == VerifyWindowDecisionKind::EarlyReject
     }
 }
 
@@ -961,15 +894,14 @@ where
                 return Ok(VerifyWindowDecision {
                     kind: VerifyWindowDecisionKind::AcceptedStop,
                     accepted_before_reject,
-                    repair_input_count: None,
                     commit_count,
                 });
             }
             continue;
         }
 
-        let repair_input_count = accepted_before_reject + 1;
-        let kind = if repair_input_count == draft_tokens.len() {
+        let commit_count = accepted_before_reject + 1;
+        let kind = if commit_count == draft_tokens.len() {
             VerifyWindowDecisionKind::TailReject
         } else if reached_eog || reached_limit {
             VerifyWindowDecisionKind::EarlyRejectStop
@@ -979,7 +911,6 @@ where
         return Ok(VerifyWindowDecision {
             kind,
             accepted_before_reject,
-            repair_input_count: Some(repair_input_count),
             commit_count,
         });
     }
@@ -987,33 +918,8 @@ where
     Ok(VerifyWindowDecision {
         kind: VerifyWindowDecisionKind::FullAccept,
         accepted_before_reject,
-        repair_input_count: None,
         commit_count,
     })
-}
-
-pub(super) fn repaired_commit_tokens(
-    draft_tokens: &[i32],
-    accepted_before_reject: usize,
-    repair_input_count: usize,
-    repaired_predictions: &[i32],
-) -> OpenAiResult<Vec<i32>> {
-    if repaired_predictions.len() < repair_input_count {
-        return Err(OpenAiError::backend(format!(
-            "recovery verify returned too few tokens: expected {} got {:?}",
-            repair_input_count, repaired_predictions
-        )));
-    }
-    if accepted_before_reject > 0
-        && repaired_predictions[..accepted_before_reject] != draft_tokens[..accepted_before_reject]
-    {
-        eprintln!(
-            "recovery verify changed accepted prefix; committing restored target tokens: accepted {:?}, repaired {:?}",
-            &draft_tokens[..accepted_before_reject],
-            &repaired_predictions[..accepted_before_reject]
-        );
-    }
-    Ok(repaired_predictions[..repair_input_count].to_vec())
 }
 
 pub(super) fn nonzero_min(current: usize, candidate: usize) -> usize {
