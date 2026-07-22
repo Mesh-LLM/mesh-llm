@@ -68,7 +68,7 @@ pub(super) fn apply_speculative_behavior(
             push_range_constraint(setting, Some(format!("{prefix}.ngram_min")), None);
             push_mode_dependency(setting, prefix, "ngram", suffix);
         }
-        "ngram_proposer" | "ngram_max_proposal_tokens" => {
+        "ngram_proposer" | "ngram_fallback" | "ngram_max_proposal_tokens" => {
             push_mode_dependency(setting, prefix, "ngram", suffix);
         }
         "extension_initial_tokens"

@@ -73,6 +73,9 @@ pub struct NgramProposalConfig {
     pub min_ngram: usize,
     pub max_ngram: usize,
     pub max_proposal_tokens: usize,
+    /// Falls back to the simple proposer when a history proposer drafts nothing.
+    #[serde(default)]
+    pub fallback_simple: bool,
 }
 
 /// Bounds for extending an MTP prefix with an N-gram tail.
@@ -152,6 +155,12 @@ impl SpeculativeDecodeConfig {
             bail!(
                 "suffix N-gram proposer requires {SUFFIX_MIN_SEED_LEN} <= min_ngram <= max_ngram <= {SUFFIX_NGRAM_MAX_WINDOW}"
             );
+        }
+        if let Some(ngram) = &self.ngram
+            && ngram.fallback_simple
+            && ngram.kind == NgramProposerKind::Simple
+        {
+            bail!("simple N-gram fallback requires a cache or suffix primary proposer");
         }
         if self.extension.is_some() && (!self.native_mtp.enabled || self.ngram.is_none()) {
             bail!("N-gram extension requires both native MTP and an N-gram proposer");
@@ -237,6 +246,7 @@ mod standalone_speculative_config_tests {
                 min_ngram: 2,
                 max_ngram: 4,
                 max_proposal_tokens: 6,
+                fallback_simple: false,
             }),
             extension: Some(NgramExtensionConfig {
                 initial_tokens: 2,
@@ -261,6 +271,7 @@ mod standalone_speculative_config_tests {
                 min_ngram: 2,
                 max_ngram: skippy_runtime::NGRAM_CACHE_MAX_NGRAM + 1,
                 max_proposal_tokens: 6,
+                fallback_simple: false,
             }),
             ..SpeculativeDecodeConfig::default()
         };
@@ -284,6 +295,7 @@ mod standalone_speculative_config_tests {
                 min_ngram: 5,
                 max_ngram: 32,
                 max_proposal_tokens: 48,
+                fallback_simple: false,
             }),
             ..SpeculativeDecodeConfig::default()
         };
@@ -303,6 +315,7 @@ mod standalone_speculative_config_tests {
                 min_ngram: 3,
                 max_ngram: SUFFIX_NGRAM_MAX_WINDOW + 1,
                 max_proposal_tokens: 6,
+                fallback_simple: false,
             }),
             ..SpeculativeDecodeConfig::default()
         };
@@ -313,6 +326,30 @@ mod standalone_speculative_config_tests {
     }
 
     #[test]
+    fn standalone_speculative_config_rejects_simple_fallback_on_simple_proposer() {
+        let config = SpeculativeDecodeConfig {
+            ngram: Some(NgramProposalConfig {
+                kind: NgramProposerKind::Simple,
+                min_ngram: 2,
+                max_ngram: 4,
+                max_proposal_tokens: 6,
+                fallback_simple: true,
+            }),
+            ..SpeculativeDecodeConfig::default()
+        };
+
+        let error = config
+            .validate()
+            .expect_err("fallback needs history proposer");
+
+        assert!(
+            error
+                .to_string()
+                .contains("requires a cache or suffix primary proposer")
+        );
+    }
+
+    #[test]
     fn standalone_speculative_config_rejects_suffix_matches_below_seed_length() {
         let config = SpeculativeDecodeConfig {
             ngram: Some(NgramProposalConfig {
@@ -320,6 +357,7 @@ mod standalone_speculative_config_tests {
                 min_ngram: 2,
                 max_ngram: 16,
                 max_proposal_tokens: 4,
+                fallback_simple: false,
             }),
             ..SpeculativeDecodeConfig::default()
         };

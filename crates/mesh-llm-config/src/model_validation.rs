@@ -547,6 +547,19 @@ fn validate_speculative_proposer_controls(
         &["simple", "cache", "suffix"],
         &format!("{base_path}.ngram_proposer"),
     )?;
+    validate_optional_enum(
+        config.ngram_fallback.as_deref(),
+        &["simple"],
+        &format!("{base_path}.ngram_fallback"),
+    )?;
+    let simple_selected = config.ngram_proposer.as_deref() == Some("simple")
+        || config.strategy.as_deref() == Some("ngram-simple");
+    if config.ngram_fallback.is_some() && simple_selected {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.ngram_fallback"),
+            format!("{base_path}.ngram_fallback requires a cache or suffix primary proposer"),
+        ));
+    }
     let suffix_selected = config.ngram_proposer.as_deref() == Some("suffix")
         || config.strategy.as_deref() == Some("ngram-suffix");
     if suffix_selected {

@@ -135,6 +135,7 @@ fn legacy_speculative_config(args: &ServeBinaryArgs) -> SpeculativeDecodeConfig 
             min_ngram: args.openai_ngram_min,
             max_ngram: args.openai_ngram_max,
             max_proposal_tokens: args.openai_ngram_max,
+            fallback_simple: false,
         });
     }
     config
@@ -218,6 +219,7 @@ mod tests {
                 min_ngram: 2,
                 max_ngram: 4,
                 max_proposal_tokens: 6,
+                fallback_simple: false,
             }),
             extension: Some(NgramExtensionConfig {
                 initial_tokens: 2,

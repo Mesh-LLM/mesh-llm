@@ -349,6 +349,7 @@ spec_default               = "auto"          # bool or "auto"
 # `cache` is request-local and requires ngram_max <= 4; `suffix` is a pure-Rust
 # longest-suffix (prompt-lookup) matcher allowing ngram_max <= 64.
 # ngram_proposer            = "cache"  # simple | cache | suffix
+# ngram_fallback            = "simple" # retry cache/suffix misses with the simple proposer
 # ngram_min                 = 2
 # ngram_max                 = 4
 # ngram_max_proposal_tokens = 6        # output budget, separate from ngram_max
@@ -784,7 +785,11 @@ verify_window_pipeline_depth = 2
 
 Suffix can also run without MTP by setting `strategy = "ngram-suffix"` and
 omitting the extension controls. Layer packages may declare `ngram-suffix` as
-a request-local proposer and standalone strategy. See
+a request-local proposer and standalone strategy. Because `cache` and `suffix`
+stay silent on a miss, `ngram_fallback = "simple"` retries the miss with the
+llama.cpp simple proposer (2-token minimum match) so some draft is always in
+flight. This targets high-latency links where a mediocre draft beats no draft;
+on a local network it is roughly neutral. See
 [Suffix N-gram Proposer](skippy/SUFFIX_NGRAM_PROPOSER.md) for the lookup
 contract, telemetry, and benchmark requirements.
 

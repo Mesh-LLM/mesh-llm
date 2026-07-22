@@ -20,8 +20,13 @@ pub(in crate::frontend) fn standalone_ngram_proposal_limit(
         .map_or(0, |ngram| ngram.max_proposal_tokens)
 }
 
+/// Minimum match length the simple fallback proposer scans for. The history
+/// proposers use longer configured bounds that the simple proposer cannot.
+const SIMPLE_FALLBACK_MIN_NGRAM: usize = 2;
+
 /// Runs the configured standalone N-gram proposer (simple, cache, or suffix)
-/// over committed history and returns its draft.
+/// over committed history and returns its draft. When enabled, a history
+/// proposer miss falls back to the simple proposer.
 pub(in crate::frontend) fn propose_configured_ngram_tokens(
     config: &SpeculativeDecodeConfig,
     history_proposer: &mut Option<HistoryNgramProposer>,
@@ -44,6 +49,16 @@ pub(in crate::frontend) fn propose_configured_ngram_tokens(
             .ok_or_else(|| OpenAiError::backend("configured history N-gram proposer is missing"))?
             .propose(committed_history, &[], proposal_limit)?,
     };
+    if tokens.is_empty() && ngram.fallback_simple && ngram.kind != NgramProposerKind::Simple {
+        let fallback =
+            propose_ngram_tokens(committed_history, SIMPLE_FALLBACK_MIN_NGRAM, proposal_limit)?;
+        if !fallback.is_empty() {
+            return Ok(ConfiguredNgramProposal {
+                tokens: fallback,
+                source: "simple",
+            });
+        }
+    }
     Ok(ConfiguredNgramProposal {
         tokens,
         source: ngram.kind.as_str(),
@@ -67,9 +82,20 @@ mod tests {
                 min_ngram,
                 max_ngram,
                 max_proposal_tokens: 3,
+                fallback_simple: false,
             }),
             ..SpeculativeDecodeConfig::default()
         }
+    }
+
+    fn config_with_fallback(
+        kind: NgramProposerKind,
+        min_ngram: usize,
+        max_ngram: usize,
+    ) -> SpeculativeDecodeConfig {
+        let mut config = config(kind, min_ngram, max_ngram);
+        config.ngram.as_mut().unwrap().fallback_simple = true;
+        config
     }
 
     fn propose(config: &SpeculativeDecodeConfig, history: &[i32]) -> ConfiguredNgramProposal {
@@ -121,5 +147,45 @@ mod tests {
         );
         assert_eq!(proposal.source, "suffix");
         assert_eq!(proposal.tokens, vec![4, 5, 1]);
+    }
+
+    #[test]
+    fn simple_fallback_fires_on_a_history_proposer_miss() {
+        let proposal = propose(
+            &config_with_fallback(NgramProposerKind::Suffix, 3, 8),
+            &[5, 6, 1, 2, 9, 7, 1, 2],
+        );
+        assert_eq!(proposal.source, "simple");
+        assert_eq!(proposal.tokens, vec![9, 7, 1]);
+    }
+
+    #[test]
+    fn simple_fallback_does_not_replace_a_history_proposer_hit() {
+        let proposal = propose(
+            &config_with_fallback(NgramProposerKind::Suffix, 3, 8),
+            &[1, 2, 3, 4, 5, 1, 2, 3],
+        );
+        assert_eq!(proposal.source, "suffix");
+        assert_eq!(proposal.tokens, vec![4, 5, 1]);
+    }
+
+    #[test]
+    fn simple_fallback_stays_off_by_default() {
+        let proposal = propose(
+            &config(NgramProposerKind::Suffix, 3, 8),
+            &[5, 6, 1, 2, 9, 1, 2],
+        );
+        assert_eq!(proposal.source, "suffix");
+        assert!(proposal.tokens.is_empty());
+    }
+
+    #[test]
+    fn simple_fallback_miss_reports_the_primary_source() {
+        let proposal = propose(
+            &config_with_fallback(NgramProposerKind::Cache, 2, 4),
+            &[1, 2, 3, 4],
+        );
+        assert_eq!(proposal.source, "cache");
+        assert!(proposal.tokens.is_empty());
     }
 }

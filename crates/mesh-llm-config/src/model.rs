@@ -560,6 +560,7 @@ pub struct SpeculativeConfig {
     pub ngram_min: Option<u32>,
     pub ngram_max: Option<u32>,
     pub ngram_proposer: Option<String>,
+    pub ngram_fallback: Option<String>,
     pub ngram_max_proposal_tokens: Option<u32>,
     pub extension_initial_tokens: Option<u32>,
     pub extension_max_tokens: Option<u32>,
@@ -611,6 +612,7 @@ impl SpeculativeConfig {
             ngram_min: pick!(ngram_min),
             ngram_max: pick!(ngram_max),
             ngram_proposer: pick!(ngram_proposer),
+            ngram_fallback: pick!(ngram_fallback),
             ngram_max_proposal_tokens: pick!(ngram_max_proposal_tokens),
             extension_initial_tokens: pick!(extension_initial_tokens),
             extension_max_tokens: pick!(extension_max_tokens),
@@ -680,6 +682,8 @@ struct SpeculativeConfigRaw {
     #[serde(default)]
     ngram_proposer: Option<String>,
     #[serde(default)]
+    ngram_fallback: Option<String>,
+    #[serde(default)]
     ngram_max_proposal_tokens: Option<u32>,
     #[serde(default)]
     extension_initial_tokens: Option<u32>,
@@ -736,6 +740,7 @@ impl<'de> Deserialize<'de> for SpeculativeConfig {
             ngram_min: raw.ngram_min,
             ngram_max: raw.ngram_max,
             ngram_proposer: raw.ngram_proposer,
+            ngram_fallback: raw.ngram_fallback,
             ngram_max_proposal_tokens: raw.ngram_max_proposal_tokens,
             extension_initial_tokens: raw.extension_initial_tokens,
             extension_max_tokens: raw.extension_max_tokens,
@@ -759,7 +764,7 @@ impl Serialize for SpeculativeConfig {
     {
         use serde::ser::SerializeMap;
 
-        let mut map = serializer.serialize_map(Some(32))?;
+        let mut map = serializer.serialize_map(Some(33))?;
         map.serialize_entry("strategy", &self.strategy)?;
         map.serialize_entry("mode", &self.mode)?;
         if self.legacy_draft_model_path_used {
@@ -788,6 +793,7 @@ impl Serialize for SpeculativeConfig {
         map.serialize_entry("ngram_min", &self.ngram_min)?;
         map.serialize_entry("ngram_max", &self.ngram_max)?;
         map.serialize_entry("ngram_proposer", &self.ngram_proposer)?;
+        map.serialize_entry("ngram_fallback", &self.ngram_fallback)?;
         map.serialize_entry("ngram_max_proposal_tokens", &self.ngram_max_proposal_tokens)?;
         map.serialize_entry("extension_initial_tokens", &self.extension_initial_tokens)?;
         map.serialize_entry("extension_max_tokens", &self.extension_max_tokens)?;

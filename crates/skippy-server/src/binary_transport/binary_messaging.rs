@@ -304,6 +304,7 @@ mod tests {
                 min_ngram: 3,
                 max_ngram: 4,
                 max_proposal_tokens: 64,
+                fallback_simple: false,
             }),
             ..SpeculativeDecodeConfig::default()
         }

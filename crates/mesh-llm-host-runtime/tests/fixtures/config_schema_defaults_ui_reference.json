@@ -869,6 +869,13 @@
       }
     },
     {
+      "canonical_path": "defaults.speculative.ngram_fallback",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.speculative.ngram_max",
       "support": "supported",
       "source": {

@@ -237,6 +237,14 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
             .global_config
             .and_then(|config| config.ngram_proposer.clone()),
     );
+    let ngram_fallback = pick_owned(
+        input
+            .model_config
+            .and_then(|config| config.ngram_fallback.clone()),
+        input
+            .global_config
+            .and_then(|config| config.ngram_fallback.clone()),
+    );
     let ngram_max_proposal_tokens = pick_optional_u32(
         input
             .model_config
@@ -277,11 +285,17 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
             .unwrap_or_else(|| {
                 existing.map_or(max_ngram as usize, |ngram| ngram.max_proposal_tokens)
             });
+        let fallback_simple = match ngram_fallback.as_deref() {
+            Some("simple") => true,
+            None => existing.is_some_and(|ngram| ngram.fallback_simple),
+            Some(_) => unreachable!("validated by mesh configuration"),
+        };
         config.ngram = Some(NgramProposalConfig {
             kind,
             min_ngram: min_ngram as usize,
             max_ngram: max_ngram as usize,
             max_proposal_tokens,
+            fallback_simple,
         });
         if config.effective_strategy == "disabled" {
             config.effective_strategy = ngram_effective_strategy(kind).to_string();
@@ -569,6 +583,7 @@ fn ngram_proposer_config(
         min_ngram: min_ngram as usize,
         max_ngram: max_ngram as usize,
         max_proposal_tokens: max_proposal_tokens as usize,
+        fallback_simple: false,
     })
 }
 
