@@ -429,6 +429,8 @@ jobs:
     if: ${{ needs.changes.outputs.rust_changed == 'true' && needs.changes.outputs.docs_only != 'true' }}
     name: Rust crate tests (${{ matrix.batch.idx }})
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -442,6 +444,8 @@ jobs:
       RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Install test dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake jq ninja-build pkg-config libssl-dev libdbus-1-dev lld
       - uses: dtolnay/rust-toolchain@stable
@@ -456,6 +460,9 @@ jobs:
           save-if: "false"
       - name: Prepare UI placeholder
         run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
+      - name: Prepare patched llama.cpp source checkout
+        if: ${{ contains(matrix.batch.crates, 'skippy-quantize') }}
+        run: scripts/prepare-llama.sh pinned
       - name: Ensure ABI cache directory
         run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
       - name: Cache patched llama.cpp ABI build

@@ -7393,6 +7393,7 @@ dependencies = [
  "clap",
  "csv",
  "dirs",
+ "libc",
  "model-artifact",
  "model-hf",
  "model-ref",

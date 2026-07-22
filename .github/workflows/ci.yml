@@ -366,6 +366,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Prepare UI placeholder
         run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
+      - name: Prepare patched llama.cpp source checkout
+        if: ${{ contains(matrix.batch.crates, 'skippy-quantize') }}
+        run: scripts/prepare-llama.sh pinned
       - name: Ensure ABI cache directory
         run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
       - name: Cache patched llama.cpp ABI build

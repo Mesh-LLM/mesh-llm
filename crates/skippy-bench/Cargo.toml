@@ -9,6 +9,7 @@ anyhow.workspace = true
 clap.workspace = true
 csv = "1.4.0"
 dirs = "6.0.0"
+libc = "0.2"
 skippy-protocol = { path = "../skippy-protocol" }
 skippy-runtime = { path = "../skippy-runtime" }
 skippy-topology = { path = "../skippy-topology" }

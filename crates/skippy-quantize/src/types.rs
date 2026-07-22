@@ -40,7 +40,6 @@ pub enum JobKind {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum QuantType {
     Q1_0,
-    Q2_0,
     Q2K,
     Q2KS,
     Q3K,
@@ -128,7 +127,6 @@ impl FromStr for QuantType {
         let normalized = normalize_type_name(raw);
         let quant = match normalized.as_str() {
             "Q10" => Self::Q1_0,
-            "Q20" => Self::Q2_0,
             "Q2K" => Self::Q2K,
             "Q2KS" => Self::Q2KS,
             "Q3K" => Self::Q3K,
@@ -175,7 +173,6 @@ impl FromStr for QuantType {
 impl QuantType {
     pub const ALL: &'static [Self] = &[
         Self::Q1_0,
-        Self::Q2_0,
         Self::Q2K,
         Self::Q2KS,
         Self::Q3K,
@@ -218,7 +215,6 @@ impl QuantType {
     pub fn as_llama_name(self) -> &'static str {
         match self {
             Self::Q1_0 => "Q1_0",
-            Self::Q2_0 => "Q2_0",
             Self::Q2K => "Q2_K",
             Self::Q2KS => "Q2_K_S",
             Self::Q3K => "Q3_K",
@@ -295,7 +291,6 @@ impl QuantType {
             37 => Some(Self::TQ2_0),
             38 => Some(Self::Mxfp4Moe),
             40 => Some(Self::Q1_0),
-            41 => Some(Self::Q2_0),
             _ => None,
         }
     }
@@ -303,7 +298,6 @@ impl QuantType {
     pub fn as_llama_file_type(self) -> llama_quant_ffi::LlamaFileType {
         match self {
             Self::Q1_0 => llama_quant_ffi::LlamaFileType::MostlyQ1_0,
-            Self::Q2_0 => llama_quant_ffi::LlamaFileType::MostlyQ2_0,
             Self::Q2K => llama_quant_ffi::LlamaFileType::MostlyQ2K,
             Self::Q2KS => llama_quant_ffi::LlamaFileType::MostlyQ2KS,
             Self::Q3K | Self::Q3KM => llama_quant_ffi::LlamaFileType::MostlyQ3KM,
@@ -633,7 +627,6 @@ mod tests {
 
     #[test]
     fn parses_llama_quant_names() {
-        assert_eq!("Q2_0".parse::<QuantType>().unwrap(), QuantType::Q2_0);
         assert_eq!("Q2_K".parse::<QuantType>().unwrap(), QuantType::Q2K);
         assert_eq!("q2-k".parse::<QuantType>().unwrap(), QuantType::Q2K);
         assert_eq!("q2k".parse::<QuantType>().unwrap(), QuantType::Q2K);
@@ -662,7 +655,6 @@ mod tests {
         assert_eq!("15".parse::<QuantType>().unwrap(), QuantType::Q4K);
         assert_eq!("17".parse::<QuantType>().unwrap(), QuantType::Q5K);
         assert_eq!("40".parse::<QuantType>().unwrap(), QuantType::Q1_0);
-        assert_eq!("41".parse::<QuantType>().unwrap(), QuantType::Q2_0);
         assert!("999".parse::<QuantType>().is_err());
     }
 

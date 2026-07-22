@@ -279,7 +279,7 @@ fn configure_child_group(command: &mut Command) {
 }
 
 fn terminate_child(child: &mut Child) -> Result<()> {
-    terminate_child_signal(child, "TERM");
+    terminate_child_signal(child, ChildSignal::Terminate)?;
     let grace = Instant::now();
     while grace.elapsed() < Duration::from_secs(5) {
         if child
@@ -291,24 +291,34 @@ fn terminate_child(child: &mut Child) -> Result<()> {
         }
         thread::sleep(Duration::from_millis(100));
     }
-    terminate_child_signal(child, "KILL");
+    terminate_child_signal(child, ChildSignal::Kill)?;
     let _ = child.wait().context("wait for killed harness command")?;
     Ok(())
 }
 
-fn terminate_child_signal(child: &mut Child, signal: &str) {
-    #[cfg(unix)]
-    {
-        let process_group = format!("-{}", child.id());
-        let _ = Command::new("kill")
-            .args([format!("-{signal}"), process_group])
-            .status();
+enum ChildSignal {
+    Terminate,
+    Kill,
+}
+
+#[cfg(unix)]
+fn terminate_child_signal(child: &mut Child, signal: ChildSignal) -> Result<()> {
+    let process_group = -libc::pid_t::try_from(child.id()).context("child PID overflow")?;
+    let signal = match signal {
+        ChildSignal::Terminate => libc::SIGTERM,
+        ChildSignal::Kill => libc::SIGKILL,
+    };
+    // SAFETY: `kill` receives a process-group identifier and signal constant;
+    // it does not dereference memory in this process.
+    if unsafe { libc::kill(process_group, signal) } == -1 {
+        child.kill().context("terminate harness command")?;
     }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-        let _ = signal;
-    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn terminate_child_signal(child: &mut Child, _signal: ChildSignal) -> Result<()> {
+    child.kill().context("terminate harness command")
 }
 
 fn env_concurrency_matching_endpoint(
