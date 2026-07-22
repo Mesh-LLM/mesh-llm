@@ -154,7 +154,7 @@ before modifying these paths.
 ## Live-state inspection commands
 
 ```bash
-gh workflow list --repo Mesh-LLM/mesh-llm
+gh workflow list --all --repo Mesh-LLM/mesh-llm
 gh run list --repo Mesh-LLM/mesh-llm --limit 30
 gh variable list --repo Mesh-LLM/mesh-llm
 gh secret list --repo Mesh-LLM/mesh-llm
