@@ -167,7 +167,10 @@ On native Windows, `just check-release` runs the host-safe Rust/doc invariant su
 
 CI uses [`dorny/paths-filter`](https://github.com/dorny/paths-filter) to skip jobs when unchanged areas of the repo are modified. A `changes` detection job runs first on every push and PR, then each build job gates on its output.
 
-For the current PR build topology, see [`ci/ci.md`](ci/ci.md). For workflow-editing rules agents must follow, see [`.github/AGENTS.md`](.github/AGENTS.md).
+For the current PR build topology, see [`ci/ci.md`](ci/ci.md). Agents must start
+every CI edit with the canonical
+[`manage-ci` skill](.agents/skills/manage-ci/SKILL.md); `.github/AGENTS.md`
+routes all GitHub workflow work there.
 
 Linux CI is moving to prebuilt public and self-hosted images from
 [`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images).

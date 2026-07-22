@@ -475,52 +475,19 @@ Before committing, run the local checks most likely to fail in CI for the files 
 - Do not report a build or test step as complete until the command has actually exited with code `0`.
 - Run Rust validation serially. Do not run multiple `cargo` commands at the same time.
 
-### CI runner images and dependency ownership
+### CI changes
 
-Linux CI is moving to the prebuilt, multi-architecture images maintained in
-[`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images).
-The public image is a job container on GitHub-hosted runners; the self-hosted
-image is the Actions Runner Controller pod image on the K3s runner pools. Both
-variants share the same core toolchain, and their immutable layers can be
-cached by the container runtime instead of rebuilding the host environment in
-every job.
+Before inspecting, running, defining, editing, reviewing, or documenting CI,
+read `.agents/skills/manage-ci/SKILL.md` completely. The `manage-ci` skill is
+the canonical source for workflow, dependency, runner/worker, image, cache,
+artifact, variable, secret, permission, release, deployment, operational, and
+validation rules. Start every `.github/`, CI-script, or runner-integration edit
+there.
 
-- Treat project manifests and lockfiles in this repository, plus the YAML
-  profiles and installer scripts in `mesh-llm-runner-images`, as the sources of
-  truth for CI dependencies.
-- **Do not fix a CI failure by adding a one-off package installation, tool
-  download, or host bootstrap step to a MeshLLM workflow.** This includes new
-  `apt-get install`, `pip install`, `npm install --global`, `cargo install`,
-  `curl | sh`, or equivalent setup commands in individual jobs.
-- If MeshLLM code needs a library or SDK, update the appropriate project
-  manifest and lockfile here. If CI needs a shared operating-system package,
-  compiler, CLI, or runner capability, update `profiles/common.yml`,
-  `profiles/public.yml`, `profiles/self-hosted.yml`, or the owning installer in
-  `mesh-llm-runner-images`, then publish the image and pin its multi-architecture
-  OCI digest in production consumers.
-- Workflow steps should install only the repository dependencies declared by
-  the checked-in manifests (for example `cargo`, `pnpm`, or `npm` locked
-  installs). The runner-image build reads those manifests and warms their
-  dependency caches; it does not replace manifests as the dependency contract.
-- Existing runtime installation blocks are migration debt, not examples to
-  copy. When touching one, prefer removing it after the required dependency is
-  present in the runner image.
-- A temporary incident workaround requires an explanatory comment, an owner,
-  and a linked removal issue or expiry date. It must not become the permanent
-  dependency path.
-
-This policy reduces repeated package-manager traffic and transient setup
-failures while ensuring missing dependencies are corrected at their durable
-source. See `ci/ci.md` and `.github/AGENTS.md` for the consumer and workflow
-rules.
-
-### CI, workflow, and crate-list changes
-
-- If you touch `.github/workflows/`, `.github/actions/`, release packaging, Docker packaging, workspace members, crate names, publish scripts, clippy batch planning, or SDK smoke/test crate lists, run the matching repo-consistency check before committing:
-  - `cargo run -p xtask -- repo-consistency release-targets`
-  - `cargo run -p xtask -- repo-consistency ci-crate-lists`
-- When adding, removing, renaming, or splitting workspace crates, update the workflow filters, Docker copy lists, `scripts/affected-crates.sh`, `scripts/plan-clippy-batches.sh`, `scripts/publish-crates.sh`, and the xtask repo-consistency expectations in the same commit.
-- If an SDK/API crate list changes, verify that both the workflow loop and `tools/xtask/src/main.rs` agree before committing; CI intentionally fails when those drift.
+Keep `.agents/skills/manage-ci/references/current-inventory.md` synchronized
+with the checked-in CI contract and `ci/ci.md` synchronized with topology. When
+a CI rule changes, update the skill first rather than adding duplicate guidance
+to this file or `.github/AGENTS.md`.
 
 ### UI changes
 

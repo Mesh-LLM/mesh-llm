@@ -324,4 +324,6 @@ Use these checks when reviewing PR CI wall-clock regressions:
   class (Blacksmith Windows 2025 for Windows ABI products, Blacksmith macOS for Swift/Metal, Linux
   for Linux backends) and skip unsupported combinations explicitly.
 
-For agent-facing workflow editing rules, see `.github/AGENTS.md`.
+For canonical agent-facing CI rules, start with
+`.agents/skills/manage-ci/SKILL.md`. The scoped `.github/AGENTS.md` file routes
+all GitHub workflow work to that skill.
