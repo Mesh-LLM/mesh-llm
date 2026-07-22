@@ -32,6 +32,7 @@ const OWNER_CONTROL_SERVER_SCAN_DEADLINE_SECS_FOR_CLIENT_MARGIN: u64 = 30;
 const OWNER_CONTROL_INVENTORY_RESPONSE_TIMEOUT_SECS: u64 =
     OWNER_CONTROL_SERVER_SCAN_DEADLINE_SECS_FOR_CLIENT_MARGIN + 5;
 const OWNER_CONTROL_WATCH_ACCEPT_TIMEOUT_SECS: u64 = 5;
+const FAILED_BOOTSTRAP_CLOSE_TIMEOUT_MILLIS: u64 = 250;
 
 fn owner_control_client_bind_addr() -> std::net::SocketAddr {
     std::net::SocketAddr::from(([0, 0, 0, 0], 0))
@@ -47,9 +48,19 @@ fn owner_control_client_bind_addr() -> std::net::SocketAddr {
 /// Config and inventory mutation is intentionally exclusive to `mesh-llm-control/1`.
 /// The legacy mesh-plane config stream IDs remain reserved, but no client bootstrap path
 /// falls back to them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ControlPlaneBootstrapOptions {
     control_endpoint: Option<String>,
+    connect_timeout: std::time::Duration,
+}
+
+impl Default for ControlPlaneBootstrapOptions {
+    fn default() -> Self {
+        Self {
+            control_endpoint: None,
+            connect_timeout: std::time::Duration::from_secs(OWNER_CONTROL_CONNECT_TIMEOUT_SECS),
+        }
+    }
 }
 
 impl ControlPlaneBootstrapOptions {
@@ -64,6 +75,12 @@ impl ControlPlaneBootstrapOptions {
 
     pub fn control_endpoint(&self) -> Option<&str> {
         self.control_endpoint.as_deref()
+    }
+
+    /// Bound owner-control endpoint bootstrap without changing request deadlines.
+    pub fn with_connect_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
     }
 
     pub fn select_transport(
@@ -261,14 +278,10 @@ impl OwnerControlClient {
             .await
             .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))?;
         if control_addr.relay_urls().next().is_some() {
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(OWNER_CONTROL_CONNECT_TIMEOUT_SECS),
-                endpoint.online(),
-            )
-            .await;
+            let _ = tokio::time::timeout(options.connect_timeout, endpoint.online()).await;
         }
         let connection = match tokio::time::timeout(
-            std::time::Duration::from_secs(OWNER_CONTROL_CONNECT_TIMEOUT_SECS),
+            options.connect_timeout,
             endpoint.connect(control_addr.clone(), ALPN_CONTROL_V1),
         )
         .await
@@ -278,15 +291,16 @@ impl OwnerControlClient {
                 let error =
                     configured_endpoint_connect_error(&endpoint, control_addr, options, error)
                         .await;
-                endpoint.close().await;
+                close_failed_bootstrap_endpoint(&endpoint).await;
                 return Err(error);
             }
             Err(_) => {
-                endpoint.close().await;
+                close_failed_bootstrap_endpoint(&endpoint).await;
                 return Err(ControlPlaneClientError::Negotiation(options.configured_endpoint_failure(
                     OwnerControlErrorCode::ControlUnavailable,
                     format!(
-                        "remote owner-control endpoint is unavailable or unreachable: connect timed out after {OWNER_CONTROL_CONNECT_TIMEOUT_SECS}s"
+                        "remote owner-control endpoint is unavailable or unreachable: connect timed out after {:.3}s",
+                        options.connect_timeout.as_secs_f64()
                     ),
                 )));
             }
@@ -537,6 +551,14 @@ impl OwnerControlClient {
         .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))?;
         Ok((send, recv))
     }
+}
+
+async fn close_failed_bootstrap_endpoint(endpoint: &Endpoint) {
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(FAILED_BOOTSTRAP_CLOSE_TIMEOUT_MILLIS),
+        endpoint.close(),
+    )
+    .await;
 }
 
 async fn write_owner_control_request(

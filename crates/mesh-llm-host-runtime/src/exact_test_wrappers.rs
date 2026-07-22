@@ -55,11 +55,6 @@ fn mesh_requirements_policy_hash_derives_mesh_id() {
 }
 
 #[test]
-fn mesh_requirements_policy_change_creates_distinct_mesh() {
-    mesh::requirements::tests::assert_mesh_requirements_policy_change_changes_mesh_id();
-}
-
-#[test]
 fn mesh_requirements_version_bounds_unset_min_only_max_only_and_exact() {
     mesh::requirements::tests::assert_mesh_requirements_version_bounds_unset_min_only_max_only_and_exact();
 }

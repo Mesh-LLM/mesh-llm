@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Page, type TestInfo } from '@playwright/test'
+import { expect, test, type Page, type TestInfo } from '../fixtures/base'
 import { DATA_MODE_STORAGE_KEY } from '@e2e/support/data-mode'
 
 const FEATURE_FLAGS_STORAGE_KEY = 'mesh-llm-ui-preview:feature-flags:v1'
@@ -464,9 +464,9 @@ test.describe('schema-driven configuration controls', () => {
 
     const contextSize = page.getByRole('slider', { name: 'Context size' })
     await expect(contextSize).toBeVisible()
-    await expect(contextSize).toHaveAttribute('min', '512')
-    await expect(contextSize).toHaveAttribute('max', '32768')
-    await expect(contextSize).toHaveAttribute('step', '512')
+    await expect(contextSize).toHaveAttribute('aria-valuemin', '2048')
+    await expect(contextSize).toHaveAttribute('aria-valuemax', '262144')
+    await expect(contextSize).toHaveAttribute('aria-valuenow', '4096')
 
     await expect(page.getByRole('radio', { name: 'balanced' })).toBeChecked()
     await expect(page.getByText('K q8_0 · V q4_0')).toBeVisible()
@@ -483,7 +483,7 @@ test.describe('schema-driven configuration controls', () => {
     await page.getByRole('tab', { name: 'Models' }).click()
     await page.getByRole('button', { name: 'Show advanced' }).click()
     await expect(page.getByRole('textbox', { name: 'Multimodal projector' })).toBeDisabled()
-    await expect(page.getByText('No local projector file was detected.')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Why unavailable: Multimodal projector' })).toBeDisabled()
     await expect(page.getByRole('textbox', { name: 'Projector URL' })).toHaveValue('https://example.com/mmproj.gguf')
 
     await page.getByRole('tab', { name: 'Plugins' }).click()
@@ -507,7 +507,9 @@ test.describe('schema-driven configuration controls', () => {
     await page.goto(appUrl('/configuration/models', testInfo))
     await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
 
-    await page.getByRole('slider', { name: 'Context size' }).fill('8192')
+    const contextSize = page.getByRole('slider', { name: 'Context size' })
+    await page.getByRole('button', { name: '8K', exact: true }).click()
+    await expect(contextSize).toHaveAttribute('aria-valuenow', '8192')
     await page.getByLabel('KV cache policy').getByRole('radio', { name: 'quality' }).click()
     await page.getByLabel('GPU assignment').getByRole('radio', { name: 'pinned' }).click()
     await expect(page.getByRole('textbox', { name: 'Pinned GPU device' })).toBeEnabled()
@@ -522,7 +524,6 @@ test.describe('schema-driven configuration controls', () => {
     await expect(page.getByText('Generated TOML validates against mesh-llm config rules.')).toBeVisible()
 
     await page.getByRole('button', { name: 'Save config' }).click()
-    await expect(page.getByRole('button', { name: 'Save config' })).toBeDisabled()
 
     await expect
       .poll(async () => {

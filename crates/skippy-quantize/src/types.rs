@@ -40,6 +40,7 @@ pub enum JobKind {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum QuantType {
     Q1_0,
+    Q2_0,
     Q2K,
     Q2KS,
     Q3K,
@@ -127,6 +128,7 @@ impl FromStr for QuantType {
         let normalized = normalize_type_name(raw);
         let quant = match normalized.as_str() {
             "Q10" => Self::Q1_0,
+            "Q20" => Self::Q2_0,
             "Q2K" => Self::Q2K,
             "Q2KS" => Self::Q2KS,
             "Q3K" => Self::Q3K,
@@ -173,6 +175,7 @@ impl FromStr for QuantType {
 impl QuantType {
     pub const ALL: &'static [Self] = &[
         Self::Q1_0,
+        Self::Q2_0,
         Self::Q2K,
         Self::Q2KS,
         Self::Q3K,
@@ -215,6 +218,7 @@ impl QuantType {
     pub fn as_llama_name(self) -> &'static str {
         match self {
             Self::Q1_0 => "Q1_0",
+            Self::Q2_0 => "Q2_0",
             Self::Q2K => "Q2_K",
             Self::Q2KS => "Q2_K_S",
             Self::Q3K => "Q3_K",
@@ -291,6 +295,7 @@ impl QuantType {
             37 => Some(Self::TQ2_0),
             38 => Some(Self::Mxfp4Moe),
             40 => Some(Self::Q1_0),
+            41 => Some(Self::Q2_0),
             _ => None,
         }
     }
@@ -298,6 +303,7 @@ impl QuantType {
     pub fn as_llama_file_type(self) -> llama_quant_ffi::LlamaFileType {
         match self {
             Self::Q1_0 => llama_quant_ffi::LlamaFileType::MostlyQ1_0,
+            Self::Q2_0 => llama_quant_ffi::LlamaFileType::MostlyQ2_0,
             Self::Q2K => llama_quant_ffi::LlamaFileType::MostlyQ2K,
             Self::Q2KS => llama_quant_ffi::LlamaFileType::MostlyQ2KS,
             Self::Q3K | Self::Q3KM => llama_quant_ffi::LlamaFileType::MostlyQ3KM,
@@ -341,6 +347,7 @@ pub enum TensorType {
     F32,
     F16,
     Q1_0,
+    Q2_0,
     Q4_0,
     Q4_1,
     Q5_0,
@@ -380,6 +387,7 @@ impl TensorType {
             Self::F32 => Some(llama_quant_ffi::GgmlType::F32),
             Self::F16 => Some(llama_quant_ffi::GgmlType::F16),
             Self::Q1_0 => Some(llama_quant_ffi::GgmlType::Q1_0),
+            Self::Q2_0 => Some(llama_quant_ffi::GgmlType::Q2_0),
             Self::Q4_0 => Some(llama_quant_ffi::GgmlType::Q4_0),
             Self::Q4_1 => Some(llama_quant_ffi::GgmlType::Q4_1),
             Self::Q5_0 => Some(llama_quant_ffi::GgmlType::Q5_0),
@@ -418,6 +426,7 @@ impl TensorType {
         Self::F32,
         Self::F16,
         Self::Q1_0,
+        Self::Q2_0,
         Self::Q4_0,
         Self::Q4_1,
         Self::Q5_0,
@@ -456,6 +465,7 @@ impl TensorType {
             Self::F32 => "F32",
             Self::F16 => "F16",
             Self::Q1_0 => "Q1_0",
+            Self::Q2_0 => "Q2_0",
             Self::Q4_0 => "Q4_0",
             Self::Q4_1 => "Q4_1",
             Self::Q5_0 => "Q5_0",
@@ -496,6 +506,7 @@ impl TensorType {
             "F32" => Some(Self::F32),
             "F16" => Some(Self::F16),
             "Q10" => Some(Self::Q1_0),
+            "Q20" => Some(Self::Q2_0),
             "Q40" => Some(Self::Q4_0),
             "Q41" => Some(Self::Q4_1),
             "Q50" => Some(Self::Q5_0),
@@ -597,6 +608,7 @@ mod tests {
     #[test]
     fn accepts_raw_tensor_types_but_not_ftype_mixtures() {
         assert!(TensorType::parse("Q1_0").is_some());
+        assert!(TensorType::parse("Q2_0").is_some());
         assert!(TensorType::parse("Q3_K").is_some());
         assert!(TensorType::parse("q4_K").is_some());
         assert!(TensorType::parse("Q6_K").is_some());
@@ -621,6 +633,7 @@ mod tests {
 
     #[test]
     fn parses_llama_quant_names() {
+        assert_eq!("Q2_0".parse::<QuantType>().unwrap(), QuantType::Q2_0);
         assert_eq!("Q2_K".parse::<QuantType>().unwrap(), QuantType::Q2K);
         assert_eq!("q2-k".parse::<QuantType>().unwrap(), QuantType::Q2K);
         assert_eq!("q2k".parse::<QuantType>().unwrap(), QuantType::Q2K);
@@ -649,6 +662,7 @@ mod tests {
         assert_eq!("15".parse::<QuantType>().unwrap(), QuantType::Q4K);
         assert_eq!("17".parse::<QuantType>().unwrap(), QuantType::Q5K);
         assert_eq!("40".parse::<QuantType>().unwrap(), QuantType::Q1_0);
+        assert_eq!("41".parse::<QuantType>().unwrap(), QuantType::Q2_0);
         assert!("999".parse::<QuantType>().is_err());
     }
 

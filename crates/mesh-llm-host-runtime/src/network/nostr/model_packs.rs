@@ -47,7 +47,24 @@ fn model_tiers() -> Vec<(String, f64)> {
 pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
     let local_models = crate::models::scan_local_models();
     let tiers = model_tiers();
+    auto_model_pack_with(vram_gb, &local_models, &tiers, &catalog_ref)
+}
 
+fn catalog_ref(name: &str) -> String {
+    crate::models::find_remote_catalog_model_exact(name)
+        .map(|model| crate::models::remote_catalog_model_ref(&model))
+        .unwrap_or_else(|| name.to_string())
+}
+
+fn auto_model_pack_with<F>(
+    vram_gb: f64,
+    local_models: &[String],
+    tiers: &[(String, f64)],
+    catalog_ref: &F,
+) -> Vec<String>
+where
+    F: Fn(&str) -> String,
+{
     // Helper: check if a model is on disk
     let on_disk = |name: &str| local_models.contains(&name.to_string());
     // Helper: model size from tiers
@@ -66,11 +83,6 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
         min_vram: f64,
         models: Vec<String>,
     }
-    let catalog_ref = |name: &str| {
-        crate::models::find_remote_catalog_model_exact(name)
-            .map(|model| crate::models::remote_catalog_model_ref(&model))
-            .unwrap_or_else(|| name.to_string())
-    };
     let packs: Vec<Pack> = vec![
         // One model per tier. Node serves one model at a time.
         Pack {
@@ -125,10 +137,11 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
     vec![primary]
 }
 
-/// Models to advertise as "wanted" for demand seeding.
-/// These tell other nodes what the mesh could use, covering every VRAM tier.
-/// NOT served by this node — just demand hints for the mesh.
-pub fn demand_seed_models() -> Vec<String> {
+/// Build the model refs advertised as demand hints for every VRAM tier.
+fn demand_seed_models_with<F>(catalog_ref: &F) -> Vec<String>
+where
+    F: Fn(&str) -> String,
+{
     [
         "Qwen3-Coder-Next-Q4_K_M",
         "Qwen3.5-27B-Q4_K_M",
@@ -138,19 +151,29 @@ pub fn demand_seed_models() -> Vec<String> {
         "Qwen3-0.6B-Q4_K_M",
     ]
     .into_iter()
-    .map(|name| {
-        crate::models::find_remote_catalog_model_exact(name)
-            .map(|model| crate::models::remote_catalog_model_ref(&model))
-            .unwrap_or_else(|| name.to_string())
-    })
+    .map(catalog_ref)
     .collect()
 }
 
 /// Legacy wrapper — returns serving models + demand seeds combined.
 /// Used by `smart_auto` for the StartNew decision.
 pub fn default_models_for_vram(vram_gb: f64) -> Vec<String> {
-    let mut models = auto_model_pack(vram_gb);
-    for m in demand_seed_models() {
+    let local_models = crate::models::scan_local_models();
+    let tiers = model_tiers();
+    default_models_for_vram_with(vram_gb, &local_models, &tiers, &catalog_ref)
+}
+
+fn default_models_for_vram_with<F>(
+    vram_gb: f64,
+    local_models: &[String],
+    tiers: &[(String, f64)],
+    catalog_ref: &F,
+) -> Vec<String>
+where
+    F: Fn(&str) -> String,
+{
+    let mut models = auto_model_pack_with(vram_gb, local_models, tiers, catalog_ref);
+    for m in demand_seed_models_with(catalog_ref) {
         if !models.contains(&m) {
             models.push(m);
         }
@@ -162,98 +185,95 @@ pub fn default_models_for_vram(vram_gb: f64) -> Vec<String> {
 mod auto_pack_tests {
     use super::*;
 
-    fn catalog_ref(name: &str) -> String {
-        crate::models::find_remote_catalog_model_exact(name)
-            .map(|model| crate::models::remote_catalog_model_ref(&model))
-            .unwrap_or_else(|| name.to_string())
+    fn identity_ref(name: &str) -> String {
+        name.to_string()
     }
 
-    fn matches_catalog_alias(model: &str, alias: &str) -> bool {
-        if model == alias || model == catalog_ref(alias) {
-            return true;
-        }
-        let Some((family, quant)) = alias.rsplit_once("-Q") else {
-            return false;
-        };
-        model.contains(family) && model.contains(&format!("Q{quant}"))
+    fn test_tiers() -> Vec<(String, f64)> {
+        [
+            ("MiniMax-M2.5-Q4_K_M", 151.8),
+            ("Qwen3-Coder-Next-Q4_K_M", 52.8),
+            ("GLM-4.7-Flash-Q4_K_M", 19.8),
+            ("Qwen3.5-27B-Q4_K_M", 18.7),
+            ("Gemma-4-E4B-it-Q4_K_M", 5.1),
+            ("Qwen3-4B-Q4_K_M", 2.75),
+        ]
+        .into_iter()
+        .map(|(name, size)| (name.to_string(), size))
+        .collect()
+    }
+
+    fn test_auto_model_pack(vram_gb: f64) -> Vec<String> {
+        auto_model_pack_with(vram_gb, &[], &test_tiers(), &identity_ref)
     }
 
     fn assert_single_pack_model(pack: &[String], alias: &str) {
         assert_eq!(pack.len(), 1);
-        assert!(
-            matches_catalog_alias(&pack[0], alias),
-            "expected {alias} or catalog ref, got {}",
-            pack[0]
-        );
+        assert_eq!(pack[0], alias);
     }
 
     fn assert_contains_catalog_alias(models: &[String], alias: &str) {
-        assert!(
-            models
-                .iter()
-                .any(|model| matches_catalog_alias(model, alias)),
-            "model {alias} missing from default models"
-        );
+        assert!(models.iter().any(|model| model == alias));
     }
 
     #[test]
     fn pack_4gb_starter() {
-        let pack = auto_model_pack(4.0);
+        let pack = test_auto_model_pack(4.0);
         assert_single_pack_model(&pack, "Qwen3-4B-Q4_K_M");
     }
 
     #[test]
     fn pack_8gb_single_model() {
-        let pack = auto_model_pack(8.0);
+        let pack = test_auto_model_pack(8.0);
         assert_single_pack_model(&pack, "Gemma-4-E4B-it-Q4_K_M");
     }
 
     #[test]
     fn pack_16gb_single() {
-        let pack = auto_model_pack(16.0);
+        let pack = test_auto_model_pack(16.0);
         assert_single_pack_model(&pack, "Gemma-4-E4B-it-Q4_K_M");
     }
 
     #[test]
     fn pack_24gb_vision() {
-        let pack = auto_model_pack(24.0);
+        let pack = test_auto_model_pack(24.0);
         assert_single_pack_model(&pack, "Qwen3.5-27B-Q4_K_M");
     }
 
     #[test]
     fn pack_50gb_glm_flash() {
-        let pack = auto_model_pack(50.0);
+        let pack = test_auto_model_pack(50.0);
         assert_single_pack_model(&pack, "GLM-4.7-Flash-Q4_K_M");
     }
 
     #[test]
     fn pack_63gb_frontier_coder() {
-        let pack = auto_model_pack(63.0);
+        let pack = test_auto_model_pack(63.0);
         assert_single_pack_model(&pack, "Qwen3-Coder-Next-Q4_K_M");
     }
 
     #[test]
     fn pack_85gb_frontier_coder() {
-        let pack = auto_model_pack(85.0);
+        let pack = test_auto_model_pack(85.0);
         assert_single_pack_model(&pack, "Qwen3-Coder-Next-Q4_K_M");
     }
 
     #[test]
     fn pack_206gb_minimax() {
-        let pack = auto_model_pack(206.0);
+        let pack = test_auto_model_pack(206.0);
         assert_single_pack_model(&pack, "MiniMax-M2.5-Q4_K_M");
     }
 
     #[test]
     fn pack_between_tiers_falls_through() {
         // 40GB: below 50GB tier, falls to 24GB tier (Qwen3.5-27B)
-        let pack = auto_model_pack(40.0);
+        let pack = test_auto_model_pack(40.0);
         assert_single_pack_model(&pack, "Qwen3.5-27B-Q4_K_M");
     }
 
     #[test]
     fn demand_seeds_are_separate() {
-        let seeds = demand_seed_models();
+        let seeds = demand_seed_models_with(&identity_ref);
         assert!(seeds.len() >= 4);
         assert_contains_catalog_alias(&seeds, "Qwen3-0.6B-Q4_K_M");
         assert_contains_catalog_alias(&seeds, "Qwen3-Coder-Next-Q4_K_M");
@@ -261,24 +281,20 @@ mod auto_pack_tests {
 
     #[test]
     fn default_models_includes_both() {
-        let all = default_models_for_vram(30.0);
-        let pack = auto_model_pack(30.0);
-        let seeds = demand_seed_models();
+        let pack = test_auto_model_pack(30.0);
+        let seeds = demand_seed_models_with(&identity_ref);
+        let all = default_models_for_vram_with(30.0, &[], &test_tiers(), &identity_ref);
         // Pack models come first
         for m in &pack {
             assert!(
-                all.iter().any(|model| {
-                    model == m || matches_catalog_alias(model, m) || matches_catalog_alias(m, model)
-                }),
+                all.contains(m),
                 "pack model {m} missing from default_models"
             );
         }
         // Seeds are also present
         for m in &seeds {
             assert!(
-                all.iter().any(|model| {
-                    model == m || matches_catalog_alias(model, m) || matches_catalog_alias(m, model)
-                }),
+                all.contains(m),
                 "seed model {m} missing from default_models"
             );
         }

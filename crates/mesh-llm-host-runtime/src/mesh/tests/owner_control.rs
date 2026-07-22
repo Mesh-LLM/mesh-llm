@@ -442,6 +442,7 @@ async fn control_plane_listener_shutdown_stops_listener_task() -> anyhow::Result
     )?;
 
     node.shutdown_control_listener().await;
+    assert!(node.control_endpoint().await.is_none());
 
     let client = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
@@ -450,7 +451,15 @@ async fn control_plane_listener_shutdown_stops_listener_task() -> anyhow::Result
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
         .bind()
         .await?;
-    assert!(client.connect(endpoint, ALPN_CONTROL_V1).await.is_err());
+    let reconnect = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        client.connect(endpoint, ALPN_CONTROL_V1),
+    )
+    .await;
+    assert!(
+        !matches!(reconnect, Ok(Ok(_))),
+        "closed control endpoint unexpectedly accepted a connection"
+    );
     Ok(())
 }
 

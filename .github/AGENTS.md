@@ -26,13 +26,16 @@ reason about.
 - Gate backend lanes on backend inputs, not every Rust change.
 - Keep clippy sharding driven by `scripts/plan-clippy-batches.sh`; do not
   replace it with hand-maintained static batches.
+- Keep crate-test sharding driven by `scripts/plan-test-batches.sh`. It derives
+  workspace membership from `cargo metadata`; do not add a workflow-owned test
+  crate allowlist.
 - When adding a Rust workspace crate, make sure its package name appears in the
   `WORKSPACE_MEMBERS` arrays in `scripts/affected-crates.sh` and
   `scripts/plan-clippy-batches.sh`. Normal affected-crate routing discovers new
   crates through `cargo metadata`, but the all-rust/fail-open paths and clippy
   `--all` planning still use those arrays. `cargo run -p xtask --
   repo-consistency ci-crate-lists` fails fast when they drift from the Cargo
-  workspace.
+  workspace or when generated crate-test batches do not cover it exactly once.
 - If workflow changes affect crate/test routing, update
   `tools/xtask/src/main.rs` invariants in the same change.
 

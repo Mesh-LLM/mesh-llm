@@ -38,6 +38,7 @@ pub enum LlamaFileType {
     MostlyMxfp4Moe = 38,
     MostlyNvfp4 = 39,
     MostlyQ1_0 = 40,
+    MostlyQ2_0 = 41,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,7 +78,8 @@ pub enum GgmlType {
     Mxfp4 = 39,
     Nvfp4 = 40,
     Q1_0 = 41,
-    Count = 42,
+    Q2_0 = 42,
+    Count = 43,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

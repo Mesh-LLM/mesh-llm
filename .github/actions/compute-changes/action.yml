@@ -27,6 +27,9 @@ outputs:
   batches_json:
     description: 'JSON array of test batches'
     value: ${{ steps.derive.outputs.batches_json }}
+  test_batches_json:
+    description: 'JSON array of Cargo test batches'
+    value: ${{ steps.derive.outputs.test_batches_json }}
   clippy_batches_json:
     description: 'JSON array of deterministic clippy matrix batches'
     value: ${{ steps.derive.outputs.clippy_batches_json }}
@@ -128,6 +131,12 @@ runs:
           CLIPPY_BATCHES=$(bash scripts/plan-clippy-batches.sh --all)
         else
           CLIPPY_BATCHES=$(bash scripts/plan-clippy-batches.sh --crates-json "$AFFECTED_CRATES")
+        fi
+
+        if [[ "${{ inputs.event_name }}" != "pull_request" ]] || [[ "$ALL_RUST" == "true" ]]; then
+          TEST_BATCHES=$(bash scripts/plan-test-batches.sh --all --bins 4)
+        else
+          TEST_BATCHES=$(bash scripts/plan-test-batches.sh --crates-json "$AFFECTED_CRATES" --bins 4)
         fi
 
         # Read changed files for docs_only and rust_changed logic
@@ -330,21 +339,9 @@ runs:
         }
 
         if [[ "${{ inputs.event_name }}" == "workflow_dispatch" ]] || [[ "$ALL_RUST" == "true" ]]; then
-          add_linux_test_group sdk-api linux-tests-sdk-api
-          add_linux_test_group skippy linux-tests-skippy
-          add_linux_test_group unit linux-tests-unit
           add_linux_test_group protocol linux-tests-protocol
           add_linux_test_group skippy-smoke linux-tests-skippy-smoke
         else
-          if echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm-client") or index("mesh-llm-api-client") or index("mesh-llm-api-server") or index("mesh-llm-config") or index("mesh-llm-commands") or index("mesh-llm-events") or index("mesh-llm-hardware-profile") or index("mesh-llm-runtime-install") or index("mesh-llm-native-runtime") or index("mesh-llm-routing") or index("mesh-llm-types") or index("mesh-llm-sdk") or index("mesh-llm-cli") or index("mesh-llm-tui") or index("mesh-llm-embedded-runtime") or index("mesh-llm-console-server") or index("mesh-llm-ffi") or index("mesh-llm-nodejs")' >/dev/null; then
-            add_linux_test_group sdk-api linux-tests-sdk-api
-          fi
-          if echo "$AFFECTED_CRATES" | jq -e 'index("skippy-protocol") or index("skippy-server") or index("openai-frontend") or index("skippy-runtime") or index("skippy-topology") or index("skippy-model-package") or index("skippy-prompt") or index("metrics-server")' >/dev/null; then
-            add_linux_test_group skippy linux-tests-skippy
-          fi
-          if echo "$AFFECTED_CRATES" | jq -e 'index("model-artifact") or index("mesh-llm-host-runtime") or index("mesh-llm")' >/dev/null; then
-            add_linux_test_group unit linux-tests-unit
-          fi
           if echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm") or index("mesh-llm-protocol")' >/dev/null; then
             add_linux_test_group protocol linux-tests-protocol
           fi
@@ -361,6 +358,7 @@ runs:
           echo "affected_crates=$AFFECTED_CRATES"
           echo "test_crates=$TEST_CRATES"
           echo "batches_json=$BATCHES"
+          echo "test_batches_json=$TEST_BATCHES"
           echo "clippy_batches_json=$CLIPPY_BATCHES"
           echo "all_rust=$ALL_RUST"
           echo "ui_changed=$UI_CHANGED"

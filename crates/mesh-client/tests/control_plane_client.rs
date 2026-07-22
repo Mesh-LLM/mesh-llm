@@ -757,7 +757,11 @@ async fn control_plane_client_unreachable_listener_returns_structured_negotiatio
 
     let client = make_client().await;
     let err = match client
-        .connect_control_plane(ControlPlaneBootstrapOptions::new().with_control_endpoint(token))
+        .connect_control_plane(
+            ControlPlaneBootstrapOptions::new()
+                .with_control_endpoint(token)
+                .with_connect_timeout(std::time::Duration::from_millis(100)),
+        )
         .await
     {
         Ok(_) => panic!("unreachable listener should fail"),

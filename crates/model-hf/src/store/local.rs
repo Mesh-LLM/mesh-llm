@@ -1237,45 +1237,27 @@ mod tests {
 
     #[test]
     fn mmproj_path_falls_back_to_single_sibling_sidecar() {
-        let temp = std::env::temp_dir().join(format!(
-            "mesh-llm-mmproj-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&temp).unwrap();
-        let model = temp.join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
-        let mmproj = temp.join("mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf");
+        let temp = tempfile::tempdir().unwrap();
+        let model = temp.path().join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+        let mmproj = temp.path().join("mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf");
         std::fs::write(&model, b"model").unwrap();
         std::fs::write(&mmproj, b"mmproj").unwrap();
 
         let found = find_mmproj_path("Qwen3VL-2B-Instruct-Q4_K_M", &model);
         assert_eq!(found.as_deref(), Some(mmproj.as_path()));
-
-        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
     fn mmproj_path_ignores_ambiguous_sibling_sidecars() {
-        let temp = std::env::temp_dir().join(format!(
-            "mesh-llm-mmproj-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&temp).unwrap();
-        let model = temp.join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
-        let mmproj_a = temp.join("mmproj-a.gguf");
-        let mmproj_b = temp.join("mmproj-b.gguf");
+        let temp = tempfile::tempdir().unwrap();
+        let model = temp.path().join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+        let mmproj_a = temp.path().join("mmproj-a.gguf");
+        let mmproj_b = temp.path().join("mmproj-b.gguf");
         std::fs::write(&model, b"model").unwrap();
         std::fs::write(&mmproj_a, b"mmproj").unwrap();
         std::fs::write(&mmproj_b, b"mmproj").unwrap();
 
         assert!(find_mmproj_path("Qwen3VL-2B-Instruct-Q4_K_M", &model).is_none());
-
-        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]

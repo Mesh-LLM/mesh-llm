@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/base'
 
 const MEASUREMENT_MS = 6000
 const FRAME_BUDGET_MS = 16.7

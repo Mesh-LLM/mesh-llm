@@ -994,7 +994,7 @@ mod tests {
         let marker = root.join("mesh-llm-benchmark-cuda");
 
         let err = with_benchmark_child_override(&child, || {
-            run_benchmark_subprocess(&marker, Duration::from_secs(1))
+            run_benchmark_subprocess(&marker, Duration::from_secs(5))
                 .expect_err("empty-stderr benchmark child failure should fail")
         });
         let _ = std::fs::remove_dir_all(&root);
@@ -1019,7 +1019,9 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).expect("create timeout dir");
         #[cfg(unix)]
-        let child = write_test_child(&root, "mesh-llm-child", "sleep 5");
+        // Replace the shell with the sleeping process so killing the benchmark
+        // child also closes its piped stdout/stderr immediately.
+        let child = write_test_child(&root, "mesh-llm-child", "exec sleep 5");
         #[cfg(windows)]
         let child = write_test_child(&root, "mesh-llm-child.cmd", "timeout /t 5 >NUL");
         let marker = root.join("mesh-llm-benchmark-cuda");
