@@ -729,6 +729,7 @@ mod tests {
     }
 
     fn pinned_llama_quant_option_names() -> Vec<String> {
+        const UNSUPPORTED_FFI_QUANT_MODES: &[&str] = &["Q2_0"];
         let quantize_cpp = repo_root().join(".deps/llama.cpp/tools/quantize/quantize.cpp");
         let source = fs::read_to_string(&quantize_cpp)
             .unwrap_or_else(|err| panic!("read {}: {err}", quantize_cpp.display()));
@@ -744,6 +745,7 @@ mod tests {
                 line.strip_prefix("{ \"")
                     .and_then(|rest| rest.split_once('"').map(|(name, _)| name.to_string()))
             })
+            .filter(|name| !UNSUPPORTED_FFI_QUANT_MODES.contains(&name.as_str()))
             .collect()
     }
 

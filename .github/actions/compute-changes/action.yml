@@ -288,7 +288,7 @@ runs:
         WINDOWS_GPU_BUILD_REQUIRED="false"
         if [[ -n "$CHANGED_FILES" ]]; then
           WINDOWS_CPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^crates/mesh-llm-nodejs/|^crates/skippy-ffi/|^scripts/build-windows\.ps1$|^third_party/llama\.cpp/|^Cargo\.toml$|^Cargo\.lock$|^\.github/cache-version\.txt$)' || true)
-          WINDOWS_GPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^crates/skippy-ffi/|^scripts/build-windows\.ps1$|^scripts/install-windows-sdk\.ps1$|^third_party/llama\.cpp/|^\.github/cache-version\.txt$|^\.github/actions/setup-windows-rocm-sdk/)' || true)
+          WINDOWS_GPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^crates/skippy-ffi/|^scripts/(build-windows|install-windows-sdk)\.ps1$|^scripts/(package-native-runtime|verify-native-runtime-package)\.sh$|^scripts/windows-native-runtime-deps\.py$|^scripts/tests/test_windows_native_runtime_deps\.py$|^third_party/llama\.cpp/|^\.github/cache-version\.txt$|^\.github/actions/(compute-changes/action\.yml$|setup-windows-rocm-sdk/))' || true)
           if [[ -n "$WINDOWS_CPU_INPUTS" ]] || [[ "$BACKEND_RECIPE_CHANGED" == "true" ]]; then
             WINDOWS_CPU_BUILD_REQUIRED="true"
           fi

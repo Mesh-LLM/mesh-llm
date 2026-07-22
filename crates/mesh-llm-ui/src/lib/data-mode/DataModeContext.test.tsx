@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DATA_MODE_STORAGE_KEY, DataModeProvider } from '@/lib/data-mode/DataModeContext'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { DATA_MODE_STORAGE_KEY, DataModeProvider, LEGACY_DATA_MODE_STORAGE_KEY } from '@/lib/data-mode/DataModeContext'
 import { useDataMode } from '@/lib/data-mode/useDataMode'
 import { env } from '@/lib/env'
 
@@ -20,6 +20,7 @@ describe('DataModeProvider', () => {
 
   afterEach(() => {
     env.isDevelopment = originalIsDevelopment
+    vi.restoreAllMocks()
   })
 
   it('defaults to live mode in production builds and persists under the preview namespace', async () => {
@@ -70,6 +71,54 @@ describe('DataModeProvider', () => {
     expect(result.current.mode).toBe('live')
   })
 
+  it('migrates a legacy harness default to the production default without deleting v1', () => {
+    env.isDevelopment = false
+    window.localStorage.setItem(LEGACY_DATA_MODE_STORAGE_KEY, 'harness')
+
+    const { result } = renderHook(() => useDataMode(), { wrapper: providerWrapper() })
+
+    expect(result.current.mode).toBe('live')
+    expect(window.localStorage.getItem(DATA_MODE_STORAGE_KEY)).toBe('live')
+    expect(window.localStorage.getItem(LEGACY_DATA_MODE_STORAGE_KEY)).toBe('harness')
+  })
+
+  it('does not repeat migration when a valid v2 choice already exists', () => {
+    window.localStorage.setItem(LEGACY_DATA_MODE_STORAGE_KEY, 'live')
+    window.localStorage.setItem(DATA_MODE_STORAGE_KEY, 'harness')
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+
+    const { result } = renderHook(() => useDataMode(), { wrapper: providerWrapper({ initialMode: 'live' }) })
+
+    expect(result.current.mode).toBe('harness')
+    expect(setItem).not.toHaveBeenCalled()
+  })
+
+  it('repairs a malformed v2 value without restoring stale v1 state', async () => {
+    window.localStorage.setItem(LEGACY_DATA_MODE_STORAGE_KEY, 'harness')
+    window.localStorage.setItem(DATA_MODE_STORAGE_KEY, 'not-a-data-mode')
+
+    const { result } = renderHook(() => useDataMode(), { wrapper: providerWrapper({ initialMode: 'live' }) })
+
+    expect(result.current.mode).toBe('live')
+    await waitFor(() => {
+      expect(window.localStorage.getItem(DATA_MODE_STORAGE_KEY)).toBe('live')
+    })
+    expect(window.localStorage.getItem(LEGACY_DATA_MODE_STORAGE_KEY)).toBe('harness')
+  })
+
+  it('keeps legacy state intact when the v2 migration write fails', () => {
+    window.localStorage.setItem(LEGACY_DATA_MODE_STORAGE_KEY, 'harness')
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage unavailable', 'QuotaExceededError')
+    })
+
+    const { result } = renderHook(() => useDataMode(), { wrapper: providerWrapper({ initialMode: 'live' }) })
+
+    expect(result.current.mode).toBe('live')
+    expect(window.localStorage.getItem(DATA_MODE_STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem(LEGACY_DATA_MODE_STORAGE_KEY)).toBe('harness')
+  })
+
   it('persists data mode updates', async () => {
     const { result } = renderHook(() => useDataMode(), { wrapper: providerWrapper() })
 
@@ -92,5 +141,21 @@ describe('DataModeProvider', () => {
 
     expect(result.current.mode).toBe('live')
     expect(window.localStorage.getItem(storageKey)).toBeNull()
+  })
+
+  it('does not run the app upgrade migration for a host-owned storage key', async () => {
+    const storageKey = 'host-owned:data-mode'
+    window.localStorage.setItem(LEGACY_DATA_MODE_STORAGE_KEY, 'harness')
+
+    const { result } = renderHook(() => useDataMode(), {
+      wrapper: providerWrapper({ initialMode: 'live', storageKey })
+    })
+
+    expect(result.current.mode).toBe('live')
+    await waitFor(() => {
+      expect(window.localStorage.getItem(storageKey)).toBe('live')
+    })
+    expect(window.localStorage.getItem(DATA_MODE_STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem(LEGACY_DATA_MODE_STORAGE_KEY)).toBe('harness')
   })
 })

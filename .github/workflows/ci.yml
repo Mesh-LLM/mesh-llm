@@ -73,6 +73,7 @@ jobs:
               - '.github/cache-version.txt'
               - '.github/workflows/ci.yml'
               - '.github/workflows/smoke.yml'
+              - '.github/actions/compute-changes/action.yml'
 
             ui:
               - 'crates/mesh-llm-ui/**'
@@ -140,10 +141,15 @@ jobs:
               - 'crates/skippy-ffi/**'
               - 'scripts/build-windows.ps1'
               - 'scripts/install-windows-sdk.ps1'
+              - 'scripts/package-native-runtime.sh'
+              - 'scripts/verify-native-runtime-package.sh'
+              - 'scripts/windows-native-runtime-deps.py'
+              - 'scripts/tests/test_windows_native_runtime_deps.py'
               - 'third_party/llama.cpp/**'
               - 'Justfile'
               - '.github/cache-version.txt'
               - '.github/actions/setup-windows-rocm-sdk/**'
+              - '.github/actions/compute-changes/action.yml'
               - '.github/workflows/ci.yml'
               - '.github/workflows/windows-warm-caches.yml'
 
@@ -1092,6 +1098,14 @@ jobs:
         if: ${{ env.RUN_WINDOWS_GPU == 'true' }}
         with:
           persist-credentials: false
+      - uses: actions/setup-python@v6
+        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' }}
+        with:
+          python-version: '3.x'
+      - name: Test Windows native-runtime dependency resolver
+        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' }}
+        shell: pwsh
+        run: python -m unittest scripts.tests.test_windows_native_runtime_deps -v
       - uses: dtolnay/rust-toolchain@stable
         if: ${{ env.RUN_WINDOWS_GPU == 'true' }}
       - uses: taiki-e/install-action@just

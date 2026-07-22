@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { DATA_MODE_STORAGE_KEY } from '@e2e/support/data-mode'
 
 const pluginName = 'web-ui-exemplar'
 const pluginApi = `/api/plugins/${pluginName}`
@@ -94,10 +95,13 @@ test.describe('installed plugin web UI exemplar @plugin', () => {
     const browserApiResponses = collectBrowserApiResponses(page)
     await mkdir(evidenceDirectory, { recursive: true })
 
-    await page.addInitScript((preferences) => {
-      window.localStorage.setItem('mesh-llm-ui-preview:preferences:v1', JSON.stringify(preferences))
-      window.localStorage.setItem('mesh-llm-ui-preview:data-mode:v1', 'live')
-    }, darkUiPreferences)
+    await page.addInitScript(
+      ({ dataModeStorageKey, preferences }) => {
+        window.localStorage.setItem('mesh-llm-ui-preview:preferences:v1', JSON.stringify(preferences))
+        window.localStorage.setItem(dataModeStorageKey, 'live')
+      },
+      { dataModeStorageKey: DATA_MODE_STORAGE_KEY, preferences: darkUiPreferences }
+    )
 
     try {
       const consoleResponse = await request.get('/')

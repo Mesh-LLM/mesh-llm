@@ -6,6 +6,13 @@ title: Installing Mesh
 
 Mesh runs on macOS, Linux, and Windows. Choose your platform for detailed install instructions.
 
+The shell and PowerShell installers below remain the simplest installation
+path. Versioned Homebrew formulas, Linux native packages, checksums, SBOMs, and
+OCI images are published by the public
+[`Mesh-LLM/mesh-packaging`](https://github.com/Mesh-LLM/mesh-packaging)
+repository. Homebrew is provided as a release formula rather than a tap, and
+Linux packages are release assets rather than apt or pacman repositories.
+
 ## Choose your platform
 
 - [Installing on macOS](/docs/pages/installing-macos/) (Apple Silicon, Homebrew)

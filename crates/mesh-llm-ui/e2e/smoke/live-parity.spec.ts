@@ -1,6 +1,6 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
+import { DATA_MODE_STORAGE_KEY } from '@e2e/support/data-mode'
 
-const DATA_MODE_STORAGE_KEY = 'mesh-llm-ui-preview:data-mode:v1'
 const API_ORIGIN = 'http://127.0.0.1:3131'
 const CLIP_FIXTURE_PATH = decodeURIComponent(new URL('../fixtures/clip.mp3', import.meta.url).pathname)
 

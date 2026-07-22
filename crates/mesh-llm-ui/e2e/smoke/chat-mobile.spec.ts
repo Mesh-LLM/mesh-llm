@@ -1,6 +1,6 @@
 import { devices, expect, test, type Page } from '@playwright/test'
+import { DATA_MODE_STORAGE_KEY } from '@e2e/support/data-mode'
 
-const DATA_MODE_STORAGE_KEY = 'mesh-llm-ui-preview:data-mode:v1'
 const API_ORIGIN = 'http://127.0.0.1:3131'
 const IPHONE_KEYBOARD_VIEWPORT = { width: 390, height: 520 }
 const IPHONE_14 = devices['iPhone 14']

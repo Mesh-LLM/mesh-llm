@@ -293,6 +293,239 @@ pub struct NativeMtpOpenAiCaseReport {
     pub metrics: NativeMtpOpenAiMetricsReport,
 }
 
+#[derive(Debug, Serialize)]
+pub struct GlmDsaStage0TraceReport {
+    pub mode: &'static str,
+    pub status: &'static str,
+    pub run_id: String,
+    pub model_id: String,
+    pub model_path: String,
+    pub case_root: String,
+    pub stage_layer_end: u32,
+    pub activation_width: i32,
+    pub activation_wire_dtype: String,
+    pub prefill_chunk_size: u32,
+    pub max_new_tokens: u32,
+    pub trace_filter: String,
+    pub both_variants_completed: bool,
+    pub fused_prefill_speedup_vs_direct: Option<f64>,
+    pub fused_glm_dsa_op_speedup_vs_direct: Option<f64>,
+    pub trace_parity: GlmDsaTraceParityReport,
+    pub downstream_parity: GlmDsaDownstreamParityReport,
+    pub semantic_parity: GlmDsaSemanticParityReport,
+    pub variants: Vec<GlmDsaTraceVariantReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GlmDsaTraceParityReport {
+    pub required: bool,
+    pub matched: bool,
+    pub fused_trace_count: usize,
+    pub direct_trace_count: usize,
+    pub compared_trace_count: usize,
+    pub mismatched_trace_count: usize,
+    pub missing_in_fused_count: usize,
+    pub missing_in_direct_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mismatches: Vec<GlmDsaTraceParityMismatchReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing_in_fused: Vec<GlmDsaTraceKeyReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing_in_direct: Vec<GlmDsaTraceKeyReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GlmDsaTraceKeyReport {
+    pub tokens: u64,
+    pub name: String,
+    pub occurrence: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GlmDsaTraceParityMismatchReport {
+    pub key: GlmDsaTraceKeyReport,
+    pub reason: String,
+    pub fused_stats: Option<String>,
+    pub direct_stats: Option<String>,
+    pub fused_type: String,
+    pub direct_type: String,
+    pub fused_shape: [i64; 4],
+    pub direct_shape: [i64; 4],
+}
+
+#[derive(Debug, Serialize)]
+pub struct GlmDsaTraceVariantReport {
+    pub variant: &'static str,
+    pub direct_sparse_attn: bool,
+    pub fused_sparse_mask: bool,
+    pub prompt_exit_code: Option<i32>,
+    pub prompt_success: bool,
+    pub stage_log: String,
+    pub prompt_log: String,
+    pub fake_downstream_message_count: usize,
+    pub fake_downstream_prefill_message_count: usize,
+    pub fake_downstream_decode_message_count: usize,
+    pub fake_downstream_prefill_token_count: usize,
+    pub fake_downstream_top_k_message_count: usize,
+    pub fake_downstream_max_top_k_count: usize,
+    pub fake_downstream_total_top_k_count: usize,
+    pub fake_downstream_total_causal_visible_top_k_count: usize,
+    pub fake_downstream_total_active_top_k_window_count: usize,
+    pub fake_downstream_total_finite_top_k_count: usize,
+    pub fake_downstream_total_padded_top_k_count: usize,
+    pub fake_downstream_avg_top_k_per_token: Option<f64>,
+    pub fake_downstream_avg_causal_visible_top_k_per_token: Option<f64>,
+    pub fake_downstream_avg_active_top_k_window_per_token: Option<f64>,
+    pub fake_downstream_avg_finite_top_k_per_token: Option<f64>,
+    pub fake_downstream_max_top_k_per_token: Option<f64>,
+    pub fake_downstream_top_k_padding_ratio: Option<f64>,
+    pub fake_downstream_top_k_sideband_to_hidden_ratio: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fake_downstream_messages: Vec<GlmDsaDownstreamMessageReport>,
+    pub trace_line_count: usize,
+    pub timing_line_count: usize,
+    pub prompt_prefill_tok_s: Option<f64>,
+    pub prompt_decode_tok_s: Option<f64>,
+    pub avg_128_token_timing: Option<GlmDsaTimingReport>,
+    pub max_128_token_timing: Option<GlmDsaTimingChunkReport>,
+    pub last_128_token_timing: Option<GlmDsaTimingChunkReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub timing_chunks: Vec<GlmDsaTimingChunkReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub timing_group_chunks: Vec<GlmDsaTimingGroupChunkReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GlmDsaDownstreamMessageReport {
+    pub kind: String,
+    pub pos_start: i32,
+    pub token_count: i32,
+    pub activation_bytes: usize,
+    pub activation_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activation_f32: Option<GlmDsaActivationStatsReport>,
+    pub top_k_count: usize,
+    pub top_k_sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GlmDsaDownstreamParityReport {
+    pub matched: bool,
+    pub fused_message_count: usize,
+    pub direct_message_count: usize,
+    pub compared_message_count: usize,
+    pub mismatched_message_count: usize,
+    pub activation_mismatch_count: usize,
+    pub top_k_mismatch_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub messages: Vec<GlmDsaDownstreamComparisonReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GlmDsaSemanticParityReport {
+    pub matched: bool,
+    pub activation_atol: f32,
+    pub activation_relative_rmse_tolerance: f64,
+    pub activation_within_tolerance: bool,
+    pub activation_out_of_tolerance_count: usize,
+    pub top_k_exact: bool,
+    pub message_metadata_exact: bool,
+    pub compared_message_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GlmDsaDownstreamComparisonReport {
+    pub index: usize,
+    pub fused_kind: String,
+    pub direct_kind: String,
+    pub fused_pos_start: i32,
+    pub direct_pos_start: i32,
+    pub fused_token_count: i32,
+    pub direct_token_count: i32,
+    pub activation_sha256_equal: bool,
+    pub top_k_sha256_equal: bool,
+    pub top_k_count_equal: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k_comparison: Option<GlmDsaTopKComparisonReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activation_error: Option<GlmDsaActivationErrorReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GlmDsaTopKComparisonReport {
+    pub compared_count: usize,
+    pub mismatch_count: usize,
+    pub mismatch_ratio: f64,
+    pub active_compared_count: usize,
+    pub active_mismatch_count: usize,
+    pub active_mismatch_ratio: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_mismatch_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_mismatch_fused: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_mismatch_direct: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_active_mismatch_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_active_mismatch_fused: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_active_mismatch_direct: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GlmDsaActivationErrorReport {
+    pub count: usize,
+    pub max_abs_error: f32,
+    pub mean_abs_error: f64,
+    pub rmse: f64,
+    pub relative_rmse: Option<f64>,
+    pub max_reference_abs: f32,
+    pub non_finite_pair_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GlmDsaActivationStatsReport {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub max_abs: f32,
+    pub non_finite_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GlmDsaTimingReport {
+    pub chunk_count: usize,
+    pub total_us: f64,
+    pub indexer_topk_us: f64,
+    pub sparse_mask_us: f64,
+    pub dsa_sparse_attn_us: f64,
+    pub mla_attention_us: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GlmDsaTimingChunkReport {
+    pub index: usize,
+    pub tokens: u32,
+    pub total_us: f64,
+    pub indexer_topk_us: f64,
+    pub sparse_mask_us: f64,
+    pub dsa_sparse_attn_us: f64,
+    pub mla_attention_us: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GlmDsaTimingGroupChunkReport {
+    pub index: usize,
+    pub tokens: u32,
+    pub group: String,
+    pub total_us: f64,
+    pub indexer_topk_us: f64,
+    pub sparse_mask_us: f64,
+    pub dsa_sparse_attn_us: f64,
+    pub mla_attention_us: f64,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct NativeMtpOpenAiMetricsReport {
     pub native_mtp_enabled: bool,

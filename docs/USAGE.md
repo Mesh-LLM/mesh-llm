@@ -345,10 +345,10 @@ spec_default               = "auto"          # bool or "auto"
 # draft_cache_type_k = "q8_0"
 # draft_cache_type_v = "q8_0"
 
-# N-gram proposer and MTP extension. `simple` scans accepted history;
+# N-gram proposer and MTP extension.
 # `cache` is request-local and requires ngram_max <= 4; `suffix` is a pure-Rust
 # longest-suffix (prompt-lookup) matcher allowing ngram_max <= 64.
-# ngram_proposer            = "cache"  # simple | cache | suffix
+# ngram_proposer            = "cache"  # cache | suffix
 # ngram_min                 = 2
 # ngram_max                 = 4
 # ngram_max_proposal_tokens = 6        # output budget, separate from ngram_max
@@ -726,8 +726,8 @@ defaults. The resolved plan is validated once before Skippy starts.
 Set `strategy = "auto"` to use a package recommendation, `"disabled"` for
 the no-speculation baseline, or `"mtp"` for native MTP. A package may also
 publish stable names such as `mtp-cache`; that name is valid only for the
-package that declares it. Direct GGUF serving can use `ngram-simple`,
-`ngram-cache`, or `ngram-suffix` when it supplies valid N-gram bounds.
+package that declares it. Direct GGUF serving can use `ngram-cache` or
+`ngram-suffix` when it supplies valid N-gram bounds.
 
 ```toml
 [[models]]
@@ -746,13 +746,13 @@ verify_window_pipeline_depth = 2
 
 `ngram_min` and `ngram_max` determine the history match length.
 `ngram_max_proposal_tokens` is separately the maximum continuation length.
-The request-local cache is limited to `ngram_max <= 4`. N-gram settings require
-native MTP and create one composite proposal; standalone N-gram speculation is
-not supported. All combinations are verified together by the target, so tuning
-these values changes speculative work, not output correctness.
+The request-local cache is limited to `ngram_max <= 4`. N-gram settings may run
+standalone or, with native MTP, form one composite proposal. All combinations
+are verified together by the target, so tuning these values changes speculative
+work, not output correctness.
 
-A third proposer, `suffix`, is a pure-Rust longest-suffix matcher
-("prompt-lookup decoding"). Unlike `simple`/`cache` it is not bound by
+The `suffix` proposer is a pure-Rust longest-suffix matcher
+("prompt-lookup decoding"). Unlike `cache` it is not bound by
 llama.cpp's 4-token match window, so it can match long verbatim repeats in the
 context (up to `ngram_max <= 64`) and copy long, high-confidence drafts. It is
 designed for input-grounded, repetitive workloads — re-emitting a file with a

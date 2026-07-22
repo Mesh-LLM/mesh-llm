@@ -6,6 +6,8 @@ use mesh_llm_native_runtime::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
 
+mod rocm;
+
 pub fn host_runtime_profile() -> HostRuntimeProfile {
     let mut gpus = detect_gpus();
     apply_gpu_arch_overrides(&mut gpus);
@@ -322,8 +324,20 @@ fn detect_cuda_profile(gpus: &[HostGpuProfile]) -> Option<HostCudaProfile> {
 
 fn detect_rocm_profile(gpus: &[HostGpuProfile]) -> Option<HostRocmProfile> {
     let mut gpu_arches = env_string_set("MESH_LLM_ROCM_GPU_ARCHES");
+    gpu_arches.extend(rocm::gpu_arches());
+    detect_rocm_profile_with_arches(
+        gpus,
+        gpu_arches,
+        std::env::var("MESH_LLM_ROCM_VERSION").ok(),
+    )
+}
+
+fn detect_rocm_profile_with_arches(
+    gpus: &[HostGpuProfile],
+    mut gpu_arches: BTreeSet<String>,
+    version: Option<String>,
+) -> Option<HostRocmProfile> {
     gpu_arches.extend(gpus.iter().filter_map(|gpu| gpu.rocm_gfx.clone()));
-    let version = std::env::var("MESH_LLM_ROCM_VERSION").ok();
     let has_rocm_label = gpus.iter().any(|gpu| {
         let label = gpu.display_name.to_ascii_lowercase();
         label.contains("amd") || label.contains("radeon") || label.contains("rocm")
@@ -408,7 +422,6 @@ fn leading_major_version(value: &str) -> Option<u32> {
 
 fn gpu_labels() -> Vec<String> {
     let mut labels = Vec::new();
-    append_command_lines(&mut labels, "rocminfo", &[]);
     append_command_lines(&mut labels, "vulkaninfo", &["--summary"]);
     append_platform_gpu_labels(&mut labels);
     labels.sort();
@@ -688,6 +701,74 @@ mod tests {
             detected_native_runtime_flavors(&[profile("AMD Radeon PRO W7900")], None, None, None);
 
         assert!(flavors.contains(&NativeRuntimeBackendKind::Rocm));
+    }
+
+    #[test]
+    fn kfd_architecture_evidence_enables_rocm_without_inventory_synthesis() {
+        let profile =
+            detect_rocm_profile_with_arches(&[], BTreeSet::from(["gfx942".to_string()]), None)
+                .expect("KFD architecture should enable a ROCm runtime profile");
+
+        assert_eq!(profile.gpu_arches, BTreeSet::from(["gfx942".to_string()]));
+    }
+
+    #[test]
+    fn mi300x_kfd_evidence_selects_rocm_over_cpu_runtime() {
+        use mesh_llm_native_runtime::{
+            NativeRuntimeArtifact, NativeRuntimeBackend, NativeRuntimePlatform, RuntimeSelection,
+            select_native_runtime_from_artifacts,
+        };
+
+        let rocm =
+            detect_rocm_profile_with_arches(&[], BTreeSet::from(["gfx942".to_string()]), None)
+                .expect("MI300X KFD evidence should produce a ROCm profile");
+        let runtime_profile = HostRuntimeProfile {
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            target_triple: None,
+            available_flavors: detected_native_runtime_flavors(&[], None, Some(&rocm), None),
+            gpus: Vec::new(),
+            cuda: None,
+            rocm: Some(rocm),
+            vulkan: None,
+        };
+        let artifact = |id: &str, backend: NativeRuntimeBackend| NativeRuntimeArtifact {
+            id: id.to_string(),
+            mesh_version: Some("test".to_string()),
+            skippy_abi: "test-abi".to_string(),
+            platform: NativeRuntimePlatform {
+                os: "linux".to_string(),
+                arch: "x86_64".to_string(),
+                target: None,
+            },
+            backend,
+            rank: 0,
+            libraries: vec!["lib/libmeshllm_ffi.so".to_string()],
+            url: None,
+            sha256: None,
+            signature: None,
+        };
+        let artifacts = vec![
+            artifact("runtime-cpu", NativeRuntimeBackend::cpu()),
+            artifact(
+                "runtime-rocm",
+                NativeRuntimeBackend::rocm(vec!["gfx942".to_string()]),
+            ),
+        ];
+
+        let selected = select_native_runtime_from_artifacts(
+            &artifacts,
+            &runtime_profile,
+            "test",
+            Some("test-abi"),
+            &RuntimeSelection::Recommended,
+        )
+        .expect("MI300X should select the compatible ROCm runtime");
+
+        assert_eq!(
+            selected.artifact.backend.kind,
+            NativeRuntimeBackendKind::Rocm
+        );
     }
 
     #[test]

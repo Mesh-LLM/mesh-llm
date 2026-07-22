@@ -159,6 +159,7 @@ mod tests {
             quant: Some("Q2_K".to_string()),
             output_type: None,
             tensor_type_file: None,
+            tensor_type_recipe: None,
         };
 
         let report = verify_manifest(&manifest).unwrap();

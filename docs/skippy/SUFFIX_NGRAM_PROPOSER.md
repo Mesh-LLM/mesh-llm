@@ -25,7 +25,6 @@ All three N-gram implementations are first-class standalone proposers:
 
 | Strategy | Proposer | Requires native MTP | On lookup miss |
 |---|---|---:|---|
-| `ngram-simple` | Stateless llama.cpp history lookup | No | Decode one target token |
 | `ngram-cache` | Request-local llama.cpp cache | No | Decode one target token |
 | `ngram-suffix` | Request-local exact-suffix index | No | Decode one target token |
 
@@ -148,7 +147,7 @@ verify_window_max_tokens = 32
 verify_window_pipeline_depth = 2
 ```
 
-`ngram-simple`, `ngram-cache`, and `ngram-suffix` are valid standalone package
+`ngram-cache` and `ngram-suffix` are valid standalone package
 strategy types. A suffix package proposer must declare request-local history:
 
 ```json
@@ -274,8 +273,8 @@ The expected outcome is a hypothesis until measured. Acceptance rate alone is
 not the success criterion: a lower-acceptance arm may still win throughput when
 its longer horizon keeps distributed stages busy.
 
-A standalone comparison should use `disabled`, `ngram-simple`, `ngram-cache`,
-and `ngram-suffix` arms on the same split. The benchmark runner uses generic
+A standalone comparison should use `disabled`, `ngram-cache`, and
+`ngram-suffix` arms on the same split. The benchmark runner uses generic
 draft acceptance for standalone arms and N-gram tail acceptance for MTP hybrid
 arms; activation requires the configured proposer’s own hit/source telemetry.
 
@@ -396,8 +395,8 @@ following work should be completed before making suffix a package default:
 
 ### CLI and configuration
 
-- The resolver and hidden advanced CLI accept `ngram-simple`, `ngram-cache`,
-  and `ngram-suffix`; preserve tests proving all three reach the typed stage-0
+- The resolver and hidden advanced CLI accept `ngram-cache` and `ngram-suffix`;
+  preserve tests proving both reach the typed stage-0
   plan without native MTP.
 - Before general release, expose discoverable CLI help or a strategy-listing
   command instead of requiring operators to know hidden flags.

@@ -2,7 +2,10 @@ use anyhow::Result;
 use clap::Parser;
 
 mod cli;
+mod generation_manifest;
 mod gguf_header;
+mod glm_dsa_contract;
+mod glm_dsa_generation_policy;
 mod hash;
 mod inspect;
 mod package;
@@ -83,5 +86,26 @@ fn main() -> Result<()> {
             stages,
             verify_sha256,
         } => validate::run_preflight(package, stages, verify_sha256),
+        Command::ValidateGlmDsaContract {
+            package,
+            require_generation_policy,
+        } => {
+            let report = glm_dsa_contract::validate_path_with_options(
+                &package,
+                glm_dsa_contract::GlmDsaContractOptions {
+                    require_generation_policy,
+                },
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            anyhow::ensure!(
+                report.valid,
+                "GLM-DSA contract validation failed for {}",
+                package.display()
+            );
+            Ok(())
+        }
+        Command::RepairGlmDsaGenerationPolicy { package, in_place } => {
+            glm_dsa_generation_policy::repair_package(&package, in_place)
+        }
     }
 }

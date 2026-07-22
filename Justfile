@@ -184,10 +184,10 @@ release-build-cuda-windows cuda_arch="75;80;86;87;89;90":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cuda -CudaArch "{{cuda_arch}}" -BuildProfile release
 
 # Build a Linux ROCm ABI release artifact with an explicit architecture list.
-release-build-rocm rocm_arch="gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201":
+release-build-rocm rocm_arch="gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201":
     @MESH_LLM_BUILD_PROFILE=release scripts/build-linux-rocm.sh "{{ rocm_arch }}"
 
-release-build-rocm-windows rocm_arch="gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201":
+release-build-rocm-windows rocm_arch="gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend rocm -RocmArch "{{rocm_arch}}" -BuildProfile release
 
 # Build a Linux Vulkan ABI release artifact.

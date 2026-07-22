@@ -47,19 +47,7 @@ pub fn run_gpus(json_output: bool) -> Result<()> {
         return print_json(gpus_json(&hw));
     }
 
-    if hw.gpus.is_empty() {
-        println!(
-            "⚠️ No runtime-selectable GPUs reported by the embedded inference backend. This node will run CPU-only until the backend exposes a selectable device."
-        );
-        return Ok(());
-    }
-
-    for (index, gpu) in hw.gpus.iter().enumerate() {
-        if index > 0 {
-            println!();
-        }
-        print_gpu(gpu);
-    }
+    println!("{}", format_gpus(&hw));
 
     Ok(())
 }
@@ -222,45 +210,57 @@ fn attach_cached_bandwidth(hw: &mut HardwareSurvey) {
     }
 }
 
-fn print_gpu(gpu: &GpuFacts) {
-    println!("🖥️ GPU {}", gpu.index);
-    println!("  Name: {}", gpu.display_name);
+fn format_gpus(hw: &HardwareSurvey) -> String {
+    if hw.gpus.is_empty() {
+        return "⚠️ No runtime-selectable GPUs reported by the embedded inference backend. This node will run CPU-only until the backend exposes a selectable device.".to_string();
+    }
+    hw.gpus
+        .iter()
+        .map(format_gpu)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn format_gpu(gpu: &GpuFacts) -> String {
+    let mut lines = vec![
+        format!("🖥️ GPU {}", gpu.index),
+        format!("  Name: {}", gpu.display_name),
+    ];
     if let Some(stable_id) = gpu.stable_id.as_deref() {
-        println!("  Stable ID: {stable_id}");
+        lines.push(format!("  Stable ID: {stable_id}"));
     }
     if let Some(backend_device) = gpu.backend_device.as_deref() {
-        println!("  Backend device: {backend_device}");
+        lines.push(format!("  Backend device: {backend_device}"));
     } else {
-        println!(
-            "  Backend device: unavailable (hardware-visible only; embedded runtime did not report a selectable device)"
-        );
+        lines.push("  Backend device: unavailable (hardware-visible only; embedded runtime did not report a selectable device)".to_string());
     }
-    println!("  VRAM: {}", format_vram(gpu.vram_bytes));
-    println!(
+    lines.push(format!("  VRAM: {}", format_vram(gpu.vram_bytes)));
+    lines.push(format!(
         "  Bandwidth: {}",
         gpu.mem_bandwidth_gbps
             .map(format_bandwidth)
             .unwrap_or_else(|| "unavailable".to_string())
-    );
-    println!(
+    ));
+    lines.push(format!(
         "  Unified memory: {}",
         if gpu.unified_memory { "yes" } else { "no" }
-    );
+    ));
     if let Some(pci_bdf) = gpu.pci_bdf.as_deref() {
-        println!("  PCI BDF: {pci_bdf}");
+        lines.push(format!("  PCI BDF: {pci_bdf}"));
     }
     if let Some(vendor_uuid) = gpu.vendor_uuid.as_deref() {
-        println!("  Vendor UUID: {vendor_uuid}");
+        lines.push(format!("  Vendor UUID: {vendor_uuid}"));
     }
     if let Some(metal_registry_id) = gpu.metal_registry_id.as_deref() {
-        println!("  Metal registry ID: {metal_registry_id}");
+        lines.push(format!("  Metal registry ID: {metal_registry_id}"));
     }
     if let Some(dxgi_luid) = gpu.dxgi_luid.as_deref() {
-        println!("  DXGI LUID: {dxgi_luid}");
+        lines.push(format!("  DXGI LUID: {dxgi_luid}"));
     }
     if let Some(pnp_instance_id) = gpu.pnp_instance_id.as_deref() {
-        println!("  PnP instance ID: {pnp_instance_id}");
+        lines.push(format!("  PnP instance ID: {pnp_instance_id}"));
     }
+    lines.join("\n")
 }
 
 fn format_vram(bytes: u64) -> String {
@@ -346,6 +346,46 @@ mod tests {
                 "gpus": [],
             })
         );
+    }
+
+    #[test]
+    fn human_output_formats_rocm_gpu_without_omitting_backend_details() {
+        let mut gpu = sample_gpu(0);
+        gpu.display_name = "AMD Instinct MI300X".to_string();
+        gpu.backend_device = Some("ROCm0".to_string());
+        gpu.stable_id = Some("pci:0000:65:00.0".to_string());
+        gpu.pci_bdf = Some("0000:65:00.0".to_string());
+        gpu.vendor_uuid = None;
+        gpu.mem_bandwidth_gbps = None;
+        let hw = HardwareSurvey {
+            gpus: vec![gpu],
+            ..HardwareSurvey::default()
+        };
+
+        assert_eq!(
+            format_gpus(&hw),
+            "🖥️ GPU 0\n  Name: AMD Instinct MI300X\n  Stable ID: pci:0000:65:00.0\n  Backend device: ROCm0\n  VRAM: 24 GB\n  Bandwidth: unavailable\n  Unified memory: no\n  PCI BDF: 0000:65:00.0"
+        );
+    }
+
+    #[test]
+    fn human_output_keeps_every_rocm_gpu() {
+        let mut first = sample_gpu(0);
+        first.display_name = "AMD Instinct MI300X".to_string();
+        first.backend_device = Some("ROCm0".to_string());
+        let mut second = sample_gpu(1);
+        second.display_name = "AMD Instinct MI300X".to_string();
+        second.backend_device = Some("HIP1".to_string());
+        let hw = HardwareSurvey {
+            gpus: vec![first, second],
+            ..HardwareSurvey::default()
+        };
+
+        let output = format_gpus(&hw);
+
+        assert_eq!(output.matches("🖥️ GPU ").count(), 2);
+        assert!(output.contains("Backend device: ROCm0"));
+        assert!(output.contains("Backend device: HIP1"));
     }
 
     #[test]

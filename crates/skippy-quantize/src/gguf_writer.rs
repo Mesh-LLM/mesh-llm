@@ -13,6 +13,13 @@ use crate::tensor_map::{
 };
 use crate::types::ConvertOutputType;
 
+mod glm_dsa;
+
+use glm_dsa::{
+    GlmDsaKvBSplitMode, TensorTransform, enrich_glm_dsa_indexshare_metadata, glm_dsa_kv_b_layer,
+    glm_dsa_kv_b_split_mode, stream_transformed_segment,
+};
+
 const GGUF_MAGIC: &[u8; 4] = b"GGUF";
 const GGUF_VERSION: u32 = 3;
 const GGUF_ALIGNMENT: u64 = 32;
@@ -27,7 +34,6 @@ const GGUF_TYPE_UINT64: u32 = 10;
 const GGML_TYPE_F32: u32 = 0;
 const GGML_TYPE_F16: u32 = 1;
 const GGML_TYPE_BF16: u32 = 30;
-
 #[derive(Debug, Clone)]
 pub(crate) struct RawGgufWriteOptions {
     pub(crate) buffer_size: usize,
@@ -119,11 +125,14 @@ fn prepare_raw_safetensors_gguf(
         "no safetensors files found under {}",
         source.display()
     );
+    let metadata_seed = options.metadata.clone();
+    let glm_dsa_kv_b_split = glm_dsa_kv_b_split_mode(metadata_seed.as_deref())?;
     let tensors = collect_tensor_sources(
         &files,
         options.tensor_name_map,
         options.output_type,
         options.tensor_selection,
+        glm_dsa_kv_b_split,
     )?;
     ensure!(
         !tensors.is_empty(),
@@ -131,12 +140,10 @@ fn prepare_raw_safetensors_gguf(
         source.display()
     );
     let total_tensor_count = tensors.len();
+    let mut metadata = metadata_seed.unwrap_or_else(|| raw_metadata(source, total_tensor_count));
+    enrich_glm_dsa_indexshare_metadata(&mut metadata, &tensors)?;
     let mut tensors = select_split_tensors(tensors, options.split)?;
     assign_gguf_offsets(&mut tensors)?;
-    let metadata = options
-        .metadata
-        .clone()
-        .unwrap_or_else(|| raw_metadata(source, total_tensor_count));
     let metadata = split_metadata(metadata, options.split, total_tensor_count)?;
     Ok(PreparedGgufWrite {
         files,
@@ -289,6 +296,7 @@ fn collect_tensor_sources(
     tensor_name_map: TensorNameMap,
     output_type: Option<ConvertOutputType>,
     tensor_selection: TensorSelection,
+    glm_dsa_kv_b_split: GlmDsaKvBSplitMode,
 ) -> Result<Vec<TensorSource>> {
     let mut tensors = Vec::new();
     let mut expert_groups = BTreeMap::<ExpertGroupKey, ExpertGroup>::new();
@@ -313,6 +321,27 @@ fn collect_tensor_sources(
                     }
                 }
                 continue;
+            }
+            if let Some(layer) = glm_dsa_kv_b_layer(tensor.name())? {
+                match glm_dsa_kv_b_split {
+                    GlmDsaKvBSplitMode::Config(split) => {
+                        tensors.extend(TensorSource::from_glm_dsa_kv_b_split(
+                            file_index,
+                            tensor,
+                            layer,
+                            split,
+                            output_type,
+                        )?);
+                        continue;
+                    }
+                    GlmDsaKvBSplitMode::MissingMetadata => {
+                        anyhow::bail!(
+                            "GLM-DSA tensor {} requires attention head/value/rope/kv_lora metadata for kv_b split",
+                            tensor.name()
+                        );
+                    }
+                    GlmDsaKvBSplitMode::Disabled => {}
+                }
             }
             tensors.push(TensorSource::from_safetensor(
                 file_index,
@@ -377,6 +406,7 @@ impl TensorSource {
                 element_count,
                 source_byte_len: tensor.byte_len(),
                 target_byte_len: tensor_byte_len(element_count, target_dtype)?,
+                transform: TensorTransform::Identity,
             }],
             name,
             dims: tensor.shape().iter().rev().copied().collect(),
@@ -395,6 +425,7 @@ struct TensorSegment {
     element_count: u64,
     source_byte_len: u64,
     target_byte_len: u64,
+    transform: TensorTransform,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -538,6 +569,7 @@ impl ExpertGroup {
                 element_count,
                 source_byte_len: tensor.byte_len(),
                 target_byte_len: tensor_byte_len(element_count, self.target_dtype)?,
+                transform: TensorTransform::Identity,
             },
         );
         ensure!(
@@ -848,6 +880,10 @@ fn stream_segment(
     segment: &TensorSegment,
     buffer_size: usize,
 ) -> Result<u64> {
+    if let Some(written) = stream_transformed_segment(writer, file, segment, buffer_size)? {
+        return Ok(written);
+    }
+
     if segment.source_dtype == segment.target_dtype {
         let copied = file.stream_tensor(&segment.source_name, writer, buffer_size)?;
         ensure!(

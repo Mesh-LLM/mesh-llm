@@ -7501,6 +7501,7 @@ dependencies = [
  "clap",
  "libc",
  "llama-quant-ffi",
+ "regex-lite",
  "serde",
  "serde_json",
  "skippy-ffi",

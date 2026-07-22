@@ -23,6 +23,12 @@ On Windows, use PowerShell:
 irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
 ```
 
+Versioned Homebrew formulas, Ubuntu and Arch packages, checksums, SBOMs, and
+OCI images are available from the public
+[`Mesh-LLM/mesh-packaging`](https://github.com/Mesh-LLM/mesh-packaging)
+repository. See the [platform install guides](https://meshllm.cloud/docs/pages/installing-mesh/)
+for the supported package matrix and install commands.
+
 Finish setup:
 
 ```bash

@@ -82,7 +82,7 @@ pub(crate) fn convert_float_chunk<W: Write>(
     Ok(output.len() as u64)
 }
 
-fn read_float_element(input: &[u8], dtype: FloatDType, index: usize) -> f32 {
+pub(crate) fn read_float_element(input: &[u8], dtype: FloatDType, index: usize) -> f32 {
     match dtype {
         FloatDType::F32 => {
             let start = index * 4;
@@ -105,7 +105,7 @@ fn read_float_element(input: &[u8], dtype: FloatDType, index: usize) -> f32 {
     }
 }
 
-fn write_float_element(output: &mut Vec<u8>, dtype: FloatDType, value: f32) {
+pub(crate) fn write_float_element(output: &mut Vec<u8>, dtype: FloatDType, value: f32) {
     match dtype {
         FloatDType::F32 => output.extend_from_slice(&value.to_le_bytes()),
         FloatDType::F16 => output.extend_from_slice(&f32_to_f16_bits(value).to_le_bytes()),

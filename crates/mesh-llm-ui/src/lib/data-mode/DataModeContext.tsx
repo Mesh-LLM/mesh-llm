@@ -2,7 +2,8 @@ import { useEffect, useState, type ReactNode, type SetStateAction } from 'react'
 import { env } from '@/lib/env'
 import { DataModeContext, type DataMode } from '@/lib/data-mode/data-mode-context'
 
-export const DATA_MODE_STORAGE_KEY = `${env.storageNamespace}:data-mode:v1`
+export const DATA_MODE_STORAGE_KEY = `${env.storageNamespace}:data-mode:v2`
+export const LEGACY_DATA_MODE_STORAGE_KEY = `${env.storageNamespace}:data-mode:v1`
 
 export type DataModeProviderProps = {
   children: ReactNode
@@ -20,7 +21,21 @@ function readStoredDataMode(storageKey: string, fallbackMode: DataMode, persist:
 
   try {
     const storedValue = window.localStorage.getItem(storageKey)
-    return isDataMode(storedValue) ? storedValue : fallbackMode
+    if (isDataMode(storedValue)) return storedValue
+
+    // v1 may contain the old production default (`harness`), so its value
+    // cannot safely be interpreted as an explicit choice. A valid legacy key
+    // only marks this as an upgrade: seed v2 from today's environment default
+    // and retain v1 so a downgraded console can still start normally.
+    if (
+      storedValue === null &&
+      storageKey === DATA_MODE_STORAGE_KEY &&
+      isDataMode(window.localStorage.getItem(LEGACY_DATA_MODE_STORAGE_KEY))
+    ) {
+      writeStoredDataMode(storageKey, fallbackMode, persist)
+    }
+
+    return fallbackMode
   } catch {
     return fallbackMode
   }
@@ -30,6 +45,7 @@ function writeStoredDataMode(storageKey: string, mode: DataMode, persist: boolea
   if (!persist || typeof window === 'undefined') return
 
   try {
+    if (window.localStorage.getItem(storageKey) === mode) return
     window.localStorage.setItem(storageKey, mode)
   } catch {
     return

@@ -1,7 +1,7 @@
 use std::{
     net::{SocketAddr, TcpStream},
     path::PathBuf,
-    process::{Child, Command},
+    process::{Child, Command, ExitStatus},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -22,6 +22,10 @@ impl ChildGuard {
             .spawn()
             .with_context(|| format!("failed to spawn {:?}", command))?;
         Ok(Self { child })
+    }
+
+    pub fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
+        self.child.try_wait().context("poll child process")
     }
 }
 

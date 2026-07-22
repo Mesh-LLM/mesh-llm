@@ -51,7 +51,7 @@ pub(crate) fn metadata_from_hf_config_with_options(
     push_common_llm_metadata(&mut metadata, arch, &config, options)?;
     push_attention_metadata(&mut metadata, arch, &config)?;
     push_glm_dsa_indexer_metadata(&mut metadata, arch, &config)?;
-    push_moe_metadata(&mut metadata, arch, &config);
+    push_moe_metadata(&mut metadata, arch, &config)?;
     push_tokenizer_metadata(&mut metadata, source, &config)?;
     if options.include_mtp {
         push_if_u32(
@@ -152,7 +152,15 @@ fn push_common_llm_metadata(
         config,
         "intermediate_size",
     );
-    if let Some(eps) = optional_f32(config, "rms_norm_eps") {
+    if arch == "glm-dsa" {
+        push_required_f32(
+            metadata,
+            arch,
+            "attention.layer_norm_rms_epsilon",
+            config,
+            "rms_norm_eps",
+        )?;
+    } else if let Some(eps) = optional_f32(config, "rms_norm_eps") {
         metadata.push(GgufKv::f32(
             &format!("{arch}.attention.layer_norm_rms_epsilon"),
             eps,
@@ -171,53 +179,110 @@ fn push_attention_metadata(metadata: &mut Vec<GgufKv>, arch: &str, config: &Valu
         &format!("{arch}.attention.head_count_kv"),
         optional_u32(config, "num_key_value_heads").unwrap_or(head_count),
     ));
-    if let Some((nope, rope)) =
+    let mut key_len_mla = None;
+    let (key_len, rope_dim) = if let Some((nope, rope)) =
         optional_u32(config, "qk_nope_head_dim").zip(optional_u32(config, "qk_rope_head_dim"))
     {
-        metadata.push(GgufKv::u32(
-            &format!("{arch}.attention.key_length"),
-            nope + rope,
-        ));
-        metadata.push(GgufKv::u32(&format!("{arch}.rope.dimension_count"), rope));
+        let dense_key_len = nope + rope;
+        if arch == "glm-dsa" {
+            ensure!(
+                rope > 0,
+                "GLM-DSA qk_rope_head_dim must be greater than zero"
+            );
+            ensure!(
+                rope % 2 == 0,
+                "GLM-DSA qk_rope_head_dim must be even for native llama.cpp RoPE"
+            );
+            ensure!(
+                nope > 0,
+                "GLM-DSA qk_nope_head_dim must be greater than zero for native MLA split"
+            );
+            let kv_lora_rank = required_u32(config, "kv_lora_rank")?;
+            ensure!(
+                kv_lora_rank > 0,
+                "GLM-DSA kv_lora_rank must be greater than zero"
+            );
+            key_len_mla = Some(dense_key_len);
+            (kv_lora_rank + rope, rope)
+        } else {
+            (dense_key_len, rope)
+        }
     } else {
         let head_dim = optional_u32(config, "head_dim").unwrap_or(
             required_u32(config, "hidden_size")? / required_u32(config, "num_attention_heads")?,
         );
-        metadata.push(GgufKv::u32(
-            &format!("{arch}.attention.key_length"),
-            head_dim,
-        ));
-        metadata.push(GgufKv::u32(
-            &format!("{arch}.rope.dimension_count"),
-            head_dim,
-        ));
-    }
+        (head_dim, head_dim)
+    };
+    metadata.push(GgufKv::u32(
+        &format!("{arch}.attention.key_length"),
+        key_len,
+    ));
+    metadata.push(GgufKv::u32(
+        &format!("{arch}.rope.dimension_count"),
+        rope_dim,
+    ));
     let value_len = optional_u32(config, "v_head_dim")
         .or_else(|| optional_u32(config, "head_dim"))
         .unwrap_or(
             required_u32(config, "hidden_size")? / required_u32(config, "num_attention_heads")?,
         );
+    if arch == "glm-dsa" {
+        ensure!(
+            value_len > 0,
+            "GLM-DSA v_head_dim must be greater than zero"
+        );
+    }
     metadata.push(GgufKv::u32(
         &format!("{arch}.attention.value_length"),
         value_len,
     ));
+    if arch == "glm-dsa" {
+        let key_len_mla = key_len_mla.context(
+            "GLM-DSA metadata requires qk_nope_head_dim and qk_rope_head_dim for MLA key length",
+        )?;
+        metadata.push(GgufKv::u32(
+            &format!("{arch}.attention.key_length_mla"),
+            key_len_mla,
+        ));
+        metadata.push(GgufKv::u32(
+            &format!("{arch}.attention.value_length_mla"),
+            value_len,
+        ));
+    }
     if let Some(theta) = optional_f32(config, "rope_theta") {
         metadata.push(GgufKv::f32(&format!("{arch}.rope.freq_base"), theta));
     }
-    push_if_u32(
-        metadata,
-        arch,
-        "attention.q_lora_rank",
-        config,
-        "q_lora_rank",
-    );
-    push_if_u32(
-        metadata,
-        arch,
-        "attention.kv_lora_rank",
-        config,
-        "kv_lora_rank",
-    );
+    if arch == "glm-dsa" {
+        push_required_u32(
+            metadata,
+            arch,
+            "attention.q_lora_rank",
+            config,
+            "q_lora_rank",
+        )?;
+        push_required_u32(
+            metadata,
+            arch,
+            "attention.kv_lora_rank",
+            config,
+            "kv_lora_rank",
+        )?;
+    } else {
+        push_if_u32(
+            metadata,
+            arch,
+            "attention.q_lora_rank",
+            config,
+            "q_lora_rank",
+        );
+        push_if_u32(
+            metadata,
+            arch,
+            "attention.kv_lora_rank",
+            config,
+            "kv_lora_rank",
+        );
+    }
     Ok(())
 }
 
@@ -250,10 +315,183 @@ fn push_glm_dsa_indexer_metadata(
         config,
         &["index_topk", "indexer_top_k"],
     )?;
+    push_first_u32(
+        metadata,
+        arch,
+        "attention.indexer.top_k_frequency",
+        config,
+        &["index_topk_freq", "indexer_top_k_freq"],
+    );
+    push_first_u32(
+        metadata,
+        arch,
+        "attention.indexer.skip_top_k_offset",
+        config,
+        &["index_skip_topk_offset", "indexer_skip_top_k_offset"],
+    );
+    push_glm_dsa_indexer_types(metadata, arch, config)?;
+    validate_glm_dsa_indexer_contract(config)?;
     Ok(())
 }
 
-fn push_moe_metadata(metadata: &mut Vec<GgufKv>, arch: &str, config: &Value) {
+fn validate_glm_dsa_indexer_contract(config: &Value) -> Result<()> {
+    let index_head_dim = optional_u32(config, "index_head_dim")
+        .or_else(|| optional_u32(config, "indexer_head_size"))
+        .context("GLM-DSA config missing index_head_dim/indexer_head_size")?;
+    let rope_dim = required_u32(config, "qk_rope_head_dim")?;
+    ensure!(
+        index_head_dim > rope_dim,
+        "GLM-DSA index_head_dim must be greater than qk_rope_head_dim"
+    );
+
+    let freq = optional_u32(config, "index_topk_freq")
+        .or_else(|| optional_u32(config, "indexer_top_k_freq"));
+    let offset = optional_u32(config, "index_skip_topk_offset")
+        .or_else(|| optional_u32(config, "indexer_skip_top_k_offset"));
+    if let Some(freq) = freq {
+        ensure!(
+            freq > 0,
+            "GLM-DSA index_topk_freq must be greater than zero when present"
+        );
+        let offset = offset.context(
+            "GLM-DSA index_skip_topk_offset/indexer_skip_top_k_offset is required when index_topk_freq is present",
+        )?;
+        validate_glm_dsa_indexer_types_match_frequency(config, freq, offset)?;
+    }
+    Ok(())
+}
+
+fn validate_glm_dsa_indexer_types_match_frequency(
+    config: &Value,
+    freq: u32,
+    offset: u32,
+) -> Result<()> {
+    let Some(types) = config.get("indexer_types") else {
+        return Ok(());
+    };
+    let types = types
+        .as_array()
+        .context("config value \"indexer_types\" must be an array")?;
+    for (layer, value) in types.iter().enumerate() {
+        let role = value
+            .as_str()
+            .context("config value \"indexer_types\" must contain strings")?
+            .to_ascii_lowercase();
+        let role_full = role == "full";
+        let freq_full = glm_dsa_frequency_layer_is_full(layer as u32, offset, freq);
+        ensure!(
+            role_full == freq_full,
+            "GLM-DSA indexer_types conflicts with index_topk_freq at layer {layer}"
+        );
+    }
+    Ok(())
+}
+
+fn glm_dsa_frequency_layer_is_full(layer: u32, offset: u32, freq: u32) -> bool {
+    layer < offset || (layer - offset + 1).is_multiple_of(freq)
+}
+
+fn push_glm_dsa_indexer_types(
+    metadata: &mut Vec<GgufKv>,
+    arch: &str,
+    config: &Value,
+) -> Result<()> {
+    let Some(types) = config.get("indexer_types") else {
+        return Ok(());
+    };
+
+    let types = types
+        .as_array()
+        .context("config value \"indexer_types\" must be an array")?;
+    let n_layers = required_u32(config, "num_hidden_layers")? as usize;
+    ensure!(
+        types.len() == n_layers,
+        "config value \"indexer_types\" length {} must match num_hidden_layers {n_layers}",
+        types.len()
+    );
+
+    let mut normalized = Vec::with_capacity(types.len());
+    for value in types {
+        let role = value
+            .as_str()
+            .context("config value \"indexer_types\" must contain strings")?
+            .to_ascii_lowercase();
+        ensure!(
+            role == "full" || role == "shared",
+            "config value \"indexer_types\" must contain only \"full\" or \"shared\""
+        );
+        normalized.push(role);
+    }
+
+    metadata.push(GgufKv::array_string(
+        &format!("{arch}.attention.indexer.types"),
+        normalized,
+    ));
+    Ok(())
+}
+
+fn push_moe_metadata(metadata: &mut Vec<GgufKv>, arch: &str, config: &Value) -> Result<()> {
+    if arch == "glm-dsa" {
+        validate_glm_dsa_moe_contract(config)?;
+        push_required_first_u32(
+            metadata,
+            arch,
+            "expert_count",
+            config,
+            &["n_routed_experts", "num_experts"],
+        )?;
+        push_required_first_u32(
+            metadata,
+            arch,
+            "expert_used_count",
+            config,
+            &["num_experts_per_tok"],
+        )?;
+        push_required_first_u32(
+            metadata,
+            arch,
+            "expert_shared_count",
+            config,
+            &["n_shared_experts"],
+        )?;
+        push_required_first_u32(
+            metadata,
+            arch,
+            "expert_feed_forward_length",
+            config,
+            &["moe_intermediate_size"],
+        )?;
+        push_required_first_u32(
+            metadata,
+            arch,
+            "leading_dense_block_count",
+            config,
+            &["first_k_dense_replace"],
+        )?;
+        push_required_f32(
+            metadata,
+            arch,
+            "expert_weights_scale",
+            config,
+            "routed_scaling_factor",
+        )?;
+        push_required_bool(
+            metadata,
+            arch,
+            "expert_weights_norm",
+            config,
+            "norm_topk_prob",
+        )?;
+        push_first_u32(
+            metadata,
+            arch,
+            "expert_shared_feed_forward_length",
+            config,
+            &["shared_expert_intermediate_size"],
+        );
+        return Ok(());
+    }
+
     push_first_u32(
         metadata,
         arch,
@@ -302,6 +540,29 @@ fn push_moe_metadata(metadata: &mut Vec<GgufKv>, arch: &str, config: &Value) {
     if let Some(norm) = optional_bool(config, "norm_topk_prob") {
         metadata.push(GgufKv::bool(&format!("{arch}.expert_weights_norm"), norm));
     }
+    Ok(())
+}
+
+fn validate_glm_dsa_moe_contract(config: &Value) -> Result<()> {
+    let target_layers = required_u32(config, "num_hidden_layers")?;
+    ensure!(
+        target_layers > 0,
+        "GLM-DSA num_hidden_layers must be greater than zero"
+    );
+    let expert_count = optional_u32(config, "n_routed_experts")
+        .or_else(|| optional_u32(config, "num_experts"))
+        .context("GLM-DSA config missing n_routed_experts/num_experts")?;
+    let expert_used = required_u32(config, "num_experts_per_tok")?;
+    ensure!(
+        expert_used <= expert_count,
+        "GLM-DSA num_experts_per_tok must be less than or equal to expert count"
+    );
+    let dense_lead = optional_u32(config, "first_k_dense_replace").unwrap_or(0);
+    ensure!(
+        dense_lead < target_layers,
+        "GLM-DSA first_k_dense_replace must be less than num_hidden_layers"
+    );
+    Ok(())
 }
 
 fn push_required_first_u32(
@@ -350,6 +611,32 @@ fn push_required_u32(
         &format!("{arch}.{gguf_suffix}"),
         required_u32(config, config_key)?,
     ));
+    Ok(())
+}
+
+fn push_required_f32(
+    metadata: &mut Vec<GgufKv>,
+    arch: &str,
+    gguf_suffix: &str,
+    config: &Value,
+    config_key: &str,
+) -> Result<()> {
+    let value = optional_f32(config, config_key)
+        .with_context(|| format!("config missing {config_key:?}"))?;
+    metadata.push(GgufKv::f32(&format!("{arch}.{gguf_suffix}"), value));
+    Ok(())
+}
+
+fn push_required_bool(
+    metadata: &mut Vec<GgufKv>,
+    arch: &str,
+    gguf_suffix: &str,
+    config: &Value,
+    config_key: &str,
+) -> Result<()> {
+    let value = optional_bool(config, config_key)
+        .with_context(|| format!("config missing {config_key:?}"))?;
+    metadata.push(GgufKv::bool(&format!("{arch}.{gguf_suffix}"), value));
     Ok(())
 }
 
@@ -516,6 +803,23 @@ mod tests {
               "index_n_heads": 32,
               "index_head_dim": 128,
               "index_topk": 2048,
+              "index_topk_freq": 4,
+              "index_skip_topk_offset": 3,
+              "indexer_types": [
+                "full", "full", "full", "shared", "shared", "shared", "full",
+                "shared", "shared", "shared", "full", "shared", "shared",
+                "shared", "full", "shared", "shared", "shared", "full",
+                "shared", "shared", "shared", "full", "shared", "shared",
+                "shared", "full", "shared", "shared", "shared", "full",
+                "shared", "shared", "shared", "full", "shared", "shared",
+                "shared", "full", "shared", "shared", "shared", "full",
+                "shared", "shared", "shared", "full", "shared", "shared",
+                "shared", "full", "shared", "shared", "shared", "full",
+                "shared", "shared", "shared", "full", "shared", "shared",
+                "shared", "full", "shared", "shared", "shared", "full",
+                "shared", "shared", "shared", "full", "shared", "shared",
+                "shared", "full", "shared", "shared", "shared"
+              ],
               "n_routed_experts": 256,
               "num_experts_per_tok": 8,
               "n_shared_experts": 1,
@@ -530,6 +834,27 @@ mod tests {
 
         let metadata = metadata_from_hf_config(&root, 3).unwrap();
 
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.attention.key_length" && *value == 576
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.attention.key_length_mla" && *value == 256
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.attention.value_length_mla" && *value == 256
+            )
+        }));
         assert!(metadata.iter().any(|kv| {
             matches!(
                 kv,
@@ -551,6 +876,123 @@ mod tests {
                     if key == "glm-dsa.attention.indexer.top_k" && *value == 2048
             )
         }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.attention.indexer.top_k_frequency" && *value == 4
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.attention.indexer.skip_top_k_offset" && *value == 3
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::ArrayString { key, value }
+                    if key == "glm-dsa.attention.indexer.types"
+                        && value.len() == 78
+                        && value[0] == "full"
+                        && value[3] == "shared"
+                        && value[6] == "full"
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.expert_count" && *value == 256
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.expert_used_count" && *value == 8
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.expert_shared_count" && *value == 1
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.expert_feed_forward_length" && *value == 2048
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::U32 { key, value }
+                    if key == "glm-dsa.leading_dense_block_count" && *value == 3
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::F32 { key, value }
+                    if key == "glm-dsa.expert_weights_scale" && (*value - 2.5).abs() < f32::EPSILON
+            )
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(
+                kv,
+                GgufKv::Bool { key, value }
+                    if key == "glm-dsa.expert_weights_norm" && *value
+            )
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_glm_dsa_config_missing_runtime_contract_metadata() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("config.json"),
+            r#"{
+              "model_type": "glm_moe_dsa",
+              "vocab_size": 154880,
+              "max_position_embeddings": 1048576,
+              "hidden_size": 6144,
+              "intermediate_size": 12288,
+              "num_hidden_layers": 78,
+              "num_attention_heads": 64,
+              "num_key_value_heads": 64,
+              "qk_nope_head_dim": 192,
+              "qk_rope_head_dim": 64,
+              "v_head_dim": 256,
+              "q_lora_rank": 2048,
+              "kv_lora_rank": 512,
+              "index_n_heads": 32,
+              "index_head_dim": 128,
+              "index_topk": 2048,
+              "n_routed_experts": 256,
+              "n_shared_experts": 1,
+              "moe_intermediate_size": 2048,
+              "first_k_dense_replace": 3,
+              "routed_scaling_factor": 2.5,
+              "norm_topk_prob": true,
+              "rms_norm_eps": 1e-5
+            }"#,
+        )
+        .unwrap();
+
+        let err = metadata_from_hf_config(&root, 3).unwrap_err();
+
+        assert!(
+            err.to_string().contains("num_experts_per_tok"),
+            "unexpected error: {err:#}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

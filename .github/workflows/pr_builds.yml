@@ -119,14 +119,6 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/cache-version.txt'
-            windows_gpu:
-              - 'crates/skippy-ffi/**'
-              - 'scripts/build-windows.ps1'
-              - 'scripts/install-windows-sdk.ps1'
-              - 'third_party/llama.cpp/**'
-              - '.github/cache-version.txt'
-              - '.github/actions/setup-windows-rocm-sdk/**'
-
             docs:
               - 'docs/**'
               - '**.md'
@@ -1026,6 +1018,14 @@ jobs:
         run: Write-Host "Skipping Windows ${{ matrix.name }} because this change does not touch Windows GPU build inputs."
       - uses: actions/checkout@v5
         if: ${{ matrix.backend == 'cpu' || env.RUN_WINDOWS_GPU == 'true' }}
+      - uses: actions/setup-python@v6
+        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' }}
+        with:
+          python-version: '3.x'
+      - name: Test Windows native-runtime dependency resolver
+        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' }}
+        shell: pwsh
+        run: python -m unittest scripts.tests.test_windows_native_runtime_deps -v
       - uses: dtolnay/rust-toolchain@stable
         if: ${{ matrix.backend == 'cpu' || env.RUN_WINDOWS_GPU == 'true' }}
       - uses: taiki-e/install-action@just

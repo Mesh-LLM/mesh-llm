@@ -376,6 +376,25 @@ for library in "${runtime_libraries[@]}"; do
     library_paths+=("lib/$name")
 done
 
+if [[ "$runtime_os" == "windows" && "$BACKEND" == "vulkan" ]]; then
+    dependency_args=()
+    for library in "${runtime_libraries[@]}"; do
+        dependency_args+=(--search-dir "$(dirname "$library")")
+    done
+    "$(python_bin)" "$SCRIPT_DIR/windows-native-runtime-deps.py" collect \
+        --lib-dir "$stage_dir/lib" \
+        "${dependency_args[@]}"
+
+    library_paths=()
+    while IFS= read -r library; do
+        name="$(basename "$library")"
+        if [[ "$name" != "$primary_name" ]]; then
+            library_paths+=("lib/$name")
+        fi
+    done < <(find "$stage_dir/lib" -maxdepth 1 -type f -name '*.dll' | sort)
+    library_paths+=("lib/$primary_name")
+fi
+
 rewrite_macos_runtime_paths
 rewrite_linux_runtime_paths
 

@@ -178,7 +178,10 @@ fn resolve_backend_device<'a>(
         .iter()
         .filter(|gpu| {
             gpu.backend_device.as_deref().is_some_and(|backend_device| {
-                backend_device.eq_ignore_ascii_case(&request.requested_value)
+                mesh_llm_system::backend::backend_device_names_match(
+                    backend_device,
+                    &request.requested_value,
+                )
             })
         })
         .collect::<Vec<_>>();

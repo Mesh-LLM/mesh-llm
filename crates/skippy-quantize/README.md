@@ -414,10 +414,24 @@ per-tensor policy with `--tensor-type-file` or repeated `--tensor-type`.
 The tensor recipe format is one override per line:
 
 ```text
-blk.*.ffn_gate_exps.weight=Q2_K
-blk.*.ffn_down_exps.weight=Q3_K
-mtp.*=Q8_0
+attn_q_a\.weight$=Q8_0
+ffn_down_shexp\.weight$=Q4_K
+(^|\.)nextn\.=Q8_0
 ```
+
+Recipe files are whitespace-tokenized, so keep comments in a sidecar README
+rather than inside the recipe itself. `PATTERN` is passed to llama.cpp as a
+regular expression and matched with `std::regex_search`; first match wins.
+Use raw GGML tensor types such as `Q2_K`, `Q3_K`, `Q4_K`, `Q8_0`, `F16`, and
+`BF16`, not artifact profile names such as `Q2_K-MTP-Q8`.
+
+Repository-maintained GLM-5.2 recipes live under
+`recipes/quantization/`. The baseline
+`glm-5.2-q2-k-mtp-q8.tensor-types.txt` recreates the lab comfort-fit profile
+from base `--quant Q2_K`. The experimental
+`glm-5.2-q2-k-routed-down-mtp-q8.tensor-types.txt` lowers only decoder-layer
+`blk.0..77.ffn_down_exps.weight` tensors to `Q2_K`, deliberately excluding
+`blk.78`, the native NextN/MTP block.
 
 Inspect supported modes and raw tensor override types:
 

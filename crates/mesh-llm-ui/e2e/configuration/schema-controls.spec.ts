@@ -1,7 +1,7 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
+import { DATA_MODE_STORAGE_KEY } from '@e2e/support/data-mode'
 
-const DATA_MODE_STORAGE_KEY = 'mesh-llm-ui-preview:data-mode:v1'
 const FEATURE_FLAGS_STORAGE_KEY = 'mesh-llm-ui-preview:feature-flags:v1'
 
 type JsonRecord = Record<string, unknown>

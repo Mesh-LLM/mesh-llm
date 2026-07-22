@@ -150,6 +150,34 @@ class AgentToolCallReliabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing expected fixture value"):
             self.harness.validate_final_answer(bad_response, "signal-7429")
 
+    def test_requests_explicitly_disable_thinking(self) -> None:
+        call = self.harness.ToolCall(call_id="call_1", key="codeword")
+        assistant_message = {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": call.call_id,
+                    "type": "function",
+                    "function": {
+                        "name": self.harness.TOOL_NAME,
+                        "arguments": json.dumps({"key": call.key}),
+                    },
+                }
+            ],
+        }
+        requests = [
+            self.harness.build_tool_probe_request("auto", 1),
+            self.harness.build_stream_tool_probe_request("auto", 1),
+            self.harness.build_tool_result_request("auto", 1, assistant_message, call),
+            self.harness.build_stream_tool_result_request("auto", 1, assistant_message, call),
+        ]
+
+        for request in requests:
+            self.assertEqual(
+                request["chat_template_kwargs"],
+                {"enable_thinking": False},
+            )
+
     def test_writes_jsonl_probe_results(self) -> None:
         result = self.harness.ProbeResult(
             model="auto",

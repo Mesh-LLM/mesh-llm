@@ -134,3 +134,65 @@ fn print_progress(progress: &Progress) {
         None => print_success("Next window: complete"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use regex_lite::Regex;
+
+    use super::*;
+
+    #[test]
+    fn glm52_q2_routed_down_recipe_targets_decoder_down_only() {
+        let recipe = include_str!(
+            "../../../recipes/quantization/glm-5.2-q2-k-routed-down-mtp-q8.tensor-types.txt"
+        );
+        let routed_down = recipe
+            .split_whitespace()
+            .next()
+            .expect("recipe should start with routed-down override");
+        let (pattern, tensor_type) = routed_down
+            .split_once('=')
+            .expect("recipe entry should be PATTERN=TYPE");
+
+        assert_eq!(tensor_type, "Q2_K");
+        let regex = Regex::new(pattern).expect("routed-down pattern should compile");
+
+        for layer in [0, 8, 45, 77] {
+            let name = format!("blk.{layer}.ffn_down_exps.weight");
+            assert!(regex.is_match(&name), "expected {name} to match");
+        }
+
+        for name in [
+            "blk.78.ffn_down_exps.weight",
+            "blk.8.ffn_gate_exps.weight",
+            "blk.8.ffn_up_exps.weight",
+            "blk.8.ffn_down_shexp.weight",
+            "blk.78.nextn.ffn_down_exps.weight",
+        ] {
+            assert!(!regex.is_match(name), "did not expect {name} to match");
+        }
+    }
+
+    #[test]
+    fn checked_in_glm52_quant_recipes_validate() {
+        for (name, recipe) in [
+            (
+                "glm-5.2-q2-k-mtp-q8",
+                include_str!("../../../recipes/quantization/glm-5.2-q2-k-mtp-q8.tensor-types.txt"),
+            ),
+            (
+                "glm-5.2-q2-k-routed-down-mtp-q8",
+                include_str!(
+                    "../../../recipes/quantization/glm-5.2-q2-k-routed-down-mtp-q8.tensor-types.txt"
+                ),
+            ),
+        ] {
+            let mut entry_count = 0;
+            for token in recipe.split_whitespace() {
+                ensure_tensor_type_entry(token).expect("checked-in tensor recipe should validate");
+                entry_count += 1;
+            }
+            assert!(entry_count > 0, "{name} recipe must not be empty");
+        }
+    }
+}
