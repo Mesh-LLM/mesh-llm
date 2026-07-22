@@ -227,6 +227,14 @@ class NightlyStabilityHarnessTests(unittest.TestCase):
         self.assertIsNotNone(result.tok_per_sec)
         self.assertIn("expected exactly STREAM_OK", result.detail)
 
+    def test_chat_requests_explicitly_disable_thinking(self) -> None:
+        for stream in (False, True):
+            request = self.harness.build_chat_request("auto", 1, stream)
+            self.assertEqual(
+                request["chat_template_kwargs"],
+                {"enable_thinking": False},
+            )
+
     def test_write_evidence_outputs_machine_readable_files(self) -> None:
         rows = [
             self.harness.CommandResult(

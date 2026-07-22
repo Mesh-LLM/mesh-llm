@@ -143,6 +143,7 @@ def build_tool_probe_request(model: str, attempt: int) -> dict[str, Any]:
         "stream": False,
         "max_tokens": 96,
         "temperature": 0,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
 
 
@@ -244,6 +245,7 @@ def build_tool_result_request(
         "stream": False,
         "max_tokens": 64,
         "temperature": 0,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
 
 

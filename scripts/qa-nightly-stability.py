@@ -483,6 +483,7 @@ def build_chat_request(model: str, attempt: int, stream: bool) -> dict[str, Any]
         "stream": stream,
         "max_tokens": 32,
         "temperature": 0,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     if stream:
         body["stream_options"] = {"include_usage": True}
