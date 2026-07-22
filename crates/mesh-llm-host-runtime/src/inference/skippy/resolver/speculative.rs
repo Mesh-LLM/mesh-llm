@@ -209,6 +209,17 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
         .unwrap_or_else(SpeculativeDecodeConfig::default);
     config.requested_strategy = input.requested_strategy.to_string();
 
+    if input.requested_strategy == "disabled" {
+        // A model-level disable must ignore proposer, extension, and native-MTP
+        // state inherited from [defaults] or package metadata; otherwise the mode
+        // override below would re-enable speculation from those settings.
+        config.ngram = None;
+        config.extension = None;
+        config.native_mtp.enabled = false;
+        config.effective_strategy = "disabled".to_string();
+        return Ok(config);
+    }
+
     if input.native_mtp_enabled {
         config.native_mtp.enabled = true;
         config.native_mtp.max_draft_tokens = input.draft_max_tokens.max(1) as usize;
@@ -244,7 +255,12 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
                 .global_config
                 .and_then(|config| config.ngram_proposer.clone())
         });
-    if config.ngram.is_some() || ngram_min > 0 || ngram_max > 0 {
+    // An explicitly requested standalone N-gram strategy must build a proposer
+    // even when both bounds are omitted, so resolution fails loudly instead of
+    // succeeding with no proposer.
+    let explicit_standalone_ngram =
+        matches!(input.requested_strategy, "ngram-cache" | "ngram-suffix");
+    if explicit_standalone_ngram || config.ngram.is_some() || ngram_min > 0 || ngram_max > 0 {
         let existing = config.ngram.as_ref();
         let min_ngram = nonzero_or(
             ngram_min,
@@ -255,7 +271,9 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
             existing.map_or(0, |ngram| ngram.max_ngram as u32),
         );
         if min_ngram == 0 || max_ngram == 0 || min_ngram > max_ngram {
-            bail!("skippy speculative N-gram proposer requires 0 < ngram_min <= ngram_max");
+            bail!(
+                "skippy speculative N-gram proposer requires both ngram_min and ngram_max with 0 < ngram_min <= ngram_max"
+            );
         }
         let kind = match ngram_proposer.as_deref() {
             Some("cache") => NgramProposerKind::Cache,

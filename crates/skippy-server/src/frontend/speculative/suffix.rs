@@ -8,6 +8,11 @@ use super::SUFFIX_NGRAM_MAX_WINDOW;
 pub(super) const SUFFIX_MIN_SEED_LEN: usize = 3;
 /// Largest seed length; bounds the fixed-size seed key.
 const SUFFIX_MAX_SEED_LEN: usize = 8;
+/// Hard cap on seed occurrences examined per lookup. Ambiguous repetitive input
+/// (many seeds with differing preceding tokens) would otherwise scan the whole
+/// bucket every decode step. The bucket is walked most-recent-first, so the most
+/// temporally relevant occurrences are always the ones examined.
+const SUFFIX_MAX_LOOKUP_CANDIDATES: usize = 64;
 
 /// Per-request lookup counters surfaced through response timings.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -200,7 +205,9 @@ impl SuffixNgramProposer {
                 best_match = match_len;
                 best_end = end;
             }
-            if best_match >= self.max_window {
+            if best_match >= self.max_window
+                || stats.candidates_examined >= SUFFIX_MAX_LOOKUP_CANDIDATES
+            {
                 break;
             }
         }
@@ -312,6 +319,27 @@ mod tests {
         let proposal = proposer.propose(&committed, &[], 3);
         assert!(proposal.stats.candidates_examined > 8);
         assert_eq!(proposal.tokens, vec![9, 10, 11]);
+    }
+
+    #[test]
+    fn lookup_candidate_scan_is_bounded_on_ambiguous_repeats() {
+        let mut proposer = SuffixNgramProposer::new(5, 16, 8).unwrap();
+        let mut committed = Vec::new();
+        // ~100 occurrences of the seed [1,2,3,4,5], each preceded by a distinct
+        // token so no backward match reaches max_window; without a budget the
+        // whole bucket is scanned on every decode step.
+        for prefix in 300..400 {
+            committed.extend_from_slice(&[prefix, 1, 2, 3, 4, 5, prefix + 1000]);
+        }
+        committed.extend_from_slice(&[7, 1, 2, 3, 4, 5]);
+
+        let proposal = proposer.propose(&committed, &[], 3);
+        assert!(
+            proposal.stats.candidates_examined <= SUFFIX_MAX_LOOKUP_CANDIDATES,
+            "examined {}",
+            proposal.stats.candidates_examined
+        );
+        assert!(proposal.stats.candidates_examined > 8);
     }
 
     #[test]

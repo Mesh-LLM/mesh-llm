@@ -701,6 +701,106 @@ ngram_max_proposal_tokens = 48
 }
 
 #[test]
+fn strategy_disabled_ignores_inherited_ngram_bounds() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+strategy = "disabled"
+ngram_proposer = "suffix"
+ngram_min = 5
+ngram_max = 32
+ngram_max_proposal_tokens = 48
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "meshllm/coding-model",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("disabled strategy should resolve");
+
+    assert!(!resolved.speculative.native_mtp_enabled);
+    assert_eq!(resolved.speculative.mode, "disabled");
+    assert!(resolved.speculative.decode.ngram.is_none());
+    assert_eq!(resolved.speculative.decode.effective_strategy, "disabled");
+}
+
+#[test]
+fn explicit_standalone_strategy_without_bounds_fails() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+strategy = "ngram-suffix"
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let error = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "meshllm/coding-model",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect_err("an explicit N-gram strategy without bounds must fail");
+
+    assert!(
+        error.to_string().contains("both ngram_min and ngram_max"),
+        "{error}"
+    );
+}
+
+#[test]
+fn standalone_ngram_rejected_for_single_stage_serving() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+strategy = "ngram-suffix"
+ngram_min = 5
+ngram_max = 32
+ngram_max_proposal_tokens = 48
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "meshllm/coding-model",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("standalone suffix strategy should resolve");
+
+    // Multi-stage (staged) serving has a verify path and builds fine.
+    resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("staged serving should build OpenAI args");
+
+    // Single-stage/direct serving has no N-gram verify path, so it must reject
+    // rather than silently run target-only while reporting a proposer.
+    let error = resolved
+        .to_embedded_openai_args(0, false)
+        .expect_err("single-stage standalone N-gram must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("requires multi-stage split serving"),
+        "{error}"
+    );
+}
+
+#[test]
 fn speculative_strategy_native_mtp_rejects_direct_gguf_without_proven_support() {
     let mesh_config = parse_config(
         r#"

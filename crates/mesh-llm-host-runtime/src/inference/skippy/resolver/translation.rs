@@ -280,14 +280,27 @@ impl ResolvedSkippyConfig {
             if self.skippy.prefill_controls_explicit {
                 bail!("skippy prefill chunk controls require staged serving");
             }
+            // A stage with no downstream delegates to generate_local_tokens, which
+            // has no N-gram verification path. Reject a standalone N-gram plan here
+            // rather than silently running target-only while reporting a proposer.
+            if self.speculative.decode.ngram.is_some()
+                && !self.speculative.decode.native_mtp.enabled
+            {
+                bail!(
+                    "standalone N-gram speculation ({}) requires multi-stage split serving; \
+                     single-stage and direct GGUF requests have no N-gram verification path",
+                    self.speculative.decode.effective_strategy
+                );
+            }
         }
         Ok(())
     }
 
-    fn speculative_mode_for_embedded(&self, _staged: bool) -> &'static str {
+    fn speculative_mode_for_embedded(&self, staged: bool) -> &'static str {
         if self.speculative.mode == "draft" && self.speculative.draft_model_path.is_some() {
             "draft"
-        } else if self.speculative.decode.ngram.is_some()
+        } else if staged
+            && self.speculative.decode.ngram.is_some()
             && !self.speculative.decode.native_mtp.enabled
         {
             "ngram"

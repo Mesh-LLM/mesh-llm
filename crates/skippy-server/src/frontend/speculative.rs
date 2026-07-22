@@ -43,9 +43,10 @@ pub struct NativeMtpProposalConfig {
 
 /// Which N-gram draft proposer to run: llama.cpp request-local `cache`, or the
 /// pure-Rust longest-suffix `suffix`.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NgramProposerKind {
+    #[default]
     Cache,
     Suffix,
 }
@@ -67,6 +68,9 @@ pub const SUFFIX_NGRAM_MAX_WINDOW: usize = 64;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NgramProposalConfig {
+    /// Defaults to `cache` so speculative plans written before the kind field
+    /// existed still deserialize.
+    #[serde(default)]
     pub kind: NgramProposerKind,
     pub min_ngram: usize,
     pub max_ngram: usize,
@@ -281,6 +285,16 @@ mod standalone_speculative_config_tests {
 
         assert_eq!(decoded, config);
         decoded.validate().expect("valid suffix plan");
+    }
+
+    #[test]
+    fn ngram_proposal_config_without_kind_defaults_to_cache() {
+        // Speculative plans written before the kind field existed omit it; they
+        // must still deserialize (for --openai-speculative-config) as cache.
+        let json = r#"{"min_ngram":2,"max_ngram":4,"max_proposal_tokens":6}"#;
+        let config: NgramProposalConfig =
+            serde_json::from_str(json).expect("legacy plan without kind should deserialize");
+        assert_eq!(config.kind, NgramProposerKind::Cache);
     }
 
     #[test]
