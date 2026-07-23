@@ -353,7 +353,7 @@ jobs:
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_ENABLED: "false"
       GGML_CUDA_NO_VMM: "1"
       LLAMA_STAGE_SKIP_NCCL: "1"
     steps:
@@ -363,19 +363,6 @@ jobs:
       - name: Verify prebuilt backend environment
         if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
         run: verify-runner-image public "${{ matrix.backend }}"
-      - name: Configure baked sccache GHA backend
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')
-            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '')
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '')
-            const exitCode = await exec.exec('sccache', ['--start-server'], { ignoreReturnCode: true })
-            if (exitCode !== 0) {
-              core.warning('GitHub Actions cache is unavailable; falling back to job-local sccache.')
-              core.exportVariable('SCCACHE_GHA_ENABLED', 'false')
-            }
       - name: Skip Linux backend build
         if: ${{ env.RUN_LINUX_BACKEND != 'true' }}
         run: echo "Skipping Linux ${{ matrix.name }} backend build; backend inputs did not change."
