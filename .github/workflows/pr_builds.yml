@@ -146,7 +146,7 @@ jobs:
     name: Runner image / GitHub-hosted public
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -199,7 +199,7 @@ jobs:
     name: Linux CPU
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -328,20 +328,20 @@ jobs:
         include:
           - name: CUDA slim
             backend: cuda
-            container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99
+            container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
             cache_key: linux-cuda-slim
             runs_on: '["ubuntu-24.04"]'
             self_hosted_runs_on: '["self-hosted","Linux","X64","amd64","gpu-nvidia"]'
           - name: ROCm slim
             backend: rocm
-            container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:064cd6ec060352487b10b2009a6aac5482830fd04d9cfe3eef1d662d2ad121d7
+            container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b88ca9371ada2c507d6e36b71f0e0538fee378c6a5e2b39c17249b4b7e5088a
             cache_key: linux-rocm-slim
             build_dir: .deps/llama-build/build-stage-abi-rocm-gfx1100
             amdgpu_targets: gfx1100
             runs_on: '"ubuntu-24.04"'
           - name: Vulkan
             backend: vulkan
-            container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:18bab50e8871a9c825dcc3a22fdd0df7e5ff717d4239f2f60795f6b65c5031b3
+            container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80
             cache_key: linux-vulkan
             build_dir: .deps/llama-build/build-stage-abi-vulkan
             runs_on: '"ubuntu-24.04"'
@@ -453,7 +453,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -525,7 +525,7 @@ jobs:
     name: Linux tests (${{ matrix.group }})
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

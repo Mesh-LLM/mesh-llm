@@ -337,10 +337,10 @@ jobs:
         include:
           - cuda_version: '12.9.2'
             cuda_major: '12'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
           - cuda_version: '13.1.2'
             cuda_major: '13'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa0f8e26c18d3756f13c3d600f1324bc2e95ebec87d1894f4bfa0b6edf75afcc
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
     container:
       image: ${{ matrix.runner_image }}
       credentials:
@@ -392,12 +392,12 @@ jobs:
         include:
           - cuda_version: '12.9.2'
             cuda_major: '12'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
             cuda_architectures: '75;80;86;87;89;90'
             cuda_architectures_cache: '75_80_86_87_89_90'
           - cuda_version: '13.1.2'
             cuda_major: '13'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa0f8e26c18d3756f13c3d600f1324bc2e95ebec87d1894f4bfa0b6edf75afcc
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
             cuda_architectures: '75;80;86;87;89;90;100;103;120;121'
             cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'
     container:
@@ -453,7 +453,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:40bc649633114ded6638c95e633392540e483461a6056e1bd3b90b41e739abaf
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0e13e5d2d2c121df265ff6c69be81e468989e09f81d6b7ff049b110cc0bb0d2b
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -504,7 +504,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:18bab50e8871a9c825dcc3a22fdd0df7e5ff717d4239f2f60795f6b65c5031b3
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -725,9 +725,9 @@ jobs:
       matrix:
         include:
           - cuda_version: '12.9.2'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
           - cuda_version: '13.1.2'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa0f8e26c18d3756f13c3d600f1324bc2e95ebec87d1894f4bfa0b6edf75afcc
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
     container:
       image: ${{ matrix.runner_image }}
       credentials:
@@ -780,11 +780,11 @@ jobs:
           - cuda_version: '12.9.2'
             cuda_major: '12'
             cuda_architectures_cache: '75_80_86_87_89_90'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
           - cuda_version: '13.1.2'
             cuda_major: '13'
             cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa0f8e26c18d3756f13c3d600f1324bc2e95ebec87d1894f4bfa0b6edf75afcc
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
     container:
       image: ${{ matrix.runner_image }}
       credentials:
@@ -838,7 +838,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:40bc649633114ded6638c95e633392540e483461a6056e1bd3b90b41e739abaf
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0e13e5d2d2c121df265ff6c69be81e468989e09f81d6b7ff049b110cc0bb0d2b
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -888,7 +888,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:18bab50e8871a9c825dcc3a22fdd0df7e5ff717d4239f2f60795f6b65c5031b3
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

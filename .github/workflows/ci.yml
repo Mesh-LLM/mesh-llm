@@ -181,7 +181,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -307,7 +307,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -382,7 +382,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -783,7 +783,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -846,7 +846,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:40bc649633114ded6638c95e633392540e483461a6056e1bd3b90b41e739abaf
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0e13e5d2d2c121df265ff6c69be81e468989e09f81d6b7ff049b110cc0bb0d2b
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -904,7 +904,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:18bab50e8871a9c825dcc3a22fdd0df7e5ff717d4239f2f60795f6b65c5031b3
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

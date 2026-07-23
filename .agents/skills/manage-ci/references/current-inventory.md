@@ -106,17 +106,17 @@ trust-boundary contract. Do not route untrusted PR code to persistent GPU
 runners merely because the same image can also run as an ARC pod.
 
 The image family built from MeshLLM revision
-`792839470d1ab2f71c8a9e263e0064aed64aa1f8` is:
+`5f341d6828fc77cce2f3be43f2a6ff26f3223433` is:
 
 | Image | Immutable index digest |
 | --- | --- |
-| public CPU | `sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b` |
-| public Vulkan | `sha256:18bab50e8871a9c825dcc3a22fdd0df7e5ff717d4239f2f60795f6b65c5031b3` |
-| public CUDA 12 | `sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99` |
-| public CUDA 13 | `sha256:fa0f8e26c18d3756f13c3d600f1324bc2e95ebec87d1894f4bfa0b6edf75afcc` |
-| public ROCm 7.0 | `sha256:40bc649633114ded6638c95e633392540e483461a6056e1bd3b90b41e739abaf` |
-| public ROCm 7.2 | `sha256:064cd6ec060352487b10b2009a6aac5482830fd04d9cfe3eef1d662d2ad121d7` |
-| self-hosted compatibility | `sha256:6a2064ae12594c169b0f37ed1429a75e9d964f1971cfdf83ff57da823759a5a2` |
+| public CPU | `sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d` |
+| public Vulkan | `sha256:ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80` |
+| public CUDA 12 | `sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd` |
+| public CUDA 13 | `sha256:6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6` |
+| public ROCm 7.0 | `sha256:0e13e5d2d2c121df265ff6c69be81e468989e09f81d6b7ff049b110cc0bb0d2b` |
+| public ROCm 7.2 | `sha256:6b88ca9371ada2c507d6e36b71f0e0538fee378c6a5e2b39c17249b4b7e5088a` |
+| self-hosted compatibility | `sha256:37e0ce710eae44952306c4a553cf89fdf94c009660a2a8fa04bba4d202a32baf` |
 
 MeshLLM workflows pin the public digest. The Flux repository must independently
 roll the ARC HelmReleases to the paired self-hosted digest; that cross-repository
