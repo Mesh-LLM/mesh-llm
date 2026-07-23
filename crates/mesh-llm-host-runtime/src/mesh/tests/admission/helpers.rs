@@ -169,7 +169,7 @@ pub(super) async fn start_owner_control_test_server(
     *node.owner_attestation.lock().await = Some(ownership);
     *node.owner_summary.lock().await = owner_summary;
     *node.trust_store.lock().await = trust_store;
-    node.maybe_start_control_listener(secret_key.clone(), None, None, None)
+    node.maybe_start_control_listener(secret_key.clone(), None, None)
         .await?;
     Ok((node, secret_key, config_path))
 }

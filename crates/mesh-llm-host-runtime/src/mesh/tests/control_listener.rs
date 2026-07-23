@@ -41,7 +41,7 @@ async fn control_plane_listener_starts_with_owner() -> anyhow::Result<()> {
         Node::new_for_tests_with_secret(super::super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
 
-    node.maybe_start_control_listener(secret_key, None, None, None)
+    node.maybe_start_control_listener(secret_key, None, None)
         .await?;
 
     let endpoint = node
@@ -60,6 +60,57 @@ async fn control_plane_listener_starts_with_owner() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Regression test for the owner-control / main-mesh relay endpoint-id
+/// collision.
+///
+/// The owner-control listener shares the node's secret key (and therefore its
+/// iroh endpoint id) with the main mesh endpoint, because the control protocol
+/// validates the dialed `target_node_id` against the main endpoint id. An iroh
+/// relay keeps only one active connection per endpoint id, so if the control
+/// endpoint also registered with the relay it would evict the main mesh
+/// endpoint's relay registration ("Another endpoint connected with the same
+/// endpoint id. No more messages will be received."), silently killing all
+/// relay-delivered mesh traffic — gossip, joins, inference routing — for peers
+/// that cannot reach this node directly. That defeats relay fallback and is the
+/// root cause of consume-side "connects but never joins / catalog never syncs".
+///
+/// The fix keeps the control endpoint relay-disabled. This test pins the
+/// observable invariant: the control endpoint token must advertise NO relay
+/// URLs, so it can never contend for the shared id's relay slot. If someone
+/// re-enables relay on the control endpoint, this fails.
+#[tokio::test]
+async fn control_plane_listener_token_carries_no_relay_urls() -> anyhow::Result<()> {
+    let (node, secret_key) =
+        Node::new_for_tests_with_secret(super::super::NodeRole::Worker).await?;
+    *node.owner_summary.lock().await = verified_owner_summary("owner-a");
+
+    node.maybe_start_control_listener(secret_key, None, None)
+        .await?;
+
+    let endpoint = node
+        .control_endpoint()
+        .await
+        .expect("verified owner should start a control listener");
+    let decoded = Node::decode_invite_token(&endpoint)?;
+
+    // Same id as the main mesh endpoint (required by target-node validation)...
+    assert_eq!(decoded.id, node.endpoint.id());
+    // ...but ZERO relay URLs, so it cannot evict the main endpoint's relay slot.
+    let relay_addrs = decoded
+        .addrs
+        .iter()
+        .filter(|addr| matches!(addr, iroh::TransportAddr::Relay(_)))
+        .count();
+    assert_eq!(
+        relay_addrs, 0,
+        "owner-control token must not advertise relay URLs (shares the main \
+         endpoint id; a relay registration would evict the main mesh endpoint)"
+    );
+
+    node.shutdown_control_listener().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn control_plane_listener_uses_explicit_advertised_address() -> anyhow::Result<()> {
     let (node, secret_key) =
@@ -67,7 +118,7 @@ async fn control_plane_listener_uses_explicit_advertised_address() -> anyhow::Re
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
     let advertised_addr = std::net::SocketAddr::from(([203, 0, 113, 10], 18443));
 
-    node.maybe_start_control_listener(secret_key, None, Some(advertised_addr), None)
+    node.maybe_start_control_listener(secret_key, None, Some(advertised_addr))
         .await?;
 
     let endpoint = node
@@ -92,13 +143,8 @@ async fn control_plane_listener_disabled_without_owner() -> anyhow::Result<()> {
     let (node, secret_key) =
         Node::new_for_tests_with_secret(super::super::NodeRole::Worker).await?;
 
-    node.maybe_start_control_listener(
-        secret_key,
-        Some("127.0.0.1:7447".parse().unwrap()),
-        None,
-        None,
-    )
-    .await?;
+    node.maybe_start_control_listener(secret_key, Some("127.0.0.1:7447".parse().unwrap()), None)
+        .await?;
 
     assert!(node.control_endpoint().await.is_none());
     Ok(())
@@ -109,7 +155,7 @@ async fn control_plane_listener_accepts_only_control_alpn() -> anyhow::Result<()
     let (node, secret_key) =
         Node::new_for_tests_with_secret(super::super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    node.maybe_start_control_listener(secret_key, None, None, None)
+    node.maybe_start_control_listener(secret_key, None, None)
         .await?;
     let endpoint = Node::decode_invite_token(
         &node
@@ -186,7 +232,7 @@ async fn control_plane_endpoint_not_in_gossip_or_status() -> anyhow::Result<()> 
     let (node, secret_key) =
         Node::new_for_tests_with_secret(super::super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    node.maybe_start_control_listener(secret_key, None, None, None)
+    node.maybe_start_control_listener(secret_key, None, None)
         .await?;
     let control_endpoint = node
         .control_endpoint()
@@ -223,7 +269,7 @@ async fn control_plane_listener_shutdown_stops_listener_task() -> anyhow::Result
     let (node, secret_key) =
         Node::new_for_tests_with_secret(super::super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    node.maybe_start_control_listener(secret_key, None, None, None)
+    node.maybe_start_control_listener(secret_key, None, None)
         .await?;
     let endpoint = Node::decode_invite_token(
         &node
