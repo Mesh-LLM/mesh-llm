@@ -81,11 +81,13 @@ Runner images are published from
 as `ghcr.io/mesh-llm/mesh-llm-cuda-runner`. The source repository owns:
 
 - `profiles/common.yml`
+- `profiles/backends/{cpu,vulkan,cuda,rocm}.yml`
 - `profiles/public.yml`
 - `profiles/self-hosted.yml`
-- toolchain installers, manifest collection, dependency warming, and image
-  verification
-- `linux/amd64` and `linux/arm64` manifest children
+- CUDA/ROCm toolchain installers, manifest collection, dependency warming, and
+  backend compiler-probe verification
+- AMD64/ARM64 CPU, Vulkan, CUDA 12, and CUDA 13 images
+- AMD64 ROCm 7.0 and ROCm 7.2 images
 
 Production consumers must use the multi-architecture manifest digest. Tags are
 discovery inputs and are mutable absent separately verified registry controls.
@@ -96,19 +98,25 @@ anonymous pull of the package succeeds, GitHub-hosted container jobs must grant
 `container.credentials`. Do not assume making the source repository public also
 makes an existing package public.
 
-The first production rollout covers the shared public core environment for the
-Linux CPU artifact, Rust crate tests, grouped Linux tests, Rust formatting,
-Clippy, and UI quality jobs in `pr_builds.yml`, `ci.yml`, and `pr_quality.yml`.
-Backend-specific CUDA, ROCm, Vulkan, release, and platform packaging containers
-remain explicit migration debt until the runner-image repository publishes and
-verifies the required backend overlays; do not copy their setup blocks into new
-generic jobs.
+The production rollout covers the shared public CPU environment and explicit
+public Vulkan, CUDA, and ROCm overlays in `pr_builds.yml`, `ci.yml`,
+`pr_quality.yml`, and Linux release jobs. Backend images standardize compilers
+and SDKs; actual GPU access remains a separate runner label, node resource, and
+trust-boundary contract. Do not route untrusted PR code to persistent GPU
+runners merely because the same image can also run as an ARC pod.
 
-The image pair built from MeshLLM revision
-`b6ead55656cb173a5427cd98d9e9ee236f2e0855` is:
+The image family built from MeshLLM revision
+`792839470d1ab2f71c8a9e263e0064aed64aa1f8` is:
 
-- public: `sha256:ce5bed8460b5e01906846cd468b1adb05e95d3dee685955d67ef2ce9907afac1`
-- self-hosted: `sha256:ce827d2395ba9fddcf4d5f827e32f12c9a5846441ce99b3f54f9a8160121250e`
+| Image | Immutable index digest |
+| --- | --- |
+| public CPU | `sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b` |
+| public Vulkan | `sha256:18bab50e8871a9c825dcc3a22fdd0df7e5ff717d4239f2f60795f6b65c5031b3` |
+| public CUDA 12 | `sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99` |
+| public CUDA 13 | `sha256:fa0f8e26c18d3756f13c3d600f1324bc2e95ebec87d1894f4bfa0b6edf75afcc` |
+| public ROCm 7.0 | `sha256:40bc649633114ded6638c95e633392540e483461a6056e1bd3b90b41e739abaf` |
+| public ROCm 7.2 | `sha256:064cd6ec060352487b10b2009a6aac5482830fd04d9cfe3eef1d662d2ad121d7` |
+| self-hosted compatibility | `sha256:6a2064ae12594c169b0f37ed1429a75e9d964f1971cfdf83ff57da823759a5a2` |
 
 MeshLLM workflows pin the public digest. The Flux repository must independently
 roll the ARC HelmReleases to the paired self-hosted digest; that cross-repository
@@ -131,7 +139,7 @@ All GitHub Actions variables are strings.
 | Variable | Purpose and fallback |
 | --- | --- |
 | `USE_SELF_HOSTED` | Exact `true` selects supported self-hosted GPU/release lanes; otherwise hosted |
-| `CUDA_VERSION` | CUDA selection; checked-in lane defaults currently differ, so inspect all consumers before changing |
+| `CUDA_VERSION` | Windows CUDA toolkit selection; Linux CUDA lanes use digest-pinned backend images |
 | `VULKAN_SDK_VERSION` | Windows Vulkan SDK; fallback `1.4.328.1` |
 | `LLAMA_UPSTREAM_CANARY_SMOKE` | Enables canary smoke; fallback `1` |
 | `LLAMA_WINDOWS_CACHE_RETENTION` | Windows warm-cache retention; fallback `2` |

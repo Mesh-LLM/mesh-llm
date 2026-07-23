@@ -172,10 +172,12 @@ update the skill resources in the same change.
   `npm`, `cargo install`, downloaded binary, `curl | sh`, setup action, or host
   bootstrap step to an individual workflow.
 - Put Rust, Node, Python, Go, test, and SDK dependencies in their checked-in
-  project manifests and lockfiles. Put shared Linux packages, compilers, CLIs,
-  and runner capabilities in `profiles/common.yml`, `profiles/public.yml`,
-  `profiles/self-hosted.yml`, or the owning runner-image installer. Rebuild and
-  verify all architectures, publish, then pin the new digest.
+  project manifests and lockfiles. Put shared Linux packages and CLIs in
+  `profiles/common.yml`, backend-specific SDK packages in
+  `profiles/backends/<backend>.yml`, environment-only capabilities in
+  `profiles/public.yml` or `profiles/self-hosted.yml`, and vendor toolchains in
+  the owning runner-image installer. Rebuild and verify every supported
+  backend/architecture pair, publish, then pin the new digest.
 - Locked project installation remains valid job work. The runner image warms
   dependency caches but does not replace the manifests as the contract.
 - Centralized platform setup may remain on macOS or Windows where the Linux

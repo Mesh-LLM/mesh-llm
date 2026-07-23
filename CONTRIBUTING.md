@@ -172,12 +172,12 @@ every CI edit with the canonical
 [`manage-ci` skill](.agents/skills/manage-ci/SKILL.md); `.github/AGENTS.md`
 routes all GitHub workflow work there.
 
-Linux CI is moving to prebuilt public and self-hosted images from
+Linux CI uses prebuilt public and self-hosted images from
 [`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images).
-These images share a multi-architecture core environment, warm dependencies
-from MeshLLM's checked-in manifests, and allow container runtimes to reuse
-cached image layers where the runner host or K3s node retains them instead of
-reinstalling host packages in every job.
+CPU, Vulkan, versioned CUDA, and versioned ROCm images share a core environment,
+warm dependencies from MeshLLM's checked-in manifests, and allow container
+runtimes to reuse cached layers where the runner host or K3s node retains them
+instead of reinstalling host packages in every job.
 
 If CI is missing a dependency, update the appropriate MeshLLM manifest and
 lockfile or the runner image's YAML profile/installer, then publish the image

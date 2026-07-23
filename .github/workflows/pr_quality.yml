@@ -57,7 +57,7 @@ jobs:
     if: needs.changes.outputs.rust_changed == 'true'
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce5bed8460b5e01906846cd468b1adb05e95d3dee685955d67ef2ce9907afac1
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -76,7 +76,7 @@ jobs:
     if: needs.changes.outputs.rust_changed == 'true'
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce5bed8460b5e01906846cd468b1adb05e95d3dee685955d67ef2ce9907afac1
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -136,7 +136,7 @@ jobs:
     if: needs.changes.outputs.ui_changed == 'true'
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce5bed8460b5e01906846cd468b1adb05e95d3dee685955d67ef2ce9907afac1
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

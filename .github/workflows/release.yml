@@ -337,36 +337,27 @@ jobs:
         include:
           - cuda_version: '12.9.2'
             cuda_major: '12'
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99
           - cuda_version: '13.1.2'
             cuda_major: '13'
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa0f8e26c18d3756f13c3d600f1324bc2e95ebec87d1894f4bfa0b6edf75afcc
     container:
-      image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
+      image: ${{ matrix.runner_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       LLAMA_STAGE_BACKEND: cuda
       MESH_NATIVE_RUNTIME_TARGET: aarch64-unknown-linux-gnu
       MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
     steps:
-      - name: Install base packages
-        run: |
-          for attempt in 1 2 3; do
-            apt-get -o Acquire::Retries=5 update &&
-              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld patchelf &&
-              break
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 10))
-          done
-          rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify prebuilt backend environment
+        run: verify-runner-image public cuda
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -401,14 +392,19 @@ jobs:
         include:
           - cuda_version: '12.9.2'
             cuda_major: '12'
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99
             cuda_architectures: '75;80;86;87;89;90'
             cuda_architectures_cache: '75_80_86_87_89_90'
           - cuda_version: '13.1.2'
             cuda_major: '13'
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa0f8e26c18d3756f13c3d600f1324bc2e95ebec87d1894f4bfa0b6edf75afcc
             cuda_architectures: '75;80;86;87;89;90;100;103;120;121'
             cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'
     container:
-      image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
+      image: ${{ matrix.runner_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       LLAMA_STAGE_BACKEND: cuda
       LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
@@ -416,27 +412,13 @@ jobs:
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
       MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
     steps:
-      - name: Install base packages
-        run: |
-          for attempt in 1 2 3; do
-            apt-get -o Acquire::Retries=5 update &&
-              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld patchelf &&
-              break
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 10))
-          done
-          rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify prebuilt backend environment
+        run: verify-runner-image public cuda
       - name: Cache native runtime CUDA backend build
         uses: actions/cache@v5
         with:
@@ -471,34 +453,23 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
     container:
-      image: rocm/dev-ubuntu-24.04:7.0-complete
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:40bc649633114ded6638c95e633392540e483461a6056e1bd3b90b41e739abaf
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       LLAMA_STAGE_BACKEND: rocm
       LLAMA_STAGE_AMDGPU_TARGETS: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-rocm-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
     steps:
-      - name: Install base packages
-        run: |
-          for attempt in 1 2 3; do
-            apt-get -o Acquire::Retries=5 update &&
-              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld patchelf &&
-              break
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 10))
-          done
-          rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify prebuilt backend environment
+        run: verify-runner-image public rocm
       - name: Cache native runtime ROCm backend build
         uses: actions/cache@v5
         with:
@@ -532,6 +503,11 @@ jobs:
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:18bab50e8871a9c825dcc3a22fdd0df7e5ff717d4239f2f60795f6b65c5031b3
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       LLAMA_STAGE_BACKEND: vulkan
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-vulkan
@@ -540,9 +516,8 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl python3 glslc libvulkan-dev spirv-headers lld patchelf
+      - name: Verify prebuilt backend environment
+        run: verify-runner-image public vulkan
       - name: Cache native runtime Vulkan backend build
         uses: actions/cache@v5
         with:
@@ -748,43 +723,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cuda_version: ['12.9.2', '13.1.2']
+        include:
+          - cuda_version: '12.9.2'
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99
+          - cuda_version: '13.1.2'
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa0f8e26c18d3756f13c3d600f1324bc2e95ebec87d1894f4bfa0b6edf75afcc
     container:
-      image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
+      image: ${{ matrix.runner_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       LLAMA_STAGE_BACKEND: cuda
       MESH_RELEASE_ARCH: aarch64
       MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
     steps:
-      - name: Install base packages
-        run: |
-          for attempt in 1 2 3; do
-            apt-get -o Acquire::Retries=5 update &&
-              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld &&
-              break
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 10))
-          done
-          rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: |
-            .github/cache-version.txt
-            crates/mesh-llm-ui/pnpm-lock.yaml
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@just
+      - name: Verify prebuilt backend environment
+        run: verify-runner-image public cuda
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -820,45 +780,28 @@ jobs:
           - cuda_version: '12.9.2'
             cuda_major: '12'
             cuda_architectures_cache: '75_80_86_87_89_90'
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99
           - cuda_version: '13.1.2'
             cuda_major: '13'
             cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa0f8e26c18d3756f13c3d600f1324bc2e95ebec87d1894f4bfa0b6edf75afcc
     container:
-      image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
+      image: ${{ matrix.runner_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       LLAMA_STAGE_BACKEND: cuda
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-cuda-sm${{ matrix.cuda_architectures_cache }}
       MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
     steps:
-      - name: Install base packages
-        run: |
-          for attempt in 1 2 3; do
-            apt-get -o Acquire::Retries=5 update &&
-              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld &&
-              break
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 10))
-          done
-          rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: |
-            .github/cache-version.txt
-            crates/mesh-llm-ui/pnpm-lock.yaml
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@just
+      - name: Verify prebuilt backend environment
+        run: verify-runner-image public cuda
       - name: Cache release CUDA backend build
         uses: actions/cache@v5
         with:
@@ -895,41 +838,22 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
     container:
-      image: rocm/dev-ubuntu-24.04:7.0-complete
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:40bc649633114ded6638c95e633392540e483461a6056e1bd3b90b41e739abaf
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       LLAMA_STAGE_BACKEND: rocm
       LLAMA_STAGE_AMDGPU_TARGETS: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-rocm-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201
     steps:
-      - name: Install base packages
-        run: |
-          for attempt in 1 2 3; do
-            apt-get -o Acquire::Retries=5 update &&
-              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld &&
-              break
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 10))
-          done
-          rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: |
-            .github/cache-version.txt
-            crates/mesh-llm-ui/pnpm-lock.yaml
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@just
+      - name: Verify prebuilt backend environment
+        run: verify-runner-image public rocm
       - name: Cache release ROCm backend build
         uses: actions/cache@v5
         with:
@@ -963,6 +887,11 @@ jobs:
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:18bab50e8871a9c825dcc3a22fdd0df7e5ff717d4239f2f60795f6b65c5031b3
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       LLAMA_STAGE_BACKEND: vulkan
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-vulkan
@@ -970,20 +899,8 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: |
-            .github/cache-version.txt
-            crates/mesh-llm-ui/pnpm-lock.yaml
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@just
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl glslc libvulkan-dev spirv-headers lld
+      - name: Verify prebuilt backend environment
+        run: verify-runner-image public vulkan
       - name: Cache release Vulkan backend build
         uses: actions/cache@v5
         with:

@@ -212,15 +212,23 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
 
 Linux CI environments are maintained in
 [`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images)
-and published as multi-architecture images at
-`ghcr.io/mesh-llm/mesh-llm-cuda-runner`. The two variants are built from the
-same core toolchain:
+and published at `ghcr.io/mesh-llm/mesh-llm-cuda-runner`. Every image is built
+from the same core toolchain and selects an execution environment independently
+from its backend SDK:
 
-- `public-*` runs as a job-level `container:` on an `ubuntu-24.04`
-  GitHub-hosted runner.
-- `self-hosted-*` is the ARC runner pod image for the `mesh-llm-amd64` and
-  `mesh-llm-arm64` K3s scale sets. Jobs targeting these labels run directly in
-  that pod and must not wrap it in a second job container.
+- `public-<backend>-*` runs as a job-level `container:` on an Ubuntu GitHub-hosted
+  or legacy container-capable self-hosted runner.
+- `self-hosted-<backend>-*` adds the Actions runner and is used directly as an
+  ARC pod image. Jobs targeting an ARC scale-set label must not wrap that pod in
+  a second job container.
+- CPU, Vulkan, CUDA 12, and CUDA 13 publish AMD64 and ARM64 manifest children.
+  ROCm 7.0 and 7.2 are AMD64-only until an ARM64 ROCm lane is supported and
+  verified by MeshLLM.
+
+The compatibility `public-*` manifest selects CPU on both architectures. The
+compatibility `self-hosted-*` manifest preserves the deployed K3s topology by
+selecting CUDA 12 on AMD64 and CPU on ARM64. New consumers should use an
+explicit backend image instead of relying on those aliases.
 
 Production workflows and Flux resources must pin the multi-architecture OCI
 digest, using `ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:<digest>`. Timestamp,
@@ -248,6 +256,7 @@ of MeshLLM's checked-in manifests.
 | --- | --- | --- |
 | Rust, Node, Python, or Go project/test dependency | MeshLLM manifest and lockfile | Update and validate the manifest/lockfile in this repository. |
 | Shared Linux package or CLI used by both runner types | `profiles/common.yml` in `mesh-llm-runner-images` | Update the YAML profile, rebuild all architectures, and publish a new image. |
+| Backend SDK package | `profiles/backends/<backend>.yml` in `mesh-llm-runner-images` | Update the backend profile and verify every supported architecture. |
 | Public-only or self-hosted-only system capability | `profiles/public.yml` or `profiles/self-hosted.yml` | Update the environment profile, verify its architecture matrix, and publish a new image. |
 | Toolchain or capability requiring custom installation | Owning installer in `mesh-llm-runner-images` | Update the installer and image verification, then roll forward the pinned consumer. |
 | Truly job-scoped external service | Pinned action or service container | Document why it cannot be part of a manifest or runner image. |
@@ -264,12 +273,13 @@ An emergency exception must be temporary and include a reason, owner, and
 linked removal issue or expiry date. It is not an alternative dependency
 management path.
 
-The initial production rollout applies the public image to the Linux CPU
-artifact, Rust crate tests, grouped Linux tests, Rust formatting, Clippy, and UI
-quality jobs in `pr_builds.yml`, `ci.yml`, and `pr_quality.yml`. Backend-specific
-CUDA, ROCm, Vulkan, release, and packaging lanes continue to use their existing
-vendor/platform environments until equivalent runner-image overlays are built
-and verified. Those setup blocks are migration debt, not examples for new jobs.
+The production rollout applies explicit public CPU, Vulkan, CUDA, and ROCm
+digests to the applicable Linux jobs in `pr_builds.yml`, `ci.yml`,
+`pr_quality.yml`, and `release.yml`. Backend images contain their compiler and
+SDK but do not manufacture GPU access: hosted lanes are compile/package checks,
+while runtime GPU assertions require a matching restricted self-hosted pool.
+Linux workflow-local toolchain and package setup blocks are migration debt and
+must be removed when their lane adopts an image, not copied elsewhere.
 
 PR Builds runs `public_runner_image_contract` inside the public image and a
 two-row `arc_runner_image_contract` matrix directly on `mesh-llm-amd64` and

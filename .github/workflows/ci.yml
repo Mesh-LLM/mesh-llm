@@ -181,7 +181,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce5bed8460b5e01906846cd468b1adb05e95d3dee685955d67ef2ce9907afac1
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -307,7 +307,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce5bed8460b5e01906846cd468b1adb05e95d3dee685955d67ef2ce9907afac1
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -382,7 +382,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce5bed8460b5e01906846cd468b1adb05e95d3dee685955d67ef2ce9907afac1
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0d25367456b0515a26f409a0d21a186d1501143cf5b5b1f88fe90764632d915b
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -781,31 +781,27 @@ jobs:
     runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
     permissions:
       contents: read
+      packages: read
     container:
-      image: nvidia/cuda:${{ vars.CUDA_VERSION || '12.6.3' }}-devel-ubuntu22.04
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f3bbe1618b8cf102dff702bec472e984aa768665d32981244f91264f5aac0d99
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       MESH_LLM_SKIP_UI: "1"
       # CI containers have no GPU driver (libcuda.so.1). Disable VMM and NCCL
       # to avoid linking libraries that require the CUDA driver at runtime.
       GGML_CUDA_NO_VMM: "1"
       LLAMA_STAGE_SKIP_NCCL: "1"
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
     steps:
-      - name: Install base packages
-        run: |
-          for attempt in 1 2 3; do
-            apt-get -o Acquire::Retries=5 update &&
-              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld &&
-              break
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 10))
-          done
-          rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify prebuilt backend environment
+        run: verify-runner-image public cuda
       - name: Configure Linux Rust linker
         run: |
           mkdir -p .cargo
@@ -813,8 +809,6 @@ jobs:
           [target.x86_64-unknown-linux-gnu]
           rustflags = ["-C", "link-arg=-fuse-ld=lld"]
           EOF
-      - uses: taiki-e/install-action@just
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
@@ -843,30 +837,26 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      packages: read
     container:
-      image: rocm/dev-ubuntu-24.04:7.0-complete
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:40bc649633114ded6638c95e633392540e483461a6056e1bd3b90b41e739abaf
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-rocm-gfx1100
       LLAMA_STAGE_BACKEND: rocm
       LLAMA_STAGE_AMDGPU_TARGETS: gfx1100
       MESH_LLM_SKIP_UI: "1"
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
     steps:
-      - name: Install base packages
-        run: |
-          for attempt in 1 2 3; do
-            apt-get -o Acquire::Retries=5 update &&
-              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld &&
-              break
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 10))
-          done
-          rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify prebuilt backend environment
+        run: verify-runner-image public rocm
       - name: Configure Linux Rust linker
         run: |
           mkdir -p .cargo
@@ -874,8 +864,6 @@ jobs:
           [target.x86_64-unknown-linux-gnu]
           rustflags = ["-C", "link-arg=-fuse-ld=lld"]
           EOF
-      - uses: taiki-e/install-action@just
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
@@ -900,17 +888,25 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      packages: read
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:18bab50e8871a9c825dcc3a22fdd0df7e5ff717d4239f2f60795f6b65c5031b3
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       LLAMA_STAGE_BACKEND: vulkan
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-vulkan
       MESH_LLM_SKIP_UI: "1"
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Install Vulkan build packages
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev glslc libvulkan-dev spirv-headers lld
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify prebuilt backend environment
+        run: verify-runner-image public vulkan
       - name: Configure Linux Rust linker
         run: |
           mkdir -p .cargo
@@ -918,8 +914,6 @@ jobs:
           [target.x86_64-unknown-linux-gnu]
           rustflags = ["-C", "link-arg=-fuse-ld=lld"]
           EOF
-      - uses: taiki-e/install-action@just
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
