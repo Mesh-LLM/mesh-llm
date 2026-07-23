@@ -803,7 +803,7 @@ jobs:
       - name: Verify prebuilt backend environment
         run: verify-runner-image public cuda
       - name: Configure baked sccache GHA backend
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')
@@ -865,7 +865,7 @@ jobs:
       - name: Verify prebuilt backend environment
         run: verify-runner-image public rocm
       - name: Configure baked sccache GHA backend
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')
@@ -922,7 +922,7 @@ jobs:
       - name: Verify prebuilt backend environment
         run: verify-runner-image public vulkan
       - name: Configure baked sccache GHA backend
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')

@@ -365,7 +365,7 @@ jobs:
         run: verify-runner-image public "${{ matrix.backend }}"
       - name: Configure baked sccache GHA backend
         if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')
