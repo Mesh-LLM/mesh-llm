@@ -1,11 +1,10 @@
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 33;
+pub const ABI_VERSION_PATCH: u32 = 32;
 pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
 pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
-pub const FEATURE_NGRAM_SIMPLE_DRAFT: u64 = 1 << 26;
-pub const FEATURE_NGRAM_CACHE_DRAFT: u64 = 1 << 27;
+pub const FEATURE_NGRAM_CACHE_DRAFT: u64 = 1 << 26;
 
 #[cfg(feature = "dynamic-runtime")]
 mod dynamic_library;
