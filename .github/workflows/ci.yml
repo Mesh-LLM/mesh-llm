@@ -795,13 +795,20 @@ jobs:
       LLAMA_STAGE_SKIP_NCCL: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Verify prebuilt backend environment
         run: verify-runner-image public cuda
+      - name: Configure baked sccache GHA backend
+        uses: actions/github-script@v8
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '')
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '')
       - name: Configure Linux Rust linker
         run: |
           mkdir -p .cargo
@@ -850,13 +857,20 @@ jobs:
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Verify prebuilt backend environment
         run: verify-runner-image public rocm
+      - name: Configure baked sccache GHA backend
+        uses: actions/github-script@v8
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '')
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '')
       - name: Configure Linux Rust linker
         run: |
           mkdir -p .cargo
@@ -900,13 +914,20 @@ jobs:
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Verify prebuilt backend environment
         run: verify-runner-image public vulkan
+      - name: Configure baked sccache GHA backend
+        uses: actions/github-script@v8
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '')
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '')
       - name: Configure Linux Rust linker
         run: |
           mkdir -p .cargo

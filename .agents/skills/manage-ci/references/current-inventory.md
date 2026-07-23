@@ -122,11 +122,12 @@ MeshLLM workflows pin the public digest. The Flux repository must independently
 roll the ARC HelmReleases to the paired self-hosted digest; that cross-repository
 change cannot be delivered by a MeshLLM pull request.
 
-Public-image Rust jobs use the baked `sccache` binary with
-`SCCACHE_GHA_ENABLED=false`; the GHA backend requires runtime cache credentials
-that are normally exported by the downloading setup action. Persistent Cargo
-target and ABI reuse remains owned by `Swatinem/rust-cache` and `actions/cache`.
-Do not reintroduce the sccache download action merely to export credentials.
+Public-image Rust jobs use the baked `sccache` binary. Backend compile jobs use
+`actions/github-script` only to export the ephemeral Actions cache URL and token
+that GitHub exposes to JavaScript actions; it does not download or install
+sccache. Persistent Cargo target and ABI reuse remains owned by
+`Swatinem/rust-cache` and `actions/cache`. Do not reintroduce the sccache
+download action merely to export credentials.
 
 `USE_SELF_HOSTED` currently controls selected GPU/release routes. Unset or a
 value other than the exact string `true` selects the hosted fallback. Any new
