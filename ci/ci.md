@@ -264,6 +264,27 @@ An emergency exception must be temporary and include a reason, owner, and
 linked removal issue or expiry date. It is not an alternative dependency
 management path.
 
+The initial production rollout applies the public image to the Linux CPU
+artifact, Rust crate tests, grouped Linux tests, Rust formatting, Clippy, and UI
+quality jobs in `pr_builds.yml`, `ci.yml`, and `pr_quality.yml`. Backend-specific
+CUDA, ROCm, Vulkan, release, and packaging lanes continue to use their existing
+vendor/platform environments until equivalent runner-image overlays are built
+and verified. Those setup blocks are migration debt, not examples for new jobs.
+
+PR Builds runs `public_runner_image_contract` inside the public image and a
+two-row `arc_runner_image_contract` matrix directly on `mesh-llm-amd64` and
+`mesh-llm-arm64`. The public job validates the baked dependency/tool contract.
+The ARC job checks the native machine architecture, validates the self-hosted
+image, and performs a small Rust check. It has no hosted fallback by design: it
+is the pull-request gate that detects ARC, K3s scheduling, multi-architecture
+image, and runner startup regressions.
+
+Repository visibility and GHCR package visibility are separate controls. If an
+anonymous pull still returns `401` or `403`, public-container jobs must grant
+`packages: read` and authenticate `container.credentials` with `github.actor`
+and `secrets.GITHUB_TOKEN`. Making `mesh-llm-runner-images` public does not by
+itself prove that an existing package is anonymously readable.
+
 ## Public website deployment
 
 - `website-pages.yml` deploys the public static site through GitHub Pages' Actions

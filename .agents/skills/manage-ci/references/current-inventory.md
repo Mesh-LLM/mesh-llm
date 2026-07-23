@@ -69,6 +69,13 @@ ARC scale-set labels for the prebuilt runner rollout:
 - `mesh-llm-amd64`
 - `mesh-llm-arm64`
 
+`pr_builds.yml` runs `public_runner_image_contract` in the public image and
+`arc_runner_image_contract` on both ARC labels for every pull request. The ARC
+job executes directly in each ephemeral runner pod, verifies the self-hosted
+image contract and native architecture, and runs a small Rust check. It
+intentionally has no hosted fallback because its purpose is to detect an ARC,
+K3s scheduling, architecture, or runner-image regression before merge.
+
 Runner images are published from
 [`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images)
 as `ghcr.io/mesh-llm/mesh-llm-cuda-runner`. The source repository owns:
@@ -82,6 +89,30 @@ as `ghcr.io/mesh-llm/mesh-llm-cuda-runner`. The source repository owns:
 
 Production consumers must use the multi-architecture manifest digest. Tags are
 discovery inputs and are mutable absent separately verified registry controls.
+
+The public repository and its GHCR package have independent visibility. Until
+anonymous pull of the package succeeds, GitHub-hosted container jobs must grant
+`packages: read` and provide `github.actor`/`secrets.GITHUB_TOKEN` through
+`container.credentials`. Do not assume making the source repository public also
+makes an existing package public.
+
+The first production rollout covers the shared public core environment for the
+Linux CPU artifact, Rust crate tests, grouped Linux tests, Rust formatting,
+Clippy, and UI quality jobs in `pr_builds.yml`, `ci.yml`, and `pr_quality.yml`.
+Backend-specific CUDA, ROCm, Vulkan, release, and platform packaging containers
+remain explicit migration debt until the runner-image repository publishes and
+verifies the required backend overlays; do not copy their setup blocks into new
+generic jobs.
+
+The image pair built from MeshLLM revision
+`b6ead55656cb173a5427cd98d9e9ee236f2e0855` is:
+
+- public: `sha256:ce5bed8460b5e01906846cd468b1adb05e95d3dee685955d67ef2ce9907afac1`
+- self-hosted: `sha256:ce827d2395ba9fddcf4d5f827e32f12c9a5846441ce99b3f54f9a8160121250e`
+
+MeshLLM workflows pin the public digest. The Flux repository must independently
+roll the ARC HelmReleases to the paired self-hosted digest; that cross-repository
+change cannot be delivered by a MeshLLM pull request.
 
 `USE_SELF_HOSTED` currently controls selected GPU/release routes. Unset or a
 value other than the exact string `true` selects the hosted fallback. Any new

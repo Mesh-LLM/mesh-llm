@@ -6,6 +6,8 @@ self-hosted-runner:
     - ARM64
     - amd64
     - gpu-nvidia
+    - mesh-llm-amd64
+    - mesh-llm-arm64
     - blacksmith-4vcpu-ubuntu-2404
     - blacksmith-6vcpu-macos-15
     - blacksmith-4vcpu-ubuntu-2404-arm

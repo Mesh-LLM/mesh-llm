@@ -7,6 +7,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
+permissions:
+  contents: read
+  packages: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -52,11 +56,18 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust_changed == 'true'
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce5bed8460b5e01906846cd468b1adb05e95d3dee685955d67ef2ce9907afac1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - name: Verify prebuilt CI environment
+        run: verify-runner-image public
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -64,6 +75,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust_changed == 'true'
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce5bed8460b5e01906846cd468b1adb05e95d3dee685955d67ef2ce9907afac1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -74,12 +93,8 @@ jobs:
       RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v5
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev lld
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Verify prebuilt CI environment
+        run: verify-runner-image public
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
         with:
@@ -119,19 +134,19 @@ jobs:
     needs: changes
     if: needs.changes.outputs.ui_changed == 'true'
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce5bed8460b5e01906846cd468b1adb05e95d3dee685955d67ef2ce9907afac1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         working-directory: crates/mesh-llm-ui
+        shell: bash
     steps:
       - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
-        with:
-          version: latest
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: crates/mesh-llm-ui/pnpm-lock.yaml
+      - name: Verify prebuilt CI environment
+        run: verify-runner-image public
       - name: Install dependencies
         run: pnpm i --frozen-lockfile
       - name: Lint
