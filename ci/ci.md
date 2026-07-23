@@ -285,6 +285,12 @@ anonymous pull still returns `401` or `403`, public-container jobs must grant
 and `secrets.GITHUB_TOKEN`. Making `mesh-llm-runner-images` public does not by
 itself prove that an existing package is anonymously readable.
 
+The public image already contains `sccache`. Public-image Rust jobs disable its
+GHA remote backend because the required runtime cache URL/token is normally
+exported by the downloading setup action; they retain local in-job compiler
+caching plus persistent Cargo target and ABI caches through the existing cache
+actions. Do not download a second sccache binary just to configure that backend.
+
 ## Public website deployment
 
 - `website-pages.yml` deploys the public static site through GitHub Pages' Actions

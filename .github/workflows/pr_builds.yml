@@ -212,6 +212,7 @@ jobs:
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
 
@@ -487,6 +488,7 @@ jobs:
       MESH_LLM_SKIP_UI: "1"
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -563,6 +565,7 @@ jobs:
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
 
