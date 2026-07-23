@@ -125,7 +125,9 @@ change cannot be delivered by a MeshLLM pull request.
 Public-image Rust jobs use the baked `sccache` binary. Backend compile jobs use
 `actions/github-script` only to export the ephemeral Actions cache URL and token
 that GitHub exposes to JavaScript actions; it does not download or install
-sccache. Persistent Cargo target and ABI reuse remains owned by
+sccache. The configuration probes the remote backend and falls back to
+job-local sccache when the Actions cache service is unavailable. Persistent
+Cargo target and ABI reuse remains owned by
 `Swatinem/rust-cache` and `actions/cache`. Do not reintroduce the sccache
 download action merely to export credentials.
 

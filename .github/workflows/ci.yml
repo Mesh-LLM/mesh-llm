@@ -809,6 +809,11 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')
             core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '')
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '')
+            const exitCode = await exec.exec('sccache', ['--start-server'], { ignoreReturnCode: true })
+            if (exitCode !== 0) {
+              core.warning('GitHub Actions cache is unavailable; falling back to job-local sccache.')
+              core.exportVariable('SCCACHE_GHA_ENABLED', 'false')
+            }
       - name: Configure Linux Rust linker
         run: |
           mkdir -p .cargo
@@ -871,6 +876,11 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')
             core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '')
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '')
+            const exitCode = await exec.exec('sccache', ['--start-server'], { ignoreReturnCode: true })
+            if (exitCode !== 0) {
+              core.warning('GitHub Actions cache is unavailable; falling back to job-local sccache.')
+              core.exportVariable('SCCACHE_GHA_ENABLED', 'false')
+            }
       - name: Configure Linux Rust linker
         run: |
           mkdir -p .cargo
@@ -928,6 +938,11 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')
             core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '')
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '')
+            const exitCode = await exec.exec('sccache', ['--start-server'], { ignoreReturnCode: true })
+            if (exitCode !== 0) {
+              core.warning('GitHub Actions cache is unavailable; falling back to job-local sccache.')
+              core.exportVariable('SCCACHE_GHA_ENABLED', 'false')
+            }
       - name: Configure Linux Rust linker
         run: |
           mkdir -p .cargo
