@@ -200,6 +200,8 @@ pub(crate) fn effective_relay_urls(policy: RelayPolicy, relay_urls: &[String]) -
         RelayPolicy::DefaultPublic if relay_urls.is_empty() => vec![
             "https://usw1-2.relay.michaelneale.mesh-llm.iroh.link./".into(),
             "https://aps1-1.relay.michaelneale.mesh-llm.iroh.link./".into(),
+            "https://euc1-1.relay.michaelneale.mesh-llm.iroh.link./".into(),
+            "https://use1-1.relay.michaelneale.mesh-llm.iroh.link./".into(),
         ],
         RelayPolicy::DefaultPublic => relay_urls.to_vec(),
     }
@@ -256,10 +258,17 @@ pub(crate) fn relay_map_from_urls(
     auths: &std::collections::HashMap<String, String>,
 ) -> Result<iroh::RelayMap> {
     let configs = urls.iter().map(|url| {
-        let parsed = url
+        let parsed: iroh::RelayUrl = url
             .parse()
             .with_context(|| format!("invalid relay URL `{url}`"))?;
-        let cfg = iroh::RelayConfig::new(parsed, None);
+        // Preserve iroh's default QUIC Address Discovery (QAD, UDP 7842).
+        // `iroh::RelayConfig::new(parsed, None)` explicitly DISABLES QAD, so
+        // net-report never learns a reflexive public UDP candidate and direct
+        // paths across NAT cannot form (nodes fall back to relay). Constructing
+        // via `RelayUrl::into()` keeps QAD enabled — iroh's default. QAD is
+        // client-driven and gated behind `has_ip_transports`, so relay-only and
+        // LAN-only endpoints are unaffected. See issue #1065.
+        let cfg: iroh::RelayConfig = parsed.into();
         Ok(match auths.get(url) {
             Some(token) => cfg.with_auth_token(token.clone()),
             None => cfg,
@@ -289,6 +298,17 @@ mod relay_map_tests {
         assert!(
             cfgs[0].auth_token.is_none(),
             "no auth supplied → no auth_token set"
+        );
+        // QAD must be enabled (issue #1065): the relay config must carry a QUIC
+        // address-discovery config on the default port, else nodes never learn a
+        // reflexive candidate and direct-path upgrades across NAT cannot form.
+        let quic = cfgs[0]
+            .quic
+            .as_ref()
+            .expect("default QUIC address discovery (QAD) should be enabled");
+        assert_eq!(
+            quic.port, 7842,
+            "QAD should use iroh's default relay QUIC port"
         );
     }
 

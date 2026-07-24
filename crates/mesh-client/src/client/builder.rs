@@ -566,7 +566,10 @@ fn relay_map_from_endpoint_addr(addr: &EndpointAddr) -> Option<iroh::RelayMap> {
     let configs: Vec<_> = addr
         .relay_urls()
         .cloned()
-        .map(|url| iroh::RelayConfig::new(url, None))
+        // Preserve iroh's default QUIC Address Discovery (QAD). `new(url, None)`
+        // disables it, preventing reflexive candidate discovery and direct-path
+        // upgrades across NAT (see issue #1065). `RelayUrl::into()` keeps QAD on.
+        .map(|url| -> iroh::RelayConfig { url.into() })
         .collect();
     if configs.is_empty() {
         None
