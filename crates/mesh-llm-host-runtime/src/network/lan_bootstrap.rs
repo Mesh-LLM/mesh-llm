@@ -5,22 +5,22 @@ use std::net::IpAddr;
 use tokio::task::JoinHandle;
 
 pub(crate) fn effective_quic_bind_ip(options: &RuntimeOptions) -> Option<IpAddr> {
+    // Explicit operator override always wins.
     if let Some(ip) = options.bind_ip {
         return Some(ip);
     }
 
-    let detected = mesh::detect_primary_lan_ipv4();
-    if let Some(ip) = detected {
-        tracing::info!(
-            "Auto-binding QUIC endpoint to detected LAN address {ip}; override with --bind-ip"
-        );
-        Some(ip)
-    } else {
-        tracing::debug!(
-            "Unable to detect a LAN IPv4 address for QUIC bind; using wildcard socket bind"
-        );
-        None
-    }
+    // Default: bind iroh's wildcard sockets (0.0.0.0 + [::]) and let iroh own
+    // candidate discovery. We used to auto-pin the detected primary LAN IPv4
+    // here, which created a SECOND local UDP socket alongside iroh's wildcard
+    // socket on one endpoint id. iroh's docs are explicit that manual binding is
+    // advanced/usually-unnecessary and replaces the wildcard bind; pinning one
+    // family left a stray socket whose 4-tuple diverged from the path iroh
+    // validated, contributing to direct paths idling out. With QAD supplying the
+    // public reflexive candidate and iroh's own NAT traversal, LAN pinning is no
+    // longer needed. Override with --bind-ip for genuinely special cases.
+    // See mesh-llm issue #1065.
+    None
 }
 
 /// Background tasks spawned by [`spawn_mdns_reverse_dial`] for relay-less LAN
