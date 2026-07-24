@@ -107,6 +107,21 @@ async fn control_plane_listener_token_carries_no_relay_urls() -> anyhow::Result<
          endpoint id; a relay registration would evict the main mesh endpoint)"
     );
 
+    // Invariant (defence-in-depth): the control endpoint is loopback-only by
+    // default — it must NOT advertise any non-loopback IP transport. This keeps
+    // the control plane non-routable off-box unless an explicit advertise addr
+    // is configured (see the dedicated test), preserving the separation intent
+    // of the split-control design (#539) while fixing the relay-slot eviction.
+    for addr in &decoded.addrs {
+        if let iroh::TransportAddr::Ip(sock) = addr {
+            assert!(
+                sock.ip().is_loopback(),
+                "owner-control token must only advertise loopback IPs by default, \
+                 found non-loopback {sock}"
+            );
+        }
+    }
+
     node.shutdown_control_listener().await;
     Ok(())
 }
