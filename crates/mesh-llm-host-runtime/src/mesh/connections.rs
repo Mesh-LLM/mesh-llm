@@ -215,7 +215,15 @@ mod relay_policy_tests {
     pub(crate) fn default_policy_uses_managed_relays_when_no_urls_are_given() {
         let urls = effective_relay_urls(RelayPolicy::DefaultPublic, &[]);
 
-        assert!(urls.iter().any(|url| url.contains("relay.michaelneale")));
+        assert_eq!(
+            urls,
+            vec![
+                "https://usw1-2.relay.michaelneale.mesh-llm.iroh.link./",
+                "https://aps1-1.relay.michaelneale.mesh-llm.iroh.link./",
+                "https://euc1-1.relay.michaelneale.mesh-llm.iroh.link./",
+                "https://use1-1.relay.michaelneale.mesh-llm.iroh.link./",
+            ]
+        );
     }
 
     #[test]
@@ -290,25 +298,21 @@ mod relay_map_tests {
     }
 
     #[test]
-    pub(crate) fn builds_map_without_auth_when_empty() {
-        let urls = vec!["https://r1.example/".to_string()];
+    pub(crate) fn builds_map_with_default_qad_without_auth() {
+        let urls = vec![
+            "https://r1.example/".to_string(),
+            "https://r2.example/".to_string(),
+        ];
         let map = relay_map_from_urls(&urls, &HashMap::new()).expect("relay map should build");
         let cfgs = configs(&map);
-        assert_eq!(cfgs.len(), 1);
-        assert!(
-            cfgs[0].auth_token.is_none(),
-            "no auth supplied → no auth_token set"
-        );
+        assert_eq!(cfgs.len(), 2);
+        assert!(cfgs.iter().all(|config| config.auth_token.is_none()));
         // QAD must be enabled (issue #1065): the relay config must carry a QUIC
         // address-discovery config on the default port, else nodes never learn a
         // reflexive candidate and direct-path upgrades across NAT cannot form.
-        let quic = cfgs[0]
-            .quic
-            .as_ref()
-            .expect("default QUIC address discovery (QAD) should be enabled");
-        assert_eq!(
-            quic.port, 7842,
-            "QAD should use iroh's default relay QUIC port"
+        assert!(
+            cfgs.iter()
+                .all(|config| { config.quic.as_ref().is_some_and(|quic| quic.port == 7842) })
         );
     }
 
@@ -436,11 +440,18 @@ mod gated_relay_e2e_tests {
         relay_urls: &[String],
         relay_auths: &HashMap<String, String>,
     ) -> Endpoint {
+        let relay_map =
+            relay_map_from_urls(relay_urls, relay_auths).expect("relay map should build");
+        assert!(
+            relay_map
+                .relays::<Vec<_>>()
+                .iter()
+                .all(|config| { config.quic.as_ref().is_some_and(|quic| quic.port == 7842) }),
+            "end-to-end relay configs should keep default QAD enabled"
+        );
         Endpoint::builder(presets::Minimal)
             .secret_key(SecretKey::generate())
-            .relay_mode(RelayMode::Custom(
-                relay_map_from_urls(relay_urls, relay_auths).expect("relay map should build"),
-            ))
+            .relay_mode(RelayMode::Custom(relay_map))
             .ca_tls_config(CaTlsConfig::insecure_skip_verify())
             .bind()
             .await
@@ -448,7 +459,7 @@ mod gated_relay_e2e_tests {
     }
 
     #[tokio::test]
-    pub(crate) async fn matching_token_admits_endpoint_to_gated_relay() {
+    pub(crate) async fn qad_enabled_map_admits_endpoint_to_gated_relay() {
         const TOKEN: &str = "secret-token";
         let (relay_url, _server) = spawn_gated_relay(TOKEN).await;
 

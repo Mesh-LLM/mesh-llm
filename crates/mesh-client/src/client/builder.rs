@@ -634,3 +634,31 @@ fn socket_addr(base_url: &str) -> Result<String, String> {
         .map(|value| value.to_string())
         .ok_or_else(|| format!("invalid API base URL: {base_url}"))
 }
+
+#[cfg(test)]
+mod relay_map_tests {
+    use super::relay_map_from_endpoint_addr;
+    use iroh::{EndpointAddr, RelayUrl, SecretKey};
+    use std::str::FromStr;
+
+    #[test]
+    fn endpoint_addr_relays_preserve_default_qad() {
+        let addr = EndpointAddr::new(SecretKey::generate().public())
+            .with_relay_url(
+                RelayUrl::from_str("https://relay-a.example.com").expect("relay URL parses"),
+            )
+            .with_relay_url(
+                RelayUrl::from_str("https://relay-b.example.com").expect("relay URL parses"),
+            );
+
+        let map = relay_map_from_endpoint_addr(&addr).expect("relay map should be enabled");
+        let configs = map.relays::<Vec<_>>();
+
+        assert_eq!(configs.len(), 2);
+        assert!(
+            configs
+                .iter()
+                .all(|config| { config.quic.as_ref().is_some_and(|quic| quic.port == 7842) })
+        );
+    }
+}
