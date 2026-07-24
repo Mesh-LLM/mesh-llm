@@ -23,6 +23,30 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
+struct HomeEnvGuard {
+    original_home: Option<std::ffi::OsString>,
+}
+
+impl HomeEnvGuard {
+    fn set(home: &std::path::Path) -> Self {
+        let original_home = std::env::var_os("HOME");
+        // SAFETY: callers use `#[serial]`, and Drop restores the previous value.
+        unsafe { std::env::set_var("HOME", home) };
+        Self { original_home }
+    }
+}
+
+impl Drop for HomeEnvGuard {
+    fn drop(&mut self) {
+        match &self.original_home {
+            // SAFETY: callers use `#[serial]`, and this restores the saved value.
+            Some(home) => unsafe { std::env::set_var("HOME", home) },
+            // SAFETY: callers use `#[serial]`, and HOME was originally unset.
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+}
+
 mod apply_config_diagnostics;
 mod apply_config_validation_authority;
 mod runtime_config;

@@ -181,8 +181,7 @@ async fn config_apply_does_not_emit_peer_churn() {
 #[serial]
 async fn control_plane_api_cli_requires_explicit_endpoint_and_runs_local_orchestration() {
     let temp = tempfile::tempdir().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HOME", temp.path()) };
+    let _home_guard = HomeEnvGuard::set(temp.path());
     let owner = OwnerKeypair::generate();
     let keystore_path = default_keystore_path().unwrap();
     save_keystore(&keystore_path, &owner, None, true).unwrap();
@@ -230,8 +229,7 @@ async fn control_plane_api_cli_requires_explicit_endpoint_and_runs_local_orchest
 #[serial]
 async fn control_plane_api_apply_config_uses_full_mesh_config_contract() {
     let temp = tempfile::tempdir().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HOME", temp.path()) };
+    let _home_guard = HomeEnvGuard::set(temp.path());
     let owner = OwnerKeypair::generate();
     let keystore_path = default_keystore_path().unwrap();
     save_keystore(&keystore_path, &owner, None, true).unwrap();
@@ -323,8 +321,7 @@ async fn control_plane_api_apply_config_uses_full_mesh_config_contract() {
 #[serial]
 async fn control_plane_api_apply_config_reports_revision_conflict() {
     let temp = tempfile::tempdir().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HOME", temp.path()) };
+    let _home_guard = HomeEnvGuard::set(temp.path());
     let owner = OwnerKeypair::generate();
     let keystore_path = default_keystore_path().unwrap();
     save_keystore(&keystore_path, &owner, None, true).unwrap();
@@ -422,8 +419,7 @@ async fn control_route_rejects_non_loopback() {
 #[serial]
 async fn control_plane_api_reports_remote_endpoint_unreachable() {
     let temp = tempfile::tempdir().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HOME", temp.path()) };
+    let _home_guard = HomeEnvGuard::set(temp.path());
     let owner = OwnerKeypair::generate();
     let keystore_path = default_keystore_path().unwrap();
     save_keystore(&keystore_path, &owner, None, true).unwrap();
@@ -464,8 +460,7 @@ async fn control_plane_api_reports_remote_endpoint_unreachable() {
 #[serial]
 async fn control_plane_api_cli_uses_custom_owner_key_path() {
     let temp = tempfile::tempdir().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HOME", temp.path()) };
+    let _home_guard = HomeEnvGuard::set(temp.path());
     let custom_owner_key = temp.path().join("custom-owner.json");
     save_keystore(&custom_owner_key, &OwnerKeypair::generate(), None, true).unwrap();
 
