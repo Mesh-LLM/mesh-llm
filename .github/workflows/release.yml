@@ -359,6 +359,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public cuda
+      - uses: ./.github/actions/configure-sccache-gha
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -421,6 +422,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public cuda
+      - uses: ./.github/actions/configure-sccache-gha
       - name: Cache native runtime CUDA backend build
         uses: actions/cache@v5
         with:
@@ -473,6 +475,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public rocm
+      - uses: ./.github/actions/configure-sccache-gha
       - name: Cache native runtime ROCm backend build
         uses: actions/cache@v5
         with:
@@ -524,6 +527,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public vulkan
+      - uses: ./.github/actions/configure-sccache-gha
       - name: Cache native runtime Vulkan backend build
         uses: actions/cache@v5
         with:
@@ -752,6 +756,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public cuda
+      - uses: ./.github/actions/configure-sccache-gha
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -810,6 +815,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public cuda
+      - uses: ./.github/actions/configure-sccache-gha
       - name: Cache release CUDA backend build
         uses: actions/cache@v5
         with:
@@ -863,6 +869,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public rocm
+      - uses: ./.github/actions/configure-sccache-gha
       - name: Cache release ROCm backend build
         uses: actions/cache@v5
         with:
@@ -913,6 +920,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public vulkan
+      - uses: ./.github/actions/configure-sccache-gha
       - name: Cache release Vulkan backend build
         uses: actions/cache@v5
         with:

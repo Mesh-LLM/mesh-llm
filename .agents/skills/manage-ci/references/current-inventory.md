@@ -35,6 +35,9 @@ Local actions:
 
 - `.github/actions/compute-changes` owns path, crate, backend, SDK, UI, website,
   Windows, and docs-only routing outputs.
+- `.github/actions/configure-sccache-gha` exports ephemeral Actions cache
+  credentials to the baked `sccache`, probes the GHA backend, and restarts the
+  server with job-local storage when the probe fails.
 - `.github/actions/restore-smoke-inputs` owns producer artifact staging and
   model restoration for smoke consumers.
 - `.github/actions/setup-windows-rocm-sdk` owns reusable Windows ROCm setup.
@@ -122,11 +125,13 @@ MeshLLM workflows pin the public digest. The Flux repository must independently
 roll the ARC HelmReleases to the paired self-hosted digest; that cross-repository
 change cannot be delivered by a MeshLLM pull request.
 
-Public-image Rust jobs use the baked `sccache` binary with
-`SCCACHE_GHA_ENABLED=false`, so compiler startup does not depend on the
-availability of GitHub's cache service. Persistent Cargo target and ABI reuse
-remains owned by `Swatinem/rust-cache` and `actions/cache`. Do not reintroduce
-the sccache download action merely to export credentials.
+Public-image Rust jobs use the baked `sccache` binary and start with
+`SCCACHE_GHA_ENABLED=false`. The local `configure-sccache-gha` action exports
+the ephemeral Actions cache URL/token, enables the GHA backend, and probes it by
+starting the server. If that probe fails, the action stops the remote-configured
+server and restarts `sccache` with its job-local disk cache. Persistent Cargo
+target and ABI reuse remains owned by `Swatinem/rust-cache` and `actions/cache`.
+Do not reintroduce the sccache download action merely to export credentials.
 
 `USE_SELF_HOSTED` currently controls selected GPU/release routes. Unset or a
 value other than the exact string `true` selects the hosted fallback. Any new

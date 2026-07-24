@@ -1,0 +1,49 @@
+name: Configure baked sccache GHA backend
+description: Use Actions cache from the baked sccache binary with a job-local fallback.
+
+runs:
+  using: composite
+  steps:
+    - name: Export cache credentials and start sccache
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+      with:
+        script: |
+          const cacheUrl = process.env.ACTIONS_CACHE_URL || '';
+          const resultsUrl = process.env.ACTIONS_RESULTS_URL || '';
+          const runtimeToken = process.env.ACTIONS_RUNTIME_TOKEN || '';
+
+          if (runtimeToken) {
+            core.setSecret(runtimeToken);
+          }
+
+          core.exportVariable('ACTIONS_CACHE_URL', cacheUrl);
+          core.exportVariable('ACTIONS_RESULTS_URL', resultsUrl);
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', runtimeToken);
+
+          await exec.exec('sccache', ['--stop-server'], {
+            ignoreReturnCode: true,
+          });
+          core.exportVariable('SCCACHE_GHA_ENABLED', 'true');
+
+          const remoteExitCode = await exec.exec('sccache', ['--start-server'], {
+            ignoreReturnCode: true,
+          });
+          if (remoteExitCode === 0) {
+            core.info('Baked sccache is using the GitHub Actions cache backend.');
+            return;
+          }
+
+          core.warning(
+            'GitHub Actions cache is unavailable; restarting baked sccache with its job-local disk cache.',
+          );
+          await exec.exec('sccache', ['--stop-server'], {
+            ignoreReturnCode: true,
+          });
+          core.exportVariable('SCCACHE_GHA_ENABLED', 'false');
+
+          const localExitCode = await exec.exec('sccache', ['--start-server'], {
+            ignoreReturnCode: true,
+          });
+          if (localExitCode !== 0) {
+            core.setFailed('Unable to start baked sccache with either remote or job-local storage.');
+          }
