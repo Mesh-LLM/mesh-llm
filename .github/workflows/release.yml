@@ -350,6 +350,7 @@ jobs:
       LLAMA_STAGE_BACKEND: cuda
       MESH_NATIVE_RUNTIME_TARGET: aarch64-unknown-linux-gnu
       MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -411,6 +412,7 @@ jobs:
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-cuda-sm${{ matrix.cuda_architectures_cache }}
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
       MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -462,6 +464,7 @@ jobs:
       LLAMA_STAGE_AMDGPU_TARGETS: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-rocm-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -512,10 +515,13 @@ jobs:
       LLAMA_STAGE_BACKEND: vulkan
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-vulkan
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public vulkan
       - name: Cache native runtime Vulkan backend build
@@ -737,6 +743,7 @@ jobs:
       LLAMA_STAGE_BACKEND: cuda
       MESH_RELEASE_ARCH: aarch64
       MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -794,6 +801,7 @@ jobs:
       LLAMA_STAGE_BACKEND: cuda
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-cuda-sm${{ matrix.cuda_architectures_cache }}
       MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -846,6 +854,7 @@ jobs:
       LLAMA_STAGE_BACKEND: rocm
       LLAMA_STAGE_AMDGPU_TARGETS: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-rocm-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -895,10 +904,13 @@ jobs:
     env:
       LLAMA_STAGE_BACKEND: vulkan
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-vulkan
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public vulkan
       - name: Cache release Vulkan backend build
