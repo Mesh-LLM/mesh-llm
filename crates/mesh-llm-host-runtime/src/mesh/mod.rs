@@ -1,9 +1,9 @@
 //! Mesh membership via iroh QUIC connections.
 //!
 //! Mesh control traffic uses QUIC ALPN `mesh-llm/1` and multiplexes bi-streams
-//! by first byte. Latency-sensitive and path-maintenance flows keep dedicated
-//! stream bytes. Skippy activation transport remains on the latency-sensitive
-//! `skippy-stage/2` ALPN.
+//! by first byte. The legacy direct-path repair stream remains accepted for
+//! mixed-version compatibility. Skippy activation transport remains on the
+//! latency-sensitive `skippy-stage/2` ALPN.
 
 pub use mesh_llm_types::mesh::{
     MAX_SPLIT_RTT_MS, ModelDemand, ModelRuntimeDescriptor, ModelSourceKind, ServedModelDescriptor,
@@ -116,7 +116,7 @@ use stage_artifacts::*;
 use stage_transport::*;
 use stun::*;
 
-pub use connections::{QuicBindSelection, RelayConfig, RelayPolicy, detect_primary_lan_ipv4};
+pub use connections::{QuicBindSelection, RelayConfig, RelayPolicy};
 pub use gossip::backfill_legacy_descriptors;
 #[expect(
     unused_imports,

@@ -839,8 +839,8 @@ pub(crate) async fn run_plugin_mcp(options: &RuntimeOptions) -> Result<()> {
         .await;
     node.start_heartbeat();
     node.start_rtt_refresh();
-    // Direct-path maintenance / reverse-dial removed — iroh 1.0.x does NAT
-    // traversal + relay->direct migration itself. See issue #1065.
+    // iroh owns NAT traversal and relay-to-direct migration; modern nodes do
+    // not start the legacy application-level reverse-dial sender.
     start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);
     join_mesh_for_mcp(options, &node).await?;
 

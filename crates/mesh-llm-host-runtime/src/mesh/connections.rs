@@ -109,38 +109,6 @@ pub(crate) fn default_control_bind_addr() -> std::net::SocketAddr {
     std::net::SocketAddr::from(([127, 0, 0, 1], 0))
 }
 
-/// Detect this host's primary **private LAN** IPv4 without sending any packets.
-///
-/// Returns a genuine RFC1918 LAN address (`10/8`, `172.16/12`, `192.168/16`)
-/// or `None`. It deliberately never returns a public, CGNAT (`100.64/10`), or
-/// VPN/tunnel address, so the caller can safely pin QUIC's bind to it.
-///
-/// Detection has two phases:
-///
-/// 1. **Default-route source probe.** Open an unconnected UDP socket and
-///    `connect()` it to a routable target so the kernel fills in the source IP
-///    it would use to reach that target. No datagrams are sent. This is the
-///    fast, accurate answer on a normal single-LAN host — but on a full-tunnel
-///    VPN host the default route points at the tunnel, so the source is a
-///    VPN/utun address. We therefore accept this result **only if it is a
-///    private LAN IPv4**.
-/// 2. **Interface scan fallback.** If the probe yields a non-private address
-///    (VPN default route) or fails (no default route on an isolated LAN), scan
-///    local interfaces and pick the first private, operational, non-loopback,
-///    non-link-local, non-point-to-point IPv4. Point-to-point interfaces are
-///    skipped because VPN/tunnel interfaces present as p2p.
-///
-/// Used to auto-pin QUIC's bind address to the real LAN interface on
-/// multi-homed hosts (e.g. macOS with several `utun`/VPN interfaces). Binding
-/// `0.0.0.0` on such hosts lets the kernel pick a wrong source for an
-/// unconnected QUIC `sendmsg` (yielding `EHOSTUNREACH` or a slow WAN-hairpin
-/// path) and breaks/degrades direct LAN connectivity in either dial direction.
-/// Returning only a private LAN IPv4 (or `None`) means a wrong default route
-/// can never hard-pin relay-less QUIC off-LAN; we fall back to `0.0.0.0`
-/// instead. Public-relay (Nostr) mode keeps its IPv6/relay paths regardless, so
-/// long-haul reachability to a remote mesh is never sacrificed for the LAN hint.
-pub use lan_bootstrap::detect_primary_lan_ipv4;
-
 pub(crate) fn is_public_ipv4_candidate(socket: &SocketAddr) -> bool {
     match socket.ip() {
         IpAddr::V4(ip) => is_global_ipv4_candidate(ip),

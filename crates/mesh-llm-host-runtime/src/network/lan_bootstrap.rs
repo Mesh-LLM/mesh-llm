@@ -10,16 +10,10 @@ pub(crate) fn effective_quic_bind_ip(options: &RuntimeOptions) -> Option<IpAddr>
         return Some(ip);
     }
 
-    // Default: bind iroh's wildcard sockets (0.0.0.0 + [::]) and let iroh own
-    // candidate discovery. We used to auto-pin the detected primary LAN IPv4
-    // here, which created a SECOND local UDP socket alongside iroh's wildcard
-    // socket on one endpoint id. iroh's docs are explicit that manual binding is
-    // advanced/usually-unnecessary and replaces the wildcard bind; pinning one
-    // family left a stray socket whose 4-tuple diverged from the path iroh
-    // validated, contributing to direct paths idling out. With QAD supplying the
-    // public reflexive candidate and iroh's own NAT traversal, LAN pinning is no
-    // longer needed. Override with --bind-ip for genuinely special cases.
-    // See mesh-llm issue #1065.
+    // Use iroh's default wildcard sockets and candidate discovery unless the
+    // operator explicitly needs to select an interface. Auto-pinning a detected
+    // LAN IPv4 restricted iroh's normal dual-stack path set and duplicated
+    // address-selection logic that iroh already owns.
     None
 }
 

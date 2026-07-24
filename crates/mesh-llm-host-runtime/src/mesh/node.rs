@@ -48,16 +48,10 @@ pub(crate) fn startup_transport_config() -> iroh::endpoint::QuicTransportConfig 
     // iroh's tuned defaults.
     //
     // History: this function used to override keep-alive (10s) and idle
-    // timeouts (300s conn + 300s per-path) to stop long silent inference
-    // connections being reaped mid-generation. Those overrides are now removed:
-    //   - iroh 1.0.x hard-CLAMPS per-path idle to 15s (values above are ignored
-    //     with a warning), so the 300s per-path setting never took effect.
-    //   - iroh's defaults already send keep-alive PINGs every 5s (connection AND
-    //     per-path) — more frequent than our old 10s — which keeps silent
-    //     inference paths alive without any override.
-    //   - The old overrides desynchronised connection- vs path-level liveness
-    //     and were part of what left upgraded direct paths idle long enough to
-    //     be reaped (see mesh-llm issue #1065).
+    // timeouts (300s connection + 300s per path). iroh 1.0 clamps per-path idle
+    // to 15s and already sends keep-alive PINGs every 5s, so those overrides do
+    // not provide the intended behavior and needlessly diverge from iroh's path
+    // management defaults.
     // Mesh multiplexes many concurrent streams (gossip + heartbeat + inference
     // tunnels) over one connection per peer, so we keep a generous bidi ceiling.
     iroh::endpoint::QuicTransportConfig::builder()
