@@ -58,16 +58,32 @@ fn mdns_discovery_starts_lan_rediscovery_only_with_join_token() {
 }
 
 #[tokio::test]
-async fn client_role_never_receives_model_assignment() {
-    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+async fn model_assignment_is_derived_from_node_role() {
+    let model_file = tempfile::Builder::new()
+        .suffix(".gguf")
+        .tempfile()
+        .expect("temporary model file");
+    std::fs::write(model_file.path(), b"test model").expect("write temporary model");
+    let model_ref = models::model_ref_for_path(model_file.path());
+    let local_models = [model_ref.clone()];
+
+    let mut node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
         .await
         .expect("test node");
-    node.record_request("unserved-model");
+    node.vram_bytes = 1_000_000_000;
+    node.record_request(&model_ref);
 
-    assert!(
-        pick_model_assignment_for_role(&node, &[], true)
-            .await
-            .is_none()
+    assert_eq!(
+        pick_model_assignment_for_role(&node, &local_models).await,
+        None,
+        "client roles must remain proxy-only"
+    );
+
+    node.set_role(mesh::NodeRole::Worker).await;
+    assert_eq!(
+        pick_model_assignment_for_role(&node, &local_models).await,
+        Some(model_ref),
+        "worker roles must still receive normal assignments"
     );
 }
 
