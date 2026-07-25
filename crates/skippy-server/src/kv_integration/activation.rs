@@ -16,29 +16,36 @@ impl KvStageIntegration {
         if !self.should_lookup() || token_ids.is_empty() {
             return None;
         }
-        let identity = self.prefill_identity(config, base, token_start, token_ids);
-        let page_id = activation_page_id(&identity.page_id, activation_width);
-        let lookup = self
-            .activations
-            .lock()
-            .expect("resident activation cache lock poisoned")
-            .lookup(&page_id)?;
-        let identity_token_count = identity.identity.token_count;
-        if lookup.token_count != identity_token_count
-            || u64::from(lookup.frame.desc.token_count) != identity_token_count
-            || lookup.frame.desc.payload_bytes != lookup.byte_size
-            || lookup.frame.payload.len() as u64 != lookup.byte_size
-        {
-            return None;
+        // Walk lookup candidates longest-prefix-first; the first validated
+        // cache hit is the longest activation frame reachable from this prompt.
+        for identity in self.lookup_identities(config, base, token_start, token_ids) {
+            let page_id = activation_page_id(&identity.page_id, activation_width);
+            let Some(lookup) = self
+                .activations
+                .lock()
+                .expect("resident activation cache lock poisoned")
+                .lookup(&page_id)
+            else {
+                continue;
+            };
+            let identity_token_count = identity.identity.token_count;
+            if lookup.token_count != identity_token_count
+                || u64::from(lookup.frame.desc.token_count) != identity_token_count
+                || lookup.frame.desc.payload_bytes != lookup.byte_size
+                || lookup.frame.payload.len() as u64 != lookup.byte_size
+            {
+                continue;
+            }
+            return Some(ResidentActivationRestore {
+                identity,
+                page_id,
+                token_count: lookup.token_count as usize,
+                payload_bytes: lookup.byte_size as usize,
+                entries: lookup.entries,
+                frame: lookup.frame,
+            });
         }
-        Some(ResidentActivationRestore {
-            identity,
-            page_id,
-            token_count: lookup.token_count as usize,
-            payload_bytes: lookup.byte_size as usize,
-            entries: lookup.entries,
-            frame: lookup.frame,
-        })
+        None
     }
 
     pub fn record_resident_activation(
@@ -273,10 +280,33 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![2214, 2176]
         );
-        let shared_tokens = &lookup_tokens[..2176];
         let restored = kv
-            .restore_resident_activation(&config, &test_base(), 0, shared_tokens, 4096)
-            .expect("grid-floor activation should restore by the same identity");
+            .restore_resident_activation(&config, &test_base(), 0, &lookup_tokens, 4096)
+            .expect("grid-floor activation should restore via a lookup candidate");
+        assert_eq!(restored.identity.identity.token_count, 2176);
+        assert_eq!(restored.token_count, 2176);
+        assert_eq!(restored.frame.desc.token_count, 2176);
+        assert_eq!(restored.frame.payload.len(), 2176 * 4);
+    }
+
+    #[test]
+    fn restore_hits_shared_prefix_activation_for_extended_prompt() {
+        let config = test_config();
+        let kv = KvStageIntegration::from_config(&config)
+            .unwrap()
+            .expect("resident cache enabled");
+        let recorded_tokens = (0..2214).collect::<Vec<i32>>();
+        let mut extended_lookup_tokens = recorded_tokens.clone();
+        extended_lookup_tokens.extend(100_000..100_017);
+        let frame = activation_frame(recorded_tokens.len() as u32, recorded_tokens.len() * 4);
+
+        let records =
+            kv.record_resident_activation(&config, &test_base(), 0, &recorded_tokens, 4096, &frame);
+        assert_eq!(records.len(), 2);
+
+        let restored = kv
+            .restore_resident_activation(&config, &test_base(), 0, &extended_lookup_tokens, 4096)
+            .expect("extended prompt should restore the shared grid-floor activation");
         assert_eq!(restored.identity.identity.token_count, 2176);
         assert_eq!(restored.token_count, 2176);
         assert_eq!(restored.frame.desc.token_count, 2176);
