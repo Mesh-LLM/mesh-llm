@@ -527,6 +527,18 @@ pub(super) async fn pick_model_assignment(
 /// Rebalancing uses `last_active` to gate on recency (only models active within
 /// the last 60 minutes are considered), then `request_count / servers` for
 /// relative hotness among those recent models.
+pub(super) async fn pick_model_assignment_for_role(
+    node: &mesh::Node,
+    local_models: &[String],
+    is_client: bool,
+) -> Option<String> {
+    if is_client {
+        None
+    } else {
+        pick_model_assignment(node, local_models).await
+    }
+}
+
 pub(super) async fn check_unserved_model(
     node: &mesh::Node,
     local_models: &[String],
@@ -1079,7 +1091,8 @@ pub(super) async fn select_run_auto_model_path(
     });
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-    let assignment = pick_model_assignment(ctx.node, ctx.local_models).await;
+    let assignment =
+        pick_model_assignment_for_role(ctx.node, ctx.local_models, ctx.is_client).await;
     let assignment = if assignment.is_none()
         && (ctx.options.auto || ctx.options.discover.is_some())
         && !ctx.is_client

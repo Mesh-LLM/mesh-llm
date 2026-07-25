@@ -57,6 +57,20 @@ fn mdns_discovery_starts_lan_rediscovery_only_with_join_token() {
     ));
 }
 
+#[tokio::test]
+async fn client_role_never_receives_model_assignment() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    node.record_request("unserved-model");
+
+    assert!(
+        pick_model_assignment_for_role(&node, &[], true)
+            .await
+            .is_none()
+    );
+}
+
 fn make_cli(args: &[&str]) -> RuntimeOptions {
     runtime_options_for_test(args)
 }
