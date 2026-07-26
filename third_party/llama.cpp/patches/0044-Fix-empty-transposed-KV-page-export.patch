@@ -1,0 +1,154 @@
+From 16a593e888fd63046a2dc6baf3f31fa30396c8d6 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sun, 26 Jul 2026 15:39:58 +1000
+Subject: [PATCH] Fix empty transposed KV page export
+
+---
+ src/llama-kv-cache.cpp               |   3 +
+ tests/CMakeLists.txt                 |   1 +
+ tests/test-skippy-kv-page-export.cpp | 107 +++++++++++++++++++++++++++
+ 3 files changed, 111 insertions(+)
+ create mode 100644 tests/test-skippy-kv-page-export.cpp
+
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 9df4984b3..1099da57f 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1505,6 +1505,9 @@ bool llama_kv_cache::stage_export_kv_page(
+         }
+     } else {
+         for (const auto * layer : selected) {
++            if (v_element_bytes == 0) {
++                continue;
++            }
+             auto * v = layer->v_stream[strm];
+             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
+             for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 7a93b19a0..372ff4c34 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -149,6 +149,7 @@ if (LLAMA_LLGUIDANCE)
+ endif ()
+ 
+ llama_build(test-recurrent-state-rollback.cpp get-model.cpp)
++llama_build_and_test(test-skippy-kv-page-export.cpp)
+ 
+ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
+new file mode 100644
+index 000000000..f209d0887
+--- /dev/null
++++ b/tests/test-skippy-kv-page-export.cpp
+@@ -0,0 +1,107 @@
++#include "skippy.h"
++
++#include "../src/llama-batch.h"
++#include "../src/llama-kv-cache.h"
++#include "../src/llama-model.h"
++
++#include <cstdio>
++#include <memory>
++#include <string>
++#include <vector>
++
++int main() {
++    std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
++    if (!model) {
++        fprintf(stderr, "failed to create test model\n");
++        return 1;
++    }
++    llama_hparams hparams = {};
++    hparams.n_layer_all = 1;
++    hparams.n_embd_head_k_full = 4;
++    hparams.n_embd_head_v_full = 4;
++    hparams.n_embd_head_k_swa = 4;
++    hparams.n_embd_head_v_swa = 4;
++    hparams.n_embd_head_k_mla_impl = 4;
++    hparams.n_embd_head_v_mla_impl = 4;
++    hparams.n_head_arr[0] = 1;
++    hparams.n_head_kv_arr[0] = 1;
++
++    llama_kv_cache kv(
++            *model,
++            hparams,
++            GGML_TYPE_F32,
++            GGML_TYPE_F32,
++            true,
++            false,
++            true,
++            1,
++            1,
++            1,
++            0,
++            LLAMA_SWA_TYPE_NONE,
++            nullptr,
++            {},
++            {},
++            {});
++
++    llama_pos pos = 0;
++    llama_seq_id seq_id = 0;
++    llama_seq_id * seq_ids = &seq_id;
++    int32_t n_seq_id = 1;
++    llama_ubatch ubatch = {};
++    ubatch.n_tokens = 1;
++    ubatch.n_pos = 1;
++    ubatch.pos = &pos;
++    ubatch.n_seq_id = &n_seq_id;
++    ubatch.seq_id = &seq_ids;
++
++    llama_kv_cache::slot_info slot = {};
++    slot.s0 = 0;
++    slot.s1 = 0;
++    slot.strm = { 0 };
++    slot.idxs = {{ 0 }};
++    kv.apply_ubatch(slot, ubatch);
++
++    skippy_kv_page_desc desc = {};
++    size_t payload_bytes = 0;
++    std::string error;
++    if (!kv.stage_export_kv_page(
++                0,
++                0,
++                1,
++                0,
++                1,
++                &desc,
++                nullptr,
++                0,
++                &payload_bytes,
++                error)) {
++        fprintf(stderr, "K-only KV page sizing failed: %s\n", error.c_str());
++        return 1;
++    }
++    if ((desc.flags & SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED) == 0 ||
++            desc.v_row_bytes != 0 ||
++            desc.v_element_bytes != 0 ||
++            payload_bytes == 0) {
++        fprintf(stderr, "unexpected K-only transposed KV page descriptor\n");
++        return 1;
++    }
++
++    std::vector<uint8_t> payload(payload_bytes);
++    if (!kv.stage_export_kv_page(
++                0,
++                0,
++                1,
++                0,
++                1,
++                &desc,
++                payload.data(),
++                payload.size(),
++                &payload_bytes,
++                error)) {
++        fprintf(stderr, "K-only KV page export failed: %s\n", error.c_str());
++        return 1;
++    }
++
++    return payload_bytes == payload.size() ? 0 : 1;
++}
+-- 
+2.54.0 (Apple Git-157)
+
