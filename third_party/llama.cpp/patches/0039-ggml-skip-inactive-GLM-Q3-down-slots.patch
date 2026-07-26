@@ -1,7 +1,7 @@
-From 26b844f63f2b30fdf777e0e7b08fed34eef95091 Mon Sep 17 00:00:00 2001
+From eb68fbbabf64915d6283683ae25fefd7475d46c2 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 05:30:42 +1000
-Subject: [PATCH 39/41] ggml: skip inactive GLM Q3 down slots
+Subject: [PATCH 39/45] ggml: skip inactive GLM Q3 down slots
 
 ---
  ggml/src/ggml-metal/ggml-metal.metal | 2 +-

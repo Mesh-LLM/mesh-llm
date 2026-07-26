@@ -1,7 +1,7 @@
-From 21361fbd01b30a9bf1e8b7b5d852a4f72891e463 Mon Sep 17 00:00:00 2001
+From 1f9c781f915ef3ea0f71f48660272b1c31e19d9e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 19 Jul 2026 11:27:53 +1000
-Subject: [PATCH 28/41] ggml: default GLM MoE two-phase Metal path
+Subject: [PATCH 28/45] ggml: default GLM MoE two-phase Metal path
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp |  9 ++++++++-

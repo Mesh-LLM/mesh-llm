@@ -1,7 +1,7 @@
-From 4ab2538c885d9b05d131f1bc82bf65d82bce8f2b Mon Sep 17 00:00:00 2001
+From d2550d768c3d538b50266b13861dc1ad39e266fa Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 19 Jul 2026 16:31:29 +1000
-Subject: [PATCH 29/41] ggml: add GLM MoE Metal selector diagnostics
+Subject: [PATCH 29/45] ggml: add GLM MoE Metal selector diagnostics
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 75 +++++++++++++++++++++-----

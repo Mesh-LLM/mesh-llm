@@ -1,7 +1,7 @@
-From 274b1775b270be1f5d3b0a9c3503796c437aa973 Mon Sep 17 00:00:00 2001
+From 83bd6794157379b2ac6fb6121d3940219a2ce5f3 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 01:02:36 +1000
-Subject: [PATCH 33/41] ggml: add active-count Q3 GLM MoE down kernels
+Subject: [PATCH 33/45] ggml: add active-count Q3 GLM MoE down kernels
 
 ---
  ggml/src/ggml-metal/ggml-metal-device.cpp |  49 +++++++++++

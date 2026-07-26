@@ -1,7 +1,7 @@
-From 83871e1e041ece85f08163e0542702bef1b7a948 Mon Sep 17 00:00:00 2001
+From d8a655fca4f47b48fc617b3302beb3403b743593 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 05:19:37 +1000
-Subject: [PATCH 34/41] ggml: use GLM max-active policy for Q3 down kernels
+Subject: [PATCH 34/45] ggml: use GLM max-active policy for Q3 down kernels
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 30 ++++++++++++++++++++++++++

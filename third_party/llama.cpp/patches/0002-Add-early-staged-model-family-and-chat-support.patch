@@ -1,7 +1,7 @@
-From 0477e6a1a2a3cfb1f416c4aa41377b8458507237 Mon Sep 17 00:00:00 2001
+From 0f00b168cc09677e844bf8822040aa3d71f304b5 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 02/41] Add early staged model-family and chat support
+Subject: [PATCH 02/45] Add early staged model-family and chat support
 
 Squashes the first Qwen MoE staged-runtime support, native KV page basics, session reset, token EOG exposure, batched token verification, chat-template ABI, and the first wider model-family support pass.
 ---

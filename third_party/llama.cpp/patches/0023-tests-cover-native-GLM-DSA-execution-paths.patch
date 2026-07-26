@@ -1,7 +1,7 @@
-From ed2fd3ec3e8db6033ba86738eabb385bafb54aa7 Mon Sep 17 00:00:00 2001
+From dbce275745b31af70ea3af5d023d2012da818c6d Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 14 Jul 2026 09:16:32 +1000
-Subject: [PATCH 23/41] tests: cover native GLM-DSA execution paths
+Subject: [PATCH 23/45] tests: cover native GLM-DSA execution paths
 
 ---
  scripts/glm52-phase-d-policy-report.sh |  287 ++

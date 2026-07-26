@@ -1,7 +1,7 @@
-From 363e462406ee7f29a7525ef5bbde0107de89f8ee Mon Sep 17 00:00:00 2001
+From 358fdff04cab3ca3d85cd51dbc5592a1378df9fc Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 24 Jun 2026 15:35:23 +1000
-Subject: [PATCH 24/41] Support GLM-DSA fused KV_B tensors
+Subject: [PATCH 24/45] Support GLM-DSA fused KV_B tensors
 
 ---
  src/models/deepseek2.cpp | 23 +++++++++++++++++------

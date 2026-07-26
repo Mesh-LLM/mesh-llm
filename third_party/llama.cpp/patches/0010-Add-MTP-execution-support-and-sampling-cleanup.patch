@@ -1,7 +1,7 @@
-From 2573d6f5dbfce207062a8abbcba1174c6f0df055 Mon Sep 17 00:00:00 2001
+From 42f14cd0687b5a880fa2a4f1db51ca035b5ba326 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 10/41] Add MTP execution support and sampling cleanup
+Subject: [PATCH 10/45] Add MTP execution support and sampling cleanup
 
 Squashes GLM MTP graph support, batched stage execution, native MTP sidecar support, batched MTP verification drafts, sampling and detokenization parity, unused ABI removal, MTP layer-count and sidecar fixes, VerifySpan copy avoidance, greedy sampling fast path, GLM chat fallback, and GLM DSA IndexShare support.
 ---

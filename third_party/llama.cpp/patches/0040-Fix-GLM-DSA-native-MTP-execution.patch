@@ -1,7 +1,7 @@
-From 4bbb493af960f23dc017ff05fa8564c57f1bed99 Mon Sep 17 00:00:00 2001
+From 6b9709b217341e1229a3a56b1a6132b7391c1a49 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 22 Jul 2026 08:41:09 +1000
-Subject: [PATCH 40/41] Fix GLM DSA native MTP execution
+Subject: [PATCH 40/45] Fix GLM DSA native MTP execution
 
 ---
  src/llama-context.cpp  |  16 ++

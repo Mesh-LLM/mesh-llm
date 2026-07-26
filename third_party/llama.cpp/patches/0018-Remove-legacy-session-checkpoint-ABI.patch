@@ -1,7 +1,7 @@
-From 44230e098d796b4634be1342f434381e5675933a Mon Sep 17 00:00:00 2001
+From ac55c0b40d0c582878f2f0068315e5889c97f845 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 14:07:56 +1000
-Subject: [PATCH 18/41] Remove legacy session checkpoint ABI
+Subject: [PATCH 18/45] Remove legacy session checkpoint ABI
 
 ---
  include/skippy.h        |  10 ----

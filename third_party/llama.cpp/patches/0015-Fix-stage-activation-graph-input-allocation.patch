@@ -1,7 +1,7 @@
-From f55ad1aad78ed9ca74a41bf46d8e124e4c65c5e0 Mon Sep 17 00:00:00 2001
+From 76ff9a9cdd614c8bf4a082d06b9d144bc6096dd4 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 15 Jul 2026 07:54:20 +1000
-Subject: [PATCH 15/41] Fix stage activation graph input allocation
+Subject: [PATCH 15/45] Fix stage activation graph input allocation
 
 ---
  src/llama-graph.cpp | 39 +++++++++++++++++++++++++++------------

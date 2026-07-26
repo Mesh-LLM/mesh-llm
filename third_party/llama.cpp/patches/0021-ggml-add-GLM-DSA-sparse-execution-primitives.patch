@@ -1,7 +1,7 @@
-From 44757d2d77edf487486a1eaff8882491ff64a2df Mon Sep 17 00:00:00 2001
+From 8bdf03a6a77a8acb38fd4bb35349a9d05f0f0038 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 14 Jul 2026 09:15:57 +1000
-Subject: [PATCH 21/41] ggml: add GLM-DSA sparse execution primitives
+Subject: [PATCH 21/45] ggml: add GLM-DSA sparse execution primitives
 
 ---
  ggml/include/ggml-rpc.h                   |     2 +-

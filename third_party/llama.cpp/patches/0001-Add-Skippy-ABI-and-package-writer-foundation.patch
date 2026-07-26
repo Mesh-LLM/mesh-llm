@@ -1,7 +1,7 @@
-From c75721efc90ce170ae768146f6c048a2d5904532 Mon Sep 17 00:00:00 2001
+From 34be3b6d89d94ac218678e7f6ada201a1bcba4c1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 01/41] Add Skippy ABI and package writer foundation
+Subject: [PATCH 01/45] Add Skippy ABI and package writer foundation
 
 Squashes the initial Skippy ABI headers, model info entrypoints, single-stage runtime baseline, runtime-slice tensor filtering, activation-frame execution, GGUF slice writing, and package part composition.
 ---

@@ -1,7 +1,7 @@
-From 671ac01df600d87fd821a0510d49374f9b4e95d8 Mon Sep 17 00:00:00 2001
+From a00ce995595582f131c501bb930578b3e049f879 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@mesh-llm.local>
 Date: Sun, 19 Jul 2026 00:00:00 +1000
-Subject: [PATCH 31/41] tests: cover full GLM MoE selected chain
+Subject: [PATCH 31/45] tests: cover full GLM MoE selected chain
 
 ---
  tests/test-backend-ops.cpp | 5 ++++-

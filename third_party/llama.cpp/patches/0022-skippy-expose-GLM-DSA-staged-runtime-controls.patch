@@ -1,7 +1,7 @@
-From 3df8fd64c03aa1cb7bba56f08cc52f962a186936 Mon Sep 17 00:00:00 2001
+From 02b458479060c5ae055c4a9973a66884ed55c6e9 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 14 Jul 2026 09:16:19 +1000
-Subject: [PATCH 22/41] skippy: expose GLM-DSA staged runtime controls
+Subject: [PATCH 22/45] skippy: expose GLM-DSA staged runtime controls
 
 ---
  include/skippy.h    |   20 +

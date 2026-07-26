@@ -1,7 +1,7 @@
-From 9c64ed0e7d8954e1aff5c6f7a177f374b75a66de Mon Sep 17 00:00:00 2001
+From 9fa1c53b208fec4bf4ac863c38135451a1fca6f3 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 03:51:17 +1000
-Subject: [PATCH 38/41] ggml: shrink GLM Q2 gate-up active dispatch
+Subject: [PATCH 38/45] ggml: shrink GLM Q2 gate-up active dispatch
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 6 ++++--

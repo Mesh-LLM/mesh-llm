@@ -1,7 +1,7 @@
-From 3f84ff9f880283f2d16ef1c6d48a918d1f3f7b2d Mon Sep 17 00:00:00 2001
+From 8c3753398c77d59baa5cad70aa89875354d9573e Mon Sep 17 00:00:00 2001
 From: James Dumay <james@mesh-llm.local>
 Date: Sun, 19 Jul 2026 00:00:00 +1000
-Subject: [PATCH 30/41] ggml: skip zero-weight GLM MoE gate-up slots
+Subject: [PATCH 30/45] ggml: skip zero-weight GLM MoE gate-up slots
 
 ---
  ggml/src/ggml-metal/ggml-metal.metal | 14 ++++++++------

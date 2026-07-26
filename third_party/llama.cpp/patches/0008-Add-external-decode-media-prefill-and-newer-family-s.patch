@@ -1,7 +1,7 @@
-From b291e7220c70cc313dbd1932c7e86914a3873e86 Mon Sep 17 00:00:00 2001
+From 3653cfda98f3349e7f48490c90128825c8d47762 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 08/41] Add external decode, media prefill, and newer family
+Subject: [PATCH 08/45] Add external decode, media prefill, and newer family
  support
 
 Squashes tensor filtering accounting fixes, recurrent KV page export handling, external decode filtering, staged external media prefill, tensor element counts, activation-frame batch padding and position sideband, plus Gemma3n, Llama4, and Mistral4 slices.

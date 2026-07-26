@@ -1,7 +1,7 @@
-From 7647491dc869d9a989cb8c9a20fded2064ab4cda Mon Sep 17 00:00:00 2001
+From 59cdfb7bf5cf5e112f229ebec9a4e0fa3d954547 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 04/41] Add lanes, external media, and chat grammar support
+Subject: [PATCH 04/45] Add lanes, external media, and chat grammar support
 
 Squashes Qwen3 MoE staged execution, KV cache type and generation signal ABI, backend device selection, external media prefill, shared execution lanes, batch/flash-attention config, tool-aware chat templates, and chat grammar sampling.
 ---

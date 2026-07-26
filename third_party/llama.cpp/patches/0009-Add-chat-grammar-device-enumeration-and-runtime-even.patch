@@ -1,7 +1,7 @@
-From 959159769f37f9808ff1f549635ecf0dc1849d6a Mon Sep 17 00:00:00 2001
+From 8619285489ebdbaf28638a8cf598c00e2cbf66ec Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 09/41] Add chat grammar, device enumeration, and runtime
+Subject: [PATCH 09/45] Add chat grammar, device enumeration, and runtime
  events
 
 Squashes chat grammar exception containment and lazy triggering, backend device enumeration, min-p sampling, KV cell compaction, and model-open runtime events.

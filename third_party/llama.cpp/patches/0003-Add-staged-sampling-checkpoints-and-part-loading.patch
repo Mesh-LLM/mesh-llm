@@ -1,7 +1,7 @@
-From 8ce1b7d09ba717ed15be0c3891efcd0acdf3ec8b Mon Sep 17 00:00:00 2001
+From ab8b97e2a7169c1f6081a27c49f6bc64959f79a1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 03/41] Add staged sampling, checkpoints, and part loading
+Subject: [PATCH 03/45] Add staged sampling, checkpoints, and part loading
 
 Squashes sampling configuration, batched verification frames, recurrent/native session checkpoints, logit bias, session trim, verification handoff fixes, split-metadata stripping, thinking toggle support, and ordered GGUF part loading.
 ---

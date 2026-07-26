@@ -1,7 +1,7 @@
-From 37d130da4b51a77076cf544c4f24de055627f40c Mon Sep 17 00:00:00 2001
+From f8152becddf60982cc3a69f9db8baecd399bdacb Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 10:44:00 +1000
-Subject: [PATCH 35/41] ggml: honor explicit Q2 gate/up Metal variant flags
+Subject: [PATCH 35/45] ggml: honor explicit Q2 gate/up Metal variant flags
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 12 +++++++++++-

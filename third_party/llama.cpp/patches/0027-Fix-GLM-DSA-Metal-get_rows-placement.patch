@@ -1,7 +1,7 @@
-From ab1a8ac9c16c5af2a1f022adba2ef2eab568542e Mon Sep 17 00:00:00 2001
+From 9b1b59b34069b19c59f280e1fb4c4480e3b173d0 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 22 Jul 2026 15:13:16 +1000
-Subject: [PATCH 27/41] Fix GLM DSA Metal get_rows placement
+Subject: [PATCH 27/45] Fix GLM DSA Metal get_rows placement
 
 ---
  ggml/src/ggml-metal/ggml-metal.metal | 22 ----------------------

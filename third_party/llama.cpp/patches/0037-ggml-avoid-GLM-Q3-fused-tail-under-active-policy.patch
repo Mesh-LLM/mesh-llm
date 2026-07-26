@@ -1,7 +1,7 @@
-From 94d687646f4a5fb95fff0948291a46c583c6bf77 Mon Sep 17 00:00:00 2001
+From 3bcadd4535d6e48229e2edf4a10e849b23475083 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 14:05:00 +1000
-Subject: [PATCH 37/41] ggml: avoid GLM Q3 fused tail under active policy
+Subject: [PATCH 37/45] ggml: avoid GLM Q3 fused tail under active policy
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp |  3 ++

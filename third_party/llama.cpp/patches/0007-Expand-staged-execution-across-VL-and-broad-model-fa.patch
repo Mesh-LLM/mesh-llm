@@ -1,7 +1,7 @@
-From 72c8ce38155931eebd78f394b171d1c1db049b59 Mon Sep 17 00:00:00 2001
+From a4be6bd95fb953270ad66f37355eb8e154387d6e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 07/41] Expand staged execution across VL and broad model
+Subject: [PATCH 07/45] Expand staged execution across VL and broad model
  families
 
 Squashes RWKV7 activation sideband support, Phi2, Granite, Hunyuan Dense/MoE, PhiMoE, tied-output handling, Qwen35/Hunyuan-VL, broad llama-family coverage, BitNet and StarCoder fixes, and DeepSeek OCR/Qwen3-VL-MoE support.

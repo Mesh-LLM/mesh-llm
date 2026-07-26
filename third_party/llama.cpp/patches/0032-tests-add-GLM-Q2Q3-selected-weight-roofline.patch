@@ -1,7 +1,7 @@
-From 56298172f40c80815c78f87c12d4f5354357cb9d Mon Sep 17 00:00:00 2001
+From 223525c271739859819dd21e8164e3247196b7ad Mon Sep 17 00:00:00 2001
 From: James Dumay <james@mesh-llm.local>
 Date: Sun, 19 Jul 2026 00:00:00 +1000
-Subject: [PATCH 32/41] tests: add GLM Q2Q3 selected weight roofline
+Subject: [PATCH 32/45] tests: add GLM Q2Q3 selected weight roofline
 
 ---
  tests/test-backend-ops.cpp | 30 ++++++++++++++++++++++++++++++
