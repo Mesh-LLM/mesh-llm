@@ -36,8 +36,9 @@ Local actions:
 - `.github/actions/compute-changes` owns path, crate, backend, SDK, UI, website,
   Windows, and docs-only routing outputs.
 - `.github/actions/configure-sccache-gha` exports ephemeral Actions cache
-  credentials to the baked `sccache`, probes the GHA backend, and restarts the
-  server with job-local storage when the probe fails.
+  credentials to the baked `sccache`, configures job-local disk storage ahead
+  of GHA in a fail-open multi-level cache, and restarts the server with disk-only
+  storage when the remote probe fails.
 - `.github/actions/restore-smoke-inputs` owns producer artifact staging and
   model restoration for smoke consumers.
 - `.github/actions/setup-windows-rocm-sdk` owns reusable Windows ROCm setup.
@@ -127,11 +128,15 @@ change cannot be delivered by a MeshLLM pull request.
 
 Public-image Rust jobs use the baked `sccache` binary and start with
 `SCCACHE_GHA_ENABLED=false`. The local `configure-sccache-gha` action exports
-the ephemeral Actions cache URL/token, enables the GHA backend, and probes it by
-starting the server. If that probe fails, the action stops the remote-configured
-server and restarts `sccache` with its job-local disk cache. Persistent Cargo
-target and ABI reuse remains owned by `Swatinem/rust-cache` and `actions/cache`.
-Do not reintroduce the sccache download action merely to export credentials.
+the ephemeral Actions cache URL/token, enables a `disk,gha` cache chain, ignores
+cache write errors, and probes it by starting the server. The disk tier uses a
+job-local directory beside, rather than inside, the checkout. Cache read
+failures degrade to misses, cache write failures are warnings, and compiler
+invocations fall back locally if the server becomes unavailable. If the
+initial remote probe fails, the action stops the remote-configured server and
+restarts `sccache` with disk-only storage. Persistent Cargo target and ABI reuse
+remains owned by `Swatinem/rust-cache` and `actions/cache`. Do not reintroduce
+the sccache download action merely to export credentials.
 
 `USE_SELF_HOSTED` currently controls selected GPU/release routes. Unset or a
 value other than the exact string `true` selects the hosted fallback. Any new

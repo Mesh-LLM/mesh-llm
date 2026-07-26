@@ -892,6 +892,12 @@ mesh-llm models prune
 - Skippy materialized stage GGUFs are derived cache and can be preview-pruned
   with `mesh-llm models prune`.
 
+Model downloads validate the Hugging Face Hub cache and Xet working cache
+before worker threads start. If either location is read-only, mesh-llm warns
+with the original operating-system error and uses a writable application-data
+directory instead. `MESH_LLM_DATA_DIR` chooses that fallback root;
+`HF_HUB_CACHE` and `HF_XET_CACHE` configure the two caches directly.
+
 ## Inspect local GPUs
 
 ```bash

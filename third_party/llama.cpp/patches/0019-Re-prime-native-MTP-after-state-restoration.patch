@@ -1,7 +1,7 @@
-From 595a5b64c64f85f6dba0a0a61de1868a8b0d78d6 Mon Sep 17 00:00:00 2001
+From 7462ace1495a306a658712c27034b7a70f936c6d Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 21 Jul 2026 01:38:34 +1000
-Subject: [PATCH] Re-prime native MTP after state restoration
+Subject: [PATCH 19/45] Re-prime native MTP after state restoration
 
 ---
  src/skippy.cpp | 31 ++++++++++++++++++++++++++++++-
@@ -106,5 +106,5 @@ index 32fb95ad..7f561a8d 100644
      *out_session = session;
      return skippy_success(out_error);
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

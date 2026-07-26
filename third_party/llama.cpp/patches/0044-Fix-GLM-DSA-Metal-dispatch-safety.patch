@@ -1,0 +1,213 @@
+From e47c41e7d0e39fbc95f059678b01653d813f0e6a Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 26 Jul 2026 21:15:27 +1000
+Subject: [PATCH 44/45] Fix GLM-DSA Metal dispatch safety
+
+---
+ ggml/src/ggml-metal/ggml-metal-device.cpp | 13 +++---
+ ggml/src/ggml-metal/ggml-metal-impl.h     |  2 +-
+ ggml/src/ggml-metal/ggml-metal-ops.cpp    | 49 +++++++++++------------
+ ggml/src/ggml-metal/ggml-metal.metal      |  6 +--
+ 4 files changed, 33 insertions(+), 37 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
+index 870d5a92..9ad67837 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
+@@ -2779,15 +2779,14 @@ static ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id
+ 
+     constexpr int nr0 = 8;
+     const int nsg = active_slots;
++    const char * base =
++        active_slots == 6 ? "kernel_mul_mv_id_q3_K_wr_slots_r8_a6" :
++        active_slots == 4 ? "kernel_mul_mv_id_q3_K_wr_slots_r8_a4" :
++                            "kernel_mul_mv_id_q3_K_wr_slots_r8_a2";
+ 
+-    char base[256];
+-    char name[256];
+-    snprintf(base, 256, "kernel_mul_mv_id_q3_K_weighted_reduce_slots_sg_r8_nb8_w0");
+-    snprintf(name, 256, "%s_nsg=%d_nr0=%d", base, nsg, nr0);
+-
+-    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
++    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, base);
+     if (!res.pipeline) {
+-        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
++        res = ggml_metal_library_compile_pipeline(lib, base, base, nullptr);
+     }
+ 
+     res.nr0  = nr0;
+diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
+index f7112ee5..f8431715 100644
+--- a/ggml/src/ggml-metal/ggml-metal-impl.h
++++ b/ggml/src/ggml-metal/ggml-metal-impl.h
+@@ -575,7 +575,7 @@ typedef struct {
+     uint64_t weights_nb1;
+     uint64_t weights_nb2;
+     int32_t  weighted;
+-    int32_t  _pad0;
++    int32_t  n_active_slots;
+ } ggml_metal_kargs_mul_mv_id_gate_up_swiglu;
+ 
+ typedef struct {
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 646c983a..f6a287b1 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -230,6 +230,11 @@ static int ggml_metal_glm_dsa_moe_max_active_experts() {
+     return requested >= 1 && requested <= 8 ? requested : 0;
+ }
+ 
++static int ggml_metal_glm_dsa_moe_active_slots(int total_slots) {
++    const int requested = ggml_metal_glm_dsa_moe_max_active_experts();
++    return requested > 0 && requested < total_slots ? requested : total_slots;
++}
++
+ static int ggml_metal_glm_dsa_moe_q2_weight_roofline_chunks() {
+     const char * value = getenv("GGML_METAL_EXPERIMENTAL_GLM_MOE_Q2_WEIGHT_ROOFLINE_CHUNKS");
+     if (value == nullptr) {
+@@ -678,18 +683,11 @@ static int ggml_metal_glm_dsa_sparse_attn_threads_requested() {
+     }
+ }
+ 
+-static int ggml_metal_glm_dsa_sparse_attn_threads_for_shape(int requested, int n_batch, int n_top_k) {
+-    // Large-top-k prefill shapes are sensitive to the 256-thread sparse-attn
+-    // kernel on Apple Metal and can leave rows unwritten. Keep decode and
+-    // small-top-k prefill on the requested path, but cap large prefill rows to
+-    // the shape that passes backend parity.
+-    if (n_batch > 1 && n_top_k >= 64) {
+-        return std::min(requested, 32);
+-    }
+-    if (n_top_k > 512) {
+-        return std::min(requested, 128);
+-    }
+-    return requested;
++static int ggml_metal_glm_dsa_sparse_attn_threads(int requested) {
++    // The default sparse-attention kernel is parity-certified with one
++    // simdgroup. Wider threadgroups can leave output rows unwritten, so keep
++    // every shape on the safe dispatch until the kernel is made width-agnostic.
++    return std::min(requested, 32);
+ }
+ 
+ static bool ggml_metal_glm_dsa_sparse_attn_cache_topk_enabled() {
+@@ -3169,7 +3167,7 @@ static int ggml_metal_op_glm_moe_route_gate_up_swiglu(
+         /*.weights_nb1 =*/ nb_weights1,
+         /*.weights_nb2 =*/ nb_weights2,
+         /*.weighted =*/ motif.weighted_down_input != nullptr ? 1 : 0,
+-        /*._pad0 =*/ ggml_metal_glm_dsa_moe_max_active_experts(),
++        /*.n_active_slots =*/ ggml_metal_glm_dsa_moe_active_slots(ne20),
+     };
+ 
+     auto pipeline = ggml_metal_library_get_pipeline_glm_moe_route_q2_gate_up_swiglu_pair_sg_slot8(lib, dst);
+@@ -3337,7 +3335,7 @@ static int ggml_metal_op_glm_moe_weights_gate_up_swiglu(
+         /*.weights_nb1 =*/ nb_route_weights1,
+         /*.weights_nb2 =*/ nb_route_weights2,
+         /*.weighted =*/ 0,
+-        /*._pad0 =*/ ggml_metal_glm_dsa_moe_max_active_experts(),
++        /*.n_active_slots =*/ ggml_metal_glm_dsa_moe_active_slots(ne20),
+     };
+ 
+     auto pipeline = ggml_metal_library_get_pipeline_glm_moe_weights_q2_gate_up_swiglu_pair_sg_slot1(
+@@ -3623,7 +3621,7 @@ static int ggml_metal_op_glm_moe_two_phase(
+         /*.weights_nb1 =*/ motif.weights->nb[1],
+         /*.weights_nb2 =*/ motif.weights->nb[2],
+         /*.weighted =*/ 0,
+-        /*._pad0 =*/ 0,
++        /*.n_active_slots =*/ (int32_t) motif.ids->ne[0],
+     };
+     ggml_metal_kargs_glm_moe_two_phase phase_args = {
+         /*.n_embd =*/ 6144,
+@@ -4522,7 +4520,7 @@ static int ggml_metal_op_mul_mv_id_gate_up_swiglu(
+         /*.weights_nb1 =*/ weights_nb1,
+         /*.weights_nb2 =*/ weights_nb2,
+         /*.weighted =*/ weights != nullptr ? 1 : 0,
+-        /*._pad0 =*/ ggml_metal_glm_dsa_moe_max_active_experts(),
++        /*.n_active_slots =*/ ggml_metal_glm_dsa_moe_active_slots(ne20),
+     };
+ 
+     ggml_metal_encoder_set_pipeline(enc, pipeline);
+@@ -4556,8 +4554,7 @@ static int ggml_metal_op_mul_mv_id_gate_up_swiglu(
+             slots_per_threadgroup = 4;
+         }
+     }
+-    const int active_slots =
+-        args._pad0 > 0 && args._pad0 < ne20 ? args._pad0 : ne20;
++    const int active_slots = args.n_active_slots;
+     const int64_t ne123 = pair_sg ?
+         ((active_slots + slots_per_threadgroup - 1)/slots_per_threadgroup)*ne21 :
+         active_slots*ne21;
+@@ -5260,24 +5257,24 @@ static int ggml_metal_op_mul_mv_id_weighted_reduce(
+         } else if (ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_active6_enabled() &&
+                 ne00 == 2048 && extra.already_weighted == 0) {
+             pipeline_slot_parallel =
+-                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0(lib, weighted_sum);
++                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_active6(lib, weighted_sum);
+         } else if (ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_active4_enabled() &&
+                 ne00 == 2048 && extra.already_weighted == 0) {
+             pipeline_slot_parallel =
+-                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0(lib, weighted_sum);
++                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_active4(lib, weighted_sum);
+         } else if (ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_active2_enabled() &&
+                 ne00 == 2048 && extra.already_weighted == 0) {
+             pipeline_slot_parallel =
+-                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0(lib, weighted_sum);
++                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_active2(lib, weighted_sum);
+         } else if (q3_active_count_shape && q3_active_count == 6) {
+             pipeline_slot_parallel =
+-                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0(lib, weighted_sum);
++                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_active6(lib, weighted_sum);
+         } else if (q3_active_count_shape && q3_active_count == 4) {
+             pipeline_slot_parallel =
+-                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0(lib, weighted_sum);
++                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_active4(lib, weighted_sum);
+         } else if (q3_active_count_shape && q3_active_count == 2) {
+             pipeline_slot_parallel =
+-                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0(lib, weighted_sum);
++                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_active2(lib, weighted_sum);
+         } else if (q3_f16_w0_shape) {
+             pipeline_slot_parallel =
+                 ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_f16(lib, weighted_sum);
+@@ -11666,8 +11663,8 @@ int ggml_metal_op_dsa_sparse_attn(ggml_metal_op_t ctx, int idx) {
+     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[4]), ida++); // top_k
+     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // dst
+ 
+-    const int nth_requested = ggml_metal_glm_dsa_sparse_attn_threads_for_shape(
+-            ggml_metal_glm_dsa_sparse_attn_threads_requested(), ne1, ne40);
++    const int nth_requested =
++        ggml_metal_glm_dsa_sparse_attn_threads(ggml_metal_glm_dsa_sparse_attn_threads_requested());
+     const int head_group = use_decode_grouped ? requested_head_group : 1;
+     const int max_threads_per_group = std::max(1, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)/head_group);
+     const int nth = std::min(nth_requested, max_threads_per_group);
+diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
+index b098231d..726c02ad 100644
+--- a/ggml/src/ggml-metal/ggml-metal.metal
++++ b/ggml/src/ggml-metal/ggml-metal.metal
+@@ -10331,7 +10331,7 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_impl(
+         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+     const int nb = args.ne00/QK_K;
+ 
+-    const int active_slots = args._pad0 > 0 && args._pad0 < args.nei0 ? args._pad0 : args.nei0;
++    const int active_slots = args.n_active_slots;
+     const int slot_groups = (active_slots + slots_per_tg - 1) / slots_per_tg;
+     const int r0 = tgpig.x;
+     const int token = tgpig.z / slot_groups;
+@@ -10344,7 +10344,7 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_impl(
+ 
+     if (slot < args.nei0 && token < args.nei1) {
+         const int32_t expert_id = ((device const int32_t *) (ids + token*args.nbi1))[slot];
+-        const bool active_slot = args._pad0 <= 0 || slot < args._pad0;
++        const bool active_slot = slot < args.n_active_slots;
+         if (active_slot && expert_id >= 0 && expert_id < args.ne02) {
+             device const char * src0_all = is_gate ? src0_gate_all : src0_up_all;
+             const uint64_t offset0 = uint64_t(expert_id)*args.nb02 + uint64_t(first_row)*args.nb01;
+@@ -10782,7 +10782,7 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_dual_impl(
+ 
+     if (valid_output) {
+         const int32_t expert_id = ((device const int32_t *) (ids + token*args.nbi1))[slot];
+-        const bool active_slot = (args._pad0 <= 0 || slot < args._pad0) &&
++        const bool active_slot = slot < args.n_active_slots &&
+             (args.weighted == 0 || route_weight != 0.0f);
+         if (active_slot && expert_id >= 0 && expert_id < args.ne02) {
+             const uint64_t offset0 = uint64_t(expert_id)*args.nb02 + uint64_t(first_row)*args.nb01;
+-- 
+2.50.1 (Apple Git-155)
+

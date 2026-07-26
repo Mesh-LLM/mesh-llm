@@ -1,3 +1,4 @@
+mod activation_cache;
 mod binary_kv;
 mod binary_messaging;
 mod decode_batcher;

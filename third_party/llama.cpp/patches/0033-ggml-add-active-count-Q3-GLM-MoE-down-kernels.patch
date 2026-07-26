@@ -1,7 +1,7 @@
-From 66c8184a2a33a5fb60bfcadc47d4f8088669a5fe Mon Sep 17 00:00:00 2001
+From 83bd6794157379b2ac6fb6121d3940219a2ce5f3 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 01:02:36 +1000
-Subject: [PATCH 30/36] ggml: add active-count Q3 GLM MoE down kernels
+Subject: [PATCH 33/45] ggml: add active-count Q3 GLM MoE down kernels
 
 ---
  ggml/src/ggml-metal/ggml-metal-device.cpp |  49 +++++++++++
@@ -224,7 +224,7 @@ index ab41e1ec..b4fc441a 100644
          ggml_metal_encoder_set_pipeline(enc, pipeline_slot_parallel);
          ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
 diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
-index 1b62d0dc..77119fc9 100644
+index b5e37c11..000fe0b2 100644
 --- a/ggml/src/ggml-metal/ggml-metal.metal
 +++ b/ggml/src/ggml-metal/ggml-metal.metal
 @@ -11754,7 +11754,7 @@ kernel void kernel_mul_mv_id_q3_K_weighted_reduce(
@@ -310,10 +310,10 @@ index 1b62d0dc..77119fc9 100644
  }
  
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index c80ddaf9..3a2448a8 100644
+index 9f566612..f0b94ded 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
-@@ -8919,6 +8919,15 @@ struct test_glm_moe_static_motif : public test_case {
+@@ -8922,6 +8922,15 @@ struct test_glm_moe_static_motif : public test_case {
              }
              return weighted_down ? "GLM_MOE_STATIC_MOTIF_Q2_WEIGHTED" : "GLM_MOE_STATIC_MOTIF_Q2";
          }
@@ -329,7 +329,7 @@ index c80ddaf9..3a2448a8 100644
          if (gate_type == GGML_TYPE_Q4_K && up_type == GGML_TYPE_Q4_K && down_type == GGML_TYPE_Q4_K) {
              if (n_embd == 6144 && n_ff == 2048) {
                  return "GLM_MOE_STATIC_MOTIF_Q4_GLM";
-@@ -9085,6 +9094,7 @@ struct test_glm_moe_down_reduce : public test_case {
+@@ -9088,6 +9097,7 @@ struct test_glm_moe_down_reduce : public test_case {
      const int64_t n_ff;
      const bool already_weighted;
      const bool f16_act;
@@ -337,7 +337,7 @@ index c80ddaf9..3a2448a8 100644
  
      ggml_tensor * selected_experts = nullptr;
      ggml_tensor * weights = nullptr;
-@@ -9097,23 +9107,38 @@ struct test_glm_moe_down_reduce : public test_case {
+@@ -9100,23 +9110,38 @@ struct test_glm_moe_down_reduce : public test_case {
              int64_t   n_embd = 6144,
              int64_t   n_ff = 2048,
              bool      already_weighted = false,
@@ -379,7 +379,7 @@ index c80ddaf9..3a2448a8 100644
          if (f16_act) {
              return "GLM_MOE_DOWN_REDUCE_F16_ACT";
          }
-@@ -9197,7 +9222,9 @@ struct test_glm_moe_down_reduce : public test_case {
+@@ -9200,7 +9225,9 @@ struct test_glm_moe_down_reduce : public test_case {
                  for (int64_t token = 0; token < n_tokens; ++token) {
                      float sum = 0.0f;
                      for (int64_t slot = 0; slot < n_expert_used; ++slot) {
@@ -390,7 +390,7 @@ index c80ddaf9..3a2448a8 100644
                          data[token*n_expert_used + slot] = value;
                          sum += value;
                      }
-@@ -15033,6 +15060,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -15037,6 +15064,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_glm_moe_gate_up_swiglu_rowtile_q2(false, true));
      test_cases.emplace_back(new test_glm_moe_static_motif(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, 256, 256, false));
      test_cases.emplace_back(new test_glm_moe_static_motif(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, 256, 256, true));
@@ -399,7 +399,7 @@ index c80ddaf9..3a2448a8 100644
      test_cases.emplace_back(new test_glm_moe_static_motif(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, 6144, 2048, true, true, false, 2));
      test_cases.emplace_back(new test_glm_moe_static_motif(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, 6144, 2048, true, true, false, 4));
      test_cases.emplace_back(new test_glm_moe_static_motif(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, 6144, 2048, true, true, false, 6));
-@@ -15053,6 +15082,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -15057,6 +15086,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_glm_moe_down_reduce(GGML_TYPE_Q3_K, 256, 256));
      test_cases.emplace_back(new test_glm_moe_down_reduce(GGML_TYPE_Q3_K, 256, 256, true));
      test_cases.emplace_back(new test_glm_moe_down_reduce(GGML_TYPE_Q3_K, 6144, 2048));
@@ -409,7 +409,7 @@ index c80ddaf9..3a2448a8 100644
      test_cases.emplace_back(new test_glm_moe_down_reduce(GGML_TYPE_Q3_K, 6144, 2048, true));
      test_cases.emplace_back(new test_glm_moe_down_reduce(GGML_TYPE_Q2_K, 6144, 2048));
      test_cases.emplace_back(new test_glm_moe_down_reduce(GGML_TYPE_Q2_K, 6144, 2048, true));
-@@ -15517,6 +15549,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -15521,6 +15553,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
      test_cases.emplace_back(new test_glm_moe_static_motif(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, 6144, 2048, false));
      test_cases.emplace_back(new test_glm_moe_static_motif(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, 6144, 2048, true));
      test_cases.emplace_back(new test_glm_moe_static_motif(GGML_TYPE_Q2_K,    GGML_TYPE_Q2_K,    GGML_TYPE_Q3_K, 6144, 2048, false, true));
@@ -417,7 +417,7 @@ index c80ddaf9..3a2448a8 100644
      test_cases.emplace_back(new test_glm_moe_static_motif(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, 6144, 2048, true, true, false, 2));
      test_cases.emplace_back(new test_glm_moe_static_motif(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, 6144, 2048, true, true, false, 4));
      test_cases.emplace_back(new test_glm_moe_static_motif(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, 6144, 2048, true, true, false, 6));
-@@ -15539,6 +15572,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -15543,6 +15576,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
      test_cases.emplace_back(new test_glm_moe_down_reduce(GGML_TYPE_Q3_K, 2048, 1024));
      test_cases.emplace_back(new test_glm_moe_down_reduce(GGML_TYPE_Q3_K, 2048, 1024, true));
      test_cases.emplace_back(new test_glm_moe_down_reduce(GGML_TYPE_Q3_K, 6144, 2048));
@@ -428,5 +428,5 @@ index c80ddaf9..3a2448a8 100644
      test_cases.emplace_back(new test_glm_moe_down_reduce(GGML_TYPE_TQ2_0, 6144, 2048));
      test_cases.emplace_back(new test_glm_moe_down_reduce(GGML_TYPE_Q2_K, 6144, 2048));
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

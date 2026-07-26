@@ -1,17 +1,17 @@
-From e9f260788b857c0f86f41229b3bb2da52f3d2187 Mon Sep 17 00:00:00 2001
+From 223525c271739859819dd21e8164e3247196b7ad Mon Sep 17 00:00:00 2001
 From: James Dumay <james@mesh-llm.local>
 Date: Sun, 19 Jul 2026 00:00:00 +1000
-Subject: [PATCH 29/36] tests: add GLM Q2Q3 selected weight roofline
+Subject: [PATCH 32/45] tests: add GLM Q2Q3 selected weight roofline
 
 ---
  tests/test-backend-ops.cpp | 30 ++++++++++++++++++++++++++++++
  1 file changed, 30 insertions(+)
 
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 2aaded1c..c80ddaf9 100644
+index 32f1215d..9f566612 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
-@@ -7683,6 +7683,30 @@ struct test_glm_moe_q2_weight_roofline : public test_glm_moe_routed_q2_final_out
+@@ -7685,6 +7685,30 @@ struct test_glm_moe_q2_weight_roofline : public test_glm_moe_routed_q2_final_out
      }
  };
  
@@ -42,7 +42,7 @@ index 2aaded1c..c80ddaf9 100644
  struct test_glm_moe_selected_chain : public test_case {
      static constexpr int64_t n_expert = 32;
      static constexpr int64_t n_expert_used = 8;
-@@ -14946,6 +14970,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -14950,6 +14974,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_A"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(true,  "FIXED_IDS"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_B"));
@@ -52,7 +52,7 @@ index 2aaded1c..c80ddaf9 100644
      test_cases.emplace_back(new test_glm_moe_selected_chain(1, false, "CORRECTNESS"));
      test_cases.emplace_back(new test_glm_moe_selected_chain(3, false, "USEFUL_A"));
      for (ggml_type type : {GGML_TYPE_Q8_0, GGML_TYPE_Q6_K, GGML_TYPE_Q5_K, GGML_TYPE_Q4_K}) {
-@@ -15431,6 +15458,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -15435,6 +15462,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_A"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(true,  "FIXED_IDS"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_B"));
@@ -63,5 +63,5 @@ index 2aaded1c..c80ddaf9 100644
      test_cases.emplace_back(new test_glm_moe_selected_chain(3, true,  "BYTE84"));
      test_cases.emplace_back(new test_glm_moe_selected_chain(3, true,  "BYTE128", 128));
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

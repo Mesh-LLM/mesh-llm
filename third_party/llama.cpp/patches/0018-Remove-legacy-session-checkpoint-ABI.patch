@@ -1,7 +1,7 @@
-From b56e6f768f917feef60e2a7578d62091ae03d9bd Mon Sep 17 00:00:00 2001
+From ac55c0b40d0c582878f2f0068315e5889c97f845 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 14:07:56 +1000
-Subject: [PATCH 2/2] Remove legacy session checkpoint ABI
+Subject: [PATCH 18/45] Remove legacy session checkpoint ABI
 
 ---
  include/skippy.h        |  10 ----
@@ -237,5 +237,5 @@ index 79e3e73f..32fb95ad 100644
          struct skippy_model * model,
          const char * text,
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

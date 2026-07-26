@@ -1,15 +1,15 @@
-From 6ef5b5c66a88af43d7f4d853a848ce638d0db170 Mon Sep 17 00:00:00 2001
+From 8d4cf568f56593d1fa8223ad12ca2965d680fee6 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 05/16] Add resident prefix cache and session refinements
+Subject: [PATCH 05/45] Add resident prefix cache and session refinements
 
 Squashes resident prefix cache support, exact-prefix state restoration, borrowed prefix sessions, lazy generation signals, single-token allocation avoidance, server-like thread defaults, prefix cache borrowing, lane preservation, and recurrent-state remapping.
 ---
  include/skippy.h       | 119 +++++-
- src/llama-kv-cache.cpp | 357 ++++++++++++++++++
+ src/llama-kv-cache.cpp | 369 +++++++++++++++++++
  src/llama-kv-cache.h   |  21 ++
  src/skippy.cpp         | 821 ++++++++++++++++++++++++++++++++++++++++-
- 4 files changed, 1308 insertions(+), 10 deletions(-)
+ 4 files changed, 1320 insertions(+), 10 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
 index 3ffdb879..deb5151e 100644
@@ -196,10 +196,10 @@ index 3ffdb879..deb5151e 100644
          struct skippy_model * model,
          const char * text,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index bbcd5b67..539666f9 100644
+index f74bb495..41a4e0de 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1222,6 +1222,363 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
+@@ -1223,6 +1223,375 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
      return layers[ikv].k;
  }
  
@@ -248,6 +248,10 @@ index bbcd5b67..539666f9 100644
 +        return false;
 +    }
 +    const auto & cells = v_cells[strm];
++    if (token_count > static_cast<uint64_t>(cells.size())) {
++        error = "token_count exceeds KV cache capacity";
++        return false;
++    }
 +
 +    std::vector<uint32_t> cell_idxs(static_cast<size_t>(token_count), std::numeric_limits<uint32_t>::max());
 +    uint32_t found_cells = 0;
@@ -438,6 +442,10 @@ index bbcd5b67..539666f9 100644
 +        error = "sequence id is mapped to an invalid KV stream";
 +        return false;
 +    }
++    if (desc.token_count > static_cast<uint64_t>(v_cells[strm].size())) {
++        error = "token_count exceeds KV cache capacity";
++        return false;
++    }
 +
 +    std::vector<const kv_layer *> selected;
 +    selected.reserve(layers.size());
@@ -484,6 +492,10 @@ index bbcd5b67..539666f9 100644
 +    auto udata = std::make_shared<llama_ubatch::data_t>();
 +    const uint32_t n_tokens = static_cast<uint32_t>(desc.token_count);
 +    const uint32_t n_pos = hparams.n_pos_per_embd();
++    if (n_pos != 0 && n_tokens > std::numeric_limits<size_t>::max() / n_pos) {
++        error = "token position count exceeds addressable memory";
++        return false;
++    }
 +    udata->token.resize(n_tokens);
 +    udata->pos.resize(static_cast<size_t>(n_tokens) * n_pos);
 +    udata->n_seq_id.resize(n_tokens, 1);
@@ -1569,5 +1581,5 @@ index e4d08ee4..f078f0b9 100644
          struct skippy_session * session,
          uint64_t * out_token_count,
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

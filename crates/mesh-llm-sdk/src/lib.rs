@@ -31,6 +31,9 @@ pub mod embedded_node;
 pub use embedded_node::{MeshNode, MeshNodeBuilder, MeshNodeStatus, OpenAiClient};
 
 #[cfg(feature = "serving")]
+pub use mesh_llm_embedded_runtime::initialize_host_runtime;
+
+#[cfg(feature = "serving")]
 pub mod embedded_runtime {
     pub use mesh_llm_embedded_runtime::{
         EmbeddedChatMessage, EmbeddedMeshAdmissionConfig, EmbeddedMeshDiscoveryMode,
@@ -39,8 +42,8 @@ pub mod embedded_runtime {
         EmbeddedMeshNodeMode, EmbeddedMeshNodeStatus, EmbeddedMeshRequirementsConfig,
         EmbeddedMeshServingConfig, EmbeddedMeshStorageConfig, EmbeddedServeConfig,
         EmbeddedServeHandle, EmbeddedServeMode, EmbeddedServeStatus, EmbeddedServingController,
-        EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION, start_embedded_node,
-        start_embedded_serve,
+        EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION, initialize_host_runtime,
+        start_embedded_node, start_embedded_serve,
     };
 }
 

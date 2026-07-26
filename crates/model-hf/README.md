@@ -36,8 +36,17 @@ HUGGING_FACE_HUB_TOKEN
 HF_HUB_CACHE
 HUGGINGFACE_HUB_CACHE
 HF_HOME
+HF_XET_CACHE
 XDG_CACHE_HOME
+MESH_LLM_DATA_DIR
 ```
+
+The shipped `mesh-llm` binary validates both the Hub destination and Xet's
+independent working cache before it starts worker threads. If either configured
+path is read-only, it selects a writable directory under the platform-local
+mesh-llm data directory (falling back to `~/.mesh-llm/data` or the system temp
+directory) and prints the rejected path, operating-system error, and selected
+replacement. `MESH_LLM_DATA_DIR` overrides the application-data fallback root.
 
 Use `HfModelRepository::builder()` to override the cache directory, endpoint, or
 token explicitly in tests and embedding applications.

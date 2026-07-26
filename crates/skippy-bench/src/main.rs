@@ -26,7 +26,26 @@ use crate::{
     verify_window_local::verify_window_local,
 };
 
+fn prepare_model_download_directories() {
+    let prepared = match model_hf::prepare_download_directories() {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!(
+                "⚠ Unable to prepare model download directories: {error:#}. \
+                 Model downloads may fail; set MESH_LLM_DATA_DIR to a writable directory."
+            );
+            return;
+        }
+    };
+    for fallback in &prepared.fallbacks {
+        eprintln!("⚠ {fallback}");
+    }
+    // SAFETY: runs before any Tokio runtime, process is single-threaded.
+    unsafe { prepared.apply_to_process_environment() };
+}
+
 fn main() -> Result<()> {
+    prepare_model_download_directories();
     match Cli::parse().command {
         CommandKind::LocalSingle(args) => local_single(args),
         CommandKind::LocalSplitInprocess(args) => local_split_inprocess(args),

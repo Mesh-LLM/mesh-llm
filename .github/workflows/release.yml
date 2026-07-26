@@ -22,6 +22,11 @@ on:
         required: true
         default: false
         type: boolean
+      force_hosted_runners:
+        description: Route self-hosted release lanes (x86_64 CUDA, ARM64 smoke) to GitHub-hosted runners for this run only
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ github.repository }}-${{ github.ref }}
@@ -33,7 +38,11 @@ permissions:
 
 env:
   CACHE_NAMESPACE: mesh-llm
+  SCCACHE_DIR: ${{ github.workspace }}/../.sccache
   SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+  SCCACHE_MULTILEVEL_CHAIN: disk,gha
+  SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY: ignore
 
 jobs:
   metadata:
@@ -45,6 +54,7 @@ jobs:
       prerelease: ${{ steps.meta.outputs.prerelease }}
       skip_gpu_bundles: ${{ steps.meta.outputs.skip_gpu_bundles }}
       canary: ${{ steps.meta.outputs.canary }}
+      force_hosted_runners: ${{ steps.meta.outputs.force_hosted_runners }}
     steps:
       - id: meta
         shell: bash
@@ -52,6 +62,7 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_SKIP_GPU_BUNDLES: ${{ inputs.skip_gpu_bundles || 'false' }}
           INPUT_CANARY: ${{ inputs.canary || 'false' }}
+          INPUT_FORCE_HOSTED_RUNNERS: ${{ inputs.force_hosted_runners || 'false' }}
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
@@ -74,6 +85,7 @@ jobs:
             echo "prerelease=$prerelease"
             echo "skip_gpu_bundles=$INPUT_SKIP_GPU_BUNDLES"
             echo "canary=$INPUT_CANARY"
+            echo "force_hosted_runners=$INPUT_FORCE_HOSTED_RUNNERS"
           } >> "$GITHUB_OUTPUT"
 
   build:
@@ -387,7 +399,7 @@ jobs:
     name: Build native runtime Linux x86_64 CUDA (${{ matrix.cuda_major }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && needs.metadata.outputs.force_hosted_runners != 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -691,7 +703,7 @@ jobs:
     name: Smoke Linux ARM64 artifact
     needs: [metadata, build_linux_arm64]
     if: ${{ needs.build_linux_arm64.result == 'success' }}
-    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && '["self-hosted","Linux","ARM64"]' || '["ubuntu-24.04-arm"]') }}
+    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && needs.metadata.outputs.force_hosted_runners != 'true' && '["self-hosted","Linux","ARM64"]' || '["ubuntu-24.04-arm"]') }}
     steps:
       - uses: actions/download-artifact@v7
         with:
@@ -784,7 +796,7 @@ jobs:
     name: Build Linux CUDA (${{ matrix.cuda_version }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && needs.metadata.outputs.force_hosted_runners != 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -1163,6 +1175,12 @@ jobs:
             backend: rocm
             rocm_architectures: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201
             artifact_name: release-native-runtime-windows-x86_64-rocm
+            # sccache + hipcc is broken on Windows: HIP's multi-offload-arch
+            # compile pipeline plus the long arch-derived build directory pushes
+            # object paths past MAX_PATH, and sccache fails to persist its temp
+            # file (os error 3). Disable the compiler launcher for this row only;
+            # CUDA/Vulkan keep sccache.
+            use_sccache: '0'
           - name: Vulkan
             backend: vulkan
             artifact_name: release-native-runtime-windows-x86_64-vulkan
@@ -1218,6 +1236,7 @@ jobs:
           LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
           LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
           LLAMA_STAGE_AMDGPU_TARGETS: ${{ matrix.rocm_architectures }}
+          LLAMA_STAGE_USE_SCCACHE: ${{ matrix.use_sccache || '1' }}
           MESH_LLM_CUDA_TOOLKIT_MAJOR: '12'
         run: |
           scripts/package-native-runtime.sh \

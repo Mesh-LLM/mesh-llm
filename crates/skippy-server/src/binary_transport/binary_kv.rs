@@ -119,7 +119,7 @@ fn binary_kv_attrs(config: &StageConfig, kv: &KvStageIntegration) -> BTreeMap<St
     attrs
 }
 
-fn binary_message_kv_attrs(
+pub(super) fn binary_message_kv_attrs(
     config: &StageConfig,
     kv: &KvStageIntegration,
     session_id: &str,
@@ -671,36 +671,23 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
     }
     if config.downstream.is_some()
         && let Some(output) = output
-        && let Some(record) = kv.record_resident_activation(
+    {
+        let records = kv.record_resident_activation(
             config,
             &base,
             token_start,
             token_ids,
             activation_width,
             output,
-        )
-    {
-        result.recorded_activations = result.recorded_activations.saturating_add(1);
-        result.recorded_activation_bytes = result
-            .recorded_activation_bytes
-            .saturating_add(record.payload_bytes as u64);
-        result.evicted_activation_entries = result
-            .evicted_activation_entries
-            .saturating_add(record.evicted_entries);
-        result.evicted_activation_bytes = result
-            .evicted_activation_bytes
-            .saturating_add(record.evicted_bytes);
-        attrs.insert(
-            "skippy.activation_cache.recorded_page_id".to_string(),
-            json!(record.page_id),
         );
-        attrs.insert(
-            "skippy.activation_cache.entries".to_string(),
-            json!(record.entries),
-        );
-        attrs.insert(
-            "skippy.activation_cache.resident_bytes".to_string(),
-            json!(record.resident_bytes),
+        super::activation_cache::add_binary_activation_records(
+            &mut result,
+            config,
+            kv,
+            telemetry,
+            session_id,
+            message,
+            &records,
         );
     }
     attrs.insert(

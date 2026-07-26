@@ -18,7 +18,6 @@ use crate::binary_transport::binary_kv::emit_binary_proactive_eviction;
 use crate::binary_transport::binary_kv::maybe_lookup_binary_prefill;
 use crate::binary_transport::binary_kv::maybe_prefix_cache_control;
 use crate::binary_transport::binary_kv::maybe_record_binary_full_prefill;
-use crate::binary_transport::binary_kv::maybe_record_binary_prefill;
 use crate::binary_transport::direct_return;
 use crate::binary_transport::direct_return::PredictionReturnSinks;
 use crate::binary_transport::forwarded_stage_message_timed;
@@ -28,7 +27,6 @@ use crate::binary_transport::restore_prefill_decode::handle_binary_restore_prefi
 use crate::binary_transport::run_binary_stage_message;
 use crate::binary_transport::send_client_ready_hello_if_enabled;
 use crate::binary_transport::stage_execution::binary_message_attrs;
-use crate::binary_transport::stage_execution::binary_message_base;
 use crate::binary_transport::stage_execution::binary_message_session_id;
 use crate::binary_transport::stage_execution::decode_record_tokens_sideband;
 use crate::binary_transport::stage_execution::elapsed_ms;
@@ -740,58 +738,21 @@ pub(super) fn handle_binary_connection(
         }
 
         if message.kind.is_prefill() && !restored_prefill {
-            let record = if let Some(tokens) = accumulated_prefill_tokens.get(&session_key).cloned()
-            {
-                let mut runtime = runtime.lock().expect("runtime lock poisoned");
-                let mut record = maybe_record_binary_full_prefill(
-                    config,
-                    &mut runtime,
-                    kv,
-                    telemetry,
-                    &session_key,
-                    &message,
-                    &tokens,
-                );
-                drop(runtime);
-                if let Some(kv) = kv
-                    && config.downstream.is_some()
-                {
-                    let base = binary_message_base(config, &session_key, &message);
-                    if let Some(activation) = kv.record_resident_activation(
-                        config,
-                        &base,
-                        0,
-                        &tokens,
-                        activation_width,
-                        &output,
-                    ) {
-                        record.recorded_activations = record.recorded_activations.saturating_add(1);
-                        record.recorded_activation_bytes = record
-                            .recorded_activation_bytes
-                            .saturating_add(activation.payload_bytes as u64);
-                        record.evicted_activation_entries = record
-                            .evicted_activation_entries
-                            .saturating_add(activation.evicted_entries);
-                        record.evicted_activation_bytes = record
-                            .evicted_activation_bytes
-                            .saturating_add(activation.evicted_bytes);
-                    }
-                }
-                record
-            } else {
-                maybe_record_binary_prefill(
-                    config,
-                    runtime,
-                    kv,
-                    telemetry,
-                    &session_key,
-                    &message,
-                    &token_ids,
-                    lookup_result.restored_tokens as u64,
-                    activation_width,
-                    Some(&output),
-                )
-            };
+            let record = super::prefill_recording::record_completed_prefill(
+                config,
+                runtime,
+                kv,
+                telemetry,
+                &session_key,
+                &message,
+                accumulated_prefill_tokens
+                    .get(&session_key)
+                    .map(Vec::as_slice),
+                &token_ids,
+                lookup_result.restored_tokens as u64,
+                activation_width,
+                &output,
+            );
             if record.recorded_pages > 0 {
                 message_reply_stats.kv_recorded_pages += record.recorded_pages as i64;
                 message_reply_stats.kv_record_stage_mask |= stage_mask(config.stage_index);

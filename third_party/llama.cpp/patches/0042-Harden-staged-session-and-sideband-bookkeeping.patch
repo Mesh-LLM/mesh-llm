@@ -1,0 +1,129 @@
+From 66275c899d65c5fb9c8f44efaf2f4e423bac045c Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 26 Jul 2026 21:13:49 +1000
+Subject: [PATCH 42/45] Harden staged session and sideband bookkeeping
+
+---
+ ggml/include/ggml-rpc.h |  2 +-
+ src/skippy.cpp          | 41 ++++++++++++++++++-----------------------
+ 2 files changed, 19 insertions(+), 24 deletions(-)
+
+diff --git a/ggml/include/ggml-rpc.h b/ggml/include/ggml-rpc.h
+index 82d27410..83936373 100644
+--- a/ggml/include/ggml-rpc.h
++++ b/ggml/include/ggml-rpc.h
+@@ -8,7 +8,7 @@ extern "C" {
+ 
+ #define RPC_PROTO_MAJOR_VERSION    4
+ #define RPC_PROTO_MINOR_VERSION    0
+-#define RPC_PROTO_PATCH_VERSION    3
++#define RPC_PROTO_PATCH_VERSION    4
+ 
+ #ifdef  __cplusplus
+ static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 9bd81828..47f0a549 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -1410,27 +1410,13 @@ static uint32_t skippy_glm_dsa_top_k_count_for_sideband_bytes(size_t token_count
+ }
+ 
+ static bool skippy_glm_dsa_sideband_top_k_count_is_valid(
+-        size_t token_count,
+         uint32_t actual_top_k,
+         uint32_t expected_top_k) {
+-    if (actual_top_k == 0 || expected_top_k == 0) {
+-        return false;
+-    }
+-
+-    // Prefill sidebands can be chunk-local: llama.cpp emits the actual
+-    // per-chunk top-k width, while the receiving staged session may have a
+-    // larger accumulated KV prefix.
+-    if (token_count > 1) {
+-        return actual_top_k <= expected_top_k;
+-    }
+-
+-    // Decode producers export the actual top-k tensor width from their graph.
+-    // The receiving session can have a larger accumulated KV prefix than the
+-    // producer's current sideband width, especially when an OpenAI generation
+-    // loop advances through cached or fused decode steps. The sideband is still
+-    // valid as long as it is non-empty, token-major, and does not claim more
+-    // rows than the receiver can make visible.
+-    return actual_top_k <= expected_top_k;
++    // Sidebands can be chunk-local: the producer exports the actual tensor
++    // width, while the receiving staged session may have a larger accumulated
++    // KV prefix. The sideband is valid when it is non-empty and does not claim
++    // more rows than the receiver can make visible.
++    return actual_top_k != 0 && actual_top_k <= expected_top_k;
+ }
+ 
+ static size_t skippy_glm_dsa_top_k_bytes(const skippy_session * session, size_t token_count) {
+@@ -1611,7 +1597,7 @@ static enum skippy_status skippy_validate_frame_input_sequences(
+             return SKIPPY_STATUS_INVALID_ARGUMENT;
+         }
+         const uint32_t expected_top_k = skippy_glm_dsa_sideband_top_k_count(session, expected_token_count);
+-        if (!skippy_glm_dsa_sideband_top_k_count_is_valid(expected_token_count, actual_top_k, expected_top_k)) {
++        if (!skippy_glm_dsa_sideband_top_k_count_is_valid(actual_top_k, expected_top_k)) {
+             char message[256];
+             std::snprintf(
+                     message,
+@@ -2989,6 +2975,9 @@ static enum skippy_status skippy_verify_token_batch(
+             SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
+             out_error);
+     llama_batch_free(batch);
++    if (status == SKIPPY_STATUS_OK) {
++        skippy_record_tokens(session, token_ids, token_count);
++    }
+     return status;
+ }
+ 
+@@ -3880,6 +3869,9 @@ static enum skippy_status skippy_decode_activation_frame(
+     if (status == SKIPPY_STATUS_OK && token_ids != nullptr) {
+         status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, token_start, out_error);
+     }
++    if (status == SKIPPY_STATUS_OK && token_ids != nullptr) {
++        skippy_record_tokens(session, token_ids, token_count);
++    }
+     return status;
+ }
+ 
+@@ -5078,6 +5070,7 @@ enum skippy_status skippy_decode_batch_sampled(
+     }
+ 
+     const int32_t n_tokens = static_cast<int32_t>(request_count);
++    GGML_ASSERT(static_cast<size_t>(n_tokens) == request_count);
+     llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+     batch.n_tokens = n_tokens;
+     for (int32_t i = 0; i < n_tokens; ++i) {
+@@ -5586,7 +5579,7 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+     if (activation_input) {
+         embd_storage.resize(static_cast<size_t>(n_tokens)*n_embd_inp);
+         if ((batch_input_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+-            glm_dsa_input_top_k_storage.resize(static_cast<size_t>(n_tokens)*batch_input_top_k);
++            glm_dsa_input_top_k_storage.resize(request_count*batch_input_top_k);
+         }
+         for (int32_t i = 0; i < n_tokens; ++i) {
+             const skippy_activation_desc * input_desc = input_descs[i];
+@@ -5648,7 +5641,7 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+     const llama_pos batch_pos_start = pos_storage.empty() ? first->n_past : pos_storage[0];
+     skippy_glm_dsa_top_k_scope glm_dsa_top_k_scope(
+             glm_dsa_input_top_k_storage.empty() ? nullptr : glm_dsa_input_top_k_storage.data(),
+-            static_cast<uint32_t>(n_tokens),
++            static_cast<uint32_t>(request_count),
+             batch_input_top_k,
+             1,
+             batch_pos_start);
+@@ -6384,7 +6377,9 @@ enum skippy_status skippy_import_kv_page(
+     // KV residency determines graph topology for paths such as GLM-DSA, where
+     // the selected-index width is capped by the visible KV length. Do not reuse
+     // a graph that was built before this page was imported.
+-    session->ctx->get_gf_res_prev()->reset();
++    if (llm_graph_result * graph = session->ctx->get_gf_res_prev()) {
++        graph->reset();
++    }
+     session->n_past = std::max<int32_t>(
+             session->n_past,
+             static_cast<int32_t>(std::min<uint64_t>(
+-- 
+2.50.1 (Apple Git-155)
+
