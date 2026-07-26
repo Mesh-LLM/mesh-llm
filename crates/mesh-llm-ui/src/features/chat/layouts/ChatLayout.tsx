@@ -15,6 +15,8 @@ const DESKTOP_SIDEBAR_QUERY = '(min-width: 1024px)'
 const CHAT_LAYOUT_FALLBACK_HEIGHT = 'calc(100dvh - 180px)'
 const CHAT_LAYOUT_MIN_HEIGHT = 320
 const CHAT_LAYOUT_KEYBOARD_GUTTER = 12
+// Keep this above the transcript's bottom padding: scrollIntoView aligns the anchor above that padding.
+const CHAT_STICK_TO_BOTTOM_THRESHOLD = 64
 
 type ChatLayoutStyle = CSSProperties & {
   '--chat-layout-height': string
@@ -30,6 +32,8 @@ type ChatLayoutProps = {
   children: ReactNode
   composer: ReactNode
   onMessageAreaClick?: () => void
+  /** Change this value to resume following the latest message after an explicit user action. */
+  stickToBottomKey?: string
 }
 
 function shouldUseDesktopSidebarFallback() {
@@ -126,11 +130,13 @@ export function ChatLayout({
   actions,
   children,
   composer,
-  onMessageAreaClick
+  onMessageAreaClick,
+  stickToBottomKey
 }: ChatLayoutProps) {
   const layoutRef = useRef<HTMLDivElement | null>(null)
   const messageListRef = useRef<HTMLDivElement | null>(null)
   const messageEndRef = useRef<HTMLDivElement | null>(null)
+  const shouldStickToBottomRef = useRef(true)
   const chatLayoutHeight = useChatVisualViewportHeight(layoutRef)
   const desktopSidebarViewport = useDesktopSidebarViewport()
   const showDesktopSidebar =
@@ -140,6 +146,13 @@ export function ChatLayout({
       onMessageAreaClick?.()
     }
   }
+  const handleMessageListScroll = () => {
+    const messageList = messageListRef.current
+    if (!messageList) return
+
+    const distanceFromBottom = messageList.scrollHeight - messageList.clientHeight - messageList.scrollTop
+    shouldStickToBottomRef.current = distanceFromBottom <= CHAT_STICK_TO_BOTTOM_THRESHOLD
+  }
 
   const chatLayoutStyle: ChatLayoutStyle = {
     '--chat-layout-height': chatLayoutHeight,
@@ -148,10 +161,15 @@ export function ChatLayout({
   }
 
   useLayoutEffect(() => {
+    shouldStickToBottomRef.current = true
+  }, [stickToBottomKey])
+
+  useLayoutEffect(() => {
     const messageList = messageListRef.current
-    if (!messageList) return undefined
+    if (!messageList || !shouldStickToBottomRef.current) return undefined
 
     const scrollToBottom = () => {
+      if (!shouldStickToBottomRef.current) return
       messageList.scrollTop = messageList.scrollHeight
       messageEndRef.current?.scrollIntoView({ block: 'end' })
     }
@@ -200,6 +218,7 @@ export function ChatLayout({
             className="chat-message-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 sm:px-[26px] sm:py-5"
             data-testid="chat-message-list"
             onPointerDown={handleMessageAreaPointerDown}
+            onScroll={handleMessageListScroll}
           >
             {children}
             <div aria-hidden={true} data-chat-scroll-anchor="true" ref={messageEndRef} />
