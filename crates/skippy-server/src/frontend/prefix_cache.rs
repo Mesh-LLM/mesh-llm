@@ -406,7 +406,7 @@ impl StageOpenAiBackend {
                 })
                 .collect::<OpenAiResult<Vec<_>>>()?
         };
-        let activation_record = kv.record_resident_activation(
+        let activation_records = kv.record_resident_activation(
             &self.config,
             &base,
             token_start,
@@ -440,7 +440,7 @@ impl StageOpenAiBackend {
             self.telemetry
                 .emit("stage.openai_kv_record_decision", attrs);
         }
-        if let Some(record) = activation_record {
+        for record in &activation_records {
             let mut attrs = self.openai_attrs(ids);
             attrs.insert(
                 "skippy.kv.decision".to_string(),
@@ -451,10 +451,9 @@ impl StageOpenAiBackend {
                 json!(record_candidate_count),
             );
             attrs.insert("skippy.kv.token_start".to_string(), json!(token_start));
-            attrs.insert("skippy.kv.token_count".to_string(), json!(token_ids.len()));
             attrs.insert(
-                "skippy.activation_cache.recorded_page_id".to_string(),
-                json!(record.page_id),
+                "skippy.kv.token_count".to_string(),
+                json!(record.token_count),
             );
             attrs.insert(
                 "skippy.activation_cache.payload_bytes".to_string(),
@@ -462,7 +461,8 @@ impl StageOpenAiBackend {
             );
             self.telemetry
                 .emit("stage.openai_kv_record_decision", attrs);
-        } else if !recorded_any {
+        }
+        if activation_records.is_empty() && !recorded_any {
             let mut attrs = self.openai_attrs(ids);
             attrs.insert("skippy.kv.decision".to_string(), json!("stage0_record"));
             attrs.insert(

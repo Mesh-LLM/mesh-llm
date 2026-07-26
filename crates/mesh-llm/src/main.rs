@@ -14,6 +14,8 @@
 const DEFAULT_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn main() {
+    prepare_model_download_directories();
+
     let mut builder = tokio::runtime::Builder::new_multi_thread();
     builder.enable_all();
 
@@ -25,4 +27,23 @@ fn main() {
 
     let runtime = builder.build().expect("build tokio runtime");
     std::process::exit(runtime.block_on(mesh_llm::run_main()));
+}
+
+fn prepare_model_download_directories() {
+    let prepared =
+        match mesh_llm_host_runtime::command_support::models::prepare_download_directories() {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                eprintln!(
+                    "⚠ Unable to prepare model download directories: {error:#}. Model downloads may fail; set MESH_LLM_DATA_DIR to a writable directory."
+                );
+                return;
+            }
+        };
+    for fallback in &prepared.fallbacks {
+        eprintln!("⚠ {fallback}");
+    }
+    // SAFETY: This runs before the Tokio runtime is constructed, while the
+    // process is still single-threaded.
+    unsafe { prepared.apply_to_process_environment() };
 }

@@ -88,45 +88,12 @@ fn distribution_ref_file(file: &str) -> String {
         .replace('\\', "/")
 }
 
-fn hf_hub_cache_override() -> Option<PathBuf> {
-    let path = std::env::var("HF_HUB_CACHE")
-        .ok()
-        .or_else(|| std::env::var("HUGGINGFACE_HUB_CACHE").ok())?;
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(trimmed))
-    }
-}
-
 pub fn huggingface_hub_cache() -> PathBuf {
-    if let Some(path) = hf_hub_cache_override() {
-        path
-    } else {
-        if let Ok(path) = std::env::var("HF_HOME") {
-            let trimmed = path.trim();
-            if !trimmed.is_empty() {
-                return PathBuf::from(trimmed).join("hub");
-            }
-        }
-        if let Ok(path) = std::env::var("XDG_CACHE_HOME") {
-            let trimmed = path.trim();
-            if !trimmed.is_empty() {
-                return PathBuf::from(trimmed).join("huggingface").join("hub");
-            }
-        }
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(".cache")
-            .join("huggingface")
-            .join("hub")
-    }
+    crate::huggingface_hub_cache_dir()
 }
 
 pub fn huggingface_hub_cache_dir() -> PathBuf {
-    huggingface_hub_cache()
+    crate::huggingface_hub_cache_dir()
 }
 
 pub fn huggingface_repo_folder_name(repo_id: &str, repo_type: impl RepoType) -> String {
@@ -179,13 +146,7 @@ fn cache_repo_id(repo: &CachedRepoInfo) -> Option<&str> {
 }
 
 pub fn mesh_llm_cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".cache")
-        })
-        .join("mesh-llm")
+    crate::mesh_llm_cache_dir()
 }
 
 pub fn model_metadata_cache_dir() -> PathBuf {

@@ -56,6 +56,8 @@ pub use usage::{
     model_usage_cache_dir, plan_model_cleanup, track_managed_model_usage, track_model_usage,
 };
 
+pub use model_hf::{PreparedDownloadDirectories, prepare_download_directories};
+
 pub(crate) fn build_hf_api(_progress: bool) -> Result<HFClientSync> {
     let mut builder = HFClientBuilder::new().cache_dir(huggingface_hub_cache_dir());
     if let Ok(endpoint) = std::env::var("HF_ENDPOINT") {

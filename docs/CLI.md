@@ -334,6 +334,13 @@ Switches:
 - `--direct`: download the exact Hugging Face GGUF file directly, bypassing catalog layer-package resolution.
 - `--json`: machine-readable output.
 
+Before downloading, mesh-llm checks both the Hugging Face Hub destination and
+the separate Xet working cache. A configured path that is read-only is replaced
+with a writable mesh-llm data directory, and the warning reports the rejected
+path, operating-system error, and selected replacement. Set
+`MESH_LLM_DATA_DIR` to choose the fallback root, or set `HF_HUB_CACHE` and
+`HF_XET_CACHE` independently when both locations should be explicit.
+
 ### `models package`
 
 Use this to plan or submit a Hugging Face Job that splits a source GGUF into a

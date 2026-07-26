@@ -163,8 +163,11 @@ fn ensure_cached_hf_asset(api: &hf_hub::HFClientSync, asset: &HfAsset) -> Result
         .send()
         .with_context(|| {
             format!(
-                "Cache Hugging Face asset {}/{}@{}",
-                asset.repo, asset.file, asset.revision
+                "Cache Hugging Face asset {}/{}@{}. {}",
+                asset.repo,
+                asset.file,
+                asset.revision,
+                model_hf::download_cache_diagnostic(),
             )
         })
 }
@@ -703,8 +706,11 @@ fn download_hf_assets_sync(
             Err(err) => {
                 return Err(err).with_context(|| {
                     format!(
-                        "Cache Hugging Face asset {}/{}@{}",
-                        asset.repo, asset.file, asset.revision
+                        "Cache Hugging Face asset {}/{}@{}. {}",
+                        asset.repo,
+                        asset.file,
+                        asset.revision,
+                        model_hf::download_cache_diagnostic(),
                     )
                 });
             }

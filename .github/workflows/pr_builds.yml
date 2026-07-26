@@ -328,7 +328,7 @@ jobs:
         include:
           - name: CUDA slim
             backend: cuda
-            container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
+            container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:295341c6c9f17c9eb69281fd454bda953799406d6915f472c914fb5f024a88ed
             cache_key: linux-cuda-slim
             runs_on: '["ubuntu-24.04"]'
             self_hosted_runs_on: '["self-hosted","Linux","X64","amd64","gpu-nvidia"]'

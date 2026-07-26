@@ -1,4 +1,11 @@
+mod cache_paths;
 pub mod store;
+
+pub use cache_paths::{
+    DownloadDirectoryFallback, DownloadDirectoryKind, PreparedDownloadDirectories,
+    download_cache_diagnostic, download_cache_diagnostic_for, huggingface_hub_cache_dir,
+    huggingface_xet_cache_dir, mesh_llm_cache_dir, prepare_download_directories,
+};
 
 use std::{
     ffi::OsStr,
@@ -51,7 +58,12 @@ impl HfModelRepository {
             .revision(revision.to_string())
             .send()
             .await
-            .with_context(|| format!("download Hugging Face model file {repo}@{revision}/{file}"))
+            .with_context(|| {
+                format!(
+                    "download Hugging Face model file {repo}@{revision}/{file}. {}",
+                    download_cache_diagnostic_for(&self.cache_dir)
+                )
+            })
     }
 
     pub async fn download_artifact_files(
@@ -215,27 +227,6 @@ impl HfModelIdentity {
             format!("{}@{}/{}", self.repo_id, self.revision, distribution_id)
         })
     }
-}
-
-pub fn huggingface_hub_cache_dir() -> PathBuf {
-    if let Some(path) = env_path("HF_HUB_CACHE") {
-        return path;
-    }
-    if let Some(path) = env_path("HUGGINGFACE_HUB_CACHE") {
-        return path;
-    }
-    if let Some(path) = env_path("HF_HOME") {
-        return path.join("hub");
-    }
-    if let Some(path) = env_path("XDG_CACHE_HOME") {
-        return path.join("huggingface").join("hub");
-    }
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".cache")
-        .join("huggingface")
-        .join("hub")
 }
 
 pub fn hf_token_override() -> Option<String> {
@@ -446,12 +437,6 @@ fn parse_model_repo_folder_name(folder: &str) -> Option<String> {
 
 fn repo_parts(repo: &str) -> (&str, &str) {
     repo.split_once('/').unwrap_or(("", repo))
-}
-
-fn env_path(key: &str) -> Option<PathBuf> {
-    let value = std::env::var(key).ok()?;
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
 }
 
 fn env_usize(key: &str) -> Option<usize> {
