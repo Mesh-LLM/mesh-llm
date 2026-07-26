@@ -22,26 +22,38 @@ pub enum GenerationTermination {
 /// Optional digest of the target runtime's full exported state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerationStateDigest {
+    /// Number of bytes in the exported runtime state.
     pub byte_length: u64,
+    /// BLAKE3 digest of the exported runtime-state bytes.
     pub blake3_digest: [u8; 32],
 }
 
 /// Target-authoritative result captured immediately before local session teardown.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerationReceipt {
+    /// OpenAI request identity.
     pub request_id: u64,
+    /// OpenAI session identity.
     pub session_id: u64,
+    /// Number of prompt token IDs supplied to local generation.
     pub prompt_token_count: usize,
+    /// Stable digest of the prompt token IDs.
     pub prompt_token_digest: [u8; 32],
+    /// Target-authoritative generated token IDs in callback order.
     pub generated_token_ids: Box<[i32]>,
+    /// Canonical runtime position captured before session teardown.
     pub final_session_position: u64,
+    /// Why generation stopped successfully.
     pub termination: GenerationTermination,
+    /// Time spent in model generation, excluding receipt delivery.
     pub model_generation_elapsed_us: u64,
+    /// Optional digest of the target runtime's full exported state.
     pub full_state: Option<GenerationStateDigest>,
 }
 
 /// Receives one successful local-generation result before its runtime session is dropped.
 pub trait GenerationReceiptSink: Send + Sync {
+    /// Records one successful local-generation receipt.
     fn record(&self, receipt: &GenerationReceipt) -> Result<()>;
 }
 
@@ -57,6 +69,7 @@ pub struct GenerationReceiptConfig {
 }
 
 impl GenerationReceiptConfig {
+    /// Creates receipt delivery with full-state export disabled.
     pub fn new(sink: Arc<dyn GenerationReceiptSink>) -> Self {
         Self {
             sink,
@@ -65,11 +78,13 @@ impl GenerationReceiptConfig {
     }
 
     #[must_use]
+    /// Enables or disables the optional full-state digest.
     pub fn with_full_state_digest(mut self, enabled: bool) -> Self {
         self.export_full_state = enabled;
         self
     }
 
+    /// Reports whether receipt delivery exports and hashes full runtime state.
     pub fn exports_full_state(&self) -> bool {
         self.export_full_state
     }
@@ -283,29 +298,5 @@ mod tests {
             digest.blake3_digest,
             state_digest(b"state!").unwrap().blake3_digest
         );
-    }
-
-    #[test]
-    fn receipt_observes_tokens_before_callbacks_and_reports_before_cleanup() {
-        let source = include_str!("local_generation.rs");
-        let record = source
-            .find("observation.record_token(token_id)?")
-            .expect("receipt should record each generated token");
-        let callback = source
-            .find("let control = on_token(token_id)?")
-            .expect("generation callback should still control stopping");
-        let receipt = source
-            .find("let receipt_result = if result.is_ok()")
-            .expect("receipt should be success-only");
-        let cleanup = source
-            .find("runtime.drop_session_timed(&session_id)")
-            .expect("session should still be dropped");
-        let receipt_error = source
-            .find("receipt_result?;")
-            .expect("receipt failure should fail the request");
-        assert!(record < callback);
-        assert!(callback < receipt);
-        assert!(receipt < cleanup);
-        assert!(cleanup < receipt_error);
     }
 }

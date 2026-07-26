@@ -18,6 +18,18 @@ use openai_frontend::OpenAiResult;
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::time::Duration;
+
+struct LocalGenerationReceiptFinalization<'a> {
+    generation_succeeded: bool,
+    session_label: &'a str,
+    request_id: u64,
+    session_id: u64,
+    prompt_token_ids: &'a [i32],
+    observation: Option<&'a RefCell<Option<GenerationReceiptObservation>>>,
+    cancelled: bool,
+    model_generation_elapsed: Option<Duration>,
+}
 
 impl StageOpenAiBackend {
     pub(super) fn generate_local_tokens(
@@ -777,33 +789,16 @@ impl StageOpenAiBackend {
             self.emit_openai_summary("stage.openai_decode", decode_timer, attrs);
             Ok(())
         })();
-        let receipt_observation = receipt_observation.as_ref().and_then(|observation| {
-            let mut slot = observation.borrow_mut();
-            if let Some(observation) = slot.as_mut() {
-                if receipt_cancelled {
-                    observation.mark_cancelled();
-                }
-                if let Some(elapsed) = receipt_model_generation_elapsed {
-                    observation.set_model_generation_elapsed(elapsed);
-                }
-            }
-            slot.take()
+        let receipt_result = self.finalize_generation_receipt(LocalGenerationReceiptFinalization {
+            generation_succeeded: result.is_ok(),
+            session_label: &session_id,
+            request_id: receipt_request_id,
+            session_id: receipt_session_id,
+            prompt_token_ids: receipt_prompt_token_ids,
+            observation: receipt_observation.as_ref(),
+            cancelled: receipt_cancelled,
+            model_generation_elapsed: receipt_model_generation_elapsed,
         });
-        let receipt_result = if result.is_ok() {
-            match (self.generation_receipt.as_ref(), receipt_observation) {
-                (Some(config), Some(observation)) => self.deliver_local_generation_receipt(
-                    config,
-                    &session_id,
-                    receipt_request_id,
-                    receipt_session_id,
-                    receipt_prompt_token_ids,
-                    observation,
-                ),
-                _ => Ok(()),
-            }
-        } else {
-            Ok(())
-        };
         let lock_timer = PhaseTimer::start();
         if let Ok(mut runtime) = self.runtime.lock() {
             let runtime_lock_wait_ms = lock_timer.elapsed_ms();
@@ -841,6 +836,38 @@ impl StageOpenAiBackend {
         receipt_result?;
         Ok(cache_stats)
     }
+
+    fn finalize_generation_receipt(
+        &self,
+        finalization: LocalGenerationReceiptFinalization<'_>,
+    ) -> OpenAiResult<()> {
+        let observation = finalization.observation.and_then(|observation| {
+            let mut slot = observation.borrow_mut();
+            if let Some(observation) = slot.as_mut() {
+                if finalization.cancelled {
+                    observation.mark_cancelled();
+                }
+                if let Some(elapsed) = finalization.model_generation_elapsed {
+                    observation.set_model_generation_elapsed(elapsed);
+                }
+            }
+            slot.take()
+        });
+        if !finalization.generation_succeeded {
+            return Ok(());
+        }
+        match (self.generation_receipt.as_ref(), observation) {
+            (Some(config), Some(observation)) => self.deliver_local_generation_receipt(
+                config,
+                finalization.session_label,
+                finalization.request_id,
+                finalization.session_id,
+                finalization.prompt_token_ids,
+                observation,
+            ),
+            _ => Ok(()),
+        }
+    }
 }
 
 fn prompt_fits_single_prefill_sample(prompt_token_count: usize, session_batch_size: usize) -> bool {
@@ -849,7 +876,44 @@ fn prompt_fits_single_prefill_sample(prompt_token_count: usize, session_batch_si
 
 #[cfg(test)]
 mod tests {
-    use super::prompt_fits_single_prefill_sample;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+
+    use anyhow::{Result, bail};
+    use skippy_protocol::{LoadMode, StageConfig};
+    use skippy_runtime::SamplingConfig;
+    use tokio::sync::Semaphore;
+
+    use super::*;
+    use crate::binary_transport::DecodeFrameBatcher;
+    use crate::frontend::SpeculativeDecodeConfig;
+    use crate::frontend::admission::GenerationTokenBudget;
+    use crate::frontend::decode_batcher::DecodeBatcher;
+    use crate::frontend::generation::{OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds};
+    use crate::frontend::{
+        EmbeddedOpenAiRequestDefaults, GenerationReceipt, GenerationReceiptConfig,
+        GenerationReceiptSink, GenerationTermination,
+    };
+    use crate::runtime_state::load_runtime;
+    use crate::telemetry::{Telemetry, TelemetryLevel};
+
+    #[derive(Default)]
+    struct RecordingReceiptSink {
+        receipts: Mutex<Vec<GenerationReceipt>>,
+        fail: AtomicBool,
+    }
+
+    impl GenerationReceiptSink for RecordingReceiptSink {
+        fn record(&self, receipt: &GenerationReceipt) -> Result<()> {
+            self.receipts.lock().unwrap().push(receipt.clone());
+            if self.fail.load(Ordering::Relaxed) {
+                bail!("synthetic generation receipt sink failure");
+            }
+            Ok(())
+        }
+    }
 
     #[test]
     fn single_prefill_sample_requires_prompt_to_fit_session_batch() {
@@ -864,5 +928,166 @@ mod tests {
         let source = include_str!("local_generation.rs");
         assert!(source.contains(concat!(".decode", "_sampled_mtp(")));
         assert!(!source.contains(concat!(".decode_frame", "_sampled_mtp(")));
+    }
+
+    #[test]
+    fn local_generation_delivers_receipt_before_cleanup_and_propagates_sink_errors() -> Result<()> {
+        let Some(model_path) = std::env::var_os("SKIPPY_GENERATION_RECEIPT_MODEL") else {
+            eprintln!("skipping: SKIPPY_GENERATION_RECEIPT_MODEL is not set");
+            return Ok(());
+        };
+        let Some(layer_count) = std::env::var_os("SKIPPY_GENERATION_RECEIPT_MODEL_LAYERS") else {
+            eprintln!("skipping: SKIPPY_GENERATION_RECEIPT_MODEL_LAYERS is not set");
+            return Ok(());
+        };
+        let layer_count = layer_count
+            .to_string_lossy()
+            .parse::<u32>()
+            .map_err(|error| anyhow::anyhow!("invalid receipt test layer count: {error}"))?;
+        let config = StageConfig {
+            run_id: "generation-receipt-test".to_string(),
+            topology_id: "generation-receipt-test".to_string(),
+            model_id: "generation-receipt-test".to_string(),
+            package_ref: None,
+            manifest_sha256: None,
+            source_model_path: None,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path: Some(model_path.to_string_lossy().into_owned()),
+            projector_path: None,
+            stage_id: "stage-0".to_string(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: layer_count,
+            ctx_size: 128,
+            lane_count: 1,
+            n_batch: Some(32),
+            n_ubatch: Some(32),
+            n_gpu_layers: 0,
+            mmap: Some(true),
+            mlock: false,
+            cache_type_k: "f16".to_string(),
+            cache_type_v: "f16".to_string(),
+            flash_attn_type: Default::default(),
+            filter_tensors_on_load: false,
+            selected_device: None,
+            kv_cache: None,
+            native_mtp_enabled: false,
+            load_mode: LoadMode::RuntimeSlice,
+            bind_addr: "127.0.0.1:0".to_string(),
+            upstream: None,
+            downstream: None,
+        };
+        let runtime = load_runtime(&config)?
+            .ok_or_else(|| anyhow::anyhow!("receipt test runtime was not loaded"))?;
+        let sink = Arc::new(RecordingReceiptSink::default());
+        let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
+        let speculative = SpeculativeDecodeConfig::default();
+        let decode_batcher = DecodeBatcher::new(runtime.clone(), 1);
+        let decode_frame_batcher = DecodeFrameBatcher::new(runtime.clone(), 1);
+        let backend = StageOpenAiBackend {
+            runtime: runtime.clone(),
+            config,
+            telemetry,
+            model_id: "generation-receipt-test".to_string(),
+            default_max_tokens: 1,
+            request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+            ctx_size: 128,
+            mode: OpenAiBackendMode::LocalRuntime,
+            draft: None,
+            speculative_window: 0,
+            adaptive_speculative_window: false,
+            ngram_max: 0,
+            speculative: speculative.clone(),
+            generation_limit: Arc::new(Semaphore::new(1)),
+            generation_queue_depth: Arc::new(AtomicUsize::new(0)),
+            generation_queue_limit: 1,
+            generation_token_budget: Arc::new(GenerationTokenBudget::new(128)),
+            hook_policy: None,
+            generation_receipt: Some(GenerationReceiptConfig::new(sink.clone())),
+            kv: None,
+            decode_batcher,
+            decode_frame_batcher,
+        };
+        let sampling = SamplingConfig::default();
+        let prompt_token_ids = [1];
+        let ids = OpenAiGenerationIds::new(OpenAiCacheHints::default());
+        let mut emitted = Vec::new();
+        backend.generate_local_tokens(
+            LocalGeneration {
+                prompt_token_ids: &prompt_token_ids,
+                max_tokens: 1,
+                sampling: &sampling,
+                chat_sampling_metadata: None,
+                speculative: &speculative,
+                native_mtp_enabled: false,
+                hook_request: None,
+                hook_runtime: None,
+                cancellation: None,
+                ids: &ids,
+            },
+            |token_id| {
+                emitted.push(token_id);
+                Ok(TokenControl::Continue)
+            },
+        )?;
+
+        let receipts = sink.receipts.lock().unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].request_id, ids.request_id);
+        assert_eq!(receipts[0].session_id, ids.session_id);
+        assert_eq!(receipts[0].prompt_token_count, prompt_token_ids.len());
+        assert_eq!(receipts[0].generated_token_ids.as_ref(), emitted.as_slice());
+        assert_eq!(receipts[0].termination, GenerationTermination::MaxTokens);
+        assert!(receipts[0].final_session_position >= prompt_token_ids.len() as u64);
+        drop(receipts);
+        assert!(
+            runtime
+                .lock()
+                .unwrap()
+                .session_stats()
+                .lanes
+                .iter()
+                .all(|lane| lane.session_id.as_deref() != Some(&ids.session_label))
+        );
+
+        sink.fail.store(true, Ordering::Relaxed);
+        let failing_ids = OpenAiGenerationIds::new(OpenAiCacheHints::default());
+        let error = match backend.generate_local_tokens(
+            LocalGeneration {
+                prompt_token_ids: &prompt_token_ids,
+                max_tokens: 1,
+                sampling: &sampling,
+                chat_sampling_metadata: None,
+                speculative: &speculative,
+                native_mtp_enabled: false,
+                hook_request: None,
+                hook_runtime: None,
+                cancellation: None,
+                ids: &failing_ids,
+            },
+            |_| Ok(TokenControl::Continue),
+        ) {
+            Ok(_) => panic!("sink failure should fail local generation"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("synthetic generation receipt sink failure")
+        );
+        assert!(
+            runtime
+                .lock()
+                .unwrap()
+                .session_stats()
+                .lanes
+                .iter()
+                .all(|lane| lane.session_id.as_deref() != Some(&failing_ids.session_label))
+        );
+
+        Ok(())
     }
 }
