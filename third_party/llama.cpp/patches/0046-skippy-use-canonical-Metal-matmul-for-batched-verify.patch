@@ -1,0 +1,124 @@
+From c4d9451f00508ae5817e5a1107fbea500fcbabd1 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 26 Jul 2026 10:23:34 +1000
+Subject: [PATCH] skippy: use canonical Metal matmul for batched verify
+
+---
+ src/skippy.cpp | 66 +++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 62 insertions(+), 4 deletions(-)
+
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index fdd344a39..c84c1ca76 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -29,6 +29,7 @@
+ #include <fstream>
+ #include <cstdio>
+ #include <limits>
++#include <optional>
+ #include <regex>
+ #include <set>
+ #include <string>
+@@ -1790,6 +1791,57 @@ static bool skippy_verify_tokens_batch_enabled() {
+     return skippy_env_enabled("SKIPPY_VERIFY_TOKENS_ENABLE_BATCH");
+ }
+ 
++static bool skippy_verify_tokens_canonical_metal_enabled() {
++    return !skippy_env_disabled("SKIPPY_VERIFY_TOKENS_CANONICAL_METAL");
++}
++
++static std::mutex g_skippy_verify_tokens_canonical_env_mutex;
++
++class skippy_scoped_env_flag {
++public:
++    skippy_scoped_env_flag(const char * name, const char * value)
++        : name(name) {
++        const char * previous_value = std::getenv(name);
++        if (previous_value != nullptr) {
++            previous = previous_value;
++            had_previous = true;
++        }
++        setenv(name, value, 1);
++    }
++
++    ~skippy_scoped_env_flag() {
++        if (had_previous) {
++            setenv(name, previous.c_str(), 1);
++        } else {
++            unsetenv(name);
++        }
++    }
++
++    skippy_scoped_env_flag(const skippy_scoped_env_flag &) = delete;
++    skippy_scoped_env_flag & operator=(const skippy_scoped_env_flag &) = delete;
++
++private:
++    const char * name;
++    std::string previous;
++    bool had_previous = false;
++};
++
++class skippy_scoped_verify_canonical_metal {
++public:
++    explicit skippy_scoped_verify_canonical_metal(bool enabled)
++        : lock(enabled ? std::unique_lock<std::mutex>(g_skippy_verify_tokens_canonical_env_mutex) : std::unique_lock<std::mutex>()) {
++        if (enabled) {
++            mul_mv_ext.emplace("GGML_METAL_DISABLE_SMALL_BATCH_MUL_MV_EXT", "1");
++            mul_mm.emplace("GGML_METAL_DISABLE_SMALL_BATCH_MUL_MM", "1");
++        }
++    }
++
++private:
++    std::unique_lock<std::mutex> lock;
++    std::optional<skippy_scoped_env_flag> mul_mv_ext;
++    std::optional<skippy_scoped_env_flag> mul_mm;
++};
++
+ static bool skippy_glm_dsa_op_timing_enabled() {
+     return skippy_env_enabled("SKIPPY_GLM_DSA_OP_TIMING");
+ }
+@@ -5197,7 +5249,10 @@ enum skippy_status skippy_verify_tokens(
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+ 
+-    enum skippy_status status = skippy_verify_tokens_batch_enabled() ?
++    const bool use_batched_verify = skippy_verify_tokens_batch_enabled();
++    skippy_scoped_verify_canonical_metal canonical_metal(
++            use_batched_verify && skippy_verify_tokens_canonical_metal_enabled());
++    enum skippy_status status = use_batched_verify ?
+             skippy_verify_token_batch(session, token_ids, token_count, out_error) :
+             skippy_verify_token_serial_sampled(
+                     session,
+@@ -5209,7 +5264,7 @@ enum skippy_status skippy_verify_tokens(
+                     out_error);
+     if (status == SKIPPY_STATUS_OK) {
+         const int32_t n_tokens = static_cast<int32_t>(token_count);
+-        if (skippy_verify_tokens_batch_enabled()) {
++        if (use_batched_verify) {
+             for (int32_t i = 0; i < n_tokens; ++i) {
+                 output_tokens[i] = skippy_greedy_sample_ith(session, i);
+             }
+@@ -5922,7 +5977,10 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+                         out_error);
+     } else {
+         if (session->stage_model->config.include_output) {
+-            status = skippy_verify_tokens_batch_enabled() ?
++            const bool use_batched_verify = skippy_verify_tokens_batch_enabled();
++            skippy_scoped_verify_canonical_metal canonical_metal(
++                    use_batched_verify && skippy_verify_tokens_canonical_metal_enabled());
++            status = use_batched_verify ?
+                     skippy_verify_token_batch(session, token_ids, token_count, out_error) :
+                     skippy_verify_token_serial_sampled(
+                             session,
+@@ -5932,7 +5990,7 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+                             output_tokens,
+                             output_token_capacity,
+                             out_error);
+-            output_tokens_sampled = !skippy_verify_tokens_batch_enabled();
++            output_tokens_sampled = !use_batched_verify;
+         } else {
+             status = skippy_decode_tokens(
+                     session,
+-- 
+2.54.0 (Apple Git-157)
+
