@@ -7,11 +7,14 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use skippy_runtime::{
-    FlashAttentionType, RuntimeConfig, RuntimeLoadMode, SamplingConfig, StageModel, StageSession,
-    TokenSignal, parse_cache_type,
+    FlashAttentionType, GenerationSignalWindow, RuntimeConfig, RuntimeLoadMode, SamplingConfig,
+    StageModel, StageSession, TokenSignal, parse_cache_type,
 };
 
 use crate::cli::{FlashAttentionArg, VerifyWindowLocalArgs};
+
+// Mirrors GGML_METAL_BATCH_INVARIANT_MUL_MV_MAX_WIDTH in the pinned Metal patch.
+const MAX_BATCH_INVARIANT_VERIFY_WIDTH: usize = 16;
 
 #[derive(Debug, Serialize)]
 struct TimingStats {
@@ -159,9 +162,7 @@ fn validate_args(args: &VerifyWindowLocalArgs) -> Result<()> {
     if args.iterations == 0 {
         bail!("iterations must be greater than zero");
     }
-    if args.verify_widths.is_empty() || args.verify_widths.contains(&0) {
-        bail!("verify_widths must contain at least one positive width");
-    }
+    validate_verify_widths(&args.verify_widths, args.sample_width)?;
     if args.continuation_steps == 0 {
         bail!("continuation_steps must be positive");
     }
@@ -169,6 +170,38 @@ fn validate_args(args: &VerifyWindowLocalArgs) -> Result<()> {
         && (split_layer == 0 || split_layer >= args.layer_end)
     {
         bail!("split_layer must be greater than zero and less than layer_end");
+    }
+    Ok(())
+}
+
+fn validate_verify_widths(verify_widths: &[usize], sample_width: usize) -> Result<()> {
+    if verify_widths.is_empty() || verify_widths.contains(&0) {
+        bail!("verify_widths must contain at least one positive width");
+    }
+    if verify_widths
+        .iter()
+        .any(|&width| width > MAX_BATCH_INVARIANT_VERIFY_WIDTH)
+    {
+        bail!(
+            "verify_widths must not exceed the batch-invariant Metal ceiling of {MAX_BATCH_INVARIANT_VERIFY_WIDTH}"
+        );
+    }
+    if verify_widths
+        .iter()
+        .enumerate()
+        .any(|(index, width)| verify_widths[..index].contains(width))
+    {
+        bail!("verify_widths must not contain duplicates");
+    }
+    if sample_width == 0 || sample_width > MAX_BATCH_INVARIANT_VERIFY_WIDTH {
+        bail!(
+            "sample_width must be between 1 and the batch-invariant Metal ceiling of {MAX_BATCH_INVARIANT_VERIFY_WIDTH}"
+        );
+    }
+    if !verify_widths.contains(&sample_width) {
+        bail!(
+            "sample_width must also appear in verify_widths so timed execution is parity-checked"
+        );
     }
     Ok(())
 }
@@ -238,7 +271,7 @@ fn run_full_model_samples(args: &VerifyWindowLocalArgs) -> Result<FullModelSampl
         &args.verify_widths,
         args.continuation_steps,
     )?;
-    let verify_tokens = target_plan.verify_tokens_for_width(sample_width(args)?)?;
+    let verify_tokens = target_plan.verify_tokens_for_width(sample_width(args))?;
     let samples = run_samples(
         &mut session,
         base_token_count,
@@ -270,7 +303,7 @@ struct ParitySide {
     position: u64,
     full_state: Vec<u8>,
     signal: TokenSignal,
-    signal_window: String,
+    signal_window: GenerationSignalWindow,
     elapsed_us: u128,
 }
 
@@ -288,10 +321,11 @@ impl VerifyTargetPlan {
         if width == 0 {
             bail!("verify width must be greater than zero");
         }
-        if self.targets.len() < width {
+        let required_targets = width.saturating_sub(1);
+        if self.targets.len() < required_targets {
             bail!(
-                "target stream has {} token(s), but width {width} requires {width}",
-                self.targets.len()
+                "target stream has {} token(s), but width {width} requires {required_targets} target token(s)",
+                self.targets.len(),
             );
         }
         let mut tokens = Vec::with_capacity(width);
@@ -319,6 +353,8 @@ fn choose_target_plan(
     config: &RuntimeConfig,
     target_token_count: usize,
 ) -> Result<VerifyTargetPlan> {
+    // Kernel parity needs an always-accepted target stream. Native MTP proposal
+    // quality and acceptance remain covered by the dedicated MTP benchmarks.
     session
         .trim_session(base_token_count)
         .context("failed to trim session before choosing verify target stream")?;
@@ -326,8 +362,8 @@ fn choose_target_plan(
         .first()
         .context("prompt produced no token for verify-token seed")?;
     let mut input = current;
-    let mut targets = Vec::with_capacity(target_token_count.saturating_add(1));
-    for _ in 0..target_token_count.saturating_add(1) {
+    let mut targets = Vec::with_capacity(target_token_count);
+    for _ in 0..target_token_count {
         let (predicted, _native_mtp, _frame) = session
             .decode_step_frame_sampled_mtp(input, Some(&SamplingConfig::default()), None, 0, 1)
             .with_context(|| {
@@ -446,10 +482,9 @@ fn collect_parity_side(
         .export_full_state(0, run.layer_end)
         .with_context(|| format!("failed to export {label} full state"))?;
     let signal = session.last_token_signal()?;
-    let signal_window = format!(
-        "{:?}",
-        session.signal_window(run.width.saturating_add(1) as u32)?
-    );
+    let window_tokens =
+        u32::try_from(run.width.saturating_add(1)).context("signal window width exceeds u32")?;
+    let signal_window = session.signal_window(window_tokens)?;
     Ok(ParitySide {
         prediction,
         continuation,
@@ -611,15 +646,13 @@ fn max_verify_width(args: &VerifyWindowLocalArgs) -> Result<usize> {
 
 fn target_token_count(args: &VerifyWindowLocalArgs) -> Result<usize> {
     max_verify_width(args)?
+        .max(args.sample_width)
         .checked_add(args.continuation_steps)
         .context("target token count overflow")
 }
 
-fn sample_width(args: &VerifyWindowLocalArgs) -> Result<usize> {
-    args.verify_widths
-        .first()
-        .copied()
-        .context("verify_widths must contain at least one width")
+fn sample_width(args: &VerifyWindowLocalArgs) -> usize {
+    args.sample_width
 }
 
 fn run_samples(
@@ -1155,7 +1188,7 @@ fn build_report(
     full: FullModelSamples,
     split_inprocess: Option<SplitInprocessReport>,
 ) -> Result<VerifyWindowLocalReport> {
-    let sample_width = sample_width(&args)?;
+    let sample_width = sample_width(&args);
     let batched = timing_stats(&full.samples.batched)?;
     let serial = timing_stats(&full.samples.serial)?;
     let batched_avg = batched.avg_us;
@@ -1271,9 +1304,12 @@ fn flash_attn_name(value: FlashAttentionArg) -> &'static str {
 mod tests {
     use std::time::Duration;
 
+    use skippy_runtime::{GenerationSignalWindow, TokenSignal};
+
     use super::{
-        VerifyTargetPlan, expected_continuation, first_mismatch_position, percentile, timing_shape,
-        timing_stats, verified_tokens_per_sec,
+        MAX_BATCH_INVARIANT_VERIFY_WIDTH, ParitySide, VerifyTargetPlan, build_parity_check,
+        expected_continuation, first_mismatch_position, percentile, timing_shape, timing_stats,
+        validate_verify_widths, verified_tokens_per_sec,
     };
 
     #[test]
@@ -1300,6 +1336,15 @@ mod tests {
     #[test]
     fn token_rate_uses_configured_verify_width() {
         assert_eq!(verified_tokens_per_sec(20_000.0, 4), 200.0);
+    }
+
+    #[test]
+    fn verify_width_validation_rejects_duplicates_and_out_of_range_samples() {
+        assert!(validate_verify_widths(&[1, 2, 4, 9, 16], 9).is_ok());
+        assert!(validate_verify_widths(&[1, 2, 2], 2).is_err());
+        assert!(validate_verify_widths(&[MAX_BATCH_INVARIANT_VERIFY_WIDTH + 1], 2).is_err());
+        assert!(validate_verify_widths(&[2], MAX_BATCH_INVARIANT_VERIFY_WIDTH + 1).is_err());
+        assert!(validate_verify_widths(&[1, 2, 4], 9).is_err());
     }
 
     #[test]
@@ -1346,6 +1391,60 @@ mod tests {
         };
 
         assert_eq!(expected_continuation(&plan, 4, 3).unwrap(), &[24, 25, 26]);
+    }
+
+    #[test]
+    fn parity_aggregation_preserves_mismatch_details() {
+        let serial = parity_side(vec![11, 12], vec![13], GenerationSignalWindow::default());
+        let batched = parity_side(vec![11, 99], vec![13], GenerationSignalWindow::default());
+
+        let check = build_parity_check(2, 1, &[11, 12], &[13], &serial, &batched).unwrap();
+
+        assert!(!check.matched);
+        assert_eq!(check.first_mismatch_position, Some(1));
+        assert!(!check.target_stream_matched);
+        assert!(check.continuation_matched);
+    }
+
+    #[test]
+    fn signal_window_shape_is_advisory_for_batch_parity() {
+        let serial = parity_side(
+            vec![11, 12],
+            vec![13],
+            GenerationSignalWindow {
+                token_count: 2,
+                ..GenerationSignalWindow::default()
+            },
+        );
+        let batched = parity_side(
+            vec![11, 12],
+            vec![13],
+            GenerationSignalWindow {
+                token_count: 1,
+                ..GenerationSignalWindow::default()
+            },
+        );
+
+        let check = build_parity_check(2, 1, &[11, 12], &[13], &serial, &batched).unwrap();
+
+        assert!(check.matched);
+        assert!(!check.signal_window_matched);
+    }
+
+    fn parity_side(
+        prediction: Vec<i32>,
+        continuation: Vec<i32>,
+        signal_window: GenerationSignalWindow,
+    ) -> ParitySide {
+        ParitySide {
+            prediction,
+            continuation,
+            position: 2,
+            full_state: vec![1, 2, 3],
+            signal: TokenSignal::default(),
+            signal_window,
+            elapsed_us: 1,
+        }
     }
 
     #[test]

@@ -244,8 +244,12 @@ pub struct VerifyWindowLocalArgs {
     pub iterations: usize,
     #[arg(long, default_value_t = 8)]
     pub warmup: usize,
+    /// Verification widths checked for canonical parity (maximum 16).
     #[arg(long, value_delimiter = ',', default_value = "2")]
     pub verify_widths: Vec<usize>,
+    /// Independent verification width used for timing samples (maximum 16).
+    #[arg(long, default_value_t = 2)]
+    pub sample_width: usize,
     #[arg(long, default_value_t = 1)]
     pub continuation_steps: usize,
     #[arg(long = "flash-attn", value_enum, default_value = "auto")]
@@ -702,6 +706,7 @@ mod tests {
         assert_eq!(args.warmup, 1);
         assert_eq!(args.n_gpu_layers, -1);
         assert_eq!(args.verify_widths, vec![2]);
+        assert_eq!(args.sample_width, 2);
         assert_eq!(args.continuation_steps, 1);
         assert_eq!(args.flash_attn, FlashAttentionArg::Auto);
     }
@@ -742,6 +747,28 @@ mod tests {
         };
 
         assert_eq!(args.verify_widths, vec![1, 2, 4, 9]);
+    }
+
+    #[test]
+    fn parses_verify_window_local_sample_width() {
+        let cli = Cli::try_parse_from([
+            "skippy-bench",
+            "verify-window-local",
+            "--model-path",
+            "/tmp/model.gguf",
+            "--verify-widths",
+            "1,2,4,9",
+            "--sample-width",
+            "9",
+        ])
+        .unwrap();
+
+        let CommandKind::VerifyWindowLocal(args) = cli.command else {
+            panic!("expected verify-window-local subcommand");
+        };
+
+        assert_eq!(args.verify_widths, vec![1, 2, 4, 9]);
+        assert_eq!(args.sample_width, 9);
     }
 
     #[test]
