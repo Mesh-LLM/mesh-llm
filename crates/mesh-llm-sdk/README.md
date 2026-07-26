@@ -46,6 +46,8 @@ client.disconnect().await;
 ```toml
 [dependencies]
 mesh-llm-sdk = { version = "0.72.1", features = ["serving"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1"
 ```
 
 ```rust,no_run
