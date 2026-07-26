@@ -1175,6 +1175,12 @@ jobs:
             backend: rocm
             rocm_architectures: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201
             artifact_name: release-native-runtime-windows-x86_64-rocm
+            # sccache + hipcc is broken on Windows: HIP's multi-offload-arch
+            # compile pipeline plus the long arch-derived build directory pushes
+            # object paths past MAX_PATH, and sccache fails to persist its temp
+            # file (os error 3). Disable the compiler launcher for this row only;
+            # CUDA/Vulkan keep sccache.
+            use_sccache: '0'
           - name: Vulkan
             backend: vulkan
             artifact_name: release-native-runtime-windows-x86_64-vulkan
@@ -1230,6 +1236,7 @@ jobs:
           LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
           LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
           LLAMA_STAGE_AMDGPU_TARGETS: ${{ matrix.rocm_architectures }}
+          LLAMA_STAGE_USE_SCCACHE: ${{ matrix.use_sccache || '1' }}
           MESH_LLM_CUDA_TOOLKIT_MAJOR: '12'
         run: |
           scripts/package-native-runtime.sh \
