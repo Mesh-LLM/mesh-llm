@@ -1,17 +1,17 @@
-From 16a593e888fd63046a2dc6baf3f31fa30396c8d6 Mon Sep 17 00:00:00 2001
+From fe586db1fd61a8a8906d0bc571a65e05d12cc4ff Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sun, 26 Jul 2026 15:39:58 +1000
-Subject: [PATCH] Fix empty transposed KV page export
+Subject: [PATCH] Fix empty transposed KV page import and export
 
 ---
- src/llama-kv-cache.cpp               |   3 +
+ src/llama-kv-cache.cpp               |   6 +
  tests/CMakeLists.txt                 |   1 +
- tests/test-skippy-kv-page-export.cpp | 107 +++++++++++++++++++++++++++
- 3 files changed, 111 insertions(+)
+ tests/test-skippy-kv-page-export.cpp | 165 +++++++++++++++++++++++++++
+ 3 files changed, 172 insertions(+)
  create mode 100644 tests/test-skippy-kv-page-export.cpp
 
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 9df4984b3..1099da57f 100644
+index 9df4984b3..1c4c2ddbc 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -1505,6 +1505,9 @@ bool llama_kv_cache::stage_export_kv_page(
@@ -24,24 +24,34 @@ index 9df4984b3..1099da57f 100644
              auto * v = layer->v_stream[strm];
              const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
              for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+@@ -1679,6 +1682,9 @@ bool llama_kv_cache::stage_import_kv_page(
+         }
+     } else {
+         for (const auto * layer : selected) {
++            if (desc.v_element_bytes == 0) {
++                continue;
++            }
+             auto * v = layer->v_stream[strm];
+             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
+             for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 7a93b19a0..372ff4c34 100644
+index 7a93b19a0..158ab28df 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -149,6 +149,7 @@ if (LLAMA_LLGUIDANCE)
- endif ()
- 
+@@ -151,6 +151,7 @@ endif ()
  llama_build(test-recurrent-state-rollback.cpp get-model.cpp)
-+llama_build_and_test(test-skippy-kv-page-export.cpp)
  
  if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
++    llama_build_and_test(test-skippy-kv-page-export.cpp)
      # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+     llama_build_and_test(test-sampling.cpp)
+     llama_build_and_test(test-reasoning-budget.cpp)
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
 new file mode 100644
-index 000000000..f209d0887
+index 000000000..724835df7
 --- /dev/null
 +++ b/tests/test-skippy-kv-page-export.cpp
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,165 @@
 +#include "skippy.h"
 +
 +#include "../src/llama-batch.h"
@@ -147,8 +157,65 @@ index 000000000..f209d0887
 +        return 1;
 +    }
 +
-+    return payload_bytes == payload.size() ? 0 : 1;
++    if (payload_bytes != payload.size()) {
++        fprintf(stderr, "K-only KV page export byte count mismatch\n");
++        return 1;
++    }
++    if (!kv.stage_import_kv_page(
++                0,
++                desc,
++                payload.data(),
++                payload.size(),
++                error)) {
++        fprintf(stderr, "K-only KV page import failed: %s\n", error.c_str());
++        return 1;
++    }
++
++    skippy_kv_page_desc roundtrip_desc = {};
++    size_t roundtrip_bytes = 0;
++    if (!kv.stage_export_kv_page(
++                0,
++                0,
++                1,
++                0,
++                1,
++                &roundtrip_desc,
++                nullptr,
++                0,
++                &roundtrip_bytes,
++                error)) {
++        fprintf(stderr, "K-only KV page round-trip sizing failed: %s\n", error.c_str());
++        return 1;
++    }
++    if (roundtrip_bytes != payload.size() ||
++            roundtrip_desc.flags != desc.flags ||
++            roundtrip_desc.k_row_bytes != desc.k_row_bytes ||
++            roundtrip_desc.v_row_bytes != 0 ||
++            roundtrip_desc.v_element_bytes != 0) {
++        fprintf(stderr, "unexpected K-only transposed KV page round-trip descriptor\n");
++        return 1;
++    }
++    std::vector<uint8_t> roundtrip_payload(roundtrip_bytes);
++    if (!kv.stage_export_kv_page(
++                0,
++                0,
++                1,
++                0,
++                1,
++                &roundtrip_desc,
++                roundtrip_payload.data(),
++                roundtrip_payload.size(),
++                &roundtrip_bytes,
++                error)) {
++        fprintf(stderr, "K-only KV page round-trip export failed: %s\n", error.c_str());
++        return 1;
++    }
++    if (roundtrip_payload != payload) {
++        fprintf(stderr, "K-only KV page payload changed after round trip\n");
++        return 1;
++    }
++
++    return 0;
 +}
 -- 
 2.54.0 (Apple Git-157)
-
