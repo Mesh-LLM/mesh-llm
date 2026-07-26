@@ -1,31 +1,33 @@
-From a64f418e0f6e536d4b57ec4e0abb642af30ecb9e Mon Sep 17 00:00:00 2001
+From 0f7f31ef18355e7581e0e5a36f5a45e45274b3aa Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 26 Jul 2026 11:28:36 +1000
 Subject: [PATCH] ggml-metal: make small-batch matmul batch invariant
 
 ---
- ggml/src/ggml-metal/ggml-metal-device.cpp |   6 +-
+ ggml/src/ggml-metal/ggml-metal-device.cpp |   8 +-
  ggml/src/ggml-metal/ggml-metal-impl.h     |   2 +
  ggml/src/ggml-metal/ggml-metal-ops.cpp    | 108 +++++++++++++++++-----
  ggml/src/ggml-metal/ggml-metal.metal      | 103 +++++++++++++++++----
- 4 files changed, 174 insertions(+), 45 deletions(-)
+ 4 files changed, 176 insertions(+), 45 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
-index 870d5a92e..c53508e85 100644
+index 870d5a92e..b156d670c 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
-@@ -1186,6 +1186,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_
+@@ -1186,6 +1186,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_
          ggml_metal_cv_free(cv);
      }
  
 +    if (tsrc0 == GGML_TYPE_F32 && tsrc1 == GGML_TYPE_F32) {
 +        res.smem = 32*N_R0_F32*sizeof(float);
++    } else if (tsrc0 == GGML_TYPE_Q5_0 && tsrc1 == GGML_TYPE_F32) {
++        res.smem = 32*N_R0_Q5_0*sizeof(float);
 +    }
 +
      return res;
  }
  
-@@ -1282,7 +1286,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
+@@ -1282,7 +1288,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
                      suffix = "_short";
                  } else {
                      nsg = std::min(4, (ne00 + 127) / 128);

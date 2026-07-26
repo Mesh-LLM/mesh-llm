@@ -11,10 +11,7 @@ use skippy_runtime::{
     StageModel, StageSession, TokenSignal, parse_cache_type,
 };
 
-use crate::cli::{FlashAttentionArg, VerifyWindowLocalArgs};
-
-// Mirrors GGML_METAL_BATCH_INVARIANT_MUL_MV_MAX_WIDTH in the pinned Metal patch.
-const MAX_BATCH_INVARIANT_VERIFY_WIDTH: usize = 16;
+use crate::cli::{FlashAttentionArg, MAX_VERIFY_WINDOW_WIDTH, VerifyWindowLocalArgs};
 
 #[derive(Debug, Serialize)]
 struct TimingStats {
@@ -180,10 +177,10 @@ fn validate_verify_widths(verify_widths: &[usize], sample_width: usize) -> Resul
     }
     if verify_widths
         .iter()
-        .any(|&width| width > MAX_BATCH_INVARIANT_VERIFY_WIDTH)
+        .any(|&width| width > MAX_VERIFY_WINDOW_WIDTH)
     {
         bail!(
-            "verify_widths must not exceed the batch-invariant Metal ceiling of {MAX_BATCH_INVARIANT_VERIFY_WIDTH}"
+            "verify_widths must not exceed the batch-invariant Metal ceiling of {MAX_VERIFY_WINDOW_WIDTH}"
         );
     }
     if verify_widths
@@ -193,9 +190,9 @@ fn validate_verify_widths(verify_widths: &[usize], sample_width: usize) -> Resul
     {
         bail!("verify_widths must not contain duplicates");
     }
-    if sample_width == 0 || sample_width > MAX_BATCH_INVARIANT_VERIFY_WIDTH {
+    if sample_width == 0 || sample_width > MAX_VERIFY_WINDOW_WIDTH {
         bail!(
-            "sample_width must be between 1 and the batch-invariant Metal ceiling of {MAX_BATCH_INVARIANT_VERIFY_WIDTH}"
+            "sample_width must be between 1 and the batch-invariant Metal ceiling of {MAX_VERIFY_WINDOW_WIDTH}"
         );
     }
     if !verify_widths.contains(&sample_width) {
@@ -1307,10 +1304,11 @@ mod tests {
     use skippy_runtime::{GenerationSignalWindow, TokenSignal};
 
     use super::{
-        MAX_BATCH_INVARIANT_VERIFY_WIDTH, ParitySide, VerifyTargetPlan, build_parity_check,
-        expected_continuation, first_mismatch_position, percentile, timing_shape, timing_stats,
-        validate_verify_widths, verified_tokens_per_sec,
+        ParitySide, VerifyTargetPlan, build_parity_check, expected_continuation,
+        first_mismatch_position, percentile, timing_shape, timing_stats, validate_verify_widths,
+        verified_tokens_per_sec,
     };
+    use crate::cli::MAX_VERIFY_WINDOW_WIDTH;
 
     #[test]
     fn timing_stats_sorts_and_summarizes_microseconds() {
@@ -1342,8 +1340,8 @@ mod tests {
     fn verify_width_validation_rejects_duplicates_and_out_of_range_samples() {
         assert!(validate_verify_widths(&[1, 2, 4, 9, 16], 9).is_ok());
         assert!(validate_verify_widths(&[1, 2, 2], 2).is_err());
-        assert!(validate_verify_widths(&[MAX_BATCH_INVARIANT_VERIFY_WIDTH + 1], 2).is_err());
-        assert!(validate_verify_widths(&[2], MAX_BATCH_INVARIANT_VERIFY_WIDTH + 1).is_err());
+        assert!(validate_verify_widths(&[MAX_VERIFY_WINDOW_WIDTH + 1], 2).is_err());
+        assert!(validate_verify_widths(&[2], MAX_VERIFY_WINDOW_WIDTH + 1).is_err());
         assert!(validate_verify_widths(&[1, 2, 4], 9).is_err());
     }
 
