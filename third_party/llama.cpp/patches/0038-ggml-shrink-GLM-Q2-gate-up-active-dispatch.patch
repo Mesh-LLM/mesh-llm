@@ -1,7 +1,7 @@
-From aacb3421872735fcd2f1a22e4560a60b44f53046 Mon Sep 17 00:00:00 2001
+From 9c64ed0e7d8954e1aff5c6f7a177f374b75a66de Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 03:51:17 +1000
-Subject: [PATCH 35/36] ggml: shrink GLM Q2 gate-up active dispatch
+Subject: [PATCH 38/41] ggml: shrink GLM Q2 gate-up active dispatch
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 6 ++++--
@@ -27,7 +27,7 @@ index 91976954..646c983a 100644
      const int grid_y = (1 + nr1 - 1)/nr1;
      const int grid_z = ne123;
 diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
-index 77119fc9..338e8f3e 100644
+index 000fe0b2..5dfeed66 100644
 --- a/ggml/src/ggml-metal/ggml-metal.metal
 +++ b/ggml/src/ggml-metal/ggml-metal.metal
 @@ -10331,9 +10331,11 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_impl(
@@ -45,5 +45,5 @@ index 77119fc9..338e8f3e 100644
      const bool is_gate = (sgitg & 1) != 0;
      const int first_row = r0 * nr0;
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

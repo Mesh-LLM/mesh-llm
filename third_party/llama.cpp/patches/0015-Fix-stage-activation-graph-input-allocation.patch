@@ -1,7 +1,7 @@
-From d42eefb175b9e2ce7445391fa6fd059dc4521a13 Mon Sep 17 00:00:00 2001
+From f55ad1aad78ed9ca74a41bf46d8e124e4c65c5e0 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 15 Jul 2026 07:54:20 +1000
-Subject: [PATCH 15/16] Fix stage activation graph input allocation
+Subject: [PATCH 15/41] Fix stage activation graph input allocation
 
 ---
  src/llama-graph.cpp | 39 +++++++++++++++++++++++++++------------
@@ -102,5 +102,5 @@ index a75f0b75..6613747a 100644
      if (n_embd_inp != n_embd) {
          cur = ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 0);
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

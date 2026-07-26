@@ -1,7 +1,7 @@
-From ce280251dfacfcf0f99307690fa0f0114665f572 Mon Sep 17 00:00:00 2001
+From 0477e6a1a2a3cfb1f416c4aa41377b8458507237 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 02/16] Add early staged model-family and chat support
+Subject: [PATCH 02/41] Add early staged model-family and chat support
 
 Squashes the first Qwen MoE staged-runtime support, native KV page basics, session reset, token EOG exposure, batched token verification, chat-template ABI, and the first wider model-family support pass.
 ---
@@ -32,7 +32,7 @@ Squashes the first Qwen MoE staged-runtime support, native KV page basics, sessi
  create mode 100644 common/stage-chat.cpp
 
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index 4cf580a0..b06bfeda 100644
+index 99688f53..3928ba17 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
 @@ -98,6 +98,7 @@ add_library(${TARGET}
@@ -42,7 +42,7 @@ index 4cf580a0..b06bfeda 100644
 +    stage-chat.cpp
      speculative.cpp
      speculative.h
-     unicode.cpp
+     trie.cpp
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
 new file mode 100644
 index 00000000..39d6331a
@@ -455,7 +455,7 @@ index a7986a87..33d57061 100644
  public:
      llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index e70583e6..e8be39b0 100644
+index e25464c5..d7c7c220 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -4,6 +4,7 @@
@@ -863,10 +863,10 @@ index 531d99db..d9301c19 100644
      // graph_build API
      //
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index f4310743..4e43bfbc 100644
+index 7f23dbbc..c94aca78 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1095,13 +1095,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1082,13 +1082,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
      };
  
      auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
@@ -880,7 +880,7 @@ index f4310743..4e43bfbc 100644
          // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
          // the tensor is duplicated
          // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
-@@ -1135,22 +1128,38 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1122,22 +1115,38 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                      break;
              }
  
@@ -929,10 +929,10 @@ index f4310743..4e43bfbc 100644
          if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
              const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 4c10e412..3c65b60e 100644
+index b100f601..07d3f4f3 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -1393,13 +1393,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1398,13 +1398,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
              }
  
              // MoE expert weight scales (per-expert, shape {n_expert})
@@ -2347,5 +2347,5 @@ index 26169320..50e25c8f 100644
          const char * path,
          struct skippy_model_info ** out_info,
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

@@ -1,7 +1,7 @@
-From dfe419c41613f4cd640998b391899a145abdfc10 Mon Sep 17 00:00:00 2001
+From 44757d2d77edf487486a1eaff8882491ff64a2df Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 14 Jul 2026 09:15:57 +1000
-Subject: [PATCH 19/24] ggml: add GLM-DSA sparse execution primitives
+Subject: [PATCH 21/41] ggml: add GLM-DSA sparse execution primitives
 
 ---
  ggml/include/ggml-rpc.h                   |     2 +-
@@ -5169,7 +5169,7 @@ index b36fa811..03567502 100644
  void   ggml_metal_buffer_set_tensor   (ggml_metal_buffer_t buf, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
  void   ggml_metal_buffer_get_tensor   (ggml_metal_buffer_t buf, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size);
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 80e47f2c..8becf966 100644
+index 4edd77c6..4531d2d5 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -2,7 +2,6 @@
@@ -5196,7 +5196,7 @@ index 80e47f2c..8becf966 100644
  void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder) {
      [encoder->obj endEncoding];
  }
-@@ -1272,6 +1280,137 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1273,6 +1281,137 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
              return true;
          case GGML_OP_GATED_DELTA_NET:
              return has_simdgroup_reduction && op->src[2]->ne[0] % 32 == 0;
@@ -5334,7 +5334,7 @@ index 80e47f2c..8becf966 100644
          case GGML_OP_SOLVE_TRI:
          case GGML_OP_MUL_MAT:
          case GGML_OP_MUL_MAT_ID:
-@@ -1411,6 +1550,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1412,6 +1551,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
  
      // pointers to global device
      ggml_metal_device_t dev;
@@ -5342,7 +5342,7 @@ index 80e47f2c..8becf966 100644
  };
  
  static void ggml_metal_log_allocated_size(id<MTLDevice> device, size_t size_aligned) {
-@@ -1515,7 +1655,6 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
+@@ -1516,7 +1656,6 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
      ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
  
      res->dev = dev;
@@ -5350,7 +5350,7 @@ index 80e47f2c..8becf966 100644
      const size_t size_page = sysconf(_SC_PAGESIZE);
  
      size_t size_aligned = size;
-@@ -1585,7 +1724,6 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
+@@ -1586,7 +1725,6 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
      ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
  
      res->dev = dev;
@@ -5358,7 +5358,7 @@ index 80e47f2c..8becf966 100644
      res->all_data = ptr;
      res->all_size = size;
  
-@@ -1913,3 +2051,11 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
+@@ -1914,3 +2052,11 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
  
      return res;
  }
@@ -31466,7 +31466,7 @@ index a7d1fe7d..cdc85b08 100644
  
  struct ggml_hash_set ggml_hash_set_new(size_t size) {
 diff --git a/src/llama-hparams.h b/src/llama-hparams.h
-index 8be5f28f..92626b4d 100644
+index 747754fc..6cca1d33 100644
 --- a/src/llama-hparams.h
 +++ b/src/llama-hparams.h
 @@ -226,6 +226,10 @@ struct llama_hparams {
@@ -31478,7 +31478,8 @@ index 8be5f28f..92626b4d 100644
 +    bool     indexer_types_present = false;
 +    std::array<int32_t, LLAMA_MAX_LAYERS> indexer_types; // -1 unknown, 0 shared, 1 full
  
-     // DeepSeek-V4
-     uint32_t dsv4_o_group_count        = 0;
+     // Indexer is "full" (1) or "shared" (0)
+     // Shared indexers reuse top-k from previous full layer
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
+

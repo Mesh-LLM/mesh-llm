@@ -1,7 +1,7 @@
-From 8797805107cd1e49bc018a498ce9d008493000f8 Mon Sep 17 00:00:00 2001
+From 4ab2538c885d9b05d131f1bc82bf65d82bce8f2b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 19 Jul 2026 16:31:29 +1000
-Subject: [PATCH 26/36] ggml: add GLM MoE Metal selector diagnostics
+Subject: [PATCH 29/41] ggml: add GLM MoE Metal selector diagnostics
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 75 +++++++++++++++++++++-----
@@ -139,10 +139,10 @@ index 684efdc6..ab41e1ec 100644
          fusion_scratch : ggml_metal_get_buffer_id(weighted_sum);
  
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 56fb7b23..53489947 100644
+index cc7703c8..50ec5225 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
-@@ -9575,6 +9575,7 @@ struct test_glm_ffn_consumer : public test_case {
+@@ -9578,6 +9578,7 @@ struct test_glm_ffn_consumer : public test_case {
      ggml_tensor * selected_experts = nullptr;
      ggml_tensor * weights = nullptr;
      ggml_tensor * routed_out = nullptr;
@@ -150,7 +150,7 @@ index 56fb7b23..53489947 100644
      ggml_tensor * out = nullptr;
  
      test_glm_ffn_consumer(
-@@ -9762,9 +9763,9 @@ struct test_glm_ffn_consumer : public test_case {
+@@ -9765,9 +9766,9 @@ struct test_glm_ffn_consumer : public test_case {
              }
          }
  
@@ -163,7 +163,7 @@ index 56fb7b23..53489947 100644
      }
  
      ggml_tensor * build_graph(ggml_context * ctx) override {
-@@ -9851,6 +9852,36 @@ struct test_glm_ffn_two_phase_consumer : public test_glm_ffn_consumer {
+@@ -9854,6 +9855,36 @@ struct test_glm_ffn_two_phase_consumer : public test_glm_ffn_consumer {
      }
  };
  
@@ -200,7 +200,7 @@ index 56fb7b23..53489947 100644
  struct test_glm_ffn_dual_lane_consumer : public test_glm_ffn_consumer {
      const bool dual_lane;
      const char * variant;
-@@ -15150,6 +15181,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -15154,6 +15185,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_glm_ffn_chain_native_down(true, "CANDIDATE"));
      test_cases.emplace_back(new test_glm_ffn_chain_two_phase(true, "CANDIDATE"));
      test_cases.emplace_back(new test_glm_ffn_two_phase_consumer(true, "CANDIDATE"));
@@ -208,7 +208,7 @@ index 56fb7b23..53489947 100644
      test_cases.emplace_back(new test_glm_ffn_dual_lane_consumer(true, "CANDIDATE"));
  
      return test_cases;
-@@ -15520,6 +15552,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -15524,6 +15556,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                  GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, 6144, 2048, true, true));
      test_cases.emplace_back(new test_glm_ffn_consumer(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K,
                  GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, 6144, 2048, true, false, true));
@@ -217,5 +217,5 @@ index 56fb7b23..53489947 100644
                  GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, 6144, 2048, true, false));
      test_cases.emplace_back(new test_glm_ffn_consumer(GGML_TYPE_Q1_0, GGML_TYPE_Q1_0, GGML_TYPE_Q1_0,
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

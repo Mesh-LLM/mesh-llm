@@ -1,17 +1,17 @@
-From 37ee00411144af6570074a352ac8584ab8527ad6 Mon Sep 17 00:00:00 2001
+From 671ac01df600d87fd821a0510d49374f9b4e95d8 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@mesh-llm.local>
 Date: Sun, 19 Jul 2026 00:00:00 +1000
-Subject: [PATCH 28/36] tests: cover full GLM MoE selected chain
+Subject: [PATCH 31/41] tests: cover full GLM MoE selected chain
 
 ---
  tests/test-backend-ops.cpp | 5 ++++-
  1 file changed, 4 insertions(+), 1 deletion(-)
 
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 53489947..2aaded1c 100644
+index 50ec5225..32f1215d 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
-@@ -7824,7 +7824,9 @@ struct test_glm_moe_selected_chain : public test_case {
+@@ -7826,7 +7826,9 @@ struct test_glm_moe_selected_chain : public test_case {
          }
      }
  
@@ -22,7 +22,7 @@ index 53489947..2aaded1c 100644
  
      bool eval_perf(ggml_backend_t backend, const char * op_names_filter, printer * output_printer) override {
          scoped_test_env motif_reference_env("GGML_METAL_ENABLE_GLM_MOE_DECODE_MOTIF_REFERENCE", "1");
-@@ -14945,6 +14947,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -14949,6 +14951,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(true,  "FIXED_IDS"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_B"));
      test_cases.emplace_back(new test_glm_moe_selected_chain(1, false, "CORRECTNESS"));
@@ -31,5 +31,5 @@ index 53489947..2aaded1c 100644
          test_cases.emplace_back(new test_glm_attention_projection_chain(type, 2));
      }
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

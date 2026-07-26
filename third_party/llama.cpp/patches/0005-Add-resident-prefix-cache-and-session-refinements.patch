@@ -1,7 +1,7 @@
-From 6ef5b5c66a88af43d7f4d853a848ce638d0db170 Mon Sep 17 00:00:00 2001
+From 3d670a04e3951b8d1d85e7983118f7e7bd998e40 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 05/16] Add resident prefix cache and session refinements
+Subject: [PATCH 05/41] Add resident prefix cache and session refinements
 
 Squashes resident prefix cache support, exact-prefix state restoration, borrowed prefix sessions, lazy generation signals, single-token allocation avoidance, server-like thread defaults, prefix cache borrowing, lane preservation, and recurrent-state remapping.
 ---
@@ -196,10 +196,10 @@ index 3ffdb879..deb5151e 100644
          struct skippy_model * model,
          const char * text,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index bbcd5b67..539666f9 100644
+index f74bb495..41a4e0de 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1222,6 +1222,363 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
+@@ -1223,6 +1223,363 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
      return layers[ikv].k;
  }
  
@@ -1569,5 +1569,5 @@ index e4d08ee4..f078f0b9 100644
          struct skippy_session * session,
          uint64_t * out_token_count,
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

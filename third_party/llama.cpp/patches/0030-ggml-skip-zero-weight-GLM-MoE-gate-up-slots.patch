@@ -1,14 +1,14 @@
-From 4523e19eecd43c47ca650939bb0c2dfc87c43920 Mon Sep 17 00:00:00 2001
+From 3f84ff9f880283f2d16ef1c6d48a918d1f3f7b2d Mon Sep 17 00:00:00 2001
 From: James Dumay <james@mesh-llm.local>
 Date: Sun, 19 Jul 2026 00:00:00 +1000
-Subject: [PATCH 27/36] ggml: skip zero-weight GLM MoE gate-up slots
+Subject: [PATCH 30/41] ggml: skip zero-weight GLM MoE gate-up slots
 
 ---
  ggml/src/ggml-metal/ggml-metal.metal | 14 ++++++++------
  1 file changed, 8 insertions(+), 6 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
-index b7b7e065..1b62d0dc 100644
+index 7a6df158..b5e37c11 100644
 --- a/ggml/src/ggml-metal/ggml-metal.metal
 +++ b/ggml/src/ggml-metal/ggml-metal.metal
 @@ -10773,9 +10773,15 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_dual_impl(
@@ -41,5 +41,5 @@ index b7b7e065..1b62d0dc 100644
          const float up_value = simd_sum(sum_up[row]);
          const float gate_value = simd_sum(sum_gate[row]);
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

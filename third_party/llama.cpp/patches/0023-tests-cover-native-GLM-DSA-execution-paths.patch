@@ -1,7 +1,7 @@
-From 356609cab13dccdfb2069bcd739a3fff39e55e66 Mon Sep 17 00:00:00 2001
+From ed2fd3ec3e8db6033ba86738eabb385bafb54aa7 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 14 Jul 2026 09:16:32 +1000
-Subject: [PATCH 21/24] tests: cover native GLM-DSA execution paths
+Subject: [PATCH 23/41] tests: cover native GLM-DSA execution paths
 
 ---
  scripts/glm52-phase-d-policy-report.sh |  287 ++
@@ -1262,7 +1262,7 @@ index 00000000..8a1e0f38
 +
 +echo "wrote ${summary}"
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index e3553c5e..18e06172 100644
+index e7cd6d0c..0a7c2997 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
 @@ -51,6 +51,87 @@
@@ -1714,7 +1714,7 @@ index e3553c5e..18e06172 100644
  // GGML_OP_GATED_LINEAR_ATTN
  struct test_gla : public test_case {
      const ggml_type type;
-@@ -6060,120 +6373,4029 @@ struct test_topk_moe : public test_case {
+@@ -6062,120 +6375,4029 @@ struct test_topk_moe : public test_case {
      }
  };
  
@@ -5830,7 +5830,7 @@ index e3553c5e..18e06172 100644
              out = ggml_add(ctx, out, bias2);
  
              ggml_set_name(out, "out");
-@@ -6747,20 +10969,618 @@ struct test_timestep_embedding : public test_case {
+@@ -6749,20 +10971,618 @@ struct test_timestep_embedding : public test_case {
          return VARS_TO_STR4(type, ne_a, dim, max_period);
      }
  
@@ -6458,7 +6458,7 @@ index e3553c5e..18e06172 100644
  };
  
  // GGML_OP_LEAKY_RELU
-@@ -6912,6 +11732,424 @@ struct test_flash_attn_ext : public test_case {
+@@ -6914,6 +11734,424 @@ struct test_flash_attn_ext : public test_case {
      }
  };
  
@@ -6883,7 +6883,7 @@ index e3553c5e..18e06172 100644
  // GGML_OP_CROSS_ENTROPY_LOSS
  struct test_cross_entropy_loss : public test_case {
      const ggml_type type;
-@@ -8097,6 +13335,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -8099,6 +13337,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      }
  
      test_cases.emplace_back(new test_get_rows(GGML_TYPE_F32, 1, 8, 2, 1, 1, false));
@@ -6897,7 +6897,7 @@ index e3553c5e..18e06172 100644
      for (ggml_type type : all_types) {
          for (int b : {1, 7}) {
              for (bool v : {false, true}) {
-@@ -8805,6 +14050,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -8807,6 +14052,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 512, 5120, {128, 1}, {1, 1}));
  #endif
  
@@ -6916,7 +6916,7 @@ index e3553c5e..18e06172 100644
      for (ggml_type type_a : all_types) {
          for (int i = 1; i < 10; ++i) {
              test_cases.emplace_back(new test_mul_mat(type_a,    GGML_TYPE_F32, 16,  i, 256, { 1,  1}, {1, 1}));
-@@ -9601,6 +14858,218 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -9604,6 +14861,218 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
              }
          }
      }
@@ -7135,7 +7135,7 @@ index e3553c5e..18e06172 100644
  
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
-@@ -9668,6 +15137,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -9671,6 +15140,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
          }
      }
  
@@ -7146,7 +7146,7 @@ index e3553c5e..18e06172 100644
      return test_cases;
  }
  #ifdef _MSC_VER
-@@ -9824,6 +15297,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -9827,6 +15300,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
          }
      }
  
@@ -7168,7 +7168,7 @@ index e3553c5e..18e06172 100644
      // qwen3-30b-a3b
      for (int bs : {1, 4, 8, 32, 64, 128, 256, 512}) {
          for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XS}) {
-@@ -9843,6 +15331,266 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -9846,6 +15334,266 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
          }
      }
  
@@ -7436,7 +7436,7 @@ index e3553c5e..18e06172 100644
      // gpt-oss-20b
      for (int bs : {1, 4, 8, 512}) {
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 57d33a62..fe0accc8 100644
+index 86c3051c..a2e79125 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -14,6 +14,7 @@
@@ -8433,7 +8433,7 @@ index 57d33a62..fe0accc8 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -429,6 +1360,20 @@ static bool arch_supported(const llm_arch arch) {
+@@ -430,6 +1361,20 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -8454,7 +8454,7 @@ index 57d33a62..fe0accc8 100644
  static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
      struct user_data_t {
          struct {
-@@ -542,6 +1487,33 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -543,6 +1488,33 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
      const std::string template_row_res = "%15s %10s|%20s|\n";
  
      bool all_ok = true;
@@ -8488,7 +8488,7 @@ index 57d33a62..fe0accc8 100644
      common_log_flush(common_log_main());
      printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
      printf("|");
-@@ -591,6 +1563,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -592,6 +1564,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                  std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                  char nmse_str[12] = {0};
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
@@ -8499,4 +8499,5 @@ index 57d33a62..fe0accc8 100644
                  skip = true; // FIXME
  #endif // GGML_USE_WEBGPU
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
+

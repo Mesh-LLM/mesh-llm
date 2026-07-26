@@ -1,0 +1,31 @@
+From f0117fd52d20ed468656025d5156bae31621f99e Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 26 Jul 2026 19:30:12 +1000
+Subject: [PATCH 41/41] Adapt Skippy model loading to load modes
+
+---
+ src/skippy.cpp | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index a8cc03cb..9bd81828 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -950,11 +950,10 @@ static void skippy_apply_model_load_memory_config(
+     if (config == nullptr) {
+         return;
+     }
+-    if (config->has_mmap_override) {
+-        params.use_mmap = config->use_mmap;
+-    }
+     if (config->use_mlock) {
+-        params.use_mlock = true;
++        params.load_mode = LLAMA_LOAD_MODE_MLOCK;
++    } else if (config->has_mmap_override) {
++        params.load_mode = config->use_mmap ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
+     }
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

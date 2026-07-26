@@ -1,7 +1,7 @@
-From 6208005ffe6bdc5b2d187f2d6c31138773bfdbc9 Mon Sep 17 00:00:00 2001
+From 7ff6f97a583d12a0d49d8022ac5244a5cd3fe9bd Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 13:10:00 +1000
-Subject: [PATCH 33/36] ggml: make GLM MoE roofline honor active experts
+Subject: [PATCH 36/41] ggml: make GLM MoE roofline honor active experts
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 18 ++++++++++++------
@@ -61,5 +61,5 @@ index 9469192d..2121075e 100644
  
      return motif.n_fuse;
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

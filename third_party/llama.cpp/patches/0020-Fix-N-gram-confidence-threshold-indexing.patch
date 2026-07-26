@@ -1,7 +1,7 @@
-From ce5f8e97f7be0a9e3ce2f6a5f97ebc035a749cf1 Mon Sep 17 00:00:00 2001
+From 752154d65a1c56c0364ffe46639c81de991a04c7 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 21 Jul 2026 02:44:00 +1000
-Subject: [PATCH] Fix N-gram confidence threshold indexing
+Subject: [PATCH 20/41] Fix N-gram confidence threshold indexing
 
 When the configured N-gram range starts above one, ngrams_primary is a
 zero-based slice of that range. Indexing the confidence tables directly by
@@ -58,5 +58,5 @@ index a0447210..ce5f8e97 100644
          if (drafted_token == LLAMA_TOKEN_NULL) {
              drafted_token = try_draft(nc_static, ngram_static);
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

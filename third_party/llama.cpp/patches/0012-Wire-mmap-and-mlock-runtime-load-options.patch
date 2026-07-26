@@ -1,7 +1,7 @@
-From 1bd70926c77b6c94f59829bd4a38bf01adf13d47 Mon Sep 17 00:00:00 2001
+From e39fcacb938d0a10c202887f24456a560df5a1a0 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 1 Jul 2026 23:52:26 -0400
-Subject: [PATCH 12/16] Wire mmap and mlock runtime load options
+Subject: [PATCH 12/41] Wire mmap and mlock runtime load options
 
 ---
  include/skippy.h |  3 +++
@@ -64,5 +64,5 @@ index 8af180e5..fcd8a48f 100644
              params.use_extra_bufts = false;
          }
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

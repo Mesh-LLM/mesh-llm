@@ -1,7 +1,7 @@
-From 8fec61c2696f179dbe598552bef7da0237ebedbb Mon Sep 17 00:00:00 2001
+From 37d130da4b51a77076cf544c4f24de055627f40c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 10:44:00 +1000
-Subject: [PATCH 32/36] ggml: honor explicit Q2 gate/up Metal variant flags
+Subject: [PATCH 35/41] ggml: honor explicit Q2 gate/up Metal variant flags
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 12 +++++++++++-
@@ -38,5 +38,5 @@ index 2e42a168..9469192d 100644
          pair_sg_slot8_requested;
      const bool pair_sg_slot2 = pair_sg && dst->type == GGML_TYPE_F32 &&
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 
