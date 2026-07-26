@@ -15,7 +15,6 @@ const DESKTOP_SIDEBAR_QUERY = '(min-width: 1024px)'
 const CHAT_LAYOUT_FALLBACK_HEIGHT = 'calc(100dvh - 180px)'
 const CHAT_LAYOUT_MIN_HEIGHT = 320
 const CHAT_LAYOUT_KEYBOARD_GUTTER = 12
-// Keep this above the transcript's bottom padding: scrollIntoView aligns the anchor above that padding.
 const CHAT_STICK_TO_BOTTOM_THRESHOLD = 64
 
 type ChatLayoutStyle = CSSProperties & {
@@ -32,7 +31,6 @@ type ChatLayoutProps = {
   children: ReactNode
   composer: ReactNode
   onMessageAreaClick?: () => void
-  /** Change this value to resume following the latest message after an explicit user action. */
   stickToBottomKey?: string
 }
 
