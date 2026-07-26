@@ -1182,7 +1182,10 @@ fn flash_attn_name(value: FlashAttentionArg) -> &'static str {
 mod tests {
     use std::time::Duration;
 
-    use super::{percentile, timing_shape, timing_stats, verified_tokens_per_sec};
+    use super::{
+        VerifyTargetPlan, first_mismatch_position, percentile, timing_shape, timing_stats,
+        verified_tokens_per_sec,
+    };
 
     #[test]
     fn timing_stats_sorts_and_summarizes_microseconds() {
@@ -1226,5 +1229,30 @@ mod tests {
         assert_eq!(shape.first_half.avg_us, 15.0);
         assert_eq!(shape.second_half.avg_us, 40.0);
         assert_eq!(shape.second_half_avg_vs_first_half_avg, 40.0 / 15.0);
+    }
+
+    #[test]
+    fn target_plan_builds_required_verification_widths() {
+        let plan = VerifyTargetPlan {
+            current: 10,
+            targets: (20..=40).collect(),
+        };
+
+        for width in [1, 2, 4, 9] {
+            let tokens = plan.verify_tokens_for_width(width).unwrap();
+            let expected = plan.expected_for_width(width).unwrap();
+
+            assert_eq!(tokens.len(), width);
+            assert_eq!(expected.len(), width);
+            assert_eq!(tokens[0], 10);
+            assert_eq!(&tokens[1..], &expected[..width.saturating_sub(1)]);
+        }
+    }
+
+    #[test]
+    fn mismatch_position_reports_value_and_length_differences() {
+        assert_eq!(first_mismatch_position(&[1, 2, 3], &[1, 9, 3]), Some(1));
+        assert_eq!(first_mismatch_position(&[1, 2], &[1, 2, 3]), Some(2));
+        assert_eq!(first_mismatch_position(&[1, 2, 3], &[1, 2, 3]), None);
     }
 }
