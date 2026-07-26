@@ -4,6 +4,7 @@ use crate::binary_transport::WireCondition;
 use crate::cli::ServeOpenAiArgs;
 use crate::config::load_json;
 use crate::config::validate_config;
+use crate::frontend::GenerationReceiptConfig;
 use crate::frontend::OpenAiGuardrailsConfig;
 use crate::frontend::OpenAiGuardrailsStatus;
 use crate::frontend::admission::GenerationTokenBudget;
@@ -138,6 +139,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         generation_queue_limit: args.generation_concurrency,
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
+        generation_receipt: None,
         kv,
         decode_batcher,
         decode_frame_batcher,
@@ -187,6 +189,7 @@ pub struct EmbeddedOpenAiArgs {
     pub prediction_returns: Option<Arc<PredictionReturnHub>>,
     pub telemetry: Telemetry,
     pub hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub generation_receipt: Option<GenerationReceiptConfig>,
     pub openai_guardrails: Option<OpenAiGuardrailsConfig>,
 }
 
@@ -297,6 +300,9 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
     if args.native_mtp_draft_model_path.is_some() && !args.native_mtp_enabled {
         bail!("native MTP must be enabled when an MTP draft model is set");
     }
+    if args.generation_receipt.is_some() && args.config.downstream.is_some() {
+        bail!("generation receipts are supported only for local single-stage execution");
+    }
     let speculative_windows_enabled = args.draft_model_path.is_some()
         || args.speculative.native_mtp.enabled
         || args.speculative.ngram.is_some();
@@ -387,6 +393,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         generation_queue_limit: args.generation_concurrency,
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: args.hook_policy,
+        generation_receipt: args.generation_receipt,
         kv,
         decode_batcher,
         decode_frame_batcher,

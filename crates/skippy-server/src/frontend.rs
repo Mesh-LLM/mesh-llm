@@ -8,6 +8,7 @@ mod embedded_execution;
 mod embedded_generation;
 mod generation;
 mod generation_flow;
+mod generation_receipt;
 mod guardrails;
 mod local_generation;
 mod native_mtp;
@@ -34,6 +35,10 @@ pub use self::generation::{
     EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat,
     embedded_openai_backend, embedded_openai_router, serve_embedded_openai,
     serve_embedded_openai_with_shutdown, serve_openai,
+};
+pub use self::generation_receipt::{
+    GenerationReceipt, GenerationReceiptConfig, GenerationReceiptSink, GenerationStateDigest,
+    GenerationTermination, generation_token_id_digest,
 };
 pub use self::guardrails::{
     OpenAiGuardrailsConfig, OpenAiGuardrailsStatus, OpenAiGuardrailsTarget,

@@ -27,9 +27,10 @@ pub use embedded::{
 pub use frontend::{
     CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs,
     EmbeddedOpenAiBackend, EmbeddedOpenAiRequestDefaults, EmbeddedReasoningBudget,
-    EmbeddedReasoningEnabled, EmbeddedReasoningFormat, NativeMtpProposalConfig,
+    EmbeddedReasoningEnabled, EmbeddedReasoningFormat, GenerationReceipt, GenerationReceiptConfig,
+    GenerationReceiptSink, GenerationStateDigest, GenerationTermination, NativeMtpProposalConfig,
     NgramExtensionConfig, NgramProposalConfig, NgramProposerKind, OpenAiGuardrailsConfig,
     OpenAiGuardrailsStatus, OpenAiGuardrailsTarget, SpeculativeDecodeConfig, VerifyWindowConfig,
-    embedded_openai_backend,
+    embedded_openai_backend, generation_token_id_digest,
 };
 pub use skippy_protocol::StageConfig;

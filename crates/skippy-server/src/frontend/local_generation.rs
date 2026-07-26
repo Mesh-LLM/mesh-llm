@@ -8,6 +8,7 @@ use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::decode_token_phase;
+use crate::frontend::generation_receipt::GenerationReceiptObservation;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
 use crate::kv_integration::proactive_eviction_attrs;
@@ -15,6 +16,7 @@ use crate::kv_integration::proactive_eviction_error_kind;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
 use serde_json::json;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 impl StageOpenAiBackend {
@@ -24,7 +26,33 @@ impl StageOpenAiBackend {
         mut on_token: impl FnMut(i32) -> OpenAiResult<TokenControl>,
     ) -> OpenAiResult<GenerationCacheStats> {
         let session_id = request.ids.session_label.clone();
+        let receipt_request_id = request.ids.request_id;
+        let receipt_session_id = request.ids.session_id;
+        let receipt_prompt_token_ids = request.prompt_token_ids;
+        let receipt_observation = self.generation_receipt.as_ref().map(|_| {
+            RefCell::new(Some(GenerationReceiptObservation::new(
+                usize::try_from(request.max_tokens)
+                    .expect("supported targets represent u32 token budgets as usize"),
+            )))
+        });
+        let mut receipt_cancelled = false;
+        let mut receipt_model_generation_elapsed = None;
         let mut cache_stats = GenerationCacheStats::default();
+        let mut emit_token = |token_id| {
+            if let Some(observation) = receipt_observation.as_ref()
+                && let Some(observation) = observation.borrow_mut().as_mut()
+            {
+                observation.record_token(token_id)?;
+            }
+            let control = on_token(token_id)?;
+            if control == TokenControl::Stop
+                && let Some(observation) = receipt_observation.as_ref()
+                && let Some(observation) = observation.borrow_mut().as_mut()
+            {
+                observation.mark_callback_stop();
+            }
+            Ok(control)
+        };
         let result = (|| {
             let mut prompt_prefill_sample = None;
             let mut chat_sampling_configured = false;
@@ -522,7 +550,7 @@ impl StageOpenAiBackend {
             if let Some(predicted) = prompt_prefill_sample {
                 current = predicted;
                 decoded_tokens += 1;
-                stopped = on_token(current)? == TokenControl::Stop;
+                stopped = emit_token(current)? == TokenControl::Stop;
             }
             let mut hook_request = request.hook_request;
             let hook_runtime = request.hook_runtime;
@@ -538,6 +566,7 @@ impl StageOpenAiBackend {
                     .cancellation
                     .is_some_and(openai_frontend::CancellationToken::is_cancelled)
                 {
+                    receipt_cancelled = true;
                     break;
                 }
                 let decode_step = decoded_tokens;
@@ -695,7 +724,7 @@ impl StageOpenAiBackend {
                         .insert("llama_stage.message_kind".to_string(), json!("DecodeToken"));
                     self.emit_openai_phase("stage.openai_decode_token", token_timer, token_attrs);
                 }
-                if on_token(current)? == TokenControl::Stop {
+                if emit_token(current)? == TokenControl::Stop {
                     break;
                 }
             }
@@ -741,11 +770,40 @@ impl StageOpenAiBackend {
             request.speculative.insert_telemetry_attrs(&mut attrs);
             let native_mtp_stats = native_mtp.stats();
             cache_stats.native_mtp_stats = native_mtp_stats;
-            cache_stats.predicted_ms = decode_timer.elapsed_ms();
+            let model_generation_elapsed = decode_timer.start_instant.elapsed();
+            cache_stats.predicted_ms = model_generation_elapsed.as_secs_f64() * 1_000.0;
+            receipt_model_generation_elapsed = Some(model_generation_elapsed);
             native_mtp_stats.insert_attrs(&mut attrs);
             self.emit_openai_summary("stage.openai_decode", decode_timer, attrs);
             Ok(())
         })();
+        let receipt_observation = receipt_observation.as_ref().and_then(|observation| {
+            let mut slot = observation.borrow_mut();
+            if let Some(observation) = slot.as_mut() {
+                if receipt_cancelled {
+                    observation.mark_cancelled();
+                }
+                if let Some(elapsed) = receipt_model_generation_elapsed {
+                    observation.set_model_generation_elapsed(elapsed);
+                }
+            }
+            slot.take()
+        });
+        let receipt_result = if result.is_ok() {
+            match (self.generation_receipt.as_ref(), receipt_observation) {
+                (Some(config), Some(observation)) => self.deliver_local_generation_receipt(
+                    config,
+                    &session_id,
+                    receipt_request_id,
+                    receipt_session_id,
+                    receipt_prompt_token_ids,
+                    observation,
+                ),
+                _ => Ok(()),
+            }
+        } else {
+            Ok(())
+        };
         let lock_timer = PhaseTimer::start();
         if let Ok(mut runtime) = self.runtime.lock() {
             let runtime_lock_wait_ms = lock_timer.elapsed_ms();
@@ -780,6 +838,7 @@ impl StageOpenAiBackend {
             }
         }
         result?;
+        receipt_result?;
         Ok(cache_stats)
     }
 }

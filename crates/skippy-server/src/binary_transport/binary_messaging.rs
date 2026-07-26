@@ -173,6 +173,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                 prediction_returns: Some(openai_prediction_returns),
                 telemetry: openai_telemetry,
                 hook_policy: None,
+                generation_receipt: None,
                 openai_guardrails: Some(frontend::OpenAiGuardrailsConfig::disabled_for_skippy()),
             })
             .await

@@ -21,6 +21,11 @@ pub struct DecodeBatchRequest<'a> {
     pub sampling: Option<&'a SamplingConfig>,
 }
 
+fn native_position_to_u64(native_position: i32) -> Result<u64> {
+    u64::try_from(native_position)
+        .map_err(|_| anyhow!("skippy session has no valid native position"))
+}
+
 // The experimental C ABI owns synchronization internally for model/session use.
 // Rust stage-server access is additionally serialized behind a Mutex.
 unsafe impl Send for StageSession {}
@@ -28,6 +33,12 @@ unsafe impl Send for StageSession {}
 impl StageSession {
     pub fn token_count(&self) -> u64 {
         self.token_count
+    }
+
+    /// Returns the position reported by the native runtime.
+    pub fn native_position(&self) -> Result<u64> {
+        let native_position = unsafe { skippy_ffi::skippy_session_position(self.raw) };
+        native_position_to_u64(native_position)
     }
 
     pub fn batch_size(&self) -> Result<usize> {
@@ -358,5 +369,22 @@ impl Drop for StageSession {
                 let _ = skippy_ffi::skippy_session_free(self.raw, ptr::null_mut());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::native_position_to_u64;
+
+    #[test]
+    fn native_position_conversion_accepts_non_negative_positions() {
+        assert_eq!(native_position_to_u64(0).unwrap(), 0);
+        assert_eq!(native_position_to_u64(i32::MAX).unwrap(), i32::MAX as u64);
+    }
+
+    #[test]
+    fn native_position_conversion_rejects_negative_positions() {
+        assert!(native_position_to_u64(-1).is_err());
+        assert!(native_position_to_u64(i32::MIN).is_err());
     }
 }

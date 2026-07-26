@@ -3,6 +3,7 @@ use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::PredictionReturnReceiver;
 use crate::binary_transport::WireCondition;
 use crate::frontend::EmbeddedOpenAiRequestDefaults;
+use crate::frontend::GenerationReceiptConfig;
 use crate::frontend::NativeMtpDraft;
 use crate::frontend::NativeMtpStats;
 use crate::frontend::SpeculativeDecodeConfig;
@@ -59,6 +60,7 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) generation_queue_limit: usize,
     pub(in crate::frontend) generation_token_budget: Arc<GenerationTokenBudget>,
     pub(in crate::frontend) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub(in crate::frontend) generation_receipt: Option<GenerationReceiptConfig>,
     pub(in crate::frontend) kv: Option<Arc<KvStageIntegration>>,
     pub(in crate::frontend) decode_batcher: DecodeBatcher,
     pub(in crate::frontend) decode_frame_batcher: DecodeFrameBatcher,

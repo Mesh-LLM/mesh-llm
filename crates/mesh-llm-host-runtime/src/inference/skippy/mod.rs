@@ -470,6 +470,7 @@ fn embedded_openai_args_from(
         prediction_returns,
         telemetry,
         hook_policy,
+        generation_receipt: None,
         openai_guardrails: None,
     })
 }
