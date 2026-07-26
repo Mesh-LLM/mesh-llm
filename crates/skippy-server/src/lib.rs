@@ -29,7 +29,9 @@ pub use frontend::{
     EmbeddedOpenAiBackend, EmbeddedOpenAiRequestDefaults, EmbeddedReasoningBudget,
     EmbeddedReasoningEnabled, EmbeddedReasoningFormat, GenerationReceipt, GenerationReceiptConfig,
     GenerationReceiptSink, GenerationStateDigest, GenerationTermination, NativeMtpProposalConfig,
-    NgramExtensionConfig, NgramProposalConfig, NgramProposerKind, OpenAiGuardrailsConfig,
+    LinearProposal, LinearProposalDiscardReason, LinearProposalDisposition, LinearProposalIngress,
+    LinearProposalIngressConfig, LinearProposalQuery, LinearProposalReceipt, NgramExtensionConfig,
+    NgramProposalConfig, NgramProposerKind, OpaqueProposalDecisionId, OpenAiGuardrailsConfig,
     OpenAiGuardrailsStatus, OpenAiGuardrailsTarget, SpeculativeDecodeConfig, VerifyWindowConfig,
     embedded_openai_backend, generation_token_id_digest,
 };

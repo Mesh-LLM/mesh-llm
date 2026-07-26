@@ -1,3 +1,4 @@
+use crate::frontend::LinearProposalDisposition;
 use crate::frontend::NativeMtpDecodeOptions;
 use crate::frontend::NativeMtpDraft;
 use crate::frontend::NativeMtpDraftOrigin;
@@ -12,6 +13,10 @@ use crate::frontend::generation_receipt::{
     GenerationReceiptObservation, LocalGenerationReceiptDelivery,
     complete_generation_before_cleanup,
 };
+use crate::frontend::linear_proposal::{
+    execute_linear_proposal_with_terminal_discard, greedy_linear_proposal_admitted,
+    query_linear_proposal,
+};
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
 use crate::kv_integration::proactive_eviction_attrs;
@@ -22,7 +27,6 @@ use serde_json::json;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::time::Duration;
-
 pub(super) struct LocalGenerationReceiptFinalization<'a> {
     pub(super) session_label: &'a str,
     pub(super) request_id: u64,
@@ -570,6 +574,20 @@ impl StageOpenAiBackend {
             let hook_runtime = request.hook_runtime;
             let generation_hooks_active =
                 self.generation_hooks_active(&hook_request, hook_runtime.as_ref());
+            let linear_proposals_enabled = self.linear_proposal_ingress.is_some()
+                && !request.native_mtp_enabled
+                && !generation_hooks_active
+                && greedy_linear_proposal_admitted(
+                    request.sampling.enabled,
+                    request.chat_sampling_metadata,
+                );
+            let mut linear_context_tokens = linear_proposals_enabled.then(|| {
+                let mut tokens = request.prompt_token_ids.to_vec();
+                if decoded_tokens > 0 {
+                    tokens.push(current);
+                }
+                tokens
+            });
             let emit_token_debug = self.telemetry.is_debug_enabled();
             let native_mtp_options = NativeMtpDecodeOptions::from_config(request.speculative);
             let mut native_mtp = NativeMtpVerifier::default();
@@ -582,6 +600,92 @@ impl StageOpenAiBackend {
                 {
                     receipt_cancelled = true;
                     break;
+                }
+                if let (Some(config), Some(committed_token_ids)) = (
+                    self.linear_proposal_ingress.as_ref(),
+                    linear_context_tokens.as_mut(),
+                ) {
+                    let remaining_new_tokens =
+                        (request.max_tokens as usize).saturating_sub(decoded_tokens);
+                    let base_position = u64::try_from(
+                        request
+                            .prompt_token_ids
+                            .len()
+                            .saturating_sub(1)
+                            .checked_add(decoded_tokens)
+                            .ok_or_else(|| {
+                                OpenAiError::backend("linear proposal base position exceeds usize")
+                            })?,
+                    )
+                    .map_err(|_| {
+                        OpenAiError::backend("linear proposal base position exceeds u64")
+                    })?;
+                    if let Some(queried) = query_linear_proposal(
+                        config,
+                        request.ids.request_id,
+                        request.ids.session_id,
+                        decoded_tokens,
+                        committed_token_ids,
+                        remaining_new_tokens,
+                    )? {
+                        let decision_id = queried.proposal.decision_id.clone();
+                        let receipt = execute_linear_proposal_with_terminal_discard(
+                            config,
+                            &decision_id,
+                            || {
+                                self.execute_local_linear_proposal(
+                                    &session_id,
+                                    current,
+                                    base_position,
+                                    decoded_tokens,
+                                    request.max_tokens as usize,
+                                    queried,
+                                    &mut on_token,
+                                )
+                            },
+                        )?;
+                        config
+                            .source()
+                            .report(&receipt)
+                            .map_err(openai_backend_error)?;
+
+                        let proposal_runtime_lock_wait_ms =
+                            Duration::from_micros(receipt.runtime_lock_wait_us).as_secs_f64()
+                                * 1_000.0;
+                        let proposal_runtime_lock_hold_ms =
+                            Duration::from_micros(receipt.runtime_lock_hold_us).as_secs_f64()
+                                * 1_000.0;
+                        runtime_lock_wait_ms += proposal_runtime_lock_wait_ms;
+                        runtime_lock_wait_max_ms =
+                            runtime_lock_wait_max_ms.max(proposal_runtime_lock_wait_ms);
+                        runtime_lock_hold_ms += proposal_runtime_lock_hold_ms;
+                        runtime_lock_hold_max_ms =
+                            runtime_lock_hold_max_ms.max(proposal_runtime_lock_hold_ms);
+                        runtime_lock_acquires =
+                            runtime_lock_acquires.saturating_add(receipt.runtime_lock_acquires);
+
+                        decoded_tokens = decoded_tokens
+                            .checked_add(receipt.committed_tokens.len())
+                            .ok_or_else(|| {
+                                OpenAiError::backend("linear proposal decode count overflow")
+                            })?;
+                        current = *receipt.committed_tokens.last().ok_or_else(|| {
+                            OpenAiError::backend("linear proposal receipt committed no tokens")
+                        })?;
+                        committed_token_ids.extend_from_slice(&receipt.committed_tokens);
+                        let stopped_by_proposal =
+                            receipt.disposition == LinearProposalDisposition::Stopped;
+                        if emit_token_debug {
+                            let mut proposal_attrs = self.openai_attrs(request.ids);
+                            receipt.insert_telemetry_attrs(&mut proposal_attrs);
+                            self.telemetry
+                                .emit_debug("stage.openai_linear_proposal", proposal_attrs);
+                        }
+                        if stopped_by_proposal || decoded_tokens >= request.max_tokens as usize {
+                            break;
+                        }
+                        continue;
+                    }
                 }
                 let decode_step = decoded_tokens;
                 let token_timer = PhaseTimer::start();
@@ -693,6 +797,9 @@ impl StageOpenAiBackend {
                     continue;
                 }
                 decoded_tokens += 1;
+                if let Some(committed_token_ids) = linear_context_tokens.as_mut() {
+                    committed_token_ids.push(current);
+                }
                 if emit_token_debug {
                     let mut token_attrs = self.openai_attrs(request.ids);
                     token_attrs.insert("llama_stage.decode_step".to_string(), json!(decode_step));

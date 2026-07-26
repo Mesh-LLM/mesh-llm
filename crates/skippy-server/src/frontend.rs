@@ -10,6 +10,7 @@ mod generation;
 mod generation_flow;
 mod generation_receipt;
 mod guardrails;
+mod linear_proposal;
 mod local_generation;
 mod native_mtp;
 mod prefill;
@@ -42,6 +43,11 @@ pub use self::generation_receipt::{
 };
 pub use self::guardrails::{
     OpenAiGuardrailsConfig, OpenAiGuardrailsStatus, OpenAiGuardrailsTarget,
+};
+pub use self::linear_proposal::{
+    LinearProposal, LinearProposalDiscardReason, LinearProposalDisposition, LinearProposalIngress,
+    LinearProposalIngressConfig, LinearProposalQuery, LinearProposalReceipt,
+    OpaqueProposalDecisionId,
 };
 pub use self::speculative::{
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,

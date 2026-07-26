@@ -535,6 +535,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             telemetry,
             hook_policy,
             generation_receipt: None,
+            linear_proposal_ingress: None,
             openai_guardrails: None,
         }
     }

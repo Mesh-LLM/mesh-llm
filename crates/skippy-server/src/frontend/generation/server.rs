@@ -5,6 +5,7 @@ use crate::cli::ServeOpenAiArgs;
 use crate::config::load_json;
 use crate::config::validate_config;
 use crate::frontend::GenerationReceiptConfig;
+use crate::frontend::LinearProposalIngressConfig;
 use crate::frontend::OpenAiGuardrailsConfig;
 use crate::frontend::OpenAiGuardrailsStatus;
 use crate::frontend::admission::GenerationTokenBudget;
@@ -140,6 +141,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
         generation_receipt: None,
+        linear_proposal_ingress: None,
         kv,
         decode_batcher,
         decode_frame_batcher,
@@ -190,6 +192,7 @@ pub struct EmbeddedOpenAiArgs {
     pub telemetry: Telemetry,
     pub hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
     pub generation_receipt: Option<GenerationReceiptConfig>,
+    pub linear_proposal_ingress: Option<LinearProposalIngressConfig>,
     pub openai_guardrails: Option<OpenAiGuardrailsConfig>,
 }
 
@@ -396,6 +399,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: args.hook_policy,
         generation_receipt: args.generation_receipt,
+        linear_proposal_ingress: args.linear_proposal_ingress,
         kv,
         decode_batcher,
         decode_frame_batcher,
