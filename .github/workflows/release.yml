@@ -22,6 +22,11 @@ on:
         required: true
         default: false
         type: boolean
+      force_hosted_runners:
+        description: Route self-hosted release lanes (x86_64 CUDA, ARM64 smoke) to GitHub-hosted runners for this run only
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ github.repository }}-${{ github.ref }}
@@ -49,6 +54,7 @@ jobs:
       prerelease: ${{ steps.meta.outputs.prerelease }}
       skip_gpu_bundles: ${{ steps.meta.outputs.skip_gpu_bundles }}
       canary: ${{ steps.meta.outputs.canary }}
+      force_hosted_runners: ${{ steps.meta.outputs.force_hosted_runners }}
     steps:
       - id: meta
         shell: bash
@@ -56,6 +62,7 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_SKIP_GPU_BUNDLES: ${{ inputs.skip_gpu_bundles || 'false' }}
           INPUT_CANARY: ${{ inputs.canary || 'false' }}
+          INPUT_FORCE_HOSTED_RUNNERS: ${{ inputs.force_hosted_runners || 'false' }}
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
@@ -78,6 +85,7 @@ jobs:
             echo "prerelease=$prerelease"
             echo "skip_gpu_bundles=$INPUT_SKIP_GPU_BUNDLES"
             echo "canary=$INPUT_CANARY"
+            echo "force_hosted_runners=$INPUT_FORCE_HOSTED_RUNNERS"
           } >> "$GITHUB_OUTPUT"
 
   build:
@@ -391,7 +399,7 @@ jobs:
     name: Build native runtime Linux x86_64 CUDA (${{ matrix.cuda_major }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && needs.metadata.outputs.force_hosted_runners != 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -695,7 +703,7 @@ jobs:
     name: Smoke Linux ARM64 artifact
     needs: [metadata, build_linux_arm64]
     if: ${{ needs.build_linux_arm64.result == 'success' }}
-    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && '["self-hosted","Linux","ARM64"]' || '["ubuntu-24.04-arm"]') }}
+    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && needs.metadata.outputs.force_hosted_runners != 'true' && '["self-hosted","Linux","ARM64"]' || '["ubuntu-24.04-arm"]') }}
     steps:
       - uses: actions/download-artifact@v7
         with:
@@ -788,7 +796,7 @@ jobs:
     name: Build Linux CUDA (${{ matrix.cuda_version }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && needs.metadata.outputs.force_hosted_runners != 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
     strategy:
       fail-fast: false
       matrix:
