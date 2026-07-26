@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use skippy_runtime::{
     FlashAttentionType, RuntimeConfig, RuntimeLoadMode, SamplingConfig, StageModel, StageSession,
-    parse_cache_type,
+    TokenSignal, parse_cache_type,
 };
 
 use crate::cli::{FlashAttentionArg, VerifyWindowLocalArgs};
@@ -54,9 +54,10 @@ struct VerifyWindowLocalReport {
     parity_checks: Vec<VerifyParityCheck>,
     warmup: usize,
     iterations: usize,
-    batched_width2: TimingStats,
-    serial_two_decode_mtp_n1: TimingStats,
-    split_inprocess_width2: Option<SplitInprocessReport>,
+    sample_width: usize,
+    batched: TimingStats,
+    serial: TimingStats,
+    split_inprocess: Option<SplitInprocessReport>,
     batched_avg_vs_serial_avg: f64,
     batched_token_per_sec: f64,
     serial_token_per_sec: f64,
@@ -133,6 +134,11 @@ pub fn verify_window_local(args: VerifyWindowLocalArgs) -> Result<()> {
         None => None,
     };
     let report = build_report(args, full, split)?;
+    let parity_failure = report
+        .parity_checks
+        .iter()
+        .find(|check| !check.matched)
+        .map(format_parity_failure);
     let encoded = serde_json::to_vec_pretty(&report)?;
 
     if let Some(path) = output {
@@ -140,6 +146,9 @@ pub fn verify_window_local(args: VerifyWindowLocalArgs) -> Result<()> {
             .with_context(|| format!("failed to write {}", path.display()))?;
     }
     println!("{}", String::from_utf8(encoded)?);
+    if let Some(failure) = parity_failure {
+        bail!("{failure}");
+    }
     Ok(())
 }
 
@@ -250,6 +259,30 @@ struct VerifyTargetPlan {
     targets: Vec<i32>,
 }
 
+enum ParityExecution {
+    Serial,
+    Batched,
+}
+
+struct ParitySide {
+    prediction: Vec<i32>,
+    continuation: Vec<i32>,
+    position: u64,
+    full_state: Vec<u8>,
+    signal: TokenSignal,
+    signal_window: String,
+    elapsed_us: u128,
+}
+
+struct ParityRun<'a> {
+    base_token_count: u64,
+    layer_end: i32,
+    verify_tokens: &'a [i32],
+    continuation_input: i32,
+    width: usize,
+    continuation_steps: usize,
+}
+
 impl VerifyTargetPlan {
     fn verify_tokens_for_width(&self, width: usize) -> Result<Vec<i32>> {
         if width == 0 {
@@ -284,7 +317,7 @@ fn choose_target_plan(
     prompt_tokens: &[i32],
     prompt: &str,
     config: &RuntimeConfig,
-    max_width: usize,
+    target_token_count: usize,
 ) -> Result<VerifyTargetPlan> {
     session
         .trim_session(base_token_count)
@@ -293,8 +326,8 @@ fn choose_target_plan(
         .first()
         .context("prompt produced no token for verify-token seed")?;
     let mut input = current;
-    let mut targets = Vec::with_capacity(max_width.saturating_add(1));
-    for _ in 0..max_width.saturating_add(1) {
+    let mut targets = Vec::with_capacity(target_token_count.saturating_add(1));
+    for _ in 0..target_token_count.saturating_add(1) {
         let (predicted, _native_mtp, _frame) = session
             .decode_step_frame_sampled_mtp(input, Some(&SamplingConfig::default()), None, 0, 1)
             .with_context(|| {
@@ -348,87 +381,113 @@ fn run_parity_check(
 ) -> Result<VerifyParityCheck> {
     let verify_tokens = target_plan.verify_tokens_for_width(width)?;
     let expected = target_plan.expected_for_width(width)?;
+    let continuation_expected = expected_continuation(target_plan, width, continuation_steps)?;
+    let continuation_input = *target_plan
+        .targets
+        .get(width.saturating_sub(1))
+        .with_context(|| format!("missing continuation input for width {width}"))?;
+    let layer_end = i32::try_from(layer_end).context("layer_end exceeds i32")?;
+    let run = ParityRun {
+        base_token_count,
+        layer_end,
+        verify_tokens: &verify_tokens,
+        continuation_input,
+        width,
+        continuation_steps,
+    };
+    let serial = collect_parity_side(session, &run, ParityExecution::Serial)?;
+    let batched = collect_parity_side(session, &run, ParityExecution::Batched)?;
+    build_parity_check(
+        width,
+        continuation_steps,
+        expected,
+        continuation_expected,
+        &serial,
+        &batched,
+    )
+}
 
+fn collect_parity_side(
+    session: &mut StageSession,
+    run: &ParityRun<'_>,
+    execution: ParityExecution,
+) -> Result<ParitySide> {
+    let label = match execution {
+        ParityExecution::Serial => "serial",
+        ParityExecution::Batched => "batched",
+    };
     session
-        .trim_session(base_token_count)
-        .context("failed to trim session before serial parity check")?;
-    let serial_start = Instant::now();
-    let serial_prediction = serial_decode_expected(session, &verify_tokens)?;
-    let serial_us = serial_start.elapsed().as_micros();
-    let serial_position = session.token_count();
-    let serial_continuation =
-        decode_expected_continuation(session, target_plan, width, continuation_steps)?;
-    let serial_full_state = session
-        .export_full_state(
-            0,
-            i32::try_from(layer_end).context("layer_end exceeds i32")?,
-        )
-        .context("failed to export serial full state")?;
-    let serial_signal = session.last_token_signal()?;
-    let serial_window = format!(
+        .trim_session(run.base_token_count)
+        .with_context(|| format!("failed to trim session before {label} parity check"))?;
+    let start = Instant::now();
+    let prediction = match execution {
+        ParityExecution::Serial => serial_decode_expected(session, run.verify_tokens)?,
+        ParityExecution::Batched => {
+            session
+                .verify_tokens_frame_sampled(
+                    run.verify_tokens,
+                    Some(&SamplingConfig::default()),
+                    None,
+                    0,
+                )
+                .with_context(|| format!("batched width-{} VerifyWindow failed", run.width))?
+                .0
+        }
+    };
+    let elapsed_us = start.elapsed().as_micros();
+    let position = session.token_count();
+    let continuation = decode_continuation(
+        session,
+        run.continuation_input,
+        run.width,
+        run.continuation_steps,
+    )?;
+    let full_state = session
+        .export_full_state(0, run.layer_end)
+        .with_context(|| format!("failed to export {label} full state"))?;
+    let signal = session.last_token_signal()?;
+    let signal_window = format!(
         "{:?}",
-        session.signal_window(width.saturating_add(1) as u32)?
+        session.signal_window(run.width.saturating_add(1) as u32)?
     );
+    Ok(ParitySide {
+        prediction,
+        continuation,
+        position,
+        full_state,
+        signal,
+        signal_window,
+        elapsed_us,
+    })
+}
 
-    session
-        .trim_session(base_token_count)
-        .context("failed to trim session before batched parity check")?;
-    let batched_start = Instant::now();
-    let (batched_prediction, _frame) = session
-        .verify_tokens_frame_sampled(&verify_tokens, Some(&SamplingConfig::default()), None, 0)
-        .with_context(|| format!("batched width-{width} VerifyWindow failed"))?;
-    let batched_us = batched_start.elapsed().as_micros();
-    let batched_position = session.token_count();
-    let batched_continuation =
-        decode_expected_continuation(session, target_plan, width, continuation_steps)?;
-    let batched_full_state = session
-        .export_full_state(
-            0,
-            i32::try_from(layer_end).context("layer_end exceeds i32")?,
-        )
-        .context("failed to export batched full state")?;
-    let batched_signal = session.last_token_signal()?;
-    let batched_window = format!(
-        "{:?}",
-        session.signal_window(width.saturating_add(1) as u32)?
-    );
-
-    let batched_prefix = prediction_prefix(&batched_prediction, width)?;
-    let serial_prefix = prediction_prefix(&serial_prediction, width)?;
+fn build_parity_check(
+    width: usize,
+    continuation_steps: usize,
+    expected: &[i32],
+    continuation_expected: &[i32],
+    serial: &ParitySide,
+    batched: &ParitySide,
+) -> Result<VerifyParityCheck> {
+    let batched_prefix = prediction_prefix(&batched.prediction, width)?;
+    let serial_prefix = prediction_prefix(&serial.prediction, width)?;
     let target_stream_matched = batched_prefix == expected && serial_prefix == expected;
-    let continuation_matched = batched_continuation == serial_continuation;
-    let native_position_matched = batched_position == serial_position;
-    let full_state_matched = batched_full_state == serial_full_state;
-    let token_signal_matched = batched_signal == serial_signal;
-    let signal_window_matched = batched_window == serial_window;
+    let continuation_matched = batched.continuation == continuation_expected
+        && serial.continuation == continuation_expected;
+    let native_position_matched = batched.position == serial.position;
+    let full_state_matched = batched.full_state == serial.full_state;
+    let token_signal_matched = batched.signal == serial.signal;
+    let signal_window_matched = batched.signal_window == serial.signal_window;
     let first_mismatch_position = first_mismatch_position(batched_prefix, expected)
         .or_else(|| first_mismatch_position(serial_prefix, expected));
+    // Signal windows summarize decode-call history, so one batched call and N serial
+    // calls have different window shapes by construction. Keep this diagnostic
+    // visible, but gate parity on canonical model state and token signals.
     let matched = target_stream_matched
         && continuation_matched
         && native_position_matched
         && full_state_matched
         && token_signal_matched;
-    if !matched {
-        bail!(
-            "verify parity failed at width {width}: first_mismatch_position={:?} target_stream_matched={} continuation_matched={} native_position_matched={} full_state_matched={} serial_full_state_bytes={} batched_full_state_bytes={} token_signal_matched={} signal_window_matched={} serial_margin={} batched_margin={} serial_top={} batched_top={} batched_us={} serial_us={}",
-            first_mismatch_position,
-            target_stream_matched,
-            continuation_matched,
-            native_position_matched,
-            full_state_matched,
-            serial_full_state.len(),
-            batched_full_state.len(),
-            token_signal_matched,
-            signal_window_matched,
-            serial_signal.margin,
-            batched_signal.margin,
-            serial_signal.top_token,
-            batched_signal.top_token,
-            batched_us,
-            serial_us
-        );
-    }
-
     Ok(VerifyParityCheck {
         width,
         matched,
@@ -438,19 +497,41 @@ fn run_parity_check(
         continuation_steps,
         native_position_matched,
         full_state_matched,
-        serial_full_state_bytes: serial_full_state.len(),
-        batched_full_state_bytes: batched_full_state.len(),
+        serial_full_state_bytes: serial.full_state.len(),
+        batched_full_state_bytes: batched.full_state.len(),
         token_signal_matched,
         signal_window_matched,
-        serial_top_token: serial_signal.top_token,
-        serial_second_token: serial_signal.second_token,
-        serial_top2_margin: serial_signal.margin,
-        batched_top_token: batched_signal.top_token,
-        batched_second_token: batched_signal.second_token,
-        batched_top2_margin: batched_signal.margin,
-        batched_us,
-        serial_us,
+        serial_top_token: serial.signal.top_token,
+        serial_second_token: serial.signal.second_token,
+        serial_top2_margin: serial.signal.margin,
+        batched_top_token: batched.signal.top_token,
+        batched_second_token: batched.signal.second_token,
+        batched_top2_margin: batched.signal.margin,
+        batched_us: batched.elapsed_us,
+        serial_us: serial.elapsed_us,
     })
+}
+
+fn format_parity_failure(check: &VerifyParityCheck) -> String {
+    format!(
+        "verify parity failed at width {}: first_mismatch_position={:?} target_stream_matched={} continuation_matched={} native_position_matched={} full_state_matched={} serial_full_state_bytes={} batched_full_state_bytes={} token_signal_matched={} signal_window_matched={} serial_margin={} batched_margin={} serial_top={} batched_top={} batched_us={} serial_us={}",
+        check.width,
+        check.first_mismatch_position,
+        check.target_stream_matched,
+        check.continuation_matched,
+        check.native_position_matched,
+        check.full_state_matched,
+        check.serial_full_state_bytes,
+        check.batched_full_state_bytes,
+        check.token_signal_matched,
+        check.signal_window_matched,
+        check.serial_top2_margin,
+        check.batched_top2_margin,
+        check.serial_top_token,
+        check.batched_top_token,
+        check.batched_us,
+        check.serial_us
+    )
 }
 
 fn serial_decode_expected(session: &mut StageSession, verify_tokens: &[i32]) -> Result<Vec<i32>> {
@@ -459,43 +540,43 @@ fn serial_decode_expected(session: &mut StageSession, verify_tokens: &[i32]) -> 
         let (predicted, _native_mtp, _frame) = session
             .decode_step_frame_sampled_mtp(*token_id, Some(&SamplingConfig::default()), None, 0, 1)
             .context("serial target-stream decode failed")?;
-        if predicted >= 0 {
-            predicted_tokens.push(predicted);
+        if predicted < 0 {
+            bail!("serial target-stream decode returned no token for input {token_id}");
         }
+        predicted_tokens.push(predicted);
     }
     Ok(predicted_tokens)
 }
 
-fn decode_expected_continuation(
-    session: &mut StageSession,
+fn expected_continuation(
     target_plan: &VerifyTargetPlan,
     width: usize,
     continuation_steps: usize,
+) -> Result<&[i32]> {
+    let end = width
+        .checked_add(continuation_steps)
+        .with_context(|| format!("continuation index overflow at width {width}"))?;
+    target_plan.targets.get(width..end).with_context(|| {
+        format!(
+            "missing continuation targets for width {width}; target plan has {} token(s)",
+            target_plan.targets.len()
+        )
+    })
+}
+
+fn decode_continuation(
+    session: &mut StageSession,
+    mut input: i32,
+    width: usize,
+    continuation_steps: usize,
 ) -> Result<Vec<i32>> {
-    let mut input = *target_plan
-        .targets
-        .get(width.saturating_sub(1))
-        .with_context(|| format!("missing continuation input for width {width}"))?;
     let mut predicted_tokens = Vec::with_capacity(continuation_steps);
     for step in 0..continuation_steps {
-        let expected_index = width
-            .checked_add(step)
-            .with_context(|| format!("continuation index overflow at width {width}"))?;
-        let expected = *target_plan.targets.get(expected_index).with_context(|| {
-            format!(
-                "missing continuation target for width {width}, step {step}; \
-                 target plan has {} token(s)",
-                target_plan.targets.len()
-            )
-        })?;
         let (predicted, _native_mtp, _frame) = session
             .decode_step_frame_sampled_mtp(input, Some(&SamplingConfig::default()), None, 0, 1)
             .with_context(|| format!("continuation decode failed at width {width}, step {step}"))?;
-        if predicted != expected {
-            bail!(
-                "continuation mismatch at width {width}, step {step}: \
-                 predicted {predicted}, expected {expected}"
-            );
+        if predicted < 0 {
+            bail!("continuation decode returned no token at width {width}, step {step}");
         }
         predicted_tokens.push(predicted);
         input = predicted;
@@ -670,7 +751,7 @@ fn measure_batched(
     let start = Instant::now();
     let prediction = session
         .verify_tokens_frame_sampled(verify_tokens, Some(&SamplingConfig::default()), None, 0)
-        .context("batched width-2 VerifyWindow failed")?
+        .with_context(|| format!("batched width-{} VerifyWindow failed", verify_tokens.len()))?
         .0;
     Ok((start.elapsed(), prediction))
 }
@@ -718,7 +799,12 @@ fn run_split_inprocess_samples(
         args.warmup,
         args.iterations,
     )?;
-    split_report(split_layer, samples, full_batched_avg_us)
+    split_report(
+        split_layer,
+        samples,
+        full_batched_avg_us,
+        verify_tokens.len(),
+    )
 }
 
 fn split_runtime_configs(
@@ -1013,6 +1099,7 @@ fn split_report(
     split_layer: u32,
     samples: SplitSampleSet,
     full_batched_avg_us: f64,
+    sample_width: usize,
 ) -> Result<SplitInprocessReport> {
     let total = timing_stats(&samples.total)?;
     let serial_total = timing_stats(&samples.serial_total)?;
@@ -1028,8 +1115,8 @@ fn split_report(
         serial_stage1: timing_stats(&samples.serial_stage1)?,
         total,
         serial_total,
-        total_token_per_sec: verified_tokens_per_sec(total_avg, 2),
-        serial_total_token_per_sec: verified_tokens_per_sec(serial_total_avg, 2),
+        total_token_per_sec: verified_tokens_per_sec(total_avg, sample_width),
+        serial_total_token_per_sec: verified_tokens_per_sec(serial_total_avg, sample_width),
         total_avg_vs_full_batched_avg: total_avg / full_batched_avg_us,
         total_avg_vs_serial_total_avg: total_avg / serial_total_avg,
         diagnostics: split_timing_diagnostics(&samples)?,
@@ -1066,12 +1153,13 @@ impl SampleSet {
 fn build_report(
     args: VerifyWindowLocalArgs,
     full: FullModelSamples,
-    split_inprocess_width2: Option<SplitInprocessReport>,
+    split_inprocess: Option<SplitInprocessReport>,
 ) -> Result<VerifyWindowLocalReport> {
-    let batched_width2 = timing_stats(&full.samples.batched)?;
-    let serial_two_decode_mtp_n1 = timing_stats(&full.samples.serial)?;
-    let batched_avg = batched_width2.avg_us;
-    let serial_avg = serial_two_decode_mtp_n1.avg_us;
+    let sample_width = sample_width(&args)?;
+    let batched = timing_stats(&full.samples.batched)?;
+    let serial = timing_stats(&full.samples.serial)?;
+    let batched_avg = batched.avg_us;
+    let serial_avg = serial.avg_us;
     Ok(VerifyWindowLocalReport {
         mode: "verify-window-local",
         model_path: args.model_path,
@@ -1091,12 +1179,13 @@ fn build_report(
         parity_checks: full.parity_checks,
         warmup: args.warmup,
         iterations: args.iterations,
-        batched_width2,
-        serial_two_decode_mtp_n1,
-        split_inprocess_width2,
+        sample_width,
+        batched,
+        serial,
+        split_inprocess,
         batched_avg_vs_serial_avg: batched_avg / serial_avg,
-        batched_token_per_sec: verified_tokens_per_sec(batched_avg, 2),
-        serial_token_per_sec: verified_tokens_per_sec(serial_avg, 2),
+        batched_token_per_sec: verified_tokens_per_sec(batched_avg, sample_width),
+        serial_token_per_sec: verified_tokens_per_sec(serial_avg, sample_width),
         first_batched_prediction: full.samples.first_batched_prediction,
         first_serial_prediction: full.samples.first_serial_prediction,
     })
@@ -1183,8 +1272,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        VerifyTargetPlan, first_mismatch_position, percentile, timing_shape, timing_stats,
-        verified_tokens_per_sec,
+        VerifyTargetPlan, expected_continuation, first_mismatch_position, percentile, timing_shape,
+        timing_stats, verified_tokens_per_sec,
     };
 
     #[test]
@@ -1209,8 +1298,8 @@ mod tests {
     }
 
     #[test]
-    fn token_rate_uses_verified_token_count() {
-        assert_eq!(verified_tokens_per_sec(20_000.0, 2), 100.0);
+    fn token_rate_uses_configured_verify_width() {
+        assert_eq!(verified_tokens_per_sec(20_000.0, 4), 200.0);
     }
 
     #[test]
@@ -1247,6 +1336,16 @@ mod tests {
             assert_eq!(tokens[0], 10);
             assert_eq!(&tokens[1..], &expected[..width.saturating_sub(1)]);
         }
+    }
+
+    #[test]
+    fn target_plan_selects_expected_continuation_after_width() {
+        let plan = VerifyTargetPlan {
+            current: 10,
+            targets: (20..=40).collect(),
+        };
+
+        assert_eq!(expected_continuation(&plan, 4, 3).unwrap(), &[24, 25, 26]);
     }
 
     #[test]
