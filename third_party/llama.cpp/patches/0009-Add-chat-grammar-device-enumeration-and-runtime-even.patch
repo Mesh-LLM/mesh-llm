@@ -1,7 +1,7 @@
-From bd3343f6b65ad898f32c1179cdd8424275342df6 Mon Sep 17 00:00:00 2001
+From 8619285489ebdbaf28638a8cf598c00e2cbf66ec Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 09/16] Add chat grammar, device enumeration, and runtime
+Subject: [PATCH 09/45] Add chat grammar, device enumeration, and runtime
  events
 
 Squashes chat grammar exception containment and lazy triggering, backend device enumeration, min-p sampling, KV cell compaction, and model-open runtime events.
@@ -20,7 +20,7 @@ Squashes chat grammar exception containment and lazy triggering, backend device 
  create mode 100644 include/skippy/devices.h
 
 diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
-index 3f91364c..4b582932 100644
+index af84ff32..a68e2c91 100644
 --- a/common/chat-auto-parser-generator.cpp
 +++ b/common/chat-auto-parser-generator.cpp
 @@ -23,6 +23,18 @@ static void foreach_function(const json & tools, const std::function<void(const
@@ -42,7 +42,7 @@ index 3f91364c..4b582932 100644
  namespace autoparser {
  
  parser_build_context::parser_build_context(common_chat_peg_builder & p, const generation_params & inputs) :
-@@ -101,7 +113,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &
+@@ -103,7 +115,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &
          // Set grammar triggers based on tool section markers (fall back to per-call markers)
          if (data.grammar_lazy) {
              data.grammar_triggers = {
@@ -446,10 +446,10 @@ index 00000000..382f1e69
 +
 +#endif
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index e5c0a061..43e9492a 100644
+index 0e6902aa..131064e0 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -735,11 +735,28 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
+@@ -736,11 +736,28 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
  }
  
  llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool optimize) {
@@ -481,7 +481,7 @@ index e5c0a061..43e9492a 100644
  }
  
  llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
-@@ -1166,6 +1183,93 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+@@ -1167,6 +1184,93 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
      }
  }
  
@@ -575,7 +575,7 @@ index e5c0a061..43e9492a 100644
  bool llama_kv_cache::get_can_shift() const {
      // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
      if (model.arch == LLM_ARCH_STEP35) {
-@@ -2878,8 +2982,9 @@ llama_kv_cache_context::llama_kv_cache_context(
+@@ -2884,8 +2988,9 @@ llama_kv_cache_context::llama_kv_cache_context(
          llama_kv_cache * kv,
          llama_context * lctx,
          bool do_shift,
@@ -1451,18 +1451,18 @@ index 27dc78b0..4dcd0d96 100644
  
  enum skippy_status skippy_model_free(
 diff --git a/tests/test-chat-auto-parser.cpp b/tests/test-chat-auto-parser.cpp
-index 78e42c65..2d854509 100644
+index 4218f8d5..2cb295c1 100644
 --- a/tests/test-chat-auto-parser.cpp
 +++ b/tests/test-chat-auto-parser.cpp
-@@ -57,6 +57,7 @@ static void test_seed_oss_tool_with_reasoning(testing & t);
- static void test_nemotron_analysis(testing & t);
- static void test_nemotron_reasoning_detection(testing & t);
- static void test_nemotron_tool_format(testing & t);
+@@ -66,6 +66,7 @@ static void test_laguna_s_tool_format(testing & t);
+ static void test_laguna_xs2_analysis(testing & t);
+ static void test_laguna_xs2_reasoning_detection(testing & t);
+ static void test_laguna_xs2_tool_format(testing & t);
 +static void test_nemotron_lazy_tool_trigger(testing & t);
  
  // CohereForAI template analysis tests
  static void test_cohere_reasoning_detection(testing & t);
-@@ -1306,6 +1307,7 @@ static common_chat_template load_nemotron_template(testing & t) {
+@@ -1318,6 +1319,7 @@ static common_chat_template load_nemotron_template(testing & t) {
  static void test_nemotron_analysis(testing & t) {
      t.test("Nemotron reasoning detection", test_nemotron_reasoning_detection);
      t.test("Nemotron tool format", test_nemotron_tool_format);
@@ -1470,8 +1470,8 @@ index 78e42c65..2d854509 100644
  }
  
  static void test_nemotron_reasoning_detection(testing & t) {
-@@ -1378,6 +1380,30 @@ static void test_nemotron_tool_format(testing & t) {
-     t.assert_true("should support tools", analysis.jinja_caps.supports_tools);
+@@ -1478,6 +1480,30 @@ static void test_laguna_xs2_analysis(testing & t) {
+     t.test("Laguna-XS.2(v5) tool format", test_laguna_xs2_tool_format);
  }
  
 +static void test_nemotron_lazy_tool_trigger(testing & t) {
@@ -1501,11 +1501,11 @@ index 78e42c65..2d854509 100644
  static common_chat_template load_cohere_template(testing & t) {
      return load_template(t, "models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja");
  }
-@@ -2092,4 +2118,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
+@@ -2192,4 +2218,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
          }
      }
  }
 -
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

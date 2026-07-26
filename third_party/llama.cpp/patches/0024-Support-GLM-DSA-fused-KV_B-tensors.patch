@@ -1,7 +1,7 @@
-From 320112e2be2f38c92559b4eaeb482816c6037874 Mon Sep 17 00:00:00 2001
+From 358fdff04cab3ca3d85cd51dbc5592a1378df9fc Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 24 Jun 2026 15:35:23 +1000
-Subject: [PATCH 22/24] Support GLM-DSA fused KV_B tensors
+Subject: [PATCH 24/45] Support GLM-DSA fused KV_B tensors
 
 ---
  src/models/deepseek2.cpp | 23 +++++++++++++++++------
@@ -64,10 +64,10 @@ index 180fb082..feb05570 100644
          cb(q_nope, "mtp_q_nope_perm", il);
  
 diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
-index 10bf235f..a975da0d 100644
+index 1d90426d..b682d670 100644
 --- a/src/models/glm-dsa.cpp
 +++ b/src/models/glm-dsa.cpp
-@@ -87,9 +87,13 @@ void llama_model_glm_dsa::load_arch_tensors(llama_model_loader &) {
+@@ -122,9 +122,13 @@ void llama_model_glm_dsa::load_arch_tensors(llama_model_loader &) {
  
          layer.wkv_a_mqa = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i), {n_embd, kv_lora_rank + n_embd_head_qk_rope}, flags);
  
@@ -85,5 +85,5 @@ index 10bf235f..a975da0d 100644
          layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head * n_embd_head_v_mla, n_embd}, flags);
  
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

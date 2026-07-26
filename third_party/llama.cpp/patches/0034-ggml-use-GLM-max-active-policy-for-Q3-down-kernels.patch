@@ -1,7 +1,7 @@
-From 3fc13c2ed2cecf50726e7d10927f5070539c9aa1 Mon Sep 17 00:00:00 2001
+From d8a655fca4f47b48fc617b3302beb3403b743593 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 05:19:37 +1000
-Subject: [PATCH 31/36] ggml: use GLM max-active policy for Q3 down kernels
+Subject: [PATCH 34/45] ggml: use GLM max-active policy for Q3 down kernels
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 30 ++++++++++++++++++++++++++
@@ -85,10 +85,10 @@ index b4fc441a..2e42a168 100644
              pipeline_slot_parallel =
                  ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_f16(lib, weighted_sum);
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 3a2448a8..44f36f73 100644
+index f0b94ded..12e2059f 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
-@@ -7331,6 +7331,7 @@ struct test_topk_moe_glm_component : public test_case {
+@@ -7333,6 +7333,7 @@ struct test_topk_moe_glm_component : public test_case {
              getenv("SKIPPY_GLM_DSA_EXPERIMENTAL_Q3_DOWN_SLOT_PARALLEL_REDUCE_R8") != nullptr ||
              getenv("GGML_METAL_ENABLE_Q3_DOWN_SLOT_PARALLEL_REDUCE_R8_NB8") != nullptr ||
              getenv("GGML_METAL_ENABLE_Q3_DOWN_SLOT_PARALLEL_REDUCE_R8_NB8_W0") != nullptr ||
@@ -96,7 +96,7 @@ index 3a2448a8..44f36f73 100644
              getenv("GGML_METAL_ENABLE_Q3_DOWN_SLOT_PARALLEL_REDUCE_R12_NB8_W0") != nullptr ||
              getenv("SKIPPY_GLM_DSA_EXPERIMENTAL_Q3_DOWN_SLOT_PARALLEL_REDUCE_R16") != nullptr ||
              getenv("SKIPPY_GLM_DSA_EXPERIMENTAL_Q3_DOWN_SLOT_SPLIT2_REDUCE") != nullptr ||
-@@ -9021,6 +9022,7 @@ struct test_glm_moe_static_motif : public test_case {
+@@ -9024,6 +9025,7 @@ struct test_glm_moe_static_motif : public test_case {
              getenv("SKIPPY_GLM_DSA_EXPERIMENTAL_Q3_DOWN_SLOT_PARALLEL_REDUCE_R8") != nullptr ||
              getenv("GGML_METAL_ENABLE_Q3_DOWN_SLOT_PARALLEL_REDUCE_R8_NB8") != nullptr ||
              getenv("GGML_METAL_ENABLE_Q3_DOWN_SLOT_PARALLEL_REDUCE_R8_NB8_W0") != nullptr ||
@@ -105,5 +105,5 @@ index 3a2448a8..44f36f73 100644
              getenv("SKIPPY_GLM_DSA_EXPERIMENTAL_Q3_DOWN_SLOT_PARALLEL_REDUCE_R16") != nullptr ||
              getenv("SKIPPY_GLM_DSA_EXPERIMENTAL_Q3_DOWN_SLOT_SPLIT2_REDUCE") != nullptr ||
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

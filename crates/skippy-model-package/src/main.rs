@@ -20,7 +20,26 @@ mod write;
 use cli::{Args, Command};
 use package::{ArtifactHook, ExplicitSourceIdentity};
 
+fn prepare_model_download_directories() {
+    let prepared = match model_hf::prepare_download_directories() {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!(
+                "⚠ Unable to prepare model download directories: {error:#}. \
+                 Model downloads may fail; set MESH_LLM_DATA_DIR to a writable directory."
+            );
+            return;
+        }
+    };
+    for fallback in &prepared.fallbacks {
+        eprintln!("⚠ {fallback}");
+    }
+    // SAFETY: runs before any Tokio runtime, process is single-threaded.
+    unsafe { prepared.apply_to_process_environment() };
+}
+
 fn main() -> Result<()> {
+    prepare_model_download_directories();
     let args = Args::parse();
     match args.command {
         Command::Inspect { model } => inspect::inspect(model),

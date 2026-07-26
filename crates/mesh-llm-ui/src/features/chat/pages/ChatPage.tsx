@@ -506,6 +506,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   >({})
   const [selectedAttachmentPreview, setSelectedAttachmentPreview] = useState<SubmittedAttachmentPreview | null>(null)
   const [failedSubmission, setFailedSubmission] = useState<FailedSubmission | null>(null)
+  const [latestTurnToken, setLatestTurnToken] = useState(0)
   const queuedSubmissionsRef = useRef<QueuedSubmission[]>([])
   const queueDrainInFlightRef = useRef(false)
   const submittedAttachmentUrlsRef = useRef<Set<string>>(new Set())
@@ -553,6 +554,9 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     previousAssistantMessageIds: Set<string>
   } | null>(null)
   const handledChatErrorRef = useRef<{ conversationId: string; message: string } | null>(null)
+  const requestJumpToLatest = useCallback(() => {
+    setLatestTurnToken((current) => current + 1)
+  }, [])
   const revokeSubmittedAttachmentPreviews = useCallback((previews: SubmittedAttachmentPreview[]) => {
     for (const preview of previews) {
       revokeObjectUrl(preview.objectUrl)
@@ -1020,6 +1024,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     const nextPrompt = composerDraft.prompt.trim()
     if (!nextPrompt && composerDraft.attachments.length === 0) return
 
+    requestJumpToLatest()
     const submission: ComposerSubmission = { prompt: composerDraft.prompt, attachments: [...composerDraft.attachments] }
 
     if (composerShouldQueue) {
@@ -1042,7 +1047,14 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     }
 
     await submitPromptNow(submission, composerConversationId)
-  }, [clearComposerDraft, composerConversationId, composerDraft, composerShouldQueue, submitPromptNow])
+  }, [
+    clearComposerDraft,
+    composerConversationId,
+    composerDraft,
+    composerShouldQueue,
+    requestJumpToLatest,
+    submitPromptNow
+  ])
 
   useEffect(() => {
     queuedSubmissionsRef.current = queuedSubmissions
@@ -1086,6 +1098,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
 
   const retryLastResponse = useCallback(async () => {
     if (!canRetry) return
+    requestJumpToLatest()
     const ensuredConversationId = ensureConversation()
     clearStoppedConversation(ensuredConversationId)
     setFailedSubmission(null)
@@ -1098,7 +1111,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
       )
     }
     await chat.reload()
-  }, [activeModelName, canRetry, chat, clearStoppedConversation, ensureConversation])
+  }, [activeModelName, canRetry, chat, clearStoppedConversation, ensureConversation, requestJumpToLatest])
 
   const stopStreamingResponse = useCallback(() => {
     const latestLiveMessage = liveMessagesWithModels.at(-1)
@@ -1249,6 +1262,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
       <ChatLayout
         sidebar={sidebar}
         hideSidebar={conversations.conversations.length === 0}
+        stickToBottomKey={`${displayedConversationId}:${latestTurnToken}`}
         title={data.title}
         subtitle={activeConversation?.title}
         actions={actions}

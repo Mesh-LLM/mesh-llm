@@ -1,7 +1,7 @@
-From 5af8ab8b7c670470d36f3f8756d716a3548dc895 Mon Sep 17 00:00:00 2001
+From 3b3d6f4ab0c269931f5f75120f3d8b496917e3b7 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 3 Jul 2026 13:15:19 +1000
-Subject: [PATCH 11/16] Pass reasoning format through stage chat templates
+Subject: [PATCH 11/45] Pass reasoning format through stage chat templates
 
 ---
  common/stage-chat.cpp   | 4 ++++
@@ -57,5 +57,5 @@ index cfb4a8fa..0e1f0351 100644
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 

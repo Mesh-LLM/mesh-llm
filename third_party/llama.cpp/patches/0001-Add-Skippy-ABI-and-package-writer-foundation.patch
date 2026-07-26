@@ -1,7 +1,7 @@
-From 44fbcee408ecf53a7ee56963368642062715eca4 Mon Sep 17 00:00:00 2001
+From 34be3b6d89d94ac218678e7f6ada201a1bcba4c1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 01/16] Add Skippy ABI and package writer foundation
+Subject: [PATCH 01/45] Add Skippy ABI and package writer foundation
 
 Squashes the initial Skippy ABI headers, model info entrypoints, single-stage runtime baseline, runtime-slice tensor filtering, activation-frame execution, GGUF slice writing, and package part composition.
 ---
@@ -444,10 +444,10 @@ index 7ed490ce..a7986a87 100644
  enum llm_graph_type {
      LLM_GRAPH_TYPE_DEFAULT,
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 28f8bb79..f4310743 100644
+index 43447f57..7f23dbbc 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -17,6 +17,16 @@ static const size_t kiB = 1024;
+@@ -18,6 +18,16 @@ static const size_t kiB = 1024;
  static const size_t MiB = 1024*kiB;
  static const size_t GiB = 1024*MiB;
  
@@ -464,7 +464,7 @@ index 28f8bb79..f4310743 100644
  const char * llama_file_version_name(llama_fver version) {
      switch (version) {
          case GGUF_FILE_VERSION_V1: return "GGUF V1 (support until nov 2023)";
-@@ -1107,6 +1117,40 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1094,6 +1104,40 @@ struct ggml_tensor * llama_model_loader::create_tensor(
              throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
          }
  
@@ -506,7 +506,7 @@ index 28f8bb79..f4310743 100644
          if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
              const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
-index c476026d..3fb84fdd 100644
+index 75a3652d..92ad6430 100644
 --- a/src/llama-model-loader.h
 +++ b/src/llama-model-loader.h
 @@ -20,6 +20,17 @@ using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
@@ -2080,5 +2080,5 @@ index 00000000..26169320
 +
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
 
