@@ -14,8 +14,9 @@ use crate::frontend::generation_receipt::{
     complete_generation_before_cleanup,
 };
 use crate::frontend::linear_proposal::{
+    LinearProposalExecutionParams, LinearProposalQueryOutcome,
     execute_linear_proposal_with_terminal_discard, greedy_linear_proposal_admitted,
-    query_linear_proposal,
+    query_linear_proposal, report_linear_proposal_receipt,
 };
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
@@ -620,7 +621,7 @@ impl StageOpenAiBackend {
                     .map_err(|_| {
                         OpenAiError::backend("linear proposal base position exceeds u64")
                     })?;
-                    if let Some(queried) = query_linear_proposal(
+                    let queried = match query_linear_proposal(
                         config,
                         request.ids.request_id,
                         request.ids.session_id,
@@ -628,26 +629,57 @@ impl StageOpenAiBackend {
                         committed_token_ids,
                         remaining_new_tokens,
                     )? {
+                        LinearProposalQueryOutcome::NoProposal => None,
+                        LinearProposalQueryOutcome::DeadlineExceeded {
+                            proposal_elapsed_us,
+                        } => {
+                            let mut attrs = self.openai_attrs(request.ids);
+                            attrs.insert(
+                                "llama_stage.linear_proposal.discard_reason".to_string(),
+                                json!("deadline_exceeded"),
+                            );
+                            attrs.insert(
+                                "llama_stage.linear_proposal.proposal_us".to_string(),
+                                json!(proposal_elapsed_us),
+                            );
+                            self.telemetry
+                                .emit("stage.openai_linear_proposal_late", attrs);
+                            None
+                        }
+                        LinearProposalQueryOutcome::Ready(queried) => Some(queried),
+                    };
+                    if let Some(queried) = queried {
                         let decision_id = queried.proposal.decision_id.clone();
                         let receipt = execute_linear_proposal_with_terminal_discard(
                             config,
                             &decision_id,
                             || {
                                 self.execute_local_linear_proposal(
-                                    &session_id,
-                                    current,
-                                    base_position,
-                                    decoded_tokens,
-                                    request.max_tokens as usize,
+                                    LinearProposalExecutionParams {
+                                        session_id: &session_id,
+                                        current,
+                                        base_position,
+                                        generated_len: decoded_tokens,
+                                        max_new_tokens: request.max_tokens as usize,
+                                    },
                                     queried,
                                     &mut on_token,
                                 )
                             },
                         )?;
-                        config
-                            .source()
-                            .report(&receipt)
-                            .map_err(openai_backend_error)?;
+                        if let Some(error) = report_linear_proposal_receipt(config, &receipt) {
+                            let mut attrs = self.openai_attrs(request.ids);
+                            receipt.insert_telemetry_attrs(&mut attrs);
+                            attrs.insert(
+                                "llama_stage.linear_proposal.report_error".to_string(),
+                                json!(format!("{error:#}")),
+                            );
+                            self.telemetry
+                                .emit("stage.openai_linear_proposal_report_failed", attrs);
+                            eprintln!(
+                                "linear proposal receipt report failed after tokens were committed: {error:#}"
+                            );
+                        }
 
                         let proposal_runtime_lock_wait_ms =
                             Duration::from_micros(receipt.runtime_lock_wait_us).as_secs_f64()

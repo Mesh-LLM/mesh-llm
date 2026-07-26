@@ -26,6 +26,7 @@ const MAX_LINEAR_PROPOSAL_TOKENS: usize = 256;
 pub struct OpaqueProposalDecisionId(Box<[u8]>);
 
 impl OpaqueProposalDecisionId {
+    /// Validates and stores a source-defined decision identifier.
     pub fn new(bytes: impl Into<Vec<u8>>) -> Result<Self> {
         let bytes = bytes.into();
         if bytes.is_empty() {
@@ -40,6 +41,7 @@ impl OpaqueProposalDecisionId {
         Ok(Self(bytes.into_boxed_slice()))
     }
 
+    /// Returns the opaque identifier bytes exactly as supplied by the source.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -48,11 +50,14 @@ impl OpaqueProposalDecisionId {
 /// One source-selected linear proposal. The API is width one by construction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinearProposal {
+    /// Source identity used to correlate the eventual receipt or discard.
     pub decision_id: OpaqueProposalDecisionId,
+    /// Width-one continuation tokens selected by the source.
     pub token_ids: Box<[i32]>,
 }
 
 impl LinearProposal {
+    /// Creates a proposal for one source decision.
     pub fn new(decision_id: OpaqueProposalDecisionId, token_ids: impl Into<Vec<i32>>) -> Self {
         Self {
             decision_id,
@@ -64,26 +69,41 @@ impl LinearProposal {
 /// Causal, committed-only state supplied to a proposal source.
 #[derive(Clone, Copy, Debug)]
 pub struct LinearProposalQuery<'a> {
+    /// OpenAI request identity.
     pub request_id: u64,
+    /// OpenAI session identity.
     pub session_id: u64,
+    /// Number of target tokens already generated.
     pub decode_step: usize,
+    /// Prompt and target tokens committed before this query.
     pub committed_token_ids: &'a [i32],
+    /// Maximum proposal width Skippy will accept for this query.
     pub max_proposal_tokens: usize,
+    /// Advisory deadline the synchronous source must honor.
     pub deadline: Instant,
 }
 
+/// Why Skippy rejected a source decision without producing a receipt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinearProposalDiscardReason {
+    /// The source returned after the advisory deadline.
     DeadlineExceeded,
+    /// The proposal was empty or exceeded the per-query token bound.
     InvalidTokenCount,
+    /// The proposal contained an invalid negative token identifier.
     InvalidTokenId,
+    /// Verification or canonical-state repair failed.
     ExecutionFailed,
 }
 
+/// How verification committed a linear proposal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinearProposalDisposition {
+    /// Every proposal token matched and the boundary token was committed.
     FullAccept,
+    /// Verification committed the target correction at the first mismatch.
     FirstMismatch,
+    /// Generation stopped before the ordinary proposal boundary.
     Stopped,
 }
 
@@ -94,25 +114,45 @@ pub enum LinearProposalDisposition {
 /// must not be interpreted as future canonical target tokens after a mismatch.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinearProposalReceipt {
+    /// Source identity copied from the proposal.
     pub decision_id: OpaqueProposalDecisionId,
+    /// Target-authoritative verification outcome.
     pub disposition: LinearProposalDisposition,
+    /// Number of tokens supplied by the proposal source.
     pub proposal_token_count: usize,
+    /// Number of target verification rows executed.
     pub verification_rows: usize,
+    /// Number of source tokens accepted by target verification.
     pub accepted_proposal_tokens: usize,
+    /// Target tokens committed to the response stream.
     pub committed_tokens: Box<[i32]>,
+    /// Prediction observed for every verification row.
     pub verification_row_predictions: Box<[i32]>,
+    /// Prefix length of row predictions that remained canonical.
     pub canonical_prediction_count: usize,
+    /// Correction token on mismatch or boundary token on full acceptance.
     pub correction_or_boundary_token: Option<i32>,
+    /// Runtime session position before verification.
     pub base_position: u64,
+    /// Runtime session position immediately after speculative verification.
     pub position_after_verification: u64,
+    /// Runtime session position after canonical repair.
     pub canonical_position: u64,
+    /// Non-canonical verification rows trimmed during repair.
     pub trimmed_rows: usize,
+    /// Time spent waiting for the proposal source.
     pub proposal_elapsed_us: u64,
+    /// Time spent verifying the proposal.
     pub verification_elapsed_us: u64,
+    /// Time spent repairing the runtime session.
     pub repair_elapsed_us: u64,
+    /// End-to-end proposal decision time.
     pub total_elapsed_us: u64,
+    /// Aggregate runtime mutex wait time.
     pub runtime_lock_wait_us: u64,
+    /// Aggregate runtime mutex hold time.
     pub runtime_lock_hold_us: u64,
+    /// Number of runtime mutex acquisitions.
     pub runtime_lock_acquires: usize,
 }
 
@@ -203,10 +243,13 @@ impl LinearProposalReceipt {
 /// proposal that arrives after it and calls `discard` so the source can resolve
 /// any pending decision without treating it as verified.
 pub trait LinearProposalIngress: Send + Sync {
+    /// Returns an optional bounded proposal for the committed query state.
     fn propose(&self, query: LinearProposalQuery<'_>) -> Result<Option<LinearProposal>>;
 
+    /// Receives the target-authoritative outcome for a verified proposal.
     fn report(&self, receipt: &LinearProposalReceipt) -> Result<()>;
 
+    /// Resolves a source decision that Skippy could not verify.
     fn discard(
         &self,
         _decision_id: &OpaqueProposalDecisionId,
@@ -224,6 +267,12 @@ pub struct LinearProposalIngressConfig {
 }
 
 impl LinearProposalIngressConfig {
+    /// Creates a bounded proposal ingress.
+    ///
+    /// The deadline is advisory because `propose` executes synchronously on
+    /// the decode thread. Implementations must observe `query.deadline` and
+    /// return promptly; Skippy discards a proposal returned after the deadline
+    /// but cannot preempt a blocked source.
     pub fn new(
         source: Arc<dyn LinearProposalIngress>,
         deadline: Duration,
@@ -247,14 +296,17 @@ impl LinearProposalIngressConfig {
         })
     }
 
+    /// Returns the advisory source deadline for each proposal query.
     pub fn deadline(&self) -> Duration {
         self.deadline
     }
 
+    /// Returns the configured proposal-width bound.
     pub fn max_proposal_tokens(&self) -> usize {
         self.max_proposal_tokens
     }
 
+    /// Returns the configured proposal source.
     pub fn source(&self) -> &Arc<dyn LinearProposalIngress> {
         &self.source
     }
@@ -266,6 +318,12 @@ pub(crate) struct QueriedLinearProposal {
     pub(crate) operation_started: Instant,
 }
 
+pub(crate) enum LinearProposalQueryOutcome {
+    NoProposal,
+    DeadlineExceeded { proposal_elapsed_us: u64 },
+    Ready(QueriedLinearProposal),
+}
+
 pub(crate) fn query_linear_proposal(
     config: &LinearProposalIngressConfig,
     request_id: u64,
@@ -273,12 +331,12 @@ pub(crate) fn query_linear_proposal(
     decode_step: usize,
     committed_token_ids: &[i32],
     remaining_new_tokens: usize,
-) -> OpenAiResult<Option<QueriedLinearProposal>> {
+) -> OpenAiResult<LinearProposalQueryOutcome> {
     let max_proposal_tokens = remaining_new_tokens
         .saturating_sub(1)
         .min(config.max_proposal_tokens());
     if max_proposal_tokens == 0 {
-        return Ok(None);
+        return Ok(LinearProposalQueryOutcome::NoProposal);
     }
     let operation_started = Instant::now();
     let deadline = operation_started
@@ -298,7 +356,7 @@ pub(crate) fn query_linear_proposal(
         .map_err(openai_backend_error)?;
     let proposal_elapsed_us = elapsed_us(proposal_started);
     let Some(proposal) = proposal else {
-        return Ok(None);
+        return Ok(LinearProposalQueryOutcome::NoProposal);
     };
     if Instant::now() > deadline {
         config
@@ -308,7 +366,9 @@ pub(crate) fn query_linear_proposal(
                 LinearProposalDiscardReason::DeadlineExceeded,
             )
             .map_err(openai_backend_error)?;
-        return Ok(None);
+        return Ok(LinearProposalQueryOutcome::DeadlineExceeded {
+            proposal_elapsed_us,
+        });
     }
     if proposal.token_ids.is_empty() || proposal.token_ids.len() > max_proposal_tokens {
         config
@@ -318,7 +378,7 @@ pub(crate) fn query_linear_proposal(
                 LinearProposalDiscardReason::InvalidTokenCount,
             )
             .map_err(openai_backend_error)?;
-        return Ok(None);
+        return Ok(LinearProposalQueryOutcome::NoProposal);
     }
     if proposal.token_ids.iter().any(|token| *token < 0) {
         config
@@ -328,9 +388,9 @@ pub(crate) fn query_linear_proposal(
                 LinearProposalDiscardReason::InvalidTokenId,
             )
             .map_err(openai_backend_error)?;
-        return Ok(None);
+        return Ok(LinearProposalQueryOutcome::NoProposal);
     }
-    Ok(Some(QueriedLinearProposal {
+    Ok(LinearProposalQueryOutcome::Ready(QueriedLinearProposal {
         proposal,
         proposal_elapsed_us,
         operation_started,
@@ -357,6 +417,13 @@ pub(crate) fn execute_linear_proposal_with_terminal_discard<T>(
             Err(primary_error)
         }
     }
+}
+
+pub(crate) fn report_linear_proposal_receipt(
+    config: &LinearProposalIngressConfig,
+    receipt: &LinearProposalReceipt,
+) -> Option<anyhow::Error> {
+    config.source().report(receipt).err()
 }
 
 pub(crate) fn greedy_linear_proposal_admitted(
@@ -393,28 +460,37 @@ struct LinearProposalExecution {
     runtime_lock_acquires: usize,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct LinearProposalExecutionParams<'a> {
+    pub(crate) session_id: &'a str,
+    pub(crate) current: i32,
+    pub(crate) base_position: u64,
+    pub(crate) generated_len: usize,
+    pub(crate) max_new_tokens: usize,
+}
+
+#[derive(Default)]
+struct LinearProposalRepairTiming {
+    elapsed_us: u64,
+    runtime_lock_wait_us: u64,
+    runtime_lock_hold_us: u64,
+    runtime_lock_acquires: usize,
+}
+
 impl StageOpenAiBackend {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute_local_linear_proposal(
         &self,
-        session_id: &str,
-        current: i32,
-        base_position: u64,
-        generated_len: usize,
-        max_new_tokens: usize,
+        params: LinearProposalExecutionParams<'_>,
         queried: QueriedLinearProposal,
         on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
     ) -> OpenAiResult<LinearProposalReceipt> {
         let proposal_token_count = queried.proposal.token_ids.len();
         let mut verify_inputs = Vec::with_capacity(proposal_token_count.saturating_add(1));
-        verify_inputs.push(current);
+        verify_inputs.push(params.current);
         verify_inputs.extend_from_slice(&queried.proposal.token_ids);
 
         let execution = self.execute_local_linear_proposal_inner(
-            session_id,
-            base_position,
-            generated_len,
-            max_new_tokens,
+            params,
             &queried.proposal.token_ids,
             &verify_inputs,
             on_token,
@@ -453,7 +529,7 @@ impl StageOpenAiBackend {
             committed_tokens: execution.committed_tokens.into_boxed_slice(),
             verification_row_predictions: execution.predictions.into_boxed_slice(),
             correction_or_boundary_token,
-            base_position,
+            base_position: params.base_position,
             position_after_verification: execution.position_after_verification,
             canonical_position: execution.canonical_position,
             trimmed_rows: usize::try_from(
@@ -472,13 +548,9 @@ impl StageOpenAiBackend {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn execute_local_linear_proposal_inner(
         &self,
-        session_id: &str,
-        base_position: u64,
-        generated_len: usize,
-        max_new_tokens: usize,
+        params: LinearProposalExecutionParams<'_>,
         proposal_tokens: &[i32],
         verify_inputs: &[i32],
         on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
@@ -492,21 +564,22 @@ impl StageOpenAiBackend {
         let verify_lock_wait_us = elapsed_us(verify_lock_timer);
         let verify_hold_timer = Instant::now();
         let observed_position = runtime
-            .session_token_count(session_id)
+            .session_token_count(params.session_id)
             .ok_or_else(|| OpenAiError::backend("linear proposal session is not active"))?;
-        if observed_position != base_position {
+        if observed_position != params.base_position {
             return Err(OpenAiError::backend(format!(
-                "linear proposal session position mismatch: observed {observed_position}, expected {base_position}"
+                "linear proposal session position mismatch: observed {observed_position}, expected {}",
+                params.base_position
             )));
         }
         let predictions = runtime
-            .verify_tokens(session_id, verify_inputs)
+            .verify_tokens(params.session_id, verify_inputs)
             .map_err(openai_backend_error)?;
         let decision = classify_native_mtp_verify_window(
             proposal_tokens,
             &predictions,
-            generated_len,
-            max_new_tokens,
+            params.generated_len,
+            params.max_new_tokens,
             |token| {
                 runtime
                     .model
@@ -515,9 +588,10 @@ impl StageOpenAiBackend {
             },
         )?;
         let position_after_verification = runtime
-            .session_token_count(session_id)
+            .session_token_count(params.session_id)
             .ok_or_else(|| OpenAiError::backend("linear proposal session disappeared"))?;
-        let expected_position_after_verification = base_position
+        let expected_position_after_verification = params
+            .base_position
             .checked_add(
                 u64::try_from(verify_inputs.len())
                     .map_err(|_| OpenAiError::backend("verification row count exceeds u64"))?,
@@ -555,47 +629,19 @@ impl StageOpenAiBackend {
             ));
         }
 
-        let canonical_position = base_position
+        let canonical_position = params
+            .base_position
             .checked_add(
                 u64::try_from(committed_tokens.len())
                     .map_err(|_| OpenAiError::backend("committed token count exceeds u64"))?,
             )
             .ok_or_else(|| OpenAiError::backend("linear proposal canonical position overflow"))?;
-        let mut repair_elapsed_us = 0;
-        let mut repair_lock_wait_us = 0;
-        let mut repair_lock_hold_us = 0;
-        let mut runtime_lock_acquires = 1;
-        finish_linear_proposal_after_repair(callback_error, || {
-            if canonical_position < position_after_verification {
-                let repair_timer = Instant::now();
-                let repair_lock_timer = Instant::now();
-                let mut runtime = self.runtime.lock().map_err(|_| {
-                    OpenAiError::backend("runtime lock poisoned during proposal repair")
-                })?;
-                repair_lock_wait_us = elapsed_us(repair_lock_timer);
-                let repair_hold_timer = Instant::now();
-                let trim_result = runtime.trim_session(session_id, canonical_position);
-                repair_lock_hold_us = elapsed_us(repair_hold_timer);
-                runtime_lock_acquires += 1;
-                if let Err(error) = trim_result {
-                    let _ = runtime.drop_session_timed(session_id);
-                    return Err(OpenAiError::backend(format!(
-                        "linear proposal repair failed and the session was retired: {error:#}"
-                    )));
-                }
-                let repaired_position =
-                    runtime.session_token_count(session_id).ok_or_else(|| {
-                        OpenAiError::backend("repaired linear proposal session disappeared")
-                    })?;
-                if repaired_position != canonical_position {
-                    let _ = runtime.drop_session_timed(session_id);
-                    return Err(OpenAiError::backend(format!(
-                        "linear proposal repair position mismatch: observed {repaired_position}, expected {canonical_position}"
-                    )));
-                }
-                repair_elapsed_us = elapsed_us(repair_timer);
-            }
-            Ok(())
+        let repair = finish_linear_proposal_after_repair(callback_error, || {
+            self.trim_branch_suffix_or_retire(
+                params.session_id,
+                canonical_position,
+                position_after_verification,
+            )
         })?;
 
         Ok(LinearProposalExecution {
@@ -606,10 +652,53 @@ impl StageOpenAiBackend {
             position_after_verification,
             canonical_position,
             verification_elapsed_us,
-            repair_elapsed_us,
-            runtime_lock_wait_us: verify_lock_wait_us.saturating_add(repair_lock_wait_us),
-            runtime_lock_hold_us: verify_lock_hold_us.saturating_add(repair_lock_hold_us),
-            runtime_lock_acquires,
+            repair_elapsed_us: repair.elapsed_us,
+            runtime_lock_wait_us: verify_lock_wait_us.saturating_add(repair.runtime_lock_wait_us),
+            runtime_lock_hold_us: verify_lock_hold_us.saturating_add(repair.runtime_lock_hold_us),
+            runtime_lock_acquires: 1usize.saturating_add(repair.runtime_lock_acquires),
+        })
+    }
+
+    fn trim_branch_suffix_or_retire(
+        &self,
+        session_id: &str,
+        canonical_position: u64,
+        position_after_verification: u64,
+    ) -> OpenAiResult<LinearProposalRepairTiming> {
+        if canonical_position >= position_after_verification {
+            return Ok(LinearProposalRepairTiming::default());
+        }
+
+        let repair_timer = Instant::now();
+        let repair_lock_timer = Instant::now();
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned during proposal repair"))?;
+        let runtime_lock_wait_us = elapsed_us(repair_lock_timer);
+        let repair_hold_timer = Instant::now();
+        let trim_result = runtime.trim_session(session_id, canonical_position);
+        let runtime_lock_hold_us = elapsed_us(repair_hold_timer);
+        if let Err(error) = trim_result {
+            let _ = runtime.drop_session_timed(session_id);
+            return Err(OpenAiError::backend(format!(
+                "linear proposal repair failed and the session was retired: {error:#}"
+            )));
+        }
+        let repaired_position = runtime
+            .session_token_count(session_id)
+            .ok_or_else(|| OpenAiError::backend("repaired linear proposal session disappeared"))?;
+        if repaired_position != canonical_position {
+            let _ = runtime.drop_session_timed(session_id);
+            return Err(OpenAiError::backend(format!(
+                "linear proposal repair position mismatch: observed {repaired_position}, expected {canonical_position}"
+            )));
+        }
+        Ok(LinearProposalRepairTiming {
+            elapsed_us: elapsed_us(repair_timer),
+            runtime_lock_wait_us,
+            runtime_lock_hold_us,
+            runtime_lock_acquires: 1,
         })
     }
 }
@@ -637,12 +726,12 @@ fn linear_proposal_disposition(
     }
 }
 
-fn finish_linear_proposal_after_repair(
+fn finish_linear_proposal_after_repair<T>(
     callback_error: Option<OpenAiError>,
-    repair: impl FnOnce() -> OpenAiResult<()>,
-) -> OpenAiResult<()> {
-    repair()?;
-    callback_error.map_or(Ok(()), Err)
+    repair: impl FnOnce() -> OpenAiResult<T>,
+) -> OpenAiResult<T> {
+    let repaired = repair()?;
+    callback_error.map_or(Ok(repaired), Err)
 }
 
 #[cfg(test)]
@@ -665,6 +754,7 @@ mod tests {
         proposal: Mutex<Option<LinearProposal>>,
         delay: Mutex<Duration>,
         discard_fails: Mutex<bool>,
+        report_fails: Mutex<bool>,
         queries: Mutex<Vec<RecordedQuery>>,
         receipts: Mutex<Vec<LinearProposalReceipt>>,
         discards: Mutex<Vec<(OpaqueProposalDecisionId, LinearProposalDiscardReason)>>,
@@ -685,6 +775,9 @@ mod tests {
 
         fn report(&self, receipt: &LinearProposalReceipt) -> Result<()> {
             self.receipts.lock().unwrap().push(receipt.clone());
+            if *self.report_fails.lock().unwrap() {
+                bail!("synthetic report failure");
+            }
             Ok(())
         }
 
@@ -837,6 +930,43 @@ mod tests {
     }
 
     #[test]
+    fn report_failure_is_observed_without_becoming_an_execution_error() {
+        let source = Arc::new(FakeIngress::default());
+        *source.report_fails.lock().unwrap() = true;
+        let config =
+            LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
+        let receipt = LinearProposalReceipt {
+            decision_id: OpaqueProposalDecisionId::new(vec![90]).unwrap(),
+            disposition: LinearProposalDisposition::FullAccept,
+            proposal_token_count: 1,
+            verification_rows: 2,
+            accepted_proposal_tokens: 1,
+            committed_tokens: vec![11, 12].into_boxed_slice(),
+            verification_row_predictions: vec![11, 12].into_boxed_slice(),
+            canonical_prediction_count: 2,
+            correction_or_boundary_token: Some(12),
+            base_position: 10,
+            position_after_verification: 12,
+            canonical_position: 12,
+            trimmed_rows: 0,
+            proposal_elapsed_us: 1,
+            verification_elapsed_us: 2,
+            repair_elapsed_us: 0,
+            total_elapsed_us: 3,
+            runtime_lock_wait_us: 0,
+            runtime_lock_hold_us: 2,
+            runtime_lock_acquires: 1,
+        };
+
+        let error = report_linear_proposal_receipt(&config, &receipt)
+            .expect("report failure should be available for logging");
+
+        assert!(error.to_string().contains("synthetic report failure"));
+        assert_eq!(source.receipts.lock().unwrap().as_slice(), &[receipt]);
+        assert!(source.discards.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn greedy_admission_rejects_sampling_and_grammar() {
         assert!(greedy_linear_proposal_admitted(false, None));
         assert!(greedy_linear_proposal_admitted(false, Some("{}")));
@@ -860,9 +990,11 @@ mod tests {
         let config =
             LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
 
-        let queried = query_linear_proposal(&config, 7, 8, 9, &[21, 22, 23], 5)
-            .unwrap()
-            .unwrap();
+        let LinearProposalQueryOutcome::Ready(queried) =
+            query_linear_proposal(&config, 7, 8, 9, &[21, 22, 23], 5).unwrap()
+        else {
+            panic!("bounded proposal should be ready");
+        };
 
         assert_eq!(queried.proposal.decision_id, id);
         assert_eq!(queried.proposal.token_ids.as_ref(), &[31, 32, 33]);
@@ -888,11 +1020,10 @@ mod tests {
         let invalid_config =
             LinearProposalIngressConfig::new(invalid_source.clone(), Duration::from_secs(1), 4)
                 .unwrap();
-        assert!(
-            query_linear_proposal(&invalid_config, 1, 2, 3, &[4], 5)
-                .unwrap()
-                .is_none()
-        );
+        assert!(matches!(
+            query_linear_proposal(&invalid_config, 1, 2, 3, &[4], 5).unwrap(),
+            LinearProposalQueryOutcome::NoProposal
+        ));
         assert_eq!(
             invalid_source.discards.lock().unwrap().as_slice(),
             &[(invalid_id, LinearProposalDiscardReason::InvalidTokenCount)]
@@ -906,11 +1037,13 @@ mod tests {
         let late_config =
             LinearProposalIngressConfig::new(late_source.clone(), Duration::from_millis(1), 4)
                 .unwrap();
-        assert!(
-            query_linear_proposal(&late_config, 1, 2, 3, &[4], 5)
-                .unwrap()
-                .is_none()
-        );
+        let LinearProposalQueryOutcome::DeadlineExceeded {
+            proposal_elapsed_us,
+        } = query_linear_proposal(&late_config, 1, 2, 3, &[4], 5).unwrap()
+        else {
+            panic!("late proposal should produce deadline telemetry");
+        };
+        assert!(proposal_elapsed_us >= 1_000);
         assert_eq!(
             late_source.discards.lock().unwrap().as_slice(),
             &[(late_id, LinearProposalDiscardReason::DeadlineExceeded)]
@@ -926,11 +1059,10 @@ mod tests {
             4,
         )
         .unwrap();
-        assert!(
-            query_linear_proposal(&invalid_token_config, 1, 2, 3, &[4], 5)
-                .unwrap()
-                .is_none()
-        );
+        assert!(matches!(
+            query_linear_proposal(&invalid_token_config, 1, 2, 3, &[4], 5).unwrap(),
+            LinearProposalQueryOutcome::NoProposal
+        ));
         assert_eq!(
             invalid_token_source.discards.lock().unwrap().as_slice(),
             &[(
