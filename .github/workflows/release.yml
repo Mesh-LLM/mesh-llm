@@ -33,7 +33,11 @@ permissions:
 
 env:
   CACHE_NAMESPACE: mesh-llm
+  SCCACHE_DIR: ${{ github.workspace }}/../.sccache
   SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+  SCCACHE_MULTILEVEL_CHAIN: disk,gha
+  SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY: ignore
 
 jobs:
   metadata:

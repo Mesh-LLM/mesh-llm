@@ -298,11 +298,15 @@ itself prove that an existing package is anonymously readable.
 The public image already contains `sccache`. Public-image Rust jobs start with
 its GHA remote backend disabled, then use the repository-local
 `configure-sccache-gha` action to export the ephemeral Actions cache URL/token
-and probe the remote backend. A failed probe stops the remote-configured server
-and restarts `sccache` with its job-local disk cache, so cache availability
-cannot block compiler startup. Persistent Cargo target and ABI caches continue
-through the existing cache actions. Do not download a second sccache binary
-just to configure the GHA backend.
+and start a `disk,gha` multi-level cache. The disk cache serves as L0, GHA is a
+best-effort L1, and the disk tier uses a job-local directory beside the checkout
+so it does not make release sources appear dirty. Cache read failures degrade to
+misses, and cache write failures only emit warnings. Compiler invocations also
+fall back locally if the sccache server becomes unavailable. A failed initial
+remote probe stops the remote-configured server and restarts `sccache` with
+disk-only storage. Persistent Cargo target and ABI caches continue through the
+existing cache actions. Do not download a second sccache binary just to
+configure the GHA backend.
 
 ## Public website deployment
 

@@ -436,6 +436,27 @@ fn check_release_container_contracts(
     const PINNED_GITHUB_SCRIPT: &str =
         "uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd";
 
+    for (required, context) in [
+        (
+            "  SCCACHE_DIR: ${{ github.workspace }}/../.sccache",
+            "release workflow sccache disk cache",
+        ),
+        (
+            "  SCCACHE_IGNORE_SERVER_IO_ERROR: \"1\"",
+            "release workflow sccache compiler fallback",
+        ),
+        (
+            "  SCCACHE_MULTILEVEL_CHAIN: disk,gha",
+            "release workflow sccache cache chain",
+        ),
+        (
+            "  SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY: ignore",
+            "release workflow sccache write fallback",
+        ),
+    ] {
+        ensure_contains(release_workflow, required, context)?;
+    }
+
     ensure_contains(
         configure_sccache_action,
         PINNED_GITHUB_SCRIPT,
@@ -462,6 +483,22 @@ fn check_release_container_contracts(
         (
             "core.exportVariable('SCCACHE_GHA_ENABLED', 'false')",
             "sccache GHA action job-local fallback",
+        ),
+        (
+            "core.exportVariable('SCCACHE_IGNORE_SERVER_IO_ERROR', '1')",
+            "sccache GHA action compiler fallback",
+        ),
+        (
+            "core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk,gha')",
+            "sccache GHA action cache chain",
+        ),
+        (
+            "core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk')",
+            "sccache GHA action disk-only fallback",
+        ),
+        (
+            "core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'ignore')",
+            "sccache GHA action write fallback",
         ),
         ("['--start-server']", "sccache GHA action server start"),
         ("['--stop-server']", "sccache GHA action server stop"),
@@ -685,11 +722,20 @@ core.exportVariable('ACTIONS_RESULTS_URL'
 core.exportVariable('ACTIONS_RUNTIME_TOKEN'
 core.exportVariable('SCCACHE_GHA_ENABLED', 'true')
 core.exportVariable('SCCACHE_GHA_ENABLED', 'false')
+core.exportVariable('SCCACHE_IGNORE_SERVER_IO_ERROR', '1')
+core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk,gha')
+core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk')
+core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'ignore')
 ['--start-server']
 ['--stop-server']
 "#;
 
-    const VALID_CONTAINER_WORKFLOW: &str = r#"jobs:
+    const VALID_CONTAINER_WORKFLOW: &str = r#"env:
+  SCCACHE_DIR: ${{ github.workspace }}/../.sccache
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+  SCCACHE_MULTILEVEL_CHAIN: disk,gha
+  SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY: ignore
+jobs:
   build_linux_cuda:
     container:
       image: example.invalid/runner@sha256:digest
@@ -748,5 +794,26 @@ core.exportVariable('SCCACHE_GHA_ENABLED', 'false')
         let error =
             check_release_container_contracts(VALID_CONTAINER_WORKFLOW, &action).unwrap_err();
         assert!(error.to_string().contains("job-local fallback"));
+    }
+
+    #[test]
+    fn release_container_contract_requires_fail_open_sccache_writes() {
+        let workflow = VALID_CONTAINER_WORKFLOW
+            .replace("  SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY: ignore\n", "");
+
+        let error = check_release_container_contracts(&workflow, VALID_SCCACHE_ACTION).unwrap_err();
+        assert!(error.to_string().contains("write fallback"));
+    }
+
+    #[test]
+    fn release_container_contract_requires_disk_first_sccache_chain() {
+        let action = VALID_SCCACHE_ACTION.replace(
+            "core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk,gha')",
+            "",
+        );
+
+        let error =
+            check_release_container_contracts(VALID_CONTAINER_WORKFLOW, &action).unwrap_err();
+        assert!(error.to_string().contains("cache chain"));
     }
 }

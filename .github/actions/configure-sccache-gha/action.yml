@@ -1,5 +1,5 @@
 name: Configure baked sccache GHA backend
-description: Use Actions cache from the baked sccache binary with a job-local fallback.
+description: Use job-local disk plus best-effort Actions cache from the baked sccache binary.
 
 runs:
   using: composite
@@ -19,6 +19,9 @@ runs:
           core.exportVariable('ACTIONS_CACHE_URL', cacheUrl);
           core.exportVariable('ACTIONS_RESULTS_URL', resultsUrl);
           core.exportVariable('ACTIONS_RUNTIME_TOKEN', runtimeToken);
+          core.exportVariable('SCCACHE_IGNORE_SERVER_IO_ERROR', '1');
+          core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk,gha');
+          core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'ignore');
 
           await exec.exec('sccache', ['--stop-server'], {
             ignoreReturnCode: true,
@@ -29,7 +32,9 @@ runs:
             ignoreReturnCode: true,
           });
           if (remoteExitCode === 0) {
-            core.info('Baked sccache is using the GitHub Actions cache backend.');
+            core.info(
+              'Baked sccache is using job-local disk with a best-effort GitHub Actions cache.',
+            );
             return;
           }
 
@@ -40,6 +45,7 @@ runs:
             ignoreReturnCode: true,
           });
           core.exportVariable('SCCACHE_GHA_ENABLED', 'false');
+          core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk');
 
           const localExitCode = await exec.exec('sccache', ['--start-server'], {
             ignoreReturnCode: true,
