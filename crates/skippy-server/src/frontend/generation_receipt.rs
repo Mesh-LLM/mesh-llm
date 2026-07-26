@@ -117,6 +117,15 @@ pub(crate) struct GenerationReceiptObservation {
     model_generation_elapsed: Option<Duration>,
 }
 
+pub(crate) struct LocalGenerationReceiptDelivery<'a> {
+    pub(crate) config: &'a GenerationReceiptConfig,
+    pub(crate) session_label: &'a str,
+    pub(crate) request_id: u64,
+    pub(crate) session_id: u64,
+    pub(crate) prompt_token_ids: &'a [i32],
+    pub(crate) observation: GenerationReceiptObservation,
+}
+
 impl GenerationReceiptObservation {
     pub(crate) fn new(max_tokens: usize) -> Self {
         Self {
@@ -170,28 +179,22 @@ struct FinishedGenerationObservation {
 }
 
 impl StageOpenAiBackend {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn deliver_local_generation_receipt(
         &self,
-        config: &GenerationReceiptConfig,
-        session_label: &str,
-        request_id: u64,
-        session_id: u64,
-        prompt_token_ids: &[i32],
-        observation: GenerationReceiptObservation,
+        delivery: LocalGenerationReceiptDelivery<'_>,
     ) -> OpenAiResult<()> {
-        let observation = observation.finish()?;
+        let observation = delivery.observation.finish()?;
         let (final_session_position, full_state) = {
             let mut runtime = self
                 .runtime
                 .lock()
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
             let final_session_position = runtime
-                .canonical_session_position(session_label)
+                .canonical_session_position(delivery.session_label)
                 .map_err(openai_backend_error)?;
-            let full_state = if config.exports_full_state() {
+            let full_state = if delivery.config.exports_full_state() {
                 let bytes = runtime
-                    .export_full_state(session_label)
+                    .export_full_state(delivery.session_label)
                     .map_err(openai_backend_error)?;
                 Some(state_digest(&bytes)?)
             } else {
@@ -200,17 +203,21 @@ impl StageOpenAiBackend {
             (final_session_position, full_state)
         };
         let receipt = GenerationReceipt {
-            request_id,
-            session_id,
-            prompt_token_count: prompt_token_ids.len(),
-            prompt_token_digest: generation_token_id_digest(prompt_token_ids),
+            request_id: delivery.request_id,
+            session_id: delivery.session_id,
+            prompt_token_count: delivery.prompt_token_ids.len(),
+            prompt_token_digest: generation_token_id_digest(delivery.prompt_token_ids),
             generated_token_ids: observation.generated_token_ids,
             final_session_position,
             termination: observation.termination,
             model_generation_elapsed_us: observation.model_generation_elapsed_us,
             full_state,
         };
-        config.sink().record(&receipt).map_err(openai_backend_error)
+        delivery
+            .config
+            .sink()
+            .record(&receipt)
+            .map_err(openai_backend_error)
     }
 }
 

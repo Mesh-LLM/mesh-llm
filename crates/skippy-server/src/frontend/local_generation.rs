@@ -8,7 +8,9 @@ use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::decode_token_phase;
-use crate::frontend::generation_receipt::GenerationReceiptObservation;
+use crate::frontend::generation_receipt::{
+    GenerationReceiptObservation, LocalGenerationReceiptDelivery,
+};
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
 use crate::kv_integration::proactive_eviction_attrs;
@@ -857,14 +859,16 @@ impl StageOpenAiBackend {
             return Ok(());
         }
         match (self.generation_receipt.as_ref(), observation) {
-            (Some(config), Some(observation)) => self.deliver_local_generation_receipt(
-                config,
-                finalization.session_label,
-                finalization.request_id,
-                finalization.session_id,
-                finalization.prompt_token_ids,
-                observation,
-            ),
+            (Some(config), Some(observation)) => {
+                self.deliver_local_generation_receipt(LocalGenerationReceiptDelivery {
+                    config,
+                    session_label: finalization.session_label,
+                    request_id: finalization.request_id,
+                    session_id: finalization.session_id,
+                    prompt_token_ids: finalization.prompt_token_ids,
+                    observation,
+                })
+            }
             _ => Ok(()),
         }
     }
