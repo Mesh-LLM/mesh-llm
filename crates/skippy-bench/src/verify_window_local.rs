@@ -11,7 +11,7 @@ use skippy_runtime::{
     parse_cache_type,
 };
 
-use crate::cli::VerifyWindowLocalArgs;
+use crate::cli::{FlashAttentionArg, VerifyWindowLocalArgs};
 
 #[derive(Debug, Serialize)]
 struct TimingStats {
@@ -46,8 +46,12 @@ struct VerifyWindowLocalReport {
     n_ubatch: Option<u32>,
     cache_type_k: String,
     cache_type_v: String,
+    flash_attn: &'static str,
     prompt_token_count: usize,
     verify_tokens: Vec<i32>,
+    verify_widths: Vec<usize>,
+    continuation_steps: usize,
+    parity_checks: Vec<VerifyParityCheck>,
     warmup: usize,
     iterations: usize,
     batched_width2: TimingStats,
@@ -58,6 +62,30 @@ struct VerifyWindowLocalReport {
     serial_token_per_sec: f64,
     first_batched_prediction: Vec<i32>,
     first_serial_prediction: Vec<i32>,
+}
+
+#[derive(Debug, Serialize)]
+struct VerifyParityCheck {
+    width: usize,
+    matched: bool,
+    first_mismatch_position: Option<usize>,
+    target_stream_matched: bool,
+    continuation_matched: bool,
+    continuation_steps: usize,
+    native_position_matched: bool,
+    full_state_matched: bool,
+    serial_full_state_bytes: usize,
+    batched_full_state_bytes: usize,
+    token_signal_matched: bool,
+    signal_window_matched: bool,
+    serial_top_token: i32,
+    serial_second_token: i32,
+    serial_top2_margin: f32,
+    batched_top_token: i32,
+    batched_second_token: i32,
+    batched_top2_margin: f32,
+    batched_us: u128,
+    serial_us: u128,
 }
 
 #[derive(Debug, Serialize)]
@@ -122,6 +150,12 @@ fn validate_args(args: &VerifyWindowLocalArgs) -> Result<()> {
     if args.iterations == 0 {
         bail!("iterations must be greater than zero");
     }
+    if args.verify_widths.is_empty() || args.verify_widths.contains(&0) {
+        bail!("verify_widths must contain at least one positive width");
+    }
+    if args.continuation_steps == 0 {
+        bail!("continuation_steps must be positive");
+    }
     if let Some(split_layer) = args.split_layer
         && (split_layer == 0 || split_layer >= args.layer_end)
     {
@@ -147,7 +181,7 @@ fn full_runtime_config(args: &VerifyWindowLocalArgs) -> Result<RuntimeConfig> {
         selected_backend_device: None,
         cache_type_k: parse_cache_type(&args.cache_type_k)?,
         cache_type_v: parse_cache_type(&args.cache_type_v)?,
-        flash_attn_type: FlashAttentionType::Auto,
+        flash_attn_type: runtime_flash_attn(args.flash_attn),
         load_mode: RuntimeLoadMode::RuntimeSlice,
         projector_path: None,
         include_embeddings: true,
@@ -159,6 +193,7 @@ fn full_runtime_config(args: &VerifyWindowLocalArgs) -> Result<RuntimeConfig> {
 struct FullModelSamples {
     tokens: Vec<i32>,
     verify_tokens: Vec<i32>,
+    parity_checks: Vec<VerifyParityCheck>,
     samples: SampleSet,
 }
 
@@ -178,13 +213,23 @@ fn run_full_model_samples(args: &VerifyWindowLocalArgs) -> Result<FullModelSampl
         .prefill_chunked(&tokens)
         .context("failed to prefill prompt")?;
     let base_token_count = session.token_count();
-    let verify_tokens = choose_verify_tokens(
+    let target_plan = choose_target_plan(
         &mut session,
         base_token_count,
         &tokens,
         &args.prompt,
         &config,
+        target_token_count(args)?,
     )?;
+    let parity_checks = run_parity_checks(
+        &mut session,
+        base_token_count,
+        args.layer_end,
+        &target_plan,
+        &args.verify_widths,
+        args.continuation_steps,
+    )?;
+    let verify_tokens = target_plan.verify_tokens_for_width(sample_width(args)?)?;
     let samples = run_samples(
         &mut session,
         base_token_count,
@@ -195,44 +240,305 @@ fn run_full_model_samples(args: &VerifyWindowLocalArgs) -> Result<FullModelSampl
     Ok(FullModelSamples {
         tokens,
         verify_tokens,
+        parity_checks,
         samples,
     })
 }
 
-fn choose_verify_tokens(
+struct VerifyTargetPlan {
+    current: i32,
+    targets: Vec<i32>,
+}
+
+impl VerifyTargetPlan {
+    fn verify_tokens_for_width(&self, width: usize) -> Result<Vec<i32>> {
+        if width == 0 {
+            bail!("verify width must be greater than zero");
+        }
+        if self.targets.len() < width {
+            bail!(
+                "target stream has {} token(s), but width {width} requires {width}",
+                self.targets.len()
+            );
+        }
+        let mut tokens = Vec::with_capacity(width);
+        tokens.push(self.current);
+        tokens.extend_from_slice(&self.targets[..width.saturating_sub(1)]);
+        Ok(tokens)
+    }
+
+    fn expected_for_width(&self, width: usize) -> Result<&[i32]> {
+        if self.targets.len() < width {
+            bail!(
+                "target stream has {} token(s), but width {width} requires {width}",
+                self.targets.len()
+            );
+        }
+        Ok(&self.targets[..width])
+    }
+}
+
+fn choose_target_plan(
     session: &mut StageSession,
     base_token_count: u64,
     prompt_tokens: &[i32],
     prompt: &str,
     config: &RuntimeConfig,
-) -> Result<Vec<i32>> {
+    max_width: usize,
+) -> Result<VerifyTargetPlan> {
     session
         .trim_session(base_token_count)
-        .context("failed to trim session before choosing verify tokens")?;
+        .context("failed to trim session before choosing verify target stream")?;
     let current = *prompt_tokens
         .first()
         .context("prompt produced no token for verify-token seed")?;
-    let (_after_current, native_mtp, _frame) = session
-        .decode_step_frame_sampled_mtp(current, Some(&SamplingConfig::default()), None, 0, 1)
-        .with_context(|| {
-            format!(
-                "failed to get native MTP draft from {} after prompt {:?}",
-                model_description(config),
-                prompt
-            )
-        })?;
-    let Some(draft) = native_mtp else {
-        bail!("model did not produce a native MTP n=1 draft token");
-    };
+    let mut input = current;
+    let mut targets = Vec::with_capacity(max_width.saturating_add(1));
+    for _ in 0..max_width.saturating_add(1) {
+        let (predicted, _native_mtp, _frame) = session
+            .decode_step_frame_sampled_mtp(input, Some(&SamplingConfig::default()), None, 0, 1)
+            .with_context(|| {
+                format!(
+                    "failed to extend greedy target stream from {} after prompt {:?}",
+                    model_description(config),
+                    prompt
+                )
+            })?;
+        if predicted < 0 {
+            bail!("target stream decode did not return a token");
+        }
+        targets.push(predicted);
+        input = predicted;
+    }
     session
         .trim_session(base_token_count)
-        .context("failed to trim session after choosing verify tokens")?;
-    let draft_token = draft
-        .token_ids
+        .context("failed to trim session after choosing verify target stream")?;
+    Ok(VerifyTargetPlan { current, targets })
+}
+
+fn run_parity_checks(
+    session: &mut StageSession,
+    base_token_count: u64,
+    layer_end: u32,
+    target_plan: &VerifyTargetPlan,
+    widths: &[usize],
+    continuation_steps: usize,
+) -> Result<Vec<VerifyParityCheck>> {
+    let mut checks = Vec::with_capacity(widths.len());
+    for &width in widths {
+        checks.push(run_parity_check(
+            session,
+            base_token_count,
+            layer_end,
+            target_plan,
+            width,
+            continuation_steps,
+        )?);
+    }
+    Ok(checks)
+}
+
+fn run_parity_check(
+    session: &mut StageSession,
+    base_token_count: u64,
+    layer_end: u32,
+    target_plan: &VerifyTargetPlan,
+    width: usize,
+    continuation_steps: usize,
+) -> Result<VerifyParityCheck> {
+    let verify_tokens = target_plan.verify_tokens_for_width(width)?;
+    let expected = target_plan.expected_for_width(width)?;
+
+    session
+        .trim_session(base_token_count)
+        .context("failed to trim session before serial parity check")?;
+    let serial_start = Instant::now();
+    let serial_prediction = serial_decode_expected(session, &verify_tokens)?;
+    let serial_us = serial_start.elapsed().as_micros();
+    let serial_position = session.token_count();
+    let serial_continuation =
+        decode_expected_continuation(session, target_plan, width, continuation_steps)?;
+    let serial_full_state = session
+        .export_full_state(
+            0,
+            i32::try_from(layer_end).context("layer_end exceeds i32")?,
+        )
+        .context("failed to export serial full state")?;
+    let serial_signal = session.last_token_signal()?;
+    let serial_window = format!(
+        "{:?}",
+        session.signal_window(width.saturating_add(1) as u32)?
+    );
+
+    session
+        .trim_session(base_token_count)
+        .context("failed to trim session before batched parity check")?;
+    let batched_start = Instant::now();
+    let (batched_prediction, _frame) = session
+        .verify_tokens_frame_sampled(&verify_tokens, Some(&SamplingConfig::default()), None, 0)
+        .with_context(|| format!("batched width-{width} VerifyWindow failed"))?;
+    let batched_us = batched_start.elapsed().as_micros();
+    let batched_position = session.token_count();
+    let batched_continuation =
+        decode_expected_continuation(session, target_plan, width, continuation_steps)?;
+    let batched_full_state = session
+        .export_full_state(
+            0,
+            i32::try_from(layer_end).context("layer_end exceeds i32")?,
+        )
+        .context("failed to export batched full state")?;
+    let batched_signal = session.last_token_signal()?;
+    let batched_window = format!(
+        "{:?}",
+        session.signal_window(width.saturating_add(1) as u32)?
+    );
+
+    let batched_prefix = prediction_prefix(&batched_prediction, width)?;
+    let serial_prefix = prediction_prefix(&serial_prediction, width)?;
+    let target_stream_matched = batched_prefix == expected && serial_prefix == expected;
+    let continuation_matched = batched_continuation == serial_continuation;
+    let native_position_matched = batched_position == serial_position;
+    let full_state_matched = batched_full_state == serial_full_state;
+    let token_signal_matched = batched_signal == serial_signal;
+    let signal_window_matched = batched_window == serial_window;
+    let first_mismatch_position = first_mismatch_position(batched_prefix, expected)
+        .or_else(|| first_mismatch_position(serial_prefix, expected));
+    let matched = target_stream_matched
+        && continuation_matched
+        && native_position_matched
+        && full_state_matched
+        && token_signal_matched;
+    if !matched {
+        bail!(
+            "verify parity failed at width {width}: first_mismatch_position={:?} target_stream_matched={} continuation_matched={} native_position_matched={} full_state_matched={} serial_full_state_bytes={} batched_full_state_bytes={} token_signal_matched={} signal_window_matched={} serial_margin={} batched_margin={} serial_top={} batched_top={} batched_us={} serial_us={}",
+            first_mismatch_position,
+            target_stream_matched,
+            continuation_matched,
+            native_position_matched,
+            full_state_matched,
+            serial_full_state.len(),
+            batched_full_state.len(),
+            token_signal_matched,
+            signal_window_matched,
+            serial_signal.margin,
+            batched_signal.margin,
+            serial_signal.top_token,
+            batched_signal.top_token,
+            batched_us,
+            serial_us
+        );
+    }
+
+    Ok(VerifyParityCheck {
+        width,
+        matched,
+        first_mismatch_position,
+        target_stream_matched,
+        continuation_matched,
+        continuation_steps,
+        native_position_matched,
+        full_state_matched,
+        serial_full_state_bytes: serial_full_state.len(),
+        batched_full_state_bytes: batched_full_state.len(),
+        token_signal_matched,
+        signal_window_matched,
+        serial_top_token: serial_signal.top_token,
+        serial_second_token: serial_signal.second_token,
+        serial_top2_margin: serial_signal.margin,
+        batched_top_token: batched_signal.top_token,
+        batched_second_token: batched_signal.second_token,
+        batched_top2_margin: batched_signal.margin,
+        batched_us,
+        serial_us,
+    })
+}
+
+fn serial_decode_expected(session: &mut StageSession, verify_tokens: &[i32]) -> Result<Vec<i32>> {
+    let mut predicted_tokens = Vec::with_capacity(verify_tokens.len());
+    for token_id in verify_tokens {
+        let (predicted, _native_mtp, _frame) = session
+            .decode_step_frame_sampled_mtp(*token_id, Some(&SamplingConfig::default()), None, 0, 1)
+            .context("serial target-stream decode failed")?;
+        if predicted >= 0 {
+            predicted_tokens.push(predicted);
+        }
+    }
+    Ok(predicted_tokens)
+}
+
+fn decode_expected_continuation(
+    session: &mut StageSession,
+    target_plan: &VerifyTargetPlan,
+    width: usize,
+    continuation_steps: usize,
+) -> Result<Vec<i32>> {
+    let mut input = *target_plan
+        .targets
+        .get(width.saturating_sub(1))
+        .with_context(|| format!("missing continuation input for width {width}"))?;
+    let mut predicted_tokens = Vec::with_capacity(continuation_steps);
+    for step in 0..continuation_steps {
+        let expected_index = width
+            .checked_add(step)
+            .with_context(|| format!("continuation index overflow at width {width}"))?;
+        let expected = *target_plan.targets.get(expected_index).with_context(|| {
+            format!(
+                "missing continuation target for width {width}, step {step}; \
+                 target plan has {} token(s)",
+                target_plan.targets.len()
+            )
+        })?;
+        let (predicted, _native_mtp, _frame) = session
+            .decode_step_frame_sampled_mtp(input, Some(&SamplingConfig::default()), None, 0, 1)
+            .with_context(|| format!("continuation decode failed at width {width}, step {step}"))?;
+        if predicted != expected {
+            bail!(
+                "continuation mismatch at width {width}, step {step}: \
+                 predicted {predicted}, expected {expected}"
+            );
+        }
+        predicted_tokens.push(predicted);
+        input = predicted;
+    }
+    Ok(predicted_tokens)
+}
+
+fn prediction_prefix(prediction: &[i32], width: usize) -> Result<&[i32]> {
+    if prediction.len() < width {
+        bail!(
+            "prediction has {} token(s), but width {width} requires {width}",
+            prediction.len()
+        );
+    }
+    Ok(&prediction[..width])
+}
+
+fn first_mismatch_position(left: &[i32], right: &[i32]) -> Option<usize> {
+    left.iter()
+        .zip(right.iter())
+        .position(|(left, right)| left != right)
+        .or_else(|| (left.len() != right.len()).then_some(left.len().min(right.len())))
+}
+
+fn max_verify_width(args: &VerifyWindowLocalArgs) -> Result<usize> {
+    args.verify_widths
+        .iter()
+        .copied()
+        .max()
+        .context("verify_widths must contain at least one width")
+}
+
+fn target_token_count(args: &VerifyWindowLocalArgs) -> Result<usize> {
+    max_verify_width(args)?
+        .checked_add(args.continuation_steps)
+        .context("target token count overflow")
+}
+
+fn sample_width(args: &VerifyWindowLocalArgs) -> Result<usize> {
+    args.verify_widths
         .first()
         .copied()
-        .context("native MTP draft did not include a token")?;
-    Ok(vec![current, draft_token])
+        .context("verify_widths must contain at least one width")
 }
 
 fn run_samples(
@@ -437,7 +743,7 @@ fn split_runtime_configs(
         selected_backend_device: None,
         cache_type_k,
         cache_type_v,
-        flash_attn_type: FlashAttentionType::Auto,
+        flash_attn_type: runtime_flash_attn(args.flash_attn),
         load_mode: RuntimeLoadMode::RuntimeSlice,
         projector_path: None,
         include_embeddings: true,
@@ -460,7 +766,7 @@ fn split_runtime_configs(
         selected_backend_device: None,
         cache_type_k,
         cache_type_v,
-        flash_attn_type: FlashAttentionType::Auto,
+        flash_attn_type: runtime_flash_attn(args.flash_attn),
         load_mode: RuntimeLoadMode::RuntimeSlice,
         projector_path: None,
         include_embeddings: false,
@@ -777,8 +1083,12 @@ fn build_report(
         n_ubatch: args.n_ubatch,
         cache_type_k: args.cache_type_k,
         cache_type_v: args.cache_type_v,
+        flash_attn: flash_attn_name(args.flash_attn),
         prompt_token_count: full.tokens.len(),
         verify_tokens: full.verify_tokens,
+        verify_widths: args.verify_widths,
+        continuation_steps: args.continuation_steps,
+        parity_checks: full.parity_checks,
         warmup: args.warmup,
         iterations: args.iterations,
         batched_width2,
@@ -850,6 +1160,22 @@ fn model_description(config: &RuntimeConfig) -> String {
         "layers={}..{} ctx={} n_gpu_layers={}",
         config.layer_start, config.layer_end, config.ctx_size, config.n_gpu_layers
     )
+}
+
+fn runtime_flash_attn(value: FlashAttentionArg) -> FlashAttentionType {
+    match value {
+        FlashAttentionArg::Auto => FlashAttentionType::Auto,
+        FlashAttentionArg::Disabled => FlashAttentionType::Disabled,
+        FlashAttentionArg::Enabled => FlashAttentionType::Enabled,
+    }
+}
+
+fn flash_attn_name(value: FlashAttentionArg) -> &'static str {
+    match value {
+        FlashAttentionArg::Auto => "auto",
+        FlashAttentionArg::Disabled => "disabled",
+        FlashAttentionArg::Enabled => "enabled",
+    }
 }
 
 #[cfg(test)]

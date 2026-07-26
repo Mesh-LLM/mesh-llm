@@ -1,0 +1,167 @@
+From 85b0794c28134e58a57b549f45cd50f952cd9974 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 26 Jul 2026 09:32:38 +1000
+Subject: [PATCH] skippy: make verify tokens state-canonical by default
+
+---
+ src/skippy.cpp | 100 ++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 86 insertions(+), 14 deletions(-)
+
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index a8cc03cbc..fdd344a39 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -1786,6 +1786,10 @@ static bool skippy_mtp_greedy_sampling_fastpath_enabled() {
+     return skippy_env_enabled("SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH");
+ }
+ 
++static bool skippy_verify_tokens_batch_enabled() {
++    return skippy_env_enabled("SKIPPY_VERIFY_TOKENS_ENABLE_BATCH");
++}
++
+ static bool skippy_glm_dsa_op_timing_enabled() {
+     return skippy_env_enabled("SKIPPY_GLM_DSA_OP_TIMING");
+ }
+@@ -2882,6 +2886,10 @@ static void skippy_record_tokens(
+ }
+ 
+ static void skippy_record_signal(skippy_session * session, int32_t logits_index);
++static llama_token skippy_sample_token_ith(
++        skippy_session * session,
++        const skippy_sampling_config * sampling,
++        int32_t logits_index);
+ 
+ static enum skippy_status skippy_decode_tokens(
+         skippy_session * session,
+@@ -2993,6 +3001,44 @@ static enum skippy_status skippy_verify_token_batch(
+     return status;
+ }
+ 
++static enum skippy_status skippy_verify_token_serial_sampled(
++        skippy_session * session,
++        const llama_token * token_ids,
++        size_t token_count,
++        const skippy_sampling_config * sampling,
++        llama_token * output_tokens,
++        size_t output_token_capacity,
++        struct skippy_error ** out_error) {
++    if (session == nullptr || session->ctx == nullptr || token_ids == nullptr || token_count == 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and at least one token are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (output_tokens == nullptr || output_token_capacity < token_count) {
++        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "token output buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++    if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "non-first runtime slices require activation input");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    for (size_t i = 0; i < token_count; ++i) {
++        enum skippy_status status = skippy_decode_tokens(
++                session,
++                &token_ids[i],
++                1,
++                true,
++                SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
++                out_error);
++        if (status != SKIPPY_STATUS_OK) {
++            return status;
++        }
++        skippy_record_signal(session, -1);
++        output_tokens[i] = skippy_sample_token_ith(session, sampling, -1);
++    }
++    return skippy_success(out_error);
++}
++
+ static llama_token skippy_greedy_sample_context(
+         llama_model * model,
+         llama_context * ctx,
+@@ -5151,11 +5197,22 @@ enum skippy_status skippy_verify_tokens(
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+ 
+-    enum skippy_status status = skippy_verify_token_batch(session, token_ids, token_count, out_error);
++    enum skippy_status status = skippy_verify_tokens_batch_enabled() ?
++            skippy_verify_token_batch(session, token_ids, token_count, out_error) :
++            skippy_verify_token_serial_sampled(
++                    session,
++                    token_ids,
++                    token_count,
++                    nullptr,
++                    output_tokens,
++                    output_token_capacity,
++                    out_error);
+     if (status == SKIPPY_STATUS_OK) {
+         const int32_t n_tokens = static_cast<int32_t>(token_count);
+-        for (int32_t i = 0; i < n_tokens; ++i) {
+-            output_tokens[i] = skippy_greedy_sample_ith(session, i);
++        if (skippy_verify_tokens_batch_enabled()) {
++            for (int32_t i = 0; i < n_tokens; ++i) {
++                output_tokens[i] = skippy_greedy_sample_ith(session, i);
++            }
+         }
+     }
+     return status;
+@@ -5848,6 +5905,7 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+         }
+     }
+ 
++    bool output_tokens_sampled = false;
+     if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
+         status = session->stage_model->config.include_output ?
+                 skippy_verify_activation_frame(session, input_desc, input_payload, token_ids, token_count, out_error) :
+@@ -5863,15 +5921,27 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+                         SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
+                         out_error);
+     } else {
+-        status = session->stage_model->config.include_output ?
+-                skippy_verify_token_batch(session, token_ids, token_count, out_error) :
+-                skippy_decode_tokens(
+-                        session,
+-                        token_ids,
+-                        token_count,
+-                        false,
+-                        SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
+-                        out_error);
++        if (session->stage_model->config.include_output) {
++            status = skippy_verify_tokens_batch_enabled() ?
++                    skippy_verify_token_batch(session, token_ids, token_count, out_error) :
++                    skippy_verify_token_serial_sampled(
++                            session,
++                            token_ids,
++                            token_count,
++                            sampling,
++                            output_tokens,
++                            output_token_capacity,
++                            out_error);
++            output_tokens_sampled = !skippy_verify_tokens_batch_enabled();
++        } else {
++            status = skippy_decode_tokens(
++                    session,
++                    token_ids,
++                    token_count,
++                    false,
++                    SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
++                    out_error);
++        }
+     }
+     if (status != SKIPPY_STATUS_OK) {
+         return status;
+@@ -5885,8 +5955,10 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+ 
+     if (session->stage_model->config.include_output) {
+         const int32_t n_tokens = static_cast<int32_t>(token_count);
+-        for (int32_t i = 0; i < n_tokens; ++i) {
+-            output_tokens[i] = skippy_sample_token_ith(session, sampling, i);
++        if (!output_tokens_sampled) {
++            for (int32_t i = 0; i < n_tokens; ++i) {
++                output_tokens[i] = skippy_sample_token_ith(session, sampling, i);
++            }
+         }
+         if (output_token_capacity >= token_count + 3 && token_count > 0) {
+             skippy_native_mtp_draft mtp_draft = {};
+-- 
+2.54.0 (Apple Git-157)
+
