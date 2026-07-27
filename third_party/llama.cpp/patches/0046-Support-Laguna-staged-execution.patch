@@ -1,0 +1,72 @@
+From d94d179b554ff3de781b122b305a22d1a63f1b2d Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 27 Jul 2026 17:19:02 +1000
+Subject: [PATCH] Support Laguna staged execution
+
+---
+ src/models/laguna.cpp | 19 ++++++++++++++++---
+ src/skippy.cpp        |  1 +
+ 2 files changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/src/models/laguna.cpp b/src/models/laguna.cpp
+index fb55ec12..7144a389 100644
+--- a/src/models/laguna.cpp
++++ b/src/models/laguna.cpp
+@@ -157,7 +157,12 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+     // No MuP embedding scale (laguna omits this; afmoe scales by sqrt(hidden)).
+ 
+     ggml_tensor * inp_pos = build_inp_pos();
+@@ -166,11 +171,11 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
+     const bool has_swa = hparams.swa_type != LLAMA_SWA_TYPE_NONE;
+     llm_graph_input_attn_kv      * inp_attn_kv   = has_swa ? nullptr : build_attn_inp_kv();
+     llm_graph_input_attn_kv_iswa * inp_attn_iswa = has_swa ? build_attn_inp_kv_iswa() : nullptr;
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
+         const bool    is_swa_il   = hparams.is_swa(il);
+         const int64_t n_head_il   = hparams.n_head(il);
+         const int64_t n_head_kv_il = hparams.n_head_kv(il);
+@@ -320,6 +325,14 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
+     }
+ 
+     cur = inpL;
++
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(cur, "stage_boundary", il_end - 1);
++        res->t_embd = cur;
++        ggml_build_forward_expand(gf, cur);
++        return;
++    }
++
+     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+     cb(cur, "result_norm", -1);
+     res->t_embd = cur;
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 47f0a549..da0d97bf 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -4112,6 +4112,7 @@ static enum skippy_status skippy_finish_model_open(
+             model->arch != LLM_ARCH_JAIS &&
+             model->arch != LLM_ARCH_JAIS2 &&
+             model->arch != LLM_ARCH_JAMBA &&
++            model->arch != LLM_ARCH_LAGUNA &&
+             model->arch != LLM_ARCH_LFM2 &&
+             model->arch != LLM_ARCH_LLADA &&
+             model->arch != LLM_ARCH_LLADA_MOE &&
+-- 
+2.50.1 (Apple Git-155)
+

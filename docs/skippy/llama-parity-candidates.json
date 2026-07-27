@@ -186,6 +186,14 @@
       "notes": "text lane passed in llama-parity-qwen3moe-runtime-slice-2; q8 activation wire validated; ResidentKv native-sequence remap cache smoke passed; MoE expert-stage smoke already passed"
     },
     {
+      "llama_model": "laguna",
+      "family": "laguna",
+      "status": "candidate",
+      "repo": "poolside/Laguna-S-2.1-GGUF",
+      "include": "laguna-s-2.1-Q4_K_M.gguf",
+      "notes": "P0 certification target from the official Poolside Q4_K_M GGUF; runtime-slice, package, dtype, state, cache, and mesh evidence remain pending until the Laguna certification run completes"
+    },
+    {
       "llama_model": "mistral3",
       "family": "mistral",
       "status": "certified",

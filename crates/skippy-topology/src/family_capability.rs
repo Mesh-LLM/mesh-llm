@@ -151,6 +151,11 @@ pub const STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS: &[StageRuntimeFamilyExpectati
         recurrent_or_hybrid: true,
     },
     StageRuntimeFamilyExpectation {
+        llama_architecture: "laguna",
+        family_id: "laguna",
+        recurrent_or_hybrid: false,
+    },
+    StageRuntimeFamilyExpectation {
         llama_architecture: "lfm2",
         family_id: "lfm2",
         recurrent_or_hybrid: true,
@@ -553,6 +558,16 @@ pub fn qwen3moe_capability(layer_count: u32, activation_width: u32) -> FamilyCap
         activation_width,
         WireValidation::Untested,
         ExactStateMobility::Accepted,
+    )
+}
+
+pub fn laguna_capability(layer_count: u32, activation_width: u32) -> FamilyCapabilityRecord {
+    dense_family_capability(
+        "laguna",
+        layer_count,
+        activation_width,
+        WireValidation::Untested,
+        ExactStateMobility::Untested,
     )
 }
 
@@ -1102,6 +1117,9 @@ fn infer_mistral_olmo_llama_capability(
     }
     if compact.contains("olmo") {
         return Some(olmo_capability(layer_count, activation_width));
+    }
+    if compact.contains("laguna") {
+        return Some(laguna_capability(layer_count, activation_width));
     }
     if compact.contains("llama") {
         return Some(llama_capability(layer_count, activation_width));

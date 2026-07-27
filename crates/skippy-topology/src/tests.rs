@@ -1033,6 +1033,20 @@ fn infers_known_family_capabilities_from_model_identity() {
     .expect("qwen3moe");
     assert_eq!(qwen3moe.family_id, "qwen3moe");
     assert_eq!(qwen3moe.q8_wire_validation, WireValidation::Validated);
+    for identity in [
+        "laguna",
+        "poolside/Laguna-XS-2.1-GGUF:Q4_K_M",
+        "poolside/Laguna-S-2.1-GGUF:Q4_K_M",
+        "poolside/Laguna-XS.2-GGUF:Q4_K_M",
+        "poolside/Laguna-M.1-GGUF:Q4_K_M",
+    ] {
+        let laguna = infer_family_capability(identity, 48, 3072)
+            .unwrap_or_else(|| panic!("failed to infer {identity}"));
+        assert_eq!(laguna.family_id, "laguna", "{identity}");
+        assert_eq!(laguna.q8_wire_validation, WireValidation::Untested);
+        assert_eq!(laguna.exact_state_mobility, ExactStateMobility::Untested);
+        assert!(laguna.recurrent_ranges.is_empty());
+    }
     let openai_moe =
         infer_family_capability("ggml-org/gpt-oss-20b-GGUF:gpt-oss-20b-mxfp4", 24, 2880)
             .expect("openai_moe/gpt-oss");
