@@ -158,15 +158,20 @@ pub(super) fn run_auto_handle_model_target_reconciliation_result(
     profile: String,
     result: std::result::Result<api::RuntimeLoadResponse, String>,
 ) {
-    match result {
+    match apply_model_target_reconciliation_load_finished(
+        &mut ctx.model_target_reconciliation_state,
+        &ctx.model_target_reconciliation_policy,
+        &model_ref,
+        &profile,
+        result,
+        runtime_unix_secs(),
+    ) {
         Ok(response) => {
             let load_profile = if response.profile.is_empty() {
                 profile.clone()
             } else {
                 response.profile.clone()
             };
-            ctx.model_target_reconciliation_state
-                .record_load_success(&model_ref, &load_profile);
             if !load_profile.is_empty() && load_profile != profile {
                 tracing::warn!(
                     model_ref = %model_ref,
@@ -184,18 +189,33 @@ pub(super) fn run_auto_handle_model_target_reconciliation_result(
             });
         }
         Err(error) => {
-            ctx.model_target_reconciliation_state.record_load_failure(
-                &model_ref,
-                &profile,
-                runtime_unix_secs(),
-                &ctx.model_target_reconciliation_policy,
-            );
             let _ = emit_event(OutputEvent::Warning {
                 message: format!("Model target reconciliation failed for '{model_ref}'"),
                 context: Some(error),
             });
         }
     }
+}
+
+pub(super) fn apply_model_target_reconciliation_load_finished(
+    state: &mut ModelTargetReconciliationState,
+    policy: &ModelTargetReconciliationPolicy,
+    model_ref: &str,
+    profile: &str,
+    result: std::result::Result<api::RuntimeLoadResponse, String>,
+    now_secs: u64,
+) -> std::result::Result<api::RuntimeLoadResponse, String> {
+    match &result {
+        Ok(response) => {
+            state.record_load_success(model_ref, profile);
+            state.notify_load_success(model_ref, profile, response.clone());
+        }
+        Err(error) => {
+            state.record_load_failure(model_ref, profile, now_secs, policy);
+            state.notify_load_failure(model_ref, profile, &anyhow::Error::msg(error.clone()));
+        }
+    }
+    result
 }
 
 pub(super) fn apply_startup_model_load_finished(

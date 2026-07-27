@@ -147,6 +147,51 @@ fn startup_load_finished_notifies_stacked_load_callers() {
 }
 
 #[test]
+fn reconciliation_local_path_load_notifies_stacked_canonical_caller() {
+    // Given: reconciliation tracks the canonical catalog identity while executing a local path.
+    let mut state = ModelTargetReconciliationState::default();
+    let model_ref = "org/model@main:model.gguf";
+    let load_spec = "/models/model.gguf";
+    let profile = "low-ctx";
+    state.mark_load_started(model_ref, profile);
+    let (caller_tx, mut caller_rx) = tokio::sync::oneshot::channel();
+    state.stack_load_completion(model_ref, profile, caller_tx);
+    let response = api::RuntimeLoadResponse {
+        model_ref: load_spec.to_string(),
+        model: "Model".to_string(),
+        instance_id: "runtime-1".to_string(),
+        profile: profile.to_string(),
+        backend: Some("skippy".to_string()),
+        context_length: Some(4096),
+    };
+
+    // When: the internal path-keyed load finishes before the canonical reconciliation event.
+    state.record_load_success(load_spec, profile);
+    state.notify_load_success(load_spec, profile, response.clone());
+
+    // Then: the canonical API/owner caller remains stacked until that stable identity finishes.
+    assert!(matches!(
+        caller_rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    crate::runtime::model_lifecycle::apply_model_target_reconciliation_load_finished(
+        &mut state,
+        &ModelTargetReconciliationPolicy::default(),
+        model_ref,
+        profile,
+        Ok(response),
+        1,
+    )
+    .expect("canonical reconciliation result should succeed");
+    let caller = caller_rx
+        .blocking_recv()
+        .expect("stacked canonical caller should receive completion")
+        .expect("reconciliation load should succeed");
+    assert_eq!(caller.instance_id, "runtime-1");
+    assert!(!state.is_load_pending(model_ref, profile));
+}
+
+#[test]
 fn resolved_unload_of_profiled_load_prevents_reconciliation_reload() {
     // Given: default and low-context intents share a model name, and the low profile has loaded.
     let policy = ModelTargetReconciliationPolicy {
