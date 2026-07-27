@@ -165,6 +165,11 @@ CMAKE_ARGS=(
   -DLLAMA_BUILD_TESTS=OFF
   -DLLAMA_CURL=OFF
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+  # mtmd video shells out to ffmpeg via sheredom/subprocess.h, which calls
+  # posix_spawn_file_actions_addchdir_np - unavailable on iOS, so it breaks the
+  # Swift XCFramework build. mesh-llm does not use mtmd video; opt out on all
+  # platforms.
+  -DMTMD_VIDEO=OFF
 )
 
 if command -v ninja >/dev/null 2>&1; then

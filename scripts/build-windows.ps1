@@ -1060,7 +1060,10 @@ Invoke-InRepo {
         "-DLLAMA_CURL=OFF",
         "-DLLAMA_BUILD_EXAMPLES=OFF",
         "-DLLAMA_BUILD_TESTS=OFF",
-        "-DGGML_BUILD_TESTS=OFF"
+        "-DGGML_BUILD_TESTS=OFF",
+        # mtmd video pulls in the ffmpeg subprocess path (sheredom/subprocess.h)
+        # that mesh-llm does not use; keep it off to match build-llama.sh.
+        "-DMTMD_VIDEO=OFF"
     )
 
     $rcPath = Resolve-CommandPath "rc"
