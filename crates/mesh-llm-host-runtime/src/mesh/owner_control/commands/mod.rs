@@ -200,17 +200,16 @@ impl OwnedNodeCommand {
 
     pub(crate) fn deadline(&self) -> OwnedNodeCommandDeadline {
         match self {
-            Self::GetConfig { .. } | Self::ApplyConfig { .. } => {
-                OwnedNodeCommandDeadline::Unary(Duration::from_secs(5))
-            }
+            Self::GetConfig { .. }
+            | Self::ApplyConfig { .. }
+            | Self::LoadModel { .. }
+            | Self::UnloadModel { .. }
+            | Self::EnsureModel { .. }
+            | Self::DrainModel { .. } => OwnedNodeCommandDeadline::Unary(Duration::from_secs(5)),
             Self::ScanRefresh { .. } => OwnedNodeCommandDeadline::Scan(Duration::from_secs(
                 OWNER_CONTROL_SCAN_DEADLINE_SECS,
             )),
             Self::WatchConfig { .. } => OwnedNodeCommandDeadline::Watch,
-            Self::LoadModel { .. }
-            | Self::UnloadModel { .. }
-            | Self::EnsureModel { .. }
-            | Self::DrainModel { .. } => OwnedNodeCommandDeadline::Unary(Duration::from_secs(5)),
         }
     }
 

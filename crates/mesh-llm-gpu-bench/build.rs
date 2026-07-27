@@ -175,9 +175,7 @@ fn build_cuda() {
         "mesh_llm_gpu_bench_cuda_main",
     );
     let object = out_path("mesh_llm_gpu_bench_cuda.o");
-    let nvcc = std::env::var("NVCC")
-        .or_else(|_| std::env::var("CUDACXX"))
-        .unwrap_or_else(|_| "nvcc".to_string());
+    let nvcc = cuda_compiler(std::env::var("NVCC").ok(), std::env::var("CUDACXX").ok());
     run_or_panic({
         let mut command = std::process::Command::new(nvcc);
         command.arg("-O3").arg("-std=c++17");
@@ -195,6 +193,13 @@ fn build_cuda() {
         }
     }
     println!("cargo:rustc-link-lib=dylib=cudart");
+}
+
+fn cuda_compiler(nvcc: Option<String>, cudacxx: Option<String>) -> String {
+    nvcc.into_iter()
+        .chain(cudacxx)
+        .find(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "nvcc".to_string())
 }
 
 fn build_hip() {

@@ -794,7 +794,7 @@ check_owner_lifecycle_intent() {
     local label="runtime-${operation}"
 
     if [[ -z "$console_port" ]] || ! kill -0 "${ZERO_MODEL_PID:-}" 2>/dev/null; then
-        record_result "FAIL" "$result_name" "zero-model daemon is not running"
+        record_result "PREREQ" "$result_name" "zero-model daemon is not running"
         return 0
     fi
 

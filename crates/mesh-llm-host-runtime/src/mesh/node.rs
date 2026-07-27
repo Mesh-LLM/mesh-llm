@@ -1552,25 +1552,26 @@ impl Node {
     ) {
         self.runtime_instance_lifecycles
             .lock()
-            .expect("runtime lifecycle registry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(port, lifecycle);
     }
 
     pub(crate) fn unregister_runtime_instance_lifecycle(&self, port: u16) {
         self.runtime_instance_lifecycles
             .lock()
-            .expect("runtime lifecycle registry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&port);
     }
 
     pub(crate) async fn begin_runtime_instance_request(
         &self,
         port: u16,
-    ) -> Result<Option<crate::runtime::InstanceRequestGuard>, ()> {
+    ) -> Result<Option<crate::runtime::InstanceRequestGuard>, crate::runtime::InstanceAdmissionError>
+    {
         let lifecycle = self
             .runtime_instance_lifecycles
             .lock()
-            .expect("runtime lifecycle registry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&port)
             .cloned();
         let Some(lifecycle) = lifecycle else {
@@ -1578,7 +1579,9 @@ impl Node {
         };
         let record = lifecycle.lock().await;
         if !record.is_accepting_work() {
-            return Err(());
+            return Err(crate::runtime::InstanceAdmissionError::NotAccepting {
+                state: record.state(),
+            });
         }
         Ok(Some(crate::runtime::InstanceRequestGuard::new(
             record.in_flight_tracker(),

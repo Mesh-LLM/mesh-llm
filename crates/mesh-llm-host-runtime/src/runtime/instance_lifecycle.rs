@@ -21,9 +21,6 @@
 //! error. Instance-target drain never affects sibling instances sharing the same
 //! model name.
 
-// TODO: Remove #[allow(dead_code)] once full integration with admission/drain is complete (Todo 8+).
-#![allow(dead_code)]
-
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -66,6 +63,13 @@ impl InstanceLifecycleState {
     }
 
     /// Human-readable label for logging and status output.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "stable lifecycle labels are covered by unit tests"
+        )
+    )]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Planned => "planned",
@@ -216,8 +220,17 @@ impl Default for InFlightTracker {
 /// Bounded history of lifecycle transitions for status reporting.
 #[derive(Clone, Debug)]
 pub(crate) struct TransitionEntry {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "transition history is test-observable")
+    )]
     pub(crate) from: InstanceLifecycleState,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "transition history is test-observable")
+    )]
     pub(crate) to: InstanceLifecycleState,
+    #[expect(dead_code, reason = "transition timestamps support bounded history")]
     pub(crate) at: Instant,
 }
 
@@ -249,9 +262,14 @@ pub(crate) struct InstanceLifecycleRecord {
     max_history: usize,
 
     /// Timestamp when the instance was created.
+    #[expect(dead_code, reason = "instance age is test-observable")]
     created_at: Instant,
 
     /// Optional error message if state is `Failed`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "lifecycle errors are test-observable")
+    )]
     last_error: Option<String>,
 }
 
@@ -291,6 +309,13 @@ impl InstanceLifecycleRecord {
     }
 
     /// Increment the in-flight counter (admit a new request).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "direct counter API is retained for lifecycle tests"
+        )
+    )]
     pub(crate) fn admit_request(&self) -> u64 {
         self.in_flight.increment()
     }
@@ -298,6 +323,13 @@ impl InstanceLifecycleRecord {
     /// Decrement the in-flight counter (complete a request).
     /// Returns `true` if this decrement brought the count to zero while
     /// draining, signaling that unload can proceed immediately.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "direct counter API is retained for lifecycle tests"
+        )
+    )]
     pub(crate) fn complete_request(&self) -> bool {
         let new_count = self.in_flight.decrement();
         new_count == 0 && self.state == InstanceLifecycleState::Draining
@@ -421,16 +453,25 @@ impl InstanceLifecycleRecord {
     }
 
     /// Set the error message for a failed instance.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "lifecycle error storage is covered by tests")
+    )]
     pub(crate) fn set_error(&mut self, error: String) {
         self.last_error = Some(error);
     }
 
     /// Get the last error message, if any.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "lifecycle error storage is covered by tests")
+    )]
     pub(crate) fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
     }
 
     /// Recent transition history (most recent first).
+    #[expect(dead_code, reason = "reserved bounded history status surface")]
     pub(crate) fn recent_history(&self, limit: usize) -> Vec<TransitionEntry> {
         let mut entries: Vec<_> = self.history.iter().cloned().rev().take(limit).collect();
         entries.reverse();
@@ -438,22 +479,35 @@ impl InstanceLifecycleRecord {
     }
 
     /// Full transition history as a vector clone (VecDeque doesn't coerce to slice refs stably).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "full history access is covered by tests")
+    )]
     pub(crate) fn full_history(&self) -> Vec<TransitionEntry> {
         self.history.iter().cloned().collect()
     }
 
     /// Time since the instance was created.
+    #[expect(dead_code, reason = "reserved instance age status surface")]
     pub(crate) fn age(&self) -> Duration {
         self.created_at.elapsed()
     }
 
     /// Whether this instance is in a terminal state.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "terminal-state classification is covered by tests"
+        )
+    )]
     pub(crate) fn is_terminal(&self) -> bool {
         self.state.is_terminal()
     }
 
     /// Reset drain state (for testing).
     #[cfg(test)]
+    #[expect(dead_code, reason = "retained for focused drain state tests")]
     fn reset_drain(&mut self) {
         self.draining_initiated = false;
         self.drain_deadline = None;
@@ -507,10 +561,24 @@ pub(crate) enum InstanceLifecycleError {
     },
 
     #[error("instance already terminal (state={state:?})")]
+    #[expect(dead_code, reason = "reserved explicit terminal-state diagnostic")]
     AlreadyTerminal { state: InstanceLifecycleState },
 
     #[error("model '{0}' has multiple loaded instances; specify instance ID to drain a single one")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "model-target ambiguity is covered by lifecycle tests"
+        )
+    )]
     AmbiguousModelTarget(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub(crate) enum InstanceAdmissionError {
+    #[error("runtime instance is not accepting work while {state:?}")]
+    NotAccepting { state: InstanceLifecycleState },
 }
 
 // ── Drain Coordinator ────────────────────────────────────────────────────────
@@ -544,6 +612,9 @@ impl DrainCoordinator {
         loop {
             {
                 let record = record.lock().await;
+                if record.state() != InstanceLifecycleState::Draining {
+                    return DrainResult::ForceCancelled;
+                }
                 if record.in_flight_count() == 0 {
                     return DrainResult::Graceful;
                 }
@@ -562,6 +633,9 @@ impl DrainCoordinator {
         record: &InstanceLifecycleRecord,
         _fake_now: Instant,
     ) -> DrainResult {
+        if record.state() != InstanceLifecycleState::Draining {
+            return DrainResult::ForceCancelled;
+        }
         if record.in_flight_count() == 0 {
             return DrainResult::Graceful;
         }
@@ -985,14 +1059,28 @@ mod tests {
     #[test]
     fn history_is_bounded() {
         let mut record = InstanceLifecycleRecord::new(InstanceLifecycleState::Planned, 3);
-        // Make several transitions.
+        for state in [
+            InstanceLifecycleState::Resolving,
+            InstanceLifecycleState::Loading,
+            InstanceLifecycleState::Warming,
+            InstanceLifecycleState::Serving,
+        ] {
+            record.transition_to(state).unwrap();
+        }
         record
-            .transition_to(InstanceLifecycleState::Resolving)
+            .mark_draining(Instant::now() + Duration::from_secs(1))
             .unwrap();
-        record.reset_drain();
-        // We can't easily do many valid transitions in a test without going through
-        // the full lifecycle, so just verify the capacity is set correctly.
-        assert!(record.full_history().len() <= 3);
+        record.transition_to_unloading().unwrap();
+        record
+            .transition_to(InstanceLifecycleState::Stopped)
+            .unwrap();
+
+        let history = record.full_history();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0].from, InstanceLifecycleState::Serving);
+        assert_eq!(history[0].to, InstanceLifecycleState::Draining);
+        assert_eq!(history[2].from, InstanceLifecycleState::Unloading);
+        assert_eq!(history[2].to, InstanceLifecycleState::Stopped);
     }
 
     // ── Terminal States ──────────────────────────────────────────────────────
@@ -1049,7 +1137,10 @@ mod tests {
 
     #[test]
     fn drain_coordinator_graceful_with_zero_inflight() {
-        let record = InstanceLifecycleRecord::new(InstanceLifecycleState::Serving, 20);
+        let mut record = InstanceLifecycleRecord::new(InstanceLifecycleState::Serving, 20);
+        record
+            .mark_draining(Instant::now() + Duration::from_secs(1))
+            .unwrap();
         let coord = DrainCoordinator::default();
         let result = coord.wait_for_unload_ready_fake_clock(&record, Instant::now());
         assert_eq!(result, DrainResult::Graceful);
@@ -1121,6 +1212,29 @@ mod tests {
         assert_eq!(locked.in_flight_count(), 0);
         locked.transition_to_unloading().unwrap();
         assert_eq!(locked.state(), InstanceLifecycleState::Unloading);
+    }
+
+    #[tokio::test]
+    async fn drain_wait_force_cancels_after_failed_transition() {
+        let record = Arc::new(Mutex::new(InstanceLifecycleRecord::new(
+            InstanceLifecycleState::Serving,
+            20,
+        )));
+        {
+            let mut locked = record.lock().await;
+            locked
+                .mark_draining(Instant::now() + Duration::from_secs(300))
+                .unwrap();
+            locked
+                .transition_to(InstanceLifecycleState::Failed)
+                .unwrap();
+        }
+
+        let result = DrainCoordinator::default()
+            .wait_for_unload_ready(&record)
+            .await;
+
+        assert_eq!(result, DrainResult::ForceCancelled);
     }
 
     #[tokio::test(start_paused = true)]

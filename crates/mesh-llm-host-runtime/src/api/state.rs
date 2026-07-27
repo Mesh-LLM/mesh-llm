@@ -57,10 +57,6 @@ pub enum RuntimeControlRequest {
         options: UnloadOptions,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<RuntimeUnloadResponse>>,
     },
-    #[allow(dead_code)]
-    PostIntent {
-        intent: crate::runtime::ModelIntent,
-    },
     SetOpenAiGuardrailMode {
         mode: GuardrailMode,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<OpenAiGuardrailModeUpdateResponse>>,
@@ -209,6 +205,7 @@ pub(super) struct ApiInner {
     pub(super) is_host: bool,
     pub(super) is_client: bool,
     pub(super) llama_ready: bool,
+    pub(super) listeners_ready: bool,
     pub(super) llama_port: Option<u16>,
     pub(super) model_name: String,
     pub(super) primary_backend: Option<String>,

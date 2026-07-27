@@ -132,6 +132,7 @@ remain a separate projection of a successful local scan.
 - Client get/apply unary response: 5 seconds; client inventory response: 35
   seconds, covering the server's 30-second scan deadline plus margin; watch
   acceptance: 5 seconds. An accepted watch has no unary response deadline.
+- Client lifecycle-command unary response: 5 seconds.
 - Server handshake read: 2 seconds; request read: 5 seconds.
 - At most 32 owner-control stream workers are active per connection. The
   permit is acquired before spawning request work.
@@ -147,7 +148,8 @@ remain a separate projection of a successful local scan.
 node's reconciler and never mutate durable config.
 
 - **`load_model`**: one-shot present intent. Accepts one canonical model
-  reference. Returns accepted/current lifecycle state within the unary deadline.
+  reference. Returns accepted/current lifecycle state within the five-second
+  lifecycle-command unary deadline.
 - **`ensure_model`**: maintained present intent with bounded retry. Accepts one
   canonical model reference. Survives transient load failures for the session.
 - **`unload_model`**: absent intent. Accepts one canonical model reference or
@@ -159,7 +161,8 @@ node's reconciler and never mutate durable config.
 
 Responses return request/intent ID, accepted/current lifecycle state, resolved
 model/instance when known, and bounded typed errors. They acknowledge queueing
-within the existing unary deadline and never wait for a model load to complete.
+within the lifecycle-command unary deadline and never wait for a model load to
+complete.
 
 Old peers that do not implement these commands return `UNKNOWN_COMMAND`, which
 new clients translate to typed `CONTROL_UNSUPPORTED`. There is no silent

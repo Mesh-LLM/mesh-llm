@@ -1334,14 +1334,15 @@ probe_lifecycle_legacy_unsupported() {
     [[ -n "$released_console_port" ]] || return 0
 
     local control_out="$CONTROL_DIR/${label}-response.json"
-    local control_log="$LOG_DIR/${label}.log"
+    local control_log="$LOG_DIR/${label}-post.log"
+    local bootstrap_log="$LOG_DIR/${label}-bootstrap.log"
     local bootstrap_out="$CONTROL_DIR/${label}-bootstrap.json"
     if ! curl -fsS --max-time 10 \
         "http://127.0.0.1:${released_console_port}/api/runtime/control-bootstrap" \
-        >"$bootstrap_out" 2>"$control_log"; then
+        >"$bootstrap_out" 2>"$bootstrap_log"; then
         record_result "PREREQ" "$label" \
             "released host does not expose owner-control bootstrap for a typed compatibility probe" \
-            "path=$bootstrap_out" "log=$control_log"
+            "path=$bootstrap_out" "log=$bootstrap_log"
         return 0
     fi
     local endpoint
@@ -1383,11 +1384,11 @@ raise SystemExit(
 PY
     then
         record_result "PASS" "$label" \
-            "released host returned a typed unsupported lifecycle response" \
+            "current controller returned a typed unsupported lifecycle response for the released target" \
             "http_status=$response_status" "path=$control_out" "log=$control_log"
     else
         record_result "FAIL" "$label" \
-            "released host did not return a typed unsupported lifecycle response" \
+            "current controller did not return a typed unsupported lifecycle response for the released target" \
             "http_status=${response_status:-none}" "path=$control_out" "log=$control_log"
     fi
 }

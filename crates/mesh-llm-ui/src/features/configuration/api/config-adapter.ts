@@ -29,6 +29,13 @@ import {
 import { ApiError, parseApiErrorBody } from '@/lib/api/errors'
 import { env } from '@/lib/env'
 import { createRuntimePolicySettingsFromSchema } from './runtime-settings'
+import {
+  DEFAULT_CATEGORY_ORDER,
+  DEFAULT_SETTING_ORDER,
+  sortCategories,
+  sortSettings,
+  titleCaseIdentifier
+} from './schema-setting-order'
 import { gpuAllocatableVramGB, gpuRatedVramGB, gpuReservedVramGB, gpuSystemReportedVramGB } from '@/lib/vram'
 
 export type RuntimeControlBootstrapPayload = {
@@ -280,7 +287,7 @@ function runtimeControlErrorMessage(error: unknown): string | undefined {
   return undefined
 }
 
-export const CATEGORY_ICON_BY_ID: Record<string, ConfigurationDefaultsSetting['icon']> = {
+const CATEGORY_ICON_BY_ID: Record<string, ConfigurationDefaultsSetting['icon']> = {
   meshllm: 'cpu',
   network: 'server',
   attestation: 'shield',
@@ -304,9 +311,6 @@ const FALLBACK_DEFAULTS_CATEGORY: ConfigurationDefaultsCategory = {
 }
 
 type SchemaSettingContext = 'settings' | 'integrations'
-
-const DEFAULT_CATEGORY_ORDER = 1000
-const DEFAULT_SETTING_ORDER = 1000
 
 const DEFAULTS_CATEGORY_FALLBACKS: Record<string, ConfigurationDefaultsCategory> = {
   meshllm: {
@@ -414,15 +418,6 @@ const PATH_RENDERER_FALLBACKS: Record<string, string> = {
 }
 
 type ChoicePresentation = Extract<ConfigurationDefaultsControl, { kind: 'choice' }>['presentation']
-
-function titleCaseIdentifier(value: string) {
-  return value
-    .replaceAll('_', ' ')
-    .replaceAll('-', ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, (match) => match.toUpperCase())
-}
 
 function settingIdFromPath(canonicalPath: string) {
   return canonicalPath
@@ -644,24 +639,6 @@ function schemaSettingFromEntry(input: SchemaSettingFromEntryInput): Configurati
     validationConstraints: entry.constraints,
     categoryOrder: category.order ?? DEFAULT_CATEGORY_ORDER
   }
-}
-
-function sortCategories(categories: readonly ConfigurationDefaultsCategory[]) {
-  return [...categories].sort(
-    (left, right) =>
-      (left.order ?? DEFAULT_CATEGORY_ORDER) - (right.order ?? DEFAULT_CATEGORY_ORDER) ||
-      left.label.localeCompare(right.label)
-  )
-}
-
-function sortSettings(settings: readonly ConfigurationDefaultsSetting[]) {
-  return [...settings].sort(
-    (left, right) =>
-      (left.categoryOrder ?? DEFAULT_CATEGORY_ORDER) - (right.categoryOrder ?? DEFAULT_CATEGORY_ORDER) ||
-      (left.settingOrder ?? DEFAULT_SETTING_ORDER) - (right.settingOrder ?? DEFAULT_SETTING_ORDER) ||
-      left.label.localeCompare(right.label) ||
-      left.id.localeCompare(right.id)
-  )
 }
 
 export function createConfigurationDefaultsFromSchema(

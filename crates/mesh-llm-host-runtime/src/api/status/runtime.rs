@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 /// stopping > degraded > ready_serving > ready_proxying > ready_idle > starting.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub enum DaemonState {
     /// Shutdown has been requested; runtime is winding down.
     Stopping,
@@ -28,7 +27,6 @@ pub enum DaemonState {
 }
 
 /// Derive daemon state with exact precedence order.
-#[allow(dead_code)]
 pub fn derive_daemon_state(
     shutdown_requested: bool,
     has_terminal_failure: bool,

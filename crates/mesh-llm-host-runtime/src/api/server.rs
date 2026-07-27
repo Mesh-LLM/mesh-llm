@@ -32,6 +32,10 @@ pub(crate) async fn start_with_listener(
     let Some(listener) = bind_management_listener(port, listen_all, existing_listener).await else {
         return;
     };
+    {
+        let mut inner = state.inner.lock().await;
+        inner.listeners_ready = true;
+    }
     let management_url = management_url(&listener, port);
     tracing::info!("Management API on {management_url}");
 

@@ -302,7 +302,10 @@ pub(super) async fn default_models_for_vram_blocking(my_vram_gb: f64) -> Result<
         .context("join default model selection task")
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "used by the retained legacy advertised-model selection lane and its focused tests"
+)]
 pub(super) async fn auto_model_pack_blocking(my_vram_gb: f64) -> Result<Vec<String>> {
     tokio::task::spawn_blocking(move || nostr::auto_model_pack(my_vram_gb))
         .await
@@ -316,7 +319,13 @@ pub(super) async fn auto_model_pack_blocking(my_vram_gb: f64) -> Result<Vec<Stri
 /// 2. Underserved models with demand that we have on disk
 /// 3. Unserved models with demand that we can download from catalog
 /// 4. Standby if everything is covered
-#[allow(dead_code)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the retained legacy automatic assignment lane and its focused tests"
+    )
+)]
 pub(super) async fn pick_model_assignment(
     node: &mesh::Node,
     local_models: &[String],
@@ -541,7 +550,13 @@ pub(super) async fn pick_model_assignment_for_role(
 /// Rebalancing uses `last_active` to gate on recency (only models active within
 /// the last 60 minutes are considered), then `request_count / servers` for
 /// relative hotness among those recent models.
-#[allow(dead_code)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by passive-publication compatibility code and focused promotion tests"
+    )
+)]
 pub(super) async fn check_unserved_model(
     node: &mesh::Node,
     local_models: &[String],
@@ -635,6 +650,10 @@ pub(super) async fn check_unserved_model(
     None
 }
 
+#[expect(
+    dead_code,
+    reason = "retained runtime-side MCP join compatibility entrypoint"
+)]
 pub(super) async fn join_mesh_for_mcp(options: &RuntimeOptions, node: &mesh::Node) -> Result<()> {
     if !options.join.is_empty() {
         return join_mcp_with_tokens(&options.join, node).await;
@@ -651,7 +670,10 @@ pub(super) async fn join_mesh_for_mcp(options: &RuntimeOptions, node: &mesh::Nod
     Ok(())
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the shipped command lane owns MCP joins while the runtime compatibility path remains available"
+)]
 pub(super) async fn join_mcp_with_tokens(tokens: &[String], node: &mesh::Node) -> Result<()> {
     for token in tokens {
         match node.join_with_retry(token).await {
@@ -671,7 +693,10 @@ pub(super) async fn join_mcp_with_tokens(tokens: &[String], node: &mesh::Node) -
     anyhow::bail!("Failed to join any peer for MCP mode");
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the shipped command lane owns MCP joins while the runtime compatibility path remains available"
+)]
 pub(super) async fn join_mcp_via_lan_discovery(
     options: &RuntimeOptions,
     node: &mesh::Node,
@@ -742,7 +767,10 @@ pub(super) async fn join_mcp_via_lan_discovery(
     Ok(())
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the shipped command lane owns MCP joins while the runtime compatibility path remains available"
+)]
 pub(super) async fn join_mcp_via_nostr_discovery(
     options: &RuntimeOptions,
     node: &mesh::Node,
@@ -821,7 +849,10 @@ pub(super) async fn join_mcp_via_nostr_discovery(
     }
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "retained as the runtime-side MCP compatibility entrypoint while command dispatch lives in mesh-llm-commands"
+)]
 pub(crate) async fn run_plugin_mcp(options: &RuntimeOptions) -> Result<()> {
     let resolved_plugins = load_resolved_plugins(options)?;
     let config = plugin::load_config(options.config.as_deref())?;
@@ -1081,7 +1112,10 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
     }
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the daemon startup path supersedes legacy automatic model selection while focused tests retain coverage"
+)]
 pub(super) async fn select_run_auto_model_path(
     ctx: &mut RunAutoModelSelectionContext<'_>,
 ) -> Result<RunAutoModelSelection> {

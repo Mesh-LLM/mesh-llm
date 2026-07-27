@@ -210,6 +210,20 @@ struct ControlLifecycleModelRequest {
     profile: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+enum ControlLifecycleOperation {
+    Load,
+    Unload,
+    Ensure,
+    Drain,
+}
+
+struct ControlLifecycleTarget {
+    model: String,
+    instance_id: Option<String>,
+    profile: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct LocalControlSnapshotPayload {
     node_id: String,
@@ -523,52 +537,7 @@ async fn handle_control_load_model(
     state: &MeshApi,
     body: &str,
 ) -> anyhow::Result<()> {
-    if !ensure_loopback_control_caller(stream).await? {
-        return Ok(());
-    }
-    let request: ControlLifecycleModelRequest = match serde_json::from_str(body) {
-        Ok(request) => request,
-        Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
-    };
-    let model = match (request.model, request.instance_id) {
-        (Some(model), None) if !model.trim().is_empty() => model,
-        _ => {
-            return respond_error(
-                stream,
-                400,
-                "load-model requires a model reference and does not accept an instance id",
-            )
-            .await;
-        }
-    };
-    let endpoint = match required_control_endpoint(request.endpoint.clone()) {
-        Ok(endpoint) => endpoint,
-        Err(error) => return respond_control_error(stream, error).await,
-    };
-    match connect_owner_control_client(state, &endpoint).await {
-        Ok(client) => {
-            let result = client.load_model(model, request.profile).await;
-            client.close().await;
-            match result {
-                Ok(response) => {
-                    respond_json(
-                        stream,
-                        200,
-                        &serde_json::json!({
-                            "accepted": true,
-                            "intent_id": response.intent_id,
-                            "accepted_state": response.accepted_state,
-                            "model": response.target.as_ref().map(|target| &target.canonical_model_ref),
-                            "instance_id": response.target.as_ref().and_then(|target| target.instance_id.as_deref()),
-                        }),
-                    )
-                    .await
-                }
-                Err(error) => respond_control_error(stream, control_error_from_client(error)).await,
-            }
-        }
-        Err(error) => respond_control_error(stream, error).await,
-    }
+    handle_control_lifecycle_model(stream, state, body, ControlLifecycleOperation::Load).await
 }
 
 async fn handle_control_unload_model(
@@ -576,55 +545,7 @@ async fn handle_control_unload_model(
     state: &MeshApi,
     body: &str,
 ) -> anyhow::Result<()> {
-    if !ensure_loopback_control_caller(stream).await? {
-        return Ok(());
-    }
-    let request: ControlLifecycleModelRequest = match serde_json::from_str(body) {
-        Ok(request) => request,
-        Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
-    };
-    let (model, instance_id) = match (request.model, request.instance_id, request.profile) {
-        (Some(model), None, None) if !model.trim().is_empty() => (model, None),
-        (None, Some(instance_id), None) if !instance_id.trim().is_empty() => {
-            (String::new(), Some(instance_id))
-        }
-        _ => {
-            return respond_error(
-                stream,
-                400,
-                "unload-model requires exactly one model reference or instance id",
-            )
-            .await;
-        }
-    };
-    let endpoint = match required_control_endpoint(request.endpoint.clone()) {
-        Ok(endpoint) => endpoint,
-        Err(error) => return respond_control_error(stream, error).await,
-    };
-    match connect_owner_control_client(state, &endpoint).await {
-        Ok(client) => {
-            let result = client.unload_model(model, instance_id).await;
-            client.close().await;
-            match result {
-                Ok(response) => {
-                    respond_json(
-                        stream,
-                        200,
-                        &serde_json::json!({
-                            "accepted": true,
-                            "intent_id": response.intent_id,
-                            "accepted_state": response.accepted_state,
-                            "model": response.target.as_ref().map(|target| &target.canonical_model_ref),
-                            "instance_id": response.target.as_ref().and_then(|target| target.instance_id.as_deref()),
-                        }),
-                    )
-                    .await
-                }
-                Err(error) => respond_control_error(stream, control_error_from_client(error)).await,
-            }
-        }
-        Err(error) => respond_control_error(stream, error).await,
-    }
+    handle_control_lifecycle_model(stream, state, body, ControlLifecycleOperation::Unload).await
 }
 
 async fn handle_control_ensure_model(
@@ -632,58 +553,22 @@ async fn handle_control_ensure_model(
     state: &MeshApi,
     body: &str,
 ) -> anyhow::Result<()> {
-    if !ensure_loopback_control_caller(stream).await? {
-        return Ok(());
-    }
-    let request: ControlLifecycleModelRequest = match serde_json::from_str(body) {
-        Ok(request) => request,
-        Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
-    };
-    let model = match (request.model, request.instance_id) {
-        (Some(model), None) if !model.trim().is_empty() => model,
-        _ => {
-            return respond_error(
-                stream,
-                400,
-                "ensure-model requires a model reference and does not accept an instance id",
-            )
-            .await;
-        }
-    };
-    let endpoint = match required_control_endpoint(request.endpoint.clone()) {
-        Ok(endpoint) => endpoint,
-        Err(error) => return respond_control_error(stream, error).await,
-    };
-    match connect_owner_control_client(state, &endpoint).await {
-        Ok(client) => {
-            let result = client.ensure_model(model, request.profile).await;
-            client.close().await;
-            match result {
-                Ok(response) => {
-                    respond_json(
-                        stream,
-                        200,
-                        &serde_json::json!({
-                            "accepted": true,
-                            "intent_id": response.intent_id,
-                            "accepted_state": response.accepted_state,
-                            "model": response.target.as_ref().map(|target| &target.canonical_model_ref),
-                            "instance_id": response.target.as_ref().and_then(|target| target.instance_id.as_deref()),
-                        }),
-                    )
-                    .await
-                }
-                Err(error) => respond_control_error(stream, control_error_from_client(error)).await,
-            }
-        }
-        Err(error) => respond_control_error(stream, error).await,
-    }
+    handle_control_lifecycle_model(stream, state, body, ControlLifecycleOperation::Ensure).await
 }
 
 async fn handle_control_drain_model(
     stream: &mut TcpStream,
     state: &MeshApi,
     body: &str,
+) -> anyhow::Result<()> {
+    handle_control_lifecycle_model(stream, state, body, ControlLifecycleOperation::Drain).await
+}
+
+async fn handle_control_lifecycle_model(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    body: &str,
+    operation: ControlLifecycleOperation,
 ) -> anyhow::Result<()> {
     if !ensure_loopback_control_caller(stream).await? {
         return Ok(());
@@ -692,48 +577,115 @@ async fn handle_control_drain_model(
         Ok(request) => request,
         Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
     };
-    let (model, instance_id) = match (request.model, request.instance_id, request.profile) {
-        (Some(model), None, None) if !model.trim().is_empty() => (model, None),
-        (None, Some(instance_id), None) if !instance_id.trim().is_empty() => {
-            (String::new(), Some(instance_id))
-        }
-        _ => {
-            return respond_error(
-                stream,
-                400,
-                "drain-model requires exactly one model reference or instance id",
-            )
-            .await;
-        }
+    let endpoint = request.endpoint.clone();
+    let target = match validate_control_lifecycle_target(operation, request) {
+        Ok(target) => target,
+        Err(message) => return respond_error(stream, 400, message).await,
     };
-    let endpoint = match required_control_endpoint(request.endpoint.clone()) {
+    let endpoint = match required_control_endpoint(endpoint) {
         Ok(endpoint) => endpoint,
         Err(error) => return respond_control_error(stream, error).await,
     };
     match connect_owner_control_client(state, &endpoint).await {
         Ok(client) => {
-            let result = client.drain_model(model, instance_id).await;
+            let result = invoke_control_lifecycle(&client, operation, target).await;
             client.close().await;
             match result {
-                Ok(response) => {
-                    respond_json(
-                        stream,
-                        200,
-                        &serde_json::json!({
-                            "accepted": true,
-                            "intent_id": response.intent_id,
-                            "accepted_state": response.accepted_state,
-                            "model": response.target.as_ref().map(|target| &target.canonical_model_ref),
-                            "instance_id": response.target.as_ref().and_then(|target| target.instance_id.as_deref()),
-                        }),
-                    )
-                    .await
-                }
+                Ok(response) => respond_json(stream, 200, &response).await,
                 Err(error) => respond_control_error(stream, control_error_from_client(error)).await,
             }
         }
         Err(error) => respond_control_error(stream, error).await,
     }
+}
+
+fn validate_control_lifecycle_target(
+    operation: ControlLifecycleOperation,
+    request: ControlLifecycleModelRequest,
+) -> Result<ControlLifecycleTarget, &'static str> {
+    let ControlLifecycleModelRequest {
+        model,
+        instance_id,
+        profile,
+        ..
+    } = request;
+    match operation {
+        ControlLifecycleOperation::Load | ControlLifecycleOperation::Ensure => {
+            match (model, instance_id) {
+                (Some(model), None) if !model.trim().is_empty() => Ok(ControlLifecycleTarget {
+                    model,
+                    instance_id: None,
+                    profile,
+                }),
+                _ if matches!(operation, ControlLifecycleOperation::Load) => {
+                    Err("load-model requires a model reference and does not accept an instance id")
+                }
+                _ => Err(
+                    "ensure-model requires a model reference and does not accept an instance id",
+                ),
+            }
+        }
+        ControlLifecycleOperation::Unload | ControlLifecycleOperation::Drain => {
+            let target = match (model, instance_id, profile) {
+                (Some(model), None, None) if !model.trim().is_empty() => {
+                    Some(ControlLifecycleTarget {
+                        model,
+                        instance_id: None,
+                        profile: None,
+                    })
+                }
+                (None, Some(instance_id), None) if !instance_id.trim().is_empty() => {
+                    Some(ControlLifecycleTarget {
+                        model: String::new(),
+                        instance_id: Some(instance_id),
+                        profile: None,
+                    })
+                }
+                _ => None,
+            };
+            target.ok_or({
+                if matches!(operation, ControlLifecycleOperation::Unload) {
+                    "unload-model requires exactly one model reference or instance id"
+                } else {
+                    "drain-model requires exactly one model reference or instance id"
+                }
+            })
+        }
+    }
+}
+
+async fn invoke_control_lifecycle(
+    client: &mesh_client::OwnerControlClient,
+    operation: ControlLifecycleOperation,
+    target: ControlLifecycleTarget,
+) -> Result<serde_json::Value, ControlPlaneClientError> {
+    let (intent_id, accepted_state, response_target) = match operation {
+        ControlLifecycleOperation::Load => {
+            let response = client.load_model(target.model, target.profile).await?;
+            (response.intent_id, response.accepted_state, response.target)
+        }
+        ControlLifecycleOperation::Unload => {
+            let response = client
+                .unload_model(target.model, target.instance_id)
+                .await?;
+            (response.intent_id, response.accepted_state, response.target)
+        }
+        ControlLifecycleOperation::Ensure => {
+            let response = client.ensure_model(target.model, target.profile).await?;
+            (response.intent_id, response.accepted_state, response.target)
+        }
+        ControlLifecycleOperation::Drain => {
+            let response = client.drain_model(target.model, target.instance_id).await?;
+            (response.intent_id, response.accepted_state, response.target)
+        }
+    };
+    Ok(serde_json::json!({
+        "accepted": true,
+        "intent_id": intent_id,
+        "accepted_state": accepted_state,
+        "model": response_target.as_ref().map(|target| &target.canonical_model_ref),
+        "instance_id": response_target.as_ref().and_then(|target| target.instance_id.as_deref()),
+    }))
 }
 
 async fn handle_runtime_config_validate(stream: &mut TcpStream, body: &str) -> anyhow::Result<()> {

@@ -248,17 +248,18 @@ pub(crate) async fn run_auto_unload_runtime_entry(
     ctx.node.unregister_runtime_instance_lifecycle(port);
     remove_dashboard_context_usage(ctx.dashboard_context_usage, &model, &handle).await;
     handle.shutdown().await;
-    if let Err(error) = lifecycle
-        .lock()
-        .await
-        .transition_to(InstanceLifecycleState::Stopped)
     {
-        tracing::warn!(
-            model,
-            instance_id = unload.instance_id,
-            %error,
-            "runtime instance stopped with a stale lifecycle state"
-        );
+        let mut record = lifecycle.lock().await;
+        if record.state() == InstanceLifecycleState::Unloading
+            && let Err(error) = record.transition_to(InstanceLifecycleState::Stopped)
+        {
+            tracing::warn!(
+                model,
+                instance_id = unload.instance_id,
+                %error,
+                "runtime instance stopped with a stale lifecycle state"
+            );
+        }
     }
     drop(capacity_reservation);
     remove_dashboard_process(ctx.dashboard_processes, &unload.instance_id).await;

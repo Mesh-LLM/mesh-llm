@@ -18,6 +18,6 @@ impl PriorityController for UnsupportedPriorityController {
     }
 
     fn restore_priority(&mut self) -> Result<(), PriorityFailure> {
-        Err(PriorityFailure::RestoreFailed)
+        Err(PriorityFailure::Unsupported)
     }
 }

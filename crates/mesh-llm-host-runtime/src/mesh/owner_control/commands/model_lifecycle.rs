@@ -7,6 +7,10 @@ use crate::proto::node::{
 };
 use crate::protocol::NODE_PROTOCOL_GENERATION;
 use crate::runtime::{IntentSource, ModelIntent, UnloadOptions, UnloadTarget};
+use mesh_llm_protocol::protocol::{
+    validate_owner_control_model_for_load_or_ensure,
+    validate_owner_control_model_for_unload_or_drain,
+};
 
 pub(crate) async fn execute_load(
     node: &Node,
@@ -105,13 +109,10 @@ pub(crate) async fn execute_drain(
     let drain_timeout_secs = request
         .drain_timeout_secs
         .unwrap_or(node.drain_timeout_secs);
-    if drain_timeout_secs > node.drain_timeout_max_secs {
-        return owner_control_error_envelope(
-            OwnerControlErrorCode::BadRequest,
-            Some(request_id),
-            None,
-            "drain_timeout_secs exceeds configured maximum",
-        );
+    if let Err(envelope) =
+        validate_drain_timeout(drain_timeout_secs, node.drain_timeout_max_secs, request_id)
+    {
+        return *envelope;
     }
     let model_ref = match extract_absent_model_ref(request.model, request_id) {
         Ok(ref_) => ref_,
@@ -140,27 +141,35 @@ pub(crate) async fn execute_drain(
     .await
 }
 
+fn validate_drain_timeout(
+    drain_timeout_secs: u64,
+    drain_timeout_max_secs: u64,
+    request_id: u64,
+) -> Result<(), Box<OwnerControlEnvelope>> {
+    if drain_timeout_secs == 0 || drain_timeout_secs > drain_timeout_max_secs {
+        Err(Box::new(owner_control_error_envelope(
+            OwnerControlErrorCode::BadRequest,
+            Some(request_id),
+            None,
+            "drain_timeout_secs must be positive and not exceed configured maximum",
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 fn extract_present_model_ref(
     model: Option<crate::proto::node::OwnerControlModelRef>,
     request_id: u64,
 ) -> Result<crate::proto::node::OwnerControlModelRef, Box<OwnerControlEnvelope>> {
     match model {
-        Some(ref_) => {
-            if ref_.canonical_model_ref.trim().is_empty()
-                || ref_
-                    .instance_id
-                    .as_deref()
-                    .is_some_and(|id| !id.trim().is_empty())
-            {
-                return Err(Box::new(owner_control_error_envelope(
-                    OwnerControlErrorCode::BadRequest,
-                    Some(request_id),
-                    None,
-                    "load and ensure require a canonical model reference only",
-                )));
-            }
-            Ok(ref_)
-        }
+        Some(ref_) if validate_owner_control_model_for_load_or_ensure(&ref_).is_ok() => Ok(ref_),
+        Some(_) => Err(Box::new(owner_control_error_envelope(
+            OwnerControlErrorCode::BadRequest,
+            Some(request_id),
+            None,
+            "load and ensure require a canonical model reference only",
+        ))),
         None => Err(Box::new(owner_control_error_envelope(
             OwnerControlErrorCode::BadRequest,
             Some(request_id),
@@ -175,15 +184,7 @@ fn extract_absent_model_ref(
     request_id: u64,
 ) -> Result<crate::proto::node::OwnerControlModelRef, Box<OwnerControlEnvelope>> {
     match model {
-        Some(ref_)
-            if !ref_.canonical_model_ref.trim().is_empty()
-                ^ ref_
-                    .instance_id
-                    .as_deref()
-                    .is_some_and(|id| !id.trim().is_empty()) =>
-        {
-            Ok(ref_)
-        }
+        Some(ref_) if validate_owner_control_model_for_unload_or_drain(&ref_).is_ok() => Ok(ref_),
         Some(_) => Err(Box::new(owner_control_error_envelope(
             OwnerControlErrorCode::BadRequest,
             Some(request_id),
@@ -379,6 +380,21 @@ mod tests {
             missing.error.as_ref().and_then(|error| error.request_id),
             Some(43)
         );
+    }
+
+    #[test]
+    fn drain_timeout_must_be_positive_and_within_the_configured_maximum() {
+        for accepted in [1, 60] {
+            assert!(validate_drain_timeout(accepted, 60, 41).is_ok());
+        }
+
+        for rejected in [0, 61] {
+            let envelope =
+                validate_drain_timeout(rejected, 60, 42).expect_err("timeout should fail");
+            let error = envelope.error.expect("error envelope");
+            assert_eq!(error.code, OwnerControlErrorCode::BadRequest as i32);
+            assert_eq!(error.request_id, Some(42));
+        }
     }
 
     #[test]

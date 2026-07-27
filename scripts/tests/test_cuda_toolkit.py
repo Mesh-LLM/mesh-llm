@@ -8,6 +8,21 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 CUDA_TOOLKIT_LIB = ROOT / "scripts" / "lib" / "cuda-toolkit.sh"
+CUDA_ENV_VARS = (
+    "CUDACXX",
+    "CUDAToolkit_ROOT",
+    "NVCC",
+    "CUDA_HOME",
+    "CUDA_PATH",
+    "CUDA_LIBRARY_PATH",
+    "LIBRARY_PATH",
+    "LD_LIBRARY_PATH",
+)
+
+
+def clean_cuda_env(env: dict[str, str]) -> None:
+    for name in CUDA_ENV_VARS:
+        env.pop(name, None)
 
 
 def run_bash(script: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -39,17 +54,7 @@ def test_resolves_toolkit_root_through_nvcc_symlink(tmp_path: pathlib.Path) -> N
 
     env = os.environ.copy()
     env["PATH"] = f"{exposed_bin}:{env['PATH']}"
-    for name in (
-        "CUDACXX",
-        "CUDAToolkit_ROOT",
-        "NVCC",
-        "CUDA_HOME",
-        "CUDA_PATH",
-        "CUDA_LIBRARY_PATH",
-        "LIBRARY_PATH",
-        "LD_LIBRARY_PATH",
-    ):
-        env.pop(name, None)
+    clean_cuda_env(env)
     result = run_bash(
         f"""
         source {shlex.quote(str(CUDA_TOOLKIT_LIB))}
@@ -104,17 +109,7 @@ def test_canonical_path_falls_back_to_python(tmp_path: pathlib.Path) -> None:
 def test_propagates_helper_failure_when_nvcc_is_missing() -> None:
     env = os.environ.copy()
     env["PATH"] = ""
-    for name in (
-        "CUDACXX",
-        "CUDAToolkit_ROOT",
-        "NVCC",
-        "CUDA_HOME",
-        "CUDA_PATH",
-        "CUDA_LIBRARY_PATH",
-        "LIBRARY_PATH",
-        "LD_LIBRARY_PATH",
-    ):
-        env.pop(name, None)
+    clean_cuda_env(env)
 
     result = run_bash(
         f"""
@@ -133,6 +128,7 @@ def test_preserves_explicit_cuda_environment(tmp_path: pathlib.Path) -> None:
     compiler.chmod(0o755)
     explicit_root = tmp_path / "custom-toolkit"
     env = os.environ.copy()
+    clean_cuda_env(env)
     env["CUDACXX"] = str(compiler)
     env["CUDAToolkit_ROOT"] = str(explicit_root)
 

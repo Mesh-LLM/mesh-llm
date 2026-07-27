@@ -47,7 +47,10 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU16},
 };
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the legacy advertised-model selection lane remains available to compatibility helpers and focused tests"
+)]
 pub(super) enum RunAutoModelSelection {
     Model(PathBuf),
     Shutdown,
@@ -389,7 +392,6 @@ pub(super) fn node_display_name(options: &RuntimeOptions, node: &mesh::Node) -> 
         .unwrap_or_else(|| node.id().fmt_short().to_string())
 }
 
-#[allow(dead_code)]
 pub(super) async fn store_benchmark_metrics(
     mem_arc: std::sync::Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     fp32_arc: std::sync::Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
@@ -1010,6 +1012,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         target_tx: target_tx.clone(),
         model_path: model_path.to_path_buf(),
         model_ref: primary_model_ref,
+        readiness_index: 0,
         profile: primary_startup_model
             .map(|model| model.profile.clone())
             .unwrap_or_default(),
@@ -1103,7 +1106,10 @@ pub(super) fn configure_swarm_capture(
     Ok(recorder)
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the legacy advertised-model selection context is retained for compatibility helpers and focused tests"
+)]
 pub(super) struct RunAutoModelSelectionContext<'a> {
     pub(super) options: &'a RuntimeOptions,
     pub(super) node: &'a mesh::Node,
@@ -1117,7 +1123,10 @@ pub(super) struct RunAutoModelSelectionContext<'a> {
         &'a mut Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the daemon startup path supersedes advertised-model selection while compatibility tests still exercise it"
+)]
 pub(super) async fn select_advertised_run_auto_model(
     mut ctx: RunAutoModelSelectionContext<'_>,
 ) -> Result<Option<(PathBuf, String)>> {

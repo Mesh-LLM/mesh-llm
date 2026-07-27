@@ -26,7 +26,6 @@ use crate::runtime::survey;
 use anyhow::Context;
 use mesh_llm_events::{OutputEvent, emit_event, output_sink, schedule_ready_prompt};
 use skippy_protocol::FlashAttentionType;
-use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -55,6 +54,7 @@ pub(super) struct StartupLocalModelTask {
     pub(super) target_tx: Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     pub(super) model_path: PathBuf,
     pub(super) model_ref: String,
+    pub(super) readiness_index: usize,
     pub(super) profile: String,
     pub(super) model_name: String,
     pub(super) instance_id: String,
@@ -142,6 +142,7 @@ pub(super) struct StartupLoopContext<'a> {
     pub(super) target_tx: &'a Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     pub(super) model_path: &'a PathBuf,
     pub(super) model_ref: &'a str,
+    pub(super) readiness_index: usize,
     pub(super) instance_id: &'a str,
     pub(super) primary_model_name: &'a str,
     pub(super) mmproj_path: Option<&'a PathBuf>,
@@ -1199,144 +1200,20 @@ pub(super) async fn runtime_data_producer_for_console(
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the managed startup task keeps lifecycle transitions and owned cleanup resources in one cancellation-safe future"
-)]
 pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
-    let StartupLocalModelTask {
-        node,
-        config,
-        tunnel_mgr,
-        target_tx,
-        model_path,
-        model_ref,
-        profile,
-        model_name,
-        instance_id,
-        primary_model_name,
-        mmproj_path,
-        ctx_size,
-        pinned_gpu,
-        runtime_capacity_ledger,
-        cache_type_k,
-        cache_type_v,
-        n_batch,
-        n_ubatch,
-        flash_attention,
-        parallel_override,
-        split_topology_lock,
-        resource_planning_profile,
-        openai_guardrail_policy,
-        split,
-        skippy_telemetry,
-        survey_telemetry,
-        survey_launch_kind,
-        mut stop_rx,
-        dashboard_processes,
-        dashboard_context_usage,
-        runtime_instance_registry,
-        console_state,
-        api_port,
-        startup_ready_reporter,
-        runtime_event_tx,
-        startup_load_gate,
-        input_handler_enabled,
-        interactive_started,
-        interactive_control_tx,
-        interactive_console_state,
-        lifecycle,
-        lifecycle_port,
-    } = params;
-
-    let runtime_data_producer = runtime_data_producer_for_console(console_state.as_ref()).await;
-
-    let Some(StartupPreparedLaunch {
-        local_capacity,
-        model_bytes,
-        runtime_plan,
-        launch_kind,
-    }) = startup_prepare_launch(StartupPrepareLaunchContext {
-        node: &node,
-        pinned_gpu: pinned_gpu.as_ref(),
-        model_path: &model_path,
-        target_tx: &target_tx,
-        model_name: &model_name,
-        console_state: console_state.as_ref(),
-        split,
-        survey_launch_kind,
-    })
-    .await
-    else {
-        record_startup_terminal_failure(
-            &lifecycle,
-            &startup_ready_reporter,
-            &interactive_control_tx,
-            &runtime_event_tx,
-            &model_ref,
-            &profile,
-            &model_name,
-            "model inspection failed",
-        )
-        .await;
+    let runtime_data_producer =
+        runtime_data_producer_for_console(params.console_state.as_ref()).await;
+    let Some(prepared) = prepare_startup_local_model_task(&params).await else {
+        record_startup_task_failure(&params, "model inspection failed").await;
         return;
     };
+    let mut stop_rx = params.stop_rx.clone();
     loop {
-        {
-            let mut record = lifecycle.lock().await;
-            *record = InstanceLifecycleRecord::new(InstanceLifecycleState::Planned, 32);
-            record
-                .transition_to(InstanceLifecycleState::Resolving)
-                .expect("managed runtime lifecycle planned to resolving");
-            record
-                .transition_to(InstanceLifecycleState::Loading)
-                .expect("managed runtime lifecycle resolving to loading");
-        }
+        reset_startup_lifecycle(&params.lifecycle).await;
         let Some((launch_handles, launch_started)) =
-            startup_launch_runtime(StartupLaunchRuntimeContext {
-                node: &node,
-                config: &config,
-                target_tx: &target_tx,
-                model_path: &model_path,
-                model_ref: &model_ref,
-                model_name: &model_name,
-                instance_id: &instance_id,
-                mmproj_path: mmproj_path.as_ref(),
-                ctx_size,
-                pinned_gpu: pinned_gpu.as_ref(),
-                runtime_capacity_ledger: &runtime_capacity_ledger,
-                cache_type_k: cache_type_k.as_deref(),
-                cache_type_v: cache_type_v.as_deref(),
-                n_batch,
-                n_ubatch,
-                flash_attention,
-                parallel_override,
-                split_topology_lock: split_topology_lock.as_deref(),
-                resource_planning_profile,
-                openai_guardrail_policy: openai_guardrail_policy.clone(),
-                skippy_telemetry: &skippy_telemetry,
-                survey_telemetry: &survey_telemetry,
-                console_state: console_state.as_ref(),
-                startup_load_gate: &startup_load_gate,
-                stop_rx: &mut stop_rx,
-                local_capacity,
-                model_bytes,
-                runtime_plan,
-                launch_kind,
-            })
-            .await
+            launch_startup_local_model_task(&params, &mut stop_rx, &prepared).await
         else {
-            record_startup_terminal_failure(
-                &lifecycle,
-                &startup_ready_reporter,
-                &interactive_control_tx,
-                &runtime_event_tx,
-                &model_ref,
-                &profile,
-                &model_name,
-                "model launch failed",
-            )
-            .await;
+            record_startup_task_failure(&params, "model launch failed").await;
             return;
         };
         let StartupLaunchHandles {
@@ -1348,78 +1225,31 @@ pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
             mut coordinator_task,
             capacity_reservation,
         } = launch_handles;
-        lifecycle
+        params
+            .lifecycle
             .lock()
             .await
             .transition_to(InstanceLifecycleState::Warming)
             .expect("managed runtime lifecycle loading to warming");
 
-        let survey_loaded_model = survey_telemetry.model(survey::SurveyModelSpec {
+        let survey_loaded_model = params.survey_telemetry.model(survey::SurveyModelSpec {
             model: &loaded_name,
-            model_path: Some(&model_path),
-            launch_kind,
-            pinned_gpu: pinned_gpu.as_ref(),
+            model_path: Some(&params.model_path),
+            launch_kind: prepared.launch_kind,
+            pinned_gpu: params.pinned_gpu.as_ref(),
             backend: Some(&handle.backend),
             context_length: Some(u64::from(handle.context_length)),
         });
-        survey_telemetry.record_launch_success(&survey_loaded_model, launch_started.elapsed());
+        params
+            .survey_telemetry
+            .record_launch_success(&survey_loaded_model, launch_started.elapsed());
 
-        let ctx = StartupLoopContext {
-            node: &node,
-            config: &config,
-            tunnel_mgr: &tunnel_mgr,
-            target_tx: &target_tx,
-            model_path: &model_path,
-            model_ref: &model_ref,
-            instance_id: &instance_id,
-            primary_model_name: &primary_model_name,
-            mmproj_path: mmproj_path.as_ref(),
-            ctx_size,
-            pinned_gpu: pinned_gpu.as_ref(),
-            runtime_capacity_ledger: &runtime_capacity_ledger,
-            cache_type_k: cache_type_k.as_deref(),
-            cache_type_v: cache_type_v.as_deref(),
-            n_batch,
-            n_ubatch,
-            flash_attention,
-            parallel_override,
-            resource_planning_profile,
-            openai_guardrail_policy: openai_guardrail_policy.clone(),
-            skippy_telemetry: &skippy_telemetry,
-            survey_telemetry: &survey_telemetry,
-            launch_kind,
-            dashboard_processes: &dashboard_processes,
-            dashboard_context_usage: &dashboard_context_usage,
-            runtime_instance_registry: &runtime_instance_registry,
-            console_state: console_state.as_ref(),
-            api_port,
-            runtime_data_producer: runtime_data_producer.as_ref(),
-            lifecycle: &lifecycle,
-            lifecycle_port: &lifecycle_port,
-        };
-        startup_publish_loaded_runtime(&ctx, &loaded_name, &handle, &startup_ready_reporter).await;
-        let response = api::RuntimeLoadResponse {
-            model_ref: model_ref.clone(),
-            model: loaded_name.clone(),
-            instance_id: instance_id.clone(),
-            profile: profile.clone(),
-            backend: Some(handle.backend.clone()),
-            context_length: Some(handle.context_length),
-        };
-        let _ = runtime_event_tx.send(super::RuntimeEvent::StartupModelLoadFinished {
-            model_ref: model_ref.clone(),
-            profile: profile.clone(),
-            result: Ok(response),
-        });
-
-        maybe_spawn_startup_interactive_handler(
-            input_handler_enabled,
-            &loaded_name,
-            &primary_model_name,
-            &interactive_started,
-            interactive_control_tx.clone(),
-            interactive_console_state.clone(),
+        let ctx = startup_loop_context(
+            &params,
+            runtime_data_producer.as_ref(),
+            prepared.launch_kind,
         );
+        publish_startup_local_model(&params, &ctx, &loaded_name, &handle).await;
 
         let mut state = StartupLoopState {
             loaded_name,
@@ -1441,8 +1271,8 @@ pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
             StartupLoopEventContext {
                 context_usage_tick: &mut context_usage_tick,
                 stop_rx: &mut stop_rx,
-                local_capacity,
-                model_bytes,
+                local_capacity: prepared.local_capacity,
+                model_bytes: prepared.model_bytes,
             },
         )
         .await;
@@ -1453,13 +1283,166 @@ pub(super) async fn startup_local_model_loop(params: StartupLocalModelTask) {
             &mut state,
             &mut coordinator_task,
             &stop_rx,
-            &model_name,
+            &params.model_name,
         )
         .await
         {
             return;
         }
     }
+}
+
+async fn prepare_startup_local_model_task(
+    params: &StartupLocalModelTask,
+) -> Option<StartupPreparedLaunch> {
+    startup_prepare_launch(StartupPrepareLaunchContext {
+        node: &params.node,
+        pinned_gpu: params.pinned_gpu.as_ref(),
+        model_path: &params.model_path,
+        target_tx: &params.target_tx,
+        model_name: &params.model_name,
+        console_state: params.console_state.as_ref(),
+        split: params.split,
+        survey_launch_kind: params.survey_launch_kind,
+    })
+    .await
+}
+
+async fn reset_startup_lifecycle(lifecycle: &Arc<tokio::sync::Mutex<InstanceLifecycleRecord>>) {
+    let mut record = lifecycle.lock().await;
+    *record = InstanceLifecycleRecord::new(InstanceLifecycleState::Planned, 32);
+    record
+        .transition_to(InstanceLifecycleState::Resolving)
+        .expect("managed runtime lifecycle planned to resolving");
+    record
+        .transition_to(InstanceLifecycleState::Loading)
+        .expect("managed runtime lifecycle resolving to loading");
+}
+
+async fn launch_startup_local_model_task(
+    params: &StartupLocalModelTask,
+    stop_rx: &mut tokio::sync::watch::Receiver<bool>,
+    prepared: &StartupPreparedLaunch,
+) -> Option<(StartupLaunchHandles, Instant)> {
+    startup_launch_runtime(StartupLaunchRuntimeContext {
+        node: &params.node,
+        config: &params.config,
+        target_tx: &params.target_tx,
+        model_path: &params.model_path,
+        model_ref: &params.model_ref,
+        model_name: &params.model_name,
+        instance_id: &params.instance_id,
+        mmproj_path: params.mmproj_path.as_ref(),
+        ctx_size: params.ctx_size,
+        pinned_gpu: params.pinned_gpu.as_ref(),
+        runtime_capacity_ledger: &params.runtime_capacity_ledger,
+        cache_type_k: params.cache_type_k.as_deref(),
+        cache_type_v: params.cache_type_v.as_deref(),
+        n_batch: params.n_batch,
+        n_ubatch: params.n_ubatch,
+        flash_attention: params.flash_attention,
+        parallel_override: params.parallel_override,
+        split_topology_lock: params.split_topology_lock.as_deref(),
+        resource_planning_profile: params.resource_planning_profile,
+        openai_guardrail_policy: params.openai_guardrail_policy.clone(),
+        skippy_telemetry: &params.skippy_telemetry,
+        survey_telemetry: &params.survey_telemetry,
+        console_state: params.console_state.as_ref(),
+        startup_load_gate: &params.startup_load_gate,
+        stop_rx,
+        local_capacity: prepared.local_capacity,
+        model_bytes: prepared.model_bytes,
+        runtime_plan: prepared.runtime_plan,
+        launch_kind: prepared.launch_kind,
+    })
+    .await
+}
+
+fn startup_loop_context<'a>(
+    params: &'a StartupLocalModelTask,
+    runtime_data_producer: Option<&'a crate::runtime_data::RuntimeDataProducer>,
+    launch_kind: survey::SurveyLaunchKind,
+) -> StartupLoopContext<'a> {
+    StartupLoopContext {
+        node: &params.node,
+        config: &params.config,
+        tunnel_mgr: &params.tunnel_mgr,
+        target_tx: &params.target_tx,
+        model_path: &params.model_path,
+        model_ref: &params.model_ref,
+        readiness_index: params.readiness_index,
+        instance_id: &params.instance_id,
+        primary_model_name: &params.primary_model_name,
+        mmproj_path: params.mmproj_path.as_ref(),
+        ctx_size: params.ctx_size,
+        pinned_gpu: params.pinned_gpu.as_ref(),
+        runtime_capacity_ledger: &params.runtime_capacity_ledger,
+        cache_type_k: params.cache_type_k.as_deref(),
+        cache_type_v: params.cache_type_v.as_deref(),
+        n_batch: params.n_batch,
+        n_ubatch: params.n_ubatch,
+        flash_attention: params.flash_attention,
+        parallel_override: params.parallel_override,
+        resource_planning_profile: params.resource_planning_profile,
+        openai_guardrail_policy: params.openai_guardrail_policy.clone(),
+        skippy_telemetry: &params.skippy_telemetry,
+        survey_telemetry: &params.survey_telemetry,
+        launch_kind,
+        dashboard_processes: &params.dashboard_processes,
+        dashboard_context_usage: &params.dashboard_context_usage,
+        runtime_instance_registry: &params.runtime_instance_registry,
+        console_state: params.console_state.as_ref(),
+        api_port: params.api_port,
+        runtime_data_producer,
+        lifecycle: &params.lifecycle,
+        lifecycle_port: &params.lifecycle_port,
+    }
+}
+
+async fn publish_startup_local_model(
+    params: &StartupLocalModelTask,
+    ctx: &StartupLoopContext<'_>,
+    loaded_name: &str,
+    handle: &LocalRuntimeModelHandle,
+) {
+    startup_publish_loaded_runtime(ctx, loaded_name, handle, &params.startup_ready_reporter).await;
+    let response = api::RuntimeLoadResponse {
+        model_ref: params.model_ref.clone(),
+        model: loaded_name.to_string(),
+        instance_id: params.instance_id.clone(),
+        profile: params.profile.clone(),
+        backend: Some(handle.backend.clone()),
+        context_length: Some(handle.context_length),
+    };
+    let _ = params
+        .runtime_event_tx
+        .send(super::RuntimeEvent::StartupModelLoadFinished {
+            model_ref: params.model_ref.clone(),
+            profile: params.profile.clone(),
+            result: Ok(response),
+        });
+    maybe_spawn_startup_interactive_handler(
+        params.input_handler_enabled,
+        loaded_name,
+        &params.primary_model_name,
+        &params.interactive_started,
+        params.interactive_control_tx.clone(),
+        params.interactive_console_state.clone(),
+    );
+}
+
+async fn record_startup_task_failure(params: &StartupLocalModelTask, detail: &str) {
+    record_startup_terminal_failure(
+        &params.lifecycle,
+        &params.startup_ready_reporter,
+        &params.interactive_control_tx,
+        &params.runtime_event_tx,
+        &params.model_ref,
+        &params.profile,
+        &params.model_name,
+        detail,
+    )
+    .await;
 }
 
 #[expect(
@@ -1551,9 +1534,7 @@ pub(super) async fn startup_publish_loaded_runtime(
         cs.update(true, true).await;
     }
     update_pi_models_json(loaded_name, ctx.api_port);
-    // Readiness is keyed by the original desired intent identity so catalog
-    // shorthand and its resolved canonical model name converge on one record.
-    startup_ready_reporter.mark_ready_and_maybe_emit(ctx.model_ref);
+    startup_ready_reporter.mark_ready_and_maybe_emit(ctx.readiness_index);
     let _ = emit_event(OutputEvent::ModelReady {
         model: loaded_name.to_string(),
         internal_port: Some(handle.port),
@@ -1632,7 +1613,7 @@ pub(super) fn update_startup_target(
 
 #[derive(Clone)]
 pub(super) struct StartupReadyReporter {
-    pub(super) ready_by_model: Arc<Mutex<HashMap<String, bool>>>,
+    pub(super) ready_by_model: Arc<Mutex<Vec<bool>>>,
     pub(super) emitted: Arc<AtomicBool>,
     pub(super) shutdown_requested: Arc<AtomicBool>,
     startup_failure_policy: mesh_llm_config::StartupFailurePolicy,
@@ -1680,7 +1661,7 @@ impl StartupReadyReporter {
         console_port: Option<u16>,
         startup_failure_policy: mesh_llm_config::StartupFailurePolicy,
     ) -> Self {
-        let ready_by_model = models.iter().cloned().map(|model| (model, false)).collect();
+        let ready_by_model = vec![false; models.len()];
         Self {
             ready_by_model: Arc::new(Mutex::new(ready_by_model)),
             emitted: Arc::new(AtomicBool::new(false)),
@@ -1747,26 +1728,16 @@ impl StartupReadyReporter {
         self.shutdown_requested.store(true, Ordering::SeqCst);
     }
 
-    pub(super) fn mark_ready_and_build_event(&self, model_name: &str) -> Option<OutputEvent> {
+    pub(super) fn mark_ready_and_build_event(&self, readiness_index: usize) -> Option<OutputEvent> {
         let models_count = {
             let mut ready_by_model = self
                 .ready_by_model
                 .lock()
                 .expect("startup readiness mutex poisoned");
-            if let Some(entry) = ready_by_model.get_mut(model_name) {
-                *entry = true;
-            } else if let Some(key) = ready_by_model
-                .iter()
-                .filter_map(|(key, ready)| (!*ready).then_some(key.clone()))
-                .min()
-                && let Some(entry) = ready_by_model.get_mut(&key)
-            {
-                // Resolution can canonicalize a startup shorthand. Preserve
-                // one-to-one readiness accounting without exposing or relying
-                // on that internal alias in the public intent identity.
+            if let Some(entry) = ready_by_model.get_mut(readiness_index) {
                 *entry = true;
             }
-            if ready_by_model.values().all(|ready| *ready) {
+            if ready_by_model.iter().all(|ready| *ready) {
                 Some(ready_by_model.len())
             } else {
                 None
@@ -1803,8 +1774,8 @@ impl StartupReadyReporter {
         })
     }
 
-    fn mark_ready_and_maybe_emit(&self, model_name: &str) {
-        let Some(event) = self.mark_ready_and_build_event(model_name) else {
+    fn mark_ready_and_maybe_emit(&self, readiness_index: usize) {
+        let Some(event) = self.mark_ready_and_build_event(readiness_index) else {
             return;
         };
         let _ = emit_event(event);

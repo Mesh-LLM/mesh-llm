@@ -736,6 +736,10 @@ mod tests {
             1,
             "low-ctx cooldown must not suppress the default profile"
         );
+        assert_eq!(
+            actions[0].profile, "",
+            "the default profile should remain actionable while low-ctx cools down"
+        );
 
         let after_cooldown = NOW + policy.failure_cooldown_secs + 1;
         let actions = plan_model_target_reconciliation(

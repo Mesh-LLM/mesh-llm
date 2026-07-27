@@ -131,21 +131,6 @@ async fn handle_inbound_stage_transport(
     quic_send: iroh::endpoint::SendStream,
     mut quic_recv: iroh::endpoint::RecvStream,
 ) -> Result<()> {
-    // Admission check for inbound stage transport ingress.
-    match node
-        .activity_policy_guard
-        .check_admission(crate::runtime::IngressType::StageTransport)
-    {
-        crate::runtime::AdmissionResult::Allowed => {}
-        crate::runtime::AdmissionResult::Paused { reason, .. } => {
-            tracing::debug!(
-                reason,
-                "Inbound stage transport rejected by activity policy"
-            );
-            anyhow::bail!("stage transport paused: {reason}");
-        }
-    }
-
     let buf = read_len_prefixed(&mut quic_recv).await?;
     let open = skippy_protocol::proto::stage::StageTransportOpen::decode(buf.as_slice())
         .map_err(|e| anyhow::anyhow!("StageTransportOpen decode error: {e}"))?;

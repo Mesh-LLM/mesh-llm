@@ -17,12 +17,6 @@ enum AutoRouteResolution {
     MediaUnsupported,
 }
 
-/// Result of routing a request for a model with no available local candidates.
-#[allow(dead_code)] // single-variant enum preserved for future extension if fallback behavior is needed back
-enum MissingModelRouteResult {
-    Routed,
-}
-
 struct IngressRouteContext<'a> {
     node: &'a mesh::Node,
     targets: &'a election::ModelTargets,
@@ -450,7 +444,7 @@ async fn route_missing_local_model(
     ctx: &IngressRouteContext<'_>,
     model_name: &str,
     required_tokens: Option<u32>,
-) -> MissingModelRouteResult {
+) {
     // Try remote mesh first.
     if let Some(mesh_targets) = remote_mesh_targets(ctx, model_name).await {
         let routed = proxy::route_model_request(
@@ -464,15 +458,10 @@ async fn route_missing_local_model(
         )
         .await;
         debug_assert!(routed);
-        return MissingModelRouteResult::Routed;
+        return;
     }
 
-    // Try plugin dispatch (admission-checked inside). Returns Routed when a plugin manager exists.
-    if ctx.plugin_manager.is_some() {
-        return try_route_plugin_model(ctx, tcp_stream, request, model_name).await;
-    }
-
-    // No remote mesh or plugins configured. Check if the model is known locally but unavailable
+    // Check if the model is known locally but unavailable
     // (e.g., loading/draining/failed with all-None candidates). Return 503 for these cases so
     // clients can retry; return 404 only when the model truly doesn't exist anywhere.
     if has_local_unavailable_candidates(ctx.targets, model_name) {
@@ -481,7 +470,13 @@ async fn route_missing_local_model(
             &format!("model '{model_name}' is unavailable locally (loading or draining)"),
         )
         .await;
-        return MissingModelRouteResult::Routed;
+        return;
+    }
+
+    // Try plugin dispatch (admission-checked inside).
+    if ctx.plugin_manager.is_some() {
+        try_route_plugin_model(ctx, tcp_stream, request, model_name).await;
+        return;
     }
 
     // Model not found anywhere — return 404. This replaces the old fallback behavior that would
@@ -492,7 +487,6 @@ async fn route_missing_local_model(
         &format!("model '{model_name}' not found (no local or remote host serving this model)"),
     )
     .await;
-    MissingModelRouteResult::Routed
 }
 
 /// Check whether the model is known locally but currently unavailable — all local candidates are None.
@@ -528,7 +522,7 @@ async fn try_route_plugin_model(
     mut tcp_stream: tokio::net::TcpStream,
     request: &proxy::BufferedHttpRequest,
     model_name: &str,
-) -> MissingModelRouteResult {
+) {
     // Admission check for plugin dispatch ingress.
     match check_activity_admission(
         tcp_stream,
@@ -538,7 +532,7 @@ async fn try_route_plugin_model(
     .await
     {
         Ok(stream) => tcp_stream = stream,
-        Err(()) => return MissingModelRouteResult::Routed,
+        Err(()) => return,
     }
 
     let plugin_manager = ctx
@@ -566,7 +560,6 @@ async fn try_route_plugin_model(
                 )
                 .await;
             }
-            MissingModelRouteResult::Routed
         }
         Ok(None) => {
             // Plugin manager exists but doesn't serve this model — send 404.
@@ -578,7 +571,6 @@ async fn try_route_plugin_model(
                 ),
             )
             .await;
-            MissingModelRouteResult::Routed
         }
         Err(error) => {
             tracing::warn!(
@@ -592,7 +584,6 @@ async fn try_route_plugin_model(
                 &format!("plugin endpoint for model '{model_name}' unavailable"),
             )
             .await;
-            MissingModelRouteResult::Routed
         }
     }
 }
@@ -791,18 +782,6 @@ async fn handle_buffered_api_request(
     mut request: proxy::BufferedHttpRequest,
     ctx: ProxyConnectionContext<'_>,
 ) {
-    // Admission check for local OpenAI ingress.
-    let tcp_stream = match check_activity_admission(
-        tcp_stream,
-        &ctx.route.node.activity_policy_guard,
-        crate::runtime::IngressType::LocalOpenAi,
-    )
-    .await
-    {
-        Ok(stream) => stream,
-        Err(()) => return,
-    };
-
     let tcp_stream = match maybe_handle_control_request(tcp_stream, &request, &ctx).await {
         Ok(()) => return,
         Err(tcp_stream) => tcp_stream,
@@ -817,6 +796,19 @@ async fn handle_buffered_api_request(
         handle_mesh_unload_request(tcp_stream, &request, ctx.control_tx).await;
         return;
     }
+
+    // Admission applies only to new inference work. Control and unload requests
+    // remain available while host activity pauses inference.
+    let tcp_stream = match check_activity_admission(
+        tcp_stream,
+        &ctx.route.node.activity_policy_guard,
+        crate::runtime::IngressType::LocalOpenAi,
+    )
+    .await
+    {
+        Ok(stream) => stream,
+        Err(()) => return,
+    };
 
     let decision = match prepare_auto_route_decision(&mut request, &ctx.route, &descriptors).await {
         Ok(decision) => decision,

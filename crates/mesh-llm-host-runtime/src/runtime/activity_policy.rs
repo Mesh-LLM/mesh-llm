@@ -94,6 +94,13 @@ pub enum IngressType {
     /// Remote QUIC tunnelled HTTP from mesh peers.
     RemoteQuicHttp,
     /// Inbound stage transport for skippy split serving.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "stage transport classification is retained for policy tests and future pre-stream admission"
+        )
+    )]
     StageTransport,
     /// Plugin model dispatch (external plugin inference endpoints).
     PluginDispatch,
@@ -423,9 +430,10 @@ pub fn spawn_native_activity_policy(
             Duration::from_secs(config.idle_after_secs),
             Duration::from_secs(config.resume_debounce_secs),
         );
-        let mut monitor =
-            HostActivityMonitor::new(NativeHostActivityDetector::default(), SystemClock, policy);
-        let mut priority = PrioritySession::new(NativePriorityController::default());
+        let activity_state = Arc::new(Mutex::new((
+            HostActivityMonitor::new(NativeHostActivityDetector::default(), SystemClock, policy),
+            PrioritySession::new(NativePriorityController::default()),
+        )));
         let mut interval =
             tokio::time::interval(Duration::from_secs(config.poll_interval_secs.max(1)));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -433,7 +441,12 @@ pub fn spawn_native_activity_policy(
         loop {
             interval.tick().await;
             let blocking_guard = guard.clone();
+            let blocking_state = activity_state.clone();
             let blocking_result = tokio::task::spawn_blocking(move || {
+                let mut state = blocking_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let (monitor, priority) = &mut *state;
                 let sample = monitor.sample();
                 blocking_guard.update_detector_state(sample.effective);
                 let priority_status = if blocking_guard.effective_state()
@@ -448,16 +461,23 @@ pub fn spawn_native_activity_policy(
                 } else {
                     blocking_guard.clear_priority_degraded();
                 }
-                (monitor, priority)
             })
             .await;
             match blocking_result {
-                Ok((next_monitor, next_priority)) => {
-                    monitor = next_monitor;
-                    priority = next_priority;
-                }
+                Ok(()) => {}
                 Err(error) => {
                     tracing::warn!(%error, "host activity sampling task failed");
+                    guard.update_detector_state(HostActivity::Unknown);
+                    let priority_status = activity_state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .1
+                        .restore();
+                    if priority_status.is_degraded() {
+                        guard.mark_priority_degraded();
+                    } else {
+                        guard.clear_priority_degraded();
+                    }
                     break;
                 }
             }

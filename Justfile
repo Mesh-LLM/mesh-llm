@@ -392,7 +392,7 @@ test-all:
     set -euo pipefail
 
     echo "=== 0/11 Test-all rust crate coverage preflight ==="
-    cargo run -p xtask -- repo-consistency test-all-rust-crate-coverage
+    just with-lld cargo run -p xtask -- repo-consistency test-all-rust-crate-coverage
 
     # A full workspace gate otherwise leaves hundreds of incompatible
     # incremental feature graphs behind. CI already builds non-incrementally;

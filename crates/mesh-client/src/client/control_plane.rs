@@ -553,18 +553,14 @@ impl OwnerControlClient {
         model_ref: String,
         instance_id: Option<String>,
     ) -> Result<OwnerControlUnloadModelResponse, ControlPlaneClientError> {
-        let expected_instance_id = instance_id.clone();
-        let expected_model_ref = if expected_instance_id.is_some() {
-            String::new()
-        } else {
-            model_ref.clone()
-        };
+        let (expected_model_ref, expected_instance_id) =
+            validate_absent_model_target(model_ref, instance_id)?;
         let request = OwnerControlUnloadModelRequest {
             requester_node_id: self.endpoint.id().as_bytes().to_vec(),
             target_node_id: self.connection.remote_id().as_bytes().to_vec(),
             model: Some(crate::proto::node::OwnerControlModelRef {
                 canonical_model_ref: expected_model_ref.clone(),
-                instance_id,
+                instance_id: expected_instance_id.clone(),
             }),
         };
         let response = self
@@ -655,18 +651,14 @@ impl OwnerControlClient {
         model_ref: String,
         instance_id: Option<String>,
     ) -> Result<OwnerControlDrainModelResponse, ControlPlaneClientError> {
-        let expected_instance_id = instance_id.clone();
-        let expected_model_ref = if expected_instance_id.is_some() {
-            String::new()
-        } else {
-            model_ref.clone()
-        };
+        let (expected_model_ref, expected_instance_id) =
+            validate_absent_model_target(model_ref, instance_id)?;
         let request = OwnerControlDrainModelRequest {
             requester_node_id: self.endpoint.id().as_bytes().to_vec(),
             target_node_id: self.connection.remote_id().as_bytes().to_vec(),
             model: Some(crate::proto::node::OwnerControlModelRef {
                 canonical_model_ref: expected_model_ref.clone(),
-                instance_id,
+                instance_id: expected_instance_id.clone(),
             }),
             drain_timeout_secs: None,
         };
@@ -831,6 +823,25 @@ impl OwnerControlClient {
         })?
         .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))?;
         Ok((send, recv))
+    }
+}
+
+fn validate_absent_model_target(
+    model_ref: String,
+    instance_id: Option<String>,
+) -> Result<(String, Option<String>), ControlPlaneClientError> {
+    let has_model_ref = !model_ref.trim().is_empty();
+    let has_instance_id = instance_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty());
+
+    match (has_model_ref, has_instance_id) {
+        (true, false) => Ok((model_ref, None)),
+        (false, true) => Ok((String::new(), instance_id)),
+        _ => Err(ControlPlaneClientError::Protocol(
+            "unload_model and drain_model require exactly one model reference or instance id"
+                .to_string(),
+        )),
     }
 }
 
@@ -1351,6 +1362,28 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn absent_model_target_requires_exactly_one_reference() {
+        assert_eq!(
+            validate_absent_model_target("model/test".to_string(), None)
+                .expect("model-only target"),
+            ("model/test".to_string(), None)
+        );
+        assert_eq!(
+            validate_absent_model_target(String::new(), Some("runtime-2".to_string()))
+                .expect("instance-only target"),
+            (String::new(), Some("runtime-2".to_string()))
+        );
+        assert!(matches!(
+            validate_absent_model_target("model/test".to_string(), Some("runtime-2".to_string())),
+            Err(ControlPlaneClientError::Protocol(_))
+        ));
+        assert!(matches!(
+            validate_absent_model_target(String::new(), None),
+            Err(ControlPlaneClientError::Protocol(_))
+        ));
     }
 
     #[test]

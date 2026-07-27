@@ -99,6 +99,11 @@ async fn owner_lifecycle_routes_enforce_exact_target_shapes_before_connecting() 
             r#"{"endpoint":"unused","model":"model/test","profile":"low-ctx"}"#,
             "unload-model requires exactly one",
         ),
+        (
+            "/api/runtime/control/load-model",
+            r#"{"model":"model/test"}"#,
+            "control_endpoint_required",
+        ),
     ];
 
     for (path, body, expected) in invalid {

@@ -6,10 +6,6 @@ use crate::network::openai::request_normalize::ResponseAdapter;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "the local routing attempt keeps admission, forwarding, probing, and retry classification in one cancellation-safe scope"
-)]
 pub(in crate::network::openai) async fn route_local_attempt(
     node: &mesh::Node,
     tcp_stream: &mut TcpStream,
@@ -18,34 +14,44 @@ pub(in crate::network::openai) async fn route_local_attempt(
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> RouteAttemptResult {
-    let _instance_request = match node.begin_runtime_instance_request(port).await {
-        Ok(guard) => guard,
-        Err(()) => return RouteAttemptResult::RetryableUnavailable,
+    let Ok((_instance_request, mut upstream)) = acquire_local_attempt_upstream(node, port).await
+    else {
+        return RouteAttemptResult::RetryableUnavailable;
     };
-    match TcpStream::connect(format!("127.0.0.1:{port}")).await {
-        Ok(mut upstream) => {
-            let _inflight = node.begin_inflight_request();
-            let _ = upstream.set_nodelay(true);
-            if let Err(err) = upstream.write_all(prefetched).await {
-                tracing::warn!(
-                    "API proxy: failed to forward buffered request to local OpenAI surface on {port}: {err}"
-                );
-                return RouteAttemptResult::RetryableUnavailable;
-            }
-            route_local_attempt_after_forward(
-                tcp_stream,
-                &mut upstream,
-                port,
-                retry_policy,
-                response_adapter,
-            )
-            .await
-        }
-        Err(err) => {
-            tracing::warn!("API proxy: can't reach local OpenAI surface on {port}: {err}");
-            RouteAttemptResult::RetryableUnavailable
-        }
+    let _inflight = node.begin_inflight_request();
+    let _ = upstream.set_nodelay(true);
+    if let Err(err) = upstream.write_all(prefetched).await {
+        tracing::warn!(
+            "API proxy: failed to forward buffered request to local OpenAI surface on {port}: {err}"
+        );
+        return RouteAttemptResult::RetryableUnavailable;
     }
+    route_local_attempt_after_forward(
+        tcp_stream,
+        &mut upstream,
+        port,
+        retry_policy,
+        response_adapter,
+    )
+    .await
+}
+
+async fn acquire_local_attempt_upstream(
+    node: &mesh::Node,
+    port: u16,
+) -> Result<(Option<crate::runtime::InstanceRequestGuard>, TcpStream), ()> {
+    let instance_request = node
+        .begin_runtime_instance_request(port)
+        .await
+        .map_err(|error| {
+            tracing::debug!(%error, port, "local runtime instance rejected new work");
+        })?;
+    let upstream = TcpStream::connect(format!("127.0.0.1:{port}"))
+        .await
+        .map_err(|error| {
+            tracing::warn!("API proxy: can't reach local OpenAI surface on {port}: {error}");
+        })?;
+    Ok((instance_request, upstream))
 }
 
 async fn route_local_attempt_after_forward(

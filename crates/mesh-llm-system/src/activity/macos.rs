@@ -2,12 +2,11 @@ use std::process;
 
 use super::{HostActivity, HostActivityDetector, PriorityController, PriorityFailure};
 
-#[cfg(target_os = "macos")]
-use libc;
+const HID_ACTIVE_IDLE_NANOS: u64 = 1_000_000_000;
 
 #[derive(Debug, Default)]
 pub struct MacHostActivityDetector {
-    previous_idle_nanos: Option<u64>,
+    last_idle_nanos: Option<u64>,
 }
 
 impl HostActivityDetector for MacHostActivityDetector {
@@ -15,22 +14,22 @@ impl HostActivityDetector for MacHostActivityDetector {
         let current = match read_hid_idle_nanos() {
             Some(value) => value,
             None => {
-                self.previous_idle_nanos = None;
+                self.last_idle_nanos = None;
                 return HostActivity::Unknown;
             }
         };
 
-        let activity = self
-            .previous_idle_nanos
-            .map_or(HostActivity::Unknown, |previous| {
-                if current < previous {
-                    HostActivity::Active
-                } else {
-                    HostActivity::Idle
-                }
-            });
-        self.previous_idle_nanos = Some(current);
+        let activity = classify_hid_idle_nanos(current);
+        self.last_idle_nanos = Some(current);
         activity
+    }
+}
+
+fn classify_hid_idle_nanos(idle_nanos: u64) -> HostActivity {
+    if idle_nanos < HID_ACTIVE_IDLE_NANOS {
+        HostActivity::Active
+    } else {
+        HostActivity::Idle
     }
 }
 
@@ -142,7 +141,9 @@ fn set_process_nice(pid: u32, nice: i32) -> Result<(), ()> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_hid_idle_nanos;
+    use super::{
+        HID_ACTIVE_IDLE_NANOS, HostActivity, classify_hid_idle_nanos, parse_hid_idle_nanos,
+    };
 
     #[test]
     fn parses_hid_idle_time() {
@@ -151,5 +152,22 @@ mod tests {
             Some(123_456_789)
         );
         assert_eq!(parse_hid_idle_nanos("unavailable"), None);
+    }
+
+    #[test]
+    fn classifies_activity_from_absolute_idle_duration() {
+        assert_eq!(classify_hid_idle_nanos(0), HostActivity::Active);
+        assert_eq!(
+            classify_hid_idle_nanos(HID_ACTIVE_IDLE_NANOS - 1),
+            HostActivity::Active
+        );
+        assert_eq!(
+            classify_hid_idle_nanos(HID_ACTIVE_IDLE_NANOS),
+            HostActivity::Idle
+        );
+        assert_eq!(
+            classify_hid_idle_nanos(HID_ACTIVE_IDLE_NANOS + 1),
+            HostActivity::Idle
+        );
     }
 }

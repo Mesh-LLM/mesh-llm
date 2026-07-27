@@ -48,6 +48,10 @@ pub fn mark_runtime_shutting_down() {
     RUNTIME_SHUTTING_DOWN.store(true, Ordering::SeqCst);
 }
 
+pub fn runtime_shutting_down() -> bool {
+    RUNTIME_SHUTTING_DOWN.load(Ordering::SeqCst)
+}
+
 pub fn clear_runtime_shutting_down() {
     RUNTIME_SHUTTING_DOWN.store(false, Ordering::SeqCst);
 }

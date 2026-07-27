@@ -9,6 +9,13 @@ import type {
 import { CONFIGURATION_HARNESS } from '@/features/app-tabs/data'
 import type { RuntimeConfigControlStatePayload, RuntimeConfigSchemaReference } from './config-adapter'
 import { createSchemaControl } from './schema-control-factory'
+import {
+  DEFAULT_CATEGORY_ORDER,
+  DEFAULT_SETTING_ORDER,
+  sortCategories,
+  sortSettings,
+  titleCaseIdentifier
+} from './schema-setting-order'
 
 /** Build runtime-policy settings harness data (runtime.mode, activity.*, etc.) from schema. */
 export function createRuntimePolicySettingsFromSchema(
@@ -38,24 +45,12 @@ export function createRuntimePolicySettingsFromSchema(
 
 // ── Internal helpers ────────────────────────────────────────────────
 
-const DEFAULT_CATEGORY_ORDER = 1000
-const DEFAULT_SETTING_ORDER = 1000
-
 function isRuntimePolicyEntry(entry: RuntimeConfigSchemaReference['settings'][number]): boolean {
   return (
     entry.canonical_path.startsWith('runtime.') &&
     entry.canonical_path !== 'runtime.debug' &&
     entry.canonical_path !== 'runtime.listen_all'
   )
-}
-
-function titleCaseIdentifier(value: string) {
-  return value
-    .replaceAll('_', ' ')
-    .replaceAll('-', ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, (m) => m.toUpperCase())
 }
 
 const FALLBACK_DEFAULTS_CATEGORY: ConfigurationDefaultsCategory = {
@@ -205,18 +200,4 @@ function schemaSettingFromEntry(
 
 function lastPathSegment(canonicalPath: string) {
   return canonicalPath.split('.').filter(Boolean).at(-1) ?? canonicalPath
-}
-
-function sortCategories(categories: readonly ConfigurationDefaultsCategory[]) {
-  return [...categories].sort(
-    (left, right) => (left.order ?? DEFAULT_CATEGORY_ORDER) - (right.order ?? DEFAULT_CATEGORY_ORDER)
-  )
-}
-
-function sortSettings(settings: readonly ConfigDefaultsSetting[]) {
-  return [...settings].sort(
-    (a, b) =>
-      (a.categoryOrder ?? DEFAULT_CATEGORY_ORDER) - (b.categoryOrder ?? DEFAULT_CATEGORY_ORDER) ||
-      (a.settingOrder ?? DEFAULT_SETTING_ORDER) - (b.settingOrder ?? DEFAULT_SETTING_ORDER)
-  )
 }

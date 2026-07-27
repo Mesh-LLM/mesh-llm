@@ -41,8 +41,8 @@ use self::capacity::{
 use self::context_planning::RuntimeResourcePlanningProfile;
 use self::discovery::{lan_rediscovery, nostr_rediscovery, start_new_mesh};
 pub(crate) use self::instance_lifecycle::{
-    DrainCoordinator, DrainResult, InstanceLifecycleRecord, InstanceLifecycleState,
-    InstanceRequestGuard,
+    DrainCoordinator, DrainResult, InstanceAdmissionError, InstanceLifecycleRecord,
+    InstanceLifecycleState, InstanceRequestGuard,
 };
 use self::interactive::InitialPromptMode;
 use self::local::{

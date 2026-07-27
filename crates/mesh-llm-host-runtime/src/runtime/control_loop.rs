@@ -404,10 +404,6 @@ pub(super) async fn run_auto_handle_control_request(
             run_auto_handle_model_intent(ctx, intent).await;
             false
         }
-        api::RuntimeControlRequest::PostIntent { intent } => {
-            run_auto_handle_model_intent(ctx, intent).await;
-            false
-        }
         api::RuntimeControlRequest::SetOpenAiGuardrailMode { mode, resp } => {
             let result = run_auto_set_openai_guardrail_mode(ctx, mode).await;
             let _ = resp.send(result);
@@ -463,6 +459,8 @@ pub(super) async fn run_auto_handle_model_intent(
                 .model_target_reconciliation_state
                 .is_effective_intent(&intent_id, &spec, &profile)
             {
+                ctx.model_target_reconciliation_state
+                    .retire_one_shot_present(&intent_id);
                 if let Some(tx) = completion {
                     let _ = tx.send(Err(anyhow::anyhow!(
                         "model load intent is suppressed by a higher-priority desired state"

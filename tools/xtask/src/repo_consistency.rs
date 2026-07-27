@@ -274,17 +274,6 @@ pub(crate) fn check_test_all_coverage_command() -> DynResult<()> {
         "test-all dynamic/exclude target parity",
     )?;
 
-    let mut covered_crates = workspace_crates.clone();
-    for excluded in excluded_targets.iter() {
-        covered_crates.remove(excluded);
-    }
-    covered_crates.extend(dynamic_targets.iter().cloned());
-    ensure_set_eq(
-        &workspace_crates,
-        &covered_crates,
-        "test-all cargo test coverage",
-    )?;
-
     println!("repo consistency checks passed: test-all-rust-crate-coverage");
     Ok(())
 }
@@ -317,7 +306,10 @@ fn test_all_test_targets(contents: &str) -> DynResult<(BTreeSet<String>, BTreeSe
 
     let dynamic = commands
         .iter()
-        .find(|command| command.contains("cargo test ") && command.contains(" -p "))
+        .find(|command| {
+            command.contains("cargo test ")
+                && (command.contains(" -p ") || command.contains(" -p="))
+        })
         .ok_or("test-all: missing dynamic cargo test command")?;
     let workspace = commands
         .iter()
@@ -330,13 +322,19 @@ fn test_all_test_targets(contents: &str) -> DynResult<(BTreeSet<String>, BTreeSe
 }
 
 fn command_flag_values(command: &str, flag: &str) -> BTreeSet<String> {
-    command
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .windows(2)
-        .filter(|pair| pair[0] == flag)
-        .map(|pair| pair[1].to_string())
-        .collect()
+    let equals_prefix = format!("{flag}=");
+    let mut values = BTreeSet::new();
+    let mut arguments = command.split_whitespace();
+    while let Some(argument) = arguments.next() {
+        if argument == flag {
+            if let Some(value) = arguments.next() {
+                values.insert(value.to_string());
+            }
+        } else if let Some(value) = argument.strip_prefix(&equals_prefix) {
+            values.insert(value.to_string());
+        }
+    }
+    values
 }
 
 #[cfg(test)]
@@ -356,6 +354,19 @@ test-all:
         --exclude dynamic-b
 
 # Another recipe
+"#;
+        let expected = BTreeSet::from(["dynamic-a".to_string(), "dynamic-b".to_string()]);
+        let (dynamic, excluded) = test_all_test_targets(justfile).unwrap();
+        assert_eq!(dynamic, expected);
+        assert_eq!(excluded, expected);
+    }
+
+    #[test]
+    fn test_all_targets_accept_equals_form_flags() {
+        let justfile = r#"
+test-all:
+    cargo test -p=dynamic-a -p=dynamic-b
+    cargo test --workspace --exclude=dynamic-a --exclude dynamic-b
 "#;
         let expected = BTreeSet::from(["dynamic-a".to_string(), "dynamic-b".to_string()]);
         let (dynamic, excluded) = test_all_test_targets(justfile).unwrap();

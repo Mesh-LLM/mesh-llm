@@ -732,7 +732,7 @@ fn validate_config_hash_length(len: usize) -> Result<(), ControlFrameError> {
     Ok(())
 }
 
-fn validate_owner_control_model_for_load_or_ensure(
+pub fn validate_owner_control_model_for_load_or_ensure(
     model: &crate::proto::node::OwnerControlModelRef,
 ) -> Result<(), ControlFrameError> {
     let canonical = !model.canonical_model_ref.trim().is_empty();
@@ -747,7 +747,7 @@ fn validate_owner_control_model_for_load_or_ensure(
     }
 }
 
-fn validate_owner_control_model_for_unload_or_drain(
+pub fn validate_owner_control_model_for_unload_or_drain(
     model: &crate::proto::node::OwnerControlModelRef,
 ) -> Result<(), ControlFrameError> {
     let canonical = !model.canonical_model_ref.trim().is_empty();
@@ -757,12 +757,10 @@ fn validate_owner_control_model_for_unload_or_drain(
         .is_some_and(|id| !id.trim().is_empty());
     if canonical ^ instance {
         Ok(())
+    } else if canonical || instance {
+        Err(ControlFrameError::InvalidModelRefCombination)
     } else {
-        if canonical || instance {
-            Err(ControlFrameError::InvalidModelRefCombination)
-        } else {
-            Err(ControlFrameError::MissingModelRef)
-        }
+        Err(ControlFrameError::MissingModelRef)
     }
 }
 

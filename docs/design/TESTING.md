@@ -1026,9 +1026,14 @@ owner-control bootstrap and scan-refresh tests:
 | `lifecycle-unload-model` | Probe current-host owner lifecycle unload command | PASS only when the authenticated command returns HTTP 200 with `accepted=true` |
 | `lifecycle-ensure-model` | Probe current-host owner lifecycle ensure command | PASS only when the authenticated command returns HTTP 200 with `accepted=true` |
 | `lifecycle-drain-model` | Probe current-host owner lifecycle drain command | PASS only when the authenticated command returns HTTP 200 with `accepted=true` |
-| `lifecycle-legacy-unsupported` | Send a lifecycle command to the released host | PASS only for a structured response that explicitly reports unsupported/unknown command; a generic 404 is a failure |
+| `lifecycle-legacy-unsupported` | Send a lifecycle command through the current controller to the released target | PASS only for a structured response that explicitly reports unsupported/unknown command; a generic 404 is a failure |
 
-The probes discover running nodes by scanning expected console ports (config-current-node at `BASE_PORT+81`, local direction servers at their respective offsets). If no node is reachable on any expected port, all five checks record PREREQ with an explicit message about unavailable targets.
+`run_local_direction` and the `config-current-controller` setup assign the
+available console ports to `CURRENT_HOST_CONSOLE` and `RELEASED_HOST_CONSOLE`;
+the lifecycle probes do not scan ports. When `CURRENT_HOST_CONSOLE` is empty,
+all five checks record `PREREQ`. When only `RELEASED_HOST_CONSOLE` is empty, the
+four current-host lifecycle command probes still run and only
+`lifecycle-legacy-unsupported` records `PREREQ`.
 
 ### Existing behavior preserved
 
