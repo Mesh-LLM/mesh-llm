@@ -91,9 +91,7 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
     if let Err(diagnostic) = validate_telemetry_config(&config.telemetry) {
         diagnostics.push(diagnostic);
     }
-    if let Err(diagnostic) = validate_runtime_config(&config.runtime) {
-        diagnostics.push(diagnostic);
-    }
+    diagnostics.extend(validate_runtime_config(&config.runtime));
     if let Err(diagnostic) = validate_plugin_entries(&config.plugins) {
         diagnostics.push(diagnostic);
     }
@@ -131,35 +129,80 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
     diagnostics
 }
 
-fn validate_runtime_config(config: &RuntimeConfig) -> DiagnosticResult {
+fn validate_runtime_config(config: &RuntimeConfig) -> Vec<ConfigDiagnostic> {
+    let mut diagnostics = Vec::new();
     let mesh_version = config.native_runtime.mesh_version.as_deref();
     let skippy_abi = config.native_runtime.skippy_abi.as_deref();
     let selection = config.native_runtime.selection.as_deref();
     if mesh_version.is_none() && (skippy_abi.is_some() || selection.is_some()) {
-        return Err(validation_diagnostic(
+        diagnostics.push(validation_diagnostic(
             "runtime.native_runtime",
             "runtime.native_runtime override must set mesh_version when skippy_abi or selection is set",
         ));
     }
     if matches!(mesh_version, Some(value) if value.trim().is_empty()) {
-        return Err(validation_diagnostic(
+        diagnostics.push(validation_diagnostic(
             "runtime.native_runtime.mesh_version",
             "runtime.native_runtime.mesh_version must not be empty",
         ));
     }
     if matches!(skippy_abi, Some(value) if value.trim().is_empty()) {
-        return Err(validation_diagnostic(
+        diagnostics.push(validation_diagnostic(
             "runtime.native_runtime.skippy_abi",
             "runtime.native_runtime.skippy_abi must not be empty",
         ));
     }
     if matches!(selection, Some(value) if value.trim().is_empty()) {
-        return Err(validation_diagnostic(
+        diagnostics.push(validation_diagnostic(
             "runtime.native_runtime.selection",
             "runtime.native_runtime.selection must not be empty",
         ));
     }
-    Ok(())
+    for (path, value, min, max) in [
+        (
+            "runtime.activity.idle_after_secs",
+            config.activity.idle_after_secs,
+            30,
+            86_400,
+        ),
+        (
+            "runtime.activity.poll_interval_secs",
+            config.activity.poll_interval_secs,
+            1,
+            60,
+        ),
+        (
+            "runtime.activity.resume_debounce_secs",
+            config.activity.resume_debounce_secs,
+            0,
+            300,
+        ),
+    ] {
+        if !(min..=max).contains(&value) {
+            diagnostics.push(validation_diagnostic(
+                path,
+                format!("{path} must be between {min} and {max}, got {value}"),
+            ));
+        }
+    }
+    if config.drain_timeout_secs == 0 {
+        diagnostics.push(validation_diagnostic(
+            "runtime.drain_timeout_secs",
+            "runtime.drain_timeout_secs must be at least 1",
+        ));
+    }
+    if config.drain_timeout_max_secs == 0 {
+        diagnostics.push(validation_diagnostic(
+            "runtime.drain_timeout_max_secs",
+            "runtime.drain_timeout_max_secs must be at least 1",
+        ));
+    } else if config.drain_timeout_secs > config.drain_timeout_max_secs {
+        diagnostics.push(validation_diagnostic(
+            "runtime.drain_timeout_secs",
+            "runtime.drain_timeout_secs must not exceed runtime.drain_timeout_max_secs",
+        ));
+    }
+    diagnostics
 }
 
 pub fn validate_config_diagnostics_with_plugin_schemas<F>(
@@ -312,6 +355,19 @@ mod schema_tests {
     use super::*;
 
     #[test]
+    fn drain_default_cannot_exceed_maximum() {
+        let mut config = MeshConfig::default();
+        config.runtime.drain_timeout_secs = 301;
+        config.runtime.drain_timeout_max_secs = 300;
+        let diagnostics = validate_config_diagnostics(&config);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].path.as_ref().map(ConfigPath::render),
+            Some("runtime.drain_timeout_secs".to_string())
+        );
+    }
+
+    #[test]
     fn owner_control_advertise_addr_requires_matching_bind_port() {
         let config: MeshConfig = toml::from_str(
             r#"
@@ -444,5 +500,99 @@ connect_timeout_secs = 0
             err.to_string(),
             "plugin[0].startup.connect_timeout_secs must be at least 1 when set"
         );
+    }
+
+    #[test]
+    fn runtime_activity_bounds_reject_out_of_range_values() {
+        for (toml, expected_path, expected_value) in [
+            (
+                r#"
+[runtime.activity]
+idle_after_secs = 29
+"#,
+                "runtime.activity.idle_after_secs",
+                29_u64,
+            ),
+            (
+                r#"
+[runtime.activity]
+idle_after_secs = 86401
+"#,
+                "runtime.activity.idle_after_secs",
+                86_401_u64,
+            ),
+            (
+                r#"
+[runtime.activity]
+poll_interval_secs = 0
+"#,
+                "runtime.activity.poll_interval_secs",
+                0_u64,
+            ),
+            (
+                r#"
+[runtime.activity]
+poll_interval_secs = 61
+"#,
+                "runtime.activity.poll_interval_secs",
+                61_u64,
+            ),
+            (
+                r#"
+[runtime.activity]
+resume_debounce_secs = 301
+"#,
+                "runtime.activity.resume_debounce_secs",
+                301_u64,
+            ),
+        ] {
+            let config: MeshConfig =
+                toml::from_str(toml).expect("config should parse before validation");
+
+            let diagnostics = validate_config_diagnostics(&config);
+            assert_eq!(diagnostics.len(), 1);
+
+            let diagnostic = &diagnostics[0];
+            assert_eq!(diagnostic.code, ConfigDiagnosticCode::InvalidValue);
+            assert_eq!(diagnostic.severity, ConfigDiagnosticSeverity::Error);
+            assert_eq!(
+                diagnostic.schema_source,
+                Some(ConfigDiagnosticSchemaSource::BuiltIn)
+            );
+            assert_eq!(
+                diagnostic.path.as_ref().map(ConfigPath::render),
+                Some(expected_path.to_string())
+            );
+            assert_eq!(
+                diagnostic.canonical_path.as_ref().map(ConfigPath::render),
+                Some(expected_path.to_string())
+            );
+            assert!(diagnostic.message.contains(expected_path));
+            assert!(diagnostic.message.contains(&expected_value.to_string()));
+        }
+    }
+
+    #[test]
+    fn runtime_activity_bounds_accept_in_range_edges() {
+        for toml in [
+            r#"
+[runtime.activity]
+idle_after_secs = 30
+poll_interval_secs = 60
+resume_debounce_secs = 0
+"#,
+            r#"
+[runtime.activity]
+idle_after_secs = 86400
+poll_interval_secs = 1
+resume_debounce_secs = 300
+"#,
+        ] {
+            let config: MeshConfig =
+                toml::from_str(toml).expect("config should parse before validation");
+
+            let diagnostics = validate_config_diagnostics(&config);
+            assert!(diagnostics.is_empty());
+        }
     }
 }

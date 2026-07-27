@@ -267,3 +267,29 @@ mesh-llm auth trust remove <owner-id>
 - `/v1` request routing and Skippy stage traffic are separate paths. HTTP
   routing is latency-tolerant; stage splits require selected peers with suitable
   topology and latency.
+
+## Admission advertisement
+
+Nodes advertise a coarse inference admission state to mesh peers through an
+additive optional field in peer announcements. This lets peers route around
+nodes that are temporarily not accepting work without breaking mixed-version
+meshes.
+
+The admission enum values are: `UNSPECIFIED` (legacy/eligible),
+`ACCEPTING`, `ACCEPTING_DEPRIORITIZED`, `REMOTE_PAUSED`, and `ALL_PAUSED`.
+Old peers that do not recognize the field treat its absence as eligible and
+continue normal routing.
+
+Advertisement behavior is configured via `[runtime.activity].advertisement`:
+
+- `none`: emit nothing.
+- `availability_only`: publish hosted/serving availability as
+  explicitly-known-and-empty while non-admitting.
+- `coarse_state` (default): emit the admission enum and also publish
+  known-empty availability for old peers.
+- `private_coarse_state`: emit the enum only on private meshes; use
+  known-empty availability publicly.
+
+**Privacy**: only the coarse admission state is advertised. No raw activity
+data, input events, app/window names, usernames, idle durations, timestamps, or
+detector errors are ever encoded in gossip.

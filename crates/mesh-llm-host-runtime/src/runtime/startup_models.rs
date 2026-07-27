@@ -172,6 +172,10 @@ pub(super) fn owner_runtime_config(
         node_label: options.node_label.clone(),
         trust_store,
         trust_policy,
+        activity: config.runtime.activity.clone(),
+        drain_timeout_secs: config.runtime.drain_timeout_secs,
+        drain_timeout_max_secs: config.runtime.drain_timeout_max_secs,
+        public_mesh: options.publish || options.nostr_discovery,
     })
 }
 
@@ -411,37 +415,50 @@ pub(super) async fn prepare_runtime_startup(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
     explicit_surface: Option<RuntimeSurface>,
+    effective_mode: mesh_llm_config::RuntimeMode,
 ) -> Result<Option<PreparedRuntimeStartup>> {
     validate_runtime_cli_model_options(options)?;
-    let startup_specs = build_startup_model_specs(options, config)?;
+    let startup_specs = if effective_mode == mesh_llm_config::RuntimeMode::OnDemand
+        && !cli_has_explicit_models(options)
+    {
+        Vec::new()
+    } else {
+        build_startup_model_specs(options, config)?
+    };
     if options.split_topology_lock.is_some() {
         anyhow::ensure!(
             startup_specs.len() == 1,
             "--split-topology-lock requires exactly one startup model"
         );
     }
-    if should_show_serve_config_help(explicit_surface, options, &startup_specs) {
-        let config_path = plugin::config_path(options.config.as_deref()).unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("~"))
-                .join(".mesh-llm")
-                .join("config.toml")
-        });
-        let _ = emit_event(OutputEvent::Warning {
-            message: "`mesh-llm serve` needs at least one startup model. Add `[[models]]` or pass `--model` / `--gguf` explicitly.".to_string(),
-            context: Some(config_path.display().to_string()),
-        });
-        return Ok(None);
-    }
+    let _ = explicit_surface;
 
-    let mut startup_models = resolve_startup_models(&startup_specs, options.split).await?;
     let bin_dir = match &options.bin_dir {
         Some(dir) => dir.clone(),
         None => detect_bin_dir()?,
     };
+    // Model resolution is deliberately deferred until run_auto has bound the
+    // management, OpenAI, plugin, and control surfaces.
+    let requested_model_names = startup_specs
+        .iter()
+        .map(|spec| spec.model_ref.to_string_lossy().into_owned())
+        .collect();
+    Ok(Some(PreparedRuntimeStartup {
+        startup_specs,
+        requested_model_names,
+        bin_dir,
+    }))
+}
+
+pub(super) async fn resolve_eager_startup_models(
+    options: &RuntimeOptions,
+    config: &plugin::MeshConfig,
+    startup_specs: &[StartupModelSpec],
+) -> Result<Vec<StartupModelPlan>> {
+    let mut startup_models = resolve_startup_models(startup_specs, options.split).await?;
     preflight_config_owned_startup_models(
         config,
-        &startup_specs,
+        startup_specs,
         &mut startup_models,
         options.llama_flavor,
         None,
@@ -453,16 +470,7 @@ pub(super) async fn prepare_runtime_startup(
     spawn_advisory_startup_task(move || {
         models::warn_about_updates_for_paths(&resolved_models);
     });
-
-    let requested_model_names = startup_models
-        .iter()
-        .map(|model| model.declared_ref.clone())
-        .collect();
-    Ok(Some(PreparedRuntimeStartup {
-        startup_models,
-        requested_model_names,
-        bin_dir,
-    }))
+    Ok(startup_models)
 }
 
 // Snapshot update checks are advisory. Serving must not wait on Hub reachability.
@@ -891,19 +899,28 @@ pub(super) fn preflight_config_owned_startup_models_with_gpus(
     Ok(())
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "configuration guidance policy remains covered by startup matrix tests"
+    )
+)]
 pub(super) fn should_show_serve_config_help(
-    explicit_surface: Option<RuntimeSurface>,
-    options: &RuntimeOptions,
-    startup_specs: &[StartupModelSpec],
+    _explicit_surface: Option<RuntimeSurface>,
+    _options: &RuntimeOptions,
+    _startup_specs: &[StartupModelSpec],
 ) -> bool {
-    explicit_surface == Some(RuntimeSurface::Serve)
-        && !options.client
-        && startup_specs.is_empty()
-        && !options.auto
-        && options.join.is_empty()
-        && options.discover.is_none()
+    false
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "legacy size parsing remains covered by capacity compatibility tests"
+    )
+)]
 pub(super) fn parse_size_str(s: &str) -> u64 {
     let s = s.trim();
     if let Some(gb) = s.strip_suffix("GB") {
@@ -916,11 +933,25 @@ pub(super) fn parse_size_str(s: &str) -> u64 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "capacity projection remains covered by startup planning tests"
+    )
+)]
 pub(super) struct RuntimeModelCapacity {
     pub(super) required_bytes: u64,
     pub(super) fits: bool,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "path capacity projection remains covered by startup planning tests"
+    )
+)]
 pub(super) fn runtime_model_capacity_for_path(
     model_path: &Path,
     vram_bytes: u64,
@@ -933,6 +964,13 @@ pub(super) fn runtime_model_capacity_for_path(
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "reference capacity projection remains covered by startup planning tests"
+    )
+)]
 pub(super) fn runtime_model_capacity_for_ref(model: &str, vram_bytes: u64) -> RuntimeModelCapacity {
     let model_path = models::find_model_path(model);
     runtime_model_capacity_for_path(&model_path, vram_bytes)

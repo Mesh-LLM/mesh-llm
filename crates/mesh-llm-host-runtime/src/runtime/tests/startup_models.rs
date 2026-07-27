@@ -490,6 +490,35 @@ fn test_build_startup_model_specs_prefers_cli_models_over_config() {
     assert!(!specs[0].config_owned);
 }
 
+#[tokio::test]
+async fn prepare_runtime_startup_defers_model_resolution_until_after_surfaces() {
+    let bin_dir = tempfile::tempdir().expect("temporary runtime bin directory");
+    let mut options =
+        runtime_options_for_test(&["mesh-llm", "--model", "qa.invalid/model@main:missing.gguf"]);
+    options.bin_dir = Some(bin_dir.path().to_path_buf());
+    let config = plugin::MeshConfig::default();
+
+    let prepared = prepare_runtime_startup(
+        &options,
+        &config,
+        Some(RuntimeSurface::Serve),
+        mesh_llm_config::RuntimeMode::Serve,
+    )
+    .await
+    .expect("startup preparation must not resolve the model")
+    .expect("serve startup remains active");
+
+    assert_eq!(prepared.startup_specs.len(), 1);
+    assert_eq!(
+        prepared.startup_specs[0].model_ref,
+        PathBuf::from("qa.invalid/model@main:missing.gguf")
+    );
+    assert_eq!(
+        prepared.requested_model_names,
+        vec!["qa.invalid/model@main:missing.gguf"]
+    );
+}
+
 #[test]
 fn test_build_startup_model_specs_uses_config_models_when_cli_is_empty() {
     let options = runtime_options_for_test(&["mesh-llm", "--ctx-size", "4096"]);
@@ -1116,11 +1145,11 @@ fn pinned_gpu_startup_preflight_unresolvable_gpu_id_fails_closed() {
 }
 
 #[test]
-fn test_should_show_serve_config_help_for_bare_serve_without_models() {
+fn bare_serve_without_models_starts_durable_daemon() {
     let options = runtime_options_for_test(&["mesh-llm"]);
     let startup_specs = Vec::new();
 
-    assert!(should_show_serve_config_help(
+    assert!(!should_show_serve_config_help(
         Some(RuntimeSurface::Serve),
         &options,
         &startup_specs

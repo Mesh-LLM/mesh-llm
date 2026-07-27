@@ -57,6 +57,10 @@ pub enum RuntimeControlRequest {
         options: UnloadOptions,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<RuntimeUnloadResponse>>,
     },
+    #[allow(dead_code)]
+    PostIntent {
+        intent: crate::runtime::ModelIntent,
+    },
     SetOpenAiGuardrailMode {
         mode: GuardrailMode,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<OpenAiGuardrailModeUpdateResponse>>,

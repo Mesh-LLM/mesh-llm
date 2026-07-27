@@ -337,6 +337,10 @@ async fn spawn_owner_control_test_server() -> OwnerControlTestServer {
                 watch_config: None,
                 apply_config: None,
                 refresh_inventory: None,
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             error: None,
         };
@@ -417,6 +421,10 @@ async fn spawn_owner_control_apply_test_server(
                     watch_config: None,
                     apply_config: Some(response),
                     refresh_inventory: None,
+                    load_model: None,
+                    unload_model: None,
+                    ensure_model: None,
+                    drain_model: None,
                 }),
                 error: None,
             },
@@ -644,6 +652,7 @@ fn make_test_peer(
         display_rtt: None,
         selected_path: None,
         propagated_latency: None,
+        inference_admission_state: None,
     }
 }
 

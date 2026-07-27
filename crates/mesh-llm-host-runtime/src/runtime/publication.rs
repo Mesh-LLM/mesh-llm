@@ -20,6 +20,7 @@ pub(super) struct AutoRuntimeNodeSetup {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 pub(super) struct PassivePublicationSetup {
     pub(super) state: Option<api::PublicationState>,
     pub(super) status_rx: Option<tokio::sync::watch::Receiver<Option<nostr::PublishStateUpdate>>>,
@@ -99,6 +100,7 @@ pub(super) fn cleanup_run_auto_runtime_dir(
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn maybe_spawn_passive_promotion_task(
     is_client: bool,
     node: &mesh::Node,
@@ -140,6 +142,7 @@ pub(super) fn maybe_spawn_passive_promotion_task(
     });
 }
 
+#[allow(dead_code)]
 pub(super) async fn setup_passive_publication(
     options: &RuntimeOptions,
     node: &mesh::Node,
@@ -228,6 +231,7 @@ pub(super) async fn setup_passive_publication(
     setup
 }
 
+#[allow(dead_code)]
 pub(super) async fn shutdown_passive_runtime(
     node: &mesh::Node,
     plugin_manager: &plugin::PluginManager,

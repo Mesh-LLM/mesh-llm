@@ -480,6 +480,20 @@ export type ConfigurationModelPlacementOptions = {
   cacheTypeK?: string[]
   cacheTypeV?: string[]
 }
+export type RuntimeStatus = {
+  daemon_state: 'stopping' | 'degraded' | 'ready_serving' | 'ready_proxying' | 'ready_idle' | 'starting'
+  capabilities: {
+    worker_capable: boolean
+    local_serving: boolean
+    proxying: boolean
+    plugin_ingress: boolean
+    accepting_local: boolean
+    accepting_remote: boolean
+  }
+  lifecycle_instances: Array<{ instance_id: string; model_ref: string; lifecycle_state: string }>
+  intent_summary: { durable_count: number; session_count: number; recent_errors: number }
+}
+
 export type ConfigurationHarnessData = {
   title: string
   description: string
@@ -505,4 +519,5 @@ export type ConfigurationHarnessData = {
     owner?: string | { status?: string; verified?: boolean; name?: string; display_name?: string }
     release_attestation?: import('@/lib/api/types').ReleaseAttestationSummary
   }
+  runtime?: Partial<RuntimeStatus>
 }

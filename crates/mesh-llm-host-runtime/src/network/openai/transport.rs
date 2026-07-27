@@ -1495,6 +1495,7 @@ mod tests {
             selected_path: None,
             propagated_latency: None,
             owner_summary: crate::crypto::OwnershipSummary::default(),
+            inference_admission_state: None,
         }
     }
 

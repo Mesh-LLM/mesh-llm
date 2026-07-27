@@ -165,6 +165,10 @@ async fn spawn_success_server_with_refresh_detail(
                                 watch_config: None,
                                 apply_config: None,
                                 refresh_inventory: None,
+                                load_model: None,
+                                unload_model: None,
+                                ensure_model: None,
+                                drain_model: None,
                             }),
                             error: None,
                         },
@@ -196,6 +200,10 @@ async fn spawn_success_server_with_refresh_detail(
                                     },
                                 ),
                                 refresh_inventory: None,
+                                load_model: None,
+                                unload_model: None,
+                                ensure_model: None,
+                                drain_model: None,
                             }),
                             error: None,
                         },
@@ -234,6 +242,10 @@ async fn spawn_success_server_with_refresh_detail(
                                     snapshot: Some(test_snapshot(endpoint_id.as_bytes(), 5, "refresh-model.gguf")),
                                     inventory,
                                 }),
+                                load_model: None,
+                                unload_model: None,
+                                ensure_model: None,
+                                drain_model: None,
                             }),
                             error: None,
                         },
@@ -274,6 +286,10 @@ async fn spawn_success_server_with_refresh_detail(
                                 watch_config: Some(watch_response),
                                 apply_config: None,
                                 refresh_inventory: None,
+                                load_model: None,
+                                unload_model: None,
+                                ensure_model: None,
+                                drain_model: None,
                             }),
                             error: None,
                         },
@@ -365,6 +381,51 @@ async fn spawn_control_unsupported_server() -> (Endpoint, String) {
                 error: Some(mesh_client::proto::node::OwnerControlError {
                     code: OwnerControlErrorCode::ControlUnsupported as i32,
                     message: "remote endpoint did not negotiate mesh-llm-control/1".to_string(),
+                    request_id,
+                    current_revision: None,
+                }),
+            },
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let _ = send.finish();
+    });
+    (endpoint, token)
+}
+
+async fn spawn_legacy_unknown_lifecycle_server() -> (Endpoint, String) {
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(SecretKey::generate())
+        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .relay_mode(iroh::endpoint::RelayMode::Disabled)
+        .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .unwrap()
+        .bind()
+        .await
+        .unwrap();
+    let token = control_endpoint_token(&endpoint.addr());
+    let server_endpoint = endpoint.clone();
+    tokio::spawn(async move {
+        let incoming = server_endpoint
+            .accept()
+            .await
+            .expect("server should accept connection");
+        let connection = incoming.await.expect("server connection should complete");
+        let (mut send, mut recv) = connection.accept_bi().await.expect("stream should open");
+        let _ = read_control_envelope(&mut recv).await;
+        let request = read_control_envelope(&mut recv).await;
+        let request_id = request.request.map(|request| request.request_id);
+        write_control_envelope(
+            &mut send,
+            OwnerControlEnvelope {
+                r#gen: NODE_PROTOCOL_GENERATION,
+                handshake: None,
+                request: None,
+                response: None,
+                error: Some(mesh_client::proto::node::OwnerControlError {
+                    code: OwnerControlErrorCode::UnknownCommand as i32,
+                    message: "owner control request requires exactly one command variant"
+                        .to_string(),
                     request_id,
                     current_revision: None,
                 }),
@@ -681,7 +742,7 @@ async fn stalled_unary_response_returns_deterministic_timeout() {
         .expect_err("stalled response should time out");
     match error {
         ControlPlaneClientError::Transport(message) => {
-            assert_eq!(message, "owner-control unary response timed out after 5s");
+            assert_eq!(message, "owner-control unary response timed out after 10s");
         }
         other => panic!("expected transport timeout, got {other:?}"),
     }
@@ -734,6 +795,35 @@ async fn control_plane_client_rejects_alpn_mismatch() {
     match err {
         ControlPlaneClientError::Remote(err) => {
             assert_eq!(err.code, OwnerControlErrorCode::ControlUnsupported);
+        }
+        other => panic!("expected structured unsupported error, got {other:?}"),
+    }
+    control.close().await;
+    server.close().await;
+}
+
+#[tokio::test]
+async fn lifecycle_command_maps_legacy_unknown_command_to_control_unsupported() {
+    let client = make_client().await;
+    let (server, token) = spawn_legacy_unknown_lifecycle_server().await;
+    let control = owner_control_client(
+        client
+            .connect_control_plane(ControlPlaneBootstrapOptions::new().with_control_endpoint(token))
+            .await
+            .expect("control session should bootstrap before request"),
+    );
+    let err = control
+        .load_model("legacy/model".to_string(), None)
+        .await
+        .expect_err("legacy endpoint should reject lifecycle command");
+
+    match err {
+        ControlPlaneClientError::Remote(err) => {
+            assert_eq!(err.code, OwnerControlErrorCode::ControlUnsupported);
+            assert_eq!(
+                err.message,
+                "remote owner-control endpoint does not support load_model"
+            );
         }
         other => panic!("expected structured unsupported error, got {other:?}"),
     }

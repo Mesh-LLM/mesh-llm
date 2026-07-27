@@ -148,6 +148,130 @@ Use the persisted TOML for future starts or reloads. It does not rewrite active
 sessions in place, and request payload values still win over any request
 defaults from the file.
 
+## Runtime mode and daemon lifecycle
+
+The `[runtime]` section controls daemon-level behavior: operating mode, startup
+failure policy, drain timeouts, and opt-in host activity adaptation.
+
+```toml
+[runtime]
+mode = "serve"                        # "client" | "serve" (default) | "on_demand"
+startup_failure_policy = "best_effort" # "best_effort" (default) | "fail_fast"
+drain_timeout_secs = 30               # 1..=3600, default 30
+drain_timeout_max_secs = 300          # 1..=3600, default 300, must be >= drain_timeout_secs
+
+[runtime.activity]
+enabled = false                       # opt-in, default false
+idle_after_secs = 300                 # 30..=86400, default 300
+poll_interval_secs = 5                # 1..=60, default 5
+resume_debounce_secs = 30             # 0..=300, default 30
+response = "pause_remote"             # "pause_remote" (default) | "pause_all" | "reduce_priority"
+advertisement = "coarse_state"        # "none" | "availability_only" | "coarse_state" (default) | "private_coarse_state"
+```
+
+### Operating modes
+
+- **`serve`** (default, also when the field is absent): the daemon starts mesh
+  gossip, discovery, tunnels, management, owner-control, OpenAI ingress, and
+  plugins before resolving models. Configured and CLI models load eagerly as
+  startup intents.
+- **`client`**: read-only safety boundary. The node joins the mesh and routes
+  requests but never serves local models. Persisted `client` mode conflicts
+  with explicit `serve` or `--model`/`--gguf`/`--mmproj` flags and fails
+  **before** listeners start. Remediation: change the config mode to `serve`
+  or `on_demand`, or remove the model flags.
+- **`on_demand`**: the daemon starts worker-capable but idle. Configured models
+  are preference/candidate metadata, not eager intents. Models load only when
+  explicitly requested through local commands, owner-control lifecycle
+  commands, or advisory mesh demand.
+
+### Startup failure policy
+
+- **`best_effort`** (default): continue starting if a configured model fails to
+  load. The daemon stays alive and degraded; the error is logged.
+- **`fail_fast`**: abort startup if any eager startup model fails to load.
+  Applies **only** to eager startup intents. The daemon waits for terminal
+  outcomes, then orderly closes listeners and metadata and exits nonzero with a
+  bounded summary. Owner and advisory failures never kill the daemon.
+
+### Drain timeout
+
+- `drain_timeout_secs` (default 30): seconds before forcibly unloading a
+  draining instance after new work is rejected.
+- `drain_timeout_max_secs` (default 300): maximum allowed drain timeout cap.
+  Per-command overrides are capped by this value.
+- Force drain uses deadline 0 (immediate unload).
+
+### Host activity policy
+
+Activity adaptation is **opt-in** (`enabled = false` by default). When enabled,
+the daemon detects host activity and adapts inference admission:
+
+- `idle_after_secs` (default 300): seconds of inactivity before transitioning
+  to idle.
+- `poll_interval_secs` (default 5): how often to poll the activity detector.
+- `resume_debounce_secs` (default 30): seconds to wait after activity resumes
+  before re-enabling admission.
+- `response`: what to do when activity is detected:
+  - `pause_remote` (default): reject new inbound QUIC HTTP and stage transport
+    work; local API/OpenAI/plugin work continues.
+  - `pause_all`: also reject local OpenAI/plugin model dispatch. Management,
+    owner-control, health, status, and unload/drain remain reachable.
+  - `reduce_priority`: keep admissions open and invoke the best-effort priority
+    controller. May surface degraded status on failure.
+- `advertisement`: how to advertise admission state to mesh peers:
+  - `none`: emit nothing.
+  - `availability_only`: publish hosted/serving availability as
+    explicitly-known-and-empty while non-admitting.
+  - `coarse_state` (default): emit the admission enum and also publish
+    known-empty availability for old peers.
+  - `private_coarse_state`: emit the enum only on private meshes; use
+    known-empty availability publicly.
+
+**Platform support**: unsupported or headless platforms report `Unknown` and
+never infer idle. Manual override (`Auto`/`Active`/`Idle`) is session-only and
+not persisted in config. `reduce_priority` is best-effort: it captures the
+original process state, applies only through a safe platform capability, and
+restores on idle/shutdown.
+
+**Privacy**: no raw owner payloads, input events, app/window names, usernames,
+idle durations, timestamps, or detector errors appear in gossip, public status,
+logs, or telemetry. Only the coarse admission enum and known-empty availability
+are advertised.
+
+### Daemon states
+
+`/api/status` includes an optional `runtime.daemon_state` field derived with
+this precedence:
+
+1. `stopping` — shutdown in progress
+2. `degraded` — terminal failure or priority restoration failure
+3. `ready_serving` — local model serving inference
+4. `ready_proxying` — healthy remote/plugin route, no local serving
+5. `ready_idle` — listeners ready, no models loaded
+6. `starting` — not yet ready
+
+Coexistence is represented by capability booleans (`worker_capable`,
+`local_serving`, `proxying`, `plugin_ingress`, `accepting_local`,
+`accepting_remote`), not extra enum combinations.
+
+### Runtime status and activity API routes
+
+- `GET /api/runtime/intents` — filtered intent list, capped at 256 entries.
+  Shows durable/configured and session intents, but never raw owner payloads or
+  detector details.
+- `GET /api/runtime/activity` — current activity policy status.
+- `PUT /api/runtime/activity/override` — set manual override (`auto`/`active`/`idle`).
+- `DELETE /api/runtime/activity/override` — restore auto.
+
+### Compatibility
+
+Additive defaulted TOML needs no config-version bump. Canonical config still
+travels as TOML. Public `/0` and `/1` ALPN remain unchanged. Owner-control ALPN
+remains unchanged. Old peers treat missing admission as eligible (legacy
+behavior). New lifecycle commands may return typed `CONTROL_UNSUPPORTED` on
+older hosts.
+
 The example below shows every configuration section with annotations. All
 sections and fields are optional unless noted.
 
@@ -1002,6 +1126,27 @@ mesh-llm runtime apply-config \
   --json
 ```
 
+Owner lifecycle commands create session-only intents on the target node. They
+never mutate durable config or TOML — use `apply-config` for persistent changes.
+
+```bash
+mesh-llm runtime load-model --port 3131 --endpoint '<control-endpoint>' --model Qwen3-8B-Q4_K_M
+mesh-llm runtime unload-model --port 3131 --endpoint '<control-endpoint>' --model Qwen3-8B-Q4_K_M
+mesh-llm runtime ensure-model --port 3131 --endpoint '<control-endpoint>' --model Qwen3-8B-Q4_K_M
+mesh-llm runtime drain-model --port 3131 --endpoint '<control-endpoint>' --model Qwen3-8B-Q4_K_M
+```
+
+- `load-model`: one-shot present intent. Returns accepted lifecycle state.
+- `ensure-model`: maintained present intent with bounded retry. Survives
+  transient load failures for the session.
+- `unload-model`: absent intent. The model is unloaded.
+- `drain-model`: draining-then-absent intent. Already-admitted work finishes;
+  new work is rejected. Unloads at zero in-flight or force-cancels at the
+  configured drain deadline.
+
+Legacy hosts that do not implement these commands return typed
+`ControlUnsupported`, not a silent fallback to the public mesh.
+
 Equivalent REST calls:
 
 ```bash
@@ -1025,6 +1170,22 @@ curl -s -X POST localhost:3131/api/runtime/control/apply-config \
     "expected_revision":7,
     "config":{"version":1}
   }' | jq .
+
+curl -s -X POST localhost:3131/api/runtime/control/load-model \
+  -H 'Content-Type: application/json' \
+  -d '{"endpoint":"<control-endpoint>","model":"Qwen3-8B-Q4_K_M"}' | jq .
+
+curl -s -X POST localhost:3131/api/runtime/control/unload-model \
+  -H 'Content-Type: application/json' \
+  -d '{"endpoint":"<control-endpoint>","model":"Qwen3-8B-Q4_K_M"}' | jq .
+
+curl -s -X POST localhost:3131/api/runtime/control/ensure-model \
+  -H 'Content-Type: application/json' \
+  -d '{"endpoint":"<control-endpoint>","model":"Qwen3-8B-Q4_K_M"}' | jq .
+
+curl -s -X POST localhost:3131/api/runtime/control/drain-model \
+  -H 'Content-Type: application/json' \
+  -d '{"endpoint":"<control-endpoint>","model":"Qwen3-8B-Q4_K_M"}' | jq .
 ```
 
 The local REST facade is loopback-only. The public CLI spelling is

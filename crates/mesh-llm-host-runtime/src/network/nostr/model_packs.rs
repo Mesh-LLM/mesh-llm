@@ -44,6 +44,13 @@ fn model_tiers() -> Vec<(String, f64)> {
 ///   50-63GB: GLM-4.7-Flash (18G) — fast, tool calling
 ///   63-179GB: Qwen3-Coder-Next (48G) — frontier coder ~85B
 ///   179GB+:  MiniMax-M2.5 (138G) — flagship
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "compatibility helper remains covered by model-pack tests"
+    )
+)]
 pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
     let local_models = crate::models::scan_local_models();
     let tiers = model_tiers();

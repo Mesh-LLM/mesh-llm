@@ -600,6 +600,101 @@ Verify the active posture through `/api/status`:
 curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
 ```
 
+### `runtime load-model`
+
+Use this to load a model on a remote owner-attested node through the private
+owner-control plane. The command enqueues a one-shot present intent on the
+target node's reconciler and returns the accepted lifecycle state within the
+unary deadline. It does not wait for the model to finish loading.
+
+Usage:
+
+```bash
+mesh-llm runtime load-model --endpoint '<control-endpoint>' --model Qwen3-8B-Q4_K_M [--profile low-ctx]
+```
+
+Switches:
+
+- `--endpoint <TOKEN>`: explicit owner-control endpoint token (required).
+- `--model <REF>`: canonical model reference (required).
+- `--profile <NAME>`: optional runtime profile.
+- `--port <PORT>`: local management/API port (default `3131`).
+- `--json`: machine-readable output.
+
+Equivalent REST call:
+
+```bash
+curl -s -X POST localhost:3131/api/runtime/control/load-model \
+  -H 'Content-Type: application/json' \
+  -d '{"endpoint":"<control-endpoint>","model":"Qwen3-8B-Q4_K_M"}' | jq .
+```
+
+### `runtime unload-model`
+
+Use this to unload a model from a remote owner-attested node. The command
+enqueues an absent intent and returns the accepted lifecycle state.
+
+Usage:
+
+```bash
+mesh-llm runtime unload-model --endpoint '<control-endpoint>' --model Qwen3-8B-Q4_K_M
+mesh-llm runtime unload-model --endpoint '<control-endpoint>' --instance-id abc123
+```
+
+Specify exactly one of `--model <REF>` or `--instance-id <ID>`. The endpoint,
+port, and JSON switches are the same as `runtime load-model`.
+
+### `runtime ensure-model`
+
+Use this to ensure a model is loaded and maintained on a remote owner-attested
+node. Unlike `load-model` (one-shot), `ensure-model` creates a maintained
+present intent with bounded retry that survives transient load failures for
+the duration of the session.
+
+Usage:
+
+```bash
+mesh-llm runtime ensure-model --endpoint '<control-endpoint>' --model Qwen3-8B-Q4_K_M [--profile low-ctx]
+```
+
+Switches: same as `runtime load-model`.
+
+### `runtime drain-model`
+
+Use this to drain and unload a model on a remote owner-attested node. The
+command enqueues a draining-then-absent intent. Already-admitted inference work
+finishes; new work is rejected. The instance unloads immediately at zero
+in-flight, or force-cancels remaining work at the configured drain deadline.
+
+Usage:
+
+```bash
+mesh-llm runtime drain-model --endpoint '<control-endpoint>' --model Qwen3-8B-Q4_K_M
+mesh-llm runtime drain-model --endpoint '<control-endpoint>' --instance-id abc123
+```
+
+Specify exactly one of `--model <REF>` or `--instance-id <ID>`. The endpoint,
+port, and JSON switches are the same as `runtime load-model`.
+
+### Owner lifecycle command semantics
+
+All four owner lifecycle commands share these properties:
+
+- **Session-only**: intents disappear when the target node restarts. They never
+  mutate durable config or TOML. Use `runtime apply-config` for persistent
+  configuration changes.
+- **Private**: commands travel the `mesh-llm-control/1` ALPN, not the public
+  mesh plane. They require an explicit endpoint token and same-owner
+  authentication.
+- **Legacy peers**: a current client talking to a released host that does not
+  implement these commands receives a typed `ControlUnsupported` result, not a
+  silent fallback to the public mesh.
+- **Deduplication**: duplicate request IDs are idempotent within the unary
+  deadline.
+- **Privacy**: no raw owner payloads, model references, instance IDs, or
+  lifecycle states appear in public gossip, `/api/status`, or telemetry beyond
+  the coarse admission signal.
+
 ### `discover`
 
 Use this to discover meshes through the selected discovery provider and

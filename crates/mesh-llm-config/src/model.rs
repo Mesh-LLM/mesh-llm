@@ -1,10 +1,15 @@
 mod built_in_schema;
+mod runtime;
 mod schema_types;
 
 pub use built_in_schema::{
     BuiltInConfigPathResolution, built_in_config_schema_descriptor, built_in_config_settings,
     canonicalize_built_in_config_identifier, canonicalize_built_in_config_path,
     resolve_built_in_config_identifier, resolve_built_in_config_path,
+};
+pub use runtime::{
+    ActivityAdvertisement, ActivityResponse, DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
+    DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,
 };
 pub use schema_types::*;
 
@@ -65,12 +70,35 @@ fn default_model_target_demand_upgrade_max_age_secs() -> u64 {
     DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MAX_AGE_SECS
 }
 
+fn default_drain_timeout_secs() -> u64 {
+    runtime::DEFAULT_DRAIN_TIMEOUT_SECS
+}
+
+fn default_drain_timeout_max_secs() -> u64 {
+    runtime::DEFAULT_DRAIN_TIMEOUT_MAX_SECS
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RuntimeConfig {
     #[serde(default)]
     pub debug: bool,
     #[serde(default)]
     pub listen_all: bool,
+    /// Operating mode. Absent resolves to `Serve` for backward compatibility.
+    #[serde(default)]
+    pub mode: runtime::RuntimeMode,
+    /// How the runtime reacts when a model fails to load during startup.
+    #[serde(default)]
+    pub startup_failure_policy: runtime::StartupFailurePolicy,
+    /// Seconds before forcibly unloading a draining instance (default 30).
+    #[serde(default = "default_drain_timeout_secs")]
+    pub drain_timeout_secs: u64,
+    /// Maximum allowed drain timeout cap in seconds (default 300).
+    #[serde(default = "default_drain_timeout_max_secs")]
+    pub drain_timeout_max_secs: u64,
+    /// Host activity detection and response policy.
+    #[serde(default)]
+    pub activity: runtime::RuntimeActivityConfig,
     #[serde(default)]
     pub reconcile_model_targets: bool,
     #[serde(default)]
@@ -88,6 +116,11 @@ impl Default for RuntimeConfig {
         Self {
             debug: false,
             listen_all: false,
+            mode: runtime::RuntimeMode::default(),
+            startup_failure_policy: runtime::StartupFailurePolicy::default(),
+            drain_timeout_secs: runtime::DEFAULT_DRAIN_TIMEOUT_SECS,
+            drain_timeout_max_secs: runtime::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
+            activity: runtime::RuntimeActivityConfig::default(),
             reconcile_model_targets: false,
             reconcile_model_target_demand_upgrades: false,
             native_runtime: NativeRuntimeConfig::default(),

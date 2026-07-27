@@ -8,6 +8,9 @@ use crate::mesh::requirements::{MeshRequirementPolicySummary, MeshRequirementRej
 use crate::network::{affinity, metrics};
 use crate::runtime_data;
 use crate::system::hardware::expand_gpu_names;
+mod runtime;
+
+pub(crate) use runtime::*;
 use serde::Serialize;
 use skippy_server::OpenAiGuardrailsStatus;
 use std::collections::BTreeMap;
@@ -49,6 +52,20 @@ pub(crate) struct RuntimeStatusPayload {
     pub(crate) models: Vec<RuntimeModelPayload>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) stages: Vec<RuntimeStagePayload>,
+
+    // ── Runtime daemon state (backward-compatible optional fields) ────────────
+    /// Derived runtime daemon state. Optional for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) daemon_state: Option<DaemonState>,
+    /// Coexistence capability booleans. Optional for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) capabilities: Option<RuntimeCapabilityFlags>,
+    /// Bounded lifecycle instance payloads. Optional for backward compatibility.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) lifecycle_instances: Vec<LifecycleInstancePayload>,
+    /// Intent summary counts and errors. Optional for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) intent_summary: Option<IntentSummary>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -686,6 +703,10 @@ pub(crate) fn build_runtime_status_payload(
         openai_guardrails,
         models,
         stages: vec![],
+        daemon_state: None,
+        capabilities: None,
+        lifecycle_instances: vec![],
+        intent_summary: None,
     }
 }
 
@@ -1088,6 +1109,10 @@ mod tests {
                 openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
+                daemon_state: None,
+                capabilities: None,
+                lifecycle_instances: vec![],
+                intent_summary: None,
             },
             model_name: "Qwen".to_string(),
             models: vec![],
@@ -1150,6 +1175,10 @@ mod tests {
                 openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
+                daemon_state: None,
+                capabilities: None,
+                lifecycle_instances: vec![],
+                intent_summary: None,
             },
             model_name: "Qwen".to_string(),
             models: vec!["Qwen".to_string()],
@@ -1209,6 +1238,10 @@ mod tests {
                 openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
+                daemon_state: None,
+                capabilities: None,
+                lifecycle_instances: vec![],
+                intent_summary: None,
             },
             model_name: String::new(),
             models: vec![],
@@ -1277,6 +1310,10 @@ mod tests {
                 openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
+                daemon_state: None,
+                capabilities: None,
+                lifecycle_instances: vec![],
+                intent_summary: None,
             },
             model_name: String::new(),
             models: vec![],

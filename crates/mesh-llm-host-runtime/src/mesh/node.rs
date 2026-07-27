@@ -330,6 +330,25 @@ pub struct Node {
     pub gpu_compute_tflops_fp16: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
+    /// Shared activity policy guard for ingress admission checks.
+    pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
+    /// Whether activity admission details are being advertised onto a public mesh.
+    pub(crate) public_mesh: bool,
+    /// Default private owner-requested graceful drain timeout.
+    pub(crate) drain_timeout_secs: u64,
+    /// Upper bound for private owner-requested graceful drain timeouts.
+    pub(crate) drain_timeout_max_secs: u64,
+    pub(crate) runtime_intents: Arc<std::sync::Mutex<Vec<crate::runtime::DesiredRuntimeIntent>>>,
+    pub(crate) runtime_instance_lifecycles: Arc<
+        std::sync::Mutex<
+            HashMap<u16, Arc<tokio::sync::Mutex<crate::runtime::InstanceLifecycleRecord>>>,
+        >,
+    >,
+    pub(crate) owner_lifecycle_response_cache: OwnerLifecycleResponseCache,
+    /// Channel to send model lifecycle intents from owner-control commands to the reconciler.
+    /// Set during runtime initialization; None when running outside the control loop.
+    pub(crate) model_intent_tx:
+        Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<crate::runtime::ModelIntent>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -927,6 +946,23 @@ impl Node {
         let owner_keypair = owner_config
             .as_ref()
             .and_then(|config| config.keypair.clone());
+        let activity_policy_config = owner_config
+            .as_ref()
+            .map(|config| config.activity.clone())
+            .unwrap_or_default();
+        let public_mesh = owner_config
+            .as_ref()
+            .is_some_and(|config| config.public_mesh);
+        let drain_timeout_secs = owner_config
+            .as_ref()
+            .map_or(mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_SECS, |config| {
+                config.drain_timeout_secs
+            });
+        let drain_timeout_max_secs = owner_config
+            .as_ref()
+            .map_or(mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS, |config| {
+                config.drain_timeout_max_secs
+            });
 
         let node = Node {
             endpoint,
@@ -1016,6 +1052,16 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
                 Arc::new(tx)
             },
+            activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
+                &activity_policy_config,
+            ),
+            public_mesh,
+            drain_timeout_secs,
+            drain_timeout_max_secs,
+            runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
+            runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
         };
 
         node.maybe_start_control_listener(
@@ -1182,6 +1228,16 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(0);
                 Arc::new(tx)
             },
+            activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
+                &mesh_llm_config::RuntimeActivityConfig::default(),
+            ),
+            public_mesh: false,
+            drain_timeout_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_SECS,
+            drain_timeout_max_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
+            runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
+            runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -1487,6 +1543,46 @@ impl Node {
 
     pub async fn hosted_models(&self) -> Vec<String> {
         self.hosted_models.lock().await.clone()
+    }
+
+    pub(crate) fn register_runtime_instance_lifecycle(
+        &self,
+        port: u16,
+        lifecycle: Arc<tokio::sync::Mutex<crate::runtime::InstanceLifecycleRecord>>,
+    ) {
+        self.runtime_instance_lifecycles
+            .lock()
+            .expect("runtime lifecycle registry mutex poisoned")
+            .insert(port, lifecycle);
+    }
+
+    pub(crate) fn unregister_runtime_instance_lifecycle(&self, port: u16) {
+        self.runtime_instance_lifecycles
+            .lock()
+            .expect("runtime lifecycle registry mutex poisoned")
+            .remove(&port);
+    }
+
+    pub(crate) async fn begin_runtime_instance_request(
+        &self,
+        port: u16,
+    ) -> Result<Option<crate::runtime::InstanceRequestGuard>, ()> {
+        let lifecycle = self
+            .runtime_instance_lifecycles
+            .lock()
+            .expect("runtime lifecycle registry mutex poisoned")
+            .get(&port)
+            .cloned();
+        let Some(lifecycle) = lifecycle else {
+            return Ok(None);
+        };
+        let record = lifecycle.lock().await;
+        if !record.is_accepting_work() {
+            return Err(());
+        }
+        Ok(Some(crate::runtime::InstanceRequestGuard::new(
+            record.in_flight_tracker(),
+        )))
     }
 
     pub(crate) async fn refresh_served_model_descriptors(&self) {
@@ -1924,6 +2020,7 @@ mod node_tests {
             latency_source: None,
             latency_age_ms: None,
             latency_observer_id: None,
+            inference_admission_state: None,
         }
     }
 

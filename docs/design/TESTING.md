@@ -885,6 +885,178 @@ Config-only result interpretation:
 
 Reserved-ID note: mesh-plane stream IDs 0x0b and 0x0c are kept reserved, but current nodes should not advertise or rely on legacy config subscribe/push behavior there.
 
+## Daemon lifecycle certification
+
+The daemon lifecycle harness certifies the runtime model lifecycle rollout:
+zero-model serve, all modes, best-effort/fail-fast, runtime load/unload/ensure/drain,
+activity overrides/admission, and privacy — without downloading models or publishing a mesh.
+
+### Running the harness
+
+```bash
+# Local daemon lifecycle certification
+scripts/qa-runtime-daemon-lifecycle.sh \
+  --current-binary ./target/debug/mesh-llm \
+  --evidence-dir .sisyphus/evidence/task-15-local
+```
+
+The harness uses temporary homes (`$TMP_ROOT/mesh-runtime-daemon-lifecycle.*`) and ports (base `19740+`) with scoped cleanup. Each test scenario isolates a fresh `$HOME` via `MESH_LLM_EPHEMERAL_KEY=1` so multiple nodes coexist on one machine.
+
+### Planned checks
+
+Each check produces a PASS/FAIL/PREREQ record in `results.jsonl`:
+
+| Check | Description |
+|---|---|
+| `prereq.current-binary` | Binary is executable and reports a version string |
+| `prereq.owner-identity` | Temporary owner keystore can be created for authenticated lifecycle checks |
+| `zero_model_serve_ready` | Start the daemon with `--headless` and explicit API, console, and bind ports but no model; verify management API alive, `/v1/models` returns success (empty list acceptable), and the process stays alive |
+| `runtime_mode_serve` | Default serve mode starts and responds on management API within timeout |
+| `runtime_mode_on_demand` | On-demand mode starts idle without a model; if unsupported, records PREREQ |
+| `best_effort_startup` | Start with nonexistent model under explicit best-effort policy — daemon stays alive rather than crashing |
+| `fail_fast_startup` | Start with nonexistent model under explicit fail-fast policy — process exits promptly |
+| `runtime_load_model` | Authenticated owner-control `POST /api/runtime/control/load-model` returns an accepted intent |
+| `runtime_unload_model` | Authenticated owner-control `POST /api/runtime/control/unload-model` returns an accepted intent |
+| `runtime_ensure_model` | Authenticated owner-control `POST /api/runtime/control/ensure-model` returns an accepted intent |
+| `runtime_drain_model` | Authenticated owner-control `POST /api/runtime/control/drain-model` returns an accepted intent |
+| `activity_override` | `PUT /api/runtime/activity/override` with bare JSON string `"active"`, then `DELETE`, round-trips successfully |
+| `privacy_no_raw_data` | Assert `/api/runtime/activity` exposes exactly `effective_state`, `override_mode`, and `detector_category`, each limited to its documented coarse enum |
+| `clean_process_teardown` | After stopping, verify no leaked mesh-llm processes via tracked instance metadata or fallback pkill |
+
+The lifecycle POST checks first read `/api/runtime/control-bootstrap`, then send
+`Content-Type: application/json` requests to `/api/runtime/control/{load,unload,ensure,drain}-model`
+with body `{"endpoint":"<control-endpoint>","model":"qa.invalid/model@main:missing.gguf"}`.
+The harness expects HTTP 200, `accepted=true`, the same `model`, no `instance_id`,
+and `accepted_state` of `present`, `absent`, `present`, and `draining`, respectively.
+
+### Print plan (side-effect-free)
+
+```bash
+scripts/qa-runtime-daemon-lifecycle.sh \
+  --current-binary ./target/debug/mesh-llm \
+  --print-plan
+```
+
+Produces compact JSON without starting any processes:
+
+```json
+{
+  "base_port": 19740,
+  "checks": ["prereq.current-binary", "zero_model_serve_ready", ...],
+  "current_binary": "./target/debug/mesh-llm",
+  "evidence_dir": ".sisyphus/evidence",
+  "max_wait_seconds": 60,
+  "script": "qa-runtime-daemon-lifecycle.sh"
+}
+```
+
+### Evidence directory structure
+
+Each run creates a timestamped directory:
+
+```text
+.sisyphus/evidence/runtime-daemon-lifecycle-20260724T123456Z-1234/
+  manifest.json      Run inputs and mode flags
+  commands.jsonl     Commands executed by the harness and their logs
+  results.jsonl      Machine-readable PASS/FAIL/PREREQ records
+  summary.md         Human-readable final summary
+  summary.json       Machine-readable final summary (overall: pass|fail|prereq)
+  versions/current.txt   Captured binary version string
+  logs/*.log           Per-test process output
+  status/*.json        Collected /api/status payloads
+  control/*.json       Lifecycle command responses
+```
+
+### Prerequisites and failure modes
+
+`PREREQ` is never reported as PASS. Checks that reach execution record missing
+runtime prerequisites as `PREREQ`. An invalid `--current-binary` is rejected
+earlier as a usage error (exit 2), before an evidence directory is created:
+
+```bash
+# Missing binary — exits 2 with an executable-path usage error and no evidence files
+scripts/qa-runtime-daemon-lifecycle.sh \
+  --current-binary /nonexistent/path/mesh-llm \
+  --evidence-dir .sisyphus/evidence/prereq-test
+test "$?" -eq 2
+```
+
+After any run, `pgrep -f 'mesh-runtime-daemon-lifecycle'` must find no leaked processes. The cleanup trap kills all harness-owned process trees and verifies zero survivors.
+
+## Mixed-version lifecycle certification
+
+The mixed-version harness is extended to probe owner lifecycle commands
+(`load-model`, `unload-model`, `ensure-model`, `drain-model`) and typed
+unsupported behavior for new commands on released hosts, while preserving
+all existing scan-refresh/public mesh checks.
+
+### Running the harness
+
+```bash
+# Mixed-version with lifecycle commands (local-only)
+scripts/qa-control-plane-mixed-version.sh \
+  --released-binary ./target/qa/released/mesh-llm \
+  --current-binary ./target/debug/mesh-llm \
+  --local-only \
+  --evidence-dir .sisyphus/evidence/task-15-mixed-local
+
+# Public mesh certification (preserves existing probes)
+scripts/qa-control-plane-mixed-version.sh \
+  --released-binary ./target/qa/released/mesh-llm \
+  --current-binary ./target/debug/mesh-llm \
+  --require-public \
+  --evidence-dir .sisyphus/evidence/task-15-mixed-public
+
+# Inspect planned checks (side-effect-free)
+scripts/qa-control-plane-mixed-version.sh \
+  --released-binary ./target/qa/released/mesh-llm \
+  --current-binary ./target/debug/mesh-llm \
+  --local-only \
+  --print-plan | python3 -c "import json,sys; d=json.load(sys.stdin); [print(c) for c in d['checks'] if 'lifecycle' in c]"
+```
+
+### New lifecycle probes (local mode only)
+
+When `--local-only` is set, the harness adds five new checks after existing
+owner-control bootstrap and scan-refresh tests:
+
+| Check | Description | Expected result |
+|---|---|---|
+| `lifecycle-load-model` | Probe current-host owner lifecycle load command | PASS only when the authenticated command returns HTTP 200 with `accepted=true` |
+| `lifecycle-unload-model` | Probe current-host owner lifecycle unload command | PASS only when the authenticated command returns HTTP 200 with `accepted=true` |
+| `lifecycle-ensure-model` | Probe current-host owner lifecycle ensure command | PASS only when the authenticated command returns HTTP 200 with `accepted=true` |
+| `lifecycle-drain-model` | Probe current-host owner lifecycle drain command | PASS only when the authenticated command returns HTTP 200 with `accepted=true` |
+| `lifecycle-legacy-unsupported` | Send a lifecycle command to the released host | PASS only for a structured response that explicitly reports unsupported/unknown command; a generic 404 is a failure |
+
+The probes discover running nodes by scanning expected console ports (config-current-node at `BASE_PORT+81`, local direction servers at their respective offsets). If no node is reachable on any expected port, all five checks record PREREQ with an explicit message about unavailable targets.
+
+### Existing behavior preserved
+
+`--require-public` continues to produce PASS for existing public mesh probes (status, models, chat) without lifecycle command extensions — the `--local-only` flag gates the new probes so they do not affect public-mesh certification runs.
+
+### Expected outcomes
+
+The local-only run produces PASS for owner-control/scan compatibility and typed unsupported for new lifecycle commands on released hosts. The `--require-public` run produces PASS for existing public mesh probes. Both mixed-version `summary.json` files must contain zero FAIL records when prerequisites are satisfied (PREREQ is acceptable for optional checks).
+
+### Failure mode: prerequisite verification
+
+Run each harness with a nonexistent required binary or documented missing prerequisite:
+
+```bash
+# Missing released binary — exits nonzero with PREREQ in summary.json
+scripts/qa-control-plane-mixed-version.sh \
+  --released-binary /nonexistent/mesh-llm \
+  --current-binary ./target/debug/mesh-llm \
+  --local-only \
+  --evidence-dir .sisyphus/evidence/prereq-test
+
+# Verify summary shows prereq status, not pass
+cat .sisyphus/evidence/control-plane-mixed-version-*/*/summary.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'overall={d[\"overall\"]}, counts={d[\"counts\"]}')"
+
+# No leaked processes after failure
+pgrep -f 'mesh-control-plane-mixed-version|task-15-' || echo "no leaks"
+```
+
 ## Single-machine testing with ephemeral keys
 
 Set `MESH_LLM_EPHEMERAL_KEY=1` to give a second process a unique identity on the same machine.

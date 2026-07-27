@@ -165,6 +165,9 @@ fn add_windows_hip_crt_flags(command: &mut std::process::Command) {
 }
 
 fn build_cuda() {
+    println!("cargo:rerun-if-env-changed=NVCC");
+    println!("cargo:rerun-if-env-changed=CUDACXX");
+    println!("cargo:rerun-if-env-changed=CUDA_LIBRARY_PATH");
     let source = native_source("cuda", "membench-fingerprint.cu");
     let wrapper = write_wrapper(
         "mesh_llm_gpu_bench_cuda_wrapper.cu",
@@ -172,7 +175,9 @@ fn build_cuda() {
         "mesh_llm_gpu_bench_cuda_main",
     );
     let object = out_path("mesh_llm_gpu_bench_cuda.o");
-    let nvcc = std::env::var("NVCC").unwrap_or_else(|_| "nvcc".to_string());
+    let nvcc = std::env::var("NVCC")
+        .or_else(|_| std::env::var("CUDACXX"))
+        .unwrap_or_else(|_| "nvcc".to_string());
     run_or_panic({
         let mut command = std::process::Command::new(nvcc);
         command.arg("-O3").arg("-std=c++17");
@@ -184,6 +189,11 @@ fn build_cuda() {
         command
     });
     archive_static_lib(&object, "mesh_llm_gpu_bench_cuda");
+    if let Some(paths) = std::env::var_os("CUDA_LIBRARY_PATH") {
+        for path in std::env::split_paths(&paths) {
+            println!("cargo:rustc-link-search=native={}", path.display());
+        }
+    }
     println!("cargo:rustc-link-lib=dylib=cudart");
 }
 

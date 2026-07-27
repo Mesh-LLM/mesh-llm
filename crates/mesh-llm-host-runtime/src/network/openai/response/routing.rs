@@ -6,6 +6,10 @@ use crate::network::openai::request_normalize::ResponseAdapter;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "the local routing attempt keeps admission, forwarding, probing, and retry classification in one cancellation-safe scope"
+)]
 pub(in crate::network::openai) async fn route_local_attempt(
     node: &mesh::Node,
     tcp_stream: &mut TcpStream,
@@ -14,6 +18,10 @@ pub(in crate::network::openai) async fn route_local_attempt(
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> RouteAttemptResult {
+    let _instance_request = match node.begin_runtime_instance_request(port).await {
+        Ok(guard) => guard,
+        Err(()) => return RouteAttemptResult::RetryableUnavailable,
+    };
     match TcpStream::connect(format!("127.0.0.1:{port}")).await {
         Ok(mut upstream) => {
             let _inflight = node.begin_inflight_request();

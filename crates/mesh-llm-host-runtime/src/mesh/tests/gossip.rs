@@ -59,6 +59,7 @@ pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
         latency_source: None,
         latency_age_ms: None,
         latency_observer_id: None,
+        inference_admission_state: None,
     }
 }
 
@@ -335,6 +336,122 @@ pub(crate) async fn test_collect_announcements_includes_self_explicit_model_inte
         self_announcement.explicit_model_interests,
         vec!["Qwen/Qwen3-Coder-Next-GGUF@main:Q4_K_M".to_string()]
     );
+}
+
+#[tokio::test]
+pub(crate) async fn gossip_admission_advertisement_matrix() {
+    use crate::runtime::activity_policy::{
+        activity_advertisement_decision, ActivityPolicyState,
+    };
+    use mesh_llm_config::ActivityAdvertisement;
+
+    let accepting = crate::proto::node::InferenceAdmissionState::Accepting;
+    let paused = crate::proto::node::InferenceAdmissionState::RemotePaused;
+    let cases = [
+        (ActivityAdvertisement::None, false, None, false),
+        (ActivityAdvertisement::None, true, None, false),
+        (ActivityAdvertisement::AvailabilityOnly, false, None, false),
+        (ActivityAdvertisement::AvailabilityOnly, true, None, true),
+        (
+            ActivityAdvertisement::CoarseState,
+            false,
+            Some(accepting),
+            false,
+        ),
+        (
+            ActivityAdvertisement::CoarseState,
+            true,
+            Some(paused),
+            true,
+        ),
+    ];
+    for (mode, blocking, expected_state, expected_withdrawal) in cases {
+        let state = if blocking {
+            ActivityPolicyState::RemotePaused
+        } else {
+            ActivityPolicyState::Accepting
+        };
+        let decision = activity_advertisement_decision(true, mode, state, false);
+        assert_eq!(decision.admission_state, expected_state, "mode={mode:?}");
+        assert_eq!(
+            decision.withdraw_model_availability, expected_withdrawal,
+            "mode={mode:?}"
+        );
+    }
+
+    let private = activity_advertisement_decision(
+        true,
+        ActivityAdvertisement::PrivateCoarseState,
+        ActivityPolicyState::AllPaused,
+        false,
+    );
+    assert_eq!(
+        private.admission_state,
+        Some(crate::proto::node::InferenceAdmissionState::AllPaused)
+    );
+    assert!(private.withdraw_model_availability);
+
+    let public = activity_advertisement_decision(
+        true,
+        ActivityAdvertisement::PrivateCoarseState,
+        ActivityPolicyState::AllPaused,
+        true,
+    );
+    assert_eq!(public.admission_state, None);
+    assert!(public.withdraw_model_availability);
+
+    let disabled = activity_advertisement_decision(
+        false,
+        ActivityAdvertisement::CoarseState,
+        ActivityPolicyState::AllPaused,
+        false,
+    );
+    assert_eq!(disabled.admission_state, None);
+    assert!(!disabled.withdraw_model_availability);
+}
+
+#[tokio::test]
+pub(crate) async fn legacy_peer_admission_and_known_empty_withdrawal() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_id = test_endpoint_id(0x71);
+    let addr = test_addr(0x71);
+
+    let mut legacy_add = test_announcement(Some(100));
+    legacy_add.addr = addr.clone();
+    legacy_add.role = NodeRole::Host { http_port: 9337 };
+    legacy_add.version = None;
+    legacy_add.serving_models = vec!["legacy-model".to_string()];
+    legacy_add.hosted_models = None;
+    legacy_add.inference_admission_state = None;
+    node.add_peer(peer_id, addr.clone(), &legacy_add, None).await;
+
+    let state = node.state.lock().await;
+    let peer = state
+        .peers
+        .get(&peer_id)
+        .expect("legacy-style peer should be admitted");
+    assert_eq!(peer.version, None);
+    assert!(!peer.hosted_models_known);
+    assert!(peer.routes_http_model("legacy-model"));
+    drop(state);
+
+    let mut legacy_withdrawal = test_announcement(Some(100));
+    legacy_withdrawal.addr = addr.clone();
+    legacy_withdrawal.role = NodeRole::Host { http_port: 9337 };
+    legacy_withdrawal.version = None;
+    legacy_withdrawal.serving_models = Vec::new();
+    legacy_withdrawal.hosted_models = Some(Vec::new());
+    legacy_withdrawal.inference_admission_state = None;
+    node.add_peer(peer_id, addr, &legacy_withdrawal, None).await;
+
+    let state = node.state.lock().await;
+    let peer = state
+        .peers
+        .get(&peer_id)
+        .expect("legacy-withdrawal update should be applied");
+    assert_eq!(peer.hosted_models, Vec::<String>::new());
+    assert!(peer.hosted_models_known);
+    assert!(!peer.routes_http_model("legacy-model"));
 }
 
 #[test]

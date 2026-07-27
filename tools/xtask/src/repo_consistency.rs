@@ -1,4 +1,4 @@
-use crate::command::{DynResult, ensure_eq, run_command, trimmed_stderr_or_stdout};
+use crate::command::{DynResult, ensure_eq, ensure_set_eq, run_command, trimmed_stderr_or_stdout};
 use crate::{publish_consistency, release_targets, workflow_checks};
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -214,6 +214,25 @@ pub(crate) fn script_workspace_members(
     Err(format!("{relative_path}: missing WORKSPACE_MEMBERS array").into())
 }
 
+fn check_subset(
+    workspace: &BTreeSet<String>,
+    candidates: &BTreeSet<String>,
+    context: &str,
+) -> DynResult<()> {
+    let unknown = candidates
+        .difference(workspace)
+        .cloned()
+        .collect::<Vec<_>>();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{context}: found crate names not in workspace: {}",
+        unknown.join(", ")
+    )
+    .into())
+}
+
 pub(crate) fn check_release_targets_command() -> DynResult<()> {
     release_targets::check_release_targets()
 }
@@ -232,4 +251,115 @@ pub(crate) fn check_publish_crates_command() -> DynResult<()> {
     publish_consistency::check_publish_crates_consistency(&repo_root)?;
     println!("repo consistency checks passed: publish-crates");
     Ok(())
+}
+
+pub(crate) fn check_test_all_coverage_command() -> DynResult<()> {
+    let repo_root = repo_root()?;
+    let workspace_crates = workspace_package_names(&repo_root)?;
+    let justfile = fs::read_to_string(repo_root.join("Justfile"))?;
+    let (dynamic_targets, excluded_targets) = test_all_test_targets(&justfile)?;
+    check_subset(
+        &workspace_crates,
+        &dynamic_targets,
+        "test-all dynamic test targets",
+    )?;
+    check_subset(
+        &workspace_crates,
+        &excluded_targets,
+        "test-all test excludes",
+    )?;
+    ensure_set_eq(
+        &dynamic_targets,
+        &excluded_targets,
+        "test-all dynamic/exclude target parity",
+    )?;
+
+    let mut covered_crates = workspace_crates.clone();
+    for excluded in excluded_targets.iter() {
+        covered_crates.remove(excluded);
+    }
+    covered_crates.extend(dynamic_targets.iter().cloned());
+    ensure_set_eq(
+        &workspace_crates,
+        &covered_crates,
+        "test-all cargo test coverage",
+    )?;
+
+    println!("repo consistency checks passed: test-all-rust-crate-coverage");
+    Ok(())
+}
+
+fn test_all_test_targets(contents: &str) -> DynResult<(BTreeSet<String>, BTreeSet<String>)> {
+    let mut lines = contents
+        .lines()
+        .skip_while(|line| line.trim_end() != "test-all:");
+    lines.next().ok_or("Justfile: missing test-all recipe")?;
+    let mut commands = Vec::new();
+    let mut current = String::new();
+    for line in lines
+        .take_while(|line| {
+            line.trim().is_empty() || line.chars().next().is_some_and(char::is_whitespace)
+        })
+        .map(str::trim)
+    {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let continued = line.strip_suffix('\\');
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(continued.unwrap_or(line).trim());
+        if continued.is_none() {
+            commands.push(std::mem::take(&mut current));
+        }
+    }
+
+    let dynamic = commands
+        .iter()
+        .find(|command| command.contains("cargo test ") && command.contains(" -p "))
+        .ok_or("test-all: missing dynamic cargo test command")?;
+    let workspace = commands
+        .iter()
+        .find(|command| command.contains("cargo test --workspace"))
+        .ok_or("test-all: missing workspace cargo test command")?;
+    Ok((
+        command_flag_values(dynamic, "-p"),
+        command_flag_values(workspace, "--exclude"),
+    ))
+}
+
+fn command_flag_values(command: &str, flag: &str) -> BTreeSet<String> {
+    command
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .filter(|pair| pair[0] == flag)
+        .map(|pair| pair[1].to_string())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_all_test_targets;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn test_all_targets_are_parsed_from_commands() {
+        let justfile = r#"
+test-all:
+    cargo test \
+        -p dynamic-a \
+        -p dynamic-b
+    cargo test --workspace \
+        --exclude dynamic-a \
+        --exclude dynamic-b
+
+# Another recipe
+"#;
+        let expected = BTreeSet::from(["dynamic-a".to_string(), "dynamic-b".to_string()]);
+        let (dynamic, excluded) = test_all_test_targets(justfile).unwrap();
+        assert_eq!(dynamic, expected);
+        assert_eq!(excluded, expected);
+    }
 }

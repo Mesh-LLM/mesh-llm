@@ -159,6 +159,7 @@ pub struct PeerAnnouncement {
     pub(crate) latency_source: Option<crate::proto::node::LatencySource>,
     pub(crate) latency_age_ms: Option<u64>,
     pub(crate) latency_observer_id: Option<EndpointId>,
+    pub(crate) inference_admission_state: Option<crate::proto::node::InferenceAdmissionState>,
 }
 
 /// A single direct RTT measurement (e.g. from gossip exchange).
@@ -260,6 +261,7 @@ pub struct PeerInfo {
     /// Latency propagated via transitive gossip.
     pub propagated_latency: Option<PropagatedLatencyObservation>,
     pub owner_summary: OwnershipSummary,
+    pub inference_admission_state: Option<crate::proto::node::InferenceAdmissionState>,
 }
 
 #[derive(Debug)]
@@ -270,6 +272,10 @@ pub struct OwnerRuntimeConfig {
     pub node_label: Option<String>,
     pub trust_store: TrustStore,
     pub trust_policy: TrustPolicy,
+    pub activity: mesh_llm_config::RuntimeActivityConfig,
+    pub drain_timeout_secs: u64,
+    pub drain_timeout_max_secs: u64,
+    pub public_mesh: bool,
 }
 
 pub(crate) struct ControlListenerLifecycle {
@@ -340,6 +346,7 @@ impl PeerInfo {
             selected_path: None,
             propagated_latency: None,
             owner_summary,
+            inference_admission_state: ann.inference_admission_state,
         }
     }
 

@@ -2,11 +2,14 @@ use crate::client::builder::MeshClient;
 use crate::crypto::OwnerKeypair;
 use crate::proto::node::{
     NodeConfigSnapshot, OwnerControlApplyConfigRequest, OwnerControlApplyConfigResponse,
-    OwnerControlConfigSnapshot, OwnerControlConfigUpdate, OwnerControlEnvelope, OwnerControlError,
+    OwnerControlConfigSnapshot, OwnerControlConfigUpdate, OwnerControlDrainModelRequest,
+    OwnerControlDrainModelResponse, OwnerControlEnsureModelRequest,
+    OwnerControlEnsureModelResponse, OwnerControlEnvelope, OwnerControlError,
     OwnerControlErrorCode, OwnerControlGetConfigRequest, OwnerControlHandshake,
-    OwnerControlRefreshInventory, OwnerControlRefreshInventoryRequest, OwnerControlRequest,
-    OwnerControlResponse, OwnerControlWatchAccepted, OwnerControlWatchConfigRequest,
-    OwnerControlWatchConfigResponse, SignedNodeOwnership,
+    OwnerControlLoadModelRequest, OwnerControlLoadModelResponse, OwnerControlRefreshInventory,
+    OwnerControlRefreshInventoryRequest, OwnerControlRequest, OwnerControlResponse,
+    OwnerControlUnloadModelRequest, OwnerControlUnloadModelResponse, OwnerControlWatchAccepted,
+    OwnerControlWatchConfigRequest, OwnerControlWatchConfigResponse, SignedNodeOwnership,
 };
 use crate::protocol::{
     ALPN_CONTROL_V1, ALPN_V1, NODE_PROTOCOL_GENERATION, decode_owner_control_envelope,
@@ -27,7 +30,9 @@ const OWNER_CONTROL_CONNECT_TIMEOUT_SECS: u64 = 8;
 const OWNER_CONTROL_OPEN_TIMEOUT_SECS: u64 = 2;
 const OWNER_CONTROL_HANDSHAKE_TIMEOUT_SECS: u64 = 2;
 const OWNER_CONTROL_REQUEST_WRITE_TIMEOUT_SECS: u64 = 2;
-const OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS: u64 = 5;
+const OWNER_CONTROL_SERVER_UNARY_DEADLINE_SECS_FOR_CLIENT_MARGIN: u64 = 5;
+const OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS: u64 =
+    OWNER_CONTROL_SERVER_UNARY_DEADLINE_SECS_FOR_CLIENT_MARGIN + 5;
 const OWNER_CONTROL_SERVER_SCAN_DEADLINE_SECS_FOR_CLIENT_MARGIN: u64 = 30;
 const OWNER_CONTROL_INVENTORY_RESPONSE_TIMEOUT_SECS: u64 =
     OWNER_CONTROL_SERVER_SCAN_DEADLINE_SECS_FOR_CLIENT_MARGIN + 5;
@@ -255,6 +260,61 @@ impl MeshClient {
     }
 }
 
+fn validate_lifecycle_acceptance(
+    operation: &str,
+    intent_id: &str,
+    accepted_state: &str,
+    expected_state: &str,
+    target: Option<&crate::proto::node::OwnerControlModelRef>,
+    expected_model_ref: &str,
+    expected_instance_id: Option<&str>,
+) -> Result<(), ControlPlaneClientError> {
+    if intent_id.is_empty() {
+        return Err(ControlPlaneClientError::Protocol(format!(
+            "owner-control {operation} response missing intent id"
+        )));
+    }
+    if accepted_state != expected_state {
+        return Err(ControlPlaneClientError::Protocol(format!(
+            "owner-control {operation} response has invalid accepted state"
+        )));
+    }
+    let target = target.ok_or_else(|| {
+        ControlPlaneClientError::Protocol(format!(
+            "owner-control {operation} response missing target"
+        ))
+    })?;
+    if target.canonical_model_ref != expected_model_ref
+        || target.instance_id.as_deref() != expected_instance_id
+    {
+        return Err(ControlPlaneClientError::Protocol(format!(
+            "owner-control {operation} response target does not match request"
+        )));
+    }
+    Ok(())
+}
+
+fn map_legacy_lifecycle_unsupported(
+    operation: &str,
+    error: ControlPlaneClientError,
+) -> ControlPlaneClientError {
+    const LEGACY_UNKNOWN_COMMAND_MESSAGE: &str =
+        "owner control request requires exactly one command variant";
+    match error {
+        ControlPlaneClientError::Remote(mut remote)
+            if matches!(
+                remote.code,
+                OwnerControlErrorCode::BadRequest | OwnerControlErrorCode::UnknownCommand
+            ) && remote.message == LEGACY_UNKNOWN_COMMAND_MESSAGE =>
+        {
+            remote.code = OwnerControlErrorCode::ControlUnsupported;
+            remote.message = format!("remote owner-control endpoint does not support {operation}");
+            ControlPlaneClientError::Remote(remote)
+        }
+        other => other,
+    }
+}
+
 impl OwnerControlClient {
     async fn connect(
         endpoint_token: String,
@@ -345,6 +405,10 @@ impl OwnerControlClient {
                     watch_config: None,
                     apply_config: None,
                     refresh_inventory: None,
+                    load_model: None,
+                    unload_model: None,
+                    ensure_model: None,
+                    drain_model: None,
                 },
             )
             .await?;
@@ -377,6 +441,10 @@ impl OwnerControlClient {
                         config: Some(config),
                     }),
                     refresh_inventory: None,
+                    load_model: None,
+                    unload_model: None,
+                    ensure_model: None,
+                    drain_model: None,
                 },
             )
             .await?;
@@ -408,6 +476,10 @@ impl OwnerControlClient {
                         requester_node_id,
                         target_node_id,
                     }),
+                    load_model: None,
+                    unload_model: None,
+                    ensure_model: None,
+                    drain_model: None,
                 },
             )
             .await?;
@@ -425,6 +497,211 @@ impl OwnerControlClient {
             snapshot,
             inventory: response.inventory,
         })
+    }
+
+    pub async fn load_model(
+        &self,
+        model_ref: String,
+        profile: Option<String>,
+    ) -> Result<OwnerControlLoadModelResponse, ControlPlaneClientError> {
+        let expected_model_ref = model_ref.clone();
+        let request = OwnerControlLoadModelRequest {
+            requester_node_id: self.endpoint.id().as_bytes().to_vec(),
+            target_node_id: self.connection.remote_id().as_bytes().to_vec(),
+            model: Some(crate::proto::node::OwnerControlModelRef {
+                canonical_model_ref: model_ref,
+                instance_id: None,
+            }),
+            profile,
+        };
+        let response = self
+            .send_unary_request(
+                std::time::Duration::from_secs(OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS),
+                |request_id, _, _| OwnerControlRequest {
+                    request_id,
+                    get_config: None,
+                    watch_config: None,
+                    apply_config: None,
+                    refresh_inventory: None,
+                    load_model: Some(request.clone()),
+                    unload_model: None,
+                    ensure_model: None,
+                    drain_model: None,
+                },
+            )
+            .await
+            .map_err(|error| map_legacy_lifecycle_unsupported("load_model", error))?;
+        let response = response.load_model.ok_or_else(|| {
+            ControlPlaneClientError::Protocol(
+                "owner-control load_model response missing payload".to_string(),
+            )
+        })?;
+        validate_lifecycle_acceptance(
+            "load_model",
+            &response.intent_id,
+            &response.accepted_state,
+            "present",
+            response.target.as_ref(),
+            &expected_model_ref,
+            None,
+        )?;
+        Ok(response)
+    }
+
+    pub async fn unload_model(
+        &self,
+        model_ref: String,
+        instance_id: Option<String>,
+    ) -> Result<OwnerControlUnloadModelResponse, ControlPlaneClientError> {
+        let expected_instance_id = instance_id.clone();
+        let expected_model_ref = if expected_instance_id.is_some() {
+            String::new()
+        } else {
+            model_ref.clone()
+        };
+        let request = OwnerControlUnloadModelRequest {
+            requester_node_id: self.endpoint.id().as_bytes().to_vec(),
+            target_node_id: self.connection.remote_id().as_bytes().to_vec(),
+            model: Some(crate::proto::node::OwnerControlModelRef {
+                canonical_model_ref: expected_model_ref.clone(),
+                instance_id,
+            }),
+        };
+        let response = self
+            .send_unary_request(
+                std::time::Duration::from_secs(OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS),
+                |request_id, _, _| OwnerControlRequest {
+                    request_id,
+                    get_config: None,
+                    watch_config: None,
+                    apply_config: None,
+                    refresh_inventory: None,
+                    load_model: None,
+                    unload_model: Some(request.clone()),
+                    ensure_model: None,
+                    drain_model: None,
+                },
+            )
+            .await
+            .map_err(|error| map_legacy_lifecycle_unsupported("unload_model", error))?;
+        let response = response.unload_model.ok_or_else(|| {
+            ControlPlaneClientError::Protocol(
+                "owner-control unload_model response missing payload".to_string(),
+            )
+        })?;
+        validate_lifecycle_acceptance(
+            "unload_model",
+            &response.intent_id,
+            &response.accepted_state,
+            "absent",
+            response.target.as_ref(),
+            &expected_model_ref,
+            expected_instance_id.as_deref(),
+        )?;
+        Ok(response)
+    }
+
+    pub async fn ensure_model(
+        &self,
+        model_ref: String,
+        profile: Option<String>,
+    ) -> Result<OwnerControlEnsureModelResponse, ControlPlaneClientError> {
+        let expected_model_ref = model_ref.clone();
+        let request = OwnerControlEnsureModelRequest {
+            requester_node_id: self.endpoint.id().as_bytes().to_vec(),
+            target_node_id: self.connection.remote_id().as_bytes().to_vec(),
+            model: Some(crate::proto::node::OwnerControlModelRef {
+                canonical_model_ref: model_ref,
+                instance_id: None,
+            }),
+            profile,
+        };
+        let response = self
+            .send_unary_request(
+                std::time::Duration::from_secs(OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS),
+                |request_id, _, _| OwnerControlRequest {
+                    request_id,
+                    get_config: None,
+                    watch_config: None,
+                    apply_config: None,
+                    refresh_inventory: None,
+                    load_model: None,
+                    unload_model: None,
+                    ensure_model: Some(request.clone()),
+                    drain_model: None,
+                },
+            )
+            .await
+            .map_err(|error| map_legacy_lifecycle_unsupported("ensure_model", error))?;
+        let response = response.ensure_model.ok_or_else(|| {
+            ControlPlaneClientError::Protocol(
+                "owner-control ensure_model response missing payload".to_string(),
+            )
+        })?;
+        validate_lifecycle_acceptance(
+            "ensure_model",
+            &response.intent_id,
+            &response.accepted_state,
+            "present",
+            response.target.as_ref(),
+            &expected_model_ref,
+            None,
+        )?;
+        Ok(response)
+    }
+
+    pub async fn drain_model(
+        &self,
+        model_ref: String,
+        instance_id: Option<String>,
+    ) -> Result<OwnerControlDrainModelResponse, ControlPlaneClientError> {
+        let expected_instance_id = instance_id.clone();
+        let expected_model_ref = if expected_instance_id.is_some() {
+            String::new()
+        } else {
+            model_ref.clone()
+        };
+        let request = OwnerControlDrainModelRequest {
+            requester_node_id: self.endpoint.id().as_bytes().to_vec(),
+            target_node_id: self.connection.remote_id().as_bytes().to_vec(),
+            model: Some(crate::proto::node::OwnerControlModelRef {
+                canonical_model_ref: expected_model_ref.clone(),
+                instance_id,
+            }),
+            drain_timeout_secs: None,
+        };
+        let response = self
+            .send_unary_request(
+                std::time::Duration::from_secs(OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS),
+                |request_id, _, _| OwnerControlRequest {
+                    request_id,
+                    get_config: None,
+                    watch_config: None,
+                    apply_config: None,
+                    refresh_inventory: None,
+                    load_model: None,
+                    unload_model: None,
+                    ensure_model: None,
+                    drain_model: Some(request.clone()),
+                },
+            )
+            .await
+            .map_err(|error| map_legacy_lifecycle_unsupported("drain_model", error))?;
+        let response = response.drain_model.ok_or_else(|| {
+            ControlPlaneClientError::Protocol(
+                "owner-control drain_model response missing payload".to_string(),
+            )
+        })?;
+        validate_lifecycle_acceptance(
+            "drain_model",
+            &response.intent_id,
+            &response.accepted_state,
+            "draining",
+            response.target.as_ref(),
+            &expected_model_ref,
+            expected_instance_id.as_deref(),
+        )?;
+        Ok(response)
     }
 
     pub async fn watch_config(
@@ -446,6 +723,10 @@ impl OwnerControlClient {
                 }),
                 apply_config: None,
                 refresh_inventory: None,
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             response: None,
             error: None,
@@ -1011,6 +1292,104 @@ mod tests {
                 - OWNER_CONTROL_SERVER_SCAN_DEADLINE_SECS_FOR_CLIENT_MARGIN,
             5
         );
+    }
+
+    #[test]
+    fn unary_response_timeout_exceeds_server_command_deadline() {
+        const {
+            assert!(
+                OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS
+                    > OWNER_CONTROL_SERVER_UNARY_DEADLINE_SECS_FOR_CLIENT_MARGIN
+            );
+        }
+        assert_eq!(
+            OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS
+                - OWNER_CONTROL_SERVER_UNARY_DEADLINE_SECS_FOR_CLIENT_MARGIN,
+            5
+        );
+    }
+
+    #[test]
+    fn lifecycle_acceptance_requires_intent_id_and_exact_state() {
+        let target = crate::proto::node::OwnerControlModelRef {
+            canonical_model_ref: "model/test".to_string(),
+            instance_id: None,
+        };
+        assert!(
+            validate_lifecycle_acceptance(
+                "load_model",
+                "owner-1",
+                "present",
+                "present",
+                Some(&target),
+                "model/test",
+                None,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_lifecycle_acceptance(
+                "load_model",
+                "",
+                "present",
+                "present",
+                Some(&target),
+                "model/test",
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_lifecycle_acceptance(
+                "load_model",
+                "owner-1",
+                "absent",
+                "present",
+                Some(&target),
+                "model/test",
+                None,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_unknown_lifecycle_command_maps_to_control_unsupported() {
+        for code in [
+            OwnerControlErrorCode::BadRequest,
+            OwnerControlErrorCode::UnknownCommand,
+        ] {
+            let legacy = ControlPlaneClientError::Remote(OwnerControlRemoteError {
+                code,
+                message: "owner control request requires exactly one command variant".to_string(),
+                request_id: Some(7),
+                current_revision: None,
+            });
+            let mapped = map_legacy_lifecycle_unsupported("load_model", legacy);
+            let ControlPlaneClientError::Remote(mapped) = mapped else {
+                panic!("legacy response should remain a structured remote error");
+            };
+            assert_eq!(mapped.code, OwnerControlErrorCode::ControlUnsupported);
+            assert_eq!(
+                mapped.message,
+                "remote owner-control endpoint does not support load_model"
+            );
+            assert_eq!(mapped.request_id, Some(7));
+        }
+
+        let unrelated = ControlPlaneClientError::Remote(OwnerControlRemoteError {
+            code: OwnerControlErrorCode::BadRequest,
+            message: "invalid model target".to_string(),
+            request_id: Some(8),
+            current_revision: None,
+        });
+        let ControlPlaneClientError::Remote(unrelated) =
+            map_legacy_lifecycle_unsupported("load_model", unrelated)
+        else {
+            panic!("unrelated response should remain a structured remote error");
+        };
+        assert_eq!(unrelated.code, OwnerControlErrorCode::BadRequest);
+        assert_eq!(unrelated.message, "invalid model target");
     }
 
     #[test]

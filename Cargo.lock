@@ -3844,6 +3844,7 @@ dependencies = [
  "mesh-llm-types",
  "semver",
  "serde",
+ "serde_json",
  "skippy-protocol",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",

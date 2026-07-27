@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod autoupdate;
 pub mod backend;
 pub mod benchmark;

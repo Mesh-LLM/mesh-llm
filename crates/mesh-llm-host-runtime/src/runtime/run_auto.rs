@@ -1,3 +1,4 @@
+use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
 use super::startup_identity::{emit_private_mesh_name_warning, handle_public_identity_transition};
 use super::status::mesh_guardrail_mode_to_openai;
 use super::{
@@ -8,19 +9,18 @@ use super::{
     RuntimeCapacityLedger, RuntimeDashboardSnapshotProvider, RuntimeEvent, RuntimeInstanceRegistry,
     RuntimeModelHandleEntry, RuntimeOptions, RuntimeResourcePlanningProfile, RuntimeSurface,
     SkippyNativeLogForwardingGuard, StartupLocalModelTask, StartupMeshCreationState,
-    StartupModelPlan, StartupReadyReporter, bridge_skippy_native_logs, build_serving_list,
-    cli_has_explicit_models, configure_skippy_native_logging, emit_configuration_ui_read_only_hint,
-    initialize_embedded_runtime_entrypoint, initialize_runtime_entrypoint,
-    maybe_discover_join_candidates, next_runtime_instance_id, nostr_rediscovery, nostr_relays,
-    openai_guardrail_policy_handle, owner_runtime_config, prepare_runtime_startup,
-    publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
+    StartupModelPlan, StartupModelSpec, StartupReadyReporter, bridge_skippy_native_logs,
+    build_serving_list, cli_has_explicit_models, configure_skippy_native_logging,
+    emit_configuration_ui_read_only_hint, initialize_embedded_runtime_entrypoint,
+    initialize_runtime_entrypoint, maybe_discover_join_candidates, next_runtime_instance_id,
+    nostr_rediscovery, nostr_relays, openai_guardrail_policy_handle, owner_runtime_config,
+    prepare_runtime_startup, publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
     resolve_runtime_owner_key_path, resolve_startup_mesh_creation_state, run_auto_join_mesh_phase,
     run_auto_model_identity, run_auto_model_path_or_shutdown, run_auto_runtime_loop_and_shutdown,
     runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
     setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
     spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
-    start_run_auto_bootstrap_proxy, startup_default_backend_device, startup_launch_plan,
-    startup_local_model_loop, swarm_capture_observer_requested,
+    start_run_auto_bootstrap_proxy, startup_local_model_loop, swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -34,15 +34,20 @@ use crate::network::{
 use crate::plugin;
 use crate::runtime::release_attestation;
 use crate::runtime::survey;
+use crate::runtime::{InstanceLifecycleRecord, InstanceLifecycleState};
 use crate::system::{autoupdate, benchmark, hardware};
 use anyhow::Result;
-use mesh_llm_events::{LogFormat, OutputEvent, emit_event, output_sink};
+use mesh_llm_events::{LogFormat, OutputEvent, RuntimeStatus, emit_event, output_sink};
 use skippy_protocol::FlashAttentionType;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU16},
+};
 
+#[allow(dead_code)]
 pub(super) enum RunAutoModelSelection {
     Model(PathBuf),
     Shutdown,
@@ -59,6 +64,7 @@ pub(super) struct RuntimeUnloadCandidate {
     pub(super) owner: RuntimeUnloadOwner,
     pub(super) instance_id: String,
     pub(super) model_name: String,
+    pub(super) profile: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -256,6 +262,11 @@ pub(super) async fn run_runtime_cli(
     }
 
     let mut config = plugin::load_config(options.config.as_deref())?;
+    let effective_mode = resolve_effective_mode(&options, config.runtime.mode);
+    if let Err(error) = check_mode_conflicts(&options, explicit_surface, config.runtime.mode) {
+        anyhow::bail!("mode conflict: {error}");
+    }
+    options.client = effective_mode == mesh_llm_config::RuntimeMode::Client;
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
     apply_runtime_config_options(&mut options, &config);
     let startup_mesh_creation_state = resolve_startup_mesh_creation_state(&options, &config)?;
@@ -290,10 +301,10 @@ pub(super) async fn run_runtime_cli(
     maybe_discover_join_candidates(&mut options, has_startup_models, &mut auto_join_candidates)
         .await?;
     let Some(PreparedRuntimeStartup {
-        startup_models,
+        startup_specs,
         requested_model_names,
         bin_dir,
-    }) = prepare_runtime_startup(&options, &config, explicit_surface).await?
+    }) = prepare_runtime_startup(&options, &config, explicit_surface, effective_mode).await?
     else {
         return Ok(());
     };
@@ -302,7 +313,7 @@ pub(super) async fn run_runtime_cli(
         options,
         config,
         startup_mesh_creation_state,
-        startup_models,
+        startup_specs,
         requested_model_names,
         bin_dir,
         runtime,
@@ -444,6 +455,17 @@ pub(super) async fn attach_local_release_attestation(node: &mesh::Node) -> Resul
     node.set_release_attestation_report(loaded.summary, Some(attestation))
         .await;
     Ok(())
+}
+
+/// Install the model-intent channel on `node` and return the receiver the
+/// runtime control loop drains.
+async fn install_run_auto_model_intent_channel(
+    node: mesh::Node,
+) -> tokio::sync::mpsc::Receiver<super::ModelIntent> {
+    let (model_intent_tx, model_intent_rx) = tokio::sync::mpsc::channel(64);
+    let mut tx_guard = node.model_intent_tx.lock().await;
+    *tx_guard = Some(model_intent_tx);
+    model_intent_rx
 }
 
 pub(super) fn skippy_telemetry_options(options: &RuntimeOptions) -> skippy::SkippyTelemetryOptions {
@@ -727,6 +749,10 @@ pub(super) async fn build_run_auto_node_setup(
     );
     node.set_routing_telemetry_sink(survey_telemetry.routing_sink());
     node.set_available_models(local_models.clone()).await;
+    let _activity_policy_task = super::activity_policy::spawn_native_activity_policy(
+        node.activity_policy_guard.clone(),
+        config.runtime.activity.clone(),
+    );
     node.start_heartbeat();
     node.start_rtt_refresh();
     // iroh owns NAT traversal and relay-to-direct migration; modern nodes do
@@ -882,14 +908,19 @@ pub(super) struct RunAutoStartupTasksContext<'a> {
     pub(super) primary_startup_model: Option<&'a StartupModelPlan>,
     pub(super) model_name: &'a str,
     pub(super) model_path: &'a Path,
-    pub(super) api_ready_url: String,
-    pub(super) ready_console_url: Option<String>,
-    pub(super) ready_api_port: u16,
-    pub(super) ready_console_port: Option<u16>,
+    pub(super) startup_ready_reporter: &'a StartupReadyReporter,
     pub(super) target_tx: &'a Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
-    pub(super) runtime_state: &'a mut RunAutoRuntimeState,
+    pub(super) managed_models: &'a mut HashMap<String, ManagedModelController>,
+    pub(super) next_runtime_instance_sequence: &'a mut u64,
+    pub(super) runtime_capacity_ledger: &'a RuntimeCapacityLedger,
+    pub(super) runtime_instance_registry: &'a RuntimeInstanceRegistry,
+    pub(super) dashboard_processes: &'a Arc<tokio::sync::Mutex<Vec<api::RuntimeProcessPayload>>>,
+    pub(super) dashboard_context_usage: &'a DashboardContextUsage,
+    pub(super) input_handler_enabled: bool,
+    pub(super) openai_guardrail_policy: &'a OpenAiGuardrailPolicyHandle,
     pub(super) console_state: Option<&'a api::MeshApi>,
     pub(super) control_tx: &'a tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
+    pub(super) runtime_event_tx: &'a tokio::sync::mpsc::UnboundedSender<RuntimeEvent>,
     pub(super) survey_telemetry: &'a survey::SurveyTelemetry,
     pub(super) skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
     pub(super) api_port: u16,
@@ -915,9 +946,7 @@ pub(super) fn initialize_run_auto_runtime_state(options: &RuntimeOptions) -> Run
     }
 }
 
-pub(super) async fn spawn_run_auto_startup_model_tasks(
-    ctx: RunAutoStartupTasksContext<'_>,
-) -> StartupReadyReporter {
+pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksContext<'_>) {
     let RunAutoStartupTasksContext {
         options,
         config,
@@ -927,32 +956,25 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(
         primary_startup_model,
         model_name,
         model_path,
-        api_ready_url,
-        ready_console_url,
-        ready_api_port,
-        ready_console_port,
+        startup_ready_reporter,
         target_tx,
-        runtime_state,
+        managed_models,
+        next_runtime_instance_sequence,
+        runtime_capacity_ledger,
+        runtime_instance_registry,
+        dashboard_processes,
+        dashboard_context_usage,
+        input_handler_enabled,
+        openai_guardrail_policy,
         console_state,
         control_tx,
+        runtime_event_tx,
         survey_telemetry,
         skippy_telemetry,
         api_port,
         interactive_started,
     } = ctx;
 
-    let startup_model_names: Vec<String> = startup_models
-        .iter()
-        .map(|model| model.declared_ref.clone())
-        .collect();
-    let startup_ready_reporter = StartupReadyReporter::new(
-        &startup_model_names,
-        model_name.to_string(),
-        api_ready_url,
-        ready_console_url,
-        ready_api_port,
-        ready_console_port,
-    );
     let startup_load_gate = Arc::new(tokio::sync::Mutex::new(()));
     let primary_parallel_override = super::startup_models::resolve_model_parallel_override(
         primary_startup_model.and_then(|m| m.parallel),
@@ -975,8 +997,12 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(
         .map(|model| model.declared_ref.clone())
         .unwrap_or_else(|| model_name.to_string());
     let (primary_stop_tx, primary_stop_rx) = tokio::sync::watch::channel(false);
-    let primary_instance_id =
-        next_runtime_instance_id(&mut runtime_state.next_runtime_instance_sequence);
+    let primary_instance_id = next_runtime_instance_id(next_runtime_instance_sequence);
+    let primary_lifecycle = Arc::new(tokio::sync::Mutex::new(InstanceLifecycleRecord::new(
+        InstanceLifecycleState::Planned,
+        32,
+    )));
+    let primary_lifecycle_port = Arc::new(AtomicU16::new(0));
     let primary_task = tokio::spawn(Box::pin(startup_local_model_loop(StartupLocalModelTask {
         node: node.clone(),
         config: config.clone(),
@@ -984,13 +1010,16 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(
         target_tx: target_tx.clone(),
         model_path: model_path.to_path_buf(),
         model_ref: primary_model_ref,
+        profile: primary_startup_model
+            .map(|model| model.profile.clone())
+            .unwrap_or_default(),
         model_name: model_name.to_string(),
         instance_id: primary_instance_id.clone(),
         primary_model_name: model_name.to_string(),
         mmproj_path: primary_mmproj,
         ctx_size: primary_ctx_size,
         pinned_gpu: primary_pinned_gpu,
-        runtime_capacity_ledger: runtime_state.runtime_capacity_ledger.clone(),
+        runtime_capacity_ledger: runtime_capacity_ledger.clone(),
         cache_type_k: primary_cache_type_k,
         cache_type_v: primary_cache_type_v,
         n_batch: primary_n_batch,
@@ -999,30 +1028,38 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(
         parallel_override: primary_parallel_override,
         split_topology_lock: options.split_topology_lock.clone(),
         resource_planning_profile,
-        openai_guardrail_policy: runtime_state.openai_guardrail_policy.clone(),
+        openai_guardrail_policy: openai_guardrail_policy.clone(),
         split: options.split,
         skippy_telemetry: skippy_telemetry.clone(),
         survey_telemetry: survey_telemetry.clone(),
         survey_launch_kind: survey::SurveyLaunchKind::Startup,
         stop_rx: primary_stop_rx,
-        dashboard_processes: runtime_state.dashboard_processes.clone(),
-        dashboard_context_usage: runtime_state.dashboard_context_usage.clone(),
-        runtime_instance_registry: runtime_state.runtime_instance_registry.clone(),
+        dashboard_processes: dashboard_processes.clone(),
+        dashboard_context_usage: dashboard_context_usage.clone(),
+        runtime_instance_registry: runtime_instance_registry.clone(),
         console_state: console_state_for_election,
         api_port,
         startup_ready_reporter: startup_ready_reporter.clone(),
+        runtime_event_tx: runtime_event_tx.clone(),
         startup_load_gate: startup_load_gate.clone(),
-        input_handler_enabled: runtime_state.input_handler_enabled,
+        input_handler_enabled,
         interactive_started,
         interactive_control_tx: control_tx.clone(),
         interactive_console_state,
+        lifecycle: primary_lifecycle.clone(),
+        lifecycle_port: primary_lifecycle_port.clone(),
     })));
-    runtime_state.managed_models.insert(
+    managed_models.insert(
         primary_instance_id,
         ManagedModelController {
             model_name: model_name.to_string(),
+            profile: primary_startup_model
+                .map(|model| model.profile.clone())
+                .unwrap_or_default(),
             stop_tx: primary_stop_tx,
             task: primary_task,
+            lifecycle: primary_lifecycle,
+            port: primary_lifecycle_port,
         },
     );
 
@@ -1034,23 +1071,22 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(
         startup_models,
         primary_model_name: model_name,
         target_tx,
-        managed_models: &mut runtime_state.managed_models,
-        next_runtime_instance_sequence: &mut runtime_state.next_runtime_instance_sequence,
-        dashboard_processes: &runtime_state.dashboard_processes,
-        dashboard_context_usage: &runtime_state.dashboard_context_usage,
-        runtime_instance_registry: &runtime_state.runtime_instance_registry,
-        runtime_capacity_ledger: &runtime_state.runtime_capacity_ledger,
+        managed_models,
+        next_runtime_instance_sequence,
+        dashboard_processes,
+        dashboard_context_usage,
+        runtime_instance_registry,
+        runtime_capacity_ledger,
         console_state,
-        startup_ready_reporter: &startup_ready_reporter,
+        startup_ready_reporter,
         startup_load_gate: &startup_load_gate,
         control_tx,
+        runtime_event_tx,
         survey_telemetry,
         skippy_telemetry,
-        openai_guardrail_policy: &runtime_state.openai_guardrail_policy,
+        openai_guardrail_policy,
     })
     .await;
-
-    startup_ready_reporter
 }
 
 pub(super) fn configure_swarm_capture(
@@ -1067,6 +1103,7 @@ pub(super) fn configure_swarm_capture(
     Ok(recorder)
 }
 
+#[allow(dead_code)]
 pub(super) struct RunAutoModelSelectionContext<'a> {
     pub(super) options: &'a RuntimeOptions,
     pub(super) node: &'a mesh::Node,
@@ -1080,6 +1117,7 @@ pub(super) struct RunAutoModelSelectionContext<'a> {
         &'a mut Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 }
 
+#[allow(dead_code)]
 pub(super) async fn select_advertised_run_auto_model(
     mut ctx: RunAutoModelSelectionContext<'_>,
 ) -> Result<Option<(PathBuf, String)>> {
@@ -1097,7 +1135,7 @@ pub(super) struct RunAutoContext {
     pub(super) options: RuntimeOptions,
     pub(super) config: plugin::MeshConfig,
     pub(super) startup_mesh_creation_state: StartupMeshCreationState,
-    pub(super) startup_models: Vec<StartupModelPlan>,
+    pub(super) startup_specs: Vec<StartupModelSpec>,
     pub(super) requested_model_names: Vec<String>,
     pub(super) bin_dir: PathBuf,
     pub(super) runtime: Option<std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
@@ -1115,7 +1153,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         mut options,
         config,
         startup_mesh_creation_state,
-        startup_models,
+        startup_specs,
         requested_model_names,
         bin_dir,
         runtime,
@@ -1165,7 +1203,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
 
     // Start bootstrap proxy if we have somewhere to tunnel to. This gives
     // instant API access via tunnel while our GPU loads.
-    let mut bootstrap_listener_tx = start_run_auto_bootstrap_proxy(
+    let bootstrap_listener_tx = start_run_auto_bootstrap_proxy(
         &options,
         &node,
         api_port,
@@ -1173,24 +1211,12 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         &auto_join_candidates,
     );
 
-    let primary_startup_model = startup_models.first().cloned();
-
-    let Some((model, model_name)) =
-        select_advertised_run_auto_model(RunAutoModelSelectionContext {
-            options: &options,
-            node: &node,
-            startup_models: &startup_models,
-            local_models: &local_models,
-            is_client,
-            plugin_manager: &plugin_manager,
-            bootstrap_listener_tx: &mut bootstrap_listener_tx,
-            primary_startup_model: primary_startup_model.as_ref(),
-            embedded_control_rx: &mut embedded_control_rx,
-        })
-        .await?
-    else {
-        return Ok(());
-    };
+    // All daemon surfaces start from a valid zero-model state. Eager startup
+    // model resolution is intentionally deferred until after those surfaces bind.
+    node.set_models(Vec::new()).await;
+    node.set_serving_models(Vec::new()).await;
+    node.set_hosted_models(Vec::new()).await;
+    node.regossip().await;
 
     let tunnel_mgr =
         tunnel::Manager::start(node.clone(), channels.rpc, channels.http, channels.stage).await?;
@@ -1207,14 +1233,18 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         tokio::sync::mpsc::unbounded_channel::<RuntimeEvent>();
     let mut runtime_state = initialize_run_auto_runtime_state(&options);
 
-    let model_name_for_console = model_name.clone();
+    // Model intent channel: owner-control commands send intents here, control loop polls.
+    let mut model_intent_rx = install_run_auto_model_intent_channel(node.clone()).await;
+
+    let model_name_for_console = String::new();
+    let model_path_for_console = PathBuf::new();
     let runtime_owner_key_path = resolve_runtime_owner_key_path(&options)?;
     let console_state = setup_run_auto_console_state(RunAutoConsoleStateContext {
         options: &options,
         node: &node,
         console_enabled: console_port.is_some(),
         model_name: &model_name_for_console,
-        model_path: &model,
+        model_path: &model_path_for_console,
         api_port,
         plugin_manager: &plugin_manager,
         affinity_router: &affinity_router,
@@ -1239,18 +1269,6 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
             options.headless,
         )));
     }
-
-    let _ = emit_event(OutputEvent::LaunchPlan {
-        plan: startup_launch_plan(
-            &startup_models,
-            &model_name,
-            api_port,
-            console_port,
-            options.headless,
-            config.gpu.parallel,
-            startup_default_backend_device(options.llama_flavor),
-        ),
-    });
 
     let interactive_started = Arc::new(AtomicBool::new(false));
     let RunAutoServingSurface {
@@ -1277,30 +1295,29 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     })
     .await?;
 
-    tracing::info!("Starting embedded runtime for model: {model_name}");
-    let startup_ready_reporter = spawn_run_auto_startup_model_tasks(RunAutoStartupTasksContext {
-        options: &options,
-        config: &config,
-        node: &node,
-        tunnel_mgr: &tunnel_mgr,
-        startup_models: &startup_models,
-        primary_startup_model: primary_startup_model.as_ref(),
-        model_name: &model_name,
-        model_path: &model,
+    let primary_model_name = requested_model_names.first().cloned().unwrap_or_default();
+    let startup_ready_reporter = StartupReadyReporter::new_with_failure_policy(
+        &requested_model_names,
+        primary_model_name.clone(),
         api_ready_url,
         ready_console_url,
         ready_api_port,
         ready_console_port,
-        target_tx: &target_tx,
-        runtime_state: &mut runtime_state,
-        console_state: console_state.as_ref(),
-        control_tx: &control_tx,
-        survey_telemetry: &survey_telemetry,
-        skippy_telemetry: &skippy_telemetry,
-        api_port,
-        interactive_started,
-    })
-    .await;
+        config.runtime.startup_failure_policy,
+    );
+    if startup_specs.is_empty() {
+        let _ = emit_event(OutputEvent::PassiveMode {
+            role: if is_client { "client" } else { "standby" }.to_string(),
+            status: RuntimeStatus::Ready,
+            capacity_gb: (!is_client).then(|| node.vram_bytes() as f64 / 1e9),
+            models_on_disk: (!is_client).then_some(local_models),
+            detail: Some(if is_client {
+                "Client daemon ready; local model loading is disabled".to_string()
+            } else {
+                "Runtime daemon ready; no local models are loaded".to_string()
+            }),
+        });
+    }
 
     // Discovery publish loop (if --publish) or Nostr watchdog (if --auto, to take over if publisher dies).
     let discovery_publisher =
@@ -1311,11 +1328,12 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         options: &options,
         config: &config,
         node: &node,
-        primary_model_name: &model_name,
+        primary_model_name: &primary_model_name,
         target_tx: &target_tx,
         control_rx: &mut control_rx,
         control_tx: &control_tx,
         runtime_event_rx: &mut runtime_event_rx,
+        model_intent_rx: &mut model_intent_rx,
         runtime_state: &mut runtime_state,
         console_state: console_state.as_ref(),
         runtime_data_producer: runtime_data_producer.as_ref(),
@@ -1326,9 +1344,18 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
+        startup_specs: &startup_specs,
+        tunnel_mgr: &tunnel_mgr,
+        skippy_telemetry: &skippy_telemetry,
+        api_port,
+        console_port,
+        interactive_started,
         lan_bootstrap_tasks,
         runtime,
     })
     .await;
+    if let Some(summary) = startup_ready_reporter.fail_fast_summary() {
+        anyhow::bail!("{summary}");
+    }
     Ok(())
 }

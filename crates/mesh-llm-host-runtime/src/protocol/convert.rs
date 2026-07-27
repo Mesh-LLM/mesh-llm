@@ -698,6 +698,7 @@ pub(crate) fn local_ann_to_proto_ann(
             ann.stage_protocol_generation_supported,
             ann.stage_status_list_supported,
         ),
+        inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
     }
 }
 
@@ -896,6 +897,9 @@ pub(crate) fn proto_ann_to_local(
             let arr: [u8; 32] = bytes.as_slice().try_into().ok()?;
             iroh::PublicKey::from_bytes(&arr).ok()
         }),
+        inference_admission_state: pa
+            .inference_admission_state
+            .and_then(|v| crate::proto::node::InferenceAdmissionState::try_from(v).ok()),
     };
     crate::mesh::backfill_legacy_descriptors(&mut ann);
     ann.advertised_model_throughput = sanitize_model_throughput_hints_for_ann(&ann);

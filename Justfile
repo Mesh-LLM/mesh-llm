@@ -391,6 +391,9 @@ test-all:
     #!/usr/bin/env bash
     set -euo pipefail
 
+    echo "=== 0/11 Test-all rust crate coverage preflight ==="
+    cargo run -p xtask -- repo-consistency test-all-rust-crate-coverage
+
     # A full workspace gate otherwise leaves hundreds of incompatible
     # incremental feature graphs behind. CI already builds non-incrementally;
     # use the same bounded-disk behavior here unless explicitly overridden.
@@ -418,17 +421,17 @@ test-all:
     echo ""
 
     # Each UI step runs in a subshell so cd doesn't leak between steps.
-    echo "=== 1/10 Repo consistency ==="
+    echo "=== 1/11 Repo consistency ==="
     just with-lld cargo run -p xtask -- repo-consistency ci-crate-lists
     just with-lld cargo run -p xtask -- repo-consistency publish-crates
     echo ""
-    echo "=== 2/10 Rust format check ==="
+    echo "=== 2/11 Rust format check ==="
     just with-lld cargo fmt --all -- --check
     echo ""
-    echo "=== GPU bench Rust feature check ==="
+    echo "=== 3/11 GPU bench Rust feature check ==="
     MESH_LLM_GPU_BENCH_RUST_ONLY=1 just with-lld cargo check -p mesh-llm-gpu-bench --features cuda,hip,intel
     echo ""
-    echo "=== 3-4/10 Rust validation ==="
+    echo "=== 4-5/11 Rust validation ==="
     # Keep Clippy and tests adjacent for each compatible feature graph. Switching
     # dynamic -> static -> dynamic -> static forces Cargo to relink both graphs.
     echo "--- Dynamic-runtime bindings: Clippy ---"
@@ -458,16 +461,16 @@ test-all:
         --exclude skippy-ffi \
         --exclude skippy-quantize
     echo ""
-    echo "=== 5/10 Plugin author exemplar ==="
+    echo "=== 6/11 Plugin author exemplar ==="
     just with-lld cargo run --quiet --manifest-path docs/plugins/exemplars/web-ui/Cargo.toml -- --print-package-manifest > target/web-ui-exemplar-manifest.json
     diff -u <(jq -S . docs/plugins/exemplars/web-ui/plugin.package.json) <(jq -S . target/web-ui-exemplar-manifest.json)
     node --check docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.js
     (cd "{{ ui_dir }}" && pnpm exec tsc --ignoreConfig --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --lib ES2022,DOM ../../docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.ts)
     echo ""
-    echo "=== 6-9/10 Parallel portable checks and builds ==="
+    echo "=== 7-10/11 Parallel portable checks and builds ==="
     scripts/test-portable.sh
     echo ""
-    echo "=== 10/10 E2E smoke tests (Playwright) ==="
+    echo "=== 11/11 E2E smoke tests (Playwright) ==="
     (cd "{{ ui_dir }}" && pnpm run test:e2e)
     echo ""
     echo "All checks passed."

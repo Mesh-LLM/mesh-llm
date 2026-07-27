@@ -28,6 +28,7 @@ import {
 } from '@/features/configuration/lib/settings-utils'
 import { ApiError, parseApiErrorBody } from '@/lib/api/errors'
 import { env } from '@/lib/env'
+import { createRuntimePolicySettingsFromSchema } from './runtime-settings'
 import { gpuAllocatableVramGB, gpuRatedVramGB, gpuReservedVramGB, gpuSystemReportedVramGB } from '@/lib/vram'
 
 export type RuntimeControlBootstrapPayload = {
@@ -279,7 +280,7 @@ function runtimeControlErrorMessage(error: unknown): string | undefined {
   return undefined
 }
 
-const CATEGORY_ICON_BY_ID: Record<string, ConfigurationDefaultsSetting['icon']> = {
+export const CATEGORY_ICON_BY_ID: Record<string, ConfigurationDefaultsSetting['icon']> = {
   meshllm: 'cpu',
   network: 'server',
   attestation: 'shield',
@@ -727,17 +728,17 @@ export function createConfigurationRuntimeSettingsFromSchema(
   schema: RuntimeConfigSchemaReference | undefined,
   controlState?: RuntimeConfigControlStatePayload
 ): ConfigurationSettingsHarnessData {
-  return createConfigurationSettingsFromSchema(
-    schema,
-    (entry) =>
-      (entry.canonical_path.startsWith('runtime.') &&
-        entry.canonical_path !== 'runtime.debug' &&
-        entry.canonical_path !== 'runtime.listen_all') ||
-      entry.canonical_path.startsWith('defaults.throughput.') ||
-      entry.canonical_path.startsWith('defaults.skippy.') ||
-      entry.canonical_path.startsWith('defaults.advanced.server.'),
-    'Generated runtime settings',
-    controlState
+  return combineSettingsHarnessData(
+    createRuntimePolicySettingsFromSchema(schema, controlState),
+    createConfigurationSettingsFromSchema(
+      schema,
+      (entry) =>
+        entry.canonical_path.startsWith('defaults.throughput.') ||
+        entry.canonical_path.startsWith('defaults.skippy.') ||
+        entry.canonical_path.startsWith('defaults.advanced.server.'),
+      'Generated runtime settings',
+      controlState
+    )
   )
 }
 

@@ -1,8 +1,8 @@
 use super::heartbeat::{
     HomeRelayStatusTransition, RELAY_DEGRADED_RTT_MS, RELAY_MISSING_GRACE_SECS,
-    RELAY_ONLY_RECONNECT_SECS, RELAY_RECONNECT_COOLDOWN_SECS, RelayPathSnapshot,
-    RelayPeerHealth, RelayPeerObservation, RelayReconnectController, RelayReconnectReason,
-    SelectedPathKind, relay_reconnect_reason, should_remove_connection,
+    RELAY_ONLY_RECONNECT_SECS, RELAY_RECONNECT_COOLDOWN_SECS, RelayPathSnapshot, RelayPeerHealth,
+    RelayPeerObservation, RelayReconnectController, RelayReconnectReason, SelectedPathKind,
+    relay_reconnect_reason, should_remove_connection,
 };
 use super::*;
 use crate::api;
@@ -484,6 +484,16 @@ async fn make_test_node_with_requirements(
             let (tx, _rx) = tokio::sync::watch::channel(0u64);
             Arc::new(tx)
         },
+        activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
+            &mesh_llm_config::RuntimeActivityConfig::default(),
+            ),
+            public_mesh: false,
+            drain_timeout_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_SECS,
+            drain_timeout_max_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
+        runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
+        runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+        model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
     };
 
     let accept_node = node.clone();

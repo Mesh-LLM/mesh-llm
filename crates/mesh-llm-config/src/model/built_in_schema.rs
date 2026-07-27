@@ -138,6 +138,42 @@ fn build_built_in_config_schema() -> ConfigSchema {
         telemetry_setting("telemetry.metrics.endpoint", ConfigValueSchema::Url),
         startup_runtime_setting("runtime.debug", ConfigValueSchema::Boolean),
         startup_runtime_setting("runtime.listen_all", ConfigValueSchema::Boolean),
+        startup_runtime_setting(
+            "runtime.mode",
+            string_enum(["client", "serve", "on_demand"]),
+        ),
+        startup_runtime_setting(
+            "runtime.startup_failure_policy",
+            string_enum(["best_effort", "fail_fast"]),
+        ),
+        runtime_setting("runtime.drain_timeout_secs", ConfigValueSchema::Integer),
+        runtime_setting("runtime.drain_timeout_max_secs", ConfigValueSchema::Integer),
+        activity_runtime_setting("runtime.activity.enabled", ConfigValueSchema::Boolean),
+        activity_runtime_setting(
+            "runtime.activity.idle_after_secs",
+            ConfigValueSchema::Integer,
+        ),
+        activity_runtime_setting(
+            "runtime.activity.poll_interval_secs",
+            ConfigValueSchema::Integer,
+        ),
+        activity_runtime_setting(
+            "runtime.activity.resume_debounce_secs",
+            ConfigValueSchema::Integer,
+        ),
+        activity_runtime_setting(
+            "runtime.activity.response",
+            string_enum(["pause_remote", "pause_all", "reduce_priority"]),
+        ),
+        activity_runtime_setting(
+            "runtime.activity.advertisement",
+            string_enum([
+                "none",
+                "availability_only",
+                "coarse_state",
+                "private_coarse_state",
+            ]),
+        ),
         runtime_setting(
             "runtime.reconcile_model_targets",
             ConfigValueSchema::Boolean,
@@ -981,6 +1017,13 @@ fn native_runtime_setting(path: &str, value_schema: ConfigValueSchema) -> Config
 }
 
 fn startup_runtime_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];
+    setting.restart_scope = ConfigRestartScope::ProcessRestart;
+    setting
+}
+
+fn activity_runtime_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];
     setting.restart_scope = ConfigRestartScope::ProcessRestart;

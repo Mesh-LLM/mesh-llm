@@ -1,7 +1,10 @@
+pub(crate) mod model_lifecycle;
 pub(crate) mod scan_refresh;
 
 use crate::proto::node::{
-    OwnerControlApplyConfigRequest, OwnerControlGetConfigRequest, OwnerControlRequest,
+    OwnerControlApplyConfigRequest, OwnerControlDrainModelRequest, OwnerControlEnsureModelRequest,
+    OwnerControlGetConfigRequest, OwnerControlLoadModelRequest,
+    OwnerControlRefreshInventoryRequest, OwnerControlRequest, OwnerControlUnloadModelRequest,
     OwnerControlWatchConfigRequest,
 };
 use std::future::Future;
@@ -72,7 +75,23 @@ pub(crate) enum OwnedNodeCommand {
     },
     ScanRefresh {
         request_id: u64,
-        request: crate::proto::node::OwnerControlRefreshInventoryRequest,
+        request: OwnerControlRefreshInventoryRequest,
+    },
+    LoadModel {
+        request_id: u64,
+        request: OwnerControlLoadModelRequest,
+    },
+    UnloadModel {
+        request_id: u64,
+        request: OwnerControlUnloadModelRequest,
+    },
+    EnsureModel {
+        request_id: u64,
+        request: OwnerControlEnsureModelRequest,
+    },
+    DrainModel {
+        request_id: u64,
+        request: OwnerControlDrainModelRequest,
     },
 }
 
@@ -97,7 +116,31 @@ impl OwnedNodeCommand {
                 request,
             });
         }
-        request.refresh_inventory.map(|request| Self::ScanRefresh {
+        if let Some(request) = request.refresh_inventory {
+            return Some(Self::ScanRefresh {
+                request_id,
+                request,
+            });
+        }
+        if let Some(request) = request.load_model {
+            return Some(Self::LoadModel {
+                request_id,
+                request,
+            });
+        }
+        if let Some(request) = request.unload_model {
+            return Some(Self::UnloadModel {
+                request_id,
+                request,
+            });
+        }
+        if let Some(request) = request.ensure_model {
+            return Some(Self::EnsureModel {
+                request_id,
+                request,
+            });
+        }
+        request.drain_model.map(|request| Self::DrainModel {
             request_id,
             request,
         })
@@ -108,7 +151,11 @@ impl OwnedNodeCommand {
             Self::GetConfig { request_id, .. }
             | Self::WatchConfig { request_id, .. }
             | Self::ApplyConfig { request_id, .. }
-            | Self::ScanRefresh { request_id, .. } => *request_id,
+            | Self::ScanRefresh { request_id, .. }
+            | Self::LoadModel { request_id, .. }
+            | Self::UnloadModel { request_id, .. }
+            | Self::EnsureModel { request_id, .. }
+            | Self::DrainModel { request_id, .. } => *request_id,
         }
     }
 
@@ -118,6 +165,10 @@ impl OwnedNodeCommand {
             Self::WatchConfig { request, .. } => &request.requester_node_id,
             Self::ApplyConfig { request, .. } => &request.requester_node_id,
             Self::ScanRefresh { request, .. } => &request.requester_node_id,
+            Self::LoadModel { request, .. } => &request.requester_node_id,
+            Self::UnloadModel { request, .. } => &request.requester_node_id,
+            Self::EnsureModel { request, .. } => &request.requester_node_id,
+            Self::DrainModel { request, .. } => &request.requester_node_id,
         }
     }
 
@@ -127,15 +178,23 @@ impl OwnedNodeCommand {
             Self::WatchConfig { request, .. } => &request.target_node_id,
             Self::ApplyConfig { request, .. } => &request.target_node_id,
             Self::ScanRefresh { request, .. } => &request.target_node_id,
+            Self::LoadModel { request, .. } => &request.target_node_id,
+            Self::UnloadModel { request, .. } => &request.target_node_id,
+            Self::EnsureModel { request, .. } => &request.target_node_id,
+            Self::DrainModel { request, .. } => &request.target_node_id,
         }
     }
 
     pub(crate) fn execution_shape(&self) -> OwnedNodeCommandExecutionShape {
         match self {
             Self::WatchConfig { .. } => OwnedNodeCommandExecutionShape::Watch,
-            Self::GetConfig { .. } | Self::ApplyConfig { .. } | Self::ScanRefresh { .. } => {
-                OwnedNodeCommandExecutionShape::Unary
-            }
+            Self::GetConfig { .. }
+            | Self::ApplyConfig { .. }
+            | Self::ScanRefresh { .. }
+            | Self::LoadModel { .. }
+            | Self::UnloadModel { .. }
+            | Self::EnsureModel { .. }
+            | Self::DrainModel { .. } => OwnedNodeCommandExecutionShape::Unary,
         }
     }
 
@@ -148,13 +207,28 @@ impl OwnedNodeCommand {
                 OWNER_CONTROL_SCAN_DEADLINE_SECS,
             )),
             Self::WatchConfig { .. } => OwnedNodeCommandDeadline::Watch,
+            Self::LoadModel { .. }
+            | Self::UnloadModel { .. }
+            | Self::EnsureModel { .. }
+            | Self::DrainModel { .. } => OwnedNodeCommandDeadline::Unary(Duration::from_secs(5)),
         }
+    }
+
+    pub(crate) fn is_model_lifecycle(&self) -> bool {
+        matches!(
+            self,
+            Self::LoadModel { .. }
+                | Self::UnloadModel { .. }
+                | Self::EnsureModel { .. }
+                | Self::DrainModel { .. }
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::ValidateControlFrame;
     use prost::Message;
 
     #[test]
@@ -168,6 +242,10 @@ mod tests {
                 requester_node_id: vec![1],
                 target_node_id: vec![2],
             }),
+            load_model: None,
+            unload_model: None,
+            ensure_model: None,
+            drain_model: None,
         })
         .expect("typed command");
 
@@ -248,6 +326,10 @@ mod tests {
                                 as i32,
                     }),
                 }),
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             error: None,
         };
@@ -267,5 +349,336 @@ mod tests {
             Ok(crate::proto::node::OwnerControlErrorCode::ControlUnavailable)
         );
         assert!(bounded.encode_to_vec().len() < crate::protocol::MAX_CONTROL_FRAME_BYTES);
+    }
+
+    fn lifecycle_model_request(model: &str) -> crate::proto::node::OwnerControlModelRef {
+        crate::proto::node::OwnerControlModelRef {
+            canonical_model_ref: model.to_string(),
+            instance_id: Some("instance-default".to_string()),
+        }
+    }
+
+    fn make_lifecycle_base(request_id: u64) -> crate::proto::node::OwnerControlRequest {
+        crate::proto::node::OwnerControlRequest {
+            request_id,
+            get_config: None,
+            watch_config: None,
+            apply_config: None,
+            refresh_inventory: None,
+            load_model: None,
+            unload_model: None,
+            ensure_model: None,
+            drain_model: None,
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cognitive_complexity)]
+    fn owner_lifecycle_messages_round_trip() {
+        let requester = vec![1u8; 32];
+        let target = vec![2u8; 32];
+        let model_ref = lifecycle_model_request("org/model:file.gguf");
+
+        let load_request = crate::proto::node::OwnerControlRequest {
+            load_model: Some(crate::proto::node::OwnerControlLoadModelRequest {
+                requester_node_id: requester.clone(),
+                target_node_id: target.clone(),
+                model: Some(model_ref.clone()),
+                profile: Some("low-ctx".into()),
+            }),
+            ..make_lifecycle_base(101)
+        };
+        let encoded = load_request.encode_to_vec();
+        let parsed = crate::proto::node::OwnerControlRequest::decode(encoded.as_slice())
+            .expect("load-model request should decode");
+        let command =
+            OwnedNodeCommand::decode(parsed).expect("load-model must decode to a command");
+        match command {
+            OwnedNodeCommand::LoadModel {
+                request_id,
+                request,
+            } => {
+                assert_eq!(request_id, 101);
+                assert_eq!(request.requester_node_id, requester);
+                assert_eq!(request.target_node_id, target);
+                assert_eq!(request.model, Some(model_ref.clone()));
+                assert_eq!(request.profile.as_deref(), Some("low-ctx"));
+            }
+            _ => panic!("expected owner-control load-model command"),
+        }
+
+        let unload_request = crate::proto::node::OwnerControlRequest {
+            unload_model: Some(crate::proto::node::OwnerControlUnloadModelRequest {
+                requester_node_id: requester.clone(),
+                target_node_id: target.clone(),
+                model: Some(model_ref.clone()),
+            }),
+            ..make_lifecycle_base(102)
+        };
+        let encoded = unload_request.encode_to_vec();
+        let parsed = crate::proto::node::OwnerControlRequest::decode(encoded.as_slice())
+            .expect("unload-model request should decode");
+        let command =
+            OwnedNodeCommand::decode(parsed).expect("unload-model must decode to a command");
+        match command {
+            OwnedNodeCommand::UnloadModel {
+                request_id,
+                request,
+            } => {
+                assert_eq!(request_id, 102);
+                assert_eq!(request.requester_node_id, requester);
+                assert_eq!(request.target_node_id, target);
+                assert_eq!(request.model, Some(model_ref.clone()));
+            }
+            _ => panic!("expected owner-control unload-model command"),
+        }
+
+        let ensure_request = crate::proto::node::OwnerControlRequest {
+            ensure_model: Some(crate::proto::node::OwnerControlEnsureModelRequest {
+                requester_node_id: requester.clone(),
+                target_node_id: target.clone(),
+                model: Some(model_ref.clone()),
+                profile: Some("throughput".into()),
+            }),
+            ..make_lifecycle_base(103)
+        };
+        let encoded = ensure_request.encode_to_vec();
+        let parsed = crate::proto::node::OwnerControlRequest::decode(encoded.as_slice())
+            .expect("ensure-model request should decode");
+        let command =
+            OwnedNodeCommand::decode(parsed).expect("ensure-model must decode to a command");
+        match command {
+            OwnedNodeCommand::EnsureModel {
+                request_id,
+                request,
+            } => {
+                assert_eq!(request_id, 103);
+                assert_eq!(request.requester_node_id, requester);
+                assert_eq!(request.target_node_id, target);
+                assert_eq!(request.model, Some(model_ref.clone()));
+                assert_eq!(request.profile.as_deref(), Some("throughput"));
+            }
+            _ => panic!("expected owner-control ensure-model command"),
+        }
+
+        let drain_request = crate::proto::node::OwnerControlRequest {
+            drain_model: Some(crate::proto::node::OwnerControlDrainModelRequest {
+                requester_node_id: requester,
+                target_node_id: target,
+                model: Some(model_ref),
+                drain_timeout_secs: None,
+            }),
+            ..make_lifecycle_base(104)
+        };
+        let encoded = drain_request.encode_to_vec();
+        let parsed = crate::proto::node::OwnerControlRequest::decode(encoded.as_slice())
+            .expect("drain-model request should decode");
+        let command =
+            OwnedNodeCommand::decode(parsed).expect("drain-model must decode to a command");
+        match command {
+            OwnedNodeCommand::DrainModel {
+                request_id,
+                request,
+            } => {
+                assert_eq!(request_id, 104);
+                assert_eq!(request.target_node_id.len(), 32);
+                assert_eq!(
+                    request.model.map(|m| m.canonical_model_ref),
+                    Some("org/model:file.gguf".to_string())
+                );
+            }
+            _ => panic!("expected owner-control drain-model command"),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cognitive_complexity)]
+    fn owner_lifecycle_typed_decode() {
+        let requester = vec![1u8; 32];
+        let target = vec![2u8; 32];
+        let load_model = crate::proto::node::OwnerControlModelRef {
+            canonical_model_ref: "org/model:file.gguf".into(),
+            instance_id: Some("instance-load".into()),
+        };
+
+        let load_request = crate::proto::node::OwnerControlRequest {
+            request_id: 201,
+            load_model: Some(crate::proto::node::OwnerControlLoadModelRequest {
+                requester_node_id: requester.clone(),
+                target_node_id: target.clone(),
+                model: Some(load_model.clone()),
+                profile: None,
+            }),
+            ..make_lifecycle_base(201)
+        };
+        let load_decoded = OwnedNodeCommand::decode(
+            crate::proto::node::OwnerControlRequest::decode(
+                load_request.encode_to_vec().as_slice(),
+            )
+            .expect("load command should decode"),
+        )
+        .expect("load command should map");
+        match load_decoded {
+            OwnedNodeCommand::LoadModel { request, .. } => {
+                assert_eq!(request.requester_node_id, requester);
+                assert_eq!(request.target_node_id, target);
+                assert_eq!(
+                    request.model,
+                    Some(crate::proto::node::OwnerControlModelRef {
+                        canonical_model_ref: "org/model:file.gguf".into(),
+                        instance_id: Some("instance-load".into()),
+                    })
+                );
+            }
+            _ => panic!("expected load-model typed variant"),
+        }
+
+        let unload_request = crate::proto::node::OwnerControlRequest {
+            request_id: 202,
+            unload_model: Some(crate::proto::node::OwnerControlUnloadModelRequest {
+                requester_node_id: vec![1u8; 32],
+                target_node_id: vec![2u8; 32],
+                model: Some(crate::proto::node::OwnerControlModelRef {
+                    canonical_model_ref: "org/model:file.gguf".into(),
+                    instance_id: Some("instance-unload".into()),
+                }),
+            }),
+            ..make_lifecycle_base(202)
+        };
+        let unload_decoded = OwnedNodeCommand::decode(
+            crate::proto::node::OwnerControlRequest::decode(
+                unload_request.encode_to_vec().as_slice(),
+            )
+            .expect("unload command should decode"),
+        )
+        .expect("unload command should map");
+        match unload_decoded {
+            OwnedNodeCommand::UnloadModel { request, .. } => {
+                assert_eq!(request.requester_node_id, vec![1u8; 32]);
+                assert_eq!(request.target_node_id, vec![2u8; 32]);
+                assert_eq!(
+                    request.model,
+                    Some(crate::proto::node::OwnerControlModelRef {
+                        canonical_model_ref: "org/model:file.gguf".into(),
+                        instance_id: Some("instance-unload".into()),
+                    })
+                );
+            }
+            _ => panic!("expected unload-model typed variant"),
+        }
+
+        let ensure_request = crate::proto::node::OwnerControlRequest {
+            request_id: 203,
+            ensure_model: Some(crate::proto::node::OwnerControlEnsureModelRequest {
+                requester_node_id: vec![1u8; 32],
+                target_node_id: vec![2u8; 32],
+                model: Some(crate::proto::node::OwnerControlModelRef {
+                    canonical_model_ref: "org/model:file.gguf".into(),
+                    instance_id: Some("instance-ensure".into()),
+                }),
+                profile: None,
+            }),
+            ..make_lifecycle_base(203)
+        };
+        let ensure_decoded = OwnedNodeCommand::decode(
+            crate::proto::node::OwnerControlRequest::decode(
+                ensure_request.encode_to_vec().as_slice(),
+            )
+            .expect("ensure command should decode"),
+        )
+        .expect("ensure command should map");
+        match ensure_decoded {
+            OwnedNodeCommand::EnsureModel { request, .. } => {
+                assert_eq!(request.requester_node_id, vec![1u8; 32]);
+                assert_eq!(request.target_node_id, vec![2u8; 32]);
+                assert_eq!(
+                    request.model,
+                    Some(crate::proto::node::OwnerControlModelRef {
+                        canonical_model_ref: "org/model:file.gguf".into(),
+                        instance_id: Some("instance-ensure".into()),
+                    })
+                );
+            }
+            _ => panic!("expected ensure-model typed variant"),
+        }
+
+        let drain_request = crate::proto::node::OwnerControlRequest {
+            request_id: 204,
+            drain_model: Some(crate::proto::node::OwnerControlDrainModelRequest {
+                requester_node_id: vec![1u8; 32],
+                target_node_id: vec![2u8; 32],
+                model: Some(crate::proto::node::OwnerControlModelRef {
+                    canonical_model_ref: "org/model:file.gguf".into(),
+                    instance_id: Some("instance-drain".into()),
+                }),
+                drain_timeout_secs: None,
+            }),
+            ..make_lifecycle_base(204)
+        };
+        let drain_decoded = OwnedNodeCommand::decode(
+            crate::proto::node::OwnerControlRequest::decode(
+                drain_request.encode_to_vec().as_slice(),
+            )
+            .expect("drain command should decode"),
+        )
+        .expect("drain command should map");
+        match drain_decoded {
+            OwnedNodeCommand::DrainModel { request, .. } => {
+                assert_eq!(request.requester_node_id, vec![1u8; 32]);
+                assert_eq!(request.target_node_id, vec![2u8; 32]);
+                assert_eq!(
+                    request.model,
+                    Some(crate::proto::node::OwnerControlModelRef {
+                        canonical_model_ref: "org/model:file.gguf".into(),
+                        instance_id: Some("instance-drain".into()),
+                    })
+                );
+            }
+            _ => panic!("expected drain-model typed variant"),
+        }
+
+        assert_eq!(load_request.request_id, 201);
+        assert_eq!(unload_request.request_id, 202);
+        assert_eq!(ensure_request.request_id, 203);
+        assert_eq!(drain_request.request_id, 204);
+    }
+
+    #[test]
+    fn owner_lifecycle_rejects_ambiguous_and_legacy_requests() {
+        let empty = make_lifecycle_base(300);
+        assert!(OwnedNodeCommand::decode(empty).is_none());
+
+        let ambiguous = crate::proto::node::OwnerControlRequest {
+            load_model: Some(crate::proto::node::OwnerControlLoadModelRequest {
+                requester_node_id: vec![1u8; 32],
+                target_node_id: vec![2u8; 32],
+                model: Some(crate::proto::node::OwnerControlModelRef {
+                    canonical_model_ref: "org/model:file.gguf".into(),
+                    instance_id: Some("instance-ambiguous".into()),
+                }),
+                profile: None,
+            }),
+            unload_model: Some(crate::proto::node::OwnerControlUnloadModelRequest {
+                requester_node_id: vec![1u8; 32],
+                target_node_id: vec![2u8; 32],
+                model: Some(crate::proto::node::OwnerControlModelRef {
+                    canonical_model_ref: "org/model:file.gguf".into(),
+                    instance_id: Some("instance-ambiguous-2".into()),
+                }),
+            }),
+            request_id: 301,
+            ..make_lifecycle_base(301)
+        };
+        assert!(
+            ambiguous.validate_frame().is_err(),
+            "multi-command envelopes must fail validation before command execution"
+        );
+
+        let malformed = vec![0x08, 0xff];
+        let malformed_decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::proto::node::OwnerControlRequest::decode(malformed.as_slice())
+        }));
+        assert!(malformed_decoded.is_ok());
+        assert!(malformed_decoded.expect("decode should not panic").is_err());
     }
 }

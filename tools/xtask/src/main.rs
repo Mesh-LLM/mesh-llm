@@ -30,6 +30,9 @@ fn run() -> DynResult<()> {
         [command, scope] if command == "repo-consistency" && scope == "publish-crates" => {
             repo_consistency::check_publish_crates_command()
         }
+        [command, scope] if command == "repo-consistency" && scope == "test-all-rust-crate-coverage" => {
+            repo_consistency::check_test_all_coverage_command()
+        }
         [command, scope, rest @ ..]
             if command == "release-attestation" && scope == "generate-keypair" =>
         {
@@ -44,7 +47,7 @@ fn run() -> DynResult<()> {
             attestation::inspect_release_attestation(rest)
         }
         _ => Err(
-            "usage:\n  cargo run -p xtask -- repo-consistency release-targets\n  cargo run -p xtask -- repo-consistency ci-crate-lists\n  cargo run -p xtask -- repo-consistency publish-crates\n  cargo run -p xtask -- release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo run -p xtask -- release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo run -p xtask -- release-attestation inspect --binary <path> [--public-key-file <path>] [--json]"
+            "usage:\n  cargo run -p xtask -- repo-consistency release-targets\n  cargo run -p xtask -- repo-consistency ci-crate-lists\n  cargo run -p xtask -- repo-consistency publish-crates\n  cargo run -p xtask -- repo-consistency test-all-rust-crate-coverage\n  cargo run -p xtask -- release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo run -p xtask -- release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo run -p xtask -- release-attestation inspect --binary <path> [--public-key-file <path>] [--json]"
                 .to_string()
                 .into(),
         ),

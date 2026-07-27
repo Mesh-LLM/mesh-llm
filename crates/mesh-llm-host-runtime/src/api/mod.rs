@@ -66,9 +66,10 @@ pub(crate) use self::status::classify_runtime_error;
 
 use self::state::ApiInner;
 use self::status::{
-    MeshModelPayload, OpenAiGuardrailsPayload, RuntimeLlamaPayload, RuntimeProcessesPayload,
-    RuntimeStatusPayload, StatusPayload, build_runtime_processes_payload,
-    build_runtime_stage_payloads, build_runtime_status_payload, runtime_stage_state_label,
+    IntentSummary, LifecycleInstancePayload, MeshModelPayload, OpenAiGuardrailsPayload,
+    RuntimeCapabilityFlags, RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload,
+    StatusPayload, build_runtime_processes_payload, build_runtime_stage_payloads,
+    build_runtime_status_payload, derive_daemon_state, runtime_stage_state_label,
     runtime_stage_wire_dtype_label,
 };
 use crate::mesh;
@@ -367,6 +368,10 @@ impl MeshApi {
         self.inner.lock().await.draft_name = Some(name);
     }
 
+    #[expect(
+        dead_code,
+        reason = "retained for embedded callers that toggle client presentation state"
+    )]
     pub async fn set_client(&self, is_client: bool) {
         let mut inner = self.inner.lock().await;
         inner.is_client = is_client;
@@ -909,6 +914,87 @@ impl MeshApi {
         append_external_inference_models(&mut serving_models, &plugin_models);
         let mut hosted_models = node.hosted_models().await;
         append_external_inference_models(&mut hosted_models, &plugin_models);
+        let peers = node.peers().await;
+
+        let local_serving = local_processes
+            .iter()
+            .any(|process| matches!(process.status.as_str(), "serving" | "ready"));
+        let plugin_ingress = !plugin_models.is_empty();
+        let proxying = plugin_ingress
+            || peers
+                .iter()
+                .any(|peer| !peer.http_routable_models().is_empty());
+        let lifecycle_instances = local_processes
+            .iter()
+            .filter_map(|process| {
+                process
+                    .instance_id
+                    .as_ref()
+                    .map(|instance_id| LifecycleInstancePayload {
+                        instance_id: instance_id.clone(),
+                        model_ref: process.name.clone(),
+                        lifecycle_state: match process.status.as_str() {
+                            "ready" | "serving" => "serving",
+                            "shutting down" => "draining",
+                            "exited" => "failed",
+                            "starting" => "loading",
+                            other => other,
+                        }
+                        .to_string(),
+                    })
+            })
+            .take(256)
+            .collect::<Vec<_>>();
+        let has_terminal_failure = lifecycle_instances
+            .iter()
+            .any(|instance| instance.lifecycle_state == "failed");
+        let accepting_local = node
+            .activity_policy_guard
+            .check_admission(crate::runtime::IngressType::LocalOpenAi)
+            == crate::runtime::AdmissionResult::Allowed;
+        let accepting_remote = node
+            .activity_policy_guard
+            .check_admission(crate::runtime::IngressType::RemoteQuicHttp)
+            == crate::runtime::AdmissionResult::Allowed;
+        let intents = node
+            .runtime_intents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let intent_summary = IntentSummary {
+            durable_count: intents
+                .iter()
+                .filter(|intent| intent.persistence == crate::runtime::IntentPersistence::Process)
+                .count(),
+            session_count: intents
+                .iter()
+                .filter(|intent| intent.persistence == crate::runtime::IntentPersistence::Session)
+                .count(),
+            recent_errors: intents
+                .iter()
+                .rev()
+                .filter_map(|intent| intent.last_error.clone())
+                .take(16)
+                .collect(),
+        };
+        runtime.daemon_state = Some(derive_daemon_state(
+            false,
+            has_terminal_failure,
+            node.activity_policy_guard.priority_degraded(),
+            local_serving,
+            proxying,
+            true,
+        ));
+        runtime.capabilities = Some(RuntimeCapabilityFlags {
+            worker_capable: !is_client,
+            local_serving,
+            proxying,
+            plugin_ingress,
+            accepting_local,
+            accepting_remote,
+        });
+        runtime.lifecycle_instances = lifecycle_instances;
+        runtime.intent_summary = Some(intent_summary);
 
         let mut payload = runtime_data::status_payload(runtime_data_collector.build_status_view(
             runtime_data::StatusViewInput {
@@ -938,7 +1024,7 @@ impl MeshApi {
                 nostr_discovery,
                 publication_state: publication_state.as_str().into(),
                 local_processes,
-                peers: node.peers().await,
+                peers,
                 wakeable_nodes,
                 routing_affinity,
                 hardware,

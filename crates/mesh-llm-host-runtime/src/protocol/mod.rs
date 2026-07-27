@@ -5,13 +5,12 @@ use crate::mesh::NodeRole;
 use crate::mesh::PeerAnnouncement;
 
 pub(crate) mod config_diagnostic;
-mod control_frames;
 pub(crate) mod convert;
 use anyhow::Result;
-pub(crate) use control_frames::*;
 pub(crate) use convert::*;
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
+pub(crate) use mesh_llm_protocol::protocol::{ControlFrameError, ValidateControlFrame};
 use prost::Message;
 
 #[cfg(test)]

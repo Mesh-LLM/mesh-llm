@@ -234,6 +234,7 @@ pub(crate) struct LocalAnnouncementData {
     gpu_mem_bandwidth_gbps: Option<String>,
     gpu_compute_tflops_fp32: Option<String>,
     gpu_compute_tflops_fp16: Option<String>,
+    inference_admission_state: Option<crate::proto::node::InferenceAdmissionState>,
 }
 
 pub(crate) struct RebroadcastAnnouncements {
@@ -283,6 +284,7 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.owner_summary != new.owner_summary
         || old.gpu_reserved_bytes != new.gpu_reserved_bytes
         || old.propagated_latency != new.propagated_latency
+        || old.inference_admission_state != new.inference_admission_state
 }
 
 pub(crate) fn merge_first_joined_mesh_ts(existing: &mut Option<u64>, incoming: Option<u64>) {
@@ -359,6 +361,9 @@ pub(super) fn apply_transitive_ann(
     existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
     existing.stage_status_list_supported = ann.stage_status_list_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+    if ann.inference_admission_state.is_some() {
+        existing.inference_admission_state = ann.inference_admission_state;
+    }
     if ann.experts_summary.is_some() {
         existing.experts_summary = ann.experts_summary.clone();
     }
@@ -795,6 +800,7 @@ impl Node {
         existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
         existing.stage_status_list_supported = ann.stage_status_list_supported;
         existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+        existing.inference_admission_state = ann.inference_admission_state;
         if ann.version.is_some() {
             existing.version = ann.version.clone();
         }
@@ -1010,6 +1016,13 @@ impl Node {
         append_external_inference_models(&mut serving_models, &plugin_models);
         let mut hosted_models = self.hosted_models.lock().await.clone();
         append_external_inference_models(&mut hosted_models, &plugin_models);
+        let activity_advertisement = self
+            .activity_policy_guard
+            .advertisement_decision(self.public_mesh);
+        if activity_advertisement.withdraw_model_availability {
+            serving_models.clear();
+            hosted_models.clear();
+        }
         let advertised_model_throughput = self
             .routing_metrics
             .advertisable_model_throughput(&hosted_models);
@@ -1072,6 +1085,7 @@ impl Node {
                 &self.gpu_compute_tflops_fp16,
             )
             .await,
+            inference_admission_state: activity_advertisement.admission_state,
         }
     }
 
@@ -1136,6 +1150,7 @@ impl Node {
             }),
             latency_age_ms: Some(latency.age_ms),
             latency_observer_id: latency.observer_id,
+            inference_admission_state: peer.inference_admission_state,
         }
     }
 
@@ -1196,6 +1211,7 @@ impl Node {
             latency_source: None,
             latency_age_ms: None,
             latency_observer_id: None,
+            inference_admission_state: data.inference_admission_state,
         }
     }
 

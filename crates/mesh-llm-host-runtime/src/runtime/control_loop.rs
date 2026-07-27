@@ -1,17 +1,21 @@
 /// Wait for either SIGINT (ctrl-c) or SIGTERM. Without this, an unhandled
 /// SIGTERM aborts the process before runtime cleanup can run.
 use super::{
-    DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL, MODEL_TARGET_RECONCILIATION_INTERVAL,
-    ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle, RunAutoRuntimeLifecycleContext,
-    RunAutoRuntimeLoopContext, RunAutoShutdownContext, RuntimeEvent,
-    ShutdownRuntimeLoadedModelsContext, cleanup_run_auto_runtime_dir,
-    dashboard_context_usage_source, emit_shutdown, model_target_reconciliation_policy,
-    publish_runtime_llama_slots, refresh_dashboard_context_usage_batch,
-    run_auto_handle_model_target_reconciliation_result, run_auto_handle_runtime_exit,
-    run_auto_load_runtime_model, run_auto_reconcile_model_targets,
-    run_auto_record_model_target_manual_unload, run_auto_unload_runtime_model,
-    set_openai_guardrail_policy_mode, shutdown_run_auto_services, shutdown_runtime_loaded_models,
-    shutdown_runtime_managed_models, unpublish_run_auto_nostr_listing,
+    DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL, IntentSource, MODEL_TARGET_RECONCILIATION_INTERVAL,
+    ModelIntent, ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle,
+    RunAutoRuntimeLifecycleContext, RunAutoRuntimeLoopContext, RunAutoShutdownContext,
+    RunAutoStartupTasksContext, RuntimeEvent, ShutdownRuntimeLoadedModelsContext, UnloadTarget,
+    advertise_run_auto_models, apply_startup_model_load_finished, cleanup_run_auto_runtime_dir,
+    current_time_secs, dashboard_context_usage_source, emit_shutdown,
+    model_target_reconciliation_policy, publish_runtime_llama_slots,
+    refresh_dashboard_context_usage_batch, resolve_eager_startup_models,
+    resolve_runtime_unload_target, run_auto_handle_model_target_reconciliation_result,
+    run_auto_handle_runtime_exit, run_auto_load_runtime_model, run_auto_model_identity,
+    run_auto_reconcile_model_targets, run_auto_record_model_target_manual_unload,
+    run_auto_unload_runtime_model, runtime_unload_candidates, set_openai_guardrail_policy_mode,
+    shutdown_run_auto_services, shutdown_runtime_loaded_models, shutdown_runtime_managed_models,
+    spawn_run_auto_startup_model_tasks, startup_default_backend_device, startup_launch_plan,
+    suppress_desired_for_resolved_unload_candidate, unpublish_run_auto_nostr_listing,
 };
 use crate::api;
 use crate::inference::skippy;
@@ -41,6 +45,30 @@ pub(super) async fn wait_shutdown_signal() -> &'static str {
     }
 }
 
+async fn drain_pending_startup_commands(
+    ctx: &mut RunAutoRuntimeLoopContext<'_>,
+    control_rx: &mut tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>,
+    model_intent_rx: &mut tokio::sync::mpsc::Receiver<ModelIntent>,
+) -> bool {
+    while let Ok(intent) = model_intent_rx.try_recv() {
+        run_auto_handle_model_intent(ctx, intent).await;
+    }
+    while let Ok(command) = control_rx.try_recv() {
+        if run_auto_handle_control_request(ctx, command).await {
+            return true;
+        }
+    }
+    false
+}
+
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "startup reconciliation intentionally keeps surface readiness, intent precedence, resolution, and launch ordering visible"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "startup reconciliation keeps the daemon-before-model ordering and shutdown ownership in one auditable orchestration boundary"
+)]
 pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecycleContext<'_>) {
     let RunAutoRuntimeLifecycleContext {
         options,
@@ -51,6 +79,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         control_rx,
         control_tx,
         runtime_event_rx,
+        model_intent_rx,
         runtime_state,
         console_state,
         runtime_data_producer,
@@ -61,9 +90,16 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
+        startup_specs,
+        tunnel_mgr,
+        skippy_telemetry,
+        api_port,
+        console_port,
+        interactive_started,
         lan_bootstrap_tasks,
         runtime,
     } = ctx;
+    let input_handler_enabled = runtime_state.input_handler_enabled;
     let mut loop_ctx = RunAutoRuntimeLoopContext {
         options,
         config,
@@ -86,9 +122,160 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         startup_ready_reporter,
         openai_guardrail_policy: &runtime_state.openai_guardrail_policy,
         model_target_reconciliation_policy: model_target_reconciliation_policy(config),
-        model_target_reconciliation_state: ModelTargetReconciliationState::default(),
+        model_target_reconciliation_state: ModelTargetReconciliationState::with_shared_history(
+            node.runtime_intents.clone(),
+        ),
     };
-    run_auto_runtime_event_loop(&mut loop_ctx, control_rx, runtime_event_rx).await;
+
+    // Seed startup config as desired state before any resolution I/O.
+    let mut startup_intent_ids = Vec::with_capacity(startup_specs.len());
+    for spec in startup_specs {
+        let model_ref = spec.model_ref.to_string_lossy().into_owned();
+        let intent_id = loop_ctx.model_target_reconciliation_state.add_desired(
+            &model_ref,
+            &spec.profile,
+            IntentSource::StartupConfig,
+        );
+        startup_intent_ids.push((intent_id, model_ref.clone(), spec.profile.clone()));
+        tracing::debug!(
+            model = %model_ref,
+            profile = %spec.profile,
+            "seeded startup config model as desired intent"
+        );
+    }
+
+    // Commands may arrive while eager models are resolving. Apply those
+    // higher-priority session intents before launching startup work so an
+    // unload/drain accepted during resolution can suppress the startup load.
+    let mut shutdown_requested =
+        drain_pending_startup_commands(&mut loop_ctx, control_rx, model_intent_rx).await;
+
+    let eligible_startup_specs = startup_specs
+        .iter()
+        .filter(|spec| {
+            let model_ref = spec.model_ref.to_string_lossy();
+            loop_ctx
+                .model_target_reconciliation_state
+                .is_desired(&model_ref, &spec.profile)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut eligible_startup_models = Vec::new();
+    if !shutdown_requested {
+        for spec in &eligible_startup_specs {
+            match resolve_eager_startup_models(options, config, std::slice::from_ref(spec)).await {
+                Ok(mut models) => {
+                    let model_ref = spec.model_ref.to_string_lossy();
+                    if let Some((intent_id, _, _)) =
+                        startup_intent_ids.iter().find(|(_, candidate, profile)| {
+                            candidate == &model_ref && profile == &spec.profile
+                        })
+                    {
+                        for model in &models {
+                            loop_ctx
+                                .model_target_reconciliation_state
+                                .retarget_intent_model_ref(intent_id, &model.declared_ref);
+                        }
+                    }
+                    eligible_startup_models.append(&mut models);
+                }
+                Err(error) => {
+                    let detail = format!("{error:#}");
+                    let model_ref = spec.model_ref.to_string_lossy().into_owned();
+                    if let Some((intent_id, _, _)) =
+                        startup_intent_ids.iter().find(|(_, candidate, profile)| {
+                            candidate == &model_ref && profile == &spec.profile
+                        })
+                    {
+                        loop_ctx
+                            .model_target_reconciliation_state
+                            .set_intent_error(intent_id, detail.clone());
+                    }
+                    if startup_ready_reporter.record_terminal_failure(&model_ref, &detail) {
+                        shutdown_requested = true;
+                    }
+                    let _ = emit_event(OutputEvent::Warning {
+                        message: format!(
+                            "Eager startup model '{model_ref}' failed to resolve after daemon surfaces became ready"
+                        ),
+                        context: Some(detail),
+                    });
+                }
+            }
+        }
+    }
+
+    // Re-check accepted commands after resolution and immediately before task
+    // creation. This closes the launch-boundary race for unload/drain intents
+    // that arrived while catalog or filesystem resolution was in progress.
+    shutdown_requested |=
+        drain_pending_startup_commands(&mut loop_ctx, control_rx, model_intent_rx).await;
+    eligible_startup_models.retain(|model| {
+        loop_ctx
+            .model_target_reconciliation_state
+            .is_desired(&model.declared_ref, &model.profile)
+    });
+
+    if !shutdown_requested && let Some(primary) = eligible_startup_models.first() {
+        for model in &eligible_startup_models {
+            loop_ctx
+                .model_target_reconciliation_state
+                .mark_load_started(&model.declared_ref, &model.profile);
+        }
+        let (eligible_primary_name, model_source) =
+            run_auto_model_identity(Some(primary), &primary.resolved_path);
+        advertise_run_auto_models(
+            node,
+            &eligible_startup_models,
+            &eligible_primary_name,
+            model_source,
+        )
+        .await;
+        let _ = emit_event(OutputEvent::LaunchPlan {
+            plan: startup_launch_plan(
+                &eligible_startup_models,
+                &eligible_primary_name,
+                api_port,
+                console_port,
+                options.headless,
+                config.gpu.parallel,
+                startup_default_backend_device(options.llama_flavor),
+            ),
+        });
+        spawn_run_auto_startup_model_tasks(RunAutoStartupTasksContext {
+            options,
+            config,
+            node,
+            tunnel_mgr,
+            startup_models: &eligible_startup_models,
+            primary_startup_model: Some(primary),
+            model_name: &eligible_primary_name,
+            model_path: &primary.resolved_path,
+            startup_ready_reporter,
+            target_tx,
+            managed_models: loop_ctx.managed_models,
+            next_runtime_instance_sequence: loop_ctx.next_runtime_instance_sequence,
+            runtime_capacity_ledger: loop_ctx.runtime_capacity_ledger,
+            runtime_instance_registry: loop_ctx.runtime_instance_registry,
+            dashboard_processes: loop_ctx.dashboard_processes,
+            dashboard_context_usage: loop_ctx.dashboard_context_usage,
+            input_handler_enabled,
+            openai_guardrail_policy: loop_ctx.openai_guardrail_policy,
+            console_state,
+            control_tx,
+            runtime_event_tx,
+            survey_telemetry,
+            skippy_telemetry,
+            api_port,
+            interactive_started,
+        })
+        .await;
+    }
+
+    if !shutdown_requested {
+        run_auto_runtime_event_loop(&mut loop_ctx, control_rx, runtime_event_rx, model_intent_rx)
+            .await;
+    }
 
     shutdown_run_auto_runtime(RunAutoShutdownContext {
         options,
@@ -178,6 +365,8 @@ pub(super) async fn run_auto_handle_control_request(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
     cmd: api::RuntimeControlRequest,
 ) -> bool {
+    use super::{IntentSource, ModelIntent};
+
     match cmd {
         api::RuntimeControlRequest::Join { invite_token, resp } => {
             let result = ctx.node.join_with_retry(&invite_token).await;
@@ -189,8 +378,14 @@ pub(super) async fn run_auto_handle_control_request(
             profile,
             resp,
         } => {
-            let result = run_auto_load_runtime_model(ctx, spec, profile).await;
-            let _ = resp.send(result);
+            let intent = ModelIntent::Load {
+                intent_id: None,
+                spec,
+                profile,
+                source: IntentSource::ApiLoad,
+                completion: Some(resp),
+            };
+            run_auto_handle_model_intent(ctx, intent).await;
             false
         }
         api::RuntimeControlRequest::Unload {
@@ -198,9 +393,19 @@ pub(super) async fn run_auto_handle_control_request(
             options,
             resp,
         } => {
-            let result = run_auto_unload_runtime_model(ctx, target.clone(), options).await;
-            run_auto_record_model_target_manual_unload(ctx, target.as_runtime_target(), &result);
-            let _ = resp.send(result);
+            let intent = ModelIntent::Unload {
+                intent_id: None,
+                canonical_model_ref: None,
+                target,
+                options,
+                source: IntentSource::ApiUnload,
+                completion: Some(resp),
+            };
+            run_auto_handle_model_intent(ctx, intent).await;
+            false
+        }
+        api::RuntimeControlRequest::PostIntent { intent } => {
+            run_auto_handle_model_intent(ctx, intent).await;
             false
         }
         api::RuntimeControlRequest::SetOpenAiGuardrailMode { mode, resp } => {
@@ -214,6 +419,193 @@ pub(super) async fn run_auto_handle_control_request(
             let _ = flush_output().await;
             emit_shutdown(None).await;
             true
+        }
+    }
+}
+
+pub(super) async fn run_auto_handle_model_intent(
+    ctx: &mut RunAutoRuntimeLoopContext<'_>,
+    intent: ModelIntent,
+) {
+    use super::ModelIntent;
+
+    match intent {
+        ModelIntent::Load {
+            intent_id,
+            spec,
+            profile,
+            source,
+            completion,
+        } => {
+            if ctx.options.client {
+                if let Some(tx) = completion {
+                    let _ = tx.send(Err(anyhow::anyhow!(
+                        "runtime mode client does not allow local model loading"
+                    )));
+                }
+                return;
+            }
+            if ctx
+                .model_target_reconciliation_state
+                .is_load_pending(&spec, &profile)
+            {
+                if let Some(tx) = completion {
+                    ctx.model_target_reconciliation_state
+                        .stack_load_completion(&spec, &profile, tx);
+                }
+                return;
+            }
+
+            let intent_id = ctx
+                .model_target_reconciliation_state
+                .add_desired_with_id(&spec, &profile, source, intent_id);
+            if !ctx
+                .model_target_reconciliation_state
+                .is_effective_intent(&intent_id, &spec, &profile)
+            {
+                if let Some(tx) = completion {
+                    let _ = tx.send(Err(anyhow::anyhow!(
+                        "model load intent is suppressed by a higher-priority desired state"
+                    )));
+                }
+                return;
+            }
+            if let Some(tx) = completion {
+                ctx.model_target_reconciliation_state
+                    .stack_load_completion(&spec, &profile, tx);
+            }
+
+            let result = run_auto_load_runtime_model(ctx, spec.clone(), profile.clone()).await;
+            match &result {
+                Ok(response) => {
+                    ctx.model_target_reconciliation_state
+                        .record_load_success(&spec, &profile);
+                    ctx.model_target_reconciliation_state.notify_load_success(
+                        &spec,
+                        &profile,
+                        response.clone(),
+                    );
+                    ctx.model_target_reconciliation_state
+                        .retire_one_shot_present(&intent_id);
+                }
+                Err(e) => {
+                    ctx.model_target_reconciliation_state
+                        .set_intent_error(&intent_id, e.to_string());
+                    ctx.model_target_reconciliation_state
+                        .retire_one_shot_present(&intent_id);
+                    ctx.model_target_reconciliation_state
+                        .notify_load_failure(&spec, &profile, e);
+                }
+            }
+        }
+        intent @ ModelIntent::Unload { .. } => {
+            run_auto_handle_unload_intent(ctx, intent).await;
+        }
+    }
+}
+
+async fn run_auto_handle_unload_intent(
+    ctx: &mut RunAutoRuntimeLoopContext<'_>,
+    intent: ModelIntent,
+) {
+    let ModelIntent::Unload {
+        intent_id,
+        canonical_model_ref,
+        target,
+        options,
+        source,
+        completion,
+    } = intent
+    else {
+        return;
+    };
+    let unload_key = match &target {
+        UnloadTarget::Model(m) => m.clone(),
+        UnloadTarget::Instance(i) => i.clone(),
+    };
+
+    if ctx
+        .model_target_reconciliation_state
+        .is_unload_pending(&unload_key)
+    {
+        if let Some(tx) = completion {
+            ctx.model_target_reconciliation_state
+                .stack_unload_completion(&unload_key, tx);
+        }
+        return;
+    }
+
+    let resolved_unload = resolve_runtime_unload_target(
+        target.as_runtime_target(),
+        runtime_unload_candidates(ctx.runtime_models, ctx.managed_models),
+    )
+    .ok();
+    let intent_id = if let Some(candidate) = &resolved_unload {
+        suppress_desired_for_resolved_unload_candidate(
+            &mut ctx.model_target_reconciliation_state,
+            candidate,
+            source,
+            matches!(source, IntentSource::OwnerDrain),
+            intent_id,
+        )
+    } else {
+        let (intent_model, instance_target) = match &target {
+            UnloadTarget::Model(model) => {
+                (canonical_model_ref.unwrap_or_else(|| model.clone()), None)
+            }
+            UnloadTarget::Instance(instance) => (
+                canonical_model_ref.unwrap_or_else(|| instance.clone()),
+                Some(instance.clone()),
+            ),
+        };
+        let profile = ctx
+            .model_target_reconciliation_state
+            .desired_profile(&intent_model)
+            .unwrap_or_default()
+            .to_string();
+        ctx.model_target_reconciliation_state
+            .suppress_desired_with_id(
+                &intent_model,
+                &profile,
+                instance_target,
+                source,
+                matches!(source, IntentSource::OwnerDrain),
+                intent_id,
+            )
+    };
+
+    if let Some(tx) = completion {
+        ctx.model_target_reconciliation_state
+            .stack_unload_completion(&unload_key, tx);
+    }
+
+    let result = run_auto_unload_runtime_model(ctx, target.clone(), options).await;
+    run_auto_record_model_target_manual_unload(
+        ctx,
+        resolved_unload.as_ref(),
+        target.as_runtime_target(),
+        &result,
+    );
+    match &result {
+        Ok(response) => {
+            if matches!(source, IntentSource::OwnerDrain) {
+                ctx.model_target_reconciliation_state
+                    .transition_drain_to_absent(
+                        &intent_id,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    );
+            }
+            ctx.model_target_reconciliation_state
+                .notify_unload_success(&unload_key, response.clone());
+        }
+        Err(e) => {
+            ctx.model_target_reconciliation_state
+                .set_intent_error(&intent_id, e.to_string());
+            ctx.model_target_reconciliation_state
+                .notify_unload_failure(&unload_key, e);
         }
     }
 }
@@ -282,6 +674,7 @@ pub(super) async fn run_auto_runtime_event_loop(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
     control_rx: &mut tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>,
     runtime_event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RuntimeEvent>,
+    model_intent_rx: &mut tokio::sync::mpsc::Receiver<ModelIntent>,
 ) {
     let mut dashboard_context_usage_tick =
         tokio::time::interval(DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL);
@@ -340,10 +733,27 @@ pub(super) async fn run_auto_runtime_event_loop(
                             result,
                         );
                     }
+                    RuntimeEvent::StartupModelLoadFinished {
+                        model_ref,
+                        profile,
+                        result,
+                    } => {
+                        apply_startup_model_load_finished(
+                            &mut ctx.model_target_reconciliation_state,
+                            &ctx.model_target_reconciliation_policy,
+                            &model_ref,
+                            &profile,
+                            result,
+                            current_time_secs(),
+                        );
+                    }
                     RuntimeEvent::Exited { instance_id, model, port } => {
                         run_auto_handle_runtime_exit(ctx, instance_id, model, port).await;
                     }
                 }
+            }
+            Some(intent) = model_intent_rx.recv() => {
+                run_auto_handle_model_intent(ctx, intent).await;
             }
         }
     }

@@ -67,6 +67,11 @@ pub(super) enum RuntimeEvent {
         profile: String,
         result: std::result::Result<api::RuntimeLoadResponse, String>,
     },
+    StartupModelLoadFinished {
+        model_ref: String,
+        profile: String,
+        result: std::result::Result<api::RuntimeLoadResponse, String>,
+    },
 }
 
 pub(super) enum LocalRuntimeBackendHandle {
@@ -179,8 +184,11 @@ pub(super) fn current_time_unix_ms() -> u64 {
 
 pub(super) struct ManagedModelController {
     pub(super) model_name: String,
+    pub(super) profile: String,
     pub(super) stop_tx: tokio::sync::watch::Sender<bool>,
     pub(super) task: tokio::task::JoinHandle<()>,
+    pub(super) lifecycle: std::sync::Arc<tokio::sync::Mutex<super::InstanceLifecycleRecord>>,
+    pub(super) port: std::sync::Arc<std::sync::atomic::AtomicU16>,
 }
 
 pub(super) struct LocalRuntimeModelStartSpec<'a> {

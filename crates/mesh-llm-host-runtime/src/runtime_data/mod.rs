@@ -434,6 +434,10 @@ pub(crate) mod tests {
                 openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
+                daemon_state: None,
+                capabilities: None,
+                lifecycle_instances: vec![],
+                intent_summary: None,
             },
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
@@ -545,6 +549,7 @@ pub(crate) mod tests {
             selected_path: None,
             propagated_latency: None,
             owner_summary: crate::crypto::OwnershipSummary::default(),
+            inference_admission_state: None,
         };
         let hardware = collector.build_hardware_view(HardwareViewInput {
             gpu_name: None,
@@ -684,6 +689,7 @@ pub(crate) mod tests {
             selected_path: None,
             propagated_latency: None,
             owner_summary: crate::crypto::OwnershipSummary::default(),
+            inference_admission_state: None,
         };
         let hardware = collector.build_hardware_view(HardwareViewInput {
             gpu_name: None,

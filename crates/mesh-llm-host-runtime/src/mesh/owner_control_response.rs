@@ -17,6 +17,10 @@ pub(super) fn apply_response_envelope(
             watch_config: None,
             apply_config: Some(apply_config),
             refresh_inventory: None,
+            load_model: None,
+            unload_model: None,
+            ensure_model: None,
+            drain_model: None,
         }),
         error: None,
     }

@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+source "$ROOT/scripts/lib/cuda-toolkit.sh"
+
 LLAMA_WORKDIR="${LLAMA_WORKDIR:-$ROOT/.deps/llama.cpp}"
 LLAMA_BUILD_ROOT="${MESH_LLM_LLAMA_BUILD_ROOT:-$ROOT/.deps/llama-build}"
 LLAMA_BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-${LLAMA_BACKEND:-cpu}}}"
@@ -179,7 +181,14 @@ fi
 
 case "$LLAMA_BACKEND" in
   cuda)
+    configure_cuda_toolkit_env || true
     CMAKE_ARGS+=(-DGGML_CUDA=ON)
+    if [[ -n "${CUDACXX:-}" ]]; then
+      CMAKE_ARGS+=(-DCMAKE_CUDA_COMPILER="$CUDACXX")
+    fi
+    if [[ -n "${CUDAToolkit_ROOT:-}" ]]; then
+      CMAKE_ARGS+=(-DCUDAToolkit_ROOT="$CUDAToolkit_ROOT")
+    fi
     CUDA_ARCHITECTURES="${LLAMA_STAGE_CUDA_ARCHITECTURES:-${SKIPPY_CUDA_ARCHITECTURES:-}}"
     if [[ -n "$CUDA_ARCHITECTURES" ]]; then
       CMAKE_ARGS+=(-DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES")

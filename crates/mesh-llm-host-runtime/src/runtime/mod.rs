@@ -1,17 +1,20 @@
+pub(crate) mod activity_policy;
 mod auto_join;
 mod capacity;
 pub(crate) mod config_state;
 mod context_planning;
 mod control_loop;
+mod daemon_startup;
 mod dashboard;
 mod discovery;
 pub mod instance;
+mod instance_lifecycle;
 mod interactive;
 mod local;
 mod local_package;
 mod local_split;
 mod model_lifecycle;
-mod model_target_reconciliation;
+pub(crate) mod model_reconciliation;
 mod options;
 mod proxy;
 mod publication;
@@ -37,6 +40,10 @@ use self::capacity::{
 };
 use self::context_planning::RuntimeResourcePlanningProfile;
 use self::discovery::{lan_rediscovery, nostr_rediscovery, start_new_mesh};
+pub(crate) use self::instance_lifecycle::{
+    DrainCoordinator, DrainResult, InstanceLifecycleRecord, InstanceLifecycleState,
+    InstanceRequestGuard,
+};
 use self::interactive::InitialPromptMode;
 use self::local::{
     LocalRuntimeModelHandle, LocalRuntimeModelStartSpec, ManagedModelController,
@@ -49,10 +56,11 @@ use self::local::{
     start_runtime_local_model, start_runtime_split_model, startup_runtime_plan,
     stop_split_generation_cleanup, withdraw_advertised_model,
 };
-use self::model_target_reconciliation::{
+pub(crate) use self::model_reconciliation::{
+    DesiredRuntimeIntent, IntentPersistence, IntentSource, ModelIntent,
     ModelTargetReconciliationAction, ModelTargetReconciliationCandidate,
     ModelTargetReconciliationCapacityState, ModelTargetReconciliationInput,
-    ModelTargetReconciliationPolicy, ModelTargetReconciliationState,
+    ModelTargetReconciliationPolicy, ModelTargetReconciliationState, current_time_secs,
     plan_model_target_reconciliation,
 };
 pub use self::options::{MeshGuardrailMode, RuntimeOptions, RuntimeSurface};
@@ -60,7 +68,9 @@ use self::proxy::{api_proxy, bootstrap_proxy};
 #[cfg(test)]
 pub(crate) use self::release_attestation::assert_release_attestation_reports_missing_for_unstamped_binary;
 use mesh_llm_events::{ConsoleSessionMode, sort_dashboard_endpoint_rows};
+pub(crate) use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
 
+pub(crate) use self::activity_policy::{ActivityPolicyGuard, AdmissionResult, IngressType};
 pub use self::auto_join::console_session_mode_for_runtime_surface;
 use self::auto_join::*;
 use self::control_loop::*;

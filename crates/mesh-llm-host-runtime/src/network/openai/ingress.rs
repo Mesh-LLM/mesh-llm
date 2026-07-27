@@ -17,9 +17,10 @@ enum AutoRouteResolution {
     MediaUnsupported,
 }
 
+/// Result of routing a request for a model with no available local candidates.
+#[allow(dead_code)] // single-variant enum preserved for future extension if fallback behavior is needed back
 enum MissingModelRouteResult {
     Routed,
-    Fallback(tokio::net::TcpStream),
 }
 
 struct IngressRouteContext<'a> {
@@ -38,6 +39,22 @@ struct AutoRouteDecision {
     effective_model: Option<String>,
     classification: Option<router::Classification>,
     required_tokens: Option<u32>,
+}
+
+/// Check activity policy admission and reject with 503 if paused.
+async fn check_activity_admission(
+    tcp_stream: tokio::net::TcpStream,
+    guard: &crate::runtime::ActivityPolicyGuard,
+    ingress_type: crate::runtime::IngressType,
+) -> Result<tokio::net::TcpStream, ()> {
+    match guard.check_admission(ingress_type) {
+        crate::runtime::AdmissionResult::Allowed => Ok(tcp_stream),
+        crate::runtime::AdmissionResult::Paused { reason, .. } => {
+            tracing::debug!(reason, "Ingress rejected by activity policy");
+            let _ = proxy::send_503(tcp_stream, &format!("inference paused: {reason}")).await;
+            Err(())
+        }
+    }
 }
 
 /// Parse a model identifier that may include a profile suffix.
@@ -434,6 +451,7 @@ async fn route_missing_local_model(
     model_name: &str,
     required_tokens: Option<u32>,
 ) -> MissingModelRouteResult {
+    // Try remote mesh first.
     if let Some(mesh_targets) = remote_mesh_targets(ctx, model_name).await {
         let routed = proxy::route_model_request(
             ctx.node.clone(),
@@ -449,12 +467,41 @@ async fn route_missing_local_model(
         return MissingModelRouteResult::Routed;
     }
 
+    // Try plugin dispatch (admission-checked inside). Returns Routed when a plugin manager exists.
     if ctx.plugin_manager.is_some() {
         return try_route_plugin_model(ctx, tcp_stream, request, model_name).await;
     }
 
-    tracing::debug!("Model '{}' not found, trying first available", model_name);
-    MissingModelRouteResult::Fallback(tcp_stream)
+    // No remote mesh or plugins configured. Check if the model is known locally but unavailable
+    // (e.g., loading/draining/failed with all-None candidates). Return 503 for these cases so
+    // clients can retry; return 404 only when the model truly doesn't exist anywhere.
+    if has_local_unavailable_candidates(ctx.targets, model_name) {
+        let _ = proxy::send_503(
+            tcp_stream,
+            &format!("model '{model_name}' is unavailable locally (loading or draining)"),
+        )
+        .await;
+        return MissingModelRouteResult::Routed;
+    }
+
+    // Model not found anywhere — return 404. This replaces the old fallback behavior that would
+    // route to an arbitrary target, which was confusing when no host served this model.
+    let _ = proxy::send_error(
+        tcp_stream,
+        404,
+        &format!("model '{model_name}' not found (no local or remote host serving this model)"),
+    )
+    .await;
+    MissingModelRouteResult::Routed
+}
+
+/// Check whether the model is known locally but currently unavailable — all local candidates are None.
+fn has_local_unavailable_candidates(targets: &election::ModelTargets, model_name: &str) -> bool {
+    let cands = targets.candidates(model_name);
+    !cands.is_empty()
+        && cands
+            .iter()
+            .all(|t| matches!(t, election::InferenceTarget::None))
 }
 
 async fn remote_mesh_targets(
@@ -482,6 +529,18 @@ async fn try_route_plugin_model(
     request: &proxy::BufferedHttpRequest,
     model_name: &str,
 ) -> MissingModelRouteResult {
+    // Admission check for plugin dispatch ingress.
+    match check_activity_admission(
+        tcp_stream,
+        &ctx.node.activity_policy_guard,
+        crate::runtime::IngressType::PluginDispatch,
+    )
+    .await
+    {
+        Ok(stream) => tcp_stream = stream,
+        Err(()) => return MissingModelRouteResult::Routed,
+    }
+
     let plugin_manager = ctx
         .plugin_manager
         .expect("plugin route called without plugin manager");
@@ -509,14 +568,31 @@ async fn try_route_plugin_model(
             }
             MissingModelRouteResult::Routed
         }
-        Ok(None) => MissingModelRouteResult::Fallback(tcp_stream),
+        Ok(None) => {
+            // Plugin manager exists but doesn't serve this model — send 404.
+            let _ = proxy::send_error(
+                tcp_stream,
+                404,
+                &format!(
+                    "model '{model_name}' not found (no local or remote host serving this model)"
+                ),
+            )
+            .await;
+            MissingModelRouteResult::Routed
+        }
         Err(error) => {
             tracing::warn!(
                 "API proxy: failed to resolve external endpoint for model '{}': {}",
                 model_name,
                 error
             );
-            MissingModelRouteResult::Fallback(tcp_stream)
+            // Plugin resolution failure — degrade gracefully with 503. The daemon stays alive; only the affected capability is degraded.
+            let _ = proxy::send_503(
+                tcp_stream,
+                &format!("plugin endpoint for model '{model_name}' unavailable"),
+            )
+            .await;
+            MissingModelRouteResult::Routed
         }
     }
 }
@@ -528,56 +604,41 @@ async fn route_request(
     effective_model: Option<&str>,
     required_tokens: Option<u32>,
 ) {
-    let mut tcp_stream = Some(tcp_stream);
-    let target = if let Some(model_name) = effective_model {
+    if let Some(model_name) = effective_model {
+        // Model explicitly requested. Check local candidates first.
         if !has_available_candidates(ctx.targets, model_name) {
-            match route_missing_local_model(
-                tcp_stream
-                    .take()
-                    .expect("route_request stream already taken"),
-                request,
-                ctx,
-                model_name,
-                required_tokens,
-            )
-            .await
-            {
-                MissingModelRouteResult::Routed => return,
-                MissingModelRouteResult::Fallback(stream) => tcp_stream = Some(stream),
-            }
-            first_available_target(ctx.targets)
-        } else {
-            if ctx.targets.candidates(model_name).len() > 1 {
-                request.ensure_body_json();
-            }
-            let routed = proxy::route_model_request(
-                ctx.node.clone(),
-                tcp_stream
-                    .take()
-                    .expect("route_request stream already taken"),
-                ctx.targets,
-                model_name,
-                request,
-                required_tokens,
-                ctx.affinity,
-            )
-            .await;
-            debug_assert!(routed);
+            route_missing_local_model(tcp_stream, request, ctx, model_name, required_tokens).await;
             return;
         }
-    } else {
-        first_available_target(ctx.targets)
-    };
 
-    let _ = proxy::route_to_target(
-        ctx.node.clone(),
-        tcp_stream.expect("route_request stream already taken"),
-        effective_model,
-        target,
-        &request.raw,
-        request.response_adapter,
-    )
-    .await;
+        // Local candidates available — route normally.
+        if ctx.targets.candidates(model_name).len() > 1 {
+            request.ensure_body_json();
+        }
+        let routed = proxy::route_model_request(
+            ctx.node.clone(),
+            tcp_stream,
+            ctx.targets,
+            model_name,
+            request,
+            required_tokens,
+            ctx.affinity,
+        )
+        .await;
+        debug_assert!(routed);
+    } else {
+        // No model specified — generic fallback routing to first available target.
+
+        let _ = proxy::route_to_target(
+            ctx.node.clone(),
+            tcp_stream,
+            None,
+            first_available_target(ctx.targets),
+            &request.raw,
+            request.response_adapter,
+        )
+        .await;
+    }
 }
 
 async fn prepare_auto_route_decision(
@@ -730,6 +791,18 @@ async fn handle_buffered_api_request(
     mut request: proxy::BufferedHttpRequest,
     ctx: ProxyConnectionContext<'_>,
 ) {
+    // Admission check for local OpenAI ingress.
+    let tcp_stream = match check_activity_admission(
+        tcp_stream,
+        &ctx.route.node.activity_policy_guard,
+        crate::runtime::IngressType::LocalOpenAi,
+    )
+    .await
+    {
+        Ok(stream) => stream,
+        Err(()) => return,
+    };
+
     let tcp_stream = match maybe_handle_control_request(tcp_stream, &request, &ctx).await {
         Ok(()) => return,
         Err(tcp_stream) => tcp_stream,
@@ -968,5 +1041,155 @@ mod tests {
         let (model_ref, profile) = parse_model_with_profile("model#with#hash#profile");
         assert_eq!(model_ref, "model#with#hash");
         assert_eq!(profile, "profile");
+    }
+
+    // --- Routing behavior tests for model-independent daemon support ---
+
+    #[test]
+    fn has_local_unavailable_returns_false_for_empty_targets() {
+        let targets = election::ModelTargets::default();
+        assert!(!has_local_unavailable_candidates(&targets, "nonexistent"));
+    }
+
+    #[test]
+    fn has_local_unavailable_returns_true_when_all_none() {
+        let mut targets = election::ModelTargets::default();
+        targets.targets.insert(
+            "loading-model".to_string(),
+            vec![
+                election::InferenceTarget::None,
+                election::InferenceTarget::None,
+            ],
+        );
+        assert!(has_local_unavailable_candidates(&targets, "loading-model"));
+    }
+
+    #[test]
+    fn has_local_unavailable_returns_false_when_any_available() {
+        let mut targets = election::ModelTargets::default();
+        targets.targets.insert(
+            "partial-model".to_string(),
+            vec![
+                election::InferenceTarget::None,
+                election::InferenceTarget::Local(9337),
+            ],
+        );
+        assert!(!has_local_unavailable_candidates(&targets, "partial-model"));
+    }
+
+    #[test]
+    fn callable_models_excludes_all_none_targets() {
+        let mut targets = election::ModelTargets::default();
+        // Available model - included in callable list
+        targets.targets.insert(
+            "available".to_string(),
+            vec![election::InferenceTarget::Local(9337)],
+        );
+        // Unavailable model (loading/draining) - excluded from callable list
+        targets.targets.insert(
+            "unavailable".to_string(),
+            vec![
+                election::InferenceTarget::None,
+                election::InferenceTarget::None,
+            ],
+        );
+
+        let models = callable_models(&targets);
+        assert!(models.contains(&"available".to_string()));
+        assert!(!models.contains(&"unavailable".to_string()));
+    }
+
+    #[test]
+    fn callable_models_returns_empty_when_no_targets() {
+        let targets = election::ModelTargets::default();
+        let models = callable_models(&targets);
+        assert!(models.is_empty());
+    }
+
+    // --- Daemon state derivation tests for plugin-only and remote-only daemons ---
+
+    #[test]
+    fn daemon_ready_proxying_when_only_plugins_available() {
+        use crate::api::status::{DaemonState, derive_daemon_state};
+
+        assert_eq!(
+            derive_daemon_state(
+                false, // shutdown_requested
+                false, // has_terminal_failure
+                false, // priority_degraded
+                false, // local_serving - no local models
+                true,  // proxying - plugin endpoints available for routing
+                true,  // listeners_ready
+            ),
+            DaemonState::ReadyProxying,
+        );
+    }
+
+    #[test]
+    fn daemon_ready_proxying_when_only_remote_mesh_available() {
+        use crate::api::status::{DaemonState, derive_daemon_state};
+
+        assert_eq!(
+            derive_daemon_state(
+                false, // shutdown_requested
+                false, // has_terminal_failure
+                false, // priority_degraded
+                false, // local_serving - no local models
+                true,  // proxying - remote mesh targets available for routing
+                true,  // listeners_ready
+            ),
+            DaemonState::ReadyProxying,
+        );
+    }
+
+    #[test]
+    fn daemon_degraded_on_terminal_failure_not_killed() {
+        use crate::api::status::{DaemonState, derive_daemon_state};
+
+        assert_eq!(
+            derive_daemon_state(
+                false, // shutdown_requested - NOT stopping
+                true,  // has_terminal_failure - model failed
+                false, // priority_degraded
+                false, // local_serving
+                true,  // proxying still works for other capabilities
+                true,  // listeners_ready
+            ),
+            DaemonState::Degraded,
+        );
+    }
+
+    #[test]
+    fn daemon_stopping_only_when_shutdown_requested() {
+        use crate::api::status::{DaemonState, derive_daemon_state};
+
+        assert_eq!(
+            derive_daemon_state(
+                true,  // shutdown_requested - explicitly stopping
+                false, // has_terminal_failure
+                false, // priority_degraded
+                true,  // local_serving (irrelevant when stopping)
+                true,  // proxying (irrelevant when stopping)
+                true,  // listeners_ready
+            ),
+            DaemonState::Stopping,
+        );
+    }
+
+    #[test]
+    fn daemon_ready_idle_when_no_models_but_listeners_up() {
+        use crate::api::status::{DaemonState, derive_daemon_state};
+
+        assert_eq!(
+            derive_daemon_state(
+                false, // shutdown_requested
+                false, // has_terminal_failure
+                false, // priority_degraded
+                false, // local_serving - no models loaded yet (on-demand mode)
+                false, // proxying - not yet routing to mesh or plugins
+                true,  // listeners_ready - HTTP listeners are up and accepting connections
+            ),
+            DaemonState::ReadyIdle,
+        );
     }
 }

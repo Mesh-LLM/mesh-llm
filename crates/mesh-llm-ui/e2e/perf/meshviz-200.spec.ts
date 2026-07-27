@@ -175,13 +175,17 @@ test('keeps in-flight traffic packets aligned during live panning', async ({ pag
   const box = await canvas.boundingBox()
   if (!box) throw new Error('Expected MeshViz canvas to have a bounding box')
 
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  const packetLayer = page.getByTestId('mesh-packet-layer')
+
+  await canvas.hover({ position: { x: box.width / 2, y: box.height / 2 } })
+  const preWheelLayerTransform = await packetLayer.evaluate((element) => element.style.transform)
+  const liveScaleTransformPromise = waitForLivePacketLayerScale(page, preWheelLayerTransform)
   for (let index = 0; index < 4; index += 1) {
     await page.mouse.wheel(0, -120)
   }
-  await expect
-    .poll(async () => page.getByTestId('mesh-packet-layer').evaluate((element) => element.style.transform))
-    .toContain('scale(')
+  const liveScaleTransform = await liveScaleTransformPromise
+  expect(liveScaleTransform).toContain('scale(')
+  expect(liveScaleTransform).not.toBe(preWheelLayerTransform)
 
   await page.keyboard.press('z')
 
@@ -189,7 +193,6 @@ test('keeps in-flight traffic packets aligned during live panning', async ({ pag
   await expect.poll(async () => page.locator('.mesh-packet').count(), { timeout: 10_000 }).toBeGreaterThan(0)
   await expect(packet).toBeVisible()
 
-  const packetLayer = page.getByTestId('mesh-packet-layer')
   const initialPacketPosition = parseCssTranslate(await packet.evaluate((element) => element.style.transform))
 
   const panStart = await findEmptyCanvasPoint(page)
@@ -298,6 +301,28 @@ async function findEmptyCanvasPoint(page: Page): Promise<CssTranslate> {
 
     throw new Error('Expected an empty MeshViz canvas point')
   })
+}
+
+function waitForLivePacketLayerScale(page: Page, baselineTransform: string): Promise<string> {
+  return page
+    .waitForFunction(
+      (previousTransform) => {
+        const transform = document.querySelector<HTMLElement>('[data-testid="mesh-packet-layer"]')?.style.transform
+
+        return transform?.includes('scale(') && transform !== previousTransform ? transform : undefined
+      },
+      baselineTransform,
+      { polling: 'raf', timeout: 5_000 }
+    )
+    .then(async (handle) => {
+      const transform = await handle.jsonValue()
+
+      if (typeof transform !== 'string') {
+        throw new Error(`Expected live packet layer scale transform, got: ${String(transform)}`)
+      }
+
+      return transform
+    })
 }
 
 function parseCssTranslate(transform: string): CssTranslate {

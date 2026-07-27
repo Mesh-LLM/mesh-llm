@@ -104,6 +104,18 @@ async fn handle_inbound_http_stream(
     quic_recv: iroh::endpoint::RecvStream,
     http_port: u16,
 ) -> Result<()> {
+    // Admission check for remote QUIC HTTP ingress.
+    match node
+        .activity_policy_guard
+        .check_admission(crate::runtime::IngressType::RemoteQuicHttp)
+    {
+        crate::runtime::AdmissionResult::Allowed => {}
+        crate::runtime::AdmissionResult::Paused { reason, .. } => {
+            tracing::debug!(reason, "Inbound HTTP tunnel rejected by activity policy");
+            anyhow::bail!("remote inference paused: {reason}");
+        }
+    }
+
     tracing::info!("Inbound HTTP tunnel stream -> API proxy :{http_port}");
     let tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
     tcp_stream.set_nodelay(true)?;
@@ -119,6 +131,21 @@ async fn handle_inbound_stage_transport(
     quic_send: iroh::endpoint::SendStream,
     mut quic_recv: iroh::endpoint::RecvStream,
 ) -> Result<()> {
+    // Admission check for inbound stage transport ingress.
+    match node
+        .activity_policy_guard
+        .check_admission(crate::runtime::IngressType::StageTransport)
+    {
+        crate::runtime::AdmissionResult::Allowed => {}
+        crate::runtime::AdmissionResult::Paused { reason, .. } => {
+            tracing::debug!(
+                reason,
+                "Inbound stage transport rejected by activity policy"
+            );
+            anyhow::bail!("stage transport paused: {reason}");
+        }
+    }
+
     let buf = read_len_prefixed(&mut quic_recv).await?;
     let open = skippy_protocol::proto::stage::StageTransportOpen::decode(buf.as_slice())
         .map_err(|e| anyhow::anyhow!("StageTransportOpen decode error: {e}"))?;

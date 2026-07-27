@@ -56,6 +56,17 @@ message PeerAnnouncement {
   optional SignedMeshGenesisPolicy genesis_policy = 46;
   optional ReleaseBuildAttestation release_attestation = 47;
   optional DirectNodeAdmissionProof direct_admission_proof = 48;
+  // Inference admission state advertised by this peer (additive; older nodes ignore).
+  // Missing/unset means unspecified/legacy behavior.
+  optional InferenceAdmissionState inference_admission_state = 49;
+}
+
+enum InferenceAdmissionState {
+  INFERENCE_ADMISSION_STATE_UNSPECIFIED = 0;
+  INFERENCE_ADMISSION_STATE_ACCEPTING = 1;
+  INFERENCE_ADMISSION_STATE_ACCEPTING_DEPRIORITIZED = 2;
+  INFERENCE_ADMISSION_STATE_REMOTE_PAUSED = 3;
+  INFERENCE_ADMISSION_STATE_ALL_PAUSED = 4;
 }
 
 enum LatencySource {
@@ -483,6 +494,10 @@ message OwnerControlRequest {
   OwnerControlWatchConfigRequest watch_config = 3;
   OwnerControlApplyConfigRequest apply_config = 4;
   OwnerControlRefreshInventoryRequest refresh_inventory = 5;
+  OwnerControlLoadModelRequest load_model = 6;
+  OwnerControlUnloadModelRequest unload_model = 7;
+  OwnerControlEnsureModelRequest ensure_model = 8;
+  OwnerControlDrainModelRequest drain_model = 9;
 }
 
 message OwnerControlResponse {
@@ -491,6 +506,10 @@ message OwnerControlResponse {
   OwnerControlWatchConfigResponse watch_config = 3;
   OwnerControlApplyConfigResponse apply_config = 4;
   OwnerControlRefreshInventoryResponse refresh_inventory = 5;
+  OwnerControlLoadModelResponse load_model = 6;
+  OwnerControlUnloadModelResponse unload_model = 7;
+  OwnerControlEnsureModelResponse ensure_model = 8;
+  OwnerControlDrainModelResponse drain_model = 9;
 }
 
 message OwnerControlError {
@@ -558,6 +577,62 @@ message OwnerControlApplyConfigResponse {
 message OwnerControlRefreshInventoryRequest {
   bytes requester_node_id = 1;            // exactly 32 bytes
   bytes target_node_id = 2;               // exactly 32 bytes
+}
+
+message OwnerControlModelRef {
+  string canonical_model_ref = 1;
+  optional string instance_id = 2;
+}
+
+message OwnerControlLoadModelRequest {
+  bytes requester_node_id = 1;
+  bytes target_node_id = 2;
+  OwnerControlModelRef model = 3;
+  optional string profile = 4;
+}
+
+message OwnerControlUnloadModelRequest {
+  bytes requester_node_id = 1;
+  bytes target_node_id = 2;
+  OwnerControlModelRef model = 3;
+}
+
+message OwnerControlEnsureModelRequest {
+  bytes requester_node_id = 1;
+  bytes target_node_id = 2;
+  OwnerControlModelRef model = 3;
+  optional string profile = 4;
+}
+
+message OwnerControlDrainModelRequest {
+  bytes requester_node_id = 1;
+  bytes target_node_id = 2;
+  OwnerControlModelRef model = 3;
+  optional uint64 drain_timeout_secs = 4;
+}
+
+message OwnerControlLoadModelResponse {
+  string intent_id = 1;
+  string accepted_state = 2;
+  OwnerControlModelRef target = 3;
+}
+
+message OwnerControlUnloadModelResponse {
+  string intent_id = 1;
+  string accepted_state = 2;
+  OwnerControlModelRef target = 3;
+}
+
+message OwnerControlEnsureModelResponse {
+  string intent_id = 1;
+  string accepted_state = 2;
+  OwnerControlModelRef target = 3;
+}
+
+message OwnerControlDrainModelResponse {
+  string intent_id = 1;
+  string accepted_state = 2;
+  OwnerControlModelRef target = 3;
 }
 
 message OwnerControlRefreshInventoryResponse {

@@ -2,6 +2,7 @@ use super::{Node, NodeRole, current_time_unix_ms};
 use crate::crypto::verify_control_plane_target_node;
 use crate::mesh::node_requirements::preflight_pushed_config_for_current_node;
 use crate::mesh::owner_control_response;
+use crate::mesh::owner_lifecycle_cache::OwnerLifecycleResponseReservation;
 use crate::protocol::{
     ControlFrameError, NODE_PROTOCOL_GENERATION, ValidateControlFrame, ensure_control_frame_size,
     read_len_prefixed, write_len_prefixed,
@@ -581,6 +582,10 @@ impl Node {
                 watch_config: Some(watch_response),
                 apply_config: None,
                 refresh_inventory: None,
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             error: None,
         }
@@ -623,6 +628,10 @@ impl Node {
                     watch_config: None,
                     apply_config: None,
                     refresh_inventory: None,
+                    load_model: None,
+                    unload_model: None,
+                    ensure_model: None,
+                    drain_model: None,
                 }),
                 error: None,
             },
@@ -882,6 +891,7 @@ impl Node {
         let execution_shape = command.execution_shape();
         let deadline = command.deadline();
         let command_request_id = command.request_id();
+        let is_model_lifecycle = command.is_model_lifecycle();
         if let Some(result) = self
             .send_owner_control_request_id_error(
                 send,
@@ -897,6 +907,34 @@ impl Node {
             result?;
             return Ok(execution_shape);
         }
+        let mut lifecycle_leader = if is_model_lifecycle {
+            let cache_duration = match deadline {
+                commands::OwnedNodeCommandDeadline::Unary(duration) => duration,
+                commands::OwnedNodeCommandDeadline::Scan(_)
+                | commands::OwnedNodeCommandDeadline::Watch => {
+                    anyhow::bail!("model lifecycle command must use a unary deadline")
+                }
+            };
+            match self.owner_lifecycle_response_cache.reserve_with_fallback(
+                remote,
+                command_request_id,
+                owner_control_command_timeout_envelope(command_request_id, deadline),
+                cache_duration,
+            ) {
+                OwnerLifecycleResponseReservation::Ready(envelope) => {
+                    self.send_owner_control_envelope(send, envelope).await?;
+                    return Ok(execution_shape);
+                }
+                OwnerLifecycleResponseReservation::Follower(follower) => {
+                    let envelope = follower.wait().await;
+                    self.send_owner_control_envelope(send, envelope).await?;
+                    return Ok(execution_shape);
+                }
+                OwnerLifecycleResponseReservation::Leader(leader) => Some(leader),
+            }
+        } else {
+            None
+        };
 
         let execution = async {
             match command {
@@ -923,6 +961,50 @@ impl Node {
                 }
                 OwnedNodeCommand::ScanRefresh { request_id, .. } => {
                     let envelope = commands::scan_refresh::execute(self, request_id).await;
+                    self.send_owner_control_envelope(send, envelope).await?;
+                }
+                OwnedNodeCommand::LoadModel {
+                    request_id,
+                    request,
+                } => {
+                    let envelope =
+                        commands::model_lifecycle::execute_load(self, request_id, request).await;
+                    if let Some(leader) = lifecycle_leader.take() {
+                        leader.publish(envelope.clone());
+                    }
+                    self.send_owner_control_envelope(send, envelope).await?;
+                }
+                OwnedNodeCommand::UnloadModel {
+                    request_id,
+                    request,
+                } => {
+                    let envelope =
+                        commands::model_lifecycle::execute_unload(self, request_id, request).await;
+                    if let Some(leader) = lifecycle_leader.take() {
+                        leader.publish(envelope.clone());
+                    }
+                    self.send_owner_control_envelope(send, envelope).await?;
+                }
+                OwnedNodeCommand::EnsureModel {
+                    request_id,
+                    request,
+                } => {
+                    let envelope =
+                        commands::model_lifecycle::execute_ensure(self, request_id, request).await;
+                    if let Some(leader) = lifecycle_leader.take() {
+                        leader.publish(envelope.clone());
+                    }
+                    self.send_owner_control_envelope(send, envelope).await?;
+                }
+                OwnedNodeCommand::DrainModel {
+                    request_id,
+                    request,
+                } => {
+                    let envelope =
+                        commands::model_lifecycle::execute_drain(self, request_id, request).await;
+                    if let Some(leader) = lifecycle_leader.take() {
+                        leader.publish(envelope.clone());
+                    }
                     self.send_owner_control_envelope(send, envelope).await?;
                 }
             }

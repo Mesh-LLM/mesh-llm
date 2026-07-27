@@ -1,4 +1,7 @@
 use super::*;
+use crate::runtime::model_reconciliation::intent::DesiredModelState;
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 fn reconciliation_target_with_required_bytes(
     required_bytes: Option<u64>,
@@ -100,6 +103,175 @@ async fn model_target_reconciliation_replacement_unloads_before_loading() {
 }
 
 #[test]
+fn startup_load_finished_notifies_stacked_load_callers() {
+    // Given: two same-key callers are stacked behind a startup load already in flight.
+    let mut state = ModelTargetReconciliationState::default();
+    let model_ref = "org/model@main:model.gguf";
+    let profile = "low-ctx";
+    state.mark_load_started(model_ref, profile);
+    let (first_tx, first_rx) = tokio::sync::oneshot::channel();
+    let (second_tx, second_rx) = tokio::sync::oneshot::channel();
+    state.stack_load_completion(model_ref, profile, first_tx);
+    state.stack_load_completion(model_ref, profile, second_tx);
+    let response = api::RuntimeLoadResponse {
+        model_ref: model_ref.to_string(),
+        model: "Model".to_string(),
+        instance_id: "runtime-1".to_string(),
+        profile: profile.to_string(),
+        backend: Some("skippy".to_string()),
+        context_length: Some(4096),
+    };
+
+    // When: startup reports the load as finished through the reconciliation seam.
+    crate::runtime::model_lifecycle::apply_startup_model_load_finished(
+        &mut state,
+        &ModelTargetReconciliationPolicy::default(),
+        model_ref,
+        profile,
+        Ok(response),
+        1,
+    );
+
+    // Then: every stacked same-key caller receives the typed runtime load response.
+    let first = first_rx
+        .blocking_recv()
+        .expect("first stacked load caller should receive completion")
+        .expect("startup load should succeed");
+    let second = second_rx
+        .blocking_recv()
+        .expect("second stacked load caller should receive completion")
+        .expect("startup load should succeed");
+    assert_eq!(first.instance_id, "runtime-1");
+    assert_eq!(second.profile, "low-ctx");
+    assert!(!state.is_load_pending(model_ref, profile));
+}
+
+#[test]
+fn resolved_unload_of_profiled_load_prevents_reconciliation_reload() {
+    // Given: default and low-context intents share a model name, and the low profile has loaded.
+    let policy = ModelTargetReconciliationPolicy {
+        enabled: true,
+        ..ModelTargetReconciliationPolicy::default()
+    };
+    let mut state = ModelTargetReconciliationState::default();
+    state.add_desired("Qwen", "", IntentSource::StartupConfig);
+    state.add_desired("Qwen", "low-ctx", IntentSource::StartupConfig);
+    state.mark_load_started("Qwen", "low-ctx");
+    crate::runtime::model_lifecycle::apply_startup_model_load_finished(
+        &mut state,
+        &policy,
+        "Qwen",
+        "low-ctx",
+        Ok(api::RuntimeLoadResponse {
+            model_ref: "Qwen".to_string(),
+            model: "Qwen".to_string(),
+            instance_id: "runtime-low".to_string(),
+            profile: "low-ctx".to_string(),
+            backend: Some("skippy".to_string()),
+            context_length: Some(4096),
+        }),
+        1,
+    );
+    let resolved = resolve_runtime_unload_target(
+        "runtime-low",
+        vec![
+            RuntimeUnloadCandidate {
+                owner: RuntimeUnloadOwner::Runtime,
+                instance_id: "runtime-default".to_string(),
+                model_name: "Qwen".to_string(),
+                profile: String::new(),
+            },
+            RuntimeUnloadCandidate {
+                owner: RuntimeUnloadOwner::Runtime,
+                instance_id: "runtime-low".to_string(),
+                model_name: "Qwen".to_string(),
+                profile: "low-ctx".to_string(),
+            },
+        ],
+    )
+    .expect("exact loaded profile instance should resolve");
+
+    // When: the resolved loaded profile is unloaded through the desired-state seam.
+    crate::runtime::model_lifecycle::suppress_desired_for_resolved_unload_candidate(
+        &mut state,
+        &resolved,
+        IntentSource::ApiUnload,
+        false,
+        None,
+    );
+
+    // Then: the low profile is absent from effective desired state, so it is not reloaded.
+    let targets = reconciliation_targets_from_desired(&state);
+    let local_interests = local_interests_from_desired(&state);
+    let loaded = BTreeSet::new();
+    let actions = plan_model_target_reconciliation(
+        &policy,
+        &mut state,
+        ModelTargetReconciliationInput {
+            now_secs: 2,
+            local_role: mesh::NodeRole::Host { http_port: 9337 },
+            local_interest_model_refs: &local_interests,
+            loaded_model_refs: &loaded,
+            targets: &targets,
+        },
+    );
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].model_ref, "Qwen");
+    assert_eq!(actions[0].profile, "");
+    assert!(state.is_desired("Qwen", ""));
+    assert!(!state.is_desired("Qwen", "low-ctx"));
+}
+
+fn local_interests_from_desired(state: &ModelTargetReconciliationState) -> BTreeSet<String> {
+    state
+        .intent_history()
+        .iter()
+        .filter(|intent| {
+            intent.desired_state == DesiredModelState::Present
+                && state.is_effective_intent(
+                    &intent.intent_id,
+                    &intent.canonical_model_ref,
+                    &intent.profile,
+                )
+        })
+        .map(|intent| intent.canonical_model_ref.clone())
+        .collect()
+}
+
+fn reconciliation_targets_from_desired(
+    state: &ModelTargetReconciliationState,
+) -> Vec<ModelTargetReconciliationCandidate> {
+    state
+        .intent_history()
+        .iter()
+        .filter(|intent| {
+            intent.desired_state == DesiredModelState::Present
+                && state.is_effective_intent(
+                    &intent.intent_id,
+                    &intent.canonical_model_ref,
+                    &intent.profile,
+                )
+        })
+        .map(|intent| ModelTargetReconciliationCandidate {
+            rank: 1,
+            model_ref: intent.canonical_model_ref.clone(),
+            profile: intent.profile.clone(),
+            model_name: Some(intent.canonical_model_ref.clone()),
+            wanted: true,
+            wanted_reason: Some("explicit_interest"),
+            request_count: 0,
+            last_active_secs_ago: None,
+            serving_node_count: 0,
+            capacity_state: ModelTargetReconciliationCapacityState::SingleNodeFit,
+            local_path: Some(PathBuf::from(format!(
+                "/models/{}.gguf",
+                intent.canonical_model_ref
+            ))),
+        })
+        .collect()
+}
+
+#[test]
 fn runtime_unload_target_requires_instance_id_for_duplicate_models() {
     let err = resolve_runtime_unload_target(
         "Qwen",
@@ -108,11 +280,13 @@ fn runtime_unload_target_requires_instance_id_for_duplicate_models() {
                 owner: RuntimeUnloadOwner::Runtime,
                 instance_id: "runtime-1".to_string(),
                 model_name: "Qwen".to_string(),
+                profile: String::new(),
             },
             RuntimeUnloadCandidate {
                 owner: RuntimeUnloadOwner::Managed,
                 instance_id: "runtime-2".to_string(),
                 model_name: "Qwen".to_string(),
+                profile: String::new(),
             },
         ],
     )
@@ -130,11 +304,13 @@ fn runtime_unload_target_resolves_exact_instance_before_model_name() {
                 owner: RuntimeUnloadOwner::Runtime,
                 instance_id: "runtime-1".to_string(),
                 model_name: "runtime-2".to_string(),
+                profile: String::new(),
             },
             RuntimeUnloadCandidate {
                 owner: RuntimeUnloadOwner::Managed,
                 instance_id: "runtime-2".to_string(),
                 model_name: "Qwen".to_string(),
+                profile: String::new(),
             },
         ],
     )

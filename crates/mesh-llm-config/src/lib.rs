@@ -707,7 +707,9 @@ gpu_id = "pci:0000:65:00.0"
     }
 
     fn canonical_public_field_count() -> usize {
-        let source = include_str!("model.rs");
+        let source_model = include_str!("model.rs");
+        let source_runtime = include_str!("model/runtime.rs");
+        let sources = [source_model, source_runtime];
         let occurrences = [
             ("MeshConfig", 1usize),
             ("OwnerControlConfig", 1),
@@ -729,6 +731,7 @@ gpu_id = "pci:0000:65:00.0"
             ("TelemetryMetricsConfig", 1),
             ("PluginConfigEntry", 1),
             ("PluginStartupConfig", 1),
+            ("RuntimeActivityConfig", 1),
         ];
         let nested = [
             "GpuConfig",
@@ -752,6 +755,7 @@ gpu_id = "pci:0000:65:00.0"
             "AdvancedServerConfig",
             "PluginConfigEntry",
             "PluginStartupConfig",
+            "RuntimeActivityConfig",
         ];
         let ignored = [
             "extra",
@@ -763,7 +767,7 @@ gpu_id = "pci:0000:65:00.0"
 
         let mut total = 0usize;
         for (name, multiplier) in occurrences.iter() {
-            let leafs = extract_struct_fields(source, name)
+            let leafs = extract_struct_fields(&sources, name)
                 .into_iter()
                 .filter(|(field, ty)| {
                     !ignored.contains(&field.as_str())
@@ -779,11 +783,15 @@ gpu_id = "pci:0000:65:00.0"
         total
     }
 
-    fn extract_struct_fields(source: &str, struct_name: &str) -> Vec<(String, String)> {
+    fn extract_struct_fields(sources: &[&str], struct_name: &str) -> Vec<(String, String)> {
         let marker = format!("pub struct {struct_name} {{");
+        let source = sources
+            .iter()
+            .find(|s| s.contains(&marker))
+            .unwrap_or_else(|| panic!("struct {} not found in config model sources", struct_name));
         let start = source
             .find(&marker)
-            .unwrap_or_else(|| panic!("struct {struct_name} not found in model.rs"));
+            .expect("marker was just confirmed present");
         let body = &source[start + marker.len()..];
         let end = body.find("\n}").expect("struct body terminator");
 
@@ -804,9 +812,23 @@ gpu_id = "pci:0000:65:00.0"
     }
 
     fn contains_nested_type(type_name: &str, nested: &str) -> bool {
-        type_name == nested
-            || type_name == format!("Option<{nested}>")
-            || type_name == format!("Vec<{nested}>")
+        if type_name == nested {
+            return true;
+        }
+        let option = format!("Option<{nested}>");
+        let vec = format!("Vec<{nested}>");
+        if type_name == option || type_name == vec {
+            return true;
+        }
+        if type_name.ends_with(&format!("::{nested}")) {
+            return true;
+        }
+        if (type_name.starts_with("Option<") || type_name.starts_with("Vec<"))
+            && type_name.ends_with(&format!("::{nested}>"))
+        {
+            return true;
+        }
+        false
     }
 
     fn authoring_public_methods() -> BTreeSet<String> {

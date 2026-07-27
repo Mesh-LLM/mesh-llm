@@ -50,6 +50,10 @@ async fn success_envelope(
                 snapshot: Some(node.current_owner_control_snapshot().await),
                 inventory: Some(inventory),
             }),
+            load_model: None,
+            unload_model: None,
+            ensure_model: None,
+            drain_model: None,
         }),
         error: None,
     }

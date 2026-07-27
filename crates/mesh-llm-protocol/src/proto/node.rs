@@ -126,6 +126,9 @@ pub struct PeerAnnouncement {
     pub release_attestation: ::core::option::Option<ReleaseBuildAttestation>,
     #[prost(message, optional, tag = "48")]
     pub direct_admission_proof: ::core::option::Option<DirectNodeAdmissionProof>,
+    /// Inference admission state advertised by this peer (additive; older nodes ignore)
+    #[prost(enumeration = "InferenceAdmissionState", optional, tag = "49")]
+    pub inference_admission_state: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AdvertisedModelThroughput {
@@ -566,6 +569,14 @@ pub struct OwnerControlRequest {
     pub apply_config: ::core::option::Option<OwnerControlApplyConfigRequest>,
     #[prost(message, optional, tag = "5")]
     pub refresh_inventory: ::core::option::Option<OwnerControlRefreshInventoryRequest>,
+    #[prost(message, optional, tag = "6")]
+    pub load_model: ::core::option::Option<OwnerControlLoadModelRequest>,
+    #[prost(message, optional, tag = "7")]
+    pub unload_model: ::core::option::Option<OwnerControlUnloadModelRequest>,
+    #[prost(message, optional, tag = "8")]
+    pub ensure_model: ::core::option::Option<OwnerControlEnsureModelRequest>,
+    #[prost(message, optional, tag = "9")]
+    pub drain_model: ::core::option::Option<OwnerControlDrainModelRequest>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlResponse {
@@ -579,6 +590,14 @@ pub struct OwnerControlResponse {
     pub apply_config: ::core::option::Option<OwnerControlApplyConfigResponse>,
     #[prost(message, optional, tag = "5")]
     pub refresh_inventory: ::core::option::Option<OwnerControlRefreshInventoryResponse>,
+    #[prost(message, optional, tag = "6")]
+    pub load_model: ::core::option::Option<OwnerControlLoadModelResponse>,
+    #[prost(message, optional, tag = "7")]
+    pub unload_model: ::core::option::Option<OwnerControlUnloadModelResponse>,
+    #[prost(message, optional, tag = "8")]
+    pub ensure_model: ::core::option::Option<OwnerControlEnsureModelResponse>,
+    #[prost(message, optional, tag = "9")]
+    pub drain_model: ::core::option::Option<OwnerControlDrainModelResponse>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlError {
@@ -693,6 +712,91 @@ pub struct OwnerControlRefreshInventoryResponse {
     pub snapshot: ::core::option::Option<OwnerControlConfigSnapshot>,
     #[prost(message, optional, tag = "2")]
     pub inventory: ::core::option::Option<OwnerControlRefreshInventory>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlModelRef {
+    #[prost(string, tag = "1")]
+    pub canonical_model_ref: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "2")]
+    pub instance_id: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlLoadModelRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub target_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub model: ::core::option::Option<OwnerControlModelRef>,
+    #[prost(string, optional, tag = "4")]
+    pub profile: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlUnloadModelRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub target_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub model: ::core::option::Option<OwnerControlModelRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlEnsureModelRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub target_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub model: ::core::option::Option<OwnerControlModelRef>,
+    #[prost(string, optional, tag = "4")]
+    pub profile: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlDrainModelRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub target_node_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub model: ::core::option::Option<OwnerControlModelRef>,
+    #[prost(uint64, optional, tag = "4")]
+    pub drain_timeout_secs: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlLoadModelResponse {
+    #[prost(string, tag = "1")]
+    pub intent_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub accepted_state: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub target: ::core::option::Option<OwnerControlModelRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlUnloadModelResponse {
+    #[prost(string, tag = "1")]
+    pub intent_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub accepted_state: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub target: ::core::option::Option<OwnerControlModelRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlEnsureModelResponse {
+    #[prost(string, tag = "1")]
+    pub intent_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub accepted_state: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub target: ::core::option::Option<OwnerControlModelRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlDrainModelResponse {
+    #[prost(string, tag = "1")]
+    pub intent_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub accepted_state: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub target: ::core::option::Option<OwnerControlModelRef>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlRefreshInventory {
@@ -1262,6 +1366,44 @@ impl OwnerControlRefreshInventoryDisposition {
             "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_UNSPECIFIED" => Some(Self::Unspecified),
             "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_EXECUTED" => Some(Self::Executed),
             "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_COALESCED" => Some(Self::Coalesced),
+            _ => None,
+        }
+    }
+}
+/// Inference admission state for a peer (additive; older nodes ignore).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum InferenceAdmissionState {
+    Unspecified = 0,
+    Accepting = 1,
+    AcceptingDeprioritized = 2,
+    RemotePaused = 3,
+    AllPaused = 4,
+}
+impl InferenceAdmissionState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "INFERENCE_ADMISSION_STATE_UNSPECIFIED",
+            Self::Accepting => "INFERENCE_ADMISSION_STATE_ACCEPTING",
+            Self::AcceptingDeprioritized => "INFERENCE_ADMISSION_STATE_ACCEPTING_DEPRIORITIZED",
+            Self::RemotePaused => "INFERENCE_ADMISSION_STATE_REMOTE_PAUSED",
+            Self::AllPaused => "INFERENCE_ADMISSION_STATE_ALL_PAUSED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "INFERENCE_ADMISSION_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "INFERENCE_ADMISSION_STATE_ACCEPTING" => Some(Self::Accepting),
+            "INFERENCE_ADMISSION_STATE_ACCEPTING_DEPRIORITIZED" => {
+                Some(Self::AcceptingDeprioritized)
+            }
+            "INFERENCE_ADMISSION_STATE_REMOTE_PAUSED" => Some(Self::RemotePaused),
+            "INFERENCE_ADMISSION_STATE_ALL_PAUSED" => Some(Self::AllPaused),
             _ => None,
         }
     }

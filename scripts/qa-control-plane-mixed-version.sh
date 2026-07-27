@@ -43,6 +43,9 @@ START_NODE_HOME=""
 WAIT_TOKEN_VALUE=""
 WAIT_MODELS_MODEL_ID=""
 NODE_INDEX=0
+CURRENT_HOST_CONSOLE=""
+RELEASED_HOST_CONSOLE=""
+SHARED_OWNER_KEY=""
 
 usage() {
     cat <<'EOF'
@@ -90,7 +93,7 @@ Modes:
     config-current-scan-refresh
     config-current-scan-refresh-wrong-owner
   If local prerequisites are missing, it records explicit PREREQ results such
-  as config-cargo-tests or config-runtime-bootstrap.
+  as prereq.owner-identity, config-cargo-tests, or config-runtime-bootstrap.
 
 Evidence:
   Each run creates a timestamped directory containing:
@@ -243,6 +246,7 @@ run_cargo = cargo == "true"
 checks = [
     "prereq.released-binary",
     "prereq.current-binary",
+    "prereq.owner-identity",
 ]
 
 if not local:
@@ -299,8 +303,19 @@ checks.extend([
     "config-runtime-get-config",
     "config-current-scan-refresh",
     "config-current-scan-refresh-wrong-owner",
-    "cleanup",
 ])
+
+# Lifecycle command probes (local-only) — added for Task 15 mixed-version lifecycle certification
+if local or config:
+    checks.extend([
+        "lifecycle-load-model",
+        "lifecycle-unload-model",
+        "lifecycle-ensure-model",
+        "lifecycle-drain-model",
+        "lifecycle-legacy-unsupported",
+    ])
+
+checks.append("cleanup")
 
 plan = {
     "script": "qa-control-plane-mixed-version.sh",
@@ -330,6 +345,7 @@ fi
 require_tool curl
 require_tool date
 require_tool mktemp
+require_tool cmp
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 RUN_DIR="${EVIDENCE_DIR%/}/control-plane-mixed-version-${RUN_ID}"
@@ -536,11 +552,14 @@ kill_tree() {
 }
 
 cleanup() {
-    for pid in "${PIDS[@]}"; do
+    local incoming_status=$?
+    for pid in "${PIDS[@]:-}"; do
+        [[ -n "$pid" ]] || continue
         kill_tree "$pid"
     done
     local alive=0
-    for pid in "${PIDS[@]}"; do
+    for pid in "${PIDS[@]:-}"; do
+        [[ -n "$pid" ]] || continue
         if kill -0 "$pid" 2>/dev/null; then
             alive=$((alive + 1))
         fi
@@ -555,6 +574,12 @@ cleanup() {
         rm -rf "$WORK_ROOT" 2>/dev/null || true
     fi
     write_summary_json
+    local final_status="$EXIT_STATUS"
+    if [[ "$incoming_status" -ne 0 ]]; then
+        final_status="$incoming_status"
+    fi
+    trap - EXIT
+    exit "$final_status"
 }
 trap cleanup EXIT
 
@@ -595,6 +620,31 @@ record_binary_prereq() {
 
 record_binary_prereq "released" "$RELEASED_BINARY"
 record_binary_prereq "current" "$CURRENT_BINARY"
+
+if cmp -s "$RELEASED_BINARY" "$CURRENT_BINARY"; then
+    fail_usage "--released-binary and --current-binary resolve to identical executable content"
+fi
+
+SHARED_OWNER_KEY="$WORK_ROOT/owner-keystore.json"
+shared_owner_log="$LOG_DIR/shared-owner-auth-init.log"
+record_command "shared-owner-auth-init" "$shared_owner_log" \
+    "$CURRENT_BINARY" auth init \
+    --owner-key "$SHARED_OWNER_KEY" \
+    --no-passphrase \
+    --force
+if "$CURRENT_BINARY" auth init \
+    --owner-key "$SHARED_OWNER_KEY" \
+    --no-passphrase \
+    --force >"$shared_owner_log" 2>&1; then
+    record_result "PASS" "prereq.owner-identity" \
+        "temporary shared owner keystore created for mixed-version control checks" \
+        "log=$shared_owner_log"
+else
+    SHARED_OWNER_KEY=""
+    record_result "PREREQ" "prereq.owner-identity" \
+        "could not create a temporary shared owner keystore" \
+        "log=$shared_owner_log"
+fi
 
 run_logged() {
     local name="$1"
@@ -659,13 +709,33 @@ start_node() {
     local home="$WORK_ROOT/h-$node_slug"
     local runtime="$WORK_ROOT/r-$node_slug"
     local log="$LOG_DIR/$label.log"
+    local help_output
+    help_output="$("$binary" --help 2>&1 || true)"
+    local node_args=()
+    local has_explicit_owner_key=false
+    local argument
+    for argument in "$@"; do
+        if [[ "$argument" == "--headless" && "$help_output" != *"--headless"* ]]; then
+            continue
+        fi
+        node_args+=("$argument")
+        if [[ "$argument" == "--owner-key" || "$argument" == --owner-key=* ]]; then
+            has_explicit_owner_key=true
+        fi
+    done
     mkdir -p "$home" "$runtime" || return 1
 
     (
         export HOME="$home"
         export MESH_LLM_RUNTIME_ROOT="$runtime"
         export MESH_LLM_EPHEMERAL_KEY=1
-        exec "$binary" "$@"
+        if [[ -n "$SHARED_OWNER_KEY" ]] &&
+            [[ "$has_explicit_owner_key" != true ]] &&
+            [[ "$help_output" == *"--owner-key"* ]]
+        then
+            exec "$binary" --owner-key "$SHARED_OWNER_KEY" "${node_args[@]}"
+        fi
+        exec "$binary" "${node_args[@]}"
     ) >"$log" 2>&1 &
     START_NODE_PID=$!
     START_NODE_HOME="$home"
@@ -943,6 +1013,14 @@ run_local_direction() {
     local token
     wait_token "${label}-server" "$server_console" || return 1
     token="$WAIT_TOKEN_VALUE"
+    case "$label" in
+        current-serves-released-client)
+            CURRENT_HOST_CONSOLE="$server_console"
+            ;;
+        released-serves-current-client)
+            RELEASED_HOST_CONSOLE="$server_console"
+            ;;
+    esac
 
     local client_pid
     start_node "${label}-client" "$client_binary" --client --join "$token" --headless --port "$client_api" --console "$client_console" || return 1
@@ -997,14 +1075,13 @@ run_runtime_control_bootstrap() {
     local api_port=$((BASE_PORT + offset))
     local console_port=$((BASE_PORT + offset + 1))
     local bind_port=$((BASE_PORT + offset + 2))
-    local owner_key="$WORK_ROOT/owner-keystore.json"
+    local owner_key="$SHARED_OWNER_KEY"
     local wrong_owner_key="$WORK_ROOT/wrong-owner-keystore.json"
-    local auth_log="$LOG_DIR/config-auth-init.log"
     local wrong_auth_log="$LOG_DIR/config-wrong-owner-auth-init.log"
 
-    if ! "$CURRENT_BINARY" auth init --owner-key "$owner_key" --no-passphrase --force >"$auth_log" 2>&1; then
+    if [[ -z "$owner_key" ]]; then
         record_result "PREREQ" "config-runtime-bootstrap" \
-            "could not create temporary owner keystore" "log=$auth_log"
+            "temporary shared owner keystore is unavailable" "log=$shared_owner_log"
         return 0
     fi
     if ! "$CURRENT_BINARY" auth init --owner-key "$wrong_owner_key" --no-passphrase --force >"$wrong_auth_log" 2>&1; then
@@ -1072,6 +1149,7 @@ PY
     controller_pid="$START_NODE_PID"
     assert_process_alive "$controller_pid" "config-current-controller" || return 1
     wait_status "config-current-controller" "$controller_console" || return 1
+    CURRENT_HOST_CONSOLE="$controller_console"
 
     local get_config="$CONTROL_DIR/config-get-config.json"
     local get_config_log="$LOG_DIR/config-get-config.log"
@@ -1175,6 +1253,171 @@ PY
     fi
 }
 
+# ──────────────── Lifecycle command probes (Task 15) ────────────────
+
+probe_lifecycle_command() {
+    local action="$1"        # load | unload | ensure | drain
+    local console_port="$2"
+    local label="lifecycle-${action}-model"
+
+    [[ -n "$console_port" ]] || return 0
+
+    local control_out="$CONTROL_DIR/${label}-response.json"
+    local control_log="$LOG_DIR/${label}.log"
+    local bootstrap_out="$CONTROL_DIR/${label}-bootstrap.json"
+    if ! curl -fsS --max-time 10 \
+        "http://127.0.0.1:${console_port}/api/runtime/control-bootstrap" \
+        >"$bootstrap_out" 2>"$control_log"; then
+        record_result "FAIL" "$label" \
+            "current host control bootstrap endpoint failed" \
+            "path=$bootstrap_out" "log=$control_log" "console_port=$console_port"
+        return 0
+    fi
+    local endpoint
+    endpoint="$(python3 - "$bootstrap_out" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8")).get("endpoint") or "")
+PY
+)"
+    if [[ -z "$endpoint" ]]; then
+        record_result "PREREQ" "$label" \
+            "current host has no authenticated owner-control endpoint" \
+            "path=$bootstrap_out" "console_port=$console_port"
+        return 0
+    fi
+
+    local response_status=""
+    local request_json="$CONTROL_DIR/${label}-request.json"
+    python3 - "$request_json" "$endpoint" <<'PY'
+import json, sys
+json.dump(
+    {"endpoint": sys.argv[2], "model": "qa.invalid/model@main:missing.gguf"},
+    open(sys.argv[1], "w", encoding="utf-8"),
+)
+PY
+    response_status="$(curl -sS --max-time 10 \
+        -o "$control_out" \
+        -w '%{http_code}' \
+        -X POST "http://127.0.0.1:${console_port}/api/runtime/control/${action}-model" \
+        -H 'Content-Type: application/json' \
+        --data-binary "@$request_json" 2>"$control_log" || true)"
+
+    if [[ "$response_status" == "200" ]] &&
+        python3 - "$control_out" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+raise SystemExit(
+    0
+    if data.get("accepted") is True
+    and data.get("model") == "qa.invalid/model@main:missing.gguf"
+    and data.get("instance_id") is None
+    else 1
+)
+PY
+    then
+        record_result "PASS" "$label" \
+            "${action}-model command was authenticated and accepted by the current host" \
+            "http_status=$response_status" "path=$control_out" "console_port=$console_port"
+    else
+        record_result "FAIL" "$label" \
+            "${action}-model command was not accepted by the current host" \
+            "http_status=${response_status:-none}" "path=$control_out" \
+            "log=$control_log" "console_port=$console_port"
+    fi
+}
+
+probe_lifecycle_legacy_unsupported() {
+    local released_console_port="$1"
+    local current_console_port="$2"
+    local label="lifecycle-legacy-unsupported"
+
+    [[ -n "$released_console_port" ]] || return 0
+
+    local control_out="$CONTROL_DIR/${label}-response.json"
+    local control_log="$LOG_DIR/${label}.log"
+    local bootstrap_out="$CONTROL_DIR/${label}-bootstrap.json"
+    if ! curl -fsS --max-time 10 \
+        "http://127.0.0.1:${released_console_port}/api/runtime/control-bootstrap" \
+        >"$bootstrap_out" 2>"$control_log"; then
+        record_result "PREREQ" "$label" \
+            "released host does not expose owner-control bootstrap for a typed compatibility probe" \
+            "path=$bootstrap_out" "log=$control_log"
+        return 0
+    fi
+    local endpoint
+    endpoint="$(python3 - "$bootstrap_out" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8")).get("endpoint") or "")
+PY
+)"
+    if [[ -z "$endpoint" ]]; then
+        record_result "PREREQ" "$label" \
+            "released host has no authenticated owner-control endpoint" \
+            "path=$bootstrap_out"
+        return 0
+    fi
+
+    local request_json="$CONTROL_DIR/${label}-request.json"
+    python3 - "$request_json" "$endpoint" <<'PY'
+import json, sys
+path, endpoint = sys.argv[1:]
+json.dump(
+    {"endpoint": endpoint, "model": "qa.invalid/model@main:missing.gguf"},
+    open(path, "w", encoding="utf-8"),
+)
+PY
+    record_command "$label" "$control_log" \
+        curl -X POST "http://127.0.0.1:${current_console_port}/api/runtime/control/load-model"
+    local response_status
+    response_status="$(curl -sS --max-time 30 -o "$control_out" -w '%{http_code}' \
+        -X POST "http://127.0.0.1:${current_console_port}/api/runtime/control/load-model" \
+        -H 'Content-Type: application/json' \
+        --data-binary "@$request_json" 2>"$control_log" || true)"
+    if [[ "$response_status" == "503" ]] &&
+        python3 - "$control_out" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+raise SystemExit(
+    0 if data.get("error", {}).get("code") == "control_unsupported" else 1
+)
+PY
+    then
+        record_result "PASS" "$label" \
+            "released host returned a typed unsupported lifecycle response" \
+            "http_status=$response_status" "path=$control_out" "log=$control_log"
+    else
+        record_result "FAIL" "$label" \
+            "released host did not return a typed unsupported lifecycle response" \
+            "http_status=${response_status:-none}" "path=$control_out" "log=$control_log"
+    fi
+}
+
+run_lifecycle_probes() {
+    if [[ -z "$CURRENT_HOST_CONSOLE" ]]; then
+        for action in load unload ensure drain; do
+            record_result "PREREQ" "lifecycle-${action}-model" \
+                "${action}-model probe skipped — no running current-host node available on expected ports"
+        done
+        record_result "PREREQ" "lifecycle-legacy-unsupported" \
+            "legacy unsupported probe skipped — no running current-host node available on expected ports"
+        return 0
+    fi
+
+    # Probe lifecycle commands against current host
+    for action in load unload ensure drain; do
+        probe_lifecycle_command "$action" "$CURRENT_HOST_CONSOLE" || true
+    done
+
+    if [[ -z "$RELEASED_HOST_CONSOLE" ]]; then
+        record_result "PREREQ" "lifecycle-legacy-unsupported" \
+            "legacy unsupported probe skipped — no released host completed startup"
+        return 0
+    fi
+    probe_lifecycle_legacy_unsupported \
+        "$RELEASED_HOST_CONSOLE" \
+        "$CURRENT_HOST_CONSOLE" || true
+}
+
 if [[ "$LOCAL_ONLY" != true ]]; then
     run_public_probe "released-public" "$RELEASED_BINARY" "$((BASE_PORT + 0))" "$((BASE_PORT + 1))" || true
     run_public_probe "current-public" "$CURRENT_BINARY" "$((BASE_PORT + 10))" "$((BASE_PORT + 11))" || true
@@ -1200,6 +1443,11 @@ fi
 
 run_protocol_contract_tests || true
 run_runtime_control_bootstrap 80 || true
+
+# Lifecycle command probes (Task 15) — only in local mode
+if [[ "$LOCAL_ONLY" == true ]]; then
+    run_lifecycle_probes || true
+fi
 
 if [[ "$EXIT_STATUS" -eq 0 ]]; then
     append_summary ""

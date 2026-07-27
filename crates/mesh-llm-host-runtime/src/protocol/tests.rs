@@ -187,6 +187,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         display_rtt: None,
         selected_path: None,
         propagated_latency: None,
+        inference_admission_state: None,
     }
 }
 

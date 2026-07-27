@@ -98,6 +98,8 @@ trap cleanup EXIT
 
 STATUS_JSON=""
 TOKEN=""
+MODELS_JSON=""
+MODEL_ID=""
 for i in $(seq 1 "$MAX_WAIT"); do
     if ! kill -0 "$MESH_PID" 2>/dev/null; then
         echo "mesh-llm exited unexpectedly" >&2
@@ -106,13 +108,6 @@ for i in $(seq 1 "$MAX_WAIT"); do
     fi
 
     STATUS_JSON="$(curl -sf "http://127.0.0.1:${CONSOLE_PORT}/api/status" 2>/dev/null || true)"
-    READY="$(
-        printf '%s' "$STATUS_JSON" | python3 -c 'import json,sys
-try:
-    print(json.load(sys.stdin).get("llama_ready", False))
-except Exception:
-    print(False)' 2>/dev/null || echo "False"
-    )"
     TOKEN="$(
         printf '%s' "$STATUS_JSON" | python3 -c 'import json,sys
 try:
@@ -120,8 +115,17 @@ try:
 except Exception:
     print("")' 2>/dev/null || echo ""
     )"
+    MODELS_JSON="$(curl -sf "http://127.0.0.1:${API_PORT}/v1/models" 2>/dev/null || true)"
+    MODEL_ID="$(
+        printf '%s' "$MODELS_JSON" | python3 -c 'import json,sys
+try:
+    data = json.load(sys.stdin).get("data", [])
+    print(data[0]["id"] if data else "")
+except Exception:
+    print("")' 2>/dev/null || echo ""
+    )"
 
-    if [[ "$READY" == "True" && -n "$TOKEN" ]]; then
+    if [[ -n "$MODEL_ID" && -n "$TOKEN" ]]; then
         break
     fi
 
@@ -132,13 +136,6 @@ except Exception:
     fi
     sleep 1
 done
-
-MODELS_JSON="$(curl -sf "http://127.0.0.1:${API_PORT}/v1/models")"
-MODEL_ID="$(
-    printf '%s' "$MODELS_JSON" | python3 -c 'import json,sys
-data = json.load(sys.stdin).get("data", [])
-print(data[0]["id"] if data else "")'
-)"
 
 if [[ -z "$MODEL_ID" ]]; then
     echo "No models returned from /v1/models" >&2

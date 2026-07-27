@@ -22,4 +22,5 @@ dirs = "6.0.0"
 url = "2"
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tempfile = "3"

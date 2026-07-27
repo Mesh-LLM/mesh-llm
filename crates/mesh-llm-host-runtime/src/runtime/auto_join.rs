@@ -302,6 +302,7 @@ pub(super) async fn default_models_for_vram_blocking(my_vram_gb: f64) -> Result<
         .context("join default model selection task")
 }
 
+#[allow(dead_code)]
 pub(super) async fn auto_model_pack_blocking(my_vram_gb: f64) -> Result<Vec<String>> {
     tokio::task::spawn_blocking(move || nostr::auto_model_pack(my_vram_gb))
         .await
@@ -315,6 +316,7 @@ pub(super) async fn auto_model_pack_blocking(my_vram_gb: f64) -> Result<Vec<Stri
 /// 2. Underserved models with demand that we have on disk
 /// 3. Unserved models with demand that we can download from catalog
 /// 4. Standby if everything is covered
+#[allow(dead_code)]
 pub(super) async fn pick_model_assignment(
     node: &mesh::Node,
     local_models: &[String],
@@ -539,6 +541,7 @@ pub(super) async fn pick_model_assignment_for_role(
 /// Rebalancing uses `last_active` to gate on recency (only models active within
 /// the last 60 minutes are considered), then `request_count / servers` for
 /// relative hotness among those recent models.
+#[allow(dead_code)]
 pub(super) async fn check_unserved_model(
     node: &mesh::Node,
     local_models: &[String],
@@ -1078,6 +1081,7 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
     }
 }
 
+#[allow(dead_code)]
 pub(super) async fn select_run_auto_model_path(
     ctx: &mut RunAutoModelSelectionContext<'_>,
 ) -> Result<RunAutoModelSelection> {

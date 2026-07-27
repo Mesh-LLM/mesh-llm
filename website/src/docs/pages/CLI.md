@@ -502,6 +502,10 @@ mesh-llm runtime remove <RUNTIME_ID>
 mesh-llm runtime prune --active-only
 mesh-llm runtime scan-refresh --endpoint '<control-endpoint>'
 mesh-llm runtime scan-refresh --endpoint '<control-endpoint>' --json
+mesh-llm runtime load-model --endpoint '<control-endpoint>' --model '<canonical-model-ref>'
+mesh-llm runtime unload-model --endpoint '<control-endpoint>' --model '<canonical-model-ref>'
+mesh-llm runtime ensure-model --endpoint '<control-endpoint>' --model '<canonical-model-ref>'
+mesh-llm runtime drain-model --endpoint '<control-endpoint>' --instance-id '<instance-id>'
 ```
 
 Use `--json` for machine-readable output. Runtime selection is constrained by
@@ -547,6 +551,41 @@ The older hidden `runtime refresh-inventory` spelling remains available for
 compatibility and returns its legacy snapshot-only shape. New clients also
 accept snapshot-only responses from older owner-control servers without
 claiming that detailed inventory metadata was returned.
+
+#### Owner-control model lifecycle
+
+Use the lifecycle subcommands to manage models on exactly one remote,
+owner-attested node:
+
+```bash
+mesh-llm runtime load-model \
+  --endpoint '<control-endpoint>' \
+  --model 'org/model:file.gguf'
+
+mesh-llm runtime ensure-model \
+  --endpoint '<control-endpoint>' \
+  --model 'org/model:file.gguf' \
+  --profile low-ctx
+
+mesh-llm runtime unload-model \
+  --endpoint '<control-endpoint>' \
+  --model 'org/model:file.gguf'
+
+mesh-llm runtime drain-model \
+  --endpoint '<control-endpoint>' \
+  --instance-id '<instance-id>'
+```
+
+`load-model` and `ensure-model` require a canonical model reference and accept
+an optional `--profile`. `unload-model` and `drain-model` require exactly one
+of `--model` or `--instance-id`. All four commands accept `--port <PORT>`
+(default `3131`) and `--json`.
+
+The endpoint token and ownership requirements are the same as for
+`runtime scan-refresh`. A successful response means the target accepted the
+lifecycle intent; use runtime status to observe the resulting instance state.
+`drain-model` stops new admission, waits for in-flight work within the target
+policy, and then unloads the selected model or instance.
 
 
 ### `gpus`

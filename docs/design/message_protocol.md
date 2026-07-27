@@ -75,6 +75,10 @@ request tags are:
 | 3 | `watch_config` | accepted stream |
 | 4 | `apply_config` | unary |
 | 5 | `refresh_inventory` | unary scan |
+| 6 | `load_model` | unary (session intent) |
+| 7 | `unload_model` | unary (session intent) |
+| 8 | `ensure_model` | unary (session intent) |
+| 9 | `drain_model` | unary (session intent) |
 
 `scan-refresh` is the operator-facing CLI/API name for the existing wire
 operation `refresh_inventory = 5`; tag 5 is not renamed or renumbered. The
@@ -135,12 +139,38 @@ remain a separate projection of a successful local scan.
 - A response that would exceed 8 MiB is replaced with the existing
   `CONTROL_UNAVAILABLE` error before transport write.
 
+### Model lifecycle commands (tags 6-9)
+
+`load_model` (tag 6), `unload_model` (tag 7), `ensure_model` (tag 8), and
+`drain_model` (tag 9) are shipped additive owner-control commands on
+`mesh-llm-control/1`. They create session-only desired intents on the target
+node's reconciler and never mutate durable config.
+
+- **`load_model`**: one-shot present intent. Accepts one canonical model
+  reference. Returns accepted/current lifecycle state within the unary deadline.
+- **`ensure_model`**: maintained present intent with bounded retry. Accepts one
+  canonical model reference. Survives transient load failures for the session.
+- **`unload_model`**: absent intent. Accepts one canonical model reference or
+  instance ID.
+- **`drain_model`**: draining-then-absent intent. Accepts one canonical model
+  reference or instance ID. Already-admitted work finishes; new work is
+  rejected. Unloads at zero in-flight or force-cancels at the configured drain
+  deadline (default 30s, capped by `drain_timeout_max_secs`).
+
+Responses return request/intent ID, accepted/current lifecycle state, resolved
+model/instance when known, and bounded typed errors. They acknowledge queueing
+within the existing unary deadline and never wait for a model load to complete.
+
+Old peers that do not implement these commands return `UNKNOWN_COMMAND`, which
+new clients translate to typed `CONTROL_UNSUPPORTED`. There is no silent
+fallback to the public mesh.
+
 ### Adding future owned-node commands
 
-Start/stop inference, model load/unload, configuration additions beyond the
-current typed get/watch/apply operations, and long-running operation queries
-are design targets only. Those future operations are **not shipped** by the
-owner-control command surface described here.
+Start/stop inference, configuration additions beyond the current typed
+get/watch/apply operations, and long-running operation queries are design
+targets only. Those future operations are **not shipped** by the owner-control
+command surface described here beyond the model lifecycle commands above.
 
 Every future command addition must include all of the following:
 
@@ -237,8 +267,41 @@ Each `PeerAnnouncement` describes one node's state. Fields:
 | `available_model_metadata` | GGUF-derived metadata for each available model |
 | `available_model_sizes` | File sizes in bytes per model name |
 | `serialized_addr` | JSON-serialized `EndpointAddr` for peer discovery |
+| `admission` | Optional coarse inference admission state (tag 49, additive) |
 
 These GPU telemetry fields are additive and optional. Older peers continue to interoperate by ignoring unknown `/1` protobuf fields, and the richer hardware reporting does not replace the existing model-metadata flow. For the shipped Skippy-enabled binary, GPU telemetry represents devices the embedded backend reports as runtime-selectable; platform probes are not a fallback source for advertised GPU count or usable capacity when Skippy reports no backend GPU. For clarity, `gpu_mem_bandwidth_gbps` values are serialized in GB/s (gigabytes/sec), matching benchmark output and CLI formatting; only the field name still carries the older `gbps` suffix for backward compatibility. ROCm `rocm-smi --showmeminfo` and Intel `xpu-smi` discovery expose used-memory counters rather than a true reserved/system-memory value, so `gpu_reserved_bytes` is intentionally omitted for those backends.
+
+### Admission advertisement (tag 49)
+
+The optional `admission` field (protobuf tag 49 on `PeerAnnouncement`) carries
+a coarse inference admission enum so peers can route around nodes that are
+temporarily not accepting work. The field is additive; old peers that do not
+recognize it treat its absence as `UNSPECIFIED` and continue to use legacy
+eligibility.
+
+Enum values:
+
+| Value | Meaning |
+|-------|---------|
+| `UNSPECIFIED` | Legacy/unknown; treated as eligible by old peers |
+| `ACCEPTING` | Node is accepting new inference work |
+| `ACCEPTING_DEPRIORITIZED` | Node is accepting but deprioritized |
+| `REMOTE_PAUSED` | Remote/mesh inference is paused; local work continues |
+| `ALL_PAUSED` | All inference admission is paused; management/owner-control remain reachable |
+
+Advertisement modes (configured via `[runtime.activity].advertisement`):
+
+- `none`: emit nothing. Old peers see no change.
+- `availability_only`: publish hosted/serving availability as
+  explicitly-known-and-empty while non-admitting. Does not emit the enum.
+- `coarse_state` (default): emit the admission enum and also publish
+  known-empty availability for old peers that do not recognize tag 49.
+- `private_coarse_state`: emit the enum only on private meshes; use
+  known-empty availability publicly.
+
+**Privacy**: the admission field encodes only the coarse state above. No raw
+activity data, input events, app/window names, usernames, idle durations,
+timestamps, or detector errors are ever encoded in gossip.
 
 #### ExpertsSummary
 

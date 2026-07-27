@@ -114,6 +114,86 @@ pub enum RuntimeCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Load a model on a remote node through owner-control.
+    LoadModel {
+        /// Explicit owner-control endpoint token for the target node.
+        #[arg(long)]
+        endpoint: String,
+        /// Model canonical reference to load.
+        #[arg(long)]
+        model: String,
+        /// Optional runtime profile to apply.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Console/API port of the local mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Unload a model on a remote node through owner-control.
+    UnloadModel {
+        /// Explicit owner-control endpoint token for the target node.
+        #[arg(long)]
+        endpoint: String,
+        /// Model canonical reference to unload.
+        #[arg(
+            long,
+            required_unless_present = "instance_id",
+            conflicts_with = "instance_id"
+        )]
+        model: Option<String>,
+        /// Exact instance ID to unload.
+        #[arg(long, required_unless_present = "model", conflicts_with = "model")]
+        instance_id: Option<String>,
+        /// Console/API port of the local mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Ensure a model is loaded on a remote node through owner-control.
+    EnsureModel {
+        /// Explicit owner-control endpoint token for the target node.
+        #[arg(long)]
+        endpoint: String,
+        /// Model canonical reference to ensure loaded.
+        #[arg(long)]
+        model: String,
+        /// Optional runtime profile to maintain.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Console/API port of the local mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drain and unload a model on a remote node through owner-control.
+    DrainModel {
+        /// Explicit owner-control endpoint token for the target node.
+        #[arg(long)]
+        endpoint: String,
+        /// Model canonical reference to drain.
+        #[arg(
+            long,
+            required_unless_present = "instance_id",
+            conflicts_with = "instance_id"
+        )]
+        model: Option<String>,
+        /// Exact instance ID to drain.
+        #[arg(long, required_unless_present = "model", conflicts_with = "model")]
+        instance_id: Option<String>,
+        /// Console/API port of the local mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Refresh local inventory on a remote owner-control endpoint through the local management API.
     #[command(hide = true)]
     RefreshInventory {

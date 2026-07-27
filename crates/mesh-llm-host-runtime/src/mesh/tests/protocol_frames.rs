@@ -319,6 +319,7 @@ async fn transitive_peer_update_refreshes_last_mentioned() {
         latency_source: None,
         latency_age_ms: None,
         latency_observer_id: None,
+        inference_admission_state: None,
     };
 
     node.update_transitive_peer(peer_id, &addr, &ann, make_test_endpoint_id(0xee))

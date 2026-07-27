@@ -9,6 +9,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+source "$SCRIPT_DIR/lib/cuda-toolkit.sh"
+
 LLAMA_DIR="${MESH_LLM_LLAMA_DIR:-$REPO_ROOT/.deps/llama.cpp}"
 LLAMA_BUILD_ROOT="${MESH_LLM_LLAMA_BUILD_ROOT:-$REPO_ROOT/.deps/llama-build}"
 MESH_DIR="$REPO_ROOT/crates/mesh-llm"
@@ -161,12 +163,14 @@ detect_backend() {
 }
 
 locate_nvcc() {
-    if command -v nvcc &>/dev/null; then
+    if command -v nvcc >/dev/null 2>&1; then
+        configure_cuda_toolkit_env || true
         return 0
     fi
     for candidate in /usr/local/cuda/bin /opt/cuda/bin /usr/cuda/bin; do
         if [[ -x "$candidate/nvcc" ]]; then
             export PATH="$candidate:$PATH"
+            configure_cuda_toolkit_env || true
             return 0
         fi
     done

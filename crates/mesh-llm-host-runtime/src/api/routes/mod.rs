@@ -9,6 +9,7 @@ mod model_targets;
 mod objects;
 mod plugins;
 pub(crate) mod runtime;
+mod runtime_activity;
 pub(crate) mod runtime_control_state;
 mod runtime_control_state_sources;
 mod search;
@@ -61,13 +62,21 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("GET", "/api/runtime/config-schema")
                 | ("GET", "/api/runtime/config-control-state")
                 | ("GET", "/api/runtime/control-bootstrap")
+                | ("GET", "/api/runtime/intents")
+                | ("GET", "/api/runtime/activity")
                 | ("POST", "/api/runtime/control/get-config")
                 | ("POST", "/api/runtime/control/scan-refresh")
                 | ("POST", "/api/runtime/control/refresh-inventory")
                 | ("POST", "/api/runtime/control/apply-config")
+                | ("POST", "/api/runtime/control/load-model")
+                | ("POST", "/api/runtime/control/unload-model")
+                | ("POST", "/api/runtime/control/ensure-model")
+                | ("POST", "/api/runtime/control/drain-model")
                 | ("POST", "/api/runtime/config/validate")
                 | ("POST", "/api/runtime/mesh-guardrails")
                 | ("POST", "/api/runtime/models")
+                | ("PUT", "/api/runtime/activity/override")
+                | ("DELETE", "/api/runtime/activity/override")
                 | ("GET", "/api/events") => {
                     runtime::handle(stream, state, method, path_only, body).await?;
                     Ok(true)

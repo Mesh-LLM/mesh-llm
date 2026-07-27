@@ -77,6 +77,36 @@ pub(super) fn apply_runtime_controls_behavior(setting: &mut ConfigSettingSchema,
         "plugin.<plugin-name>.startup.optional" | "plugin.<plugin-name>.startup.lazy_start" => {
             set_static_options(setting)
         }
+        "runtime.mode" | "runtime.startup_failure_policy" => set_static_options(setting),
+        "runtime.drain_timeout_secs" => {
+            set_numeric(setting, Some(1.0), Some(3600.0), Some(1.0), Some("sec"));
+            push_range_constraint(
+                setting,
+                None,
+                Some("runtime.drain_timeout_max_secs".to_string()),
+            );
+        }
+        "runtime.drain_timeout_max_secs" => {
+            set_numeric(setting, Some(1.0), Some(3600.0), Some(1.0), Some("sec"));
+            push_range_constraint(
+                setting,
+                Some("runtime.drain_timeout_secs".to_string()),
+                None,
+            );
+        }
+        "runtime.activity.enabled" => set_static_options(setting),
+        "runtime.activity.idle_after_secs" => {
+            set_numeric(setting, Some(30.0), Some(86400.0), Some(1.0), Some("sec"));
+        }
+        "runtime.activity.poll_interval_secs" => {
+            set_numeric(setting, Some(1.0), Some(60.0), Some(1.0), Some("sec"));
+        }
+        "runtime.activity.resume_debounce_secs" => {
+            set_numeric(setting, Some(0.0), Some(300.0), Some(1.0), Some("sec"));
+        }
+        "runtime.activity.response" | "runtime.activity.advertisement" => {
+            set_static_options(setting)
+        }
         _ => {}
     }
 }

@@ -60,6 +60,7 @@ include!("gpu_status.rs");
 include!("runtime_status.rs");
 include!("node_state.rs");
 include!("control_plane.rs");
+include!("runtime_lifecycle_routes.rs");
 include!("management_http.rs");
 include!("runtime_data.rs");
 include!("catalog_routes.rs");

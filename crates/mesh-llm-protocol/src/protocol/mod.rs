@@ -68,6 +68,8 @@ pub enum ControlFrameError {
     InvalidOwnerControlErrorCode { got: i32 },
     InvalidInventoryDisposition { got: i32 },
     MissingInventoryModelRef,
+    MissingModelRef,
+    InvalidModelRefCombination,
     InvalidInventoryOrder,
     DecodeError(String),
     WrongStreamType { expected: u8, got: u8 },
@@ -148,6 +150,18 @@ impl std::fmt::Display for ControlFrameError {
             }
             ControlFrameError::MissingInventoryModelRef => {
                 write!(f, "inventory entry requires a canonical model ref")
+            }
+            ControlFrameError::MissingModelRef => {
+                write!(
+                    f,
+                    "model lifecycle command requires exactly one model reference"
+                )
+            }
+            ControlFrameError::InvalidModelRefCombination => {
+                write!(
+                    f,
+                    "model lifecycle command has an invalid model identifier combination"
+                )
             }
             ControlFrameError::InvalidInventoryOrder => {
                 write!(
@@ -345,6 +359,10 @@ impl ValidateControlFrame for crate::proto::node::OwnerControlRequest {
             self.watch_config.is_some(),
             self.apply_config.is_some(),
             self.refresh_inventory.is_some(),
+            self.load_model.is_some(),
+            self.unload_model.is_some(),
+            self.ensure_model.is_some(),
+            self.drain_model.is_some(),
         ];
         if commands.into_iter().filter(|present| *present).count() != 1 {
             return Err(ControlFrameError::MissingControlCommand);
@@ -361,6 +379,18 @@ impl ValidateControlFrame for crate::proto::node::OwnerControlRequest {
         if let Some(request) = &self.refresh_inventory {
             request.validate_frame()?;
         }
+        if let Some(request) = &self.load_model {
+            request.validate_frame()?;
+        }
+        if let Some(request) = &self.unload_model {
+            request.validate_frame()?;
+        }
+        if let Some(request) = &self.ensure_model {
+            request.validate_frame()?;
+        }
+        if let Some(request) = &self.drain_model {
+            request.validate_frame()?;
+        }
         Ok(())
     }
 }
@@ -375,6 +405,10 @@ impl ValidateControlFrame for crate::proto::node::OwnerControlResponse {
             self.watch_config.is_some(),
             self.apply_config.is_some(),
             self.refresh_inventory.is_some(),
+            self.load_model.is_some(),
+            self.unload_model.is_some(),
+            self.ensure_model.is_some(),
+            self.drain_model.is_some(),
         ];
         if results.into_iter().filter(|present| *present).count() != 1 {
             return Err(ControlFrameError::MissingControlResult);
@@ -389,6 +423,18 @@ impl ValidateControlFrame for crate::proto::node::OwnerControlResponse {
             response.validate_frame()?;
         }
         if let Some(response) = &self.refresh_inventory {
+            response.validate_frame()?;
+        }
+        if let Some(response) = &self.load_model {
+            response.validate_frame()?;
+        }
+        if let Some(response) = &self.unload_model {
+            response.validate_frame()?;
+        }
+        if let Some(response) = &self.ensure_model {
+            response.validate_frame()?;
+        }
+        if let Some(response) = &self.drain_model {
             response.validate_frame()?;
         }
         Ok(())
@@ -503,6 +549,94 @@ impl ValidateControlFrame for crate::proto::node::OwnerControlRefreshInventoryRe
     }
 }
 
+impl ValidateControlFrame for crate::proto::node::OwnerControlLoadModelRequest {
+    fn validate_frame(&self) -> Result<(), ControlFrameError> {
+        validate_endpoint_id_length(self.requester_node_id.len())?;
+        validate_endpoint_id_length(self.target_node_id.len())?;
+        let model = self
+            .model
+            .as_ref()
+            .ok_or(ControlFrameError::MissingModelRef)?;
+        validate_owner_control_model_for_load_or_ensure(model)
+    }
+}
+
+impl ValidateControlFrame for crate::proto::node::OwnerControlUnloadModelRequest {
+    fn validate_frame(&self) -> Result<(), ControlFrameError> {
+        validate_endpoint_id_length(self.requester_node_id.len())?;
+        validate_endpoint_id_length(self.target_node_id.len())?;
+        let model = self
+            .model
+            .as_ref()
+            .ok_or(ControlFrameError::MissingModelRef)?;
+        validate_owner_control_model_for_unload_or_drain(model)
+    }
+}
+
+impl ValidateControlFrame for crate::proto::node::OwnerControlEnsureModelRequest {
+    fn validate_frame(&self) -> Result<(), ControlFrameError> {
+        validate_endpoint_id_length(self.requester_node_id.len())?;
+        validate_endpoint_id_length(self.target_node_id.len())?;
+        let model = self
+            .model
+            .as_ref()
+            .ok_or(ControlFrameError::MissingModelRef)?;
+        validate_owner_control_model_for_load_or_ensure(model)
+    }
+}
+
+impl ValidateControlFrame for crate::proto::node::OwnerControlDrainModelRequest {
+    fn validate_frame(&self) -> Result<(), ControlFrameError> {
+        validate_endpoint_id_length(self.requester_node_id.len())?;
+        validate_endpoint_id_length(self.target_node_id.len())?;
+        let model = self
+            .model
+            .as_ref()
+            .ok_or(ControlFrameError::MissingModelRef)?;
+        validate_owner_control_model_for_unload_or_drain(model)
+    }
+}
+
+impl ValidateControlFrame for crate::proto::node::OwnerControlLoadModelResponse {
+    fn validate_frame(&self) -> Result<(), ControlFrameError> {
+        validate_owner_control_model_for_load_or_ensure(
+            self.target
+                .as_ref()
+                .ok_or(ControlFrameError::MissingModelRef)?,
+        )
+    }
+}
+
+impl ValidateControlFrame for crate::proto::node::OwnerControlUnloadModelResponse {
+    fn validate_frame(&self) -> Result<(), ControlFrameError> {
+        validate_owner_control_model_for_unload_or_drain(
+            self.target
+                .as_ref()
+                .ok_or(ControlFrameError::MissingModelRef)?,
+        )
+    }
+}
+
+impl ValidateControlFrame for crate::proto::node::OwnerControlEnsureModelResponse {
+    fn validate_frame(&self) -> Result<(), ControlFrameError> {
+        validate_owner_control_model_for_load_or_ensure(
+            self.target
+                .as_ref()
+                .ok_or(ControlFrameError::MissingModelRef)?,
+        )
+    }
+}
+
+impl ValidateControlFrame for crate::proto::node::OwnerControlDrainModelResponse {
+    fn validate_frame(&self) -> Result<(), ControlFrameError> {
+        validate_owner_control_model_for_unload_or_drain(
+            self.target
+                .as_ref()
+                .ok_or(ControlFrameError::MissingModelRef)?,
+        )
+    }
+}
+
 impl ValidateControlFrame for crate::proto::node::OwnerControlRefreshInventory {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
         use crate::proto::node::OwnerControlRefreshInventoryDisposition;
@@ -596,6 +730,40 @@ fn validate_config_hash_length(len: usize) -> Result<(), ControlFrameError> {
         return Err(ControlFrameError::InvalidConfigHashLength { got: len });
     }
     Ok(())
+}
+
+fn validate_owner_control_model_for_load_or_ensure(
+    model: &crate::proto::node::OwnerControlModelRef,
+) -> Result<(), ControlFrameError> {
+    let canonical = !model.canonical_model_ref.trim().is_empty();
+    let instance = model
+        .instance_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty());
+    match (canonical, instance) {
+        (true, false) => Ok(()),
+        (false, false) => Err(ControlFrameError::MissingModelRef),
+        _ => Err(ControlFrameError::InvalidModelRefCombination),
+    }
+}
+
+fn validate_owner_control_model_for_unload_or_drain(
+    model: &crate::proto::node::OwnerControlModelRef,
+) -> Result<(), ControlFrameError> {
+    let canonical = !model.canonical_model_ref.trim().is_empty();
+    let instance = model
+        .instance_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty());
+    if canonical ^ instance {
+        Ok(())
+    } else {
+        if canonical || instance {
+            Err(ControlFrameError::InvalidModelRefCombination)
+        } else {
+            Err(ControlFrameError::MissingModelRef)
+        }
+    }
 }
 
 fn validate_public_key_length(len: usize) -> Result<(), ControlFrameError> {
@@ -745,7 +913,8 @@ pub fn owner_control_rejection_envelope(
 mod tests {
     use super::*;
     use crate::proto::node::{
-        CompactModelMetadata, ConfigApplyMode, NodeConfigSnapshot, NodeGpuConfig, NodeModelEntry,
+        CompactModelMetadata, ConfigApplyMode, GossipFrame, InferenceAdmissionState,
+        NodeConfigSnapshot, NodeGpuConfig, NodeModelEntry, NodeRole,
         OwnerControlApplyConfigRequest, OwnerControlApplyConfigResponse,
         OwnerControlConfigSnapshot, OwnerControlConfigUpdate, OwnerControlEnvelope,
         OwnerControlError, OwnerControlErrorCode, OwnerControlGetConfigRequest,
@@ -753,8 +922,9 @@ mod tests {
         OwnerControlRefreshInventory, OwnerControlRefreshInventoryDisposition,
         OwnerControlRefreshInventoryRequest, OwnerControlRefreshInventoryResponse,
         OwnerControlRequest, OwnerControlResponse, OwnerControlWatchAccepted,
-        OwnerControlWatchConfigResponse, SignedNodeOwnership,
+        OwnerControlWatchConfigResponse, PeerAnnouncement, SignedNodeOwnership,
     };
+    use prost::Message;
 
     fn control_plane_test_config() -> NodeConfigSnapshot {
         NodeConfigSnapshot {
@@ -839,6 +1009,10 @@ mod tests {
                 watch_config: None,
                 apply_config: None,
                 refresh_inventory: None,
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             response: None,
             error: None,
@@ -863,6 +1037,10 @@ mod tests {
                 }),
                 apply_config: None,
                 refresh_inventory: None,
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             error: None,
         };
@@ -883,6 +1061,10 @@ mod tests {
                     config: Some(control_plane_test_config()),
                 }),
                 refresh_inventory: None,
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             response: None,
             error: None,
@@ -907,6 +1089,10 @@ mod tests {
                     diagnostics: Vec::new(),
                 }),
                 refresh_inventory: None,
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             error: None,
         };
@@ -925,6 +1111,10 @@ mod tests {
                     requester_node_id: vec![0x50; 32],
                     target_node_id: vec![0x60; 32],
                 }),
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             response: None,
             error: None,
@@ -945,6 +1135,10 @@ mod tests {
                     snapshot: Some(control_plane_test_snapshot()),
                     inventory: None,
                 }),
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             error: None,
         };
@@ -963,6 +1157,10 @@ mod tests {
                 watch_config: None,
                 apply_config: None,
                 refresh_inventory: None,
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             error: None,
         };
@@ -988,6 +1186,10 @@ mod tests {
                 }),
                 apply_config: None,
                 refresh_inventory: None,
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             error: None,
         };
@@ -1006,6 +1208,10 @@ mod tests {
                 watch_config: None,
                 apply_config: None,
                 refresh_inventory: None,
+                load_model: None,
+                unload_model: None,
+                ensure_model: None,
+                drain_model: None,
             }),
             response: None,
             error: None,
@@ -1134,6 +1340,44 @@ mod tests {
 
         assert_eq!(decoded, response);
         assert_eq!(decoded.inventory.expect("inventory").entries.len(), 2);
+    }
+
+    #[test]
+    fn peer_announcement_admission_round_trip() {
+        let mut peer = PeerAnnouncement {
+            endpoint_id: vec![0x42; 32],
+            role: NodeRole::Worker as i32,
+            inference_admission_state: Some(InferenceAdmissionState::Accepting as i32),
+            ..Default::default()
+        };
+
+        let frame_with_state = GossipFrame {
+            r#gen: NODE_PROTOCOL_GENERATION,
+            sender_id: vec![0x11; 32],
+            peers: vec![peer.clone()],
+        };
+
+        let encoded = frame_with_state.encode_to_vec();
+        let decoded = GossipFrame::decode(encoded.as_slice())
+            .expect("peer-announcement frame should decode after encode");
+        let decoded_peer = &decoded.peers[0];
+
+        assert_eq!(
+            decoded_peer.inference_admission_state,
+            peer.inference_admission_state
+        );
+        assert!(decoded.validate_frame().is_ok());
+
+        peer.inference_admission_state = None;
+        let frame_without_state = GossipFrame {
+            peers: vec![peer],
+            ..frame_with_state
+        };
+        let reencoded = frame_without_state.encode_to_vec();
+        let redecoded = GossipFrame::decode(reencoded.as_slice())
+            .expect("peer-announcement frame should decode without admission state");
+
+        assert!(redecoded.peers[0].inference_admission_state.is_none());
     }
 
     #[test]

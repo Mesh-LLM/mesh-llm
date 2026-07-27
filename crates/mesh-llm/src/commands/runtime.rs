@@ -98,6 +98,52 @@ pub(crate) async fn dispatch_runtime_command(
             port,
             json,
         }) => run_control_scan_refresh(endpoint, *port, *json).await,
+        Some(RuntimeCommand::LoadModel {
+            endpoint,
+            model,
+            profile,
+            port,
+            json,
+        }) => run_control_load_model(endpoint, model, profile.as_deref(), *port, *json).await,
+        Some(RuntimeCommand::UnloadModel {
+            endpoint,
+            model,
+            instance_id,
+            port,
+            json,
+        }) => {
+            run_control_unload_model(
+                endpoint,
+                model.as_deref(),
+                instance_id.as_deref(),
+                *port,
+                *json,
+            )
+            .await
+        }
+        Some(RuntimeCommand::EnsureModel {
+            endpoint,
+            model,
+            profile,
+            port,
+            json,
+        }) => run_control_ensure_model(endpoint, model, profile.as_deref(), *port, *json).await,
+        Some(RuntimeCommand::DrainModel {
+            endpoint,
+            model,
+            instance_id,
+            port,
+            json,
+        }) => {
+            run_control_drain_model(
+                endpoint,
+                model.as_deref(),
+                instance_id.as_deref(),
+                *port,
+                *json,
+            )
+            .await
+        }
         Some(RuntimeCommand::RefreshInventory {
             endpoint,
             port,
@@ -210,6 +256,70 @@ pub(crate) async fn run_control_scan_refresh(
         println!("{line}");
     }
     Ok(())
+}
+
+pub(crate) async fn run_control_load_model(
+    endpoint: &str,
+    model: &str,
+    profile: Option<&str>,
+    port: u16,
+    json_output: bool,
+) -> Result<()> {
+    let body = post_runtime_payload(
+        port,
+        "/api/runtime/control/load-model",
+        &build_lifecycle_request(endpoint, Some(model), None, profile),
+    )
+    .await?;
+    print_control_response("Load model (owner-control)", &body, json_output)
+}
+
+pub(crate) async fn run_control_unload_model(
+    endpoint: &str,
+    model: Option<&str>,
+    instance_id: Option<&str>,
+    port: u16,
+    json_output: bool,
+) -> Result<()> {
+    let body = post_runtime_payload(
+        port,
+        "/api/runtime/control/unload-model",
+        &build_lifecycle_request(endpoint, model, instance_id, None),
+    )
+    .await?;
+    print_control_response("Unload model (owner-control)", &body, json_output)
+}
+
+pub(crate) async fn run_control_ensure_model(
+    endpoint: &str,
+    model: &str,
+    profile: Option<&str>,
+    port: u16,
+    json_output: bool,
+) -> Result<()> {
+    let body = post_runtime_payload(
+        port,
+        "/api/runtime/control/ensure-model",
+        &build_lifecycle_request(endpoint, Some(model), None, profile),
+    )
+    .await?;
+    print_control_response("Ensure model (owner-control)", &body, json_output)
+}
+
+pub(crate) async fn run_control_drain_model(
+    endpoint: &str,
+    model: Option<&str>,
+    instance_id: Option<&str>,
+    port: u16,
+    json_output: bool,
+) -> Result<()> {
+    let body = post_runtime_payload(
+        port,
+        "/api/runtime/control/drain-model",
+        &build_lifecycle_request(endpoint, model, instance_id, None),
+    )
+    .await?;
+    print_control_response("Drain model (owner-control)", &body, json_output)
 }
 
 pub(crate) async fn run_control_apply_config(
@@ -501,6 +611,22 @@ fn build_control_endpoint_request(endpoint: &str) -> serde_json::Value {
     json!({ "endpoint": endpoint })
 }
 
+fn build_lifecycle_request(
+    endpoint: &str,
+    model: Option<&str>,
+    instance_id: Option<&str>,
+    profile: Option<&str>,
+) -> serde_json::Value {
+    match (model, instance_id, profile) {
+        (Some(model), None, Some(profile)) => {
+            json!({ "endpoint": endpoint, "model": model, "profile": profile })
+        }
+        (Some(model), None, None) => json!({ "endpoint": endpoint, "model": model }),
+        (None, Some(id), None) => json!({ "endpoint": endpoint, "instance_id": id }),
+        _ => json!({ "endpoint": endpoint }),
+    }
+}
+
 fn build_guardrail_mode_request(mode: MeshGuardrailCliMode) -> serde_json::Value {
     json!({ "mode": mode.as_str() })
 }
@@ -627,8 +753,8 @@ fn find_pid(processes: &[serde_json::Value], model: &serde_json::Value) -> Optio
 mod tests {
     use super::{
         build_apply_config_request, build_control_endpoint_request, build_guardrail_mode_request,
-        control_bootstrap_lines, control_scan_refresh_lines, display_backend_label,
-        runtime_success_lines, yes_no,
+        build_lifecycle_request, control_bootstrap_lines, control_scan_refresh_lines,
+        display_backend_label, runtime_success_lines, yes_no,
     };
     use mesh_llm_cli::MeshGuardrailCliMode;
     use mesh_llm_host_runtime::command_support::plugin::{GpuAssignment, GpuConfig, MeshConfig};
@@ -735,6 +861,19 @@ mod tests {
         assert_eq!(
             build_control_endpoint_request("endpoint-token"),
             json!({ "endpoint": "endpoint-token" })
+        );
+        assert_eq!(
+            build_lifecycle_request(
+                "endpoint-token",
+                Some("org/model:file.gguf"),
+                None,
+                Some("low-ctx")
+            ),
+            json!({
+                "endpoint": "endpoint-token",
+                "model": "org/model:file.gguf",
+                "profile": "low-ctx"
+            })
         );
     }
 
