@@ -15,6 +15,8 @@ export default [
     description: "Configure mesh-llm behavior, models, and defaults.",
     links: [
       ["Config File", "/docs/pages/config-toml/"],
+      ["Runtime modes", "/docs/pages/runtime-lifecycle/#runtime-modes"],
+      ["Activity policy", "/docs/pages/runtime-lifecycle/#activity-aware-admission"],
       ["Config Defaults", "/docs/pages/config-defaults/"],
       ["Config Models & Plugins", "/docs/pages/config-models/"],
       ["Config Reference", "/docs/pages/config-reference/"]
@@ -25,6 +27,7 @@ export default [
     description: "Serve local models, use Hugging Face GGUFs, and scale across machines.",
     links: [
       ["Run your first model", "/docs/pages/quickstart/#3-start-one-private-node"],
+      ["Runtime lifecycle", "/docs/pages/runtime-lifecycle/"],
       ["Choose a model", "/docs/pages/choose-a-model/"],
       ["Running large models", "/docs/pages/running-large-models/"],
       ["Console chat", "/docs/pages/console-chat/"],

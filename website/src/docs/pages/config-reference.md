@@ -23,6 +23,30 @@ mesh-llm config validate --config-path ./mesh.toml --json
 `--config-path` is omitted, it uses the global `--config` path, then
 `MESH_LLM_CONFIG`, then `~/.mesh-llm/config.toml`.
 
+## Runtime fields
+
+| Field | Default | Allowed values / range | Persistence |
+|---|---|---|---|
+| `runtime.mode` | `serve` | `serve`, `on_demand`, `client` | Config |
+| `runtime.startup_failure_policy` | `best_effort` | `best_effort`, `fail_fast` | Config |
+| `runtime.drain_timeout_secs` | `30` | 1–3600; no greater than maximum | Config |
+| `runtime.drain_timeout_max_secs` | `300` | 1–3600; no less than normal timeout | Config |
+
+## Activity fields
+
+| Field | Default | Allowed values / range | Persistence |
+|---|---|---|---|
+| `runtime.activity.enabled` | `false` | Boolean | Config |
+| `runtime.activity.idle_after_secs` | `300` | 30–86400 | Config |
+| `runtime.activity.poll_interval_secs` | `5` | 1–60 | Config |
+| `runtime.activity.resume_debounce_secs` | `30` | 0–300 | Config |
+| `runtime.activity.response` | `pause_remote` | `pause_remote`, `pause_all`, `reduce_priority` | Config |
+| `runtime.activity.advertisement` | `coarse_state` | `none`, `availability_only`, `coarse_state`, `private_coarse_state` | Config |
+| Activity override | `auto` | `auto`, `active`, `idle` | Session only; never written to config |
+
+See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) for mode behavior,
+admission semantics, and the privacy boundary.
+
 ## Rejected Fields
 
 The following fields are recognized by the parser but explicitly rejected. Setting them will cause a validation error:

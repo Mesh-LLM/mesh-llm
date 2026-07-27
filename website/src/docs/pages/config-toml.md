@@ -83,17 +83,52 @@ release_signer_keys       = []   # Allowed release signer public keys
 
 ## Runtime
 
-Runtime behavior and model reconciliation.
+Runtime mode, startup behavior, draining, activity-aware admission, and model
+reconciliation.
 
 ```toml
 [runtime]
+mode = "serve"
+startup_failure_policy = "best_effort"
+drain_timeout_secs = 30
+drain_timeout_max_secs = 300
 reconcile_model_targets                = false
 reconcile_model_target_demand_upgrades = false
 model_target_demand_upgrade_min_requests = 2
 model_target_demand_upgrade_max_age_secs = 3600
+
+[runtime.activity]
+enabled = false
+idle_after_secs = 300
+poll_interval_secs = 5
+resume_debounce_secs = 30
+response = "pause_remote"
+advertisement = "coarse_state"
 ```
 
-Model target reconciliation keeps running models aligned with configured targets. Demand upgrades use the minimum request count and maximum request age above when deciding whether a higher-quality target is warranted.
+| Mode | Configured models | Explicit CLI models | Local loads |
+|---|---|---|---|
+| `serve` (default) | Eager | Eager | Allowed |
+| `on_demand` | Candidate metadata; not eager | Eager | Allowed |
+| `client` | Never loaded locally | Conflicts | Disabled |
+
+`startup_failure_policy` accepts `best_effort` (default, keep the daemon
+running) or `fail_fast` (abort when an eager model fails).
+`drain_timeout_secs` and `drain_timeout_max_secs` must each be from 1 to 3600,
+and the normal timeout cannot exceed the maximum.
+
+Activity adaptation is opt-in. `idle_after_secs` is 30–86400,
+`poll_interval_secs` is 1–60, and `resume_debounce_secs` is 0–300. `response`
+accepts `pause_remote`, `pause_all`, or `reduce_priority`. `advertisement`
+accepts `none`, `availability_only`, `coarse_state`, or
+`private_coarse_state`. Manual activity overrides are session-only and are not
+written to this file.
+
+Model target reconciliation keeps running models aligned with configured
+targets. Demand upgrades use the minimum request count and maximum request age
+above when deciding whether a higher-quality target is warranted. See
+[Runtime Lifecycle](/docs/pages/runtime-lifecycle/) for the complete behavior,
+security, and status model.
 
 ## Deep Dives
 
@@ -102,3 +137,4 @@ Model target reconciliation keeps running models aligned with configured targets
 | [Config Defaults](/docs/pages/config-defaults/) | Model defaults: memory sizing, hardware, throughput, skippy, speculative, sampling |
 | [Config Models & Plugins](/docs/pages/config-models/) | Model entries and plugin configuration |
 | [Config Reference](/docs/pages/config-reference/) | Environment variables, CLI commands, rejected fields |
+| [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) | Modes, startup policy, lifecycle control, draining, and activity admission |

@@ -26,18 +26,58 @@ If this fails, start a node:
 mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
 ```
 
+## Runtime lifecycle
+
+Inspect the daemon, desired intents, and activity admission separately:
+
+```sh
+curl -s http://localhost:3131/api/status | jq '.runtime'
+curl -s http://localhost:3131/api/runtime/intents | jq .
+curl -s http://localhost:3131/api/runtime/activity | jq .
+```
+
+- `ready_idle` is healthy: listeners are ready and no route exists yet.
+- `ready_proxying` is healthy without a local model: a plugin or remote route
+  is available.
+- `degraded` indicates a terminal eager-load failure or a priority restoration
+  problem. Inspect `intent_summary.recent_errors` and the intent list.
+- A non-`auto` activity override can pause admission. Clear it with
+  `DELETE /api/runtime/activity/override`.
+- A `draining` instance rejects new work until in-flight work finishes. It is
+  forced down when `runtime.drain_timeout_secs` expires, bounded by
+  `runtime.drain_timeout_max_secs`.
+
+If startup reports a mode conflict, check `[runtime].mode`. Persisted `client`
+cannot be combined with `mesh-llm serve` or explicit local model/serving flags.
+Use `serve` or `on_demand` when the node should load local models.
+
+With `best_effort` (default), a bad eager model can leave the daemon running
+and degraded. With `fail_fast`, the process exits. Choose the policy
+deliberately before treating either result as unexpected.
+
 ## Is a model available?
 
 ```sh
 curl -s http://localhost:9337/v1/models | jq '.data[].id'
 ```
 
-If no models are listed, the model did not load or no serving peer is available. Try a smaller model:
+An empty list is valid on a healthy idle daemon. If you expected a model,
+inspect intents and daemon state. For a local load failure, try a smaller model:
 
 ```sh
 mesh-llm stop
 mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
 ```
+
+If you expected an external endpoint, check both layers:
+
+```sh
+mesh-llm plugins info openai-endpoint
+curl -s http://127.0.0.1:8000/v1/models | jq .
+```
+
+A healthy plugin process does not guarantee its configured inference endpoint
+is reachable or healthy.
 
 ## Is the console reachable?
 
@@ -74,3 +114,6 @@ mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD
 ```
 
 Then move back to `mesh-llm serve --auto` once the local install and model path work.
+
+For a full decision guide, see
+[Runtime Lifecycle](/docs/pages/runtime-lifecycle/).

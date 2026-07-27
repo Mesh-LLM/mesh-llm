@@ -183,7 +183,8 @@ advertisement = "coarse_state"        # "none" | "availability_only" | "coarse_s
 - **`on_demand`**: the daemon starts worker-capable but idle. Configured models
   are preference/candidate metadata, not eager intents. Models load only when
   explicitly requested through local commands, owner-control lifecycle
-  commands, or advisory mesh demand.
+  commands, advisory mesh demand, or explicit CLI `--model`/`--gguf`
+  arguments. Explicit CLI models remain eager startup intents.
 
 ### Startup failure policy
 
@@ -800,7 +801,9 @@ Use the default config:
 mesh-llm serve
 ```
 
-If no startup models are configured, `mesh-llm serve` prints a `⚠️` warning, shows help, and exits.
+If no startup models are configured, `mesh-llm serve` remains alive as a
+healthy zero-model daemon. It reports `ready_idle` while no local, plugin, or
+remote route is available, and can load a model later without restarting.
 
 Or an explicit path:
 
@@ -937,6 +940,9 @@ mesh-llm plugins install Mesh-LLM/openai-endpoint
 Then enable the plugin in `~/.mesh-llm/config.toml`:
 
 ```toml
+[runtime]
+mode = "on_demand"
+
 [[plugin]]
 name = "openai-endpoint"
 url = "http://localhost:8000/api/v1"
@@ -963,8 +969,12 @@ plugin block.
 Start mesh-llm normally:
 
 ```bash
-mesh-llm serve --model Qwen3-8B-Q4_K_M
+mesh-llm serve
 ```
+
+No `[[models]]` entry or placeholder local model is required. `on_demand`
+prevents any configured local models from loading eagerly while preserving the
+ability to load one later.
 
 After startup, mesh-llm should include Lemonade-hosted models in its own model list:
 
@@ -990,6 +1000,8 @@ Notes:
 - mesh-llm does not start or supervise Lemonade; run it separately with the Desktop app or CLI.
 - Use the exact model ID returned by Lemonade's `/api/v1/models`.
 - mesh-llm passes the configured URL to the plugin through `MESH_LLM_PLUGIN_URL`.
+- Plugin-process health and Lemonade endpoint health are separate; verify both
+  before reinstalling the plugin.
 
 Useful model commands:
 
@@ -1034,7 +1046,7 @@ This prints the local GPU inventory with stable IDs, backend device names, VRAM,
 
 ## Local runtime control
 
-Stage one supports local-only hot load and unload on a running node.
+Local hot load and unload target the running daemon on this machine.
 
 ```bash
 mesh-llm load Llama-3.2-1B-Instruct-Q4_K_M
@@ -1061,7 +1073,10 @@ curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
 The guardrail mode update is also node-local. It changes the shared
 server-side `GuardrailPolicy.mode` without restarting the process, so existing
 hosted Skippy backends and future local runtime loads observe the new mode.
-Mesh-wide rebalancing and distributed load/unload come later.
+Single-owner remote load, ensure, unload, and drain are available through the
+explicitly targeted owner-control commands below. Autonomous mesh-wide
+placement and rebalancing remain future work; owner-control is not a public
+mesh-wide load/unload mechanism.
 
 ## Owner-control plane
 

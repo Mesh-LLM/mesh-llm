@@ -105,6 +105,28 @@ curl -s http://localhost:9337/v1/models | jq '.data[].id'
 
 You should see at least one model id. Use that id for direct API calls or agents.
 
+### Start idle, then load a model
+
+The model-first command above remains the easiest first run. You can also start
+the daemon with no local model:
+
+```sh
+mesh-llm serve --discover my-private-mesh
+```
+
+The console, API, mesh, plugins, and owner-control surfaces start independently
+of model processes. Load a model after startup from another terminal:
+
+```sh
+mesh-llm load unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm status
+```
+
+Before any local model, plugin endpoint, or remote route is available,
+`GET /v1/models` correctly returns an empty `data` array. That is a healthy
+idle daemon, not a startup failure. See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/)
+for runtime modes, lifecycle state, and on-demand operation.
+
 ## 6. Try an agent
 
 After console chat works, run one agent launcher:

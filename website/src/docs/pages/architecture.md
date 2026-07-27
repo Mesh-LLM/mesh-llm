@@ -28,6 +28,20 @@ flowchart TD
 
 The important boundary is that mesh-llm owns the product and network behavior, while Skippy owns model execution. The OpenAI API stays stable whether the request is handled locally, by a peer, or by a multi-stage pipeline.
 
+### Durable daemon, managed models
+
+The host runtime owns durable surfaces: API listeners, console, identity,
+discovery, mesh membership, plugins, routing, status, and owner-control. Local
+model instances are managed resources underneath that daemon. They can be
+absent, loading, serving, draining, failed, or stopped without redefining
+whether the daemon itself is healthy.
+
+This is why zero-model states are valid. A node can be `ready_idle` with only
+its listeners ready, or `ready_proxying` with plugin or peer routes but no local
+model. Local and private owner lifecycle intents ask the reconciler to move
+model resources between states while the durable surfaces remain available.
+See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/).
+
 ## Product and control surfaces
 
 The inference API at `:9337/v1` is the application-facing path. The local management API at `:3131` supplies status, discovery, lifecycle, and runtime views to the React Mesh LLM console and to operators using scripts or the CLI. An owned node-control API provides configuration, inventory, and runtime commands for attested hosts through the owner-control lane; it uses explicit endpoint authorization and remains separate from the mesh plane used for join, gossip, routing, and inference.
@@ -39,7 +53,7 @@ The inference API at `:9337/v1` is the application-facing path. The local manage
 3. The router selects a local target, a peer host, or a stage-0 target for a split model. Model availability, hardware fit, demand, request affinity, and health all contribute to the decision.
 4. If the target is remote, the node uses the mesh QUIC transport and a tunnel or route request to reach it. The caller still sees one local OpenAI endpoint.
 5. If the target is split, stage 0 runs the input and sends activations downstream through Skippy stage transport. Later stages send results back toward the driver, which streams the OpenAI response.
-6. Runtime status, model state, routing observations, and events are published to the management API and telemetry surfaces without changing the inference contract.
+6. Runtime status, model lifecycle state, routing observations, and events are published to the management API and telemetry surfaces without changing the inference contract. Activity policy can pause admission or reduce priority without unloading a model.
 
 ```mermaid
 sequenceDiagram

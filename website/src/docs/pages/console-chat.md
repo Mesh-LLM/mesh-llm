@@ -12,6 +12,11 @@ http://localhost:3131
 
 The console is local to the machine running Mesh. It shows node status, visible peers, loaded models, and chat.
 
+A healthy `ready_idle` daemon can show an empty model selector. The console and
+management surfaces are ready, but no local, plugin, or remote model route is
+available yet. Load a model, start the configured provider, or wait for a mesh
+route; the empty selector does not by itself mean the daemon failed.
+
 ## Send a first prompt
 
 Use a short prompt first:
@@ -41,9 +46,13 @@ Check the API from a terminal:
 curl -s http://localhost:9337/v1/models | jq '.data[].id'
 ```
 
-If no models are listed, the model did not load or no serving peer is available. Try a smaller model, then restart:
+If no models are listed and you expected a local model, inspect runtime intents
+or try a smaller model:
 
 ```sh
 mesh-llm stop
 mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
 ```
+
+See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) for idle, proxying, and
+serving states.

@@ -39,7 +39,8 @@ mesh-llm serve
 ```
 
 - Both configured startup models should be considered for launch
-- If `[[models]]` is empty, `mesh-llm serve` should print a `⚠️` warning, show help, and exit cleanly
+- If `[[models]]` is empty, `mesh-llm serve` should remain alive with
+  `daemon_state=ready_idle` and a successful, possibly empty `/v1/models`
 - Explicit `--model` or `--gguf` should ignore configured `[[models]]`
 - Explicit `--ctx-size` should override configured `ctx_size`
 
@@ -246,6 +247,41 @@ curl -X DELETE localhost:3131/api/runtime/models/Llama-3.2-1B-Instruct-Q4_K_M
 - `GET /api/runtime` and `GET /api/runtime/processes` agree with the CLI output
 - Loading a small local model adds it to `/v1/models` without restarting the node
 - Unloading any local model removes it cleanly without terminating the mesh-llm process
+
+### 9b. Runtime daemon lifecycle matrix
+
+Use the maintained harness for the zero-download control checks:
+
+```bash
+scripts/qa-runtime-daemon-lifecycle.sh \
+  --current-binary ./target/debug/mesh-llm \
+  --evidence-dir .sisyphus/evidence
+```
+
+Also verify the following behaviors explicitly:
+
+| Scenario | Expected result |
+|---|---|
+| Zero-model `serve` | Daemon remains alive; `ready_idle`; `/v1/models` succeeds with an empty list. |
+| `serve` mode | Configured and explicit CLI models are eager. |
+| `on_demand` mode | Configured models stay idle; explicit CLI models remain eager; local load works. |
+| `client` mode | Routing works; local load and conflicting model/serve flags fail clearly. |
+| `best_effort` | Bad eager model records failure while durable surfaces stay up. |
+| `fail_fast` | Bad eager model terminates startup nonzero. |
+| Local lifecycle | CLI and REST load/unload work; model and exact-instance unload are distinct. |
+| Owner lifecycle | Same-owner load, unload, ensure, and drain return accepted intents and converge on the target. |
+| Activity admission | `pause_remote`, `pause_all`, and `reduce_priority` match the ingress matrix; PUT/DELETE override round-trips. |
+| Plugin-only routing | `openai-endpoint` models and completion work with no `[[models]]` and no local model process. |
+| Mixed versions | Public join/gossip/routing coexist; old owner-control targets return typed unsupported. |
+
+For owner lifecycle, verify explicit endpoint pinning, wrong-owner and
+wrong-target rejection, session-only persistence, in-flight drain completion,
+and forced unload at the deadline. For activity, verify pause changes admission
+without unloading the model and that only coarse state is advertised.
+
+The daemon-lifecycle harness does not currently launch an external provider,
+so run the plugin-only row with a real test endpoint or a purpose-built fixture.
+It must not be claimed as harness evidence.
 
 ### 10. Console model picker
 

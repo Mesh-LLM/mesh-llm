@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # qa-runtime-daemon-lifecycle.sh - certify runtime daemon model lifecycle rollout:
 # zero-model serve, all modes, best-effort/fail-fast, runtime load/unload/ensure/drain,
-# plugin-only routing, activity overrides/admission, and privacy.
+# activity overrides/admission, and privacy.
 
 set -euo pipefail
 

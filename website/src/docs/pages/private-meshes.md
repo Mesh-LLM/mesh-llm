@@ -39,3 +39,36 @@ curl -s http://localhost:3131/api/status | jq .
 ```
 
 Private meshes are useful for lab machines, office workstations, or a home cluster where you want your own machines to find each other by name.
+
+## Control an owned node
+
+Public/private mesh membership and private owner-control are separate
+boundaries. To manage a model on one remote node you own, read that target's
+endpoint token locally and transfer it out of band:
+
+```sh
+mesh-llm runtime bootstrap --json
+```
+
+From a controlling node authenticated as the same owner:
+
+```sh
+mesh-llm runtime load-model \
+  --endpoint '<control-endpoint>' --model '<canonical-model-ref>'
+mesh-llm runtime ensure-model \
+  --endpoint '<control-endpoint>' --model '<canonical-model-ref>'
+mesh-llm runtime unload-model \
+  --endpoint '<control-endpoint>' --model '<canonical-model-ref>'
+mesh-llm runtime drain-model \
+  --endpoint '<control-endpoint>' --instance-id '<instance-id>'
+```
+
+The endpoint token pins exactly one target. These commands travel over
+`mesh-llm-control/1`, require same-owner authentication, and create session-only
+intents. They do not persist TOML, use public gossip, or silently fall back to
+mesh request streams. Public mixed-version join and routing continue
+independently; an older target that lacks owner lifecycle support returns a
+typed unsupported result.
+
+See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/#owner-control-lifecycle)
+for command and drain semantics.

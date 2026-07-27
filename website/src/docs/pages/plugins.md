@@ -78,6 +78,58 @@ name = "openai-endpoint"
 url = "http://127.0.0.1:8000/v1"
 ```
 
+## External-endpoint-only workflow
+
+Mesh can expose an existing OpenAI-compatible provider without loading any
+local model or adding a placeholder model.
+
+1. Install the endpoint plugin:
+
+   ```bash
+   mesh-llm plugins install openai-endpoint
+   ```
+
+2. Configure on-demand mode when configured local models must not load eagerly,
+   then add the provider:
+
+   ```toml
+   [runtime]
+   mode = "on_demand"
+
+   [[plugin]]
+   name = "openai-endpoint"
+   url = "http://127.0.0.1:8000/v1"
+   ```
+
+3. Start the durable runtime:
+
+   ```bash
+   mesh-llm serve
+   ```
+
+4. Verify the provider's models through Mesh:
+
+   ```bash
+   curl -s http://localhost:9337/v1/models | jq '.data[].id'
+   ```
+
+5. Send a completion using one listed model:
+
+   ```bash
+   curl -s http://localhost:9337/v1/chat/completions \
+     -H 'Content-Type: application/json' \
+     -d '{"model":"<provider-model>","messages":[{"role":"user","content":"Say hello."}]}'
+   ```
+
+Plugin-process health and inference-endpoint health are separate. A connected,
+healthy plugin process can report its configured provider as unavailable; in
+that case inspect the provider URL and `/v1/models` response before reinstalling
+the plugin.
+
+See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) for zero-model and
+on-demand behavior, and [OpenAI-Compatible API](/docs/pages/openai-compatible-api/)
+for client semantics.
+
 For plugins that do not need an endpoint, the name is usually enough:
 
 ```toml

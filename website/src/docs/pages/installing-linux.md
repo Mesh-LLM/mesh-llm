@@ -66,6 +66,12 @@ glibc rather than musl.
 
 The installer downloads the `mesh-llm` executable and adds `~/.local/bin` to your user `PATH` when needed. After install, run `mesh-llm setup` to finish runtime configuration and, if you want it, the background service.
 
+`mesh-llm serve` is a foreground process attached to the current terminal.
+When setup installs the optional background service, the systemd user service
+owns the same logical runtime's startup, restart, and logs. Do not start a
+second foreground copy on the same ports; stop or disable the setup-managed
+unit before switching to foreground operation.
+
 ## Next step
 
 Run `mesh-llm setup` to finish machine setup. See the [CLI guide](/docs/pages/CLI/) for the setup flags.
@@ -101,3 +107,4 @@ curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --install-dir "$HOME/bi
 - [Installing on Windows](/docs/pages/installing-windows/)
 - [Hardware support](/docs/pages/hardware-support/)
 - [Updating Mesh](/docs/pages/updating-mesh/)
+- [Runtime Lifecycle](/docs/pages/runtime-lifecycle/)

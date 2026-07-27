@@ -8,6 +8,30 @@ No. Mesh runs models through machines you control, then exposes them through a l
 
 No. Start with one machine. Add machines later when you want more capacity, more models, or an API-only client laptop.
 
+## Does Mesh require a local model?
+
+No. Bare `mesh-llm serve` can run as a healthy idle daemon or route only to
+plugin and remote endpoints. Load a local model later if the node is
+worker-capable. See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/).
+
+## What is the difference between client and on-demand mode?
+
+`client` is routing-only and disables local model loading. `on_demand` starts
+without eagerly loading configured models but retains the ability to load one
+later. Explicit `--model` and `--gguf` arguments remain eager in `on_demand`.
+
+## Does pausing inference unload the model?
+
+No. Activity policy pauses admission or reduces priority. The model stays
+loaded and can resume without a reload. Use unload or drain when you intend to
+remove a model process.
+
+## Why is `/v1/models` empty when the daemon is healthy?
+
+The endpoint lists currently available local, plugin, and remote routes. A
+`ready_idle` daemon has its durable surfaces ready but has no route to list
+yet, so an empty `data` array is valid.
+
 ## What URL do tools use?
 
 Use:

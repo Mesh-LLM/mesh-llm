@@ -7,7 +7,15 @@ description: Configuring models and plugins in ~/.mesh-llm/config.toml
 
 ## Models
 
-The `[[models]]` array configures which models mesh-llm serves. Each entry requires a `model` reference and can override the same sub-configs as `[defaults]`.
+The `[[models]]` array describes local model intent. Each entry requires a
+`model` reference and can override the same sub-configs as `[defaults]`.
+
+- In `serve`, each entry creates eager startup intent.
+- In `on_demand`, entries are preference and candidate metadata; they do not
+  load eagerly.
+- In `client`, entries are never loaded locally.
+
+Explicit `--model` and `--gguf` arguments stay eager in `on_demand`.
 
 ```toml
 [[models]]
@@ -61,6 +69,22 @@ For network-based plugins, use a `url` instead of `command`/`args`:
 name = "openai-endpoint"
 url  = "http://gpu-box:8000/v1"
 ```
+
+An external-endpoint-only node needs no `[[models]]` entry:
+
+```toml
+[runtime]
+mode = "on_demand"
+
+[[plugin]]
+name = "openai-endpoint"
+url = "http://gpu-box:8000/v1"
+```
+
+Start it with bare `mesh-llm serve`. Provider models can appear in
+`/v1/models` while no local model process exists. See
+[Runtime Lifecycle](/docs/pages/runtime-lifecycle/) and
+[Plugins](/docs/pages/plugins/#external-endpoint-only-workflow).
 
 ### Plugin startup config
 

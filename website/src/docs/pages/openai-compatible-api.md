@@ -20,6 +20,20 @@ Use base URL `http://localhost:9337/v1` and any placeholder API key, such as `du
 curl -s http://localhost:9337/v1/models | jq '.data[].id'
 ```
 
+The list reflects usable local models plus models exposed through healthy
+plugin and remote mesh routes:
+
+- `ready_idle` can return an empty `data` array; the daemon is healthy but has
+  no route yet.
+- `ready_proxying` can return plugin or remote models with no local model
+  process.
+- `ready_serving` includes locally served routes.
+
+Requesting an unknown model returns `404` with `model_not_found`. A known route
+that is draining, paused by activity policy, or temporarily unable to accept
+work returns `503` with `service_unavailable`. Pausing admission does not
+unload the model.
+
 ## Chat completion
 
 ```sh
@@ -37,3 +51,6 @@ Tool-calling support depends on the selected model and the agent client. Start w
 ## Structured outputs
 
 Structured output support depends on the model and client behavior. Treat schema enforcement as model- and tool-specific unless the catalog marks stronger guarantees.
+
+For the state and routing model, see
+[Runtime Lifecycle](/docs/pages/runtime-lifecycle/).
