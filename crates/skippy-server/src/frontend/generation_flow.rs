@@ -16,6 +16,10 @@ use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TextGenerationCollector;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::emulation_generation_active;
+use crate::frontend::generation_receipt::{
+    GenerationReceiptObservation, complete_generation_before_cleanup,
+};
+use crate::frontend::local_generation::LocalGenerationReceiptFinalization;
 use crate::frontend::request::wire_sampling_config;
 use crate::frontend::util::generation_stop_values;
 use crate::frontend::util::openai_backend_error;
@@ -298,6 +302,13 @@ impl StageOpenAiBackend {
             }
         }
 
+        // Media embeddings do not have token IDs. The receipt binds the exact
+        // target-tokenized rendered prompt text that selects their positions.
+        let receipt_prompt_token_ids = self
+            .generation_receipt
+            .as_ref()
+            .map(|_| self.tokenize(&prompt.text))
+            .transpose()?;
         let stop_value_storage =
             generation_stop_values(stop, prompt.chat_parse_metadata.as_deref());
         let stop_values = stop_value_storage
@@ -369,6 +380,14 @@ impl StageOpenAiBackend {
             (prefill, token_signal, signal_window)
         };
         let max_tokens = max_tokens.resolve(prefill.position as usize, self.ctx_size)?;
+        let mut receipt_observation = self.generation_receipt.as_ref().map(|_| {
+            GenerationReceiptObservation::new(
+                usize::try_from(max_tokens)
+                    .expect("supported targets represent u32 token budgets as usize"),
+            )
+        });
+        let mut receipt_cancelled = false;
+        let mut receipt_model_generation_elapsed = None;
 
         // Proactive eviction: free one native decode batch worth of resident
         // prefix KV cells for grammar-triggered retries during the coming
@@ -445,6 +464,7 @@ impl StageOpenAiBackend {
 
             while decoded_tokens < max_tokens as usize {
                 if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
+                    receipt_cancelled = true;
                     break;
                 }
                 if let Some(injected_current) = self.maybe_run_generation_hooks(
@@ -460,7 +480,13 @@ impl StageOpenAiBackend {
                     current = injected_current;
                     continue;
                 }
+                if let Some(observation) = receipt_observation.as_mut() {
+                    observation.record_token(current)?;
+                }
                 if collector.push_token(current)? == TokenControl::Stop {
+                    if let Some(observation) = receipt_observation.as_mut() {
+                        observation.mark_callback_stop();
+                    }
                     decoded_tokens += 1;
                     break;
                 }
@@ -559,43 +585,25 @@ impl StageOpenAiBackend {
                     stats,
                 );
             }
+            receipt_model_generation_elapsed = Some(decode_timer.start_instant.elapsed());
             self.emit_openai_summary("stage.openai_decode", decode_timer, attrs);
             Ok(())
         })();
-        let lock_timer = PhaseTimer::start();
-        if let Ok(mut runtime) = self.runtime.lock() {
-            let runtime_lock_wait_ms = lock_timer.elapsed_ms();
-            if let Ok(drop_stats) = runtime.drop_session_timed(&session_id) {
-                let mut attrs = self.openai_attrs(&ids);
-                attrs.insert(
-                    "llama_stage.runtime_lock_wait_ms".to_string(),
-                    json!(runtime_lock_wait_ms),
-                );
-                attrs.insert(
-                    "llama_stage.session_reset_ms".to_string(),
-                    json!(drop_stats.reset_ms),
-                );
-                attrs.insert(
-                    "llama_stage.session_reset".to_string(),
-                    json!(drop_stats.reset_session),
-                );
-                attrs.insert(
-                    "llama_stage.lane_discarded".to_string(),
-                    json!(drop_stats.lane_discarded),
-                );
-                if let Some(reason) = drop_stats.lane_discard_reason.as_deref() {
-                    attrs.insert("llama_stage.lane_discard_reason".to_string(), json!(reason));
-                }
-                Self::insert_runtime_session_stats(
-                    &mut attrs,
-                    "llama_stage.runtime_sessions_after",
-                    &drop_stats.stats_after,
-                );
-                self.telemetry
-                    .emit_debug("stage.openai_session_stop", attrs);
-            }
-        }
-        result?;
+        complete_generation_before_cleanup(
+            result,
+            || {
+                self.finalize_generation_receipt(LocalGenerationReceiptFinalization {
+                    session_label: &session_id,
+                    request_id: ids.request_id,
+                    session_id: ids.session_id,
+                    prompt_token_ids: receipt_prompt_token_ids.as_deref().unwrap_or_default(),
+                    observation: receipt_observation,
+                    cancelled: receipt_cancelled,
+                    model_generation_elapsed: receipt_model_generation_elapsed,
+                })
+            },
+            || self.cleanup_local_generation_session(&session_id, &ids),
+        )?;
         collector.finish(prefill.token_count, GenerationCacheStats::default())
     }
 

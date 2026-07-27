@@ -10,6 +10,7 @@ use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::decode_token_phase;
 use crate::frontend::generation_receipt::{
     GenerationReceiptObservation, LocalGenerationReceiptDelivery,
+    complete_generation_before_cleanup,
 };
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
@@ -22,15 +23,14 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-struct LocalGenerationReceiptFinalization<'a> {
-    generation_succeeded: bool,
-    session_label: &'a str,
-    request_id: u64,
-    session_id: u64,
-    prompt_token_ids: &'a [i32],
-    observation: Option<&'a RefCell<Option<GenerationReceiptObservation>>>,
-    cancelled: bool,
-    model_generation_elapsed: Option<Duration>,
+pub(super) struct LocalGenerationReceiptFinalization<'a> {
+    pub(super) session_label: &'a str,
+    pub(super) request_id: u64,
+    pub(super) session_id: u64,
+    pub(super) prompt_token_ids: &'a [i32],
+    pub(super) observation: Option<GenerationReceiptObservation>,
+    pub(super) cancelled: bool,
+    pub(super) model_generation_elapsed: Option<Duration>,
 }
 
 impl StageOpenAiBackend {
@@ -791,21 +791,64 @@ impl StageOpenAiBackend {
             self.emit_openai_summary("stage.openai_decode", decode_timer, attrs);
             Ok(())
         })();
-        let receipt_result = self.finalize_generation_receipt(LocalGenerationReceiptFinalization {
-            generation_succeeded: result.is_ok(),
-            session_label: &session_id,
-            request_id: receipt_request_id,
-            session_id: receipt_session_id,
-            prompt_token_ids: receipt_prompt_token_ids,
-            observation: receipt_observation.as_ref(),
-            cancelled: receipt_cancelled,
-            model_generation_elapsed: receipt_model_generation_elapsed,
-        });
+        let receipt_observation = receipt_observation
+            .as_ref()
+            .and_then(|observation| observation.borrow_mut().take());
+        complete_generation_before_cleanup(
+            result,
+            || {
+                self.finalize_generation_receipt(LocalGenerationReceiptFinalization {
+                    session_label: &session_id,
+                    request_id: receipt_request_id,
+                    session_id: receipt_session_id,
+                    prompt_token_ids: receipt_prompt_token_ids,
+                    observation: receipt_observation,
+                    cancelled: receipt_cancelled,
+                    model_generation_elapsed: receipt_model_generation_elapsed,
+                })
+            },
+            || self.cleanup_local_generation_session(&session_id, request.ids),
+        )?;
+        Ok(cache_stats)
+    }
+
+    pub(super) fn finalize_generation_receipt(
+        &self,
+        mut finalization: LocalGenerationReceiptFinalization<'_>,
+    ) -> OpenAiResult<()> {
+        if let Some(observation) = finalization.observation.as_mut() {
+            if finalization.cancelled {
+                observation.mark_cancelled();
+            }
+            if let Some(elapsed) = finalization.model_generation_elapsed {
+                observation.set_model_generation_elapsed(elapsed);
+            }
+        }
+        match (self.generation_receipt.as_ref(), finalization.observation) {
+            (Some(config), Some(observation)) => {
+                self.deliver_local_generation_receipt(LocalGenerationReceiptDelivery {
+                    config,
+                    session_label: finalization.session_label,
+                    request_id: finalization.request_id,
+                    session_id: finalization.session_id,
+                    prompt_token_ids: finalization.prompt_token_ids,
+                    observation,
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub(super) fn cleanup_local_generation_session(
+        &self,
+        session_id: &str,
+        ids: &crate::frontend::generation::OpenAiGenerationIds,
+    ) {
         let lock_timer = PhaseTimer::start();
         if let Ok(mut runtime) = self.runtime.lock() {
             let runtime_lock_wait_ms = lock_timer.elapsed_ms();
-            if let Ok(drop_stats) = runtime.drop_session_timed(&session_id) {
-                let mut attrs = self.openai_attrs(request.ids);
+            if let Ok(drop_stats) = runtime.drop_session_timed(session_id) {
+                let mut attrs = self.openai_attrs(ids);
                 attrs.insert(
                     "llama_stage.runtime_lock_wait_ms".to_string(),
                     json!(runtime_lock_wait_ms),
@@ -833,43 +876,6 @@ impl StageOpenAiBackend {
                 self.telemetry
                     .emit_debug("stage.openai_session_stop", attrs);
             }
-        }
-        result?;
-        receipt_result?;
-        Ok(cache_stats)
-    }
-
-    fn finalize_generation_receipt(
-        &self,
-        finalization: LocalGenerationReceiptFinalization<'_>,
-    ) -> OpenAiResult<()> {
-        let observation = finalization.observation.and_then(|observation| {
-            let mut slot = observation.borrow_mut();
-            if let Some(observation) = slot.as_mut() {
-                if finalization.cancelled {
-                    observation.mark_cancelled();
-                }
-                if let Some(elapsed) = finalization.model_generation_elapsed {
-                    observation.set_model_generation_elapsed(elapsed);
-                }
-            }
-            slot.take()
-        });
-        if !finalization.generation_succeeded {
-            return Ok(());
-        }
-        match (self.generation_receipt.as_ref(), observation) {
-            (Some(config), Some(observation)) => {
-                self.deliver_local_generation_receipt(LocalGenerationReceiptDelivery {
-                    config,
-                    session_label: finalization.session_label,
-                    request_id: finalization.request_id,
-                    session_id: finalization.session_id,
-                    prompt_token_ids: finalization.prompt_token_ids,
-                    observation,
-                })
-            }
-            _ => Ok(()),
         }
     }
 }

@@ -5,10 +5,12 @@ use anyhow::Result;
 use openai_frontend::{OpenAiError, OpenAiResult};
 
 use crate::frontend::{StageOpenAiBackend, openai_backend_error};
+use crate::runtime_state::RuntimeState;
 
 const TOKEN_ID_DIGEST_DOMAIN: &[u8] = b"skippy-generation-token-ids-v1\0";
 
 /// Why a successful local generation stopped.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GenerationTermination {
     /// The token callback requested a stop, including for an end-of-generation token.
@@ -20,6 +22,7 @@ pub enum GenerationTermination {
 }
 
 /// Optional digest of the target runtime's full exported state.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerationStateDigest {
     /// Number of bytes in the exported runtime state.
@@ -29,15 +32,18 @@ pub struct GenerationStateDigest {
 }
 
 /// Target-authoritative result captured immediately before local session teardown.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerationReceipt {
     /// OpenAI request identity.
     pub request_id: u64,
     /// OpenAI session identity.
     pub session_id: u64,
-    /// Number of prompt token IDs supplied to local generation.
+    /// Number of target-tokenized prompt-text IDs supplied to local generation.
+    ///
+    /// For multimodal requests, media embeddings have no token IDs and are not included.
     pub prompt_token_count: usize,
-    /// Stable digest of the prompt token IDs.
+    /// Stable digest of the target-tokenized prompt-text IDs.
     pub prompt_token_digest: [u8; 32],
     /// Target-authoritative generated token IDs in callback order.
     pub generated_token_ids: Box<[i32]>,
@@ -126,6 +132,21 @@ pub(crate) struct LocalGenerationReceiptDelivery<'a> {
     pub(crate) observation: GenerationReceiptObservation,
 }
 
+trait GenerationReceiptRuntime {
+    fn canonical_session_position(&self, session_label: &str) -> Result<u64>;
+    fn export_full_state(&mut self, session_label: &str) -> Result<Vec<u8>>;
+}
+
+impl GenerationReceiptRuntime for RuntimeState {
+    fn canonical_session_position(&self, session_label: &str) -> Result<u64> {
+        self.canonical_session_position(session_label)
+    }
+
+    fn export_full_state(&mut self, session_label: &str) -> Result<Vec<u8>> {
+        self.export_full_state(session_label)
+    }
+}
+
 impl GenerationReceiptObservation {
     pub(crate) fn new(max_tokens: usize) -> Self {
         Self {
@@ -183,42 +204,68 @@ impl StageOpenAiBackend {
         &self,
         delivery: LocalGenerationReceiptDelivery<'_>,
     ) -> OpenAiResult<()> {
-        let observation = delivery.observation.finish()?;
-        let (final_session_position, full_state) = {
+        let config = delivery.config;
+        let receipt = {
             let mut runtime = self
                 .runtime
                 .lock()
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            let final_session_position = runtime
-                .canonical_session_position(delivery.session_label)
-                .map_err(openai_backend_error)?;
-            let full_state = if delivery.config.exports_full_state() {
-                let bytes = runtime
-                    .export_full_state(delivery.session_label)
-                    .map_err(openai_backend_error)?;
-                Some(state_digest(&bytes)?)
-            } else {
-                None
-            };
-            (final_session_position, full_state)
+            build_generation_receipt(&mut *runtime, delivery)?
         };
-        let receipt = GenerationReceipt {
-            request_id: delivery.request_id,
-            session_id: delivery.session_id,
-            prompt_token_count: delivery.prompt_token_ids.len(),
-            prompt_token_digest: generation_token_id_digest(delivery.prompt_token_ids),
-            generated_token_ids: observation.generated_token_ids,
-            final_session_position,
-            termination: observation.termination,
-            model_generation_elapsed_us: observation.model_generation_elapsed_us,
-            full_state,
-        };
-        delivery
-            .config
-            .sink()
-            .record(&receipt)
-            .map_err(openai_backend_error)
+        record_generation_receipt(config, &receipt)
     }
+}
+
+fn build_generation_receipt(
+    runtime: &mut dyn GenerationReceiptRuntime,
+    delivery: LocalGenerationReceiptDelivery<'_>,
+) -> OpenAiResult<GenerationReceipt> {
+    let observation = delivery.observation.finish()?;
+    let final_session_position = runtime
+        .canonical_session_position(delivery.session_label)
+        .map_err(openai_backend_error)?;
+    let full_state = if delivery.config.exports_full_state() {
+        let bytes = runtime
+            .export_full_state(delivery.session_label)
+            .map_err(openai_backend_error)?;
+        Some(state_digest(&bytes)?)
+    } else {
+        None
+    };
+    Ok(GenerationReceipt {
+        request_id: delivery.request_id,
+        session_id: delivery.session_id,
+        prompt_token_count: delivery.prompt_token_ids.len(),
+        prompt_token_digest: generation_token_id_digest(delivery.prompt_token_ids),
+        generated_token_ids: observation.generated_token_ids,
+        final_session_position,
+        termination: observation.termination,
+        model_generation_elapsed_us: observation.model_generation_elapsed_us,
+        full_state,
+    })
+}
+
+fn record_generation_receipt(
+    config: &GenerationReceiptConfig,
+    receipt: &GenerationReceipt,
+) -> OpenAiResult<()> {
+    config.sink().record(receipt).map_err(openai_backend_error)
+}
+
+pub(crate) fn complete_generation_before_cleanup<T>(
+    generation_result: OpenAiResult<T>,
+    deliver_receipt: impl FnOnce() -> OpenAiResult<()>,
+    cleanup: impl FnOnce(),
+) -> OpenAiResult<T> {
+    let receipt_result = if generation_result.is_ok() {
+        deliver_receipt()
+    } else {
+        Ok(())
+    };
+    cleanup();
+    let output = generation_result?;
+    receipt_result?;
+    Ok(output)
 }
 
 fn state_digest(bytes: &[u8]) -> OpenAiResult<GenerationStateDigest> {
@@ -236,7 +283,38 @@ fn duration_us(duration: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+
+    struct FakeRuntime {
+        position: Result<u64, &'static str>,
+        full_state: Result<Vec<u8>, &'static str>,
+    }
+
+    impl GenerationReceiptRuntime for FakeRuntime {
+        fn canonical_session_position(&self, _session_label: &str) -> Result<u64> {
+            self.position.map_err(anyhow::Error::msg)
+        }
+
+        fn export_full_state(&mut self, _session_label: &str) -> Result<Vec<u8>> {
+            self.full_state.clone().map_err(anyhow::Error::msg)
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        receipts: Mutex<Vec<GenerationReceipt>>,
+        error: Option<&'static str>,
+    }
+
+    impl GenerationReceiptSink for RecordingSink {
+        fn record(&self, receipt: &GenerationReceipt) -> Result<()> {
+            self.receipts.lock().unwrap().push(receipt.clone());
+            self.error
+                .map_or(Ok(()), |error| Err(anyhow::anyhow!(error)))
+        }
+    }
 
     #[test]
     fn token_digest_is_stable_and_order_sensitive() {
@@ -305,5 +383,112 @@ mod tests {
             digest.blake3_digest,
             state_digest(b"state!").unwrap().blake3_digest
         );
+    }
+
+    #[test]
+    fn model_free_delivery_validates_position_exports_state_and_propagates_sink_errors() {
+        let sink = Arc::new(RecordingSink::default());
+        let config = GenerationReceiptConfig::new(sink.clone()).with_full_state_digest(true);
+        let mut observation = GenerationReceiptObservation::new(1);
+        observation.record_token(9).unwrap();
+        observation.set_model_generation_elapsed(Duration::from_micros(17));
+        let mut runtime = FakeRuntime {
+            position: Ok(4),
+            full_state: Ok(b"state".to_vec()),
+        };
+        let receipt = build_generation_receipt(
+            &mut runtime,
+            LocalGenerationReceiptDelivery {
+                config: &config,
+                session_label: "session",
+                request_id: 2,
+                session_id: 3,
+                prompt_token_ids: &[4, 5, 6],
+                observation,
+            },
+        )
+        .unwrap();
+        record_generation_receipt(&config, &receipt).unwrap();
+        let receipts = sink.receipts.lock().unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].final_session_position, 4);
+        assert_eq!(receipts[0].generated_token_ids.as_ref(), &[9]);
+        assert_eq!(
+            receipts[0].full_state.as_ref().unwrap().blake3_digest,
+            *blake3::hash(b"state").as_bytes()
+        );
+        drop(receipts);
+
+        let failing_position = build_generation_receipt(
+            &mut FakeRuntime {
+                position: Err("position mismatch"),
+                full_state: Ok(Vec::new()),
+            },
+            LocalGenerationReceiptDelivery {
+                config: &config,
+                session_label: "session",
+                request_id: 2,
+                session_id: 3,
+                prompt_token_ids: &[],
+                observation: {
+                    let mut observation = GenerationReceiptObservation::new(0);
+                    observation.set_model_generation_elapsed(Duration::ZERO);
+                    observation
+                },
+            },
+        )
+        .unwrap_err();
+        assert!(failing_position.to_string().contains("position mismatch"));
+
+        let failing_sink = Arc::new(RecordingSink {
+            receipts: Mutex::new(Vec::new()),
+            error: Some("sink failed"),
+        });
+        let failing_config = GenerationReceiptConfig::new(failing_sink);
+        let mut observation = GenerationReceiptObservation::new(0);
+        observation.set_model_generation_elapsed(Duration::ZERO);
+        let receipt = build_generation_receipt(
+            &mut runtime,
+            LocalGenerationReceiptDelivery {
+                config: &failing_config,
+                session_label: "session",
+                request_id: 2,
+                session_id: 3,
+                prompt_token_ids: &[],
+                observation,
+            },
+        )
+        .unwrap();
+        let sink_error = record_generation_receipt(&failing_config, &receipt).unwrap_err();
+        assert!(sink_error.to_string().contains("sink failed"));
+    }
+
+    #[test]
+    fn receipt_delivery_precedes_cleanup_and_cleanup_survives_sink_failure() {
+        let events = Mutex::new(Vec::new());
+        let error = complete_generation_before_cleanup(
+            Ok(()),
+            || {
+                events.lock().unwrap().push("receipt");
+                Err(OpenAiError::backend("sink failed"))
+            },
+            || events.lock().unwrap().push("cleanup"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("sink failed"));
+        assert_eq!(*events.lock().unwrap(), ["receipt", "cleanup"]);
+
+        let events = Mutex::new(Vec::new());
+        let generation_error = complete_generation_before_cleanup::<()>(
+            Err(OpenAiError::backend("generation failed")),
+            || {
+                events.lock().unwrap().push("receipt");
+                Ok(())
+            },
+            || events.lock().unwrap().push("cleanup"),
+        )
+        .unwrap_err();
+        assert!(generation_error.to_string().contains("generation failed"));
+        assert_eq!(*events.lock().unwrap(), ["cleanup"]);
     }
 }
