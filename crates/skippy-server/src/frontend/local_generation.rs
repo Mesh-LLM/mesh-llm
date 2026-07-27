@@ -14,7 +14,7 @@ use crate::frontend::generation_receipt::{
     complete_generation_before_cleanup,
 };
 use crate::frontend::linear_proposal::{
-    LinearProposalExecutionParams, LinearProposalQueryOutcome,
+    LinearProposalDiscardReason, LinearProposalExecutionParams, LinearProposalQueryOutcome,
     execute_linear_proposal_with_terminal_discard, greedy_linear_proposal_admitted,
     query_linear_proposal, report_linear_proposal_receipt,
 };
@@ -582,7 +582,19 @@ impl StageOpenAiBackend {
                     request.sampling.enabled,
                     request.chat_sampling_metadata,
                 );
-            let mut linear_context_tokens = linear_proposals_enabled.then(|| {
+            let linear_proposal_max_tokens = if linear_proposals_enabled {
+                let mut runtime = self
+                    .runtime
+                    .lock()
+                    .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+                runtime
+                    .session_batch_size(&session_id)
+                    .map_err(openai_backend_error)?
+                    .saturating_sub(1)
+            } else {
+                0
+            };
+            let mut linear_context_tokens = (linear_proposal_max_tokens > 0).then(|| {
                 let mut tokens = request.prompt_token_ids.to_vec();
                 if decoded_tokens > 0 {
                     tokens.push(current);
@@ -608,6 +620,9 @@ impl StageOpenAiBackend {
                 ) {
                     let remaining_new_tokens =
                         (request.max_tokens as usize).saturating_sub(decoded_tokens);
+                    // Prefill leaves the final prompt token undecoded. When whole-prompt
+                    // prefill also samples the first target token, `decoded_tokens == 1`;
+                    // otherwise it is zero. Those two modes therefore share this position.
                     let base_position = u64::try_from(
                         request
                             .prompt_token_ids
@@ -628,12 +643,13 @@ impl StageOpenAiBackend {
                         decoded_tokens,
                         committed_token_ids,
                         remaining_new_tokens,
+                        linear_proposal_max_tokens,
                     )? {
                         LinearProposalQueryOutcome::NoProposal => None,
                         LinearProposalQueryOutcome::DeadlineExceeded {
                             proposal_elapsed_us,
                         } => {
-                            let mut attrs = self.openai_attrs(request.ids);
+                            let mut attrs = BTreeMap::new();
                             attrs.insert(
                                 "llama_stage.linear_proposal.discard_reason".to_string(),
                                 json!("deadline_exceeded"),
@@ -663,60 +679,78 @@ impl StageOpenAiBackend {
                                         max_new_tokens: request.max_tokens as usize,
                                     },
                                     queried,
-                                    &mut on_token,
+                                    &mut emit_token,
                                 )
                             },
                         )?;
-                        if let Some(error) = report_linear_proposal_receipt(config, &receipt) {
-                            let mut attrs = self.openai_attrs(request.ids);
-                            receipt.insert_telemetry_attrs(&mut attrs);
-                            attrs.insert(
-                                "llama_stage.linear_proposal.report_error".to_string(),
-                                json!(format!("{error:#}")),
-                            );
-                            self.telemetry
-                                .emit("stage.openai_linear_proposal_report_failed", attrs);
-                            eprintln!(
-                                "linear proposal receipt report failed after tokens were committed: {error:#}"
-                            );
+                        if receipt.is_none() {
+                            let discard_failed = config
+                                .source()
+                                .discard(
+                                    &decision_id,
+                                    LinearProposalDiscardReason::PositionMismatch,
+                                )
+                                .is_err();
+                            if discard_failed {
+                                self.telemetry.emit(
+                                    "stage.openai_linear_proposal_discard_failed",
+                                    BTreeMap::from([(
+                                        "llama_stage.linear_proposal.discard_reason".to_string(),
+                                        json!("position_mismatch"),
+                                    )]),
+                                );
+                            }
                         }
+                        if let Some(receipt) = receipt {
+                            if report_linear_proposal_receipt(config, &receipt).is_some() {
+                                let mut attrs = BTreeMap::new();
+                                receipt.insert_telemetry_attrs(&mut attrs);
+                                attrs.insert(
+                                    "llama_stage.linear_proposal.report_outcome".to_string(),
+                                    json!("failed"),
+                                );
+                                self.telemetry
+                                    .emit("stage.openai_linear_proposal_report_failed", attrs);
+                            }
 
-                        let proposal_runtime_lock_wait_ms =
-                            Duration::from_micros(receipt.runtime_lock_wait_us).as_secs_f64()
-                                * 1_000.0;
-                        let proposal_runtime_lock_hold_ms =
-                            Duration::from_micros(receipt.runtime_lock_hold_us).as_secs_f64()
-                                * 1_000.0;
-                        runtime_lock_wait_ms += proposal_runtime_lock_wait_ms;
-                        runtime_lock_wait_max_ms =
-                            runtime_lock_wait_max_ms.max(proposal_runtime_lock_wait_ms);
-                        runtime_lock_hold_ms += proposal_runtime_lock_hold_ms;
-                        runtime_lock_hold_max_ms =
-                            runtime_lock_hold_max_ms.max(proposal_runtime_lock_hold_ms);
-                        runtime_lock_acquires =
-                            runtime_lock_acquires.saturating_add(receipt.runtime_lock_acquires);
+                            let proposal_runtime_lock_wait_ms =
+                                Duration::from_micros(receipt.runtime_lock_wait_us).as_secs_f64()
+                                    * 1_000.0;
+                            let proposal_runtime_lock_hold_ms =
+                                Duration::from_micros(receipt.runtime_lock_hold_us).as_secs_f64()
+                                    * 1_000.0;
+                            runtime_lock_wait_ms += proposal_runtime_lock_wait_ms;
+                            runtime_lock_wait_max_ms =
+                                runtime_lock_wait_max_ms.max(proposal_runtime_lock_wait_ms);
+                            runtime_lock_hold_ms += proposal_runtime_lock_hold_ms;
+                            runtime_lock_hold_max_ms =
+                                runtime_lock_hold_max_ms.max(proposal_runtime_lock_hold_ms);
+                            runtime_lock_acquires =
+                                runtime_lock_acquires.saturating_add(receipt.runtime_lock_acquires);
 
-                        decoded_tokens = decoded_tokens
-                            .checked_add(receipt.committed_tokens.len())
-                            .ok_or_else(|| {
-                                OpenAiError::backend("linear proposal decode count overflow")
+                            decoded_tokens = decoded_tokens
+                                .checked_add(receipt.committed_tokens.len())
+                                .ok_or_else(|| {
+                                    OpenAiError::backend("linear proposal decode count overflow")
+                                })?;
+                            current = *receipt.committed_tokens.last().ok_or_else(|| {
+                                OpenAiError::backend("linear proposal receipt committed no tokens")
                             })?;
-                        current = *receipt.committed_tokens.last().ok_or_else(|| {
-                            OpenAiError::backend("linear proposal receipt committed no tokens")
-                        })?;
-                        committed_token_ids.extend_from_slice(&receipt.committed_tokens);
-                        let stopped_by_proposal =
-                            receipt.disposition == LinearProposalDisposition::Stopped;
-                        if emit_token_debug {
-                            let mut proposal_attrs = self.openai_attrs(request.ids);
-                            receipt.insert_telemetry_attrs(&mut proposal_attrs);
-                            self.telemetry
-                                .emit_debug("stage.openai_linear_proposal", proposal_attrs);
+                            committed_token_ids.extend_from_slice(&receipt.committed_tokens);
+                            let stopped_by_proposal =
+                                receipt.disposition == LinearProposalDisposition::Stopped;
+                            if emit_token_debug {
+                                let mut proposal_attrs = BTreeMap::new();
+                                receipt.insert_telemetry_attrs(&mut proposal_attrs);
+                                self.telemetry
+                                    .emit_debug("stage.openai_linear_proposal", proposal_attrs);
+                            }
+                            if stopped_by_proposal || decoded_tokens >= request.max_tokens as usize
+                            {
+                                break;
+                            }
+                            continue;
                         }
-                        if stopped_by_proposal || decoded_tokens >= request.max_tokens as usize {
-                            break;
-                        }
-                        continue;
                     }
                 }
                 let decode_step = decoded_tokens;
@@ -1156,6 +1190,7 @@ mod tests {
             generation_token_budget: Arc::new(GenerationTokenBudget::new(128)),
             hook_policy: None,
             generation_receipt: Some(GenerationReceiptConfig::new(sink.clone())),
+            linear_proposal_ingress: None,
             kv: None,
             decode_batcher,
             decode_frame_batcher,

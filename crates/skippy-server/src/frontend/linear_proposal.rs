@@ -5,7 +5,6 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use openai_frontend::{OpenAiError, OpenAiResult};
 use serde_json::json;
 
@@ -49,6 +48,7 @@ impl OpaqueProposalDecisionId {
 
 /// One source-selected linear proposal. The API is width one by construction.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LinearProposal {
     /// Source identity used to correlate the eventual receipt or discard.
     pub decision_id: OpaqueProposalDecisionId,
@@ -68,6 +68,7 @@ impl LinearProposal {
 
 /// Causal, committed-only state supplied to a proposal source.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct LinearProposalQuery<'a> {
     /// OpenAI request identity.
     pub request_id: u64,
@@ -85,6 +86,7 @@ pub struct LinearProposalQuery<'a> {
 
 /// Why Skippy rejected a source decision without producing a receipt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LinearProposalDiscardReason {
     /// The source returned after the advisory deadline.
     DeadlineExceeded,
@@ -92,12 +94,15 @@ pub enum LinearProposalDiscardReason {
     InvalidTokenCount,
     /// The proposal contained an invalid negative token identifier.
     InvalidTokenId,
+    /// The runtime session moved before verification could begin.
+    PositionMismatch,
     /// Verification or canonical-state repair failed.
     ExecutionFailed,
 }
 
 /// How verification committed a linear proposal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LinearProposalDisposition {
     /// Every proposal token matched and the boundary token was committed.
     FullAccept,
@@ -113,6 +118,7 @@ pub enum LinearProposalDisposition {
 /// after `canonical_prediction_count` are branch-conditioned observations and
 /// must not be interpreted as future canonical target tokens after a mismatch.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct LinearProposalReceipt {
     /// Source identity copied from the proposal.
     pub decision_id: OpaqueProposalDecisionId,
@@ -158,10 +164,6 @@ pub struct LinearProposalReceipt {
 
 impl LinearProposalReceipt {
     pub(crate) fn insert_telemetry_attrs(&self, attrs: &mut BTreeMap<String, serde_json::Value>) {
-        attrs.insert(
-            "llama_stage.linear_proposal.decision_id".to_string(),
-            json!(URL_SAFE_NO_PAD.encode(self.decision_id.as_bytes())),
-        );
         attrs.insert(
             "llama_stage.linear_proposal.disposition".to_string(),
             json!(match self.disposition {
@@ -331,9 +333,11 @@ pub(crate) fn query_linear_proposal(
     decode_step: usize,
     committed_token_ids: &[i32],
     remaining_new_tokens: usize,
+    runtime_max_proposal_tokens: usize,
 ) -> OpenAiResult<LinearProposalQueryOutcome> {
     let max_proposal_tokens = remaining_new_tokens
         .saturating_sub(1)
+        .min(runtime_max_proposal_tokens)
         .min(config.max_proposal_tokens());
     if max_proposal_tokens == 0 {
         return Ok(LinearProposalQueryOutcome::NoProposal);
@@ -483,18 +487,21 @@ impl StageOpenAiBackend {
         params: LinearProposalExecutionParams<'_>,
         queried: QueriedLinearProposal,
         on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<LinearProposalReceipt> {
+    ) -> OpenAiResult<Option<LinearProposalReceipt>> {
         let proposal_token_count = queried.proposal.token_ids.len();
         let mut verify_inputs = Vec::with_capacity(proposal_token_count.saturating_add(1));
         verify_inputs.push(params.current);
         verify_inputs.extend_from_slice(&queried.proposal.token_ids);
 
-        let execution = self.execute_local_linear_proposal_inner(
+        let Some(execution) = self.execute_local_linear_proposal_inner(
             params,
             &queried.proposal.token_ids,
             &verify_inputs,
             on_token,
-        )?;
+        )?
+        else {
+            return Ok(None);
+        };
         let accepted_proposal_tokens = execution
             .decision
             .accepted_proposal_tokens
@@ -519,7 +526,7 @@ impl StageOpenAiBackend {
                     .expect("checked non-empty committed tokens")
             });
         let total_elapsed_us = elapsed_us(queried.operation_started);
-        Ok(LinearProposalReceipt {
+        Ok(Some(LinearProposalReceipt {
             decision_id: queried.proposal.decision_id,
             disposition,
             proposal_token_count,
@@ -545,7 +552,7 @@ impl StageOpenAiBackend {
             runtime_lock_wait_us: execution.runtime_lock_wait_us,
             runtime_lock_hold_us: execution.runtime_lock_hold_us,
             runtime_lock_acquires: execution.runtime_lock_acquires,
-        })
+        }))
     }
 
     fn execute_local_linear_proposal_inner(
@@ -554,7 +561,7 @@ impl StageOpenAiBackend {
         proposal_tokens: &[i32],
         verify_inputs: &[i32],
         on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<LinearProposalExecution> {
+    ) -> OpenAiResult<Option<LinearProposalExecution>> {
         let verify_timer = Instant::now();
         let verify_lock_timer = Instant::now();
         let mut runtime = self
@@ -567,10 +574,7 @@ impl StageOpenAiBackend {
             .session_token_count(params.session_id)
             .ok_or_else(|| OpenAiError::backend("linear proposal session is not active"))?;
         if observed_position != params.base_position {
-            return Err(OpenAiError::backend(format!(
-                "linear proposal session position mismatch: observed {observed_position}, expected {}",
-                params.base_position
-            )));
+            return Ok(None);
         }
         let predictions = runtime
             .verify_tokens(params.session_id, verify_inputs)
@@ -644,7 +648,7 @@ impl StageOpenAiBackend {
             )
         })?;
 
-        Ok(LinearProposalExecution {
+        Ok(Some(LinearProposalExecution {
             decision,
             predictions,
             committed_tokens,
@@ -656,7 +660,7 @@ impl StageOpenAiBackend {
             runtime_lock_wait_us: verify_lock_wait_us.saturating_add(repair.runtime_lock_wait_us),
             runtime_lock_hold_us: verify_lock_hold_us.saturating_add(repair.runtime_lock_hold_us),
             runtime_lock_acquires: 1usize.saturating_add(repair.runtime_lock_acquires),
-        })
+        }))
     }
 
     fn trim_branch_suffix_or_retire(
@@ -991,7 +995,7 @@ mod tests {
             LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
 
         let LinearProposalQueryOutcome::Ready(queried) =
-            query_linear_proposal(&config, 7, 8, 9, &[21, 22, 23], 5).unwrap()
+            query_linear_proposal(&config, 7, 8, 9, &[21, 22, 23], 5, 4).unwrap()
         else {
             panic!("bounded proposal should be ready");
         };
@@ -1021,7 +1025,7 @@ mod tests {
             LinearProposalIngressConfig::new(invalid_source.clone(), Duration::from_secs(1), 4)
                 .unwrap();
         assert!(matches!(
-            query_linear_proposal(&invalid_config, 1, 2, 3, &[4], 5).unwrap(),
+            query_linear_proposal(&invalid_config, 1, 2, 3, &[4], 5, 4).unwrap(),
             LinearProposalQueryOutcome::NoProposal
         ));
         assert_eq!(
@@ -1039,7 +1043,7 @@ mod tests {
                 .unwrap();
         let LinearProposalQueryOutcome::DeadlineExceeded {
             proposal_elapsed_us,
-        } = query_linear_proposal(&late_config, 1, 2, 3, &[4], 5).unwrap()
+        } = query_linear_proposal(&late_config, 1, 2, 3, &[4], 5, 4).unwrap()
         else {
             panic!("late proposal should produce deadline telemetry");
         };
@@ -1060,7 +1064,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            query_linear_proposal(&invalid_token_config, 1, 2, 3, &[4], 5).unwrap(),
+            query_linear_proposal(&invalid_token_config, 1, 2, 3, &[4], 5, 4).unwrap(),
             LinearProposalQueryOutcome::NoProposal
         ));
         assert_eq!(
@@ -1108,5 +1112,55 @@ mod tests {
             source.discards.lock().unwrap().as_slice(),
             &[(id, LinearProposalDiscardReason::DeadlineExceeded)]
         );
+    }
+
+    #[test]
+    fn query_caps_proposals_to_the_runtime_batch_window() {
+        let source = Arc::new(FakeIngress::default());
+        let config =
+            LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 32).unwrap();
+
+        assert!(matches!(
+            query_linear_proposal(&config, 1, 2, 3, &[4], 64, 7).unwrap(),
+            LinearProposalQueryOutcome::NoProposal
+        ));
+        assert_eq!(source.queries.lock().unwrap()[0].max_proposal_tokens, 7);
+    }
+
+    #[test]
+    fn receipt_telemetry_excludes_source_ids_tokens_and_error_text() {
+        let secret = "private-decision-/Users/nick/prompt.txt";
+        let receipt = LinearProposalReceipt {
+            decision_id: OpaqueProposalDecisionId::new(secret.as_bytes().to_vec()).unwrap(),
+            disposition: LinearProposalDisposition::FullAccept,
+            proposal_token_count: 1,
+            verification_rows: 2,
+            accepted_proposal_tokens: 1,
+            committed_tokens: vec![12_345, 67_890].into_boxed_slice(),
+            verification_row_predictions: vec![12_345, 67_890].into_boxed_slice(),
+            canonical_prediction_count: 2,
+            correction_or_boundary_token: Some(67_890),
+            base_position: 3,
+            position_after_verification: 5,
+            canonical_position: 5,
+            trimmed_rows: 0,
+            proposal_elapsed_us: 1,
+            verification_elapsed_us: 2,
+            repair_elapsed_us: 3,
+            total_elapsed_us: 6,
+            runtime_lock_wait_us: 1,
+            runtime_lock_hold_us: 2,
+            runtime_lock_acquires: 1,
+        };
+        let mut attrs = BTreeMap::new();
+
+        receipt.insert_telemetry_attrs(&mut attrs);
+        let encoded = serde_json::to_string(&attrs).unwrap();
+
+        assert!(!encoded.contains(secret));
+        assert!(!encoded.contains("12345"));
+        assert!(!encoded.contains("67890"));
+        assert!(!attrs.keys().any(|key| key.contains("decision_id")));
+        assert!(!attrs.keys().any(|key| key.contains("error")));
     }
 }
