@@ -7,6 +7,15 @@ The package uses a native N-API addon built from `crates/mesh-llm-nodejs`. It is
 not a mock wrapper around the CLI. Local serving uses the same embedded runtime
 path as the Swift and Kotlin SDKs.
 
+## Install
+
+```bash
+npm install @meshllm/sdk
+```
+
+Release packages include prebuilt addons for macOS arm64/x64, Linux arm64/x64,
+and Windows x64.
+
 ## Build From Source
 
 ```bash

@@ -134,12 +134,8 @@ See [Kotlin SDK examples](sdk/kotlin.md).
 
 Install the Node package in a Node.js or Electron app:
 
-```json
-{
-  "dependencies": {
-    "@meshllm/sdk": "0.72.1"
-  }
-}
+```bash
+npm install @meshllm/sdk
 ```
 
 When building from this repository, build the native N-API addon first:

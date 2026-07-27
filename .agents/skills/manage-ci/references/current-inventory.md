@@ -27,7 +27,7 @@ the commands at the end before operational changes.
 | `windows-warm-caches.yml` | Main path push, dispatch | Trusted Windows ABI cache warming |
 | `website-pages.yml` | Main website path push, dispatch | Public website Pages build/deploy |
 | `fly-deploy-console.yml` | Dispatch | `fly-console` environment deployment |
-| `release.yml` | `v*` tag, dispatch | Release builds, attestations, publishing, downstream image dispatch |
+| `release.yml` | `v*` tag, dispatch | Release builds, attestations, publishing, downstream package/image/npm dispatch |
 | `reset-caches.yml` | Confirmed dispatch | Destructive repository cache reset |
 | `stale-prs.yml` | Schedule, dispatch | PR warning/closure maintenance |
 

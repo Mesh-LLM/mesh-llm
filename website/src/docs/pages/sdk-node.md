@@ -8,12 +8,8 @@ Use [`@meshllm/sdk`](https://www.npmjs.com/package/@meshllm/sdk) in Node.js serv
 
 ## Install
 
-```json
-{
-  "dependencies": {
-    "@meshllm/sdk": "{{ site.sdkVersion }}"
-  }
-}
+```bash
+npm install @meshllm/sdk
 ```
 
 When building from the repository, build the addon first:

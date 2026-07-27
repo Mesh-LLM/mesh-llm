@@ -10,7 +10,8 @@ manifest, packages SDK console assets, creates and pushes the release tag,
 builds all platform bundles, and publishes the GitHub release. After a complete
 non-canary release succeeds, it dispatches `Mesh-LLM/mesh-packaging` to
 package the verified release archives, publish the native package release
-assets, and publish the supported GHCR image matrix. Dispatch inputs include
+assets, publish the supported GHCR image matrix, and assemble and publish the
+Node SDK to npm. Dispatch inputs include
 `skip_gpu_bundles` and `canary` (dry-run: build and smoke everything without
 publishing). Releases that intentionally skip GPU bundles do not dispatch the
 full packaging matrix.
@@ -178,7 +179,7 @@ Verify:
 
 Push a `v*` tag to run `.github/workflows/release.yml`. The upstream release
 workflow owns release archive production, but it does not publish OCI images.
-`Mesh-LLM/mesh-packaging` is the canonical GHCR producer and starts only
+`Mesh-LLM/mesh-packaging` is the canonical package, GHCR, and npm producer and starts only
 after the GitHub release and its complete archive set have published
 successfully. The upstream `docker.yml` workflow performs Dockerfile validation
 only and is not a distribution channel.

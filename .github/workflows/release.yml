@@ -1432,7 +1432,8 @@ jobs:
                 version: $version,
                 dry_run: false,
                 publish_images: true,
-                publish_release_assets: true
+                publish_release_assets: true,
+                publish_npm: true
               }
             }' |
             gh api \

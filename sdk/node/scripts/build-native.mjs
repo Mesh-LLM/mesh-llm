@@ -7,6 +7,7 @@ const repoRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
 const profile = process.env.MESH_NODE_PROFILE || 'release'
 const cargoArgs = [
   'build',
+  '--locked',
   '-p',
   'mesh-llm-nodejs',
   '--no-default-features',
@@ -14,6 +15,11 @@ const cargoArgs = [
   'embedded-runtime'
 ]
 if (profile === 'release') cargoArgs.push('--release')
+if (profile === 'release' && process.platform === 'darwin') {
+  // Avoid llvm-objcopy corrupting the LINKEDIT string pool in large Mach-O
+  // addons on current macOS runners.
+  cargoArgs.push('--config', 'profile.release.strip=false')
+}
 
 const build = spawnSync('cargo', cargoArgs, {
   cwd: repoRoot,
