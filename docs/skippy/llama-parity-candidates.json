@@ -188,10 +188,10 @@
     {
       "llama_model": "laguna",
       "family": "laguna",
-      "status": "candidate",
+      "status": "certified_package_only",
       "repo": "poolside/Laguna-S-2.1-GGUF",
       "include": "laguna-s-2.1-Q4_K_M.gguf",
-      "notes": "P0 certification target from the official Poolside Q4_K_M GGUF; runtime-slice, package, dtype, state, cache, and mesh evidence remain pending until the Laguna certification run completes"
+      "notes": "package-only certified from poolside/Laguna-S-2.1-GGUF:Q4_K_M at source revision edd093522473dc7313b0738d8b4116b7f8b9745f; HF job 6a6708667ef3c0846496a429 published meshllm/laguna-s-2.1-Q4_K_M-layers, and pinned package revision 797f31cc813c0d643b7205118a901732f39de8ab passed package materialization with 48 layers and two 24-layer stages of 33500313312 and 34752130336 bytes; runtime-slice, activation-wire dtype, state, cache, and mesh evidence remain pending"
     },
     {
       "llama_model": "mistral3",

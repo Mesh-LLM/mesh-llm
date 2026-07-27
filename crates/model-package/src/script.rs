@@ -134,6 +134,9 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains("pipeline_tag: {yaml_quote(source_pipeline_tag)}"));
         assert!(EMBEDDED_SCRIPT.contains("- experimental"));
         assert!(EMBEDDED_SCRIPT.contains("Experimental package:"));
+        assert!(EMBEDDED_SCRIPT.contains("resolve_upstream_license"));
+        assert!(EMBEDDED_SCRIPT.contains("license_frontmatter"));
+        assert!(EMBEDDED_SCRIPT.contains("could not resolve upstream license metadata"));
         assert!(EMBEDDED_SCRIPT.contains("- openai-compatible"));
         assert!(EMBEDDED_SCRIPT.contains("## Model Overview"));
         assert!(EMBEDDED_SCRIPT.contains("## Highlights"));
