@@ -13,9 +13,9 @@ Squashes chat grammar exception containment and lazy triggering, backend device 
  src/llama-kv-cache.cpp                | 115 +++++-
  src/llama-kv-cache.h                  |  13 +-
  src/llama-kv-cells.h                  |  36 +-
- src/skippy.cpp                        | 567 ++++++++++++++++++++++++--
+ src/skippy.cpp                        | 633 +++++++++++++++++++++++++-
  tests/test-chat-auto-parser.cpp       |  27 +-
- 9 files changed, 962 insertions(+), 131 deletions(-)
+ 9 files changed, 1028 insertions(+), 131 deletions(-)
  create mode 100644 include/skippy/common.h
  create mode 100644 include/skippy/devices.h
 
@@ -677,7 +677,7 @@ index fddd31a0..c1c8dad9 100644
      // copy the state of cells [i, i + n) (used for save/restore the state of the cells)
      llama_kv_cells cp(uint32_t i, uint32_t n) const {
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 27dc78b0..4dcd0d96 100644
+index 27dc78b0..20ddbd24 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1,6 +1,8 @@
@@ -710,7 +710,7 @@ index 27dc78b0..4dcd0d96 100644
  static enum skippy_status skippy_success(skippy_error ** out_error) {
      if (out_error != nullptr) {
          *out_error = nullptr;
-@@ -155,6 +171,271 @@ static enum skippy_status skippy_success(skippy_error ** out_error) {
+@@ -155,6 +171,337 @@ static enum skippy_status skippy_success(skippy_error ** out_error) {
      return SKIPPY_STATUS_OK;
  }
  
@@ -774,7 +774,18 @@ index 27dc78b0..4dcd0d96 100644
 +    return SKIPPY_RUNTIME_EVENT_FAILURE_INTERNAL_ERROR;
 +}
 +
++struct skippy_runtime_event_delivery {
++    skippy_runtime_event_v1 event = {};
++    skippy_runtime_event_callback callback = nullptr;
++    void * user_data = nullptr;
++
++    void dispatch() const {
++        callback(&event, user_data);
++    }
++};
++
 +struct skippy_runtime_event_scope {
++    mutable std::mutex state_mutex;
 +    skippy_runtime_event_reporter_v1 reporter = {};
 +    uint64_t sequence = 0;
 +    uint64_t stage_id = 0;
@@ -803,6 +814,7 @@ index 27dc78b0..4dcd0d96 100644
 +    }
 +
 +    void clear() {
++        std::lock_guard<std::mutex> lock(state_mutex);
 +        active = false;
 +        reporter = {};
 +        sequence = 0;
@@ -812,8 +824,14 @@ index 27dc78b0..4dcd0d96 100644
 +        backend_emitted = false;
 +    }
 +
++    void set_model_id(uint64_t value) {
++        std::lock_guard<std::mutex> lock(state_mutex);
++        model_id = value;
++    }
++
 +    bool is_enabled() const {
-+        return active && reporter.callback != nullptr;
++        std::lock_guard<std::mutex> lock(state_mutex);
++        return is_enabled_locked();
 +    }
 +
 +    void emit(
@@ -827,32 +845,26 @@ index 27dc78b0..4dcd0d96 100644
 +            enum skippy_status status,
 +            const char * detail_ptr,
 +            uint64_t detail_len) {
-+        if (!is_enabled()) {
-+            return;
++        skippy_runtime_event_delivery delivery;
++        {
++            std::lock_guard<std::mutex> lock(state_mutex);
++            if (!is_enabled_locked()) {
++                return;
++            }
++            build_event_locked(
++                    delivery,
++                    category,
++                    kind,
++                    emitter,
++                    progress_current,
++                    progress_total,
++                    progress_unit,
++                    failure_code,
++                    status,
++                    detail_ptr,
++                    detail_len);
 +        }
-+
-+        skippy_runtime_event_v1 event = {
-+            SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION,
-+            static_cast<uint32_t>(sizeof(skippy_runtime_event_v1)),
-+            category,
-+            kind,
-+            emitter,
-+            0,
-+            ++sequence,
-+            skippy_runtime_event_timestamp_mono_ns(),
-+            model_id,
-+            stage_id,
-+            0,
-+            progress_current,
-+            progress_total,
-+            progress_unit,
-+            failure_code,
-+            static_cast<int32_t>(status),
-+            0,
-+            detail_ptr,
-+            detail_len,
-+        };
-+        reporter.callback(&event, reporter.user_data);
++        delivery.dispatch();
 +    }
 +
 +    void emit_detail(
@@ -884,42 +896,53 @@ index 27dc78b0..4dcd0d96 100644
 +    }
 +
 +    void emit_progress(float progress) {
-+        if (!is_enabled()) {
-+            return;
-+        }
-+
 +        progress = std::max(0.0f, std::min(progress, 1.0f));
 +        const uint64_t scaled = static_cast<uint64_t>(std::llround(progress * 1000.0f));
-+        if (scaled <= last_progress_step) {
-+            return;
++        skippy_runtime_event_delivery delivery;
++        {
++            std::lock_guard<std::mutex> lock(state_mutex);
++            if (!is_enabled_locked() || scaled <= last_progress_step) {
++                return;
++            }
++            last_progress_step = scaled;
++            build_event_locked(
++                    delivery,
++                    SKIPPY_RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
++                    SKIPPY_RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
++                    SKIPPY_RUNTIME_EVENT_EMITTER_WORKER_THREAD,
++                    scaled,
++                    1000,
++                    SKIPPY_RUNTIME_EVENT_PROGRESS_UNIT_STEPS,
++                    SKIPPY_RUNTIME_EVENT_FAILURE_NONE,
++                    SKIPPY_STATUS_OK,
++                    nullptr,
++                    0);
 +        }
-+
-+        last_progress_step = scaled;
-+        emit(
-+                SKIPPY_RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
-+                SKIPPY_RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
-+                SKIPPY_RUNTIME_EVENT_EMITTER_WORKER_THREAD,
-+                scaled,
-+                1000,
-+                SKIPPY_RUNTIME_EVENT_PROGRESS_UNIT_STEPS,
-+                SKIPPY_RUNTIME_EVENT_FAILURE_NONE,
-+                SKIPPY_STATUS_OK,
-+                nullptr,
-+                0);
++        delivery.dispatch();
 +    }
 +
 +    void emit_backend_selected(const char * detail_ptr) {
-+        if (!is_enabled() || backend_emitted || detail_ptr == nullptr || detail_ptr[0] == '\0') {
-+            return;
++        skippy_runtime_event_delivery delivery;
++        {
++            std::lock_guard<std::mutex> lock(state_mutex);
++            if (!is_enabled_locked() || backend_emitted || detail_ptr == nullptr || detail_ptr[0] == '\0') {
++                return;
++            }
++            backend_emitted = true;
++            build_event_locked(
++                    delivery,
++                    SKIPPY_RUNTIME_EVENT_CATEGORY_BACKEND,
++                    SKIPPY_RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED,
++                    SKIPPY_RUNTIME_EVENT_EMITTER_OPEN_THREAD,
++                    0,
++                    0,
++                    SKIPPY_RUNTIME_EVENT_PROGRESS_UNIT_NONE,
++                    SKIPPY_RUNTIME_EVENT_FAILURE_NONE,
++                    SKIPPY_STATUS_OK,
++                    detail_ptr,
++                    static_cast<uint64_t>(std::strlen(detail_ptr)));
 +        }
-+
-+        backend_emitted = true;
-+        emit_detail(
-+                SKIPPY_RUNTIME_EVENT_CATEGORY_BACKEND,
-+                SKIPPY_RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED,
-+                SKIPPY_RUNTIME_EVENT_EMITTER_OPEN_THREAD,
-+                SKIPPY_STATUS_OK,
-+                detail_ptr);
++        delivery.dispatch();
 +    }
 +
 +    void emit_finished() {
@@ -948,6 +971,49 @@ index 27dc78b0..4dcd0d96 100644
 +                status,
 +                detail_ptr,
 +                detail_ptr != nullptr ? static_cast<uint64_t>(std::strlen(detail_ptr)) : 0);
++    }
++
++private:
++
++    bool is_enabled_locked() const {
++        return active && reporter.callback != nullptr;
++    }
++
++    void build_event_locked(
++            skippy_runtime_event_delivery & delivery,
++            uint32_t category,
++            uint32_t kind,
++            uint32_t emitter,
++            uint64_t progress_current,
++            uint64_t progress_total,
++            uint32_t progress_unit,
++            uint32_t failure_code,
++            enum skippy_status status,
++            const char * detail_ptr,
++            uint64_t detail_len) {
++        delivery.event = {
++            SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION,
++            static_cast<uint32_t>(sizeof(skippy_runtime_event_v1)),
++            category,
++            kind,
++            emitter,
++            0,
++            ++sequence,
++            skippy_runtime_event_timestamp_mono_ns(),
++            model_id,
++            stage_id,
++            0,
++            progress_current,
++            progress_total,
++            progress_unit,
++            failure_code,
++            static_cast<int32_t>(status),
++            0,
++            detail_ptr,
++            detail_len,
++        };
++        delivery.callback = reporter.callback;
++        delivery.user_data = reporter.user_data;
 +    }
 +};
 +
@@ -982,7 +1048,7 @@ index 27dc78b0..4dcd0d96 100644
  static int32_t skippy_layer_from_name(const char * name) {
      if (name == nullptr) {
          return -1;
-@@ -576,6 +857,22 @@ static enum skippy_status skippy_apply_selected_backend_device(
+@@ -576,6 +923,22 @@ static enum skippy_status skippy_apply_selected_backend_device(
      return SKIPPY_STATUS_OK;
  }
  
@@ -1005,7 +1071,7 @@ index 27dc78b0..4dcd0d96 100644
  struct skippy_filter_scope {
      explicit skippy_filter_scope(const skippy_runtime_config * config) {
          if (config != nullptr && config->filter_tensors_on_load) {
-@@ -1233,6 +1530,9 @@ static llama_sampler * skippy_build_sampling_chain(
+@@ -1233,6 +1596,9 @@ static llama_sampler * skippy_build_sampling_chain(
      if (sampling->top_p > 0.0f && sampling->top_p < 1.0f) {
          llama_sampler_chain_add(sampler, llama_sampler_init_top_p(sampling->top_p, 1));
      }
@@ -1015,7 +1081,7 @@ index 27dc78b0..4dcd0d96 100644
      if (sampling->temperature != 1.0f) {
          llama_sampler_chain_add(sampler, llama_sampler_init_temp(sampling->temperature));
      }
-@@ -1317,8 +1617,16 @@ static bool skippy_init_chat_grammar_sampler(
+@@ -1317,8 +1683,16 @@ static bool skippy_init_chat_grammar_sampler(
  
      if (!grammar_lazy) {
          const std::string generation_prompt = metadata.value("generation_prompt", std::string());
@@ -1034,7 +1100,7 @@ index 27dc78b0..4dcd0d96 100644
          }
      }
      return true;
-@@ -1333,7 +1641,13 @@ static void skippy_sync_chat_sampling_history(skippy_session * session) {
+@@ -1333,7 +1707,13 @@ static void skippy_sync_chat_sampling_history(skippy_session * session) {
          const llama_token token = session->token_history[index];
          llama_sampler_accept(session->sampling_chain, token);
          if (session->grammar_sampler != nullptr && index >= session->grammar_generated_start) {
@@ -1049,7 +1115,7 @@ index 27dc78b0..4dcd0d96 100644
          }
          session->sampling_accepted_token_count++;
      }
-@@ -1361,7 +1675,13 @@ static llama_token skippy_chat_sample_token(skippy_session * session) {
+@@ -1361,7 +1741,13 @@ static llama_token skippy_chat_sample_token(skippy_session * session) {
          false,
      };
      if (session->grammar_sampler != nullptr) {
@@ -1064,7 +1130,7 @@ index 27dc78b0..4dcd0d96 100644
      }
      llama_sampler_apply(session->sampling_chain, &cur);
      if (cur.selected < 0 || static_cast<size_t>(cur.selected) >= cur.size) {
-@@ -1413,6 +1733,9 @@ static llama_token skippy_sample_token(
+@@ -1413,6 +1799,9 @@ static llama_token skippy_sample_token(
      if (sampling->top_p > 0.0f && sampling->top_p < 1.0f) {
          llama_sampler_chain_add(sampler, llama_sampler_init_top_p(sampling->top_p, 1));
      }
@@ -1074,7 +1140,7 @@ index 27dc78b0..4dcd0d96 100644
      if (sampling->temperature != 1.0f) {
          llama_sampler_chain_add(sampler, llama_sampler_init_temp(sampling->temperature));
      }
-@@ -1689,7 +2012,9 @@ uint64_t skippy_abi_features(void) {
+@@ -1689,7 +2078,9 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_SESSION_CHECKPOINT |
             SKIPPY_FEATURE_PACKAGE_PART_LOAD |
             SKIPPY_FEATURE_GENERATION_SIGNALS |
@@ -1085,7 +1151,7 @@ index 27dc78b0..4dcd0d96 100644
  }
  
  const char * skippy_status_string(enum skippy_status status) {
-@@ -1716,9 +2041,76 @@ void skippy_error_free(struct skippy_error * error) {
+@@ -1716,9 +2107,76 @@ void skippy_error_free(struct skippy_error * error) {
      delete error;
  }
  
@@ -1162,7 +1228,7 @@ index 27dc78b0..4dcd0d96 100644
          struct skippy_model ** out_model,
          struct skippy_error ** out_error) {
      if (config != nullptr && config->filter_tensors_on_load) {
-@@ -1829,27 +2221,47 @@ static enum skippy_status skippy_finish_model_open(
+@@ -1829,27 +2287,47 @@ static enum skippy_status skippy_finish_model_open(
              model->arch != LLM_ARCH_STABLELM &&
              model->arch != LLM_ARCH_XVERSE) {
              llama_model_free(model);
@@ -1215,7 +1281,7 @@ index 27dc78b0..4dcd0d96 100644
              return SKIPPY_STATUS_INVALID_ARGUMENT;
          }
      }
-@@ -1884,40 +2296,62 @@ static enum skippy_status skippy_finish_model_open(
+@@ -1884,40 +2362,62 @@ static enum skippy_status skippy_finish_model_open(
      skippy_graph_filter_scope graph_filter_scope(config);
      stage_model->ctx = llama_init_from_model(model, params);
      if (stage_model->ctx == nullptr) {
@@ -1233,7 +1299,7 @@ index 27dc78b0..4dcd0d96 100644
      stage_model->lane_resident_prefix_tokens.resize(stage_model->lane_count);
  
 +    if (event_scope != nullptr) {
-+        event_scope->model_id = reinterpret_cast<uint64_t>(stage_model);
++        event_scope->set_model_id(reinterpret_cast<uint64_t>(stage_model));
 +        skippy_emit_observable_backend_device(event_scope, config, model);
 +        event_scope->emit_finished();
 +    }
@@ -1286,7 +1352,7 @@ index 27dc78b0..4dcd0d96 100644
          return SKIPPY_STATUS_UNSUPPORTED;
      }
  
-@@ -1928,6 +2362,10 @@ enum skippy_status skippy_model_open(
+@@ -1928,6 +2428,10 @@ enum skippy_status skippy_model_open(
              params.use_extra_bufts = false;
          }
      }
@@ -1297,7 +1363,7 @@ index 27dc78b0..4dcd0d96 100644
  
      llama_backend_init();
      if (!ggml_backend_reg_count()) {
-@@ -1936,31 +2374,52 @@ enum skippy_status skippy_model_open(
+@@ -1936,31 +2440,52 @@ enum skippy_status skippy_model_open(
      std::vector<ggml_backend_dev_t> selected_devices;
      enum skippy_status device_status = skippy_apply_selected_backend_device(config, params, selected_devices, out_error);
      if (device_status != SKIPPY_STATUS_OK) {
@@ -1355,7 +1421,7 @@ index 27dc78b0..4dcd0d96 100644
              return SKIPPY_STATUS_INVALID_ARGUMENT;
          }
      }
-@@ -1968,15 +2427,16 @@ enum skippy_status skippy_model_open_from_parts(
+@@ -1968,15 +2493,16 @@ enum skippy_status skippy_model_open_from_parts(
      *out_model = nullptr;
  
      if (config != nullptr && config->filter_tensors_on_load && (config->layer_start < 0 || config->layer_start >= config->layer_end)) {
@@ -1377,7 +1443,7 @@ index 27dc78b0..4dcd0d96 100644
          return SKIPPY_STATUS_UNSUPPORTED;
      }
  
-@@ -1987,6 +2447,10 @@ enum skippy_status skippy_model_open_from_parts(
+@@ -1987,6 +2513,10 @@ enum skippy_status skippy_model_open_from_parts(
              params.use_extra_bufts = false;
          }
      }
@@ -1388,7 +1454,7 @@ index 27dc78b0..4dcd0d96 100644
  
      llama_backend_init();
      if (!ggml_backend_reg_count()) {
-@@ -1995,16 +2459,59 @@ enum skippy_status skippy_model_open_from_parts(
+@@ -1995,16 +2525,59 @@ enum skippy_status skippy_model_open_from_parts(
      std::vector<ggml_backend_dev_t> selected_devices;
      enum skippy_status device_status = skippy_apply_selected_backend_device(config, params, selected_devices, out_error);
      if (device_status != SKIPPY_STATUS_OK) {
@@ -1508,4 +1574,3 @@ index 4218f8d5..2cb295c1 100644
 -
 -- 
 2.50.1 (Apple Git-155)
-
