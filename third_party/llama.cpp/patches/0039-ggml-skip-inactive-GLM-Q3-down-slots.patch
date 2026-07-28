@@ -1,17 +1,17 @@
-From eb68fbbabf64915d6283683ae25fefd7475d46c2 Mon Sep 17 00:00:00 2001
+From b117244fe158b70caef4305818a738128e26317b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 05:30:42 +1000
-Subject: [PATCH 39/45] ggml: skip inactive GLM Q3 down slots
+Subject: [PATCH 39/47] ggml: skip inactive GLM Q3 down slots
 
 ---
  ggml/src/ggml-metal/ggml-metal.metal | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
-index 5dfeed66..b098231d 100644
+index 9502a0db..d367da67 100644
 --- a/ggml/src/ggml-metal/ggml-metal.metal
 +++ b/ggml/src/ggml-metal/ggml-metal.metal
-@@ -11802,7 +11802,7 @@ void kernel_mul_mv_id_q3_K_weighted_reduce_slots_sg_impl(
+@@ -11864,7 +11864,7 @@ void kernel_mul_mv_id_q3_K_weighted_reduce_slots_sg_impl(
      float sumf1[nr0] = {0.f};
      float sumf2[nr0] = {0.f};
  

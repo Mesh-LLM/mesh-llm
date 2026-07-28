@@ -1,7 +1,7 @@
-From 7462ace1495a306a658712c27034b7a70f936c6d Mon Sep 17 00:00:00 2001
+From aa826fd29d52eb836f8f3868ef04c7b5fe0bd380 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 21 Jul 2026 01:38:34 +1000
-Subject: [PATCH 19/45] Re-prime native MTP after state restoration
+Subject: [PATCH 19/47] Re-prime native MTP after state restoration
 
 ---
  src/skippy.cpp | 31 ++++++++++++++++++++++++++++++-

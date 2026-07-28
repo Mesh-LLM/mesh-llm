@@ -1,14 +1,14 @@
-From 36ee61b78bfa044c8701f3db79d8bc51bc1ca3d3 Mon Sep 17 00:00:00 2001
+From fd336839675aa17b31948afa26998881534bdb5f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 13:10:00 +1000
-Subject: [PATCH 36/45] ggml: make GLM MoE roofline honor active experts
+Subject: [PATCH 36/47] ggml: make GLM MoE roofline honor active experts
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 18 ++++++++++++------
  1 file changed, 12 insertions(+), 6 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 9469192d..2121075e 100644
+index b52204e6..370559cd 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
 @@ -2026,7 +2026,12 @@ static int ggml_metal_op_glm_moe_q2_selected_weight_scan(

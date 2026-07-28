@@ -1,7 +1,7 @@
-From 43fe1861b1b58d04444da0886fb5fddd1a14f05c Mon Sep 17 00:00:00 2001
+From ba1f26d0f7d6a8e8f7076d7f1f3b637cd5bc969a Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 26 Jul 2026 19:30:12 +1000
-Subject: [PATCH 41/45] Adapt Skippy model loading to load modes
+Subject: [PATCH 41/47] Adapt Skippy model loading to load modes
 
 ---
  src/skippy.cpp | 7 +++----
