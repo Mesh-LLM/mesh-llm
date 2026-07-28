@@ -360,9 +360,10 @@ implementation.
 
 ## Current Local Evidence
 
-These rows were collected on the local Mac Studio against the Metal stage ABI.
-They are cheap text-split and cache-smoke evidence, not full promotion by
-themselves until the reviewed topology records are updated.
+These rows were collected primarily on the local Mac Studio against the Metal
+stage ABI. They are cheap text-split and cache-smoke evidence, not full
+promotion by themselves until the reviewed topology records are updated.
+Rows with distributed evidence call out the second backend explicitly.
 
 | Family | Artifact | Text Split | q8 Wire | Exact State | Cache |
 | --- | --- | --- | --- | --- | --- |
@@ -370,7 +371,7 @@ themselves until the reviewed topology records are updated.
 | `deepseek` | `Morgen0052/deepseek-llm-7b-chat-Q4_K_M-GGUF` | `single-step`, `chain`, and f16 dtype matrix passed | rejected | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 1.58x cache-hit speedup |
 | `openai_moe` | `ggml-org/gpt-oss-20b-GGUF:gpt-oss-20b-mxfp4` | `single-step`, `chain`, and dtype matrix passed | rejected | accepted | `ResidentKv` state handoff passed; llama.cpp model file is `openai-moe`, GGUF architecture is `gpt-oss` |
 | `ernie4_5_moe` | `lmstudio-community/ERNIE-4.5-21B-A3B-PT-GGUF:Q4_K_M` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` state handoff passed |
-| `laguna` | `meshllm/laguna-s-2.1-Q4_K_M-layers@797f31cc813c0d643b7205118a901732f39de8ab` | package-backed `single-step` passed at split `24`; three-stage `chain` passed at splits `16,32` | untested | untested | M5 Max f16 parity passed against pinned full-model revision `edd093522473dc7313b0738d8b4116b7f8b9745f`: baseline token `674` matched both two-stage and three-stage predictions; width `3072`, 12,288-byte activation frame, 6,144-byte wire payload; dtype matrix, state/cache, and M4+M5 mesh evidence remain pending |
+| `laguna` | `meshllm/laguna-s-2.1-Q4_K_M-layers@797f31cc813c0d643b7205118a901732f39de8ab` | package-backed `single-step` passed at split `24`; three-stage `chain` passed at splits `16,32`; distributed OpenAI serving passed at split `24` | untested | untested | M5 Max f16 parity passed against pinned full-model revision `edd093522473dc7313b0738d8b4116b7f8b9745f`: baseline token `674` matched both two-stage and three-stage predictions. A package-backed M5 Metal `0..24` + Australian Vast.ai RTX PRO 6000 Blackwell CUDA `24..48` run at commit `226fb584` returned HTTP 200 for a 43-token prompt plus one generated token (`19`); the decode activation used the expected 12,288-byte frame and 6,144-byte f16 wire payload. Dtype matrix, state/cache, and mesh-node orchestration remain pending. |
 | `llama4` | `ggml-org/Llama-4-Scout-17B-16E-Instruct-GGUF:Q4_K_M` | package validated | untested | untested | package-only validation passed: 48 layers, 627 owned tensors, 51 artifacts, no missing/duplicate tensors |
 | `mistral4` | `bartowski/mistralai_Mistral-Small-4-119B-2603-GGUF:IQ2_XXS` | package validated | untested | untested | package-only validation passed: 36 layers, 579 tensors, 39 artifacts, no missing/duplicate tensors |
 | `nemotron_h_moe` | `lmstudio-community/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF:Q4_K_M` | package validated | untested | rejected-too-large | package-only validation passed: 52 layers, 401 tensors, 55 artifacts; `KvRecurrent` target |
