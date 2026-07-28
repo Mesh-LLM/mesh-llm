@@ -1,7 +1,7 @@
-From fe586db1fd61a8a8906d0bc571a65e05d12cc4ff Mon Sep 17 00:00:00 2001
+From 91eaf086ccb425da6c05af606f9ed20eb558cf3a Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sun, 26 Jul 2026 15:39:58 +1000
-Subject: [PATCH] Fix empty transposed KV page import and export
+Subject: [PATCH 46/47] Fix empty transposed KV page import and export
 
 ---
  src/llama-kv-cache.cpp               |   6 +
@@ -11,10 +11,10 @@ Subject: [PATCH] Fix empty transposed KV page import and export
  create mode 100644 tests/test-skippy-kv-page-export.cpp
 
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 9df4984b3..1c4c2ddbc 100644
+index c4517d65..117855d6 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1505,6 +1505,9 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1622,6 +1622,9 @@ bool llama_kv_cache::stage_export_kv_page(
          }
      } else {
          for (const auto * layer : selected) {
@@ -24,7 +24,7 @@ index 9df4984b3..1c4c2ddbc 100644
              auto * v = layer->v_stream[strm];
              const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
              for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
-@@ -1679,6 +1682,9 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1804,6 +1807,9 @@ bool llama_kv_cache::stage_import_kv_page(
          }
      } else {
          for (const auto * layer : selected) {
@@ -35,7 +35,7 @@ index 9df4984b3..1c4c2ddbc 100644
              const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
              for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 7a93b19a0..158ab28df 100644
+index 7a93b19a..158ab28d 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -151,6 +151,7 @@ endif ()
@@ -48,7 +48,7 @@ index 7a93b19a0..158ab28df 100644
      llama_build_and_test(test-reasoning-budget.cpp)
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
 new file mode 100644
-index 000000000..724835df7
+index 00000000..724835df
 --- /dev/null
 +++ b/tests/test-skippy-kv-page-export.cpp
 @@ -0,0 +1,165 @@
@@ -218,4 +218,5 @@ index 000000000..724835df7
 +    return 0;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-155)
+

@@ -1,14 +1,14 @@
-From f8152becddf60982cc3a69f9db8baecd399bdacb Mon Sep 17 00:00:00 2001
+From 1cb7507b903b5f14d23662e3253e87893beada14 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 10:44:00 +1000
-Subject: [PATCH 35/45] ggml: honor explicit Q2 gate/up Metal variant flags
+Subject: [PATCH 35/47] ggml: honor explicit Q2 gate/up Metal variant flags
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 12 +++++++++++-
  1 file changed, 11 insertions(+), 1 deletion(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 2e42a168..9469192d 100644
+index 38c485c5..b52204e6 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
 @@ -4345,6 +4345,15 @@ static int ggml_metal_op_mul_mv_id_gate_up_swiglu(

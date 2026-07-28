@@ -1,7 +1,7 @@
-From 7432fb6267d078b2e6c79df8cc301517913cf6c0 Mon Sep 17 00:00:00 2001
+From 95a491c6dd9fd92ba8b7b3406b632c8821cbc5a6 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 06/45] Expand staged execution across dense and recurrent
+Subject: [PATCH 06/47] Expand staged execution across dense and recurrent
  families
 
 Squashes the dense and decoder family support waves through LFM2, Mamba, Jamba, RWKV6, Qwen2MoE, and native sequence id exposure.
@@ -51,10 +51,10 @@ index deb5151e..84169398 100644
          const struct skippy_session * session);
  
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index cca99a8f..f2618710 100644
+index bed11342..ad8f2fc6 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -2269,10 +2269,15 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+@@ -2280,10 +2280,15 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
  
      res->t_inp_embd = cur;
  

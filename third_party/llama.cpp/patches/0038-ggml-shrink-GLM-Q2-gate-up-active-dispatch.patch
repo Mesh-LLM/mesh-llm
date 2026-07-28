@@ -1,7 +1,7 @@
-From 9fa1c53b208fec4bf4ac863c38135451a1fca6f3 Mon Sep 17 00:00:00 2001
+From aaa2838a8471e3455fa70f314e48b1c90ef7d170 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 03:51:17 +1000
-Subject: [PATCH 38/45] ggml: shrink GLM Q2 gate-up active dispatch
+Subject: [PATCH 38/47] ggml: shrink GLM Q2 gate-up active dispatch
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 6 ++++--
@@ -9,7 +9,7 @@ Subject: [PATCH 38/45] ggml: shrink GLM Q2 gate-up active dispatch
  2 files changed, 8 insertions(+), 4 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 91976954..646c983a 100644
+index 30efec9c..08f1d966 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
 @@ -4556,9 +4556,11 @@ static int ggml_metal_op_mul_mv_id_gate_up_swiglu(
@@ -27,10 +27,10 @@ index 91976954..646c983a 100644
      const int grid_y = (1 + nr1 - 1)/nr1;
      const int grid_z = ne123;
 diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
-index 000fe0b2..5dfeed66 100644
+index 9bc4a0ff..9502a0db 100644
 --- a/ggml/src/ggml-metal/ggml-metal.metal
 +++ b/ggml/src/ggml-metal/ggml-metal.metal
-@@ -10331,9 +10331,11 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_impl(
+@@ -10393,9 +10393,11 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_impl(
          ushort sgitg[[simdgroup_index_in_threadgroup]]) {
      const int nb = args.ne00/QK_K;
  

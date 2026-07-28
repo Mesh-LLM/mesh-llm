@@ -1,7 +1,7 @@
-From 3b3d6f4ab0c269931f5f75120f3d8b496917e3b7 Mon Sep 17 00:00:00 2001
+From 4522a9bafafd75bae57cb76b4db85c3661f084ea Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 3 Jul 2026 13:15:19 +1000
-Subject: [PATCH 11/45] Pass reasoning format through stage chat templates
+Subject: [PATCH 11/47] Pass reasoning format through stage chat templates
 
 ---
  common/stage-chat.cpp   | 4 ++++

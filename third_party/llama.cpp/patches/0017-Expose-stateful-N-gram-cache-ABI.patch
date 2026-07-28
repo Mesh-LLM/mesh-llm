@@ -1,7 +1,7 @@
-From c83720f81a6cebdfcba89d761afabb72bb6796f6 Mon Sep 17 00:00:00 2001
+From d5876c02fc1adef99acf71718638e56ce8d0e050 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 14:07:01 +1000
-Subject: [PATCH 17/45] Expose stateful N-gram cache ABI
+Subject: [PATCH 17/47] Expose stateful N-gram cache ABI
 
 ---
  common/ngram-cache.cpp  | 136 ++++++++++++++++++++++++++++++++++++++++

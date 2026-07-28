@@ -1,7 +1,7 @@
-From 8619285489ebdbaf28638a8cf598c00e2cbf66ec Mon Sep 17 00:00:00 2001
+From 2a4018835a0c94a87c132efabb74ccee8d0e42d0 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 09/45] Add chat grammar, device enumeration, and runtime
+Subject: [PATCH 09/47] Add chat grammar, device enumeration, and runtime
  events
 
 Squashes chat grammar exception containment and lazy triggering, backend device enumeration, min-p sampling, KV cell compaction, and model-open runtime events.
@@ -446,10 +446,10 @@ index 00000000..382f1e69
 +
 +#endif
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 0e6902aa..131064e0 100644
+index ac10ba6c..c4517d65 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -736,11 +736,28 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
+@@ -796,11 +796,28 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
  }
  
  llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool optimize) {
@@ -481,7 +481,7 @@ index 0e6902aa..131064e0 100644
  }
  
  llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
-@@ -1167,6 +1184,93 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+@@ -1274,6 +1291,93 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
      }
  }
  
@@ -575,7 +575,7 @@ index 0e6902aa..131064e0 100644
  bool llama_kv_cache::get_can_shift() const {
      // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
      if (model.arch == LLM_ARCH_STEP35) {
-@@ -2884,8 +2988,9 @@ llama_kv_cache_context::llama_kv_cache_context(
+@@ -3152,8 +3256,9 @@ llama_kv_cache_context::llama_kv_cache_context(
          llama_kv_cache * kv,
          llama_context * lctx,
          bool do_shift,
@@ -588,7 +588,7 @@ index 0e6902aa..131064e0 100644
      }
  }
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index be51c3c7..f8569057 100644
+index beaf005e..b253d915 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -95,6 +95,12 @@ public:
@@ -604,7 +604,7 @@ index be51c3c7..f8569057 100644
      // TODO: refactor the memory instances to not depend on `llama_model`
      //       instead pass all necessary info (e.g. hparams, dev layers, arch, etc.) directly
      //       likely through `struct llama_memory_params`
-@@ -217,6 +223,10 @@ public:
+@@ -219,6 +225,10 @@ public:
      // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
      void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
  
@@ -615,7 +615,7 @@ index be51c3c7..f8569057 100644
      //
      // input API
      //
-@@ -359,7 +369,8 @@ public:
+@@ -367,7 +377,8 @@ public:
              llama_kv_cache * kv,
              llama_context * lctx,
              bool do_shift,

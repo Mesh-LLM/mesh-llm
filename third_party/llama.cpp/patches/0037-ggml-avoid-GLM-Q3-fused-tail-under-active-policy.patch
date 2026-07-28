@@ -1,7 +1,7 @@
-From 3bcadd4535d6e48229e2edf4a10e849b23475083 Mon Sep 17 00:00:00 2001
+From 0566ecc45040b579f09693e3b2a670db26346259 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 20 Jul 2026 14:05:00 +1000
-Subject: [PATCH 37/45] ggml: avoid GLM Q3 fused tail under active policy
+Subject: [PATCH 37/47] ggml: avoid GLM Q3 fused tail under active policy
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp |  3 ++
@@ -9,7 +9,7 @@ Subject: [PATCH 37/45] ggml: avoid GLM Q3 fused tail under active policy
  2 files changed, 49 insertions(+)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 2121075e..91976954 100644
+index 370559cd..30efec9c 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
 @@ -2738,6 +2738,9 @@ static bool ggml_metal_glm_moe_can_fuse_swiglu_q3_down(const ggml_metal_glm_moe_
@@ -23,7 +23,7 @@ index 2121075e..91976954 100644
              motif.gate == nullptr || motif.up == nullptr ||
              motif.glu == nullptr || motif.down == nullptr || motif.out == nullptr ||
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 12e2059f..43ce1a0e 100644
+index b268be2e..745c3814 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
 @@ -7662,6 +7662,44 @@ struct test_glm_moe_routed_q2_final_output : public test_topk_moe_glm_component
@@ -71,7 +71,7 @@ index 12e2059f..43ce1a0e 100644
  struct test_glm_moe_q2_weight_roofline : public test_glm_moe_routed_q2_final_output {
      const bool bypass_route;
      const char * variant;
-@@ -15000,6 +15038,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -15003,6 +15041,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(true, false));
      test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(false, true));
      test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(true, true));
@@ -82,7 +82,7 @@ index 12e2059f..43ce1a0e 100644
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_A"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(true,  "FIXED_IDS"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_B"));
-@@ -15493,6 +15535,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -15500,6 +15542,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
      test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(true, false));
      test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(false, true));
      test_cases.emplace_back(new test_glm_moe_routed_q2_final_output(true, true));

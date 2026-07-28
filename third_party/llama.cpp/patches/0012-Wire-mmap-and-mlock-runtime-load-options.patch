@@ -1,7 +1,7 @@
-From 08a6cf87151e9f2460482d2889cb9f3750d47316 Mon Sep 17 00:00:00 2001
+From 60092b7fe8f4cc756dd8fac7cc736c836058f304 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 1 Jul 2026 23:52:26 -0400
-Subject: [PATCH 12/45] Wire mmap and mlock runtime load options
+Subject: [PATCH 12/47] Wire mmap and mlock runtime load options
 
 ---
  include/skippy.h |  3 +++
