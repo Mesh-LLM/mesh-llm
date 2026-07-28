@@ -8,7 +8,7 @@ Certification process lives in `docs/FAMILY_CERTIFY.md`. Payload measurements
 and topology constraints are summarized here so this file stays the only
 customer-facing source of truth.
 
-Last updated: 2026-05-07.
+Last updated: 2026-07-28.
 
 ## Context Capacity Contract
 
@@ -99,12 +99,13 @@ correctness smoke or from GGUF metadata alone.
 
 ## Text-Split Candidates
 
-These families now pass the cheap runtime-slice text lane, but are not promoted
-to the customer support matrix until the remaining cache smoke, reviewed
-topology records, and family-specific policy notes are updated.
+These families now pass a cheap runtime-slice or package-backed text lane, but
+are not promoted to the customer support matrix until the remaining cache
+smoke, reviewed topology records, and family-specific policy notes are updated.
 
 ```text
 Gemma text
+Laguna S 2.1 (package-backed two-stage single-step; broader certification pending)
 ```
 
 ## Exceptions
