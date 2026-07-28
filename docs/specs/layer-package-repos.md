@@ -214,7 +214,8 @@ Minimal shape:
             "default": "fixed",
             "initial_window": 1,
             "min_window": 1,
-            "max_window": 1
+            "max_window": 1,
+            "pipeline_depth": 1
           }
         }
       }
@@ -688,7 +689,8 @@ The current native MTP strategy shape is:
     "default": "fixed",
     "initial_window": 1,
     "min_window": 1,
-    "max_window": 1
+    "max_window": 1,
+    "pipeline_depth": 1
   }
 }
 ```
@@ -746,6 +748,7 @@ The package schema separates a proposer match length from its output budget:
 | `ngram_min` / `ngram_max` | N-gram proposers | Define the historical token match range. Both are required and `ngram_min <= ngram_max`. |
 | `max_proposal_tokens` | N-gram proposers | Caps how many continuation tokens the proposer may return. It is independent of `ngram_max`. |
 | `history_scope` | `ngram-cache`, `ngram-suffix` | Must be `"request"`; a history proposer never observes another request's tokens. |
+| `window_policy.pipeline_depth` | All strategies | Optional positive per-request capacity for in-flight verification windows. Omission preserves the legacy depth of `1`; package defaults above `1` require topology/workload-specific evidence. |
 | `initial_tokens` / `max_tokens` | composite extension policy | Bound the adaptive N-gram tail after an MTP prefix. |
 | `tail_backoff_proposals` | composite extension policy | Sets how many proposals to back off after an unhelpful tail. |
 

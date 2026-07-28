@@ -34,6 +34,7 @@ fn native_mtp_generation() -> PackageGenerationInfo {
                 initial_window: 1,
                 min_window: 1,
                 max_window: 1,
+                pipeline_depth: None,
             }),
             proposer: Some("mtp".to_string()),
             primary: None,
@@ -89,6 +90,7 @@ fn native_mtp_cache_generation() -> PackageGenerationInfo {
                 initial_window: 2,
                 min_window: 1,
                 max_window: 6,
+                pipeline_depth: None,
             }),
             proposer: None,
             primary: Some("mtp".to_string()),
@@ -131,6 +133,7 @@ fn ngram_cache_generation() -> PackageGenerationInfo {
                 initial_window: 6,
                 min_window: 1,
                 max_window: 6,
+                pipeline_depth: None,
             }),
             proposer: Some("cache".to_string()),
             primary: None,
@@ -173,6 +176,7 @@ fn ngram_suffix_generation() -> PackageGenerationInfo {
                 initial_window: 32,
                 min_window: 1,
                 max_window: 32,
+                pipeline_depth: Some(2),
             }),
             proposer: Some("suffix".to_string()),
             primary: None,
@@ -239,6 +243,7 @@ fn speculative_strategy_auto_detects_direct_gguf_native_mtp_tensors() {
 
     assert_eq!(resolved.speculative.strategy, "auto");
     assert!(resolved.speculative.native_mtp_enabled);
+    assert_eq!(resolved.speculative.decode.verify_window.pipeline_depth, 1);
     let load_options = resolved
         .to_model_load_options(SkippyTelemetryOptions::off())
         .expect("model load options should build");
@@ -451,12 +456,7 @@ strategy = "ngram-cache"
 
 #[test]
 fn package_suffix_strategy_resolves_as_a_standalone_proposer() {
-    let mesh_config = parse_config(
-        r#"
-[defaults.speculative]
-strategy = "ngram-suffix"
-"#,
-    );
+    let mesh_config = parse_config("");
     let model_file = temp_model_file();
     let generation = ngram_suffix_generation();
 
@@ -476,10 +476,12 @@ strategy = "ngram-suffix"
         resolved.speculative.decode.effective_strategy,
         "ngram-suffix"
     );
+    assert_eq!(resolved.speculative.decode.verify_window.pipeline_depth, 2);
     let openai = resolved
         .to_embedded_openai_args(4096, true)
         .expect("package suffix strategy should build OpenAI args");
     assert_eq!(openai.speculative_window, 48);
+    assert_eq!(openai.speculative.verify_window.pipeline_depth, 2);
     assert_eq!(
         openai.speculative.ngram.as_ref().map(|ngram| ngram.kind),
         Some(skippy_server::NgramProposerKind::Suffix)

@@ -104,6 +104,7 @@ pub struct PackageWindowPolicyInfo {
     pub initial_window: u32,
     pub min_window: u32,
     pub max_window: u32,
+    pub pipeline_depth: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -288,6 +289,8 @@ struct PackageWindowPolicy {
     initial_window: u32,
     min_window: u32,
     max_window: u32,
+    #[serde(default)]
+    pipeline_depth: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -651,6 +654,7 @@ fn package_speculative_strategy_info(
                 initial_window: window.initial_window,
                 min_window: window.min_window,
                 max_window: window.max_window,
+                pipeline_depth: window.pipeline_depth,
             }),
         proposer: strategy.proposer,
         primary: strategy.primary,

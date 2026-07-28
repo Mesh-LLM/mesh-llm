@@ -2093,5 +2093,25 @@
       "split_constraints": [],
       "sidebands": []
     }
+  },
+  {
+    "model_id": "poolside/Laguna-S-2.1-GGUF:Q4_K_M",
+    "source_repo": "poolside/Laguna-S-2.1-GGUF",
+    "source_revision": "edd093522473dc7313b0738d8b4116b7f8b9745f",
+    "source_file": "laguna-s-2.1-Q4_K_M.gguf",
+    "canonical_ref": "poolside/Laguna-S-2.1-GGUF@edd093522473dc7313b0738d8b4116b7f8b9745f/laguna-s-2.1-Q4_K_M.gguf",
+    "distribution_id": "laguna-s-2.1-Q4_K_M",
+    "selector": "Q4_K_M",
+    "capability": {
+      "family_id": "laguna",
+      "layer_count": 48,
+      "activation_width": 3072,
+      "default_wire_dtype": "f16",
+      "q8_wire_validation": "untested",
+      "exact_state_mobility": "untested",
+      "recurrent_ranges": [],
+      "split_constraints": [],
+      "sidebands": []
+    }
   }
 ]

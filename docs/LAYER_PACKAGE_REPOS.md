@@ -96,7 +96,8 @@ Minimal GLM-DSA shape:
             "default": "fixed",
             "initial_window": 1,
             "min_window": 1,
-            "max_window": 1
+            "max_window": 1,
+            "pipeline_depth": 1
           }
         }
       }
@@ -112,7 +113,7 @@ Authoring rule of thumb:
 | `generation.policy` | Stable semantic execution choices validated for the package. | `profile`, `decode`, `short_prefill`, `long_prefill`, `verify`, `indexshare` |
 | `generation.policy.experimental` | Named opt-in paths that need package/backend evidence before becoming defaults. | `selected_row_flash`, `moe_weighted_down`, `moe_merged_shared_gate_up` |
 | `generation.thresholds` | Numeric resolver inputs used to accept, reject, or fall back from a policy. | `short_prefill_max_tokens`, `compact_flash_min_kv`, `dense_mask_max_bytes` |
-| `generation.speculative_decoding` | Package-owned native or draft speculation strategy defaults. | `native-mtp-n1`, `prediction_depth`, `layer_indices`, `window_policy` |
+| `generation.speculative_decoding` | Package-owned native, N-gram, or draft speculation strategy defaults. | strategy id, proposer bounds, `window_policy`, optional positive `pipeline_depth` |
 | GGUF metadata | Architecture correctness and tensor layout requirements. | GLM-DSA q/k/v split dimensions, IndexShare roles, MTP tensor presence |
 
 Writers should emit a profile only after the artifact actually matches that

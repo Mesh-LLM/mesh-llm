@@ -105,7 +105,7 @@ smoke, reviewed topology records, and family-specific policy notes are updated.
 
 ```text
 Gemma text
-Laguna S 2.1 (package-backed M5 two-stage single-step and three-stage chain parity, plus ordinary M5 Metal 0..36 + Vast CUDA 36..48 Mesh serving at configured context 262144 with a 44,460-token prompt; broader certification pending)
+Laguna S 2.1 Q4_K_M (pinned package-backed M5 two-stage single-step and three-stage chain parity, plus ordinary M5 Metal 0..36 + Australian Vast CUDA 36..48 Mesh serving with a 44,460-token prompt; suffix N-gram depth 2 is published as the package default, with a fresh live no-override confirmation still pending; broader family certification remains pending)
 ```
 
 ## Exceptions

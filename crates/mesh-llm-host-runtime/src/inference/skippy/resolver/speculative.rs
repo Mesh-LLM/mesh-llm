@@ -563,7 +563,7 @@ fn verify_window_config(policy: &PackageWindowPolicyInfo) -> VerifyWindowConfig 
     VerifyWindowConfig {
         min_tokens: policy.min_window as usize,
         max_tokens: policy.max_window as usize,
-        pipeline_depth: 1,
+        pipeline_depth: policy.pipeline_depth.unwrap_or(1) as usize,
     }
 }
 

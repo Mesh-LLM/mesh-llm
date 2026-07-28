@@ -182,6 +182,8 @@ pub(crate) struct PreflightWindowPolicy {
     pub initial_window: u32,
     pub min_window: u32,
     pub max_window: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline_depth: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -273,6 +275,8 @@ struct PackageWindowPolicy {
     initial_window: u32,
     min_window: u32,
     max_window: u32,
+    #[serde(default)]
+    pipeline_depth: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1014,6 +1018,16 @@ fn validate_window_policy(
             "use positive window sizes",
         );
     }
+    if window.pipeline_depth == Some(0) {
+        report.error(
+            "invalid_window_policy_pipeline_depth",
+            format!(
+                "speculative strategy {name} window_policy.pipeline_depth must be greater than zero"
+            ),
+            Some("model-package.json".to_string()),
+            "set pipeline_depth to a positive in-flight verification-window capacity",
+        );
+    }
     if window.min_window > window.max_window {
         report.error(
             "invalid_window_policy_bounds",
@@ -1135,6 +1149,7 @@ fn preflight_window_policy(window: &PackageWindowPolicy) -> PreflightWindowPolic
         initial_window: window.initial_window,
         min_window: window.min_window,
         max_window: window.max_window,
+        pipeline_depth: window.pipeline_depth,
     }
 }
 
@@ -1735,7 +1750,8 @@ mod tests {
                                 "default": "fixed",
                                 "initial_window": 1,
                                 "min_window": 1,
-                                "max_window": 1
+                                "max_window": 1,
+                                "pipeline_depth": 2
                             }
                         }
                     }
@@ -1770,6 +1786,7 @@ mod tests {
         assert_eq!(window_policy.initial_window, 1);
         assert_eq!(window_policy.min_window, 1);
         assert_eq!(window_policy.max_window, 1);
+        assert_eq!(window_policy.pipeline_depth, Some(2));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2101,6 +2118,48 @@ mod tests {
 
         assert!(!report.valid);
         assert_issue(&report, "native_mtp_layer_out_of_range");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn preflight_rejects_zero_verify_window_pipeline_depth() {
+        let dir = unique_test_dir("zero-window-pipeline-depth");
+        let package = write_package_fixture(&dir, true);
+        write_generation_to_manifest(
+            &package,
+            serde_json::json!({
+                "speculative_decoding": {
+                    "default": "ngram-suffix",
+                    "proposers": {
+                        "suffix": {
+                            "type": "ngram-suffix",
+                            "ngram_min": 5,
+                            "ngram_max": 32,
+                            "max_proposal_tokens": 48,
+                            "history_scope": "request"
+                        }
+                    },
+                    "strategies": {
+                        "ngram-suffix": {
+                            "type": "ngram-suffix",
+                            "proposer": "suffix",
+                            "window_policy": {
+                                "default": "fixed",
+                                "initial_window": 32,
+                                "min_window": 1,
+                                "max_window": 32,
+                                "pipeline_depth": 0
+                            }
+                        }
+                    }
+                }
+            }),
+        );
+
+        let report = preflight_package(&package, &PackagePreflightOptions::default());
+
+        assert!(!report.valid);
+        assert_issue(&report, "invalid_window_policy_pipeline_depth");
         fs::remove_dir_all(dir).unwrap();
     }
 

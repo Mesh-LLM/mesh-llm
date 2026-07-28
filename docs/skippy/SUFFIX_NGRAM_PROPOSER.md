@@ -165,13 +165,25 @@ strategy types. A suffix package proposer must declare request-local history:
       "strategies": {
         "ngram-suffix": {
           "type": "ngram-suffix",
-          "proposer": "suffix"
+          "proposer": "suffix",
+          "window_policy": {
+            "default": "fixed",
+            "initial_window": 32,
+            "min_window": 1,
+            "max_window": 32,
+            "pipeline_depth": 2
+          }
         }
       }
     }
   }
 }
 ```
+
+`window_policy.pipeline_depth` is optional and defaults to `1` for older
+packages. A package may select a deeper verification pipeline only after the
+specific artifact and serving topology have passed workload and stability
+gates at that depth.
 
 The cache and suffix limits intentionally differ. Cache uses llama.cpp's
 stateful lookup with a match window no larger than four tokens. Suffix may use

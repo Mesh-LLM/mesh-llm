@@ -124,6 +124,8 @@ pub(crate) struct PackageWindowPolicy {
     pub(crate) initial_window: u32,
     pub(crate) min_window: u32,
     pub(crate) max_window: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pipeline_depth: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -663,6 +665,7 @@ pub(crate) fn package_generation(tensors: &[TensorInfo]) -> Option<PackageGenera
                 initial_window: 1,
                 min_window: 1,
                 max_window: 1,
+                pipeline_depth: None,
             }),
             proposer: Some(strategy_id.clone()),
             primary: None,
