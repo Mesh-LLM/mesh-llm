@@ -105,7 +105,7 @@ smoke, reviewed topology records, and family-specific policy notes are updated.
 
 ```text
 Gemma text
-Laguna S 2.1 (package-backed M5 two-stage single-step and three-stage chain parity, plus M5 Metal + Vast CUDA distributed OpenAI serving at split 24; broader certification pending)
+Laguna S 2.1 (package-backed M5 two-stage single-step and three-stage chain parity, plus ordinary M5 Metal 0..36 + Vast CUDA 36..48 Mesh serving at configured context 262144 with a 44,460-token prompt; broader certification pending)
 ```
 
 ## Exceptions
