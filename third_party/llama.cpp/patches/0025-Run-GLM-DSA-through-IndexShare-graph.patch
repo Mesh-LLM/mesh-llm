@@ -1,7 +1,7 @@
-From 03e3ece73ac2c07e17f909bda82bfd9ba2a83ec0 Mon Sep 17 00:00:00 2001
+From 89bf8ceca0a8dfdccf9abed3f859a1c80af21948 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 25 Jun 2026 15:51:20 +1000
-Subject: [PATCH 25/47] Run GLM-DSA through IndexShare graph
+Subject: [PATCH 25/45] Run GLM-DSA through IndexShare graph
 
 ---
  src/models/glm-dsa.cpp | 43 ++++++++++++++++++++++++++++++++++++++----

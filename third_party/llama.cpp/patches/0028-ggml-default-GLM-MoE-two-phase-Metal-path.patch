@@ -1,7 +1,7 @@
-From 78bd4db176b5437a43ed58fd51a8f6c304465798 Mon Sep 17 00:00:00 2001
+From 1f9c781f915ef3ea0f71f48660272b1c31e19d9e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 19 Jul 2026 11:27:53 +1000
-Subject: [PATCH 28/47] ggml: default GLM MoE two-phase Metal path
+Subject: [PATCH 28/45] ggml: default GLM MoE two-phase Metal path
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp |  9 ++++++++-
@@ -9,7 +9,7 @@ Subject: [PATCH 28/47] ggml: default GLM MoE two-phase Metal path
  2 files changed, 20 insertions(+), 1 deletion(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index e22add77..c7e21f34 100644
+index 36378f8e..684efdc6 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
 @@ -127,7 +127,14 @@ static bool ggml_metal_glm_dsa_moe_private_scratch_enabled() {
@@ -29,7 +29,7 @@ index e22add77..c7e21f34 100644
  
  static bool ggml_metal_glm_dsa_moe_dual_lane_enabled() {
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index ce4801ba..477c51cd 100644
+index 0a7c2997..cc7703c8 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
 @@ -9835,6 +9835,17 @@ struct test_glm_ffn_two_phase_consumer : public test_glm_ffn_consumer {
@@ -50,7 +50,7 @@ index ce4801ba..477c51cd 100644
      bool eval_perf(ggml_backend_t backend, const char * op_names_filter, printer * output_printer) override {
          scoped_test_env motif_reference_env("GGML_METAL_ENABLE_GLM_MOE_DECODE_MOTIF_REFERENCE", "0");
          scoped_test_env two_phase_env(
-@@ -15145,6 +15156,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -15142,6 +15153,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
  
      test_cases.emplace_back(new test_glm_ffn_chain_native_down(true, "CANDIDATE"));
      test_cases.emplace_back(new test_glm_ffn_chain_two_phase(true, "CANDIDATE"));

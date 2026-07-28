@@ -1,7 +1,7 @@
-From 05c9d6a2ccf5435db13abdca6026f10341147678 Mon Sep 17 00:00:00 2001
+From dbce275745b31af70ea3af5d023d2012da818c6d Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 14 Jul 2026 09:16:32 +1000
-Subject: [PATCH 23/47] tests: cover native GLM-DSA execution paths
+Subject: [PATCH 23/45] tests: cover native GLM-DSA execution paths
 
 ---
  scripts/glm52-phase-d-policy-report.sh |  287 ++
@@ -1262,7 +1262,7 @@ index 00000000..8a1e0f38
 +
 +echo "wrote ${summary}"
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index b4061e35..ce4801ba 100644
+index e7cd6d0c..0a7c2997 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
 @@ -51,6 +51,87 @@
@@ -6897,7 +6897,7 @@ index b4061e35..ce4801ba 100644
      for (ggml_type type : all_types) {
          for (int b : {1, 7}) {
              for (bool v : {false, true}) {
-@@ -8810,6 +14055,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -8807,6 +14052,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 512, 5120, {128, 1}, {1, 1}));
  #endif
  
@@ -6916,7 +6916,7 @@ index b4061e35..ce4801ba 100644
      for (ggml_type type_a : all_types) {
          for (int i = 1; i < 10; ++i) {
              test_cases.emplace_back(new test_mul_mat(type_a,    GGML_TYPE_F32, 16,  i, 256, { 1,  1}, {1, 1}));
-@@ -9607,6 +14864,218 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -9604,6 +14861,218 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
              }
          }
      }
@@ -7135,7 +7135,7 @@ index b4061e35..ce4801ba 100644
  
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
-@@ -9674,6 +15143,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -9671,6 +15140,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
          }
      }
  
@@ -7146,7 +7146,7 @@ index b4061e35..ce4801ba 100644
      return test_cases;
  }
  #ifdef _MSC_VER
-@@ -9834,6 +15307,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -9827,6 +15300,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
          }
      }
  
@@ -7168,7 +7168,7 @@ index b4061e35..ce4801ba 100644
      // qwen3-30b-a3b
      for (int bs : {1, 4, 8, 32, 64, 128, 256, 512}) {
          for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XS}) {
-@@ -9853,6 +15341,266 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -9846,6 +15334,266 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
          }
      }
  
@@ -7436,7 +7436,7 @@ index b4061e35..ce4801ba 100644
      // gpt-oss-20b
      for (int bs : {1, 4, 8, 512}) {
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index d02e65c9..659ea9e9 100644
+index 86c3051c..a2e79125 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -14,6 +14,7 @@
@@ -7486,16 +7486,14 @@ index d02e65c9..659ea9e9 100644
      } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
          n_layer = 3;
      } else if (arch == LLM_ARCH_CHAMELEON) {
-@@ -204,10 +224,35 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
-     // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the
-     // indexer head count is independent of the main attention head count.
-     ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,   arch == LLM_ARCH_MINIMAX_M3 ? n_head : uint32_t(1));
--    ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,   uint32_t(64));
--    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
-+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,   arch == LLM_ARCH_GLM_DSA ? uint32_t(128) : uint32_t(64));
-+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        arch == LLM_ARCH_GLM_DSA ? glm_dsa_indexer_top_k : uint32_t(8));
-     ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
-     ms.add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS, uint32_t(1));
+@@ -199,8 +219,33 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+     }
+ 
+     ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, uint32_t(1));
+-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, uint32_t(64));
+-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,      uint32_t(8));
++    ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, arch == LLM_ARCH_GLM_DSA ? uint32_t(128) : uint32_t(64));
++    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,      arch == LLM_ARCH_GLM_DSA ? glm_dsa_indexer_top_k : uint32_t(8));
 +    if (arch == LLM_ARCH_GLM_DSA) {
 +        if (glm_dsa_indexshare == glm_dsa_indexshare_fixture::CONFLICTING_METADATA) {
 +            ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K_FREQUENCY, uint32_t(1));
@@ -7524,7 +7522,7 @@ index d02e65c9..659ea9e9 100644
      ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
      ms.add_kv(LLM_KV_TOKENIZER_MODEL,         "no_vocab");
      // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,     n_embd);
-@@ -261,9 +306,242 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+@@ -254,9 +299,242 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
      return true;
  }
  
@@ -7768,7 +7766,7 @@ index d02e65c9..659ea9e9 100644
      GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
      llama_model_params model_params = llama_model_default_params();
      model_params.progress_callback = silent_model_load_progress;
-@@ -279,6 +557,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -272,6 +550,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      if (!encode) {
          ctx_params.n_ubatch = 64;
      }
@@ -7778,7 +7776,7 @@ index d02e65c9..659ea9e9 100644
  
      size_t tmp = seed;
      llama_model_ptr model(gguf_ctx != nullptr ?
-@@ -294,6 +575,656 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -287,6 +568,656 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      return std::make_pair(std::move(model), std::move(lctx));
  }
  
@@ -8435,7 +8433,7 @@ index d02e65c9..659ea9e9 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -438,6 +1369,20 @@ static bool arch_supported(const llm_arch arch) {
+@@ -430,6 +1361,20 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -8456,7 +8454,7 @@ index d02e65c9..659ea9e9 100644
  static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
      struct user_data_t {
          struct {
-@@ -551,6 +1496,33 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -543,6 +1488,33 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
      const std::string template_row_res = "%15s %10s|%20s|\n";
  
      bool all_ok = true;
@@ -8490,7 +8488,7 @@ index d02e65c9..659ea9e9 100644
      common_log_flush(common_log_main());
      printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
      printf("|");
-@@ -600,6 +1572,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -592,6 +1564,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                  std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                  char nmse_str[12] = {0};
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());

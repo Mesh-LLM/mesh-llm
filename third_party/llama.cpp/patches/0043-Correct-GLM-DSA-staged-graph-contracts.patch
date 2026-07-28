@@ -1,7 +1,7 @@
-From 2a38f4a874c8e0c6a49610957cebb6195d112610 Mon Sep 17 00:00:00 2001
+From abb3456459c7535ec1e09286c8013a60c1170efe Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 26 Jul 2026 21:14:11 +1000
-Subject: [PATCH 43/47] Correct GLM-DSA staged graph contracts
+Subject: [PATCH 43/45] Correct GLM-DSA staged graph contracts
 
 ---
  src/models/glm-dsa.cpp | 21 ++++++++-------------

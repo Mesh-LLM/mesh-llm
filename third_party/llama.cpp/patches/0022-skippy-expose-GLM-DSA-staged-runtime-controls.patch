@@ -1,7 +1,7 @@
-From 338da87701a5aafef4e1cab202ae4dd0adaad427 Mon Sep 17 00:00:00 2001
+From 02b458479060c5ae055c4a9973a66884ed55c6e9 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 14 Jul 2026 09:16:19 +1000
-Subject: [PATCH 22/47] skippy: expose GLM-DSA staged runtime controls
+Subject: [PATCH 22/45] skippy: expose GLM-DSA staged runtime controls
 
 ---
  include/skippy.h    |   20 +
@@ -56,7 +56,7 @@ index 50c08515..8f166e9c 100644
  
  struct skippy_tensor_info {
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 1363deb5..126a434b 100644
+index 6613747a..244a400a 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -25,6 +25,7 @@ static thread_local skippy_graph_filter g_skippy_graph_filter;

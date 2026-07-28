@@ -1,7 +1,7 @@
-From d474a2cf7f638e5155a83fb85624d47f6931e3d1 Mon Sep 17 00:00:00 2001
+From 66275c899d65c5fb9c8f44efaf2f4e423bac045c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 26 Jul 2026 21:13:49 +1000
-Subject: [PATCH 42/47] Harden staged session and sideband bookkeeping
+Subject: [PATCH 42/45] Harden staged session and sideband bookkeeping
 
 ---
  ggml/include/ggml-rpc.h |  2 +-

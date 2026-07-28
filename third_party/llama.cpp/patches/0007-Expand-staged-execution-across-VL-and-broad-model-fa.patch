@@ -1,7 +1,7 @@
-From de078a2e2458d364e6dbe3e895fd7a30e7296d0b Mon Sep 17 00:00:00 2001
+From a4be6bd95fb953270ad66f37355eb8e154387d6e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 07/47] Expand staged execution across VL and broad model
+Subject: [PATCH 07/45] Expand staged execution across VL and broad model
  families
 
 Squashes RWKV7 activation sideband support, Phi2, Granite, Hunyuan Dense/MoE, PhiMoE, tied-output handling, Qwen35/Hunyuan-VL, broad llama-family coverage, BitNet and StarCoder fixes, and DeepSeek OCR/Qwen3-VL-MoE support.
@@ -84,10 +84,10 @@ index 84169398..1c6d2c9f 100644
  struct skippy_session;
  struct skippy_model_info;
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9b399d60..dc61ddc8 100644
+index eed041ee..c0bfd7db 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2354,6 +2354,10 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
+@@ -2352,6 +2352,10 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
      return static_cast<llm_graph_result *>(gf_res_reserve.get());
  }
  
@@ -111,7 +111,7 @@ index bf91daa8..42442879 100644
      // returns the result of ggml_backend_sched_graph_compute_async execution
      ggml_status graph_compute(ggml_cgraph * gf, bool batched);
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index ad8f2fc6..70b61495 100644
+index f2618710..03873edb 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -23,6 +23,7 @@
@@ -244,7 +244,7 @@ index 33d57061..d9e241a1 100644
      std::vector<ggml_tensor *> t_layer_inp;
  
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 3070a8c6..3b1d48f4 100644
+index ecafbdf2..91589e1b 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -19,6 +19,7 @@ static const size_t MiB = 1024*kiB;
@@ -305,10 +305,10 @@ index f73fa907..5d693719 100644
  enum llama_fver {
      GGUF_FILE_VERSION_V1 = 1,
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 4152ee61..9cc29a51 100644
+index 07d3f4f3..b603f869 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -2770,7 +2770,8 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
+@@ -2763,7 +2763,8 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
          int flags) {
      const int64_t n_embd_qkv = n_embd_q_ + n_embd_k_ + n_embd_v_;
      layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", bid), {n_embd_, n_embd_qkv}, TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);
@@ -1803,7 +1803,7 @@ index 6e2bd9a3..5b91df3d 100644
              model.output_norm, model.output_norm_b,
              LLM_NORM, -1);
 diff --git a/src/models/openai-moe.cpp b/src/models/openai-moe.cpp
-index c91bae1c..8c4d7bed 100644
+index 6d74f9c7..d860df79 100644
 --- a/src/models/openai-moe.cpp
 +++ b/src/models/openai-moe.cpp
 @@ -65,16 +65,21 @@ llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_
@@ -1835,8 +1835,8 @@ index c91bae1c..8c4d7bed 100644
  
              cb(cur, "attn_out", il);
          }
--        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
-+        if (il == il_end - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+-        if (il == n_layer - 1) {
++        if (il == il_end - 1 && inp_out_ids) {
              // skip computing output for unused tokens
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
@@ -1851,9 +1851,9 @@ index c91bae1c..8c4d7bed 100644
 +        return;
 +    }
 +
-     res->t_h_nextn = cur;
- 
-     if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+     cur = build_norm(cur,
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
 diff --git a/src/models/openelm.cpp b/src/models/openelm.cpp
 index 13120bd3..33ca072f 100644
 --- a/src/models/openelm.cpp

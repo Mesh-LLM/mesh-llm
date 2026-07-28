@@ -1,7 +1,7 @@
-From aec3d7b74786f7434166c15be069d882cdb39ea8 Mon Sep 17 00:00:00 2001
+From 59cdfb7bf5cf5e112f229ebec9a4e0fa3d954547 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:52 +1000
-Subject: [PATCH 04/47] Add lanes, external media, and chat grammar support
+Subject: [PATCH 04/45] Add lanes, external media, and chat grammar support
 
 Squashes Qwen3 MoE staged execution, KV cache type and generation signal ABI, backend device selection, external media prefill, shared execution lanes, batch/flash-attention config, tool-aware chat templates, and chat grammar sampling.
 ---
@@ -573,7 +573,7 @@ index 4dd985da..3ffdb879 100644
          const char * path,
          struct skippy_model_info ** out_info,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 638c9664..41962096 100644
+index d7c7c220..f74bb495 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -196,12 +196,10 @@ llama_kv_cache::llama_kv_cache(
@@ -593,7 +593,7 @@ index 638c9664..41962096 100644
          }
  
          // [TAG_V_CACHE_VARIABLE]
-@@ -1338,352 +1336,6 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
+@@ -1225,352 +1223,6 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
      return layers[ikv].k;
  }
  
@@ -947,7 +947,7 @@ index 638c9664..41962096 100644
      uint32_t result = 0;
  
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index e421bd1c..6c92186d 100644
+index d9301c19..92394d4c 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -13,8 +13,6 @@ struct llama_cparams;

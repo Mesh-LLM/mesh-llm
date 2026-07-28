@@ -1,14 +1,14 @@
-From 1dc45ffa1cf72ed14b28aa5af8d63259ad3dd33c Mon Sep 17 00:00:00 2001
+From 223525c271739859819dd21e8164e3247196b7ad Mon Sep 17 00:00:00 2001
 From: James Dumay <james@mesh-llm.local>
 Date: Sun, 19 Jul 2026 00:00:00 +1000
-Subject: [PATCH 32/47] tests: add GLM Q2Q3 selected weight roofline
+Subject: [PATCH 32/45] tests: add GLM Q2Q3 selected weight roofline
 
 ---
  tests/test-backend-ops.cpp | 30 ++++++++++++++++++++++++++++++
  1 file changed, 30 insertions(+)
 
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 3edcf06f..67dbbdb6 100644
+index 32f1215d..9f566612 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
 @@ -7685,6 +7685,30 @@ struct test_glm_moe_q2_weight_roofline : public test_glm_moe_routed_q2_final_out
@@ -42,7 +42,7 @@ index 3edcf06f..67dbbdb6 100644
  struct test_glm_moe_selected_chain : public test_case {
      static constexpr int64_t n_expert = 32;
      static constexpr int64_t n_expert_used = 8;
-@@ -14953,6 +14977,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -14950,6 +14974,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_A"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(true,  "FIXED_IDS"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_B"));
@@ -52,7 +52,7 @@ index 3edcf06f..67dbbdb6 100644
      test_cases.emplace_back(new test_glm_moe_selected_chain(1, false, "CORRECTNESS"));
      test_cases.emplace_back(new test_glm_moe_selected_chain(3, false, "USEFUL_A"));
      for (ggml_type type : {GGML_TYPE_Q8_0, GGML_TYPE_Q6_K, GGML_TYPE_Q5_K, GGML_TYPE_Q4_K}) {
-@@ -15442,6 +15469,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -15435,6 +15462,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_A"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(true,  "FIXED_IDS"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_B"));

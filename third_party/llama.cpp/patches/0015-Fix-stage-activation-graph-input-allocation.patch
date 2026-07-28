@@ -1,14 +1,14 @@
-From 518d810ca858450ac5b81cb4e3a6b21f7b3e64de Mon Sep 17 00:00:00 2001
+From 76ff9a9cdd614c8bf4a082d06b9d144bc6096dd4 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 15 Jul 2026 07:54:20 +1000
-Subject: [PATCH 15/47] Fix stage activation graph input allocation
+Subject: [PATCH 15/45] Fix stage activation graph input allocation
 
 ---
  src/llama-graph.cpp | 39 +++++++++++++++++++++++++++------------
  1 file changed, 27 insertions(+), 12 deletions(-)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index a84bf8b6..1363deb5 100644
+index a75f0b75..6613747a 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -135,8 +135,8 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
@@ -86,7 +86,7 @@ index a84bf8b6..1363deb5 100644
  
      return res;
  }
-@@ -2351,7 +2360,13 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+@@ -2340,7 +2349,13 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
      assert(ggml_are_same_shape (inps[0], inps[1]));
      assert(ggml_are_same_stride(inps[0], inps[1]));
  

@@ -1,7 +1,7 @@
-From f67dc3032d5e7c66a7f6b312d88100588bd240b0 Mon Sep 17 00:00:00 2001
+From d2550d768c3d538b50266b13861dc1ad39e266fa Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 19 Jul 2026 16:31:29 +1000
-Subject: [PATCH 29/47] ggml: add GLM MoE Metal selector diagnostics
+Subject: [PATCH 29/45] ggml: add GLM MoE Metal selector diagnostics
 
 ---
  ggml/src/ggml-metal/ggml-metal-ops.cpp | 75 +++++++++++++++++++++-----
@@ -9,7 +9,7 @@ Subject: [PATCH 29/47] ggml: add GLM MoE Metal selector diagnostics
  2 files changed, 98 insertions(+), 16 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index c7e21f34..d2fdef79 100644
+index 684efdc6..ab41e1ec 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
 @@ -147,6 +147,11 @@ static bool ggml_metal_glm_dsa_moe_dual_lane_gate_slot4_enabled() {
@@ -139,7 +139,7 @@ index c7e21f34..d2fdef79 100644
          fusion_scratch : ggml_metal_get_buffer_id(weighted_sum);
  
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 477c51cd..e45661b0 100644
+index cc7703c8..50ec5225 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
 @@ -9578,6 +9578,7 @@ struct test_glm_ffn_consumer : public test_case {
@@ -200,7 +200,7 @@ index 477c51cd..e45661b0 100644
  struct test_glm_ffn_dual_lane_consumer : public test_glm_ffn_consumer {
      const bool dual_lane;
      const char * variant;
-@@ -15157,6 +15188,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -15154,6 +15185,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_glm_ffn_chain_native_down(true, "CANDIDATE"));
      test_cases.emplace_back(new test_glm_ffn_chain_two_phase(true, "CANDIDATE"));
      test_cases.emplace_back(new test_glm_ffn_two_phase_consumer(true, "CANDIDATE"));
@@ -208,7 +208,7 @@ index 477c51cd..e45661b0 100644
      test_cases.emplace_back(new test_glm_ffn_dual_lane_consumer(true, "CANDIDATE"));
  
      return test_cases;
-@@ -15531,6 +15563,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -15524,6 +15556,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                  GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, 6144, 2048, true, true));
      test_cases.emplace_back(new test_glm_ffn_consumer(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K,
                  GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, 6144, 2048, true, false, true));

@@ -1,7 +1,7 @@
-From a40efb4320028532de6767cc26d63f500fb9dadd Mon Sep 17 00:00:00 2001
+From 3653cfda98f3349e7f48490c90128825c8d47762 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 26 Jun 2026 13:47:53 +1000
-Subject: [PATCH 08/47] Add external decode, media prefill, and newer family
+Subject: [PATCH 08/45] Add external decode, media prefill, and newer family
  support
 
 Squashes tensor filtering accounting fixes, recurrent KV page export handling, external decode filtering, staged external media prefill, tensor element counts, activation-frame batch padding and position sideband, plus Gemma3n, Llama4, and Mistral4 slices.
@@ -98,7 +98,7 @@ index 1c6d2c9f..f1ff7852 100644
          struct skippy_session * session,
          llama_token token_id,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 70b61495..bf7b62f6 100644
+index 03873edb..fb804ffd 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -24,6 +24,7 @@
@@ -322,10 +322,10 @@ index d9e241a1..2e0d9c3b 100644
      std::vector<ggml_tensor *> t_layer_inp;
  
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 942a1a4a..ac10ba6c 100644
+index 41a4e0de..0e6902aa 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1419,14 +1419,16 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1302,14 +1302,16 @@ bool llama_kv_cache::stage_export_kv_page(
          if (il < static_cast<uint32_t>(layer_start) || il >= static_cast<uint32_t>(layer_end)) {
              continue;
          }
@@ -347,7 +347,7 @@ index 942a1a4a..ac10ba6c 100644
  
          if (k_row > std::numeric_limits<uint32_t>::max() ||
                  v_row > std::numeric_limits<uint32_t>::max() ||
-@@ -1439,19 +1441,19 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1322,19 +1324,19 @@ bool llama_kv_cache::stage_export_kv_page(
              v_row_bytes = static_cast<uint32_t>(v_row);
              v_element_bytes = static_cast<uint32_t>(v_el);
              k_type = static_cast<uint32_t>(layer.k_stream[strm]->type);
@@ -372,7 +372,7 @@ index 942a1a4a..ac10ba6c 100644
          const uint64_t k_bytes = token_count * k_row;
          if (payload_bytes > std::numeric_limits<uint64_t>::max() - k_bytes ||
                  payload_bytes + k_bytes > std::numeric_limits<uint64_t>::max() - v_bytes) {
-@@ -1505,6 +1507,9 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1388,6 +1390,9 @@ bool llama_kv_cache::stage_export_kv_page(
  
      if (!v_trans) {
          for (const auto * layer : selected) {
@@ -382,7 +382,7 @@ index 942a1a4a..ac10ba6c 100644
              auto * v = layer->v_stream[strm];
              for (uint32_t cell_idx : cell_idxs) {
                  ggml_backend_tensor_get(v, dst, static_cast<size_t>(cell_idx) * v_row_bytes, v_row_bytes);
-@@ -1587,15 +1592,17 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1466,15 +1471,17 @@ bool llama_kv_cache::stage_import_kv_page(
          if (il < static_cast<uint32_t>(desc.layer_start) || il >= static_cast<uint32_t>(desc.layer_end)) {
              continue;
          }
@@ -406,7 +406,7 @@ index 942a1a4a..ac10ba6c 100644
                  desc.k_row_bytes != k_row ||
                  desc.v_row_bytes != v_row ||
                  desc.v_element_bytes != v_el) {
-@@ -1682,6 +1689,9 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1557,6 +1564,9 @@ bool llama_kv_cache::stage_import_kv_page(
      auto & cells = v_cells[strm];
      if (!v_trans) {
          for (const auto * layer : selected) {
@@ -417,7 +417,7 @@ index 942a1a4a..ac10ba6c 100644
              for (uint32_t i = 0; i < n_tokens; ++i) {
                  ggml_backend_tensor_set(v, src, static_cast<size_t>(sinfo.idxs[0][i]) * desc.v_row_bytes, desc.v_row_bytes);
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 3b1d48f4..ec530d62 100644
+index 91589e1b..a62c3644 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -1126,6 +1126,19 @@ struct ggml_tensor * llama_model_loader::create_tensor(

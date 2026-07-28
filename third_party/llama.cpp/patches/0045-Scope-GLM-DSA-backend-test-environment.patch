@@ -1,14 +1,14 @@
-From 5879e1ee1ce6d7a9a005a260f74acfd3dc72f2ef Mon Sep 17 00:00:00 2001
+From 99a0fe861d955acc921d0f328f0b1e8ba95b7699 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 26 Jul 2026 21:16:20 +1000
-Subject: [PATCH 47/47] Scope GLM-DSA backend test environment
+Subject: [PATCH 45/45] Scope GLM-DSA backend test environment
 
 ---
  tests/test-backend-ops.cpp | 87 +++++++++++++++++++++++++++++---------
  1 file changed, 66 insertions(+), 21 deletions(-)
 
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 745c3814..5af000a7 100644
+index 43ce1a0e..7d47a4e0 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
 @@ -42,6 +42,7 @@

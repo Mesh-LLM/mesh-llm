@@ -1,7 +1,7 @@
-From 2166a2f7ae1dfc8469a64a172a0e48b740267645 Mon Sep 17 00:00:00 2001
+From 0f7f31ef18355e7581e0e5a36f5a45e45274b3aa Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 26 Jul 2026 11:28:36 +1000
-Subject: [PATCH 44/47] ggml-metal: make small-batch matmul batch invariant
+Subject: [PATCH] ggml-metal: make small-batch matmul batch invariant
 
 ---
  ggml/src/ggml-metal/ggml-metal-device.cpp |   8 +-
@@ -11,7 +11,7 @@ Subject: [PATCH 44/47] ggml-metal: make small-batch matmul batch invariant
  4 files changed, 176 insertions(+), 45 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
-index baac9436..39dcc313 100644
+index 870d5a92e..b156d670c 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
 @@ -1186,6 +1186,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_
@@ -37,7 +37,7 @@ index baac9436..39dcc313 100644
                      smem = 32*sizeof(float)*nr0;
                      suffix = ne00 % 4 == 0 ? "_4" : "";
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
-index 6d20ae26..5167d2df 100644
+index f7112ee56..b8683e534 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h
 +++ b/ggml/src/ggml-metal/ggml-metal-impl.h
 @@ -44,6 +44,8 @@
@@ -50,10 +50,10 @@ index 6d20ae26..5167d2df 100644
  #define N_SG_MXFP4 2
  
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 08f1d966..5b41995c 100644
+index 646c983ad..a4b62a42e 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-@@ -7744,6 +7744,41 @@ int ggml_metal_op_pool_2d(ggml_metal_op_t ctx, int idx) {
+@@ -7704,6 +7704,41 @@ int ggml_metal_op_pool_2d(ggml_metal_op_t ctx, int idx) {
      return 1;
  }
  
@@ -95,7 +95,7 @@ index 08f1d966..5b41995c 100644
  int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
      ggml_tensor * op = ctx->node(idx);
  
-@@ -7869,10 +7904,17 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
+@@ -7817,10 +7852,17 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
      // find the break-even point where the matrix-matrix kernel becomes more efficient compared
      // to the matrix-vector kernel
      const int ne11_mm_min = 8;
@@ -114,7 +114,7 @@ index 08f1d966..5b41995c 100644
          (
           (
            (
-@@ -7888,7 +7930,10 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
+@@ -7836,7 +7878,10 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             op->src[0]->type == GGML_TYPE_Q8_0 ||
             op->src[0]->type == GGML_TYPE_MXFP4 ||
             op->src[0]->type == GGML_TYPE_IQ4_NL ||
@@ -126,7 +126,7 @@ index 08f1d966..5b41995c 100644
           ) ||
           (
            (
-@@ -7897,7 +7942,10 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
+@@ -7845,7 +7890,10 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             op->src[0]->type == GGML_TYPE_Q6_K ||
             op->src[0]->type == GGML_TYPE_Q2_K ||
             op->src[0]->type == GGML_TYPE_Q3_K ||
@@ -138,7 +138,7 @@ index 08f1d966..5b41995c 100644
           )
          )
         ) {
-@@ -7909,8 +7957,6 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
+@@ -7857,8 +7905,6 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
          //       my current hypothesis is that the work grid is not evenly divisible for different nsg
          //       values and there can be some tail effects when nsg is high. need to confirm this
          //
@@ -147,7 +147,7 @@ index 08f1d966..5b41995c 100644
          // num threads along row per simdgroup
          int16_t nxpsg = 0;
          if (ne00 % 256 == 0 && ne11 < 3) {
-@@ -7921,26 +7967,33 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
+@@ -7869,26 +7915,33 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
              nxpsg = 4;
          }
  
@@ -199,7 +199,7 @@ index 08f1d966..5b41995c 100644
  
          auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg);
  
-@@ -7971,7 +8024,14 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
+@@ -7919,7 +7972,14 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
          ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
          ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
  
@@ -216,7 +216,7 @@ index 08f1d966..5b41995c 100644
          !ggml_is_transposed(op->src[0]) &&
          !ggml_is_transposed(op->src[1]) &&
 diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
-index d367da67..7d155bd7 100644
+index b098231dc..4e6d2b35f 100644
 --- a/ggml/src/ggml-metal/ggml-metal.metal
 +++ b/ggml/src/ggml-metal/ggml-metal.metal
 @@ -4778,11 +4778,6 @@ kernel void kernel_mul_mv_ext_q4x4_f32_disp(
@@ -265,7 +265,7 @@ index d367da67..7d155bd7 100644
  template [[host_name("kernel_mul_mv_ext_q2_K_f32_r1_2")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<2, block_q2_K, 256, dequantize_q2_K>;
  template [[host_name("kernel_mul_mv_ext_q2_K_f32_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_q2_K, 256, dequantize_q2_K>;
  template [[host_name("kernel_mul_mv_ext_q2_K_f32_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q2_K, 256, dequantize_q2_K>;
-@@ -13491,6 +13471,89 @@ kernel void kernel_mul_mv_q6_K_f32(
+@@ -13429,6 +13409,89 @@ kernel void kernel_mul_mv_q6_K_f32(
      kernel_mul_mv_q6_K_f32_impl<N_R0_Q6_K, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, nullptr, tgpig, tiisg, sgitg);
  }
  
@@ -356,5 +356,5 @@ index d367da67..7d155bd7 100644
  
  template<int nr0, typename args_t>
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

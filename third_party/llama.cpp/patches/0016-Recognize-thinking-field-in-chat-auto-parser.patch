@@ -1,7 +1,7 @@
-From 4f5f711be6c0acff41e0fcfdc175e46224da4e7b Mon Sep 17 00:00:00 2001
+From 587f96c77401abfb93f56147b306c2f5641f2a54 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 14 Jul 2026 19:32:50 +1000
-Subject: [PATCH 16/47] Recognize thinking field in chat auto-parser
+Subject: [PATCH 16/45] Recognize thinking field in chat auto-parser
 
 ---
  common/chat-diff-analyzer.cpp   | 10 +++++++---

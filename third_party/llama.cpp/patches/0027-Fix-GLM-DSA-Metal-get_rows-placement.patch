@@ -1,17 +1,17 @@
-From 84cfaaf9d48e6a146ef446e779b29db3f63e628e Mon Sep 17 00:00:00 2001
+From 9b1b59b34069b19c59f280e1fb4c4480e3b173d0 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 22 Jul 2026 15:13:16 +1000
-Subject: [PATCH 27/47] Fix GLM DSA Metal get_rows placement
+Subject: [PATCH 27/45] Fix GLM DSA Metal get_rows placement
 
 ---
  ggml/src/ggml-metal/ggml-metal.metal | 22 ----------------------
  1 file changed, 22 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
-index 2f1fe190..7674aef1 100644
+index b7b7e065..7a6df158 100644
 --- a/ggml/src/ggml-metal/ggml-metal.metal
 +++ b/ggml/src/ggml-metal/ggml-metal.metal
-@@ -16877,28 +16877,6 @@ kernel void kernel_dsa_sparse_attn_decode_grouped_impl(
+@@ -16815,28 +16815,6 @@ kernel void kernel_dsa_sparse_attn_decode_grouped_impl(
      reduce[reduce_offset + tid] = local_active_top_end;
      threadgroup_barrier(mem_flags::mem_threadgroup);
  

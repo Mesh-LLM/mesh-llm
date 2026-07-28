@@ -1,7 +1,7 @@
-From 104676d83b0fadf17f873e128144033a58bc6f5a Mon Sep 17 00:00:00 2001
+From e47c41e7d0e39fbc95f059678b01653d813f0e6a Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 26 Jul 2026 21:15:27 +1000
-Subject: [PATCH 45/47] Fix GLM-DSA Metal dispatch safety
+Subject: [PATCH 44/45] Fix GLM-DSA Metal dispatch safety
 
 ---
  ggml/src/ggml-metal/ggml-metal-device.cpp | 13 +++---
@@ -11,10 +11,10 @@ Subject: [PATCH 45/47] Fix GLM-DSA Metal dispatch safety
  4 files changed, 33 insertions(+), 37 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
-index 39dcc313..a4c38234 100644
+index 870d5a92..9ad67837 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
-@@ -2785,15 +2785,14 @@ static ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id
+@@ -2779,15 +2779,14 @@ static ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id
  
      constexpr int nr0 = 8;
      const int nsg = active_slots;
@@ -37,10 +37,10 @@ index 39dcc313..a4c38234 100644
  
      res.nr0  = nr0;
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
-index 5167d2df..4db4df53 100644
+index f7112ee5..f8431715 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h
 +++ b/ggml/src/ggml-metal/ggml-metal-impl.h
-@@ -577,7 +577,7 @@ typedef struct {
+@@ -575,7 +575,7 @@ typedef struct {
      uint64_t weights_nb1;
      uint64_t weights_nb2;
      int32_t  weighted;
@@ -50,7 +50,7 @@ index 5167d2df..4db4df53 100644
  
  typedef struct {
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 5b41995c..7252aeb5 100644
+index 646c983a..f6a287b1 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
 @@ -230,6 +230,11 @@ static int ggml_metal_glm_dsa_moe_max_active_experts() {
@@ -166,7 +166,7 @@ index 5b41995c..7252aeb5 100644
          } else if (q3_f16_w0_shape) {
              pipeline_slot_parallel =
                  ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_f16(lib, weighted_sum);
-@@ -11778,8 +11775,8 @@ int ggml_metal_op_dsa_sparse_attn(ggml_metal_op_t ctx, int idx) {
+@@ -11666,8 +11663,8 @@ int ggml_metal_op_dsa_sparse_attn(ggml_metal_op_t ctx, int idx) {
      ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[4]), ida++); // top_k
      ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // dst
  
@@ -178,10 +178,10 @@ index 5b41995c..7252aeb5 100644
      const int max_threads_per_group = std::max(1, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)/head_group);
      const int nth = std::min(nth_requested, max_threads_per_group);
 diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
-index 7d155bd7..674216b8 100644
+index b098231d..726c02ad 100644
 --- a/ggml/src/ggml-metal/ggml-metal.metal
 +++ b/ggml/src/ggml-metal/ggml-metal.metal
-@@ -10373,7 +10373,7 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_impl(
+@@ -10331,7 +10331,7 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_impl(
          ushort sgitg[[simdgroup_index_in_threadgroup]]) {
      const int nb = args.ne00/QK_K;
  
@@ -190,7 +190,7 @@ index 7d155bd7..674216b8 100644
      const int slot_groups = (active_slots + slots_per_tg - 1) / slots_per_tg;
      const int r0 = tgpig.x;
      const int token = tgpig.z / slot_groups;
-@@ -10386,7 +10386,7 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_impl(
+@@ -10344,7 +10344,7 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_impl(
  
      if (slot < args.nei0 && token < args.nei1) {
          const int32_t expert_id = ((device const int32_t *) (ids + token*args.nbi1))[slot];
@@ -199,7 +199,7 @@ index 7d155bd7..674216b8 100644
          if (active_slot && expert_id >= 0 && expert_id < args.ne02) {
              device const char * src0_all = is_gate ? src0_gate_all : src0_up_all;
              const uint64_t offset0 = uint64_t(expert_id)*args.nb02 + uint64_t(first_row)*args.nb01;
-@@ -10824,7 +10824,7 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_dual_impl(
+@@ -10782,7 +10782,7 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_dual_impl(
  
      if (valid_output) {
          const int32_t expert_id = ((device const int32_t *) (ids + token*args.nbi1))[slot];
