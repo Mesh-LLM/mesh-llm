@@ -6,10 +6,10 @@ Subject: [PATCH 05/47] Add resident prefix cache and session refinements
 Squashes resident prefix cache support, exact-prefix state restoration, borrowed prefix sessions, lazy generation signals, single-token allocation avoidance, server-like thread defaults, prefix cache borrowing, lane preservation, and recurrent-state remapping.
 ---
  include/skippy.h       | 119 +++++-
- src/llama-kv-cache.cpp | 369 ++++++++++++++++++
+ src/llama-kv-cache.cpp | 391 +++++++++++++++++++
  src/llama-kv-cache.h   |  21 ++
  src/skippy.cpp         | 821 ++++++++++++++++++++++++++++++++++++++++-
- 4 files changed, 1320 insertions(+), 10 deletions(-)
+ 4 files changed, 1342 insertions(+), 10 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
 index 3ffdb879..deb5151e 100644
@@ -196,10 +196,10 @@ index 3ffdb879..deb5151e 100644
          struct skippy_model * model,
          const char * text,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 41962096..942a1a4a 100644
+index 419620960f5a462fcf9fa87260aa01d5a37a855b..d8ea1d6c385ffe2911d58270811df66b7a9373f2 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1336,6 +1336,375 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
+@@ -1336,6 +1336,397 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
      return layers[ikv].k;
  }
  
@@ -409,7 +409,10 @@ index 41962096..942a1a4a 100644
 +        error = "unsupported native KV page descriptor version";
 +        return false;
 +    }
-+    if (desc.layer_start < 0 || desc.layer_end <= desc.layer_start || desc.token_count == 0) {
++    if (desc.layer_start < 0 ||
++            desc.layer_end <= desc.layer_start ||
++            static_cast<uint32_t>(desc.layer_end) > hparams.n_layer() ||
++            desc.token_count == 0) {
 +        error = "invalid native KV page descriptor";
 +        return false;
 +    }
@@ -471,6 +474,10 @@ index 41962096..942a1a4a 100644
 +        }
 +        selected.push_back(&layer);
 +    }
++    if (selected.empty()) {
++        error = "no KV cache layers selected by layer range";
++        return false;
++    }
 +    if (selected.size() != desc.layer_count) {
 +        error = "native KV page layer count does not match runtime";
 +        return false;
@@ -529,9 +536,24 @@ index 41962096..942a1a4a 100644
 +    ubatch.output = udata->output.data();
 +    ubatch.data = std::move(udata);
 +
++    auto & stream_cells = v_cells[strm];
++    std::vector<uint32_t> replaced_idxs;
++    replaced_idxs.reserve(n_tokens);
++    const llama_pos pos_start = static_cast<llama_pos>(desc.token_start);
++    const llama_pos pos_end = static_cast<llama_pos>(desc.token_start + desc.token_count);
++    for (uint32_t i = 0; i < stream_cells.size(); ++i) {
++        if (stream_cells.seq_has(i, seq_id) && stream_cells.pos_in(i, pos_start, pos_end)) {
++            replaced_idxs.push_back(i);
++        }
++    }
++    const auto replaced_cells = stream_cells.cp(replaced_idxs);
++    const uint32_t head_before = v_heads[strm];
++
 +    seq_rm(seq_id, static_cast<llama_pos>(desc.token_start), static_cast<llama_pos>(desc.token_start + desc.token_count));
 +    const slot_info sinfo = find_slot(ubatch, false);
 +    if (sinfo.empty()) {
++        stream_cells.set(replaced_idxs, replaced_cells);
++        v_heads[strm] = head_before;
 +        error = "failed to allocate KV cache cells for imported page";
 +        return false;
 +    }

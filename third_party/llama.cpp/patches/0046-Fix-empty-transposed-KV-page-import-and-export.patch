@@ -6,12 +6,12 @@ Subject: [PATCH 46/47] Fix empty transposed KV page import and export
 ---
  src/llama-kv-cache.cpp               |   6 +
  tests/CMakeLists.txt                 |   1 +
- tests/test-skippy-kv-page-export.cpp | 185 +++++++++++++++++++++++++++
- 3 files changed, 192 insertions(+)
+ tests/test-skippy-kv-page-export.cpp | 259 +++++++++++++++++++++++++++
+ 3 files changed, 266 insertions(+)
  create mode 100644 tests/test-skippy-kv-page-export.cpp
 
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index c4517d65..117855d6 100644
+index 2eede8c062d7989fc5d4ef364b65e1f36d1c7832..033e172d86ba1d984d0e66f2f0095bbd3002c689 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -1622,6 +1622,9 @@ bool llama_kv_cache::stage_export_kv_page(
@@ -24,7 +24,7 @@ index c4517d65..117855d6 100644
              auto * v = layer->v_stream[strm];
              const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
              for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
-@@ -1804,6 +1807,9 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1826,6 +1829,9 @@ bool llama_kv_cache::stage_import_kv_page(
          }
      } else {
          for (const auto * layer : selected) {
@@ -48,10 +48,10 @@ index 7a93b19a..158ab28d 100644
      llama_build_and_test(test-reasoning-budget.cpp)
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
 new file mode 100644
-index 00000000..724835df
+index 0000000000000000000000000000000000000000..82075076c5bc84b4286cab2eff3cf3bb32d1a6e0
 --- /dev/null
 +++ b/tests/test-skippy-kv-page-export.cpp
-@@ -0,0 +1,185 @@
+@@ -0,0 +1,259 @@
 +#include "skippy.h"
 +
 +#include "../src/llama-batch.h"
@@ -190,6 +190,80 @@ index 00000000..724835df
 +        fprintf(stderr, "K-only KV page import failed: %s\n", error.c_str());
 +        return 1;
 +    }
++
++    uint8_t empty_payload = 0;
++    skippy_kv_page_desc invalid_range_desc = desc;
++    invalid_range_desc.layer_start = 1;
++    invalid_range_desc.layer_end = 2;
++    invalid_range_desc.layer_count = 0;
++    invalid_range_desc.payload_bytes = 0;
++    if (restore_kv.stage_import_kv_page(
++                0,
++                invalid_range_desc,
++                &empty_payload,
++                0,
++                error)) {
++        fprintf(stderr, "out-of-bounds KV page layer range was accepted\n");
++        return 1;
++    }
++    if (restore_kv.seq_pos_min(0) != 0) {
++        fprintf(stderr, "out-of-bounds KV page import mutated the existing page\n");
++        return 1;
++    }
++    error.clear();
++
++    llama_kv_cache filtered_kv(
++            *model,
++            hparams,
++            GGML_TYPE_F32,
++            GGML_TYPE_F32,
++            true,
++            false,
++            true,
++            1,
++            1,
++            1,
++            0,
++            LLAMA_SWA_TYPE_NONE,
++            nullptr,
++            [](int32_t) { return false; },
++            {},
++            {});
++    filtered_kv.apply_ubatch(slot, ubatch);
++
++    skippy_kv_page_desc empty_range_desc = desc;
++    empty_range_desc.layer_count = 0;
++    empty_range_desc.payload_bytes = 0;
++    if (filtered_kv.stage_import_kv_page(
++                0,
++                empty_range_desc,
++                &empty_payload,
++                0,
++                error)) {
++        fprintf(stderr, "empty KV page layer selection was accepted\n");
++        return 1;
++    }
++    if (filtered_kv.seq_pos_min(0) != 0) {
++        fprintf(stderr, "empty KV page layer selection mutated the existing page\n");
++        return 1;
++    }
++    error.clear();
++
++    restore_kv.seq_cp(0, 1, 0, 1);
++    if (restore_kv.stage_import_kv_page(
++                0,
++                desc,
++                payload.data(),
++                payload.size(),
++                error)) {
++        fprintf(stderr, "KV page import unexpectedly allocated a shared occupied cell\n");
++        return 1;
++    }
++    if (restore_kv.seq_pos_min(0) != 0 || restore_kv.seq_pos_min(1) != 0) {
++        fprintf(stderr, "failed KV page allocation did not preserve the existing page\n");
++        return 1;
++    }
++    error.clear();
 +
 +    skippy_kv_page_desc roundtrip_desc = {};
 +    size_t roundtrip_bytes = 0;
