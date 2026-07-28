@@ -977,7 +977,7 @@ fn json_layer_package_repo(value: &Value, target_namespace: &str) -> Option<Stri
 async fn write_queue_marker(client: &HFClient, candidate: &Candidate, args: &Args) -> Result<()> {
     client
         .create_repository()
-        .repo_id(candidate.target_repo.clone())
+        .repo_id(&candidate.target_repo)
         .repo_type(RepoTypeModel)
         .exist_ok(true)
         .send()
