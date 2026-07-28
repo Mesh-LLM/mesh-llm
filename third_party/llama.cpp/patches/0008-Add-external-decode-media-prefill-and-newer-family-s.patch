@@ -14,8 +14,8 @@ Squashes tensor filtering accounting fixes, recurrent KV page export handling, e
  src/llama-model-loader.h   |   2 +
  src/models/gemma3n.cpp     |  76 +++++++-
  src/models/llama4.cpp      |  33 +++-
- src/skippy.cpp             | 356 +++++++++++++++++++++++++++++++++++--
- 9 files changed, 638 insertions(+), 64 deletions(-)
+ src/skippy.cpp             | 369 +++++++++++++++++++++++++++++++++++--
+ 9 files changed, 651 insertions(+), 64 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
 index 1c6d2c9f..f1ff7852 100644
@@ -870,7 +870,7 @@ index 0290f045..27dc78b0 100644
          size_t token_count,
          bool request_logits,
          struct skippy_error ** out_error) {
-@@ -1458,22 +1552,74 @@ static enum skippy_status skippy_decode_activation_frame(
+@@ -1458,22 +1552,87 @@ static enum skippy_status skippy_decode_activation_frame(
  
      const int32_t n_tokens = static_cast<int32_t>(token_count);
      const int32_t n_embd = llama_model_n_embd(session->stage_model->model);
@@ -879,7 +879,20 @@ index 0290f045..27dc78b0 100644
 +    const int32_t n_embd_inp = llama_model_n_embd_inp(session->stage_model->model);
 +    const int32_t n_altup = static_cast<int32_t>(session->stage_model->model->hparams.n_altup);
 +    const int32_t n_pos_per_embd = session->stage_model->model->hparams.n_pos_per_embd();
-+    const size_t expected_position_count = static_cast<size_t>(n_tokens)*n_pos_per_embd;
++    if (n_pos_per_embd <= 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model position sideband width must be positive");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    const size_t n_pos_per_token = static_cast<size_t>(n_pos_per_embd);
++    if (token_count > std::numeric_limits<size_t>::max() / n_pos_per_token) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "position sideband expected count exceeds size_t range");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    const size_t expected_position_count = token_count*n_pos_per_token;
++    if (positions != nullptr && position_count != expected_position_count) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "position sideband count must equal token_count * n_pos_per_embd");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
 +
 +    std::vector<float> embd_storage(static_cast<size_t>(n_tokens)*n_embd_inp);
 +    std::vector<llama_pos> pos_storage(expected_position_count);
@@ -919,7 +932,7 @@ index 0290f045..27dc78b0 100644
 +        seq_id_storage[i] = seq_id_0.data();
 +        logits_storage[i] = request_logits && i == n_tokens - 1 ? 1 : 0;
      }
-+    if (positions != nullptr && position_count == expected_position_count) {
++    if (positions != nullptr) {
 +        std::memcpy(pos_storage.data(), positions, expected_position_count*sizeof(llama_pos));
 +    } else if (n_pos_per_embd == 4) {
 +        for (int32_t i = 0; i < n_tokens; ++i) {
@@ -953,7 +966,7 @@ index 0290f045..27dc78b0 100644
      return status;
  }
  
-@@ -1494,6 +1640,7 @@ static enum skippy_status skippy_verify_activation_frame(
+@@ -1494,6 +1653,7 @@ static enum skippy_status skippy_verify_activation_frame(
  
      const int32_t n_tokens = static_cast<int32_t>(token_count);
      const int32_t n_embd = llama_model_n_embd(session->stage_model->model);
@@ -961,7 +974,7 @@ index 0290f045..27dc78b0 100644
      llama_batch batch = llama_batch_init(n_tokens, n_embd, 1);
      batch.n_tokens = n_tokens;
      const size_t hidden_bytes = skippy_activation_hidden_bytes(session, token_count);
-@@ -1507,6 +1654,7 @@ static enum skippy_status skippy_verify_activation_frame(
+@@ -1507,6 +1667,7 @@ static enum skippy_status skippy_verify_activation_frame(
      }
  
      skippy_rwkv7_v_first_scope rwkv7_v_first_scope(input_desc, input_payload, hidden_bytes, n_embd);
@@ -969,7 +982,7 @@ index 0290f045..27dc78b0 100644
      enum skippy_status status = skippy_decode_batch(session, batch, token_count, out_error);
      llama_batch_free(batch);
      return status;
-@@ -1616,12 +1764,14 @@ static enum skippy_status skippy_finish_model_open(
+@@ -1616,12 +1777,14 @@ static enum skippy_status skippy_finish_model_open(
              model->arch != LLM_ARCH_LFM2 &&
              model->arch != LLM_ARCH_LLADA &&
              model->arch != LLM_ARCH_LLADA_MOE &&
@@ -984,7 +997,7 @@ index 0290f045..27dc78b0 100644
              model->arch != LLM_ARCH_MPT &&
              model->arch != LLM_ARCH_NEMOTRON &&
              model->arch != LLM_ARCH_OLMO2 &&
-@@ -1654,6 +1804,7 @@ static enum skippy_status skippy_finish_model_open(
+@@ -1654,6 +1817,7 @@ static enum skippy_status skippy_finish_model_open(
              model->arch != LLM_ARCH_GEMMA &&
              model->arch != LLM_ARCH_GEMMA2 &&
              model->arch != LLM_ARCH_GEMMA3 &&
@@ -992,7 +1005,7 @@ index 0290f045..27dc78b0 100644
              model->arch != LLM_ARCH_GEMMA4 &&
              model->arch != LLM_ARCH_GLM_DSA &&
              model->arch != LLM_ARCH_GLM4 &&
-@@ -1937,6 +2088,39 @@ int32_t skippy_session_batch_size(
+@@ -1937,6 +2101,39 @@ int32_t skippy_session_batch_size(
      return session != nullptr && session->ctx != nullptr ? llama_n_batch(session->ctx) : 0;
  }
  
@@ -1032,7 +1045,7 @@ index 0290f045..27dc78b0 100644
  enum skippy_status skippy_session_set_position(
          struct skippy_session * session,
          int32_t n_past,
-@@ -2284,17 +2468,25 @@ enum skippy_status skippy_verify_tokens(
+@@ -2284,17 +2481,25 @@ enum skippy_status skippy_verify_tokens(
      return status;
  }
  
@@ -1059,7 +1072,7 @@ index 0290f045..27dc78b0 100644
      if (token_count == 0) {
          skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token_count must be greater than zero");
          return SKIPPY_STATUS_INVALID_ARGUMENT;
-@@ -2328,17 +2520,146 @@ enum skippy_status skippy_prefill_chunk_frame(
+@@ -2328,17 +2533,146 @@ enum skippy_status skippy_prefill_chunk_frame(
      }
  
      if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
@@ -1208,7 +1221,7 @@ index 0290f045..27dc78b0 100644
  enum skippy_status skippy_decode_step_frame(
          struct skippy_session * session,
          llama_token token_id,
-@@ -2400,7 +2721,7 @@ enum skippy_status skippy_decode_step_frame_sampled(
+@@ -2400,7 +2734,7 @@ enum skippy_status skippy_decode_step_frame_sampled(
      }
  
      if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
@@ -1217,7 +1230,7 @@ index 0290f045..27dc78b0 100644
      } else {
          status = skippy_decode_tokens(session, &token_id, 1, true, out_error);
      }
-@@ -2483,7 +2804,7 @@ enum skippy_status skippy_verify_tokens_frame(
+@@ -2483,7 +2817,7 @@ enum skippy_status skippy_verify_tokens_frame(
      if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
          status = session->stage_model->config.include_output ?
                  skippy_verify_activation_frame(session, input_desc, input_payload, token_count, out_error) :
@@ -1226,7 +1239,7 @@ index 0290f045..27dc78b0 100644
      } else {
          status = session->stage_model->config.include_output ?
                  skippy_verify_token_batch(session, token_ids, token_count, out_error) :
-@@ -3570,7 +3891,8 @@ enum skippy_status skippy_model_info_tensor_at(
+@@ -3570,7 +3904,8 @@ enum skippy_status skippy_model_info_tensor_at(
      out_tensor->role = skippy_role_from_name(name, layer_index);
      out_tensor->ggml_type = static_cast<uint32_t>(gguf_get_tensor_type(info->ctx, tensor_id));
      out_tensor->byte_size = static_cast<uint64_t>(gguf_get_tensor_size(info->ctx, tensor_id));
@@ -1238,4 +1251,3 @@ index 0290f045..27dc78b0 100644
  
 -- 
 2.50.1 (Apple Git-155)
-
