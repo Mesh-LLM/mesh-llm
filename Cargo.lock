@@ -3889,9 +3889,9 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-hf-hub"
-version = "1.0.0"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc7862ddcdf3979479ab8d667b4d234aa558ca2bdf3b35b1d18f24fe9fe4d04d"
+checksum = "43088a838cf0c6715c65f65a5ac99045fd6d6e90949a8a4183b8104ab791e96b"
 dependencies = [
  "base64",
  "bon",
