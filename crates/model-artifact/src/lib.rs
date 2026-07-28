@@ -165,73 +165,71 @@ fn select_primary_file(
     let safetensors_exact = format!("{selector}.safetensors").to_ascii_lowercase();
     let safetensors_split_prefix = format!("{selector}-00001-of-").to_ascii_lowercase();
 
-    files
-        .iter()
-        .filter_map(|file| {
-            let lower = file.path.to_ascii_lowercase();
-            let basename = basename_lower(&file.path);
-            let rank = if lower == selector_lower || basename == selector_lower {
-                0
-            } else if gguf_matches_quant_selector(&file.path, selector) {
-                1
-            } else if basename == safetensors_exact {
-                2
-            } else if basename.starts_with(&safetensors_split_prefix)
-                && basename.ends_with(".safetensors")
-            {
-                3
-            } else if basename == gguf_exact {
-                4
-            } else if basename.starts_with(&gguf_split_prefix) && basename.ends_with(".gguf") {
-                5
-            } else {
-                return None;
-            };
-            Some((
-                rank,
-                artifact_preference_score(&file.path),
-                file.path.clone(),
-                file.clone(),
-            ))
-        })
-        .min_by(|left, right| (left.0, left.1, &left.2).cmp(&(right.0, right.1, &right.2)))
-        .map(|(_, _, _, file)| file)
-        .ok_or_else(|| {
-            anyhow::anyhow!("no model artifact matching selector '{selector}' in repository")
-        })
+    select_ranked_file(files, |file, lower, basename| {
+        if lower == selector_lower || basename == selector_lower {
+            Some(0)
+        } else if gguf_matches_quant_selector(&file.path, selector) {
+            Some(1)
+        } else if basename == safetensors_exact {
+            Some(2)
+        } else if basename.starts_with(&safetensors_split_prefix)
+            && basename.ends_with(".safetensors")
+        {
+            Some(3)
+        } else if basename == gguf_exact {
+            Some(4)
+        } else if basename.starts_with(&gguf_split_prefix) && basename.ends_with(".gguf") {
+            Some(5)
+        } else {
+            None
+        }
+    })
+    .ok_or_else(|| {
+        anyhow::anyhow!("no model artifact matching selector '{selector}' in repository")
+    })
 }
 
 fn select_default_file(files: &[ModelArtifactFile]) -> Result<ModelArtifactFile> {
+    select_ranked_file(files, |_file, lower, basename| {
+        if basename == "model.safetensors" {
+            Some(0)
+        } else if is_split_safetensors_first_shard(basename) {
+            Some(1)
+        } else if lower.ends_with(".gguf") {
+            if is_known_gguf_sidecar(basename) {
+                return None;
+            }
+            if lower.contains("-000") && !lower.contains("-00001-of-") {
+                return None;
+            }
+            Some(if lower.contains("-00001-of-") { 2 } else { 3 })
+        } else {
+            None
+        }
+    })
+    .ok_or_else(|| anyhow::anyhow!("no supported model artifact files found in repository"))
+}
+
+fn select_ranked_file(
+    files: &[ModelArtifactFile],
+    mut rank: impl FnMut(&ModelArtifactFile, &str, &str) -> Option<u8>,
+) -> Option<ModelArtifactFile> {
     files
         .iter()
         .filter_map(|file| {
             let lower = file.path.to_ascii_lowercase();
             let basename = basename_lower(&file.path);
-            let rank = if basename == "model.safetensors" {
-                0
-            } else if is_split_safetensors_first_shard(&basename) {
-                1
-            } else if lower.ends_with(".gguf") {
-                if is_known_gguf_sidecar(&basename) {
-                    return None;
-                }
-                if lower.contains("-000") && !lower.contains("-00001-of-") {
-                    return None;
-                }
-                if lower.contains("-00001-of-") { 2 } else { 3 }
-            } else {
-                return None;
-            };
-            Some((
-                rank,
-                artifact_preference_score(&file.path),
-                file.path.clone(),
-                file.clone(),
-            ))
+            rank(file, &lower, &basename).map(|rank| {
+                (
+                    rank,
+                    artifact_preference_score(&file.path),
+                    file.path.as_str(),
+                    file,
+                )
+            })
         })
-        .min_by(|left, right| (left.0, left.1, &left.2).cmp(&(right.0, right.1, &right.2)))
-        .map(|(_, _, _, file)| file)
-        .ok_or_else(|| anyhow::anyhow!("no supported model artifact files found in repository"))
+        .min_by(|left, right| (left.0, left.1, left.2).cmp(&(right.0, right.1, right.2)))
+        .map(|(_, _, _, file)| file.clone())
 }
 
 fn artifact_file_set(primary_file: &str, files: &[ModelArtifactFile]) -> Vec<ModelArtifactFile> {
@@ -449,6 +447,27 @@ mod tests {
     }
 
     #[test]
+    fn exact_filename_precedes_quant_selector_match() {
+        let files = files(&["Model-Q4_K_M.gguf", "Q4_K_M"]);
+
+        let selected = select_primary_artifact_file(Some("Q4_K_M"), &files).unwrap();
+
+        assert_eq!(selected.path, "Q4_K_M");
+    }
+
+    #[test]
+    fn selector_ranking_is_independent_of_input_order() {
+        let first_order = files(&["z/Model-Q4_K_M.gguf", "a/Model-Q4_K_M.gguf"]);
+        let second_order = files(&["a/Model-Q4_K_M.gguf", "z/Model-Q4_K_M.gguf"]);
+
+        let first = select_primary_artifact_file(Some("Q4_K_M"), &first_order).unwrap();
+        let second = select_primary_artifact_file(Some("Q4_K_M"), &second_order).unwrap();
+
+        assert_eq!(first.path, "a/Model-Q4_K_M.gguf");
+        assert_eq!(second.path, first.path);
+    }
+
+    #[test]
     fn public_selector_api_resolves_mesh_mlx_shorthand() {
         let files = files(&[
             "model-00002-of-00048.safetensors",
@@ -485,6 +504,18 @@ mod tests {
         let selected = select_primary_artifact_file(None, &files).unwrap();
 
         assert_eq!(selected.path, "model.safetensors");
+    }
+
+    #[test]
+    fn default_selection_rejects_sidecars_and_non_first_split_shards() {
+        let files = files(&["mmproj-model-f16.gguf", "Model-Q4_K_M-00002-of-00002.gguf"]);
+
+        let error = select_primary_artifact_file(None, &files).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "no supported model artifact files found in repository"
+        );
     }
 
     #[test]
@@ -549,10 +580,9 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("no model artifact matching selector")
+        assert_eq!(
+            error.to_string(),
+            "no model artifact matching selector 'Q5_K_M' in repository"
         );
     }
 }

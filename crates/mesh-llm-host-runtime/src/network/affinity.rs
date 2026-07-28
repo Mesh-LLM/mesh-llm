@@ -3,19 +3,19 @@
 use crate::inference::election;
 use crate::network::target_health::{TargetHealth, TargetHealthOutcome, TargetReputationStats};
 use iroh::EndpointId;
+#[cfg(test)]
+use mesh_llm_routing::prefix_affinity::PREFIX_AFFINITY_MAX_ENTRIES;
+use mesh_llm_routing::prefix_affinity::{PREFIX_AFFINITY_TTL, PrefixAffinity, PrefixAffinityStats};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const AFFINITY_TTL: Duration = Duration::from_secs(20 * 60);
-const AFFINITY_MAX_ENTRIES: usize = 4096;
-
 /// How long a remembered auto-routed model stays valid for a given session
 /// key. Matches the prefix affinity TTL so sticky chats and sticky routing
 /// expire in lockstep.
-const AUTO_MODEL_TTL: Duration = AFFINITY_TTL;
+const AUTO_MODEL_TTL: Duration = PREFIX_AFFINITY_TTL;
 /// Upper bound on the auto-model cache. Each entry is small (session hash +
 /// model name + timestamp) so this is generous.
 const AUTO_MODEL_MAX_ENTRIES: usize = 1024;
@@ -58,18 +58,6 @@ impl AffinityConfig {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct AffinityKey {
-    model: String,
-    prefix_hash: u64,
-}
-
-#[derive(Clone, Debug)]
-struct AffinityEntry {
-    target: election::InferenceTarget,
-    last_used: Instant,
-}
-
 #[derive(Clone, Debug)]
 struct AutoModelEntry {
     model: String,
@@ -78,9 +66,7 @@ struct AutoModelEntry {
 
 #[derive(Default)]
 struct AffinityState {
-    entries: HashMap<AffinityKey, AffinityEntry>,
-    lru: VecDeque<AffinityKey>,
-    stats: AffinityStatsSnapshot,
+    prefix: PrefixAffinity<election::InferenceTarget>,
     auto_models: HashMap<u64, AutoModelEntry>,
     auto_lru: VecDeque<u64>,
 }
@@ -115,11 +101,11 @@ impl AffinityRouter {
 
     pub fn stats_snapshot(&self) -> AffinityStatsSnapshot {
         let mut state = self.inner.lock().unwrap();
-        state.prune_expired();
-        let mut stats = state.stats.clone();
-        stats.prefix_entries = state.entries.len();
-        stats.prefix_enabled = self.config.prefix_enabled;
-        stats.sticky_enabled = self.config.sticky_enabled;
+        let mut stats = affinity_stats_snapshot(
+            state.prefix.snapshot(),
+            self.config.prefix_enabled,
+            self.config.sticky_enabled,
+        );
         stats.target_reputation = self.target_health.reputation_stats();
         stats
     }
@@ -155,13 +141,11 @@ impl AffinityRouter {
     }
 
     pub fn record_sticky_route(&self) {
-        let mut state = self.inner.lock().unwrap();
-        state.stats.sticky_routes += 1;
+        self.inner.lock().unwrap().prefix.record_sticky_route();
     }
 
     pub fn record_session_route(&self) {
-        let mut state = self.inner.lock().unwrap();
-        state.stats.session_routes += 1;
+        self.inner.lock().unwrap().prefix.record_session_route();
     }
 
     pub fn lookup_target(
@@ -173,33 +157,11 @@ impl AffinityRouter {
         if !self.config.prefix_enabled {
             return None;
         }
-        let key = AffinityKey {
-            model: model.to_string(),
-            prefix_hash,
-        };
-        let mut state = self.inner.lock().unwrap();
-        state.prune_expired();
-        state.stats.prefix_lookups += 1;
-        let entry = match state.entries.get(&key).cloned() {
-            Some(entry) => entry,
-            None => {
-                state.stats.prefix_misses += 1;
-                return None;
-            }
-        };
-        if !candidates.contains(&entry.target) {
-            state.remove_key(&key);
-            state.stats.prefix_stale += 1;
-            state.stats.prefix_misses += 1;
-            return None;
-        }
-        state.touch_key(&key);
-        if let Some(existing) = state.entries.get_mut(&key) {
-            existing.last_used = Instant::now();
-        }
-        state.stats.prefix_hits += 1;
-        state.stats.prefix_routes += 1;
-        Some(entry.target)
+        self.inner
+            .lock()
+            .unwrap()
+            .prefix
+            .lookup(model, prefix_hash, candidates)
     }
 
     pub fn learn_target(&self, model: &str, prefix_hash: u64, target: &election::InferenceTarget) {
@@ -207,51 +169,22 @@ impl AffinityRouter {
             return;
         }
 
-        let key = AffinityKey {
-            model: model.to_string(),
-            prefix_hash,
-        };
-        let now = Instant::now();
-        let mut state = self.inner.lock().unwrap();
-        state.prune_expired();
-        state.entries.insert(
-            key.clone(),
-            AffinityEntry {
-                target: target.clone(),
-                last_used: now,
-            },
-        );
-        state.touch_key(&key);
-        state.stats.learned += 1;
-        while state.entries.len() > AFFINITY_MAX_ENTRIES {
-            if let Some(oldest) = state.lru.pop_front() {
-                if state.entries.remove(&oldest).is_some() {
-                    state.stats.evicted += 1;
-                }
-            } else {
-                break;
-            }
-        }
+        self.inner
+            .lock()
+            .unwrap()
+            .prefix
+            .learn(model, prefix_hash, target);
     }
 
     pub fn forget_target(&self, model: &str, prefix_hash: u64, target: &election::InferenceTarget) {
         if !self.config.prefix_enabled {
             return;
         }
-        let key = AffinityKey {
-            model: model.to_string(),
-            prefix_hash,
-        };
-        let mut state = self.inner.lock().unwrap();
-        if state
-            .entries
-            .get(&key)
-            .map(|entry| &entry.target == target)
-            .unwrap_or(false)
-        {
-            state.remove_key(&key);
-            state.stats.prefix_stale += 1;
-        }
+        self.inner
+            .lock()
+            .unwrap()
+            .prefix
+            .forget(model, prefix_hash, target);
     }
 
     /// Look up a previously-classified model name for an auto-routed session.
@@ -305,6 +238,28 @@ impl AffinityRouter {
     }
 }
 
+fn affinity_stats_snapshot(
+    stats: PrefixAffinityStats,
+    prefix_enabled: bool,
+    sticky_enabled: bool,
+) -> AffinityStatsSnapshot {
+    AffinityStatsSnapshot {
+        prefix_enabled,
+        sticky_enabled,
+        prefix_entries: stats.entries,
+        prefix_lookups: stats.lookups,
+        prefix_hits: stats.hits,
+        prefix_misses: stats.misses,
+        prefix_stale: stats.stale,
+        prefix_routes: stats.routes,
+        sticky_routes: stats.sticky_routes,
+        session_routes: stats.session_routes,
+        learned: stats.learned,
+        evicted: stats.evicted,
+        target_reputation: TargetReputationStats::default(),
+    }
+}
+
 /// Compute the session-level key used to cache an auto-routed model choice.
 ///
 /// Prefers an explicit cache/session hint from the request body (e.g.
@@ -322,48 +277,6 @@ impl Default for AffinityRouter {
 }
 
 impl AffinityState {
-    fn prune_expired(&mut self) {
-        let now = Instant::now();
-
-        while let Some(key) = self.lru.front() {
-            let front_key = key.clone();
-
-            match self.entries.get(&front_key) {
-                Some(entry) => {
-                    if now.duration_since(entry.last_used) > AFFINITY_TTL {
-                        // Oldest entry is expired: evict it.
-                        self.lru.pop_front();
-                        if self.entries.remove(&front_key).is_some() {
-                            self.stats.prefix_stale += 1;
-                        }
-                        // Continue to check next-oldest entry.
-                    } else {
-                        // Oldest entry is not expired; newer ones cannot be expired yet.
-                        break;
-                    }
-                }
-                None => {
-                    // Key is in LRU but missing from entries; drop it from LRU and continue.
-                    self.lru.pop_front();
-                }
-            }
-        }
-    }
-
-    fn touch_key(&mut self, key: &AffinityKey) {
-        if let Some(pos) = self.lru.iter().position(|existing| existing == key) {
-            self.lru.remove(pos);
-        }
-        self.lru.push_back(key.clone());
-    }
-
-    fn remove_key(&mut self, key: &AffinityKey) {
-        self.entries.remove(key);
-        if let Some(pos) = self.lru.iter().position(|existing| existing == key) {
-            self.lru.remove(pos);
-        }
-    }
-
     fn prune_auto_expired(&mut self) {
         let now = Instant::now();
         while let Some(key) = self.auto_lru.front().copied() {
@@ -790,6 +703,77 @@ mod tests {
             extract_session_hint_from_body(&body),
             Some("cache-1".to_string())
         );
+    }
+
+    #[test]
+    fn prefix_cache_tracks_hits_misses_and_stale_candidates() {
+        let affinity = AffinityRouter::with_config(true, true);
+        let cached = remote(1);
+        let available = [cached.clone()];
+
+        assert_eq!(affinity.lookup_target("qwen", 7, &available), None);
+        affinity.learn_target("qwen", 7, &cached);
+        assert_eq!(affinity.lookup_target("qwen", 7, &available), Some(cached));
+        assert_eq!(affinity.lookup_target("qwen", 7, &[remote(2)]), None);
+
+        let stats = affinity.stats_snapshot();
+        assert_eq!(stats.prefix_entries, 0);
+        assert_eq!(stats.prefix_lookups, 3);
+        assert_eq!(stats.prefix_hits, 1);
+        assert_eq!(stats.prefix_misses, 2);
+        assert_eq!(stats.prefix_stale, 1);
+        assert_eq!(stats.prefix_routes, 1);
+        assert_eq!(stats.learned, 1);
+    }
+
+    #[test]
+    fn prefix_capacity_evicts_the_least_recently_used_entry() {
+        let affinity = AffinityRouter::with_config(true, true);
+        let target = remote(1);
+        for prefix_hash in 0..=PREFIX_AFFINITY_MAX_ENTRIES as u64 {
+            affinity.learn_target("qwen", prefix_hash, &target);
+        }
+
+        let stats = affinity.stats_snapshot();
+
+        assert_eq!(stats.prefix_entries, PREFIX_AFFINITY_MAX_ENTRIES);
+        assert_eq!(stats.evicted, 1);
+        assert_eq!(affinity.lookup_target("qwen", 0, &[target]), None);
+    }
+
+    #[test]
+    fn forgetting_a_different_target_preserves_the_entry() {
+        let affinity = AffinityRouter::with_config(true, true);
+        let cached = remote(1);
+        affinity.learn_target("qwen", 13, &cached);
+
+        affinity.forget_target("qwen", 13, &remote(2));
+
+        assert_eq!(
+            affinity.lookup_target("qwen", 13, std::slice::from_ref(&cached)),
+            Some(cached)
+        );
+        assert_eq!(affinity.stats_snapshot().prefix_stale, 0);
+    }
+
+    #[test]
+    fn disabled_prefix_affinity_is_side_effect_free() {
+        let affinity = AffinityRouter::with_config(false, true);
+        let target = remote(1);
+
+        affinity.learn_target("qwen", 17, &target);
+        assert_eq!(
+            affinity.lookup_target("qwen", 17, std::slice::from_ref(&target)),
+            None
+        );
+        affinity.forget_target("qwen", 17, &target);
+
+        let stats = affinity.stats_snapshot();
+        assert!(!stats.prefix_enabled);
+        assert_eq!(stats.prefix_entries, 0);
+        assert_eq!(stats.prefix_lookups, 0);
+        assert_eq!(stats.prefix_stale, 0);
+        assert_eq!(stats.learned, 0);
     }
 
     #[test]

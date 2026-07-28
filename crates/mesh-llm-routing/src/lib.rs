@@ -3,6 +3,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub mod prefix_affinity;
+
 /// Calculate total model size, summing all split files if present.
 /// Split files follow the pattern: name-00001-of-00004.gguf.
 pub fn total_model_bytes(model: &Path) -> u64 {

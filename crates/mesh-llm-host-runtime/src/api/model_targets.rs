@@ -45,9 +45,23 @@ impl ModelTargetKey {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ModelTargetLookup {
     pub(crate) targets: Vec<ModelTargetPayload>,
-    pub(crate) by_model_name: HashMap<String, ModelTargetPayload>,
-    pub(crate) by_model_ref: HashMap<String, ModelTargetPayload>,
+    by_model_name: HashMap<String, usize>,
+    by_model_ref: HashMap<String, usize>,
     pub(crate) wanted_model_refs: Vec<String>,
+}
+
+impl ModelTargetLookup {
+    pub(crate) fn target_by_model_name(&self, model_name: &str) -> Option<&ModelTargetPayload> {
+        self.by_model_name
+            .get(model_name)
+            .and_then(|index| self.targets.get(*index))
+    }
+
+    pub(crate) fn target_by_model_ref(&self, model_ref: &str) -> Option<&ModelTargetPayload> {
+        self.by_model_ref
+            .get(model_ref)
+            .and_then(|index| self.targets.get(*index))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -373,13 +387,10 @@ fn build_target_lookup(mut payloads: Vec<ModelTargetPayload>) -> ModelTargetLook
         .collect::<Vec<_>>();
     let mut by_model_name = HashMap::new();
     let mut by_model_ref = HashMap::new();
-    for payload in &payloads {
-        by_model_ref.insert(target_identity_ref(payload), payload.clone());
+    for (index, payload) in payloads.iter().enumerate() {
+        by_model_ref.insert(target_identity_ref(payload), index);
         if let Some(model_name) = &payload.model_name {
-            by_model_name.insert(
-                model_identity_ref(model_name, &payload.profile),
-                payload.clone(),
-            );
+            by_model_name.insert(model_identity_ref(model_name, &payload.profile), index);
         }
     }
     payloads.shrink_to_fit();
@@ -596,7 +607,10 @@ mod tests {
         });
 
         assert_eq!(
-            lookup.by_model_ref[synthetic_ref].display_name,
+            lookup
+                .target_by_model_ref(synthetic_ref)
+                .expect("missing synthetic target")
+                .display_name,
             "MyModel-7B-Q4_K_M"
         );
 
@@ -685,8 +699,42 @@ mod tests {
             lookup.wanted_model_refs,
             vec!["model#fast".to_string(), "model#quality".to_string()]
         );
-        assert!(lookup.by_model_ref.contains_key("model#fast"));
-        assert!(lookup.by_model_ref.contains_key("model#quality"));
+        assert!(lookup.target_by_model_ref("model#fast").is_some());
+        assert!(lookup.target_by_model_ref("model#quality").is_some());
+    }
+
+    #[test]
+    fn target_lookup_preserves_payload_order_and_last_alias_wins() {
+        let mut first = target("first-ref");
+        first.model_name = Some("shared-name".to_string());
+        let mut second = target("second-ref");
+        second.model_name = Some("shared-name".to_string());
+        let payloads = build_target_payloads(
+            vec![first, second],
+            &mesh::NodeRole::Worker,
+            0,
+            &[],
+            &ModelTargetSizeLookup::default(),
+        );
+
+        let lookup = build_target_lookup(payloads);
+
+        assert_eq!(lookup.targets[0].model_ref, "first-ref");
+        assert_eq!(lookup.targets[1].model_ref, "second-ref");
+        assert_eq!(
+            lookup
+                .target_by_model_name("shared-name")
+                .expect("missing shared alias")
+                .model_ref,
+            "second-ref"
+        );
+        assert_eq!(
+            lookup
+                .target_by_model_ref("first-ref")
+                .expect("missing first target")
+                .model_ref,
+            "first-ref"
+        );
     }
 
     #[test]

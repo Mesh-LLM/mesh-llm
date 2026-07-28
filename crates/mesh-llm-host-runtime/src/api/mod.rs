@@ -749,9 +749,8 @@ impl MeshApi {
         ));
         for model in &mut models {
             let target = target_lookup
-                .by_model_name
-                .get(&model.name)
-                .or_else(|| target_lookup.by_model_ref.get(&model.name));
+                .target_by_model_name(&model.name)
+                .or_else(|| target_lookup.target_by_model_ref(&model.name));
             if let Some(target) = target {
                 model.target_rank = Some(target.rank);
                 model.explicit_interest_count = Some(target.explicit_interest_count);

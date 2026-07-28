@@ -111,9 +111,8 @@ impl MeshApi {
         let node = self.inner.lock().await.node.clone();
         let model_target_lookup = self.model_target_lookup().await;
         let capacity_advice = model_target_lookup
-            .by_model_ref
-            .get(model_ref)
-            .or_else(|| model_target_lookup.by_model_name.get(model_ref))
+            .target_by_model_ref(model_ref)
+            .or_else(|| model_target_lookup.target_by_model_name(model_ref))
             .map(|target| target.capacity_advice.clone());
 
         let role = node.role().await;
