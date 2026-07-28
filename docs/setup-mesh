@@ -171,8 +171,14 @@ irm https://meshllm.cloud/install.ps1 | iex
 The `curl ... | bash` invocation pipes stdin, so the installer cannot auto-run
 the interactive setup step; it prints the setup command instead. Afterwards, open
 a new shell if necessary and verify `mesh-llm --version` and `mesh-llm --help`.
-Do not recommend Homebrew unless its current availability has been independently
-verified.
+
+On Apple Silicon macOS, the canonical Homebrew tap is also available:
+
+```sh
+brew install Mesh-LLM/tap/mesh-llm
+```
+
+Intel macOS is not currently available through Homebrew.
 
 If an installed release is behind, explain the difference and ask before
 running:
