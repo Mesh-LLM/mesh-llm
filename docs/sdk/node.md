@@ -1,11 +1,11 @@
 # Node.js SDK
 
-Use `@meshllm/sdk` from npm for Node.js and Electron applications.
+Use `@mesh-llm/sdk` from npm for Node.js and Electron applications.
 
 ## Install
 
 ```bash
-npm install @meshllm/sdk
+npm install @mesh-llm/sdk
 ```
 
 When building from this repository, build the native N-API addon first:
@@ -17,11 +17,11 @@ npm run build:native
 
 ## Client: Public Mesh
 
-Node.js public discovery helpers are not currently exported by `@meshllm/sdk`.
+Node.js public discovery helpers are not currently exported by `@mesh-llm/sdk`.
 Use a public invite token selected by your app or service.
 
 ```js
-const { Client, generateOwnerKeypairHex } = require('@meshllm/sdk')
+const { Client, generateOwnerKeypairHex } = require('@mesh-llm/sdk')
 
 const client = Client.create({
   ownerKeypairHex: generateOwnerKeypairHex(),
@@ -41,7 +41,7 @@ await client.stop()
 ## Client: Private Mesh
 
 ```js
-const { Client, generateOwnerKeypairHex } = require('@meshllm/sdk')
+const { Client, generateOwnerKeypairHex } = require('@mesh-llm/sdk')
 
 const client = Client.create({
   ownerKeypairHex: generateOwnerKeypairHex(),
@@ -63,7 +63,7 @@ await client.stop()
 Install or resolve a native runtime before starting local serving:
 
 ```js
-const { resolveNativeRuntime } = require('@meshllm/sdk')
+const { resolveNativeRuntime } = require('@mesh-llm/sdk')
 
 await resolveNativeRuntime({
   artifactDir: process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR,
@@ -75,7 +75,7 @@ await resolveNativeRuntime({
 ## Serving: Public Mesh
 
 ```js
-const { Node, generateOwnerKeypairHex, resolveNativeRuntime } = require('@meshllm/sdk')
+const { Node, generateOwnerKeypairHex, resolveNativeRuntime } = require('@mesh-llm/sdk')
 
 await resolveNativeRuntime({
   artifactDir: process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR,
@@ -125,7 +125,7 @@ console as package resources. Use the package helper to find those assets in
 normal package usage:
 
 ```js
-const { defaultConsoleAssetDir } = require('@meshllm/sdk')
+const { defaultConsoleAssetDir } = require('@mesh-llm/sdk')
 
 const assetDir = defaultConsoleAssetDir()
 ```

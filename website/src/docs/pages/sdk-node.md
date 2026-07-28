@@ -4,12 +4,12 @@ title: Node.js and Electron SDK
 
 # Node.js and Electron SDK
 
-Use [`@meshllm/sdk`](https://www.npmjs.com/package/@meshllm/sdk) in Node.js services, desktop apps, and Electron applications. The package uses a native N-API addon and the same embedded serving path as the Swift and Kotlin SDKs.
+Use [`@mesh-llm/sdk`](https://www.npmjs.com/package/@mesh-llm/sdk) in Node.js services, desktop apps, and Electron applications. The package uses a native N-API addon and the same embedded serving path as the Swift and Kotlin SDKs.
 
 ## Install
 
 ```bash
-npm install @meshllm/sdk
+npm install @mesh-llm/sdk
 ```
 
 When building from the repository, build the addon first:
@@ -22,7 +22,7 @@ npm run build:native
 ## Connect as a client
 
 ```js
-const { Client, generateOwnerKeypairHex } = require('@meshllm/sdk')
+const { Client, generateOwnerKeypairHex } = require('@mesh-llm/sdk')
 
 const client = Client.create({
   ownerKeypairHex: generateOwnerKeypairHex(),
@@ -49,7 +49,7 @@ The current package expects an invite token selected by the app or service. Use 
 Serving needs a verified native runtime artifact. Bundle one with the app or explicitly allow the SDK to download a compatible release runtime:
 
 ```js
-const { resolveNativeRuntime } = require('@meshllm/sdk')
+const { resolveNativeRuntime } = require('@mesh-llm/sdk')
 
 const runtime = await resolveNativeRuntime({
   artifactDir: process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR,
@@ -66,7 +66,7 @@ const {
   Node,
   generateOwnerKeypairHex,
   resolveNativeRuntime
-} = require('@meshllm/sdk')
+} = require('@mesh-llm/sdk')
 
 await resolveNativeRuntime({
   artifactDir: process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR,

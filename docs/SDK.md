@@ -9,7 +9,7 @@ MeshLLM exposes two SDK roles across Rust, Swift, Kotlin, and Node.js:
 The SDK is split into two parts:
 
 - **Language SDKs** provide the public API: Rust `mesh-llm-sdk`, Swift
-  `MeshLLM`, Kotlin `ai.meshllm`, and Node.js `@meshllm/sdk`.
+  `MeshLLM`, Kotlin `ai.meshllm`, and Node.js `@mesh-llm/sdk`.
 - **Native runtime artifacts** provide local serving for a specific
   platform/runtime flavor, such as macOS Metal or Linux CUDA.
 
@@ -43,7 +43,7 @@ The SDK packages are published from MeshLLM releases:
 | SDK | Package source |
 |---|---|
 | Rust | crates.io package `mesh-llm-sdk` |
-| Node.js | npm package `@meshllm/sdk` |
+| Node.js | npm package `@mesh-llm/sdk` |
 | Swift | GitHub Swift package from tagged `Mesh-LLM/mesh-llm` releases |
 | Kotlin/Android | GitHub Packages Maven registry for `Mesh-LLM/mesh-llm` |
 | Native runtimes | GitHub release artifacts plus `native-runtimes.json` |
@@ -135,7 +135,7 @@ See [Kotlin SDK examples](sdk/kotlin.md).
 Install the Node package in a Node.js or Electron app:
 
 ```bash
-npm install @meshllm/sdk
+npm install @mesh-llm/sdk
 ```
 
 When building from this repository, build the native N-API addon first:
