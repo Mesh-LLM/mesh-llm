@@ -946,7 +946,7 @@ fn verify_suffix_prefill_after_restore(
     let mut source = target.create_session()?;
     source.prefill_chunk_frame(prefix, prefill_input, 0)?;
     let (source_predicted, source_frame) = if include_output {
-        let (predicted, frame) = source.verify_tokens_frame(&[continuation], decode_input, 0)?;
+        let (predicted, _, frame) = source.verify_tokens_frame(&[continuation], decode_input, 0)?;
         (Some(predicted), frame)
     } else {
         (
@@ -966,7 +966,8 @@ fn verify_suffix_prefill_after_restore(
         prefix,
     )?;
     let (restored_predicted, restored_frame) = if include_output {
-        let (predicted, frame) = restored.verify_tokens_frame(&[continuation], decode_input, 0)?;
+        let (predicted, _, frame) =
+            restored.verify_tokens_frame(&[continuation], decode_input, 0)?;
         (Some(predicted), frame)
     } else {
         (

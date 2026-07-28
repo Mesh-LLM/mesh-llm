@@ -1097,7 +1097,7 @@ fn run_local_suffix_prefill_remap_check(
             .context("suffix-prefill source prefix prefill failed")?;
     }
     let (source_predicted, source_frame) = if include_output {
-        let (predicted, frame) = source
+        let (predicted, _, frame) = source
             .verify_tokens_frame(&[suffix_token], decode_input, 0)
             .context("suffix-prefill source suffix verify failed")?;
         (Some(predicted), frame)
@@ -1111,7 +1111,7 @@ fn run_local_suffix_prefill_remap_check(
     };
 
     let (restored_predicted, restored_frame) = if include_output {
-        let (predicted, frame) = restored
+        let (predicted, _, frame) = restored
             .verify_tokens_frame(&[suffix_token], decode_input, 0)
             .context("suffix-prefill restored suffix verify failed")?;
         (Some(predicted), frame)

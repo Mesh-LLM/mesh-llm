@@ -4,14 +4,14 @@ Date: Sun, 19 Jul 2026 00:00:00 +1000
 Subject: [PATCH 32/47] tests: add GLM Q2Q3 selected weight roofline
 
 ---
- tests/test-backend-ops.cpp | 30 ++++++++++++++++++++++++++++++
- 1 file changed, 30 insertions(+)
+ tests/test-backend-ops.cpp | 43 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 43 insertions(+)
 
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
 index 3edcf06f..67dbbdb6 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
-@@ -7685,6 +7685,30 @@ struct test_glm_moe_q2_weight_roofline : public test_glm_moe_routed_q2_final_out
+@@ -7685,6 +7685,43 @@ struct test_glm_moe_q2_weight_roofline : public test_glm_moe_routed_q2_final_out
      }
  };
  
@@ -29,6 +29,19 @@ index 3edcf06f..67dbbdb6 100644
 +        return std::string("GLM_MOE_Q2Q3_WEIGHT_ROOFLINE_") + variant;
 +    }
 +
++    test_status_t eval(
++            ggml_backend_t backend1,
++            ggml_backend_t backend2,
++            const char *   op_names_filter,
++            printer *      output_printer) override {
++        scoped_test_env motif_reference_env("GGML_METAL_ENABLE_GLM_MOE_DECODE_MOTIF_REFERENCE", "1");
++        scoped_test_env chunks_env("GGML_METAL_EXPERIMENTAL_GLM_MOE_Q2_WEIGHT_ROOFLINE_CHUNKS", "16");
++        scoped_test_env bypass_env(
++            "GGML_METAL_EXPERIMENTAL_GLM_MOE_Q2_WEIGHT_ROOFLINE_BYPASS_ROUTE",
++            bypass_route ? "1" : "0");
++        return test_case::eval(backend1, backend2, op_names_filter, output_printer);
++    }
++
 +    bool eval_perf(ggml_backend_t backend, const char * op_names_filter, printer * output_printer) override {
 +        scoped_test_env motif_reference_env("GGML_METAL_ENABLE_GLM_MOE_DECODE_MOTIF_REFERENCE", "1");
 +        scoped_test_env chunks_env("GGML_METAL_EXPERIMENTAL_GLM_MOE_Q2_WEIGHT_ROOFLINE_CHUNKS", "16");
@@ -42,7 +55,7 @@ index 3edcf06f..67dbbdb6 100644
  struct test_glm_moe_selected_chain : public test_case {
      static constexpr int64_t n_expert = 32;
      static constexpr int64_t n_expert_used = 8;
-@@ -14953,6 +14977,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -14953,6 +14990,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_A"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(true,  "FIXED_IDS"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_B"));
@@ -52,7 +65,7 @@ index 3edcf06f..67dbbdb6 100644
      test_cases.emplace_back(new test_glm_moe_selected_chain(1, false, "CORRECTNESS"));
      test_cases.emplace_back(new test_glm_moe_selected_chain(3, false, "USEFUL_A"));
      for (ggml_type type : {GGML_TYPE_Q8_0, GGML_TYPE_Q6_K, GGML_TYPE_Q5_K, GGML_TYPE_Q4_K}) {
-@@ -15442,6 +15469,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+@@ -15442,6 +15482,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_A"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(true,  "FIXED_IDS"));
      test_cases.emplace_back(new test_glm_moe_q2_weight_roofline(false, "ROUTE_B"));
@@ -64,4 +77,3 @@ index 3edcf06f..67dbbdb6 100644
      test_cases.emplace_back(new test_glm_moe_selected_chain(3, true,  "BYTE128", 128));
 -- 
 2.50.1 (Apple Git-155)
-

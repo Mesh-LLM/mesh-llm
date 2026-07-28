@@ -4,8 +4,33 @@ Date: Tue, 21 Jul 2026 15:31:56 +1000
 Subject: [PATCH 26/47] Bump Skippy ABI for GLM DSA runtime config
 
 ---
- include/skippy/common.h | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
+ include/skippy.h        |  2 ++
+ include/skippy/common.h |  2 +-
+ src/skippy.cpp          | 26 ++++++++++++++------------
+ 3 files changed, 17 insertions(+), 13 deletions(-)
+
+diff --git a/include/skippy.h b/include/skippy.h
+index 8f166e9c..e9d31f55 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -448,15 +448,17 @@ LLAMA_API enum skippy_status skippy_verify_tokens_frame_sampled(
+ LLAMA_API enum skippy_status skippy_verify_tokens_frame_sampled(
+         struct skippy_session * session,
+         const llama_token * token_ids,
+         size_t token_count,
+         const struct skippy_sampling_config * sampling,
+         const struct skippy_activation_desc * input_desc,
+         const void * input_payload,
+         struct skippy_activation_desc * output_desc,
+         void * output_payload,
+         size_t output_payload_capacity,
+         size_t * out_output_payload_bytes,
+         llama_token * output_tokens,
+         size_t output_token_capacity,
+         size_t * out_token_count,
++        size_t max_draft_tokens,
++        struct skippy_native_mtp_draft * out_mtp_draft,
+         struct skippy_error ** out_error);
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index 17b7203c..aeea033d 100644
@@ -15,11 +40,62 @@ index 17b7203c..aeea033d 100644
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 31
-+#define SKIPPY_ABI_VERSION_PATCH 32
+-#define SKIPPY_ABI_VERSION_PATCH 32
++#define SKIPPY_ABI_VERSION_PATCH 33
  
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index fd4cd172..e62efb12 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -5797,7 +5797,18 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+         llama_token * output_tokens,
+         size_t output_token_capacity,
+         size_t * out_token_count,
++        size_t max_draft_tokens,
++        struct skippy_native_mtp_draft * out_mtp_draft,
+         struct skippy_error ** out_error) {
++    if (out_mtp_draft != nullptr) {
++        *out_mtp_draft = {
++            1,
++            false,
++            0,
++            {},
++            0,
++        };
++    }
+     if (out_token_count != nullptr) {
+         *out_token_count = 0;
+     }
+@@ -5889,25 +5900,16 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+         for (int32_t i = 0; i < n_tokens; ++i) {
+             output_tokens[i] = skippy_sample_token_ith(session, sampling, i);
+         }
+-        if (output_token_capacity >= token_count + 3 && token_count > 0) {
+-            skippy_native_mtp_draft mtp_draft = {};
++        if (out_mtp_draft != nullptr && token_count > 0) {
+             status = skippy_mtp_propose_next(
+                     session,
+                     output_tokens[token_count - 1],
+-                    1,
+-                    &mtp_draft,
++                    max_draft_tokens,
++                    out_mtp_draft,
+                     out_error);
+             if (status != SKIPPY_STATUS_OK) {
+                 return status;
+             }
+-            if (mtp_draft.available) {
+-                output_tokens[token_count] = mtp_draft.token_count;
+-                output_tokens[token_count + 1] = mtp_draft.token_ids[0];
+-                output_tokens[token_count + 2] = static_cast<llama_token>(std::min<int64_t>(
+-                        std::max<int64_t>(mtp_draft.proposal_compute_us, 0),
+-                        std::numeric_limits<llama_token>::max()));
+-                *out_token_count = token_count + 3;
+-            }
+         }
+     }
+ 
 -- 
 2.50.1 (Apple Git-155)
-

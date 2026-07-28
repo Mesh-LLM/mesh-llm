@@ -4,11 +4,11 @@ Date: Tue, 14 Jul 2026 09:16:32 +1000
 Subject: [PATCH 23/47] tests: cover native GLM-DSA execution paths
 
 ---
- scripts/glm52-phase-d-policy-report.sh |  287 ++
+ scripts/glm52-phase-d-policy-report.sh |  296 ++
  scripts/glm52-phase-e-moe-report.sh    |  950 ++++
  tests/test-backend-ops.cpp             | 5988 +++++++++++++++++++++++-
  tests/test-llama-archs.cpp             |  985 +++-
- 4 files changed, 8085 insertions(+), 125 deletions(-)
+ 4 files changed, 8094 insertions(+), 125 deletions(-)
  create mode 100755 scripts/glm52-phase-d-policy-report.sh
  create mode 100755 scripts/glm52-phase-e-moe-report.sh
 
@@ -17,7 +17,7 @@ new file mode 100755
 index 00000000..5b475d81
 --- /dev/null
 +++ b/scripts/glm52-phase-d-policy-report.sh
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,296 @@
 +#!/usr/bin/env bash
 +set -euo pipefail
 +
@@ -79,7 +79,13 @@ index 00000000..5b475d81
 +summary="${out_dir}/summary.md"
 +
 +echo "== GLM-DSA phase policy graph gates =="
-+"${test_llama_archs}" --arch glm-dsa 2>&1 | tee "${phase_log}"
++phase_gate_status=0
++"${test_llama_archs}" --arch glm-dsa 2>&1 | tee "${phase_log}" || phase_gate_status=$?
++if (( phase_gate_status != 0 )); then
++    echo "error: GLM-DSA phase gate failed with status ${phase_gate_status}; inspect ${phase_log}" >&2
++    exit "${phase_gate_status}"
++fi
++printf '%s\n' "GLM_DSA_PHASE_GATE_STATUS=passed" >> "${phase_log}"
 +
 +echo "== GLM-DSA sparse policy perf rows =="
 +sparse_filter='kv=1024|n_kv=1024|n_kv=257,n_batch=4|n_kv=257,n_batch=8|n_kv=257,n_batch=16'
@@ -218,7 +224,10 @@ index 00000000..5b475d81
 +    "",
 +]
 +phase_text = phase_log.read_text(errors="replace")
-+lines.append("- `test-llama-archs --arch glm-dsa` passed." if "OK" in phase_text else "- Phase gate did not report OK; inspect the raw log.")
++phase_gate_marker = "GLM_DSA_PHASE_GATE_STATUS=passed"
++if phase_gate_marker not in phase_text.splitlines():
++    raise SystemExit("Phase gate did not report definitive success; inspect the raw log.")
++lines.append("- `test-llama-archs --arch glm-dsa` passed.")
 +lines.extend([
 +    "- Covered phases: decode, short prefill, long prefill, verification.",
 +    "- Native GLM-5.2-shaped gates use `top_k=768` where applicable.",
@@ -8502,4 +8511,3 @@ index d02e65c9..659ea9e9 100644
  #endif // GGML_USE_WEBGPU
 -- 
 2.50.1 (Apple Git-155)
-

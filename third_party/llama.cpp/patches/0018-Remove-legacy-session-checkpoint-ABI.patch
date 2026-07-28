@@ -5,9 +5,9 @@ Subject: [PATCH 18/47] Remove legacy session checkpoint ABI
 
 ---
  include/skippy.h        |  10 ----
- include/skippy/common.h |   1 -
+ include/skippy/common.h |   3 +-
  src/skippy.cpp          | 115 ----------------------------------------
- 3 files changed, 126 deletions(-)
+ 3 files changed, 1 insertion(+), 127 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
 index 6b6c4889..50c08515 100644
@@ -34,6 +34,15 @@ diff --git a/include/skippy/common.h b/include/skippy/common.h
 index e976f91e..17b7203c 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
+@@ -26,7 +26,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 31
++#define SKIPPY_ABI_VERSION_PATCH 32
+ 
+ enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 @@ -46,7 +46,6 @@ enum skippy_feature {
      SKIPPY_FEATURE_RECURRENT_STATE        = 1 << 14,
      SKIPPY_FEATURE_LOGIT_BIAS             = 1 << 15,
@@ -238,4 +247,3 @@ index 79e3e73f..32fb95ad 100644
          const char * text,
 -- 
 2.50.1 (Apple Git-155)
-

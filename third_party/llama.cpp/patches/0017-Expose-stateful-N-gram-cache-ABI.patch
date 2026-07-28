@@ -4,17 +4,17 @@ Date: Mon, 20 Jul 2026 14:07:01 +1000
 Subject: [PATCH 17/47] Expose stateful N-gram cache ABI
 
 ---
- common/ngram-cache.cpp  | 136 ++++++++++++++++++++++++++++++++++++++++
+ common/ngram-cache.cpp  | 142 ++++++++++++++++++++++++++++++++++++++++
  include/skippy.h        |  35 +++++++++++
  include/skippy/common.h |   3 +-
  src/skippy.cpp          |   3 +-
- 4 files changed, 175 insertions(+), 2 deletions(-)
+ 4 files changed, 181 insertions(+), 2 deletions(-)
 
 diff --git a/common/ngram-cache.cpp b/common/ngram-cache.cpp
 index dce54b36..a0447210 100644
 --- a/common/ngram-cache.cpp
 +++ b/common/ngram-cache.cpp
-@@ -1,14 +1,150 @@
+@@ -1,14 +1,156 @@
  #include "ngram-cache.h"
  #include "common.h"
  #include "log.h"
@@ -41,6 +41,13 @@ index dce54b36..a0447210 100644
 +    return ngram_min >= LLAMA_NGRAM_MIN && ngram_min <= ngram_max && ngram_max <= LLAMA_NGRAM_MAX;
 +}
 +
++static void skippy_ngram_cache_clear_request_state(skippy_ngram_cache * cache) {
++    cache->history.clear();
++    cache->context.clear();
++    cache->dynamic.clear();
++    cache->static_cache.clear();
++}
++
 +static enum skippy_status skippy_ngram_cache_update(
 +        skippy_ngram_cache * cache,
 +        const llama_token * token_ids,
@@ -51,8 +58,7 @@ index dce54b36..a0447210 100644
 +    }
 +    if (token_count == 0) {
 +        if (reset) {
-+            cache->history.clear();
-+            cache->context.clear();
++            skippy_ngram_cache_clear_request_state(cache);
 +        }
 +        return SKIPPY_STATUS_OK;
 +    }
@@ -61,8 +67,8 @@ index dce54b36..a0447210 100644
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +    if (reset) {
++        skippy_ngram_cache_clear_request_state(cache);
 +        cache->history.assign(token_ids, token_ids + token_count);
-+        cache->context.clear();
 +        common_ngram_cache_update(
 +                cache->context,
 +                cache->ngram_min,
@@ -255,4 +261,3 @@ index 5f5596ce..79e3e73f 100644
  void skippy_error_free(struct skippy_error * error) {
 -- 
 2.50.1 (Apple Git-155)
-

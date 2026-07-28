@@ -9,13 +9,13 @@ Subject: [PATCH 38/47] ggml: shrink GLM Q2 gate-up active dispatch
  2 files changed, 8 insertions(+), 4 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 30efec9c..08f1d966 100644
+index 898427dbf9f42b0e6551a5dd65370d1737cc4a7d..02c14c5a900c033b72bafb6ff077b56d818a893f 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-@@ -4556,9 +4556,11 @@ static int ggml_metal_op_mul_mv_id_gate_up_swiglu(
-             slots_per_threadgroup = 4;
-         }
-     }
+@@ -4603,9 +4603,11 @@ static int ggml_metal_op_mul_mv_id_gate_up_swiglu(
+     ggml_metal_encoder_set_buffer(enc, q8 != nullptr ?
+             ggml_metal_get_buffer_id(q8) : ggml_metal_get_buffer_id(src1), 7);
+ 
 +    const int active_slots =
 +        args._pad0 > 0 && args._pad0 < ne20 ? args._pad0 : ne20;
      const int64_t ne123 = pair_sg ?
@@ -27,7 +27,7 @@ index 30efec9c..08f1d966 100644
      const int grid_y = (1 + nr1 - 1)/nr1;
      const int grid_z = ne123;
 diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
-index 9bc4a0ff..9502a0db 100644
+index 9bc4a0fffd7db19c5ef9b48c6be6b2cdf9501fab..9502a0dbd35d24fee8a1943b12778042673d7d47 100644
 --- a/ggml/src/ggml-metal/ggml-metal.metal
 +++ b/ggml/src/ggml-metal/ggml-metal.metal
 @@ -10393,9 +10393,11 @@ void kernel_mul_mv_id_q2_K_gate_up_swiglu_pair_sg_impl(
@@ -46,4 +46,3 @@ index 9bc4a0ff..9502a0db 100644
      const int first_row = r0 * nr0;
 -- 
 2.50.1 (Apple Git-155)
-

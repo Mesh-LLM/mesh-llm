@@ -9,10 +9,10 @@ Subject: [PATCH 34/47] ggml: use GLM max-active policy for Q3 down kernels
  2 files changed, 32 insertions(+)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index c9a07642..38c485c5 100644
+index 4fd2fab6c73e84aa5bbd923c83a8a6f84a7e836a..d85230dcdf415549399e5938681e5d184d4b6e4a 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-@@ -522,6 +522,11 @@ static bool ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_active2_enabled() {
+@@ -525,6 +525,11 @@ static bool ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_active2_enabled() {
      return value && atoi(value) != 0;
  }
  
@@ -24,7 +24,10 @@ index c9a07642..38c485c5 100644
  static bool ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_r6_nb8_w0_enabled() {
      const char * value = getenv("GGML_METAL_ENABLE_Q3_DOWN_SLOT_PARALLEL_REDUCE_R6_NB8_W0");
      return value && atoi(value) != 0;
-@@ -4776,6 +4781,12 @@ static bool ggml_metal_match_mul_mv_id_weighted_reduce(
+@@ -4800,16 +4805,23 @@ static bool ggml_metal_match_mul_mv_id_weighted_reduce(
+     const bool q3_default_w1_shape =
+         down_type == GGML_TYPE_Q3_K &&
+         ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_r8_nb8_w1_default_enabled() &&
          down->src[0]->ne[0] == 2048 &&
          down->src[2]->ne[1] == 1 &&
          ggml_get_op_params_i32(weighted_sum, 0) != 0;
@@ -37,7 +40,7 @@ index c9a07642..38c485c5 100644
      if (down_type == GGML_TYPE_Q3_K &&
              !ggml_metal_glm_dsa_q3_down_weighted_reduce_tensor_selected(weighted_sum)) {
          return reject("q3_tensor");
-@@ -4783,6 +4794,7 @@ static bool ggml_metal_match_mul_mv_id_weighted_reduce(
+     }
      if (down_type == GGML_TYPE_Q3_K &&
              !q3_default_w0_shape &&
              !q3_default_w1_shape &&
@@ -45,7 +48,7 @@ index c9a07642..38c485c5 100644
              !ggml_metal_glm_dsa_q3_down_weighted_reduce_enabled() &&
              !ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_enabled() &&
              !ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_r8_enabled() &&
-@@ -5068,6 +5080,14 @@ static int ggml_metal_op_mul_mv_id_weighted_reduce(
+@@ -5095,6 +5107,14 @@ static int ggml_metal_op_mul_mv_id_weighted_reduce(
          ggml_metal_glm_dsa_q3_down_f16_act_enabled() &&
          ne00 == 2048 &&
          extra.already_weighted == 0;
@@ -57,35 +60,37 @@ index c9a07642..38c485c5 100644
 +        ne20 == 8 &&
 +        ne21 == 1 &&
 +        extra.already_weighted == 0;
-     const bool q2_slot_parallel_requested = ggml_metal_glm_dsa_q2_down_slot_parallel_reduce_enabled();
-     const bool q2_slot_parallel_r4 = ggml_metal_glm_dsa_q2_down_slot_parallel_reduce_r4_enabled();
-     const bool q2_slot_parallel_r16 = ggml_metal_glm_dsa_q2_down_slot_parallel_reduce_r16_enabled();
-@@ -5183,6 +5203,7 @@ static int ggml_metal_op_mul_mv_id_weighted_reduce(
-              ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_active6_enabled() ||
-              ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_active4_enabled() ||
-              ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_active2_enabled() ||
+     const bool q3_slot_parallel = ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_enabled();
+     const bool q3_slot_parallel_r8 = ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_r8_enabled();
+     const bool q3_slot_parallel_r8_nb8 = ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_r8_nb8_enabled();
+@@ -5221,8 +5241,9 @@ static int ggml_metal_op_mul_mv_id_weighted_reduce(
+              q3_slot_parallel_r8_nb8 ||
+              q3_slot_parallel_r8_nb8_w0 ||
+              q3_slot_parallel_active6 ||
+              q3_slot_parallel_active4 ||
+              q3_slot_parallel_active2 ||
 +             q3_active_count_shape ||
-              ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_r6_nb8_w0_enabled() ||
-              ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_r10_nb8_w0_enabled() ||
-              ggml_metal_glm_dsa_q3_down_slot_parallel_reduce_glm52_w0_enabled() ||
-@@ -5227,6 +5248,15 @@ static int ggml_metal_op_mul_mv_id_weighted_reduce(
-                 ne00 == 2048 && extra.already_weighted == 0) {
-             pipeline_slot_parallel =
-                 ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0(lib, weighted_sum);
+              q3_slot_parallel_r6_nb8_w0 ||
+              q3_slot_parallel_r10_nb8_w0 ||
+              q3_slot_parallel_glm52_w0 ||
+@@ -5261,6 +5282,15 @@ static int ggml_metal_op_mul_mv_id_weighted_reduce(
+         } else if (q3_slot_parallel_active2 && ne00 == 2048 && extra.already_weighted == 0) {
+             pipeline_slot_parallel = ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_active2(lib, weighted_sum);
+             q3_slot_parallel_op = "mul_mv_id_q3_down_slot_parallel_reduce_active2";
 +        } else if (q3_active_count_shape && q3_active_count == 6) {
-+            pipeline_slot_parallel =
-+                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0(lib, weighted_sum);
++            pipeline_slot_parallel = ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_active6(lib, weighted_sum);
++            q3_slot_parallel_op = "mul_mv_id_q3_down_slot_parallel_reduce_active6";
 +        } else if (q3_active_count_shape && q3_active_count == 4) {
-+            pipeline_slot_parallel =
-+                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0(lib, weighted_sum);
++            pipeline_slot_parallel = ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_active4(lib, weighted_sum);
++            q3_slot_parallel_op = "mul_mv_id_q3_down_slot_parallel_reduce_active4";
 +        } else if (q3_active_count_shape && q3_active_count == 2) {
-+            pipeline_slot_parallel =
-+                ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0(lib, weighted_sum);
++            pipeline_slot_parallel = ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_active2(lib, weighted_sum);
++            q3_slot_parallel_op = "mul_mv_id_q3_down_slot_parallel_reduce_active2";
          } else if (q3_f16_w0_shape) {
-             pipeline_slot_parallel =
-                 ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_f16(lib, weighted_sum);
+             pipeline_slot_parallel = ggml_metal_library_get_pipeline_mul_mv_id_q3_weighted_reduce_slots_sg_r8_nb8_w0_f16(lib, weighted_sum);
+             q3_slot_parallel_op = "mul_mv_id_q3_down_slot_parallel_reduce_r8_nb8_w0_f16";
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 153762c0..b268be2e 100644
+index b16fd5a82a7336468f476a9573f2b79660f3c026..aa28fb6a395aaa886fec4c398e80ec7787700a9d 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
 @@ -7333,6 +7333,7 @@ struct test_topk_moe_glm_component : public test_case {
@@ -96,7 +101,7 @@ index 153762c0..b268be2e 100644
              getenv("GGML_METAL_ENABLE_Q3_DOWN_SLOT_PARALLEL_REDUCE_R12_NB8_W0") != nullptr ||
              getenv("SKIPPY_GLM_DSA_EXPERIMENTAL_Q3_DOWN_SLOT_PARALLEL_REDUCE_R16") != nullptr ||
              getenv("SKIPPY_GLM_DSA_EXPERIMENTAL_Q3_DOWN_SLOT_SPLIT2_REDUCE") != nullptr ||
-@@ -9024,6 +9025,7 @@ struct test_glm_moe_static_motif : public test_case {
+@@ -9060,6 +9061,7 @@ struct test_glm_moe_static_motif : public test_case {
              getenv("SKIPPY_GLM_DSA_EXPERIMENTAL_Q3_DOWN_SLOT_PARALLEL_REDUCE_R8") != nullptr ||
              getenv("GGML_METAL_ENABLE_Q3_DOWN_SLOT_PARALLEL_REDUCE_R8_NB8") != nullptr ||
              getenv("GGML_METAL_ENABLE_Q3_DOWN_SLOT_PARALLEL_REDUCE_R8_NB8_W0") != nullptr ||
@@ -106,4 +111,3 @@ index 153762c0..b268be2e 100644
              getenv("SKIPPY_GLM_DSA_EXPERIMENTAL_Q3_DOWN_SLOT_SPLIT2_REDUCE") != nullptr ||
 -- 
 2.50.1 (Apple Git-155)
-

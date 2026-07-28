@@ -462,6 +462,7 @@ fn collect_parity_side(
                     Some(&SamplingConfig::default()),
                     None,
                     0,
+                    0,
                 )
                 .with_context(|| format!("batched width-{} VerifyWindow failed", run.width))?
                 .0
@@ -780,7 +781,7 @@ fn measure_batched(
         .context("failed to trim session before batched verify")?;
     let start = Instant::now();
     let prediction = session
-        .verify_tokens_frame_sampled(verify_tokens, Some(&SamplingConfig::default()), None, 0)
+        .verify_tokens_frame_sampled(verify_tokens, Some(&SamplingConfig::default()), None, 0, 0)
         .with_context(|| format!("batched width-{} VerifyWindow failed", verify_tokens.len()))?
         .0;
     Ok((start.elapsed(), prediction))
@@ -987,8 +988,8 @@ fn measure_split_batched(
 
     let total_start = Instant::now();
     let stage0_start = Instant::now();
-    let (_stage0_prediction, boundary) = session0
-        .verify_tokens_frame_sampled(verify_tokens, Some(&SamplingConfig::default()), None, 0)
+    let (_stage0_prediction, _, boundary) = session0
+        .verify_tokens_frame_sampled(verify_tokens, Some(&SamplingConfig::default()), None, 0, 0)
         .context("in-process split stage 0 VerifyWindow failed")?;
     let stage0 = stage0_start.elapsed();
     let boundary_payload_bytes = boundary.payload.len();
@@ -1002,6 +1003,7 @@ fn measure_split_batched(
             verify_tokens,
             Some(&SamplingConfig::default()),
             Some(&boundary),
+            0,
             0,
         )
         .context("in-process split stage 1 VerifyWindow failed")?

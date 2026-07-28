@@ -5,11 +5,11 @@ Subject: [PATCH 42/47] Harden staged session and sideband bookkeeping
 
 ---
  ggml/include/ggml-rpc.h |  2 +-
- src/skippy.cpp          | 41 ++++++++++++++++++-----------------------
- 2 files changed, 19 insertions(+), 24 deletions(-)
+ src/skippy.cpp          | 40 +++++++++++++++++-----------------------
+ 2 files changed, 18 insertions(+), 24 deletions(-)
 
 diff --git a/ggml/include/ggml-rpc.h b/ggml/include/ggml-rpc.h
-index 82d27410..83936373 100644
+index 82d274109aec1519c3e8219d1107fb3e05aed790..8393637310a83144646efdc49cbeac07dd87e343 100644
 --- a/ggml/include/ggml-rpc.h
 +++ b/ggml/include/ggml-rpc.h
 @@ -8,7 +8,7 @@ extern "C" {
@@ -22,7 +22,7 @@ index 82d27410..83936373 100644
  #ifdef  __cplusplus
  static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 9bd81828..47f0a549 100644
+index 9bd8182810842853ae427a9cea83fc13b0ce558e..b9c117ecee38e27239a66dfbe589084796eef64b 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1410,27 +1410,13 @@ static uint32_t skippy_glm_dsa_top_k_count_for_sideband_bytes(size_t token_count
@@ -87,14 +87,6 @@ index 9bd81828..47f0a549 100644
      return status;
  }
  
-@@ -5078,6 +5070,7 @@ enum skippy_status skippy_decode_batch_sampled(
-     }
- 
-     const int32_t n_tokens = static_cast<int32_t>(request_count);
-+    GGML_ASSERT(static_cast<size_t>(n_tokens) == request_count);
-     llama_batch batch = llama_batch_init(n_tokens, 0, 1);
-     batch.n_tokens = n_tokens;
-     for (int32_t i = 0; i < n_tokens; ++i) {
 @@ -5586,7 +5579,7 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
      if (activation_input) {
          embd_storage.resize(static_cast<size_t>(n_tokens)*n_embd_inp);
@@ -126,4 +118,3 @@ index 9bd81828..47f0a549 100644
              static_cast<int32_t>(std::min<uint64_t>(
 -- 
 2.50.1 (Apple Git-155)
-

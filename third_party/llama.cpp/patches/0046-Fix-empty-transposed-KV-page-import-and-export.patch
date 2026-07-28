@@ -6,8 +6,8 @@ Subject: [PATCH 46/47] Fix empty transposed KV page import and export
 ---
  src/llama-kv-cache.cpp               |   6 +
  tests/CMakeLists.txt                 |   1 +
- tests/test-skippy-kv-page-export.cpp | 165 +++++++++++++++++++++++++++
- 3 files changed, 172 insertions(+)
+ tests/test-skippy-kv-page-export.cpp | 185 +++++++++++++++++++++++++++
+ 3 files changed, 192 insertions(+)
  create mode 100644 tests/test-skippy-kv-page-export.cpp
 
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
@@ -51,7 +51,7 @@ new file mode 100644
 index 00000000..724835df
 --- /dev/null
 +++ b/tests/test-skippy-kv-page-export.cpp
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,185 @@
 +#include "skippy.h"
 +
 +#include "../src/llama-batch.h"
@@ -161,7 +161,27 @@ index 00000000..724835df
 +        fprintf(stderr, "K-only KV page export byte count mismatch\n");
 +        return 1;
 +    }
-+    if (!kv.stage_import_kv_page(
++
++    llama_kv_cache restore_kv(
++            *model,
++            hparams,
++            GGML_TYPE_F32,
++            GGML_TYPE_F32,
++            true,
++            false,
++            true,
++            1,
++            1,
++            1,
++            0,
++            LLAMA_SWA_TYPE_NONE,
++            nullptr,
++            {},
++            {},
++            {});
++    restore_kv.apply_ubatch(slot, ubatch);
++
++    if (!restore_kv.stage_import_kv_page(
 +                0,
 +                desc,
 +                payload.data(),
@@ -173,7 +193,7 @@ index 00000000..724835df
 +
 +    skippy_kv_page_desc roundtrip_desc = {};
 +    size_t roundtrip_bytes = 0;
-+    if (!kv.stage_export_kv_page(
++    if (!restore_kv.stage_export_kv_page(
 +                0,
 +                0,
 +                1,
@@ -196,7 +216,7 @@ index 00000000..724835df
 +        return 1;
 +    }
 +    std::vector<uint8_t> roundtrip_payload(roundtrip_bytes);
-+    if (!kv.stage_export_kv_page(
++    if (!restore_kv.stage_export_kv_page(
 +                0,
 +                0,
 +                1,
@@ -219,4 +239,3 @@ index 00000000..724835df
 +}
 -- 
 2.50.1 (Apple Git-155)
-

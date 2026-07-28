@@ -412,8 +412,8 @@ impl RuntimeState {
         token_ids: &[i32],
         input: Option<&ActivationFrame>,
         output_capacity: usize,
-    ) -> Result<(Vec<i32>, ActivationFrame)> {
-        self.verify_frame_sampled(session_id, token_ids, None, input, output_capacity)
+    ) -> Result<(Vec<i32>, Option<NativeMtpDraft>, ActivationFrame)> {
+        self.verify_frame_sampled(session_id, token_ids, None, input, output_capacity, 0)
     }
 
     pub(crate) fn canonical_session_position(&self, session_id: &str) -> Result<u64> {
@@ -460,10 +460,16 @@ impl RuntimeState {
         sampling: Option<&SamplingConfig>,
         input: Option<&ActivationFrame>,
         output_capacity: usize,
-    ) -> Result<(Vec<i32>, ActivationFrame)> {
+        max_draft_tokens: usize,
+    ) -> Result<(Vec<i32>, Option<NativeMtpDraft>, ActivationFrame)> {
         let session = self.session(session_id)?;
-        let output =
-            session.verify_tokens_frame_sampled(token_ids, sampling, input, output_capacity)?;
+        let output = session.verify_tokens_frame_sampled(
+            token_ids,
+            sampling,
+            input,
+            output_capacity,
+            max_draft_tokens,
+        )?;
         self.add_session_tokens(session_id, token_ids.len() as u64);
         Ok(output)
     }
@@ -475,12 +481,12 @@ impl RuntimeState {
         sampling: Option<&SamplingConfig>,
         input: Option<&ActivationFrame>,
         output_capacity: usize,
-    ) -> Result<(Vec<i32>, ActivationFrame)> {
+    ) -> Result<(Vec<i32>, Option<NativeMtpDraft>, ActivationFrame)> {
         if token_ids.is_empty() {
             bail!("serial verify_frame requires at least one token");
         }
         let input_frames = split_activation_frame(input, token_ids.len())?;
-        let mut predicted_tokens = Vec::with_capacity(token_ids.len() + 2);
+        let mut predicted_tokens = Vec::with_capacity(token_ids.len());
         let mut output_frames = Vec::with_capacity(token_ids.len());
         let mut last_draft = None;
         for (index, token_id) in token_ids.iter().copied().enumerate() {
@@ -499,13 +505,11 @@ impl RuntimeState {
             last_draft = native_mtp;
             output_frames.push(output);
         }
-        if let Some(draft) = last_draft {
-            predicted_tokens.push(i32::try_from(draft.token_ids.len()).unwrap_or(i32::MAX));
-            predicted_tokens.extend(draft.token_ids);
-            predicted_tokens
-                .push(i32::try_from(draft.proposal_compute_us.max(0)).unwrap_or(i32::MAX));
-        }
-        Ok((predicted_tokens, combine_activation_frames(&output_frames)?))
+        Ok((
+            predicted_tokens,
+            last_draft,
+            combine_activation_frames(&output_frames)?,
+        ))
     }
 
     pub fn trim_session(&mut self, session_id: &str, token_count: u64) -> Result<()> {

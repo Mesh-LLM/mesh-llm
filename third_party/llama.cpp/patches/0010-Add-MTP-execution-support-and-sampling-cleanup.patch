@@ -6,7 +6,7 @@ Subject: [PATCH 10/47] Add MTP execution support and sampling cleanup
 Squashes GLM MTP graph support, batched stage execution, native MTP sidecar support, batched MTP verification drafts, sampling and detokenization parity, unused ABI removal, MTP layer-count and sidecar fixes, VerifySpan copy avoidance, greedy sampling fast path, GLM chat fallback, and GLM DSA IndexShare support.
 ---
  common/chat.cpp           |  111 ++++
- include/skippy.h          |   58 ++-
+ include/skippy.h          |   60 ++-
  include/skippy/common.h   |    5 +-
  src/llama-context.cpp     |   15 +-
  src/llama-graph.cpp       |    2 +
@@ -15,8 +15,8 @@ Squashes GLM MTP graph support, batched stage execution, native MTP sidecar supp
  src/models/deepseek32.cpp |   16 +-
  src/models/glm-dsa.cpp    |   11 +-
  src/models/models.h       |    5 +
- src/skippy.cpp            | 1034 +++++++++++++++++++++++++++++++------
- 11 files changed, 1371 insertions(+), 182 deletions(-)
+ src/skippy.cpp            | 1037 +++++++++++++++++++++++++++++++------
+ 11 files changed, 1376 insertions(+), 182 deletions(-)
 
 diff --git a/common/chat.cpp b/common/chat.cpp
 index 7a6e7238..91658e6d 100644
@@ -1841,7 +1841,7 @@ index 4dcd0d96..8af180e5 100644
  enum skippy_status skippy_decode_step_frame_sampled(
          struct skippy_session * session,
          llama_token token_id,
-@@ -3243,10 +3711,229 @@ enum skippy_status skippy_decode_step_frame_sampled(
+@@ -3243,10 +3711,230 @@ enum skippy_status skippy_decode_step_frame_sampled(
      return skippy_copy_output_activation_frame(session, 1, output_payload, input_desc, input_payload, out_error);
  }
  
@@ -1979,6 +1979,7 @@ index 4dcd0d96..8af180e5 100644
 +            const void * input_payload = input_payloads[i];
 +            float * dst = embd_storage.data() + static_cast<size_t>(i)*n_embd_inp;
 +            if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP) != 0) {
++                skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched activation decode does not support Gemma3n AltUp sidebands yet");
 +                return SKIPPY_STATUS_UNSUPPORTED;
 +            } else if (n_embd_inp == n_embd) {
 +                std::memcpy(dst, input_payload, hidden_bytes_per_request);
@@ -2209,4 +2210,3 @@ index 4dcd0d96..8af180e5 100644
  
 -- 
 2.50.1 (Apple Git-155)
-

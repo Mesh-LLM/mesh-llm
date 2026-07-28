@@ -569,103 +569,107 @@ pub(super) fn handle_binary_connection(
         let mut decode_batch_wait_ms = 0.0;
         let input_activation_bytes = message.activation.len();
         let mut proactive_eviction = None;
-        let (predicted_token, mut predicted_tokens, output, compute_ms) = if restored_prefill {
-            let now = now_unix_nanos() as u64;
-            compute_start_unix_nanos = now;
-            compute_end_unix_nanos = now;
-            (
-                message.state.current_token,
-                Vec::new(),
-                lookup_result
-                    .activation
-                    .clone()
-                    .unwrap_or_else(|| empty_activation_frame(config, &message)),
-                0.0,
-            )
-        } else {
-            let input_decode_started = Instant::now();
-            let input = input_activation_frame(config, topology, &mut message, activation_width)?;
-            input_activation_decode_ms = if input_activation_bytes == 0 {
-                0.0
-            } else {
-                elapsed_ms(input_decode_started)
-            };
-            compute_start_unix_nanos = now_unix_nanos() as u64;
-            let compute_started = Instant::now();
-            let use_decode_frame_batch =
-                is_decode_frame_batch_candidate(config, &message, executable_token_ids);
-            let result = if use_decode_frame_batch {
-                let token_id = executable_token_ids
-                    .first()
-                    .copied()
-                    .unwrap_or(message.state.current_token);
-                let sampling = runtime_sampling_config(message.sampling.as_ref());
-                let target_token_count =
-                    message.authoritative_session_position().ok_or_else(|| {
-                        anyhow::anyhow!("batched decode frame has no authoritative position")
-                    })?;
-                let outcome = decode_frame_batcher
-                    .decode(
-                        &session_key,
-                        target_token_count,
-                        token_id,
-                        sampling.as_ref(),
-                        input,
-                    )
-                    .context("execute batched binary decode frame")?;
-                runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
-                runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
-                runtime_lock_acquires = 1;
-                decode_batch_size = outcome.batch_size;
-                decode_batch_wait_ms = outcome.batch_wait_ms;
-                (outcome.predicted, Vec::new(), outcome.output)
-            } else {
-                let lock_started = Instant::now();
-                let mut runtime = runtime.lock().expect("runtime lock poisoned");
-                runtime_lock_wait_ms = elapsed_ms(lock_started);
-                runtime_lock_acquires = 1;
-                let lock_hold_started = Instant::now();
-                runtime_sessions_before = Some(runtime.session_stats());
-                let eviction_plan = binary_proactive_eviction_plan(
-                    message.kind,
-                    restored_prefill,
-                    executable_token_ids.len(),
-                    (message.state.prompt_token_count.max(0) as usize)
-                        .saturating_sub(message.pos_start.max(0) as usize),
-                );
-                if eviction_plan.required {
-                    proactive_eviction = Some(evict_binary_resident_prefix_for_decode(
-                        &mut runtime,
-                        kv,
-                        &session_key,
-                        eviction_plan,
-                    )?);
-                }
-                let result = run_binary_stage_message(
-                    &mut runtime,
-                    &session_key,
-                    &message,
-                    executable_token_ids,
-                    input.as_ref(),
-                    BinaryStageExecutionOptions::new(
-                        message.kind == WireMessageKind::PrefillFinalEmbd && downstream.is_none(),
-                        stage_output_activation_capacity(
-                            config,
-                            message.token_count,
-                            activation_width,
-                        )?,
-                        native_mtp_enabled,
-                    ),
+        let (predicted_token, mut predicted_tokens, output, native_mtp_draft, compute_ms) =
+            if restored_prefill {
+                let now = now_unix_nanos() as u64;
+                compute_start_unix_nanos = now;
+                compute_end_unix_nanos = now;
+                (
+                    message.state.current_token,
+                    Vec::new(),
+                    lookup_result
+                        .activation
+                        .clone()
+                        .unwrap_or_else(|| empty_activation_frame(config, &message)),
+                    None,
+                    0.0,
                 )
-                .context("execute binary stage message")?;
-                runtime_sessions_after = Some(runtime.session_stats());
-                runtime_lock_hold_ms = elapsed_ms(lock_hold_started);
-                result
+            } else {
+                let input_decode_started = Instant::now();
+                let input =
+                    input_activation_frame(config, topology, &mut message, activation_width)?;
+                input_activation_decode_ms = if input_activation_bytes == 0 {
+                    0.0
+                } else {
+                    elapsed_ms(input_decode_started)
+                };
+                compute_start_unix_nanos = now_unix_nanos() as u64;
+                let compute_started = Instant::now();
+                let use_decode_frame_batch =
+                    is_decode_frame_batch_candidate(config, &message, executable_token_ids);
+                let result = if use_decode_frame_batch {
+                    let token_id = executable_token_ids
+                        .first()
+                        .copied()
+                        .unwrap_or(message.state.current_token);
+                    let sampling = runtime_sampling_config(message.sampling.as_ref());
+                    let target_token_count =
+                        message.authoritative_session_position().ok_or_else(|| {
+                            anyhow::anyhow!("batched decode frame has no authoritative position")
+                        })?;
+                    let outcome = decode_frame_batcher
+                        .decode(
+                            &session_key,
+                            target_token_count,
+                            token_id,
+                            sampling.as_ref(),
+                            input,
+                        )
+                        .context("execute batched binary decode frame")?;
+                    runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+                    runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+                    runtime_lock_acquires = 1;
+                    decode_batch_size = outcome.batch_size;
+                    decode_batch_wait_ms = outcome.batch_wait_ms;
+                    (outcome.predicted, Vec::new(), outcome.output, None)
+                } else {
+                    let lock_started = Instant::now();
+                    let mut runtime = runtime.lock().expect("runtime lock poisoned");
+                    runtime_lock_wait_ms = elapsed_ms(lock_started);
+                    runtime_lock_acquires = 1;
+                    let lock_hold_started = Instant::now();
+                    runtime_sessions_before = Some(runtime.session_stats());
+                    let eviction_plan = binary_proactive_eviction_plan(
+                        message.kind,
+                        restored_prefill,
+                        executable_token_ids.len(),
+                        (message.state.prompt_token_count.max(0) as usize)
+                            .saturating_sub(message.pos_start.max(0) as usize),
+                    );
+                    if eviction_plan.required {
+                        proactive_eviction = Some(evict_binary_resident_prefix_for_decode(
+                            &mut runtime,
+                            kv,
+                            &session_key,
+                            eviction_plan,
+                        )?);
+                    }
+                    let result = run_binary_stage_message(
+                        &mut runtime,
+                        &session_key,
+                        &message,
+                        executable_token_ids,
+                        input.as_ref(),
+                        BinaryStageExecutionOptions::new(
+                            message.kind == WireMessageKind::PrefillFinalEmbd
+                                && downstream.is_none(),
+                            stage_output_activation_capacity(
+                                config,
+                                message.token_count,
+                                activation_width,
+                            )?,
+                            native_mtp_enabled,
+                        ),
+                    )
+                    .context("execute binary stage message")?;
+                    runtime_sessions_after = Some(runtime.session_stats());
+                    runtime_lock_hold_ms = elapsed_ms(lock_hold_started);
+                    result
+                };
+                let compute_ms = elapsed_ms(compute_started);
+                compute_end_unix_nanos = now_unix_nanos() as u64;
+                (result.0, result.1, result.2, result.3, compute_ms)
             };
-            let compute_ms = elapsed_ms(compute_started);
-            compute_end_unix_nanos = now_unix_nanos() as u64;
-            (result.0, result.1, result.2, compute_ms)
-        };
         if telemetry.is_debug_enabled() {
             let mut decode_attrs = binary_message_attrs(config, session_id, &message);
             decode_attrs.insert(
@@ -1003,7 +1007,10 @@ pub(super) fn handle_binary_connection(
             } else {
                 WireReplyKind::PredictedToken
             };
-            let native_mtp_draft = split_native_mtp_reply(&message, &mut predicted_tokens)?;
+            let native_mtp_draft = match native_mtp_draft {
+                Some(draft) => Some(draft),
+                None => split_native_mtp_reply(&message, &mut predicted_tokens)?,
+            };
             let predicted_token_count = if message.kind == WireMessageKind::VerifyWindow {
                 predicted_tokens.len()
             } else {

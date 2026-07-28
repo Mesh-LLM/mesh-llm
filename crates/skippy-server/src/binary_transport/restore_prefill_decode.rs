@@ -164,7 +164,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                 target_tokens: None,
             },
         )?;
-        let (predicted, _, output) = run_binary_stage_message(
+        let (predicted, _, output, _) = run_binary_stage_message(
             &mut runtime,
             session_id,
             &decode_message,

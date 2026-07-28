@@ -4,14 +4,14 @@ Date: Thu, 25 Jun 2026 15:51:20 +1000
 Subject: [PATCH 25/47] Run GLM-DSA through IndexShare graph
 
 ---
- src/models/glm-dsa.cpp | 43 ++++++++++++++++++++++++++++++++++++++----
- 1 file changed, 39 insertions(+), 4 deletions(-)
+ src/models/glm-dsa.cpp | 47 +++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 43 insertions(+), 4 deletions(-)
 
 diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
 index b682d670..82c6a093 100644
 --- a/src/models/glm-dsa.cpp
 +++ b/src/models/glm-dsa.cpp
-@@ -224,20 +224,37 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+@@ -224,20 +224,41 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -22,6 +22,10 @@ index b682d670..82c6a093 100644
 +    const int il_end   = stage_filtered ?
 +            std::min(stage_filter.layer_end, effective_n_layers) :
 +            effective_n_layers;
++
++    if (il_start < 0 || il_start >= il_end || il_end > effective_n_layers) {
++        throw std::runtime_error("GLM_DSA staged execution requires a non-empty in-bounds layer range");
++    }
 +
 +    if (stage_filtered && il_start < il_end && !hparams.is_indexer_full(il_start)) {
 +        throw std::runtime_error("GLM_DSA staged execution must start on a full indexer layer");
@@ -52,7 +56,7 @@ index b682d670..82c6a093 100644
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -472,7 +489,7 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+@@ -472,7 +493,7 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
                          Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, top_k, kq_scale, il);
              }
          }
@@ -61,7 +65,7 @@ index b682d670..82c6a093 100644
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -533,8 +550,26 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+@@ -533,8 +554,26 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
      }
      cur = inpL;
  
@@ -90,4 +94,3 @@ index b682d670..82c6a093 100644
  
 -- 
 2.50.1 (Apple Git-155)
-

@@ -14,6 +14,13 @@ use crate::{ActivationFrame, DecodeFrameBatchOutput, NativeMtpDraft, SamplingCon
 
 type RawInputFrame = (Option<RawActivationDesc>, *const c_void);
 
+struct RawVerifyFrameOutput {
+    predicted_tokens: Vec<i32>,
+    draft: Option<NativeMtpDraft>,
+    desc: RawActivationDesc,
+    payload: Vec<u8>,
+}
+
 fn raw_input_frame(input: Option<&ActivationFrame>) -> Result<RawInputFrame> {
     let Some(frame) = input else {
         return Ok((None, ptr::null()));
@@ -583,8 +590,8 @@ impl StageSession {
         token_ids: &[i32],
         input: Option<&ActivationFrame>,
         output_capacity: usize,
-    ) -> Result<(Vec<i32>, ActivationFrame)> {
-        self.verify_tokens_frame_sampled(token_ids, None, input, output_capacity)
+    ) -> Result<(Vec<i32>, Option<NativeMtpDraft>, ActivationFrame)> {
+        self.verify_tokens_frame_sampled(token_ids, None, input, output_capacity, 0)
     }
 
     pub fn verify_tokens_frame_sampled(
@@ -593,17 +600,24 @@ impl StageSession {
         sampling: Option<&SamplingConfig>,
         input: Option<&ActivationFrame>,
         output_capacity: usize,
-    ) -> Result<(Vec<i32>, ActivationFrame)> {
+        max_draft_tokens: usize,
+    ) -> Result<(Vec<i32>, Option<NativeMtpDraft>, ActivationFrame)> {
         if token_ids.is_empty() {
             return Err(anyhow!("verify_tokens_frame requires at least one token"));
         }
-        let (predicted_tokens, output_desc, output_payload) =
-            self.verify_tokens_frame_raw(token_ids, sampling, input, output_capacity)?;
+        let output = self.verify_tokens_frame_raw(
+            token_ids,
+            sampling,
+            input,
+            output_capacity,
+            max_draft_tokens,
+        )?;
         Ok((
-            predicted_tokens,
+            output.predicted_tokens,
+            output.draft,
             ActivationFrame {
-                desc: output_desc.into(),
-                payload: output_payload,
+                desc: output.desc.into(),
+                payload: output.payload,
             },
         ))
     }
@@ -614,7 +628,8 @@ impl StageSession {
         sampling: Option<&SamplingConfig>,
         input: Option<&ActivationFrame>,
         output_capacity: usize,
-    ) -> Result<(Vec<i32>, RawActivationDesc, Vec<u8>)> {
+        max_draft_tokens: usize,
+    ) -> Result<RawVerifyFrameOutput> {
         let raw_input = raw_input_frame(input)?;
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
@@ -632,8 +647,9 @@ impl StageSession {
         };
         let mut output_payload = vec![0_u8; output_capacity];
         let mut output_bytes = 0usize;
-        let mut predicted = vec![0_i32; token_ids.len().saturating_add(3)];
+        let mut predicted = vec![0_i32; token_ids.len()];
         let mut output_token_count = 0usize;
+        let mut output_draft = RawNativeMtpDraft::default();
         let mut error = ptr::null_mut();
         let raw_sampling = sampling.map(SamplingConfig::as_raw);
         let sampling_ptr = raw_sampling
@@ -654,12 +670,20 @@ impl StageSession {
                 predicted.as_mut_ptr(),
                 predicted.len(),
                 &mut output_token_count,
+                max_draft_tokens.min(skippy_ffi::NATIVE_MTP_MAX_DRAFT_TOKENS),
+                &mut output_draft,
                 &mut error,
             )
         };
         if status == Status::BufferTooSmall && output_bytes > output_payload.len() {
             free_error(error);
-            return self.verify_tokens_frame_raw(token_ids, sampling, input, output_bytes);
+            return self.verify_tokens_frame_raw(
+                token_ids,
+                sampling,
+                input,
+                output_bytes,
+                max_draft_tokens,
+            );
         }
         ensure_ok(status, error)?;
         predicted.truncate(output_token_count);
@@ -668,7 +692,12 @@ impl StageSession {
             .token_count
             .checked_add(u64::try_from(token_ids.len()).context("token count exceeds u64")?)
             .context("session token count overflow")?;
-        Ok((predicted, output_desc, output_payload))
+        Ok(RawVerifyFrameOutput {
+            predicted_tokens: predicted,
+            draft: NativeMtpDraft::from_raw(output_draft),
+            desc: output_desc,
+            payload: output_payload,
+        })
     }
 
     pub fn copy_output_activation_frame(
