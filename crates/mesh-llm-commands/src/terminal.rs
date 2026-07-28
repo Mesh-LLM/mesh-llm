@@ -83,3 +83,43 @@ fn style(text: &str, ansi_code: &str) -> String {
         text.to_string()
     }
 }
+
+#[cfg(test)]
+pub(crate) fn strip_ansi_styles(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut plain = String::with_capacity(text.len());
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'\x1b' && bytes.get(cursor + 1) == Some(&b'[') {
+            let mut end = cursor + 2;
+            while bytes
+                .get(end)
+                .is_some_and(|byte| byte.is_ascii_digit() || *byte == b';')
+            {
+                end += 1;
+            }
+            if bytes.get(end) == Some(&b'm') {
+                cursor = end + 1;
+                continue;
+            }
+        }
+
+        let character = text[cursor..].chars().next().expect("valid UTF-8 boundary");
+        plain.push(character);
+        cursor += character.len_utf8();
+    }
+
+    plain
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_ansi_styles;
+
+    #[test]
+    fn strip_ansi_styles_preserves_plain_and_unicode_text() {
+        assert_eq!(strip_ansi_styles("plain ✓"), "plain ✓");
+        assert_eq!(strip_ansi_styles("\x1b[1;32m✓\x1b[0m ready"), "✓ ready");
+    }
+}

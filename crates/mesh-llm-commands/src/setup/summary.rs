@@ -204,6 +204,7 @@ mod tests {
     use crate::setup::SetupEnvironment;
     use crate::setup::SetupPlatform;
     use crate::setup::github::SetupGitHubOutcome;
+    use crate::terminal::strip_ansi_styles;
 
     fn actions_with_github_outcome(github_outcome: SetupGitHubOutcome) -> CliSetupActions<'static> {
         let mut actions = CliSetupActions::new(
@@ -222,13 +223,19 @@ mod tests {
     fn github_brief_reports_unavailable_cli() {
         let actions = actions_with_github_outcome(SetupGitHubOutcome::CliUnavailable);
 
-        assert_eq!(github_brief(&actions), Some("gh unavailable".to_string()));
+        assert_eq!(
+            github_brief(&actions).map(|brief| strip_ansi_styles(&brief)),
+            Some("gh unavailable".to_string())
+        );
     }
 
     #[test]
     fn github_brief_reports_unauthenticated_cli() {
         let actions = actions_with_github_outcome(SetupGitHubOutcome::NotAuthenticated);
 
-        assert_eq!(github_brief(&actions), Some("gh signed out".to_string()));
+        assert_eq!(
+            github_brief(&actions).map(|brief| strip_ansi_styles(&brief)),
+            Some("gh signed out".to_string())
+        );
     }
 }

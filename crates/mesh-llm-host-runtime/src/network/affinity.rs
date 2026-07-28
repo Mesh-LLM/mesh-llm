@@ -5,7 +5,7 @@ use crate::network::target_health::{TargetHealth, TargetHealthOutcome, TargetRep
 use iroh::EndpointId;
 #[cfg(test)]
 use mesh_llm_routing::prefix_affinity::PREFIX_AFFINITY_MAX_ENTRIES;
-use mesh_llm_routing::prefix_affinity::{PREFIX_AFFINITY_TTL, PrefixAffinity, PrefixAffinityStats};
+use mesh_llm_routing::prefix_affinity::{PREFIX_AFFINITY_TTL, PrefixAffinity};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
@@ -36,6 +36,10 @@ pub struct AffinityStatsSnapshot {
     pub evicted: u64,
     pub target_reputation: TargetReputationStats,
 }
+
+mesh_llm_routing::impl_prefix_affinity_stats_snapshot!(AffinityStatsSnapshot {
+    target_reputation: TargetReputationStats::default(),
+});
 
 fn prefix_only_enabled() -> bool {
     std::env::var("MESH_LLM_PREFIX_ONLY")
@@ -101,7 +105,7 @@ impl AffinityRouter {
 
     pub fn stats_snapshot(&self) -> AffinityStatsSnapshot {
         let mut state = self.inner.lock().unwrap();
-        let mut stats = affinity_stats_snapshot(
+        let mut stats = AffinityStatsSnapshot::from_prefix_affinity_stats(
             state.prefix.snapshot(),
             self.config.prefix_enabled,
             self.config.sticky_enabled,
@@ -235,28 +239,6 @@ impl AffinityRouter {
     pub fn forget_auto_model(&self, session_key: u64) {
         let mut state = self.inner.lock().unwrap();
         state.remove_auto_key(session_key);
-    }
-}
-
-fn affinity_stats_snapshot(
-    stats: PrefixAffinityStats,
-    prefix_enabled: bool,
-    sticky_enabled: bool,
-) -> AffinityStatsSnapshot {
-    AffinityStatsSnapshot {
-        prefix_enabled,
-        sticky_enabled,
-        prefix_entries: stats.entries,
-        prefix_lookups: stats.lookups,
-        prefix_hits: stats.hits,
-        prefix_misses: stats.misses,
-        prefix_stale: stats.stale,
-        prefix_routes: stats.routes,
-        sticky_routes: stats.sticky_routes,
-        session_routes: stats.session_routes,
-        learned: stats.learned,
-        evicted: stats.evicted,
-        target_reputation: TargetReputationStats::default(),
     }
 }
 

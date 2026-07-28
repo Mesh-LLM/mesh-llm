@@ -11,11 +11,11 @@ pub enum CapabilityLevel {
 }
 
 impl CapabilityLevel {
-    fn is_supported(self) -> bool {
-        self == Self::Supported
+    const fn is_supported(self) -> bool {
+        matches!(self, Self::Supported)
     }
 
-    fn status(self) -> &'static str {
+    const fn status(self) -> &'static str {
         match self {
             Self::Supported => "supported",
             Self::Likely => "likely",
@@ -23,7 +23,7 @@ impl CapabilityLevel {
         }
     }
 
-    fn label(self) -> Option<&'static str> {
+    const fn label(self) -> Option<&'static str> {
         match self {
             Self::Supported => Some("yes"),
             Self::Likely => Some("likely"),
@@ -255,26 +255,27 @@ pub fn merge_config_signals(mut caps: ModelCapabilities, config: &Value) -> Mode
 }
 
 fn merge_name_signal(caps: &mut ModelCapabilities, value: &str, allow_likely_vision: bool) {
-    let vision = if strong_vision_name_signal(value) {
-        CapabilityLevel::Supported
-    } else if allow_likely_vision && likely_vision_name_signal(value) {
-        CapabilityLevel::Likely
-    } else {
-        CapabilityLevel::None
-    };
-    caps.upgrade_vision(vision);
+    caps.upgrade_vision(name_signal_level(
+        value,
+        allow_likely_vision,
+        strong_vision_name_signal,
+        likely_vision_name_signal,
+    ));
     caps.upgrade_audio(name_signal_level(
         value,
+        true,
         strong_audio_name_signal,
         likely_audio_name_signal,
     ));
     caps.upgrade_reasoning(name_signal_level(
         value,
+        true,
         strong_reasoning_name_signal,
         likely_reasoning_name_signal,
     ));
     caps.upgrade_tool_use(name_signal_level(
         value,
+        true,
         strong_tool_use_name_signal,
         likely_tool_use_name_signal,
     ));
@@ -282,12 +283,13 @@ fn merge_name_signal(caps: &mut ModelCapabilities, value: &str, allow_likely_vis
 
 fn name_signal_level(
     value: &str,
+    allow_likely: bool,
     strong: fn(&str) -> bool,
     likely: fn(&str) -> bool,
 ) -> CapabilityLevel {
     if strong(value) {
         CapabilityLevel::Supported
-    } else if likely(value) {
+    } else if allow_likely && likely(value) {
         CapabilityLevel::Likely
     } else {
         CapabilityLevel::None
@@ -469,6 +471,10 @@ mod tests {
         merge_sibling_signals,
     };
 
+    const _: bool = CapabilityLevel::Supported.is_supported();
+    const _: &str = CapabilityLevel::Likely.status();
+    const _: Option<&str> = CapabilityLevel::None.label();
+
     #[test]
     fn capability_level_status_and_label_matrix_is_stable() {
         let cases = [
@@ -498,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn strong_name_evidence_dominates_likely_and_existing_values() {
+    fn name_signals_only_upgrade_existing_levels() {
         let caps = ModelCapabilities {
             vision: CapabilityLevel::Likely,
             audio: CapabilityLevel::Supported,

@@ -636,6 +636,14 @@ fn detect_user_id() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::strip_ansi_styles;
+
+    fn plain_lines(lines: Vec<String>) -> Vec<String> {
+        lines
+            .into_iter()
+            .map(|line| strip_ansi_styles(&line))
+            .collect()
+    }
 
     fn env(temp: &Path, platform: UninstallPlatform) -> UninstallEnvironment {
         UninstallEnvironment {
@@ -856,7 +864,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let plan = plan_uninstall(&options(), &env(temp.path(), UninstallPlatform::Linux));
 
-        let lines = plan_lines(&plan, false);
+        let lines = plain_lines(plan_lines(&plan, false));
 
         assert_eq!(lines[0], "! Mesh uninstall dry run");
         assert!(lines.iter().any(|line| line == "  Config   preserved"));
@@ -895,7 +903,7 @@ mod tests {
             warnings: Vec::new(),
         };
 
-        let lines = outcome_lines(&outcome, false);
+        let lines = plain_lines(outcome_lines(&outcome, false));
 
         assert_eq!(lines[0], "✓ Mesh uninstall complete");
         assert!(lines.iter().any(|line| line == "  Removed  1 item"));

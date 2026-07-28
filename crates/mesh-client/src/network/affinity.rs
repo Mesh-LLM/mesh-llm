@@ -2,7 +2,7 @@
 
 use crate::inference::election;
 use iroh::EndpointId;
-use mesh_llm_routing::prefix_affinity::{PrefixAffinity, PrefixAffinityStats};
+use mesh_llm_routing::prefix_affinity::PrefixAffinity;
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
@@ -22,6 +22,8 @@ pub struct AffinityStatsSnapshot {
     pub learned: u64,
     pub evicted: u64,
 }
+
+mesh_llm_routing::impl_prefix_affinity_stats_snapshot!(AffinityStatsSnapshot);
 
 fn prefix_only_enabled() -> bool {
     std::env::var("MESH_LLM_PREFIX_ONLY")
@@ -70,7 +72,7 @@ impl AffinityRouter {
     }
 
     pub fn stats_snapshot(&self) -> AffinityStatsSnapshot {
-        affinity_stats_snapshot(
+        AffinityStatsSnapshot::from_prefix_affinity_stats(
             self.inner.lock().unwrap().snapshot(),
             self.config.prefix_enabled,
             self.config.sticky_enabled,
@@ -120,27 +122,6 @@ impl AffinityRouter {
             .lock()
             .unwrap()
             .forget(model, prefix_hash, target);
-    }
-}
-
-fn affinity_stats_snapshot(
-    stats: PrefixAffinityStats,
-    prefix_enabled: bool,
-    sticky_enabled: bool,
-) -> AffinityStatsSnapshot {
-    AffinityStatsSnapshot {
-        prefix_enabled,
-        sticky_enabled,
-        prefix_entries: stats.entries,
-        prefix_lookups: stats.lookups,
-        prefix_hits: stats.hits,
-        prefix_misses: stats.misses,
-        prefix_stale: stats.stale,
-        prefix_routes: stats.routes,
-        sticky_routes: stats.sticky_routes,
-        session_routes: stats.session_routes,
-        learned: stats.learned,
-        evicted: stats.evicted,
     }
 }
 
