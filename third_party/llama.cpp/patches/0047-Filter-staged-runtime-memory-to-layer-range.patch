@@ -1,0 +1,72 @@
+From 3a5f43b7fe0e90ac28f0a2856f87c291f5990a29 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 28 Jul 2026 14:23:09 +1000
+Subject: [PATCH] Filter staged runtime memory to layer range
+
+Skippy graph execution already filters to the assigned layer range, but
+llama_model::create_memory still allocated cache rows for the complete model.
+Compose the active stage filter with each memory implementation's architecture
+filter so split capacity estimates match the native allocation. Keep MTP
+sidecar contexts on their existing next-token layer filter.
+
+---
+ src/llama-model.cpp | 23 ++++++++++++++++++++++-
+ 1 file changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 10633a51..7ad59b29 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -2042,6 +2042,22 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
+     return layers[il].rope_short;
+ }
+ 
++static llama_memory_i::layer_filter_cb skippy_stage_memory_filter(
++        llama_memory_i::layer_filter_cb filter,
++        enum llama_context_type ctx_type) {
++    const skippy_graph_filter stage_filter = skippy_graph_get_filter();
++    if (!stage_filter.enabled || ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
++        return filter;
++    }
++
++    const int32_t layer_start = stage_filter.layer_start;
++    const int32_t layer_end   = stage_filter.layer_end;
++    return [filter = std::move(filter), layer_start, layer_end](int32_t il) {
++        const bool in_stage = il >= layer_start && il < layer_end;
++        return in_stage && (!filter || filter(il));
++    };
++}
++
+ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
+     llama_memory_i * res;
+ 
+@@ -2102,7 +2118,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                             std::max((uint32_t) 1, cparams.n_seq_max),
+                             cparams.n_seq_max,
+                             cparams.n_rs_seq,
+-                            nullptr);
++                            skippy_stage_memory_filter(nullptr, params.ctx_type));
+                 } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen35) {
+                     // The main difference between hybrid architectures is the
+                     // layer filters, so pick the right one here
+@@ -2127,6 +2143,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                         };
+                     }
+ 
++                    filter_attn = skippy_stage_memory_filter(std::move(filter_attn), params.ctx_type);
++                    filter_recr = skippy_stage_memory_filter(std::move(filter_recr), params.ctx_type);
++
+                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                         // Use hybrid-iswa for hybrid models with SWA
+                         res = new llama_memory_hybrid_iswa(
+@@ -2204,6 +2223,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                         }
+                     }
+ 
++                    filter = skippy_stage_memory_filter(std::move(filter), params.ctx_type);
++
+                     if (arch == LLM_ARCH_DEEPSEEK4) {
+                         GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
+ 
+-- 
+2.50.1 (Apple Git-155)

@@ -125,7 +125,7 @@ pub(crate) fn stage0_config(
     };
     config.kv_cache = context
         .family_policy
-        .stage_kv_cache_config_for_stage(&config);
+        .stage_kv_cache_config_for_package(&config, &context.package.package_dir);
     config
 }
 

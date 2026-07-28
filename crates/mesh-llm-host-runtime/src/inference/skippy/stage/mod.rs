@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
+    path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -738,7 +739,12 @@ fn stage_config(
         downstream: load.downstream.as_ref().map(peer_config),
     };
     let family_policy = super::family_policy_for_stage_config(&config);
-    config.kv_cache = family_policy.stage_kv_cache_config_for_stage(&config);
+    config.kv_cache = package.map_or_else(
+        || family_policy.stage_kv_cache_config_for_stage(&config),
+        |package| {
+            family_policy.stage_kv_cache_config_for_package(&config, Path::new(&package.local_ref))
+        },
+    );
     Ok(config)
 }
 

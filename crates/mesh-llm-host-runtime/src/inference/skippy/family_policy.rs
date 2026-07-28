@@ -52,6 +52,24 @@ impl FamilyPolicy {
         &self,
         config: &StageConfig,
     ) -> Option<StageKvCacheConfig> {
+        self.stage_kv_cache_config_for_stage_with_meta(config, None)
+    }
+
+    pub(crate) fn stage_kv_cache_config_for_package(
+        &self,
+        config: &StageConfig,
+        package_dir: &Path,
+    ) -> Option<StageKvCacheConfig> {
+        let metadata_path = package_dir.join("shared/metadata.gguf");
+        let metadata = scan_gguf_compact_meta(&metadata_path);
+        self.stage_kv_cache_config_for_stage_with_meta(config, metadata.as_ref())
+    }
+
+    fn stage_kv_cache_config_for_stage_with_meta(
+        &self,
+        config: &StageConfig,
+        package_meta: Option<&GgufCompactMeta>,
+    ) -> Option<StageKvCacheConfig> {
         match self.prefix_cache {
             FamilyPrefixCachePolicy::Disabled { .. } => None,
             FamilyPrefixCachePolicy::Auto {
@@ -66,7 +84,8 @@ impl FamilyPolicy {
                 // ctx-derived token budget, while zero means no additional
                 // byte cap. Disabling the cache entirely made every packaged
                 // model silently miss the family default.
-                let max_bytes = derive_stage_cache_max_bytes(config).unwrap_or(0);
+                let max_bytes =
+                    derive_stage_cache_max_bytes(config, package_meta).unwrap_or(0);
                 // The family policy's `max_entries` is a generous
                 // upper bound on cache cardinality. The real ceiling
                 // is the unified KV cell pool size: each resident
@@ -343,7 +362,16 @@ fn wire_dtype_from_capability(dtype: WireDType) -> StageWireDType {
     }
 }
 
-fn derive_stage_cache_max_bytes(config: &StageConfig) -> Option<u64> {
+fn derive_stage_cache_max_bytes(
+    config: &StageConfig,
+    package_meta: Option<&GgufCompactMeta>,
+) -> Option<u64> {
+    if let Some(max_bytes) =
+        package_meta.and_then(|meta| estimate_stage_cache_max_bytes(config, meta))
+    {
+        return Some(max_bytes);
+    }
+
     [
         config.materialized_path.as_deref(),
         config.source_model_path.as_deref(),
@@ -351,8 +379,13 @@ fn derive_stage_cache_max_bytes(config: &StageConfig) -> Option<u64> {
     ]
     .into_iter()
     .flatten()
-    .find_map(|path| scan_gguf_compact_meta(Path::new(path)))
+    .find_map(|path| scan_stage_cache_meta(Path::new(path)))
     .and_then(|meta| estimate_stage_cache_max_bytes(config, &meta))
+}
+
+fn scan_stage_cache_meta(path: &Path) -> Option<GgufCompactMeta> {
+    scan_gguf_compact_meta(path)
+        .or_else(|| scan_gguf_compact_meta(&path.join("shared/metadata.gguf")))
 }
 
 fn estimate_stage_cache_max_bytes(config: &StageConfig, meta: &GgufCompactMeta) -> Option<u64> {
@@ -430,6 +463,8 @@ fn ggml_block_bytes(elements: u64, block_size: u64, type_size: u64) -> Option<u6
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use skippy_protocol::{FlashAttentionType, LoadMode};
     use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, reviewed_capability_records};
@@ -493,6 +528,42 @@ mod tests {
             value_length: 128,
             ..Default::default()
         }
+    }
+
+    fn push_gguf_string(bytes: &mut Vec<u8>, value: &str) {
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value.as_bytes());
+    }
+
+    fn push_gguf_u32(bytes: &mut Vec<u8>, key: &str, value: u32) {
+        push_gguf_string(bytes, key);
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_gguf_string_kv(bytes: &mut Vec<u8>, key: &str, value: &str) {
+        push_gguf_string(bytes, key);
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        push_gguf_string(bytes, value);
+    }
+
+    fn write_package_metadata(package_dir: &Path) {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&8i64.to_le_bytes());
+        push_gguf_string_kv(&mut bytes, "general.architecture", "llama");
+        push_gguf_u32(&mut bytes, "llama.context_length", 8192);
+        push_gguf_u32(&mut bytes, "llama.embedding_length", 4096);
+        push_gguf_u32(&mut bytes, "llama.block_count", 32);
+        push_gguf_u32(&mut bytes, "llama.attention.head_count", 32);
+        push_gguf_u32(&mut bytes, "llama.attention.head_count_kv", 8);
+        push_gguf_u32(&mut bytes, "llama.attention.key_length", 128);
+        push_gguf_u32(&mut bytes, "llama.attention.value_length", 128);
+        let shared_dir = package_dir.join("shared");
+        fs::create_dir_all(&shared_dir).expect("create package shared directory");
+        fs::write(shared_dir.join("metadata.gguf"), bytes).expect("write package metadata");
     }
 
     #[test]
@@ -794,5 +865,30 @@ mod tests {
         config.cache_type_k = "mystery".to_string();
 
         assert!(estimate_stage_cache_max_bytes(&config, &kv_meta()).is_none());
+    }
+
+    #[test]
+    fn package_metadata_enables_cache_for_remote_package_paths() {
+        let package_dir = tempfile::tempdir().expect("package directory");
+        write_package_metadata(package_dir.path());
+        let mut config = stage_config();
+        config.materialized_path = None;
+        config.source_model_path = Some("/source/not-downloaded/model.gguf".to_string());
+        config.model_path = Some("hf://mesh-llm/laguna-layers".to_string());
+        let policy = FamilyPolicy {
+            activation_wire_dtype: StageWireDType::F16,
+            prefix_cache: FamilyPrefixCachePolicy::Auto {
+                payload: FamilyPrefixCachePayload::ResidentKv,
+                min_tokens: 256,
+                max_entries: 16,
+            },
+        };
+
+        let cache = policy
+            .stage_kv_cache_config_for_package(&config, package_dir.path())
+            .expect("package metadata should provide the cache byte budget");
+
+        assert_eq!(cache.payload, StageKvCachePayload::ResidentKv);
+        assert_eq!(cache.max_bytes, 3_211_264);
     }
 }
