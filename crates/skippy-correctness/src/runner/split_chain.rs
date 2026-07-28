@@ -1,9 +1,15 @@
-use std::{fs, net::SocketAddr, path::PathBuf, process::Command, time::Instant};
+use std::{
+    fs,
+    net::SocketAddr,
+    path::PathBuf,
+    process::Command,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, bail};
 use model_artifact::ModelIdentity;
 use serde_json::json;
-use skippy_protocol::binary::{StageWireMessage, WireReplyKind, recv_reply, write_stage_message};
+use skippy_protocol::binary::{StageWireMessage, WireReplyKind, write_stage_message};
 use skippy_runtime::{GGML_TYPE_F16, RuntimeConfig, StageModel};
 
 use crate::{
@@ -24,6 +30,7 @@ use super::{
         native_mtp_satisfies_requirement, native_mtp_sideband_report,
         native_mtp_verification_report, native_mtp_verification_satisfies_requirement,
     },
+    prediction_return::PredictionReturnListener,
     single_step::{SingleStepCase, run_full_model_decode, run_single_step_with_baseline},
     stage_execution::{
         BinaryDecodeMessageArgs, CorrectnessTopologyStage, FullModelResult, PackageStageSpec,
@@ -347,6 +354,8 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         bail!("stage 0 produced an empty activation frame");
     }
     let activation_width = activation_width(&boundary)?;
+    let prediction_return = PredictionReturnListener::start()?;
+    let stage0_endpoint = prediction_return.endpoint();
 
     let run_id = generate_run_id();
     let model_id = args.model_identity.model_id.clone();
@@ -407,7 +416,7 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         "upstream": {
             "stage_id": "stage-0",
             "stage_index": 0,
-            "endpoint": "driver"
+            "endpoint": stage0_endpoint
         },
         "downstream": {
             "stage_id": "stage-2",
@@ -422,7 +431,7 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
             CorrectnessTopologyStage {
                 stage_id: "stage-0",
                 stage_index: 0,
-                endpoint: "driver".to_string(),
+                endpoint: stage0_endpoint,
                 layer_start: 0,
                 layer_end: args.split_layer_1,
                 load_mode: protocol_load_mode(args.stage_load_mode),
@@ -521,7 +530,9 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         session_id,
     })?;
     write_stage_message(&mut stream, &message, wire_dtype).context("send binary chain decode")?;
-    let reply = recv_reply(&mut stream).context("receive binary chain prediction reply")?;
+    let reply = prediction_return
+        .receive(Duration::from_secs(args.startup_timeout_secs))
+        .context("receive binary chain direct prediction reply")?;
     ensure_reply_kind(&reply, WireReplyKind::PredictedToken)?;
     let native_mtp = native_mtp_sideband_report(&reply);
     let (second_predicted_token, native_mtp_verification_compute_us) =
@@ -542,8 +553,9 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
             })?;
             write_stage_message(&mut stream, &second_message, wire_dtype)
                 .context("send second binary chain decode")?;
-            let second_reply =
-                recv_reply(&mut stream).context("receive second binary chain prediction reply")?;
+            let second_reply = prediction_return
+                .receive(Duration::from_secs(args.startup_timeout_secs))
+                .context("receive second binary chain direct prediction reply")?;
             ensure_reply_kind(&second_reply, WireReplyKind::PredictedToken)?;
             (
                 Some(second_reply.predicted),
