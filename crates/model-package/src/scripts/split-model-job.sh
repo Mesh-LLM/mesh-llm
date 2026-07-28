@@ -461,6 +461,13 @@ package_entry = {
     "type": "layer-package",
     "repo": target_repo,
     "layer_count": layer_count,
+    "source_revision": source_revision,
+}
+
+source_entry = {
+    "repo": source_repo,
+    "file": source_file,
+    "revision": source_revision,
 }
 
 # Handle both dict-style and list-style variants
@@ -471,14 +478,11 @@ if isinstance(variants, dict):
         packages = variants[variant_name].get("packages", [])
         packages = [p for p in packages if p.get("repo") != target_repo]
         packages.append(package_entry)
+        variants[variant_name]["source"] = source_entry
         variants[variant_name]["packages"] = packages
     else:
         variants[variant_name] = {
-            "source": {
-                "repo": source_repo,
-                "file": source_file,
-                "revision": source_revision,
-            },
+            "source": source_entry,
             "curated": {
                 "name": variant_name,
                 "size": f"{layer_count} layers",
@@ -498,14 +502,11 @@ else:
         packages = existing_variant.get("packages", [])
         packages = [p for p in packages if p.get("repo") != target_repo]
         packages.append(package_entry)
+        existing_variant["source"] = source_entry
         existing_variant["packages"] = packages
     else:
         variants.append({
-            "source": {
-                "repo": source_repo,
-                "file": source_file,
-                "revision": source_revision,
-            },
+            "source": source_entry,
             "curated": {
                 "name": variant_name,
                 "size": f"{layer_count} layers",

@@ -214,4 +214,11 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains(r#"time "$SLICER" write-package "$WRITE_PACKAGE_INPUT""#));
         assert!(!EMBEDDED_SCRIPT.contains(r#"time $SLICER write-package "$SOURCE_PATH""#));
     }
+
+    #[test]
+    fn embedded_script_preserves_catalog_source_revision() {
+        assert!(EMBEDDED_SCRIPT.contains(r#""source_revision": source_revision"#));
+        assert!(EMBEDDED_SCRIPT.contains(r#"variants[variant_name]["source"] = source_entry"#));
+        assert!(EMBEDDED_SCRIPT.contains(r#"existing_variant["source"] = source_entry"#));
+    }
 }

@@ -1,9 +1,9 @@
 use std::{
     env, io,
     io::Write,
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -24,6 +24,7 @@ pub(super) struct PredictionReturnListener {
     bind_addr: SocketAddr,
     receiver: mpsc::Receiver<Result<StageReply, String>>,
     shutdown: Arc<AtomicBool>,
+    connection: Arc<Mutex<Option<TcpStream>>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -39,9 +40,12 @@ impl PredictionReturnListener {
             .context("set correctness prediction return listener nonblocking")?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let thread_shutdown = shutdown.clone();
+        let connection = Arc::new(Mutex::new(None));
+        let thread_connection = connection.clone();
         let (sender, receiver) = mpsc::channel();
         let thread = thread::spawn(move || {
-            let result = accept_prediction_return(listener, &thread_shutdown, &sender);
+            let result =
+                accept_prediction_return(listener, &thread_shutdown, &thread_connection, &sender);
             if let Err(error) = result {
                 let _ = sender.send(Err(format!("{error:#}")));
             }
@@ -50,6 +54,7 @@ impl PredictionReturnListener {
             bind_addr,
             receiver,
             shutdown,
+            connection,
             thread: Some(thread),
         })
     }
@@ -75,6 +80,11 @@ impl PredictionReturnListener {
 impl Drop for PredictionReturnListener {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
+        if let Ok(connection) = self.connection.lock()
+            && let Some(stream) = connection.as_ref()
+        {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -84,6 +94,7 @@ impl Drop for PredictionReturnListener {
 fn accept_prediction_return(
     listener: TcpListener,
     shutdown: &AtomicBool,
+    connection: &Mutex<Option<TcpStream>>,
     sender: &mpsc::Sender<Result<StageReply, String>>,
 ) -> Result<()> {
     let mut stream = loop {
@@ -102,6 +113,18 @@ fn accept_prediction_return(
     stream
         .set_nonblocking(false)
         .context("set direct prediction return stream blocking")?;
+    let shutdown_stream = stream
+        .try_clone()
+        .context("clone direct prediction return stream for shutdown")?;
+    {
+        let mut connection = connection
+            .lock()
+            .map_err(|_| anyhow!("direct prediction return connection lock poisoned"))?;
+        if shutdown.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        *connection = Some(shutdown_stream);
+    }
     consume_optional_client_ready_hello(&mut stream)?;
     send_ready(&mut stream).context("send direct prediction return ready")?;
     stream.flush().ok();
@@ -204,5 +227,25 @@ mod tests {
 
         assert_eq!(reply.predicted, 674);
         client.join().unwrap();
+    }
+
+    #[test]
+    fn drop_stops_when_connected_peer_stalls() {
+        let listener = PredictionReturnListener::start().unwrap();
+        let address = listener
+            .endpoint()
+            .strip_prefix("tcp://")
+            .unwrap()
+            .to_string();
+        let mut stream = TcpStream::connect(address).unwrap();
+        if client_ready_hello_enabled() {
+            send_ready(&mut stream).unwrap();
+        }
+        recv_ready(&mut stream).unwrap();
+
+        let started = std::time::Instant::now();
+        drop(listener);
+
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

@@ -315,11 +315,18 @@ async fn run_list_quants(
     eprintln!();
     eprintln!("Specify one as a model ref, e.g.:");
     eprintln!(
-        "   mesh-llm models package {}:{}",
-        source_repo, quants[0].name
+        "   mesh-llm models package {}",
+        source_quant_ref(source_repo, source_revision, &quants[0].name)
     );
 
     Ok(())
+}
+
+fn source_quant_ref(source_repo: &str, source_revision: Option<&str>, quant: &str) -> String {
+    source_revision.map_or_else(
+        || format!("{source_repo}:{quant}"),
+        |revision| format!("{source_repo}@{revision}:{quant}"),
+    )
 }
 
 fn print_quant_table(quants: &[DiscoveredQuant]) {
@@ -673,5 +680,21 @@ mod tests {
     #[test]
     fn parse_timeout_mixed() {
         assert_eq!(parse_timeout("1h30m45s").unwrap(), 5445);
+    }
+
+    #[test]
+    fn source_quant_ref_preserves_revision() {
+        assert_eq!(
+            source_quant_ref("poolside/Laguna-S-2.1-GGUF", Some("abc123"), "Q4_K_M"),
+            "poolside/Laguna-S-2.1-GGUF@abc123:Q4_K_M"
+        );
+    }
+
+    #[test]
+    fn source_quant_ref_omits_absent_revision() {
+        assert_eq!(
+            source_quant_ref("poolside/Laguna-S-2.1-GGUF", None, "Q4_K_M"),
+            "poolside/Laguna-S-2.1-GGUF:Q4_K_M"
+        );
     }
 }
