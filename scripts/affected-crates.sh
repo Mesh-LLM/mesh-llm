@@ -20,6 +20,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-identity"
   "mesh-llm-native-runtime"
   "mesh-llm-protocol"
+  "mesh-llm-release-footer"
   "mesh-llm-routing"
   "mesh-llm-runtime-install"
   "mesh-llm-sdk"

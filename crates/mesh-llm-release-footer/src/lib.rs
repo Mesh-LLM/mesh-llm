@@ -1,3 +1,5 @@
+//! Dependency-light encoding and verification for MeshLLM release footers.
+
 use sha2::{Digest, Sha256};
 
 /// Fixed footer appended after the raw signed payload bytes.

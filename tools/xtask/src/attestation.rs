@@ -2,7 +2,7 @@ use crate::command::{DynResult, ensure_eq, print_json, write_json_file};
 use crate::repo_consistency::default_node_version;
 use ed25519_dalek::{Signer, SigningKey};
 use getrandom::fill as fill_random;
-use mesh_llm_system::embedded_release_footer::{
+use mesh_llm_release_footer::{
     EmbeddedReleaseFooterStatus, EmbeddedReleasePayloadSummary, EmbeddedReleasePayloadVerifier,
     read_embedded_release_footer, stamp_embedded_release_payload, strip_embedded_release_footer,
     verify_embedded_release_footer,

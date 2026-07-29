@@ -346,6 +346,7 @@ unpublished_registry_deps() {
                 mesh-llm-build-info \
                 mesh-llm-gpu-bench \
                 mesh-llm-native-runtime \
+                mesh-llm-release-footer \
                 mesh-llm-runtime-install \
                 skippy-runtime
             ;;
@@ -482,6 +483,7 @@ publish_crates=(
     mesh-llm-api-client
     mesh-llm-events
     mesh-llm-build-info
+    mesh-llm-release-footer
     mesh-llm-config
     mesh-llm-ui
     mesh-llm-console-server

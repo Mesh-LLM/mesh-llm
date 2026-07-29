@@ -4114,6 +4114,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-release-footer"
+version = "0.72.1"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "mesh-llm-routing"
 version = "0.72.1"
 dependencies = [
@@ -4182,6 +4192,7 @@ dependencies = [
  "mesh-llm-build-info",
  "mesh-llm-gpu-bench",
  "mesh-llm-native-runtime",
+ "mesh-llm-release-footer",
  "mesh-llm-runtime-install",
  "reqwest 0.12.28",
  "semver",
@@ -9694,7 +9705,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "hex",
- "mesh-llm-system",
+ "mesh-llm-release-footer",
  "serde",
  "serde_json",
  "sha2 0.10.9",

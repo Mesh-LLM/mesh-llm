@@ -4,7 +4,7 @@ use crate::attestation::{
 };
 use crate::command::{DynResult, unique_temp_dir, write_json_file};
 use ed25519_dalek::SigningKey;
-use mesh_llm_system::embedded_release_footer::read_embedded_release_footer;
+use mesh_llm_release_footer::read_embedded_release_footer;
 use std::fs;
 use std::path::{Path, PathBuf};
 

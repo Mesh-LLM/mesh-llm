@@ -18,6 +18,7 @@ libloading = "0.8"
 mesh-llm-build-info.workspace = true
 mesh-llm-gpu-bench = { path = "../mesh-llm-gpu-bench", version = "0.72.1"  }
 mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.72.1" }
+mesh-llm-release-footer.workspace = true
 mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.72.1" }
 reqwest = { version = "0.12", features = ["stream", "json"] }
 semver = "1"

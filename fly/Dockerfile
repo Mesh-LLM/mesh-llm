@@ -34,6 +34,7 @@ COPY crates/mesh-llm-ui/ crates/mesh-llm-ui/
 COPY crates/mesh-llm-gpu-bench/ crates/mesh-llm-gpu-bench/
 COPY crates/mesh-llm-identity/ crates/mesh-llm-identity/
 COPY crates/mesh-llm-protocol/ crates/mesh-llm-protocol/
+COPY crates/mesh-llm-release-footer/ crates/mesh-llm-release-footer/
 COPY crates/mesh-llm-routing/ crates/mesh-llm-routing/
 COPY crates/mesh-llm-guardrails/ crates/mesh-llm-guardrails/
 COPY crates/mesh-llm-system/ crates/mesh-llm-system/
