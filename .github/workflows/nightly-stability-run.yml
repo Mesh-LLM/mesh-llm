@@ -57,7 +57,7 @@ jobs:
       OPENCODE_DISABLE_LSP_DOWNLOAD: "true"
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Preflight configuration
         id: preflight
@@ -80,7 +80,7 @@ jobs:
 
           echo "run=true" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         if: ${{ steps.preflight.outputs.run == 'true' && inputs.agent_smokes != '' }}
         with:
           node-version: 24
@@ -148,7 +148,7 @@ jobs:
 
       - name: Upload stability evidence
         if: ${{ always() && steps.preflight.outputs.run == 'true' }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: nightly-stability-${{ github.run_number }}-${{ github.sha }}
           path: ${{ inputs.output_dir }}/

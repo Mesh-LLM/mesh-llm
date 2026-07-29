@@ -22,6 +22,12 @@ $nativeRuntimeRoot = if ($env:MESH_LLM_NATIVE_RUNTIME_ROOT) {
 $attestationSigningKeyFile = $env:MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE
 $attestationPublicKeyFile = $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE
 $attestationVerifier = $env:MESH_RELEASE_ATTESTATION_VERIFIER
+$precomposedProductDir = $env:MESH_LLM_PRECOMPOSED_PRODUCT_DIR
+$attestationPreverified = if ([string]::IsNullOrWhiteSpace($env:MESH_RELEASE_ATTESTATION_PREVERIFIED)) {
+    "0"
+} else {
+    $env:MESH_RELEASE_ATTESTATION_PREVERIFIED.Trim()
+}
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -250,7 +256,32 @@ function Test-HasValue {
     return -not [string]::IsNullOrWhiteSpace($Value)
 }
 
+function Resolve-RepositoryPath {
+    param([string]$Path)
+
+    # Bash composite actions expose Git-for-Windows paths such as
+    # /d/a/mesh-llm/mesh-llm/product-input through GITHUB_OUTPUT. Convert that
+    # form before handing it to the Windows .NET path APIs.
+    if ($Path -match '^/(?<drive>[A-Za-z])(?:/(?<tail>.*))?$') {
+        $drive = $Matches.drive.ToUpperInvariant()
+        $tail = "$($Matches.tail)".Replace("/", "\")
+        return [System.IO.Path]::GetFullPath("${drive}:\${tail}")
+    }
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path $repoRoot $Path))
+}
+
 function Assert-AttestationConfig {
+    if ($attestationPreverified -eq "1") {
+        if ($env:MESH_RELEASE_HOST_PRESTAMPED -ne "1" -or -not (Test-HasValue $precomposedProductDir)) {
+            throw "MESH_RELEASE_ATTESTATION_PREVERIFIED=1 requires a pre-stamped precomposed product"
+        }
+    } elseif ($attestationPreverified -ne "0") {
+        throw "MESH_RELEASE_ATTESTATION_PREVERIFIED must be 0 or 1"
+    }
+
     if ($env:MESH_RELEASE_HOST_PRESTAMPED -eq "1") {
         if (-not (Test-HasValue $attestationPublicKeyFile)) {
             throw "MESH_RELEASE_HOST_PRESTAMPED=1 requires MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
@@ -274,6 +305,10 @@ function Invoke-ReleaseAttestationStamp {
     if ($env:MESH_RELEASE_HOST_PRESTAMPED -eq "1") {
         if (-not (Test-Path $attestationPublicKeyFile) -or (Get-Item $attestationPublicKeyFile).Length -eq 0) {
             throw "MESH_RELEASE_HOST_PRESTAMPED=1 requires a non-empty MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
+        }
+        if ($attestationPreverified -eq "1") {
+            Write-Host "Release attestation: verified by immutable product composer"
+            return
         }
         if (Test-HasValue $attestationVerifier) {
             Assert-FileChecksum -Path $attestationVerifier -ChecksumPath "${attestationVerifier}.sha256"
@@ -347,6 +382,67 @@ function Invoke-ReleaseAttestationStamp {
     }
 }
 
+function Copy-AndVerifyPrecomposedProduct {
+    param(
+        [string]$SourceDir,
+        [string]$BundleDir,
+        [string]$ExpectedVersion,
+        [string]$ExpectedBackend,
+        [string]$VerificationReport
+    )
+
+    $resolvedSourceDir = Resolve-RepositoryPath $SourceDir
+    if (-not (Test-Path -LiteralPath $resolvedSourceDir -PathType Container)) {
+        throw "Precomposed product directory does not exist: $resolvedSourceDir"
+    }
+
+    Require-File (Join-Path $resolvedSourceDir "product-manifest.json")
+    Require-File (Join-Path $resolvedSourceDir "host-imports.json")
+    foreach ($entry in [System.IO.Directory]::GetFileSystemEntries($resolvedSourceDir)) {
+        Copy-Item -LiteralPath $entry -Destination $BundleDir -Recurse -Force
+    }
+
+    $bundleBinary = Join-Path $BundleDir "mesh-llm.exe"
+    Require-File $bundleBinary
+    Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $ExpectedVersion
+    Invoke-ReleaseAttestationStamp -BinaryPath $bundleBinary
+
+    $python = Get-PythonCommand
+    & $python (Join-Path $scriptDir "verify-host-dependencies.py") `
+        $bundleBinary `
+        --report $VerificationReport
+    if ($LASTEXITCODE -ne 0) {
+        throw "backend-neutral host dependency verification failed"
+    }
+
+    $runtimeRoot = Join-Path $BundleDir "native-runtimes"
+    if (-not (Test-Path -LiteralPath $runtimeRoot -PathType Container)) {
+        throw "Precomposed product is missing native-runtimes: $runtimeRoot"
+    }
+    $runtimeDirs = @(Get-ChildItem -LiteralPath $runtimeRoot -Directory)
+    if ($runtimeDirs.Count -ne 1) {
+        throw "Precomposed product must contain exactly one native runtime; found $($runtimeDirs.Count)"
+    }
+    $runtimeDir = $runtimeDirs[0].FullName
+    Require-File (Join-Path $runtimeDir "manifest.json")
+
+    & bash (Join-Path $scriptDir "verify-native-runtime-package.sh") $runtimeDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "native runtime verification failed"
+    }
+
+    & $python (Join-Path $scriptDir "compose-product-bundle.py") `
+        --bundle $BundleDir `
+        --host $bundleBinary `
+        --runtime $runtimeDir `
+        --version $ExpectedVersion `
+        --backend $ExpectedBackend `
+        --check
+    if ($LASTEXITCODE -ne 0) {
+        throw "precomposed product manifest does not match the packaged bytes"
+    }
+}
+
 $Version = Normalize-RecipeArgument $Version @("version")
 $OutputDir = Normalize-RecipeArgument $OutputDir @("output", "output_dir", "outputdir")
 $Flavor = Normalize-RecipeArgument $Flavor @("flavor", "backend")
@@ -364,7 +460,9 @@ $versionedAsset = New-ReleaseAssetName -Prefix "mesh-llm-$Version" -TargetTriple
 
 $meshBinary = Join-Path $releaseBinDir "mesh-llm.exe"
 
-Require-File $meshBinary
+if (-not (Test-HasValue $precomposedProductDir)) {
+    Require-File $meshBinary
+}
 
 $resolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) {
     [System.IO.Path]::GetFullPath($OutputDir)
@@ -378,62 +476,72 @@ $bundleDir = Join-Path $stagingRoot "mesh-bundle"
 New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
 
 try {
-    $bundleBinary = Join-Path $bundleDir (Get-BundleBinaryName "mesh-llm" $binaryFlavor)
-    Copy-Item $meshBinary -Destination $bundleBinary -Force
-    Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $Version
-
-    Invoke-ReleaseAttestationStamp -BinaryPath $bundleBinary
-    $python = Get-PythonCommand
-    $hostReport = Join-Path $bundleDir "host-imports.json"
-    & $python (Join-Path $scriptDir "verify-host-dependencies.py") $bundleBinary --report $hostReport
-    if ($LASTEXITCODE -ne 0) {
-        throw "backend-neutral host dependency verification failed"
-    }
-
-    $cudaMajor = if ($env:MESH_LLM_CUDA_TOOLKIT_MAJOR) {
-        $env:MESH_LLM_CUDA_TOOLKIT_MAJOR
-    } elseif ($env:MESH_CUDA_VERSION) {
-        ($env:MESH_CUDA_VERSION -split '\.')[0]
+    if (Test-HasValue $precomposedProductDir) {
+        Copy-AndVerifyPrecomposedProduct `
+            -SourceDir $precomposedProductDir `
+            -BundleDir $bundleDir `
+            -ExpectedVersion $Version `
+            -ExpectedBackend $releaseFlavor `
+            -VerificationReport (Join-Path $stagingRoot "host-imports.verify.json")
     } else {
-        ""
-    }
-    $selectorArgs = @(
-        (Join-Path $scriptDir "select-native-runtime.py")
-        "--root"
-        $nativeRuntimeRoot
-        "--os"
-        "windows"
-        "--arch"
-        "x86_64"
-        "--backend"
-        $releaseFlavor
-    )
-    if (Test-HasValue $cudaMajor) {
-        $selectorArgs += @("--cuda-major", $cudaMajor)
-    }
-    $selectorOutput = & $python @selectorArgs
-    $selectorExitCode = $LASTEXITCODE
-    if ($selectorExitCode -ne 0) {
-        throw "failed to select the packaged Windows native runtime"
-    }
-    $runtimeDir = $selectorOutput | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Last 1
-    if (-not $runtimeDir) {
-        throw "failed to select the packaged Windows native runtime"
-    }
-    $runtimeDestinationRoot = Join-Path $bundleDir "native-runtimes"
-    $runtimeDestination = Join-Path $runtimeDestinationRoot (Split-Path -Leaf $runtimeDir)
-    New-Item -ItemType Directory -Path $runtimeDestinationRoot -Force | Out-Null
-    Copy-Item $runtimeDir -Destination $runtimeDestination -Recurse -Force
+        $bundleBinary = Join-Path $bundleDir (Get-BundleBinaryName "mesh-llm" $binaryFlavor)
+        Copy-Item $meshBinary -Destination $bundleBinary -Force
+        Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $Version
 
-    & $python (Join-Path $scriptDir "compose-product-bundle.py") `
-        --bundle $bundleDir `
-        --host $bundleBinary `
-        --runtime $runtimeDestination `
-        --version $Version `
-        --backend $releaseFlavor
-    if ($LASTEXITCODE -ne 0) {
-        throw "failed to write the product-v2 bundle manifest"
+        Invoke-ReleaseAttestationStamp -BinaryPath $bundleBinary
+        $python = Get-PythonCommand
+        $hostReport = Join-Path $bundleDir "host-imports.json"
+        & $python (Join-Path $scriptDir "verify-host-dependencies.py") $bundleBinary --report $hostReport
+        if ($LASTEXITCODE -ne 0) {
+            throw "backend-neutral host dependency verification failed"
+        }
+
+        $cudaMajor = if ($env:MESH_LLM_CUDA_TOOLKIT_MAJOR) {
+            $env:MESH_LLM_CUDA_TOOLKIT_MAJOR
+        } elseif ($env:MESH_CUDA_VERSION) {
+            ($env:MESH_CUDA_VERSION -split '\.')[0]
+        } else {
+            ""
+        }
+        $selectorArgs = @(
+            (Join-Path $scriptDir "select-native-runtime.py")
+            "--root"
+            $nativeRuntimeRoot
+            "--os"
+            "windows"
+            "--arch"
+            "x86_64"
+            "--backend"
+            $releaseFlavor
+        )
+        if (Test-HasValue $cudaMajor) {
+            $selectorArgs += @("--cuda-major", $cudaMajor)
+        }
+        $selectorOutput = & $python @selectorArgs
+        $selectorExitCode = $LASTEXITCODE
+        if ($selectorExitCode -ne 0) {
+            throw "failed to select the packaged Windows native runtime"
+        }
+        $runtimeDir = $selectorOutput | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Last 1
+        if (-not $runtimeDir) {
+            throw "failed to select the packaged Windows native runtime"
+        }
+        $runtimeDestinationRoot = Join-Path $bundleDir "native-runtimes"
+        $runtimeDestination = Join-Path $runtimeDestinationRoot (Split-Path -Leaf $runtimeDir)
+        New-Item -ItemType Directory -Path $runtimeDestinationRoot -Force | Out-Null
+        Copy-Item $runtimeDir -Destination $runtimeDestination -Recurse -Force
+
+        & $python (Join-Path $scriptDir "compose-product-bundle.py") `
+            --bundle $bundleDir `
+            --host $bundleBinary `
+            --runtime $runtimeDestination `
+            --version $Version `
+            --backend $releaseFlavor
+        if ($LASTEXITCODE -ne 0) {
+            throw "failed to write the product-v2 bundle manifest"
+        }
     }
+
     $versionedPath = Join-Path $resolvedOutputDir $versionedAsset
     $stablePath = Join-Path $resolvedOutputDir $stableAsset
 

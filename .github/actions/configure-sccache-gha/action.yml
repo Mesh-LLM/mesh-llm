@@ -1,13 +1,127 @@
-name: Configure baked sccache GHA backend
-description: Use job-local disk plus best-effort Actions cache from the baked sccache binary.
+name: Configure baked sccache remote backend
+description: Prefer Depot WebDAV, then Actions cache, with a job-local disk fallback.
+
+inputs:
+  allow_depot_remote_cache:
+    description: Allow this trusted job to read and write Depot's repository-scoped WebDAV cache.
+    required: false
+    default: "false"
 
 runs:
   using: composite
   steps:
     - name: Export cache credentials and start sccache
-      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+      env:
+        INPUT_ALLOW_DEPOT_REMOTE_CACHE: ${{ inputs.allow_depot_remote_cache }}
       with:
         script: |
+          const allowDepotRemoteCache =
+            (process.env.INPUT_ALLOW_DEPOT_REMOTE_CACHE || '').toLowerCase();
+          if (
+            allowDepotRemoteCache !== 'true' &&
+            allowDepotRemoteCache !== 'false'
+          ) {
+            core.setFailed(
+              'allow_depot_remote_cache must be the string true or false.',
+            );
+            return;
+          }
+
+          const webdavEndpoint = process.env.SCCACHE_WEBDAV_ENDPOINT || '';
+          const webdavToken =
+            process.env.SCCACHE_WEBDAV_TOKEN ||
+            process.env.DEPOT_CACHE_TOKEN ||
+            '';
+          const diskOnlyEnvironment = () => ({
+            ...process.env,
+            ACTIONS_CACHE_URL: '',
+            ACTIONS_RESULTS_URL: '',
+            ACTIONS_RUNTIME_TOKEN: '',
+            SCCACHE_WEBDAV_ENDPOINT: '',
+            SCCACHE_WEBDAV_TOKEN: '',
+            SCCACHE_WEBDAV_USERNAME: '',
+            SCCACHE_WEBDAV_PASSWORD: '',
+          });
+
+          if (
+            allowDepotRemoteCache === 'true' &&
+            webdavEndpoint &&
+            webdavToken
+          ) {
+            core.setSecret(webdavToken);
+            core.exportVariable('SCCACHE_WEBDAV_ENDPOINT', webdavEndpoint);
+            core.exportVariable('SCCACHE_WEBDAV_TOKEN', webdavToken);
+            core.exportVariable('SCCACHE_GHA_ENABLED', 'false');
+            core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk,webdav');
+            core.exportVariable('SCCACHE_IGNORE_SERVER_IO_ERROR', '1');
+            core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'ignore');
+            await exec.exec('sccache', ['--stop-server'], {
+              ignoreReturnCode: true,
+            });
+            const depotExitCode = await exec.exec('sccache', ['--start-server'], {
+              ignoreReturnCode: true,
+            });
+            if (depotExitCode === 0) {
+              core.info(
+                'Baked sccache is using job-local disk with Depot WebDAV cache.',
+              );
+              return;
+            }
+            core.warning(
+              'Depot WebDAV cache is unavailable; restarting baked sccache with job-local disk.',
+            );
+            await exec.exec('sccache', ['--stop-server'], {
+              ignoreReturnCode: true,
+            });
+            core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk');
+            const depotFallbackExitCode = await exec.exec(
+              'sccache',
+              ['--start-server'],
+              {
+                env: diskOnlyEnvironment(),
+                ignoreReturnCode: true,
+              },
+            );
+            if (depotFallbackExitCode !== 0) {
+              core.setFailed('Unable to start baked sccache with Depot or job-local storage.');
+            }
+            return;
+          }
+
+          if (
+            allowDepotRemoteCache === 'false' &&
+            (webdavEndpoint || webdavToken)
+          ) {
+            core.info(
+              'Depot cache is present but disabled for this trust context; using job-local disk only.',
+            );
+            core.exportVariable('SCCACHE_WEBDAV_ENDPOINT', '');
+            core.exportVariable('SCCACHE_WEBDAV_TOKEN', '');
+            core.exportVariable('SCCACHE_WEBDAV_USERNAME', '');
+            core.exportVariable('SCCACHE_WEBDAV_PASSWORD', '');
+            core.exportVariable('SCCACHE_GHA_ENABLED', 'false');
+            core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk');
+            core.exportVariable('SCCACHE_IGNORE_SERVER_IO_ERROR', '1');
+            await exec.exec('sccache', ['--stop-server'], {
+              ignoreReturnCode: true,
+            });
+            const untrustedDiskOnlyExitCode = await exec.exec(
+              'sccache',
+              ['--start-server'],
+              {
+                env: diskOnlyEnvironment(),
+                ignoreReturnCode: true,
+              },
+            );
+            if (untrustedDiskOnlyExitCode !== 0) {
+              core.setFailed(
+                'Unable to start baked sccache with its trust-isolated disk cache.',
+              );
+            }
+            return;
+          }
+
           // Honor an explicit job-level opt-out of the GitHub Actions cache
           // backend. Long-running lanes (CUDA/ROCm/Vulkan release builds that
           // exceed the ephemeral Actions cache token lifetime) set
@@ -15,23 +129,27 @@ runs:
           // server started after the token expires probes the gha tier at
           // startup, and that storage read fails permanently (HTTP 400),
           // aborting the build before any fail-open policy applies. Clearing the
-          // cache URL/token as well prevents any residual gha configuration
-          // from re-enabling the remote tier.
+          // cache URL/token for the server process as well prevents any
+          // residual gha configuration from re-enabling the remote tier. Do
+          // not clear them job-wide: later actions/cache consumers still need
+          // their credentials.
           if ((process.env.SCCACHE_GHA_ENABLED || '').toLowerCase() === 'false') {
             core.info(
               'SCCACHE_GHA_ENABLED=false is set; using baked sccache with disk-only cache.',
             );
             core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk');
             core.exportVariable('SCCACHE_IGNORE_SERVER_IO_ERROR', '1');
-            core.exportVariable('ACTIONS_CACHE_URL', '');
-            core.exportVariable('ACTIONS_RESULTS_URL', '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', '');
             await exec.exec('sccache', ['--stop-server'], {
               ignoreReturnCode: true,
             });
-            const diskOnlyExitCode = await exec.exec('sccache', ['--start-server'], {
-              ignoreReturnCode: true,
-            });
+            const diskOnlyExitCode = await exec.exec(
+              'sccache',
+              ['--start-server'],
+              {
+                env: diskOnlyEnvironment(),
+                ignoreReturnCode: true,
+              },
+            );
             if (diskOnlyExitCode !== 0) {
               core.setFailed('Unable to start baked sccache with its disk-only cache.');
             }
@@ -77,9 +195,14 @@ runs:
           core.exportVariable('SCCACHE_GHA_ENABLED', 'false');
           core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk');
 
-          const localExitCode = await exec.exec('sccache', ['--start-server'], {
-            ignoreReturnCode: true,
-          });
+          const localExitCode = await exec.exec(
+            'sccache',
+            ['--start-server'],
+            {
+              env: diskOnlyEnvironment(),
+              ignoreReturnCode: true,
+            },
+          );
           if (localExitCode !== 0) {
             core.setFailed('Unable to start baked sccache with either remote or job-local storage.');
           }

@@ -224,6 +224,20 @@ binary to `invalid`, but default startup still allows it.
 | [docs/specs/layer-package-repos.md](docs/specs/layer-package-repos.md) | Manifest and artifact format spec |
 | [docs/specs/mesh-setup-installer.md](docs/specs/mesh-setup-installer.md) | Installer/bootstrap and setup command behavior spec |
 
+## CI infrastructure
+
+<a href="https://depot.dev">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-light.svg">
+    <img alt="Depot" src="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-light.svg" width="128">
+  </picture>
+</a>
+
+Mesh LLM is adopting [Depot's managed GitHub Actions
+runners](https://depot.dev/docs/github-actions/overview) for non-GPU CI builds.
+Hardware-qualified GPU tests remain on dedicated runners.
+
 ## Community
 
 Mesh LLM is experimental distributed-systems software. When you report bugs,

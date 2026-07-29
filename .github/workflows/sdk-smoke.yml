@@ -58,30 +58,30 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         if: ${{ inputs.sdk_kind == 'rust' }}
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         if: ${{ inputs.sdk_kind == 'kotlin' }}
         with:
           distribution: temurin
           java-version: '21'
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24"
           cache: pnpm
           cache-dependency-path: crates/mesh-llm-ui/pnpm-lock.yaml
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
 
       - name: Install Linux SDK dependencies
         if: ${{ runner.os == 'Linux' }}
@@ -95,10 +95,9 @@ jobs:
         # `-fuse-ld=/opt/homebrew/bin/ld64.lld`. Apple clang accepts
         # that flag only when the binary actually exists on disk;
         # without `lld` installed the link step fails with
-        # `clang: error: invalid linker name in argument`. The
-        # `macos_targets` job already does `brew install ... lld` for
-        # the same reason — install it here too so the swift smoke
-        # lane matches.
+        # `clang: error: invalid linker name in argument`. The macOS
+        # host and unit-test jobs install `lld` for the same
+        # reason. Install it here too so the Swift smoke lane matches.
         run: brew install jq lld
 
       - name: Configure Linux Rust linker

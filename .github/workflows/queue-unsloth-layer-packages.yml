@@ -63,11 +63,11 @@ jobs:
       SPLIT_CANDIDATE_VRAM_GIB: ${{ github.event.inputs.split_candidate_vram_gib || '8' }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         with:
           workspaces: . -> target
           prefix-key: mesh-llm-rust-${{ hashFiles('.github/cache-version.txt') }}

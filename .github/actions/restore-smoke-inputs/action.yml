@@ -40,10 +40,55 @@ runs:
   using: composite
   steps:
     - name: Download built mesh-llm artifact
-      uses: actions/download-artifact@v7
+      uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
       with:
         name: ${{ inputs.artifact_name }}
         path: ${{ inputs.artifact_path }}
+
+    - name: Extract and verify composed product
+      shell: bash
+      run: |
+        set -euo pipefail
+        artifact_path="${{ inputs.artifact_path }}"
+        archive=""
+        archive_count=0
+        while IFS= read -r candidate; do
+          archive="$candidate"
+          archive_count=$((archive_count + 1))
+        done < <(find "$artifact_path" -mindepth 1 -maxdepth 1 -type f -name '*.tar.gz' -print)
+        if [[ "$archive_count" -ne 1 ]]; then
+          echo "expected exactly one composed product archive in $artifact_path; found $archive_count" >&2
+          exit 1
+        fi
+        tar -xzf "$archive" -C "$artifact_path"
+        rm -f -- "$archive"
+
+        product_manifest="$artifact_path/product-manifest.json"
+        test -s "$product_manifest"
+        IFS=$'\t' read -r version backend host_path runtime_path < <(
+          python3 - "$product_manifest" <<'PY'
+        import json
+        import sys
+
+        with open(sys.argv[1], encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        print(
+            manifest["mesh_version"],
+            manifest["backend"],
+            manifest["host"]["path"],
+            manifest["runtime"]["path"],
+            sep="\t",
+        )
+        PY
+        )
+        scripts/verify-native-runtime-package.sh "$artifact_path/$runtime_path"
+        python3 scripts/compose-product-bundle.py \
+          --bundle "$artifact_path" \
+          --host "$artifact_path/$host_path" \
+          --runtime "$artifact_path/$runtime_path" \
+          --version "$version" \
+          --backend "$backend" \
+          --check
 
     - name: Stage mesh-llm binary
       shell: bash
@@ -72,8 +117,9 @@ runs:
         }
 
     - name: Restore integration model cache
+      if: ${{ inputs.model_url != '' && inputs.model_file != '' }}
       id: cache-model
-      uses: actions/cache/restore@v5
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: ~/.models/${{ inputs.model_file }}
         key: ${{ inputs.cache_key_prefix }}mesh-llm-${{ runner.os }}-${{ inputs.model_cache_scope }}-${{ inputs.model_file }}-${{ hashFiles('.github/cache-version.txt') }}
@@ -81,6 +127,7 @@ runs:
           ${{ inputs.cache_key_prefix }}mesh-llm-${{ runner.os }}-${{ inputs.model_cache_scope }}-${{ inputs.model_file }}-
 
     - name: Check restored integration model
+      if: ${{ inputs.model_url != '' && inputs.model_file != '' }}
       id: model-file
       shell: bash
       run: |
@@ -93,7 +140,7 @@ runs:
         fi
 
     - name: Download integration model
-      if: ${{ steps.model-file.outputs.present != 'true' }}
+      if: ${{ inputs.model_url != '' && inputs.model_file != '' && steps.model-file.outputs.present != 'true' }}
       shell: bash
       run: |
         set -euo pipefail
@@ -122,8 +169,8 @@ runs:
         ls -lh "$output"
 
     - name: Save integration model cache
-      if: ${{ inputs.save_model_cache == 'true' && steps.cache-model.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v5
+      if: ${{ inputs.model_url != '' && inputs.model_file != '' && inputs.save_model_cache == 'true' && steps.cache-model.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: ~/.models/${{ inputs.model_file }}
         key: ${{ steps.cache-model.outputs.cache-primary-key }}

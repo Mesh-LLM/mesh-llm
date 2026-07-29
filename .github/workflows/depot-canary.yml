@@ -1,0 +1,61 @@
+name: Depot Runner Canary
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: depot-runner-canary
+  cancel-in-progress: false
+
+jobs:
+  runner:
+    name: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - depot-ubuntu-24.04
+          - depot-ubuntu-24.04-4
+          - depot-ubuntu-24.04-8
+          - depot-ubuntu-24.04-16
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Verify ephemeral runner resources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "### ${{ matrix.runner }}"
+            echo
+            echo "| Signal | Value |"
+            echo "| --- | --- |"
+            printf '| architecture | %s |\n' "$(uname -m)"
+            printf '| logical CPUs | %s |\n' "$(nproc)"
+            printf '| memory KiB | %s |\n' "$(awk '/MemTotal/ { print $2 }' /proc/meminfo)"
+            printf '| workspace free KiB | %s |\n' "$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 { print $4 }')"
+            printf '| Depot cache token injected | %s |\n' \
+              "$([[ -n "${DEPOT_CACHE_TOKEN:-}" ]] && echo yes || echo no)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore Depot cache probe
+        id: cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .depot-canary-cache
+          key: depot-runner-canary-v1-${{ matrix.runner }}
+
+      - name: Record cache probe
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p .depot-canary-cache
+          printf 'Depot cache canary\n' > .depot-canary-cache/probe.txt
+          printf '| cache hit | %s |\n' "${CACHE_HIT:-false}" \
+            >> "$GITHUB_STEP_SUMMARY"

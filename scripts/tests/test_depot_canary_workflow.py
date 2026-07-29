@@ -1,0 +1,44 @@
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW = ROOT / ".github" / "workflows" / "depot-canary.yml"
+
+
+class DepotCanaryWorkflowTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    def test_canary_has_no_code_or_credential_access(self) -> None:
+        self.assertIn("permissions: {}", self.workflow)
+        self.assertNotIn("actions/checkout", self.workflow)
+        self.assertNotIn("secrets.", self.workflow)
+        self.assertNotIn("pull_request", self.workflow)
+        self.assertNotIn("push:", self.workflow)
+
+    def test_canary_covers_measured_depot_sizes(self) -> None:
+        for runner in (
+            "depot-ubuntu-24.04",
+            "depot-ubuntu-24.04-4",
+            "depot-ubuntu-24.04-8",
+            "depot-ubuntu-24.04-16",
+        ):
+            with self.subTest(runner=runner):
+                self.assertIn(f"- {runner}", self.workflow)
+
+    def test_canary_uses_a_pinned_cache_action_without_printing_tokens(
+        self,
+    ) -> None:
+        self.assertIn(
+            "actions/cache@caa296126883cff596d87d8935842f9db880ef25 "
+            "# v5.1.0",
+            self.workflow,
+        )
+        self.assertIn("${DEPOT_CACHE_TOKEN:-}", self.workflow)
+        self.assertNotIn("echo \"$DEPOT_CACHE_TOKEN\"", self.workflow)
+        self.assertNotIn("printenv", self.workflow)
+
+
+if __name__ == "__main__":
+    unittest.main()

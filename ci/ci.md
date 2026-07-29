@@ -67,17 +67,26 @@ flowchart TD
     WebsiteDocs --> CLIDocsSync
     CLIDocs --> CLIDocsSync
 
-subgraph PRCI["pr_builds.yml · PR Builds"]
+    subgraph PRCI["pr_builds.yml · PR Builds"]
         direction TB
-        subgraph Producers["top-level target jobs"]
-            LinuxCPU["linux_cpu_artifact\ndebug mesh-llm · CLI smoke\n→ ci-linux-inference-binaries"]
+        subgraph Producers["producers, checks, and composers"]
+            LinuxHost["linux_host_input\none immutable neutral host"]
+            LinuxCPU["linux_cpu_runtime_input\none CPU runtime"]
+            LinuxProduct["linux_cpu_artifact\ncompose host + CPU runtime\n→ ci-linux-inference-binaries"]
+            StaticABI["linux_static_abi_input\none immutable CPU llama ABI"]
             RustCrateTests["rust_crate_tests matrix\nmetadata-derived crate suites"]
             LinuxTests["linux_test_groups matrix\nprotocol · Skippy smoke"]
-            LinuxTargets["linux_targets matrix\nCUDA / ROCm / Vulkan rows build when backend_changed"]
-            WindowsTargets["windows_targets matrix\nCPU / CUDA / ROCm / Vulkan\nfull builds only for Windows inputs"]
-            MacCPU["macos_cpu_artifact\nmacOS Metal build · CLI smoke\n→ ci-macos-inference-binaries"]
+            LinuxTargets["linux_targets matrix\nruntime-only CUDA / ROCm / Vulkan\ncompose with shared host"]
+            WindowsChecks["windows_checks\nlightweight broad-Rust signal"]
+            WindowsHost["windows_host_input\none immutable debug host"]
+            WindowsCPURuntime["windows_cpu_runtime_input\none CPU runtime"]
+            WindowsGPURuntimes["windows_gpu_runtime_inputs matrix\nCUDA / ROCm / Vulkan runtimes"]
+            WindowsCPUProduct["windows_cpu_product\ncompose host + CPU runtime"]
+            WindowsGPUProducts["windows_gpu_products matrix\ncompose shared host + GPU runtime"]
+            MacHost["macos_host_input\none immutable neutral host"]
+            MacRuntime["macos_metal_runtime_input\none Metal runtime"]
+            MacCPU["macos_cpu_artifact\ncompose host + Metal runtime\n→ ci-macos-inference-binaries"]
             MacTests["macos_unit_tests"]
-            MacTargets["macos_targets matrix\nCUDA / ROCm / Vulkan explicit skips"]
         end
 
         subgraph Smokes["artifact-consuming smokes"]
@@ -89,16 +98,31 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
     end
 
     Docs -. "true: gate heavy jobs" .-> PRCI
+    InferenceArtifact --> LinuxHost
     InferenceArtifact --> LinuxCPU
+    LinuxHost --> LinuxProduct
+    LinuxCPU --> LinuxProduct
     Affected --> LinuxTests
-    TestBins --> RustCrateTests
-    InferenceArtifact --> MacCPU
+    TestBins --> StaticABI
+    StaticABI --> RustCrateTests
+    StaticABI --> LinuxTests
+    InferenceArtifact --> MacHost
+    InferenceArtifact --> MacRuntime
+    MacHost --> MacCPU
+    MacRuntime --> MacCPU
     Affected --> MacTests
+    LinuxHost --> LinuxTargets
     Backend --> LinuxTargets
-    WindowsCPU --> WindowsTargets
-    WindowsGPU --> WindowsTargets
-    Backend --> MacTargets
-    LinuxCPU -- "artifact: ci-linux-inference-binaries" --> Restore
+    Affected --> WindowsChecks
+    WindowsCPU --> WindowsHost
+    WindowsCPU --> WindowsCPURuntime
+    WindowsGPU --> WindowsHost
+    WindowsGPU --> WindowsGPURuntimes
+    WindowsHost --> WindowsCPUProduct
+    WindowsCPURuntime --> WindowsCPUProduct
+    WindowsHost --> WindowsGPUProducts
+    WindowsGPURuntimes --> WindowsGPUProducts
+    LinuxProduct -- "artifact: ci-linux-inference-binaries" --> Restore
     MacCPU -- "artifact: ci-macos-inference-binaries" --> Restore
     Restore --> Inference
     Restore --> Scripted
@@ -140,14 +164,23 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
 
 - `ci.yml` validates the same composed product shape on trusted main pushes and
   manual dispatches: a backend-neutral host plus one separately packaged native
-  runtime. Linux and macOS debug artifact producers upload both layers, and the
-  Linux consumer reruns the JSON client-readiness smoke from the downloaded
-  host/runtime bytes without rebuilding either one.
-- CUDA, ROCm, Vulkan, and Windows rows build the host independently from the
-  selected runtime, require `--version`, `runtime list`, and client readiness,
-  and do so without a CUDA/ROCm/Vulkan driver, loader-path injection, or a
-  driver stub. GPU availability remains additional hardware qualification, not
-  a reason to skip the composed client-start check.
+  runtime. The Linux host and CPU runtime build independently, then a
+  composition-only job uploads product-v2 for every downstream smoke. SDK
+  smokes consume the staged runtime instead of compiling a private replacement.
+- Main builds immutable Linux, macOS, and Windows release hosts independently
+  from their CPU, Metal, CUDA, ROCm, and Vulkan runtimes. Composition-only jobs
+  verify and combine those exact producer inputs. Linux and Windows backend
+  rows build only their runtime and reuse the platform host. Each product
+  requires `--version`, `runtime list`, and client readiness without a driver
+  stub. GPU availability remains separate hardware qualification.
+- `.github/actions/prepare-host-input`,
+  `.github/actions/prepare-windows-host-input`,
+  `.github/actions/prepare-native-runtime-input`, and
+  `.github/actions/compose-product-input` are the shared PR/main/release
+  primitives. The composer never compiles either producer input.
+- Linux crate-test and grouped-test matrices restore one tarred static CPU
+  llama ABI from `linux_static_abi_input`; individual rows never rebuild the
+  same patch queue concurrently.
 
 ### Current PR Builds contract
 
@@ -155,8 +188,10 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   React console, and CLI-documentation feedback: formatting, React console UI
   quality when relevant, the CLI-docs sync guard when Rust CLI definitions
   change, and deterministic clippy bins from
-  `scripts/plan-clippy-batches.sh`. Its summary job writes a Markdown table to
-  `$GITHUB_STEP_SUMMARY` instead of printing a terminal-only table.
+  `scripts/plan-clippy-batches.sh`. Routing no longer waits for the compiled
+  consistency checks; `ci-consistency` runs beside it and remains part of the
+  summary gate. Formatting and UI quality run directly on the selected runner
+  instead of paying the public backend-image pull cost.
 - `pr_website.yml` is named **PR Website Checks** and owns the public website PR
   canary. It uses `.github/actions/compute-changes` and runs
   `website-build` only when `website_changed` is true, or when manually
@@ -178,7 +213,15 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   Every affected Rust workspace crate is assigned to a generated
   `rust_crate_tests` matrix and runs its complete `cargo test -p <crate>` suite;
   protocol compatibility and Skippy smoke remain separate integration rows.
-  Linux/macOS backend matrices remain separate from the CPU artifact producers.
+  Linux host/CPU-runtime and macOS host/Metal-runtime producers run
+  independently, and their product composers never compile. Linux backend rows
+  consume the same immutable host artifact and build only their selected
+  runtime. Windows follows the same graph: one debug neutral host, independent
+  CPU/CUDA/ROCm/Vulkan runtime inputs, and composition-only products.
+  Unsupported macOS CUDA, ROCm, and Vulkan rows are omitted.
+- Product readiness starts a local mDNS client and never depends on the mutable
+  public mesh. The public `client --auto` admission probe is manual-only, so an
+  external peer outage cannot block a pull request or release.
 - Pull requests test affected crates plus their reverse dependents. Main pushes
   and manual dispatches assign every Cargo workspace member to the matrix, so a
   targeted-routing mistake cannot permanently hide a crate suite.
@@ -199,12 +242,13 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   that can affect native ABI/backend products, such as `third_party/llama.cpp/**`,
   `crates/skippy-ffi/**`, backend build scripts, backend-relevant Justfile
   hunks, and `.github/cache-version.txt`.
-- Windows target jobs use compute-changes' `windows_cpu_build_required` and
-  `windows_gpu_build_required` outputs for full platform builds. The CPU row can
-  still run lightweight Windows cargo checks for broad Rust changes, but
-  CUDA/ROCm/Vulkan rows stay skipped unless Windows GPU inputs changed,
-  backend-relevant Justfile hunks changed, or the workflow is manually
-  dispatched.
+- Windows broad-Rust changes run lightweight Cargo checks. The immutable debug
+  host, CPU runtime, and CPU product run only when
+  `windows_cpu_build_required` is true or the workflow is manually dispatched.
+  CUDA/ROCm/Vulkan runtime producers and composition-only product jobs run only
+  when `windows_gpu_build_required` is true, backend-relevant Justfile hunks
+  changed, or the workflow is manually dispatched. All products consume the
+  same host artifact and use the release composer contract.
 - `pr_cleanup.yml` deletes PR merge-ref caches and artifacts from positively
   matched PR workflow runs when a pull request closes. Cache cleanup first plans
   deterministic shards, then fans deletion out across
@@ -303,13 +347,14 @@ while runtime GPU assertions require a matching restricted self-hosted pool.
 Linux workflow-local toolchain and package setup blocks are migration debt and
 must be removed when their lane adopts an image, not copied elsewhere.
 
-PR Builds runs `public_runner_image_contract` inside the public image and a
-two-row `arc_runner_image_contract` matrix directly on `mesh-llm-amd64` and
-`mesh-llm-arm64`. The public job validates the baked dependency/tool contract.
-The ARC job checks the native machine architecture, validates the self-hosted
-image, and performs a small Rust check. It has no hosted fallback by design: it
-is the pull-request gate that detects ARC, K3s scheduling, multi-architecture
-image, and runner startup regressions.
+PR Builds runs `public_runner_image_contract` inside the public image when the
+runner workflow, cache integration, or cache version changes (and on manual
+dispatch). Ordinary source/docs PRs do not pay this infrastructure canary.
+Trusted main CI owns the two-row `arc_runner_image_contract` matrix directly on
+`mesh-llm-amd64` and `mesh-llm-arm64`; untrusted PR-event jobs never request
+those labels. The public job validates the baked dependency/tool contract. The
+ARC job checks the native machine architecture, validates the self-hosted
+image, and performs a small Rust check. It has no hosted fallback by design.
 
 Repository visibility and GHCR package visibility are separate controls. If an
 anonymous pull still returns `401` or `403`, public-container jobs must grant
@@ -317,18 +362,45 @@ anonymous pull still returns `401` or `403`, public-container jobs must grant
 and `secrets.GITHUB_TOKEN`. Making `mesh-llm-runner-images` public does not by
 itself prove that an existing package is anonymously readable.
 
-The public image already contains `sccache`. Public-image Rust jobs start with
-its GHA remote backend disabled, then use the repository-local
-`configure-sccache-gha` action to export the ephemeral Actions cache URL/token
-and start a `disk,gha` multi-level cache. The disk cache serves as L0, GHA is a
-best-effort L1, and the disk tier uses a job-local directory beside the checkout
-so it does not make release sources appear dirty. Cache read failures degrade to
-misses, and cache write failures only emit warnings. Compiler invocations also
-fall back locally if the sccache server becomes unavailable. A failed initial
-remote probe stops the remote-configured server and restarts `sccache` with
-disk-only storage. Persistent Cargo target and ABI caches continue through the
-existing cache actions. Do not download a second sccache binary just to
-configure the GHA backend.
+The public image already contains `sccache`. In trusted jobs, the
+repository-local `configure-sccache-gha` action may use Depot's injected WebDAV
+endpoint/token and start a `disk,webdav` cache. Current pull-request jobs remain
+GitHub-hosted. When the typed Depot permission is false, the cache action starts
+the sccache child with a credential-free, job-local disk backend. That isolates
+only sccache: Depot's automatically injected job token and transparent
+GitHub-cache API redirection remain available to other code on a Depot runner.
+Consequently, no untrusted PR code may run on Depot while automatic cache
+injection is enabled. GitHub-hosted jobs retain the existing best-effort
+`disk,gha` path or explicit disk-only mode. Cache read failures degrade to
+misses, cache write failures only warn, and a failed remote probe restarts
+`sccache` with disk-only storage.
+
+## Depot rollout
+
+Every current `pull_request` job selects GitHub-hosted runners, regardless of
+repository ownership or `DEPOT_PR_RUNNERS_ENABLED`; that variable is ignored.
+The selector is only defense in depth
+because PR workflow and local-action files are themselves PR-controlled.
+
+Trusted main/release jobs use `DEPOT_RUNNERS_ENABLED`, and a trusted main-ref
+manual dispatch can use `use_depot=true` for a bounded canary. The selector
+requires `refs/heads/main`; tag pushes and feature refs fall back to hosted
+runners. Depot-managed runners register in the organization `Default` runner
+group. Before enabling public access, restrict that group to
+`Mesh-LLM/mesh-llm` and exact default-branch workflow refs, beginning with
+`depot-canary.yml@refs/heads/main`. The existing `mesh-llm` runner group owns
+the dedicated GPU scale sets and is not the Depot group.
+
+Current GitHub-hosted PR jobs may share the `mesh-llm` key namespace because
+GitHub scopes PR cache writes to the merge ref; trusted main does not restore
+from that ref. Depot's cache is repository-scoped instead, so cache-key
+conventions or a trusted reusable caller are not sufficient protection from
+malicious checked-out PR code. PR events stay hosted while automatic Depot
+Cache is enabled. Runner placement does not alter build action inputs or
+artifact contracts. Hardware-qualified GPU execution stays on dedicated
+runners. See
+[`DEPOT_MIGRATION.md`](DEPOT_MIGRATION.md) for activation prerequisites,
+baseline metrics, target service levels, and the cross-repository plan.
 
 ## Public website deployment
 
@@ -396,7 +468,7 @@ Use these checks when reviewing PR CI wall-clock regressions:
   treating a slow Windows miss as expected.
 - **Runner routing**: platform-specific work should run on its native runner
   class (Blacksmith Windows 2025 for Windows ABI products, Blacksmith macOS for Swift/Metal, Linux
-  for Linux backends) and skip unsupported combinations explicitly.
+  for Linux backends) and omit unsupported combinations.
 
 For canonical agent-facing CI rules, start with
 `.agents/skills/manage-ci/SKILL.md`. The scoped `.github/AGENTS.md` file routes

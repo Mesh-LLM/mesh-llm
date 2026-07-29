@@ -31,9 +31,15 @@ ditto -c -k --sequesterRsrc --keepParent \
 scripts/verify-swift-release-artifact.sh \
     "$SWIFT_ARTIFACT_SMOKE_DIR/MeshLLMFFI.xcframework.zip"
 
-native_runtime_dir="$(scripts/ci-prepare-native-runtime.sh "$REPO_ROOT/target/swift-native-runtime" cpu)"
+native_runtime_dir="$(
+    scripts/ci-prepare-native-runtime.sh \
+        "$REPO_ROOT/target/swift-native-runtime" \
+        cpu \
+        --reuse-from-binary "$1"
+)"
 export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="$native_runtime_dir"
 
+# shellcheck disable=SC2016 # The nested shell expands exported fixture variables.
 scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
     bash -lc '
         set -euo pipefail

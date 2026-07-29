@@ -1,0 +1,74 @@
+name: Compose verified product input
+description: Compose one verified host and one verified native runtime without compiling either input.
+
+inputs:
+  host_input_dir:
+    description: Directory containing the immutable host, import report, and checksum.
+    required: true
+  runtime_input_dir:
+    description: Directory containing one runtime archive or one extracted runtime.
+    required: true
+  output_dir:
+    description: Directory that receives the composed product-v2 tree.
+    required: false
+    default: product-input
+  backend:
+    description: Product backend/flavor.
+    required: true
+  version:
+    description: Product version. Defaults to the runtime manifest mesh version.
+    required: false
+    default: ""
+  binary_name:
+    description: Host executable filename.
+    required: false
+    default: mesh-llm
+  readiness_smoke:
+    description: Run noninteractive client readiness against the composed bytes.
+    required: false
+    default: "true"
+  attestation_public_key_file:
+    description: Optional public key used with the producer's prebuilt attestation verifier.
+    required: false
+    default: ""
+  attestation_verifier:
+    description: Optional verifier path; defaults to release-attestation-verifier in the host input.
+    required: false
+    default: ""
+
+outputs:
+  product_dir:
+    description: Absolute path to the product-v2 tree.
+    value: ${{ steps.compose.outputs.product_dir }}
+  binary_path:
+    description: Absolute path to the composed host executable.
+    value: ${{ steps.compose.outputs.binary_path }}
+  runtime_root:
+    description: Absolute path to the composed native-runtimes directory.
+    value: ${{ steps.compose.outputs.runtime_root }}
+  runtime_dir:
+    description: Absolute path to the selected runtime.
+    value: ${{ steps.compose.outputs.runtime_dir }}
+  archive_path:
+    description: Tar archive containing the exact verified product tree, including executable modes.
+    value: ${{ steps.compose.outputs.archive_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Verify and compose producer inputs
+      id: compose
+      shell: bash
+      env:
+        INPUT_HOST_INPUT_DIR: ${{ inputs.host_input_dir }}
+        INPUT_RUNTIME_INPUT_DIR: ${{ inputs.runtime_input_dir }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
+        INPUT_BACKEND: ${{ inputs.backend }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_BINARY_NAME: ${{ inputs.binary_name }}
+        INPUT_READINESS_SMOKE: ${{ inputs.readiness_smoke }}
+        INPUT_ATTESTATION_PUBLIC_KEY_FILE: ${{ inputs.attestation_public_key_file }}
+        INPUT_ATTESTATION_VERIFIER: ${{ inputs.attestation_verifier }}
+      run: |
+        set -euo pipefail
+        scripts/ci-compose-product-input.sh

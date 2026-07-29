@@ -1,0 +1,113 @@
+name: Select trusted CI runners
+description: Select Depot or GitHub-hosted Linux runners without routing pull-request events to Depot.
+
+inputs:
+  event_name:
+    description: GitHub event name.
+    required: true
+  ref:
+    description: Fully qualified Git ref used to enforce the trusted-main boundary.
+    required: true
+  depot_main_enabled:
+    description: Repository-wide Depot gate for trusted push and dispatch events.
+    required: false
+    default: "false"
+  manual_use_depot:
+    description: Typed workflow-dispatch canary selection.
+    required: false
+    default: "false"
+
+outputs:
+  depot_enabled:
+    description: Whether the selected event may use Depot.
+    value: ${{ steps.select.outputs.depot_enabled }}
+  allow_depot_remote_cache:
+    description: Whether this trusted runner selection may use Depot's remote cache.
+    value: ${{ steps.select.outputs.allow_depot_remote_cache }}
+  runner:
+    description: Default two-vCPU Linux runner label.
+    value: ${{ steps.select.outputs.runner }}
+  runner_4:
+    description: Four-vCPU Linux runner label.
+    value: ${{ steps.select.outputs.runner_4 }}
+  runner_8:
+    description: Eight-vCPU Linux runner label.
+    value: ${{ steps.select.outputs.runner_8 }}
+  runner_16:
+    description: Sixteen-vCPU Linux runner label for measured high-parallelism builds.
+    value: ${{ steps.select.outputs.runner_16 }}
+
+runs:
+  using: composite
+  steps:
+    - name: Apply runner trust policy
+      id: select
+      shell: bash
+      env:
+        INPUT_EVENT_NAME: ${{ inputs.event_name }}
+        INPUT_REF: ${{ inputs.ref }}
+        INPUT_DEPOT_MAIN_ENABLED: ${{ inputs.depot_main_enabled }}
+        INPUT_MANUAL_USE_DEPOT: ${{ inputs.manual_use_depot }}
+      run: |
+        set -euo pipefail
+
+        for value_name in \
+          INPUT_DEPOT_MAIN_ENABLED \
+          INPUT_MANUAL_USE_DEPOT
+        do
+          value="${!value_name}"
+          if [[ "$value" != "true" && "$value" != "false" ]]; then
+            echo "$value_name must be true or false, got: $value" >&2
+            exit 1
+          fi
+        done
+
+        depot_enabled=false
+        case "$INPUT_EVENT_NAME" in
+          pull_request|pull_request_target)
+            # Current PR workflows and local actions are evaluated from
+            # PR-controlled code. A repository variable or same-repo check
+            # therefore cannot establish a runner trust boundary.
+            depot_enabled=false
+            ;;
+          workflow_dispatch)
+            if [[ "$INPUT_REF" == "refs/heads/main" && ( \
+              "$INPUT_DEPOT_MAIN_ENABLED" == "true" || \
+              "$INPUT_MANUAL_USE_DEPOT" == "true" \
+            ) ]]; then
+              depot_enabled=true
+            fi
+            ;;
+          push)
+            if [[ \
+              "$INPUT_REF" == "refs/heads/main" && \
+              "$INPUT_DEPOT_MAIN_ENABLED" == "true" \
+            ]]; then
+              depot_enabled=true
+            fi
+            ;;
+          *)
+            depot_enabled=false
+            ;;
+        esac
+
+        if [[ "$depot_enabled" == "true" ]]; then
+          runner=depot-ubuntu-24.04
+          runner_4=depot-ubuntu-24.04-4
+          runner_8=depot-ubuntu-24.04-8
+          runner_16=depot-ubuntu-24.04-16
+        else
+          runner=ubuntu-24.04
+          runner_4=ubuntu-24.04
+          runner_8=ubuntu-24.04
+          runner_16=ubuntu-24.04
+        fi
+
+        {
+          echo "depot_enabled=$depot_enabled"
+          echo "allow_depot_remote_cache=$depot_enabled"
+          echo "runner=$runner"
+          echo "runner_4=$runner_4"
+          echo "runner_8=$runner_8"
+          echo "runner_16=$runner_16"
+        } >> "$GITHUB_OUTPUT"

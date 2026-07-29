@@ -48,17 +48,42 @@ class BuildWindowsScriptTests(unittest.TestCase):
             script,
         )
 
-    def test_windows_packaged_cli_smoke_checks_each_native_command(self) -> None:
-        workflow = PR_BUILDS.read_text(encoding="utf-8")
-        start = workflow.index("      - name: Composed Windows CLI and client readiness smoke")
-        smoke = workflow[start:]
+    def test_host_only_build_honors_debug_and_release_profiles(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        start = script.index("if ($HostOnly) {")
+        end = script.index("\nswitch ($backendName)", start)
+        host_only = script[start:end]
 
-        self.assertIn(".\\target\\release\\mesh-llm.exe --log-format json --version", smoke)
-        self.assertIn(".\\target\\release\\mesh-llm.exe --log-format json runtime list", smoke)
-        self.assertIn("mesh-llm --version failed with exit code $LASTEXITCODE", smoke)
-        self.assertIn("mesh-llm --help failed with exit code $LASTEXITCODE", smoke)
-        self.assertIn("mesh-llm runtime list failed with exit code $LASTEXITCODE", smoke)
-        self.assertIn("failed with exit code $LASTEXITCODE", smoke)
+        self.assertIn('$hostArgs = @("build")', host_only)
+        self.assertIn('if ($buildProfile -eq "release")', host_only)
+        self.assertIn('$hostArgs += "--release"', host_only)
+        self.assertIn('$hostOutputProfile = "debug"', host_only)
+        self.assertIn('$hostOutputProfile = "release"', host_only)
+        self.assertNotIn(
+            '@("build", "--release", "--locked"',
+            host_only,
+        )
+        self.assertIn("\n    return\n", host_only)
+        self.assertNotIn("exit 0", host_only)
+
+    def test_windows_products_use_the_shared_composition_and_smoke_contract(
+        self,
+    ) -> None:
+        workflow = PR_BUILDS.read_text(encoding="utf-8")
+        cpu_start = workflow.index("  windows_cpu_product:")
+        gpu_start = workflow.index("  windows_gpu_products:", cpu_start)
+        products = (workflow[cpu_start:gpu_start], workflow[gpu_start:])
+
+        for product in products:
+            with self.subTest(job=product.splitlines()[0].strip()):
+                self.assertIn(
+                    "uses: ./.github/actions/compose-product-input",
+                    product,
+                )
+                self.assertIn("binary_name: mesh-llm.exe", product)
+                self.assertIn('readiness_smoke: "true"', product)
+                self.assertNotIn("cargo ", product)
+                self.assertNotIn("build-windows.ps1", product)
 
 
 if __name__ == "__main__":

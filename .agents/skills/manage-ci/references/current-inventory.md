@@ -54,22 +54,50 @@ The Windows host input also carries the checksum-protected `xtask` executable
 that performed producer-side attestation. Windows product composers invoke that
 prebuilt verifier for the immutable host instead of compiling workspace code.
 
-`ci.yml` applies the same executable-product rule to trusted main validation:
-Linux and macOS debug artifact producers upload both the backend-neutral host
-and its adjacent runtime; their consumer reruns JSON client readiness from those
-exact bytes. Linux and Windows backend rows build a release host separately,
-package exactly one selected runtime, and require `runtime list` plus no-driver
-client readiness. They never invoke a backend-linked host, inject a CUDA driver
-stub, or skip client startup merely because a hosted runner has no GPU.
+`ci.yml` applies the same executable-product rule to trusted main validation.
+Linux and macOS build immutable release-profile hosts and separately packaged
+CPU or Metal runtimes, then upload complete product-v2 trees from
+composition-only jobs. Linux CUDA, ROCm, and Vulkan rows download the same
+Linux host, build only one selected runtime, and compose a product through the
+shared action. SDK consumers reuse the producer's adjacent runtime and fail if
+CI would silently rebuild it. Windows likewise builds one immutable
+release-profile host, independent CPU/CUDA/ROCm/Vulkan runtime inputs, and
+composition-only products. Broad main Rust changes exercise the Windows CPU
+product; Windows GPU products remain limited to GPU/backend inputs or manual
+dispatch. Every composed backend product requires `runtime list` plus
+no-driver client readiness; hosted GPU rows neither inject a driver stub nor
+skip startup because no device is present.
+
+`pr_builds.yml` uses the same split producer/composer shape for Linux CPU and
+macOS Metal products while retaining debug-profile hosts for lightweight PR
+iteration. Windows broad-Rust validation stays at lightweight Cargo checks;
+the debug host plus CPU or GPU runtime/product graph runs only for its
+platform/backend input or manual dispatch. Unsupported macOS CUDA, ROCm, and
+Vulkan combinations are omitted rather than emitted as no-op jobs.
 
 Local actions:
 
 - `.github/actions/compute-changes` owns path, crate, backend, SDK, UI, website,
   Windows, and docs-only routing outputs.
+- `.github/actions/select-ci-runners` routes trusted push/dispatch jobs through
+  the Depot gate only for `refs/heads/main`, returns GitHub-hosted labels for
+  tags and every other ref, and unconditionally returns GitHub-hosted labels
+  for `pull_request` events. Repository ownership and the deprecated
+  `DEPOT_PR_RUNNERS_ENABLED` variable do not alter that decision. Its cache
+  permission is derived from the same typed trust decision.
 - `.github/actions/configure-sccache-gha` exports ephemeral Actions cache
-  credentials to the baked `sccache`, configures job-local disk storage ahead
-  of GHA in a fail-open multi-level cache, and restarts the server with disk-only
-  storage when the remote probe fails.
+  credentials to the baked `sccache`, permits Depot WebDAV only for an explicit
+  trusted call, and uses disk-only storage if a future pull-request trust
+  context is ever evaluated on Depot.
+- `.github/actions/prepare-host-input` owns Unix neutral-host build, optional
+  release attestation, import-policy verification, and checksumming.
+- `.github/actions/prepare-windows-host-input` owns the equivalent Windows
+  debug/release neutral-host build, optional release attestation, import-policy
+  verification, checksum, and verifier artifact.
+- `.github/actions/prepare-native-runtime-input` owns runtime build/package
+  invocation and the release-grade artifact verifier.
+- `.github/actions/compose-product-input` verifies producer inputs, creates one
+  product-v2 tree without compiling, and runs CLI/client readiness.
 - `.github/actions/restore-smoke-inputs` owns producer artifact staging and
   model restoration for smoke consumers.
 - `.github/actions/setup-windows-rocm-sdk` owns reusable Windows ROCm setup.
@@ -94,6 +122,35 @@ GitHub-hosted labels currently used:
 - macOS: `macos-15` and legacy `macos-latest`
 - Windows: `windows-2022`
 
+Depot labels referenced behind the rollout gate:
+
+- routing/summary: `depot-ubuntu-24.04`
+- light build/planning: `depot-ubuntu-24.04-4`
+- Rust/native build: `depot-ubuntu-24.04-8`
+- measured high-parallelism native build: `depot-ubuntu-24.04-16`
+
+Current PR jobs and non-main refs never select these labels. They use the corresponding
+GitHub-hosted label regardless of repository ownership or
+`DEPOT_PR_RUNNERS_ENABLED`; that variable is ignored. Trusted main/release jobs
+use `DEPOT_RUNNERS_ENABLED`; a trusted
+main-ref manual dispatch can set `use_depot=true`. Hardware-qualified GPU
+execution is not part of the gate.
+
+The Depot dashboard reports the `Mesh-LLM` GitHub connection active, and
+GitHub lists both `depot-managed-runners` and `depot-code-access` installations
+for all organization repositories. GitHub's organization settings show the
+Depot-managed `Default` group currently allows all workflows but excludes
+public repositories, while the separate `mesh-llm` group owns the two dedicated
+GPU scale sets. Before a canary, restrict `Default` to this repository and exact
+default-branch workflow refs, then enable public-repository access.
+
+The checked-out local selector is not the security boundary because PRs can
+modify workflow and local-action files. The Depot runner group must use
+`restricted_to_workflows=true` and exact default-branch selected-workflow refs.
+Automatic Depot Cache still grants repository-scoped cache authority to the
+whole job, so even a trusted reusable caller cannot safely execute untrusted PR
+code while that injection is enabled. PRs remain GitHub-hosted.
+
 Legacy/dedicated self-hosted label arrays currently referenced:
 
 - NVIDIA AMD64: `["self-hosted","Linux","X64","amd64","gpu-nvidia"]`
@@ -104,12 +161,13 @@ ARC scale-set labels for the prebuilt runner rollout:
 - `mesh-llm-amd64`
 - `mesh-llm-arm64`
 
-`pr_builds.yml` runs `public_runner_image_contract` in the public image and
-`arc_runner_image_contract` on both ARC labels for every pull request. The ARC
-job executes directly in each ephemeral runner pod, verifies the self-hosted
-image contract and native architecture, and runs a small Rust check. It
-intentionally has no hosted fallback because its purpose is to detect an ARC,
-K3s scheduling, architecture, or runner-image regression before merge.
+`pr_builds.yml` runs `public_runner_image_contract` in the public image when
+the runner workflow, cache integration, or cache version changes, plus manual
+dispatches. Trusted main `ci.yml` owns `arc_runner_image_contract` on both ARC
+labels for the same change class. Untrusted PR-event jobs never request those
+labels. The ARC job executes directly in each ephemeral runner pod, verifies
+the self-hosted image contract and native architecture, and runs a small Rust
+check. It intentionally has no hosted fallback.
 
 Runner images are published from
 [`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images)
@@ -157,17 +215,19 @@ MeshLLM workflows pin the public digest. The Flux repository must independently
 roll the ARC HelmReleases to the paired self-hosted digest; that cross-repository
 change cannot be delivered by a MeshLLM pull request.
 
-Public-image Rust jobs use the baked `sccache` binary and start with
-`SCCACHE_GHA_ENABLED=false`. The local `configure-sccache-gha` action exports
-the ephemeral Actions cache URL/token, enables a `disk,gha` cache chain, ignores
-cache write errors, and probes it by starting the server. The disk tier uses a
-job-local directory beside, rather than inside, the checkout. Cache read
-failures degrade to misses, cache write failures are warnings, and compiler
-invocations fall back locally if the server becomes unavailable. If the
-initial remote probe fails, the action stops the remote-configured server and
-restarts `sccache` with disk-only storage. Persistent Cargo target and ABI reuse
-remains owned by `Swatinem/rust-cache` and `actions/cache`. Do not reintroduce
-the sccache download action merely to export credentials.
+Public-image Rust jobs use the baked `sccache` binary. Trusted calls to
+`configure-sccache-gha` may use Depot's `SCCACHE_WEBDAV_ENDPOINT` plus
+`SCCACHE_WEBDAV_TOKEN`/`DEPOT_CACHE_TOKEN` in a fail-open `disk,webdav` chain.
+When that permission is false and Depot is detected, the action gives the
+sccache server a credential-free environment and uses job-local disk only.
+GitHub-hosted jobs retain `disk,gha` or explicit disk-only mode. Persistent
+Cargo target and ABI reuse remains owned by `Swatinem/rust-cache` and
+`actions/cache`. Current PR jobs use the normal `mesh-llm` key namespace and
+GitHub's merge-ref scoping; trusted main does not restore PR-written entries.
+A future Depot PR entrypoint must instead use keys that trusted main/release
+jobs never restore because Depot cache entries are repository-scoped. Key
+separation alone is not a security boundary while the job receives Depot cache
+authority, so no such entrypoint is currently eligible.
 
 `USE_SELF_HOSTED` currently controls selected GPU/release routes. Unset or a
 value other than the exact string `true` selects the hosted fallback. Any new
@@ -180,6 +240,8 @@ All GitHub Actions variables are strings.
 | Variable | Purpose and fallback |
 | --- | --- |
 | `USE_SELF_HOSTED` | Exact `true` selects supported self-hosted GPU/release lanes; otherwise hosted |
+| `DEPOT_PR_RUNNERS_ENABLED` | Deprecated compatibility variable; the current selector ignores it and all PR jobs remain GitHub-hosted |
+| `DEPOT_RUNNERS_ENABLED` | Exact `true` routes eligible trusted main/release Linux jobs to Depot; otherwise GitHub-hosted |
 | `CUDA_VERSION` | Windows CUDA toolkit selection; Linux CUDA lanes use digest-pinned backend images |
 | `VULKAN_SDK_VERSION` | Windows Vulkan SDK; fallback `1.4.328.1` |
 | `LLAMA_UPSTREAM_CANARY_SMOKE` | Enables canary smoke; fallback `1` |

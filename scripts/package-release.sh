@@ -12,6 +12,8 @@ RELEASE_BIN_DIR="${MESH_LLM_RELEASE_BIN_DIR:-$REPO_ROOT/target/release}"
 NATIVE_RUNTIME_ROOT="${MESH_LLM_NATIVE_RUNTIME_ROOT:-$REPO_ROOT/dist/native-runtimes}"
 ATTESTATION_SIGNING_KEY_FILE="${MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE:-}"
 ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
+PRECOMPOSED_PRODUCT_DIR="${MESH_LLM_PRECOMPOSED_PRODUCT_DIR:-}"
+ATTESTATION_PREVERIFIED="${MESH_RELEASE_ATTESTATION_PREVERIFIED:-0}"
 
 python_bin() {
     if command -v python3 >/dev/null 2>&1; then
@@ -194,6 +196,15 @@ write_product_manifest() {
 }
 
 validate_attestation_env() {
+    if [[ "$ATTESTATION_PREVERIFIED" == "1" ]]; then
+        if [[ "${MESH_RELEASE_HOST_PRESTAMPED:-0}" != "1" || -z "$PRECOMPOSED_PRODUCT_DIR" ]]; then
+            echo "MESH_RELEASE_ATTESTATION_PREVERIFIED=1 requires a pre-stamped precomposed product" >&2
+            exit 1
+        fi
+    elif [[ "$ATTESTATION_PREVERIFIED" != "0" ]]; then
+        echo "MESH_RELEASE_ATTESTATION_PREVERIFIED must be 0 or 1" >&2
+        exit 1
+    fi
     if [[ "${MESH_RELEASE_HOST_PRESTAMPED:-0}" == "1" ]]; then
         if [[ -z "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
             echo "MESH_RELEASE_HOST_PRESTAMPED=1 requires MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE" >&2
@@ -221,6 +232,10 @@ stamp_bundle_binary() {
         if [[ -z "$ATTESTATION_PUBLIC_KEY_FILE" || ! -s "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
             echo "MESH_RELEASE_HOST_PRESTAMPED=1 requires a non-empty MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE" >&2
             exit 1
+        fi
+        if [[ "$ATTESTATION_PREVERIFIED" == "1" ]]; then
+            echo "Release attestation: verified by immutable product composer"
+            return 0
         fi
         inspect_json="$(
             cd "$REPO_ROOT"
@@ -472,6 +487,56 @@ verify_mesh_binary_version() {
     fi
 }
 
+copy_and_verify_precomposed_product() {
+    local source_dir="$1"
+    local bundle_dir="$2"
+    local version="$3"
+    local flavor="$4"
+    local runtime_dir=""
+    local runtime_count=0
+    local verification_report="$_STAGING_DIR/host-imports.verify.json"
+    local bundle_binary=""
+    bundle_binary="$bundle_dir/$(bundle_bin_name mesh-llm)"
+
+    if [[ ! -d "$source_dir" ]]; then
+        echo "Precomposed product directory does not exist: $source_dir" >&2
+        exit 1
+    fi
+    test -s "$source_dir/product-manifest.json"
+    mkdir -p "$bundle_dir"
+    cp -a "$source_dir/." "$bundle_dir/"
+
+    stamp_bundle_binary "$bundle_binary"
+    verify_mesh_binary_version "$bundle_binary" "$version"
+    "$(python_bin)" "$SCRIPT_DIR/verify-host-dependencies.py" \
+        "$bundle_binary" \
+        --report "$verification_report"
+
+    while IFS= read -r manifest; do
+        runtime_dir="$(dirname "$manifest")"
+        runtime_count=$((runtime_count + 1))
+    done < <(
+        find "$bundle_dir/native-runtimes" \
+            -mindepth 2 \
+            -maxdepth 2 \
+            -type f \
+            -name manifest.json \
+            -print
+    )
+    if [[ "$runtime_count" -ne 1 ]]; then
+        echo "Precomposed product must contain exactly one native runtime; found $runtime_count" >&2
+        exit 1
+    fi
+    "$SCRIPT_DIR/verify-native-runtime-package.sh" "$runtime_dir"
+    "$(python_bin)" "$SCRIPT_DIR/compose-product-bundle.py" \
+        --bundle "$bundle_dir" \
+        --host "$bundle_binary" \
+        --runtime "$runtime_dir" \
+        --version "$version" \
+        --backend "$flavor" \
+        --check
+}
+
 main() {
     if [[ $# -lt 1 || -z "${1:-}" ]]; then
         usage
@@ -501,31 +566,39 @@ main() {
     _STAGING_DIR="$(mktemp -d)"
 
     bundle_dir="$_STAGING_DIR/mesh-bundle"
-    mkdir -p "$bundle_dir"
+    if [[ -n "$PRECOMPOSED_PRODUCT_DIR" ]]; then
+        copy_and_verify_precomposed_product \
+            "$PRECOMPOSED_PRODUCT_DIR" \
+            "$bundle_dir" \
+            "$version" \
+            "$(effective_release_flavor)"
+    else
+        mkdir -p "$bundle_dir"
 
-    bundle_binary="$bundle_dir/$(bundle_bin_name mesh-llm)"
-    cp "$RELEASE_BIN_DIR/mesh-llm${BIN_EXT}" "$bundle_binary"
+        bundle_binary="$bundle_dir/$(bundle_bin_name mesh-llm)"
+        cp "$RELEASE_BIN_DIR/mesh-llm${BIN_EXT}" "$bundle_binary"
 
-    if [[ "$os_name" == "Darwin" && -f "$bundle_binary" ]]; then
-        install_name_tool -add_rpath @executable_path/ "$bundle_binary" 2>/dev/null || true
+        if [[ "$os_name" == "Darwin" && -f "$bundle_binary" ]]; then
+            install_name_tool -add_rpath @executable_path/ "$bundle_binary" 2>/dev/null || true
+        fi
+
+        stamp_bundle_binary "$bundle_binary"
+        verify_mesh_binary_version "$bundle_binary" "$version"
+        "$(python_bin)" "$SCRIPT_DIR/verify-host-dependencies.py" \
+            "$bundle_binary" \
+            --report "$bundle_dir/host-imports.json"
+
+        runtime_dir="$(select_native_runtime_dir)"
+        bundled_runtime="$bundle_dir/native-runtimes/$(basename "$runtime_dir")"
+        mkdir -p "$(dirname "$bundled_runtime")"
+        cp -R "$runtime_dir" "$bundled_runtime"
+        write_product_manifest \
+            "$bundle_dir" \
+            "$bundle_binary" \
+            "$bundled_runtime" \
+            "$version" \
+            "$(effective_release_flavor)"
     fi
-
-    stamp_bundle_binary "$bundle_binary"
-    verify_mesh_binary_version "$bundle_binary" "$version"
-    "$(python_bin)" "$SCRIPT_DIR/verify-host-dependencies.py" \
-        "$bundle_binary" \
-        --report "$bundle_dir/host-imports.json"
-
-    runtime_dir="$(select_native_runtime_dir)"
-    bundled_runtime="$bundle_dir/native-runtimes/$(basename "$runtime_dir")"
-    mkdir -p "$(dirname "$bundled_runtime")"
-    cp -R "$runtime_dir" "$bundled_runtime"
-    write_product_manifest \
-        "$bundle_dir" \
-        "$bundle_binary" \
-        "$bundled_runtime" \
-        "$version" \
-        "$(effective_release_flavor)"
 
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
     write_checksum_sidecar "$output_dir/$versioned_asset"

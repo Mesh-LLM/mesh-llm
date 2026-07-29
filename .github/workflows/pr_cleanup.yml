@@ -36,7 +36,7 @@ jobs:
       # or run pull request code in this workflow.
       - name: Plan cache deletion shards
         id: plan
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         env:
           PR_CACHE_REF: refs/pull/${{ github.event.inputs.pr_number || github.event.pull_request.number }}/merge
           PR_CACHE_CLEANUP_WORKERS: ${{ vars.PR_CACHE_CLEANUP_WORKERS }}
@@ -170,7 +170,7 @@ jobs:
             }
 
       - name: Upload cache deletion plan
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pr-cache-cleanup-plan-${{ github.event.inputs.pr_number || github.event.pull_request.number }}
           path: cache-cleanup-plan
@@ -191,14 +191,14 @@ jobs:
       # Deletes remain serial inside each worker so every host keeps the same
       # rate-limited request shape as the previous single-runner cleanup.
       - name: Download cache deletion plan
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: pr-cache-cleanup-plan-${{ github.event.inputs.pr_number || github.event.pull_request.number }}
           path: cache-cleanup-plan
 
       - name: Delete cache shard
         id: delete-cache-shard
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         env:
           PR_CACHE_SHARD_INDEX: ${{ matrix.shard.index }}
         with:
@@ -446,7 +446,7 @@ jobs:
 
       - name: Upload cache deletion result
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pr-cache-cleanup-result-${{ github.event.inputs.pr_number || github.event.pull_request.number }}-${{ matrix.shard.number }}
           path: cache-cleanup-results
@@ -467,7 +467,7 @@ jobs:
     steps:
       - name: Delete artifacts from pull request runs
         id: delete-pr-artifacts
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         env:
           PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.inputs.artifact_head_sha || github.event.pull_request.head.sha }}
@@ -608,7 +608,7 @@ jobs:
       actions: read
     steps:
       - name: Download cache deletion results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         continue-on-error: true
         with:
           pattern: pr-cache-cleanup-result-${{ github.event.inputs.pr_number || github.event.pull_request.number }}-*

@@ -27,11 +27,11 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev libdbus-1-dev lld
       - name: Configure Linux Rust linker
@@ -41,8 +41,8 @@ jobs:
           [target.x86_64-unknown-linux-gnu]
           rustflags = ["-C", "link-arg=-fuse-ld=lld"]
           EOF
-      - uses: mozilla-actions/sccache-action@v0.0.9
-      - uses: Swatinem/rust-cache@v2
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         with:
           workspaces: . -> target
           cache-bin: "false"
@@ -50,7 +50,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Restore Hugging Face download test model cache
         id: hf_download_model_cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ runner.temp }}/mesh-llm-hf-download-cache
           key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-hf-download-smoke-models-${{ hashFiles('.github/cache-version.txt') }}
@@ -62,7 +62,7 @@ jobs:
         run: scripts/ci-hf-download-smoke.sh
       - name: Save Hugging Face download test model cache
         if: ${{ github.ref == 'refs/heads/main' && steps.hf_download_model_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ runner.temp }}/mesh-llm-hf-download-cache
           key: ${{ steps.hf_download_model_cache.outputs.cache-primary-key }}

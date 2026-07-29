@@ -403,11 +403,11 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
           if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
           runs-on: ubuntu-24.04
           steps:
-            - uses: actions/checkout@v5
+            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
               with:
                 ref: ${{ needs.metadata.outputs.tag }}
                 persist-credentials: false
-            - uses: dtolnay/rust-toolchain@stable
+            - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
             - name: Prepare dispatched release version
               if: github.event_name == 'workflow_dispatch'
               env:

@@ -121,6 +121,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--backend", required=True)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Validate the existing product manifest without rewriting it.",
+    )
     return parser.parse_args()
 
 
@@ -129,10 +134,18 @@ def main() -> int:
     manifest = compose_manifest(
         args.bundle, args.host, args.runtime, args.version, args.backend
     )
-    (args.bundle / "product-manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    manifest_path = args.bundle / "product-manifest.json"
+    if args.check:
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if existing != manifest:
+            raise ValueError(
+                f"product manifest does not match composed bytes: {manifest_path}"
+            )
+    else:
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     return 0
 
 

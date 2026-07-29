@@ -12,22 +12,28 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "build-release.sh"
+HOST_SCRIPT = ROOT / "scripts" / "build-host.sh"
 
 
 class BuildReleaseScriptTests(unittest.TestCase):
     def test_release_host_never_enables_backend_gpu_features(self) -> None:
-        script = SCRIPT.read_text(encoding="utf-8")
+        script = HOST_SCRIPT.read_text(encoding="utf-8")
 
         self.assertNotIn("gpu-bench-cuda", script)
         self.assertNotIn("gpu-bench-hip", script)
         self.assertNotIn("build-llama.sh", script)
 
     def test_dynamic_native_runtime_feature_is_required(self) -> None:
-        script = SCRIPT.read_text(encoding="utf-8")
+        script = HOST_SCRIPT.read_text(encoding="utf-8")
 
-        self.assertIn("--features web-ui,dynamic-native-runtime", script)
+        self.assertIn('"web-ui,dynamic-native-runtime"', script)
         self.assertIn("--no-default-features", script)
         self.assertIn("MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 is unsupported", script)
+
+    def test_release_entry_point_delegates_to_canonical_host_builder(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('exec "$SCRIPT_DIR/build-host.sh" --profile release', script)
 
     def test_cuda_selection_does_not_change_host_build(self) -> None:
         cargo_log = self.run_build_release_with_backend("cuda")
@@ -62,6 +68,11 @@ class BuildReleaseScriptTests(unittest.TestCase):
             copied_script = scripts_dir / "build-release.sh"
             shutil.copy(SCRIPT, copied_script)
             copied_script.chmod(copied_script.stat().st_mode | stat.S_IXUSR)
+            copied_host_script = scripts_dir / "build-host.sh"
+            shutil.copy(HOST_SCRIPT, copied_host_script)
+            copied_host_script.chmod(
+                copied_host_script.stat().st_mode | stat.S_IXUSR
+            )
 
             self.write_executable(
                 scripts_dir / "build-ui.sh",

@@ -13,7 +13,12 @@ scripts/check-sdk-contract.sh
 scripts/package-sdk-console-assets.sh --sdk node
 scripts/verify-sdk-console-assets.sh --sdk node
 
-native_runtime_dir="$(scripts/ci-prepare-native-runtime.sh "$REPO_ROOT/target/rust-native-runtime" cpu)"
+native_runtime_dir="$(
+    scripts/ci-prepare-native-runtime.sh \
+        "$REPO_ROOT/target/rust-native-runtime" \
+        cpu \
+        --reuse-from-binary "$1"
+)"
 export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="$native_runtime_dir"
 
 scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \

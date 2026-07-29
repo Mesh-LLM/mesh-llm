@@ -2,6 +2,12 @@ name: PR Quality Checks
 
 on:
   workflow_dispatch:
+    inputs:
+      use_depot:
+        description: Route eligible non-GPU jobs to Depot for rollout benchmarking.
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
   pull_request:
@@ -16,6 +22,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # Native GitHub caches are merge-ref scoped on pull requests, so jobs can
+  # safely reuse the base branch without making PR writes visible to main.
   CACHE_NAMESPACE: mesh-llm
   CARGO_INCREMENTAL: "0"
   SCCACHE_GHA_ENABLED: "true"
@@ -37,14 +45,24 @@ jobs:
       cli_surface_changed: ${{ steps.compute.outputs.cli_surface_changed }}
       docs_only: ${{ steps.compute.outputs.docs_only }}
       rust_changed: ${{ steps.compute.outputs.rust_changed }}
+      depot_enabled: ${{ steps.runners.outputs.depot_enabled }}
+      allow_depot_remote_cache: ${{ steps.runners.outputs.allow_depot_remote_cache }}
+      runner: ${{ steps.runners.outputs.runner }}
+      runner_4: ${{ steps.runners.outputs.runner_4 }}
+      runner_8: ${{ steps.runners.outputs.runner_8 }}
+      runner_16: ${{ steps.runners.outputs.runner_16 }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
-      - name: Check CI crate-list drift
-        run: cargo run -p xtask -- repo-consistency ci-crate-lists
-      - name: Check publish crate-chain drift
-        run: cargo run -p xtask -- repo-consistency publish-crates
+      - name: Select trusted Linux runners
+        id: runners
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          manual_use_depot: ${{ inputs.use_depot == true }}
       - uses: ./.github/actions/compute-changes
         id: compute
         with:
@@ -52,29 +70,42 @@ jobs:
           base_sha: ${{ github.event.pull_request.base.sha || '' }}
           head_sha: ${{ github.event.pull_request.head.sha || '' }}
 
+  ci-consistency:
+    name: CI consistency
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ${{ needs.changes.outputs.runner_4 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: pr-consistency
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Check CI crate-list drift
+        run: cargo run -p xtask -- repo-consistency ci-crate-lists
+      - name: Check publish crate-chain drift
+        run: cargo run -p xtask -- repo-consistency publish-crates
+
   rust-fmt:
     needs: changes
     if: needs.changes.outputs.rust_changed == 'true'
-    runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    defaults:
-      run:
-        shell: bash
+    runs-on: ${{ needs.changes.outputs.runner_4 }}
     steps:
-      - uses: actions/checkout@v5
-      - name: Verify prebuilt CI environment
-        run: verify-runner-image public
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+        with:
+          components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
 
   rust-clippy:
     needs: changes
     if: needs.changes.outputs.rust_changed == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.changes.outputs.runner_8 }}
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       credentials:
@@ -93,10 +124,13 @@ jobs:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Verify prebuilt CI environment
         run: verify-runner-image public
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
         with:
           workspaces: . -> target
@@ -134,20 +168,27 @@ jobs:
   ui-quality:
     needs: changes
     if: needs.changes.outputs.ui_changed == 'true'
-    runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    runs-on: ${{ needs.changes.outputs.runner_4 }}
     defaults:
       run:
         working-directory: crates/mesh-llm-ui
-        shell: bash
     steps:
-      - uses: actions/checkout@v5
-      - name: Verify prebuilt CI environment
-        run: verify-runner-image public
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 10
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+      - name: Configure isolated pnpm store
+        run: pnpm config set store-dir ~/.pnpm-store
+      - name: Cache pnpm store
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.pnpm-store
+          key: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-${{ hashFiles('crates/mesh-llm-ui/pnpm-lock.yaml', '.github/cache-version.txt') }}
+          restore-keys: |
+            ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-
       - name: Install dependencies
         run: pnpm i --frozen-lockfile
       - name: Lint
@@ -160,7 +201,7 @@ jobs:
   cli-docs-sync:
     needs: changes
     if: needs.changes.outputs.cli_surface_changed == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.changes.outputs.runner }}
     steps:
       - name: Require public website docs update
         env:
@@ -190,13 +231,14 @@ jobs:
           EOF
 
   summary:
-    needs: [changes, rust-fmt, rust-clippy, ui-quality, cli-docs-sync]
+    needs: [changes, ci-consistency, rust-fmt, rust-clippy, ui-quality, cli-docs-sync]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Check quality gate
         env:
           CHANGES: ${{ needs.changes.result }}
+          CONSISTENCY: ${{ needs.ci-consistency.result }}
           FMT: ${{ needs.rust-fmt.result }}
           CLIPPY: ${{ needs.rust-clippy.result }}
           UI: ${{ needs.ui-quality.result }}
@@ -208,6 +250,7 @@ jobs:
             echo "| Check | Result |"
             echo "| --- | --- |"
             printf '| %s | %s |\n' "changes" "$CHANGES"
+            printf '| %s | %s |\n' "ci-consistency" "$CONSISTENCY"
             printf '| %s | %s |\n' "rust-fmt" "$FMT"
             printf '| %s | %s |\n' "rust-clippy" "$CLIPPY"
             printf '| %s | %s |\n' "ui-quality" "$UI"
@@ -215,7 +258,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           FAILED=false
-          for STATUS in "$CHANGES" "$FMT" "$CLIPPY" "$UI" "$CLI_DOCS"; do
+          for STATUS in "$CHANGES" "$CONSISTENCY" "$FMT" "$CLIPPY" "$UI" "$CLI_DOCS"; do
             if [[ "$STATUS" == "failure" || "$STATUS" == "cancelled" ]]; then
               FAILED=true
             fi

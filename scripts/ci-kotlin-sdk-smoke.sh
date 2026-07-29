@@ -68,9 +68,15 @@ print(os.path.dirname(manifest.get("uniffi_library") or manifest["library"]))
 PY
 )"
 export MESHLLM_KOTLIN_JNA_LIBRARY_PATH="$native_sdk_artifact_dir/$native_sdk_uniffi_library"
-native_runtime_dir="$(scripts/ci-prepare-native-runtime.sh "$REPO_ROOT/target/kotlin-native-runtime" cpu)"
+native_runtime_dir="$(
+    scripts/ci-prepare-native-runtime.sh \
+        "$REPO_ROOT/target/kotlin-native-runtime" \
+        cpu \
+        --reuse-from-binary "$1"
+)"
 export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="$native_runtime_dir"
 
+# shellcheck disable=SC2016 # The nested shell expands exported fixture variables.
 scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
     bash -lc '
         set -euo pipefail

@@ -52,13 +52,19 @@ def request_ctrl_break(pid: int) -> None:
     os.kill(pid, ctrl_break)
 
 
-def is_running(pid: int) -> bool:
+def is_running(pid: int, *, is_windows: bool) -> bool:
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
+    except OSError as error:
+        # Windows reports ERROR_INVALID_PARAMETER after a process has exited
+        # instead of raising ProcessLookupError for os.kill(pid, 0).
+        if is_windows and getattr(error, "winerror", None) == 87:
+            return False
+        raise
     return True
 
 
@@ -97,7 +103,7 @@ def main() -> int:
         request_ctrl_break(args.pid)
         return 0
     if args.command == "is-running":
-        return 0 if is_running(args.pid) else 1
+        return 0 if is_running(args.pid, is_windows=os.name == "nt") else 1
     if args.command == "force-stop":
         force_stop(args.pid)
         return 0

@@ -72,6 +72,9 @@ outputs:
   sdk_smoke_required:
     description: 'Boolean: true if SDK smoke tests should run as soon as a binary is ready'
     value: ${{ steps.derive.outputs.sdk_smoke_required }}
+  runner_contract_required:
+    description: 'Boolean: true if runner-image or cache integration contracts changed'
+    value: ${{ steps.derive.outputs.runner_contract_required }}
   linux_test_groups_json:
     description: 'JSON array of Linux test groups to run'
     value: ${{ steps.derive.outputs.linux_test_groups_json }}
@@ -141,6 +144,16 @@ runs:
 
         # Read changed files for docs_only and rust_changed logic
         CHANGED_FILES=$(cat /tmp/changed_files.txt | grep -v "^__force_all__$" || true)
+
+        RUNNER_CONTRACT_REQUIRED="false"
+        if [[ "${{ inputs.event_name }}" == "workflow_dispatch" ]]; then
+          RUNNER_CONTRACT_REQUIRED="true"
+        elif [[ -n "$CHANGED_FILES" ]]; then
+          RUNNER_CONTRACT_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^\.github/cache-version\.txt$|^\.github/actionlint\.yaml$|^\.github/actions/(configure-sccache-gha|select-ci-runners)/|^\.github/workflows/(ci|depot-canary|pr_builds|pr_quality|release)\.yml$)' || true)
+          if [[ -n "$RUNNER_CONTRACT_INPUTS" ]]; then
+            RUNNER_CONTRACT_REQUIRED="true"
+          fi
+        fi
 
         # Determine docs_only: true if all_rust=false, UI/website are unchanged,
         # and all files match authored docs patterns.
@@ -287,7 +300,7 @@ runs:
         if [[ "$ALL_RUST" == "true" ]]; then
           BACKEND_CHANGED="true"
         elif [[ -n "$CHANGED_FILES" ]]; then
-          BACKEND_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^third_party/llama\.cpp/|^crates/skippy-ffi/|^scripts/(build-llama|prepare-llama|build-linux|build-linux-rocm|build-mac|build-windows|install-windows-sdk)\.|^\.github/actions/setup-windows-rocm-sdk/|^\.github/cache-version\.txt$)' || true)
+          BACKEND_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^third_party/llama\.cpp/|^crates/skippy-ffi/|^scripts/(build-llama|prepare-llama|build-linux|build-linux-rocm|build-mac|build-windows|install-windows-sdk|build-host|build-release|package-native-runtime|verify-native-runtime-package|compose-product-bundle|ci-compose-product-input|ci-client-readiness-smoke)\.|^\.github/actions/(prepare-host-input|prepare-windows-host-input|prepare-native-runtime-input|compose-product-input|restore-smoke-inputs|setup-windows-rocm-sdk)/|^\.github/workflows/(ci|pr_builds|release|sdk-smoke|smoke)\.yml$|^\.github/cache-version\.txt$)' || true)
           if [[ -n "$BACKEND_INPUTS" ]] || [[ "$BACKEND_RECIPE_CHANGED" == "true" ]]; then
             BACKEND_CHANGED="true"
           fi
@@ -296,8 +309,8 @@ runs:
         WINDOWS_CPU_BUILD_REQUIRED="false"
         WINDOWS_GPU_BUILD_REQUIRED="false"
         if [[ -n "$CHANGED_FILES" ]]; then
-          WINDOWS_CPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^crates/mesh-llm-release-footer/|^crates/mesh-llm-nodejs/|^crates/skippy-ffi/|^scripts/build-windows\.ps1$|^third_party/llama\.cpp/|^Cargo\.toml$|^Cargo\.lock$|^\.github/cache-version\.txt$)' || true)
-          WINDOWS_GPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^crates/skippy-ffi/|^scripts/(build-windows|install-windows-sdk)\.ps1$|^scripts/(package-native-runtime|verify-native-runtime-package)\.sh$|^scripts/windows-native-runtime-deps\.py$|^scripts/tests/test_windows_native_runtime_deps\.py$|^third_party/llama\.cpp/|^\.github/cache-version\.txt$|^\.github/actions/(compute-changes/action\.yml$|setup-windows-rocm-sdk/))' || true)
+          WINDOWS_CPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^crates/mesh-llm-release-footer/|^crates/mesh-llm-nodejs/|^crates/skippy-ffi/|^scripts/build-windows\.ps1$|^scripts/verify-host-dependencies\.py$|^scripts/(package-native-runtime|verify-native-runtime-package|compose-product-bundle|ci-compose-product-input|ci-client-readiness-smoke)\.|^third_party/llama\.cpp/|^Cargo\.toml$|^Cargo\.lock$|^\.github/cache-version\.txt$|^\.github/actions/(compute-changes/action\.yml$|prepare-windows-host-input/|prepare-native-runtime-input/|compose-product-input/))' || true)
+          WINDOWS_GPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^crates/skippy-ffi/|^scripts/(build-windows|install-windows-sdk)\.ps1$|^scripts/verify-host-dependencies\.py$|^scripts/(package-native-runtime|verify-native-runtime-package|compose-product-bundle|ci-compose-product-input|ci-client-readiness-smoke)\.|^scripts/windows-native-runtime-deps\.py$|^scripts/tests/test_windows_native_runtime_deps\.py$|^third_party/llama\.cpp/|^\.github/cache-version\.txt$|^\.github/actions/(compute-changes/action\.yml$|prepare-windows-host-input/|prepare-native-runtime-input/|compose-product-input/|setup-windows-rocm-sdk/))' || true)
           if [[ -n "$WINDOWS_CPU_INPUTS" ]] || [[ "$BACKEND_RECIPE_CHANGED" == "true" ]]; then
             WINDOWS_CPU_BUILD_REQUIRED="true"
           fi
@@ -312,7 +325,7 @@ runs:
         if [[ "${{ inputs.event_name }}" == "workflow_dispatch" ]]; then
           SDK_SMOKE_REQUIRED="true"
         elif [[ -n "$CHANGED_FILES" ]]; then
-          DIRECT_SDK_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^sdk/|^Package\.swift$|^scripts/ci-(native|kotlin|swift)-sdk-smoke\.sh$|^scripts/ci-sdk-fixture\.sh$|^\.github/workflows/sdk-smoke\.yml$)' || true)
+          DIRECT_SDK_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^sdk/|^Package\.swift$|^scripts/ci-(rust|kotlin|swift)-sdk-smoke\.sh$|^scripts/ci-prepare-native-runtime\.sh$|^scripts/ci-sdk-fixture\.sh$|^\.github/workflows/sdk-smoke\.yml$)' || true)
           if [[ -n "$DIRECT_SDK_INPUTS" ]]; then
             SDK_SMOKE_REQUIRED="true"
           elif echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm-client") or index("mesh-llm-api-client") or index("mesh-llm-api-server") or index("mesh-llm-config") or index("mesh-llm-console-server") or index("mesh-llm-ffi") or index("mesh-llm-native-runtime") or index("mesh-llm-protocol") or index("mesh-llm-routing") or index("mesh-llm-types")' >/dev/null; then
@@ -373,5 +386,6 @@ runs:
           echo "windows_cpu_build_required=$WINDOWS_CPU_BUILD_REQUIRED"
           echo "windows_gpu_build_required=$WINDOWS_GPU_BUILD_REQUIRED"
           echo "sdk_smoke_required=$SDK_SMOKE_REQUIRED"
+          echo "runner_contract_required=$RUNNER_CONTRACT_REQUIRED"
           echo "linux_test_groups_json=$LINUX_TEST_GROUPS_JSON"
         } >> "$GITHUB_OUTPUT"

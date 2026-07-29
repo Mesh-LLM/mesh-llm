@@ -84,6 +84,36 @@ configure_rust_cache() {
     fi
 }
 
+stamp_build_version() {
+    local release_version=""
+    local pkgid=""
+
+    if [[ -n "${MESH_LLM_BUILD_VERSION:-}" ]]; then
+        echo "Using preset MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
+        return 0
+    fi
+
+    if ! pkgid="$(cd "$REPO_ROOT" && cargo pkgid -p mesh-llm 2>/dev/null)"; then
+        echo "Warning: unable to derive build version; cargo pkgid unavailable." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+    release_version="${pkgid##*#}"
+    if [[ -z "$release_version" || "$release_version" == "$pkgid" ]]; then
+        echo "Warning: unable to derive build version; cargo pkgid output was unexpected." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+
+    export MESH_LLM_BUILD_VERSION="$release_version"
+    echo "Using release MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
+}
+
+if [[ "${MESH_LLM_DYNAMIC_NATIVE_RUNTIME:-1}" != "1" ]]; then
+    echo "Host builds must use dynamic native runtimes; MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 is unsupported." >&2
+    exit 1
+fi
+
 configure_lld_linker
 configure_rust_cache
 
@@ -97,6 +127,7 @@ fi
 cargo_args=(build --locked -p mesh-llm --bin mesh-llm --no-default-features \
     --features "web-ui,dynamic-native-runtime")
 if [[ "$BUILD_PROFILE" == "release" ]]; then
+    stamp_build_version
     cargo_args=(build --release --locked -p mesh-llm --bin mesh-llm --no-default-features \
         --features "web-ui,dynamic-native-runtime")
 fi

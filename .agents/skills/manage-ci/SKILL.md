@@ -81,12 +81,18 @@ update the skill resources in the same change.
   that ignore applicable `docs_only`, `rust_changed`, `backend_changed`,
   `inference_artifact_required`, `windows_*_build_required`,
   `sdk_smoke_required`, `ui_changed`, or `website_changed` outputs.
-- Keep Linux, macOS, and Windows as top-level target matrices in
-  `pr_builds.yml`. Linux/macOS CPU rows produce downstream smoke artifacts.
-  Keep macOS CUDA, ROCm, and Vulkan rows as explicit unsupported skips.
+- Model Linux, macOS, and Windows executable products as independent
+  backend-neutral host and native-runtime producers followed by
+  composition-only product jobs. A platform/backend matrix belongs on the
+  runtime and product layers, never on a host producer. Do not add no-op macOS
+  CUDA, ROCm, or Vulkan rows for unsupported combinations.
 - Gate native backend lanes on backend inputs, not on every Rust change.
   Workflow-only and docs-only changes must not fan out into build, GPU,
   benchmark, or SDK smoke lanes without a matching product input.
+- Gate public/ARC runner-image contract jobs on runner workflow, cache
+  integration, or cache-version changes (plus manual dispatch). Do not make
+  ordinary source/docs PRs pay an infrastructure canary that validates no
+  changed contract.
 - Keep Clippy sharding driven by `scripts/plan-clippy-batches.sh`; do not add
   hand-maintained static batches.
 - Keep crate-test sharding driven by `scripts/plan-test-batches.sh`. It derives
@@ -163,6 +169,23 @@ update the skill resources in the same change.
   names, node selectors, resource requests, or worker counts in only one side
   of the contract. Update workflow routing, runner/GitOps configuration,
   inventory, and verification together.
+- Route trusted main/release Depot jobs through the repository-wide
+  `DEPOT_RUNNERS_ENABLED` exact-string gate, with a typed manual canary input
+  accepted only when `github.ref == 'refs/heads/main'` and a GitHub-hosted
+  fallback for tags and every other ref. Current
+  `pull_request` workflows must always select GitHub-hosted runners;
+  `DEPOT_PR_RUNNERS_ENABLED` is ignored.
+- Treat a checked-out repository-local selector as defense in depth, never as
+  the PR runner trust boundary: pull requests can modify both their workflow and
+  local action code. Before any PR uses Depot, automatic cache authority must be
+  disabled and isolated, then a default-branch-pinned, narrowly typed reusable
+  workflow must be restricted to its exact `@refs/heads/main` workflow ref with
+  `restricted_to_workflows=true`. Do not use `pull_request_target` to build or
+  execute PR content.
+- Confirm the Depot GitHub App, public-repository runner-group access,
+  selected-workflow restriction, and every selected runner label before
+  enabling Depot. Hardware-qualified GPU execution remains on a restricted
+  device runner.
 
 ## Dependencies and runner setup
 
@@ -230,6 +253,14 @@ update the skill resources in the same change.
   MeshLLM version, platform, and backend compatibility. Product artifacts must
   record the exact host and runtime digests and preserve the
   `mesh-bundle/native-runtimes/<runtime-id>` layout.
+- Use `.github/actions/prepare-host-input`,
+  `.github/actions/prepare-windows-host-input`,
+  `.github/actions/prepare-native-runtime-input`, and
+  `.github/actions/compose-product-input` for PR/main/release producers.
+  `prepare-host-input` owns Unix hosts and `prepare-windows-host-input` owns
+  Windows hosts. Add release-only signing/publishing around those actions; do
+  not fork their build/package/compose commands into workflow-local shell
+  blocks.
 - Keep host, runtime, and product matrices separate in release workflows.
   Product jobs download producer artifacts and verify compatibility and digest
   metadata before composition. Never satisfy a missing producer by rebuilding
@@ -252,6 +283,15 @@ update the skill resources in the same change.
   reuse unsafe: OS, architecture, backend/toolchain, relevant lockfiles,
   `.github/cache-version.txt`, and build inputs. Do not broaden restore keys
   across incompatible or untrusted contexts.
+- GitHub-hosted PR jobs may share the normal key namespace with main because
+  GitHub scopes PR writes to the merge ref and trusted main does not restore
+  them. Do not assume that isolation applies to another cache provider.
+- Depot's GitHub cache namespace is repository-scoped and has no branch
+  isolation. With automatic Depot Cache enabled, its authority is injected into
+  the whole runner job and cannot be contained by sccache disk-only mode or
+  cache-key conventions. Current PR workflows must not use Depot, including
+  through a trusted reusable caller, until automatic injection is disabled and
+  complete token/API isolation is proven.
 - Do not save large shared Rust caches from PR merge refs. Shared caches are
   written from trusted main/release/cache-warming paths. PR cleanup may delete
   positively matched PR caches/artifacts but must not delete workflow runs or
@@ -261,8 +301,10 @@ update the skill resources in the same change.
   follows the release policy, not the PR default.
 - Restore producer artifacts through `.github/actions/restore-smoke-inputs`.
   Reuse `smoke.yml`, `scripted-binary-smoke.yml`, `sdk-smoke.yml`, and
-  `hf-download-smoke.yml`; do not rebuild MeshLLM or duplicate model/artifact
-  restore blocks in consumers.
+  `hf-download-smoke.yml`; do not rebuild MeshLLM, native runtimes, or duplicate
+  model/artifact restore blocks in consumers. SDK smokes consume the runtime
+  adjacent to their staged producer binary and must fail rather than silently
+  compiling a replacement in CI.
 - Never put credentials, local absolute paths, private endpoints, or secret
   material into cache/artifact content or workflow summaries.
 

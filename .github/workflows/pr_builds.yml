@@ -1,10 +1,13 @@
 name: PR Builds
 
-# Set USE_SELF_HOSTED=true to route CUDA matrix rows to the dedicated NVIDIA
-# runner; unset or false uses GitHub-hosted runners.
-
 on:
   workflow_dispatch:
+    inputs:
+      use_depot:
+        description: Route eligible non-GPU jobs to Depot for rollout benchmarking.
+        required: false
+        default: false
+        type: boolean
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
@@ -17,6 +20,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # GitHub scopes pull-request cache writes to refs/pull/<n>/merge while still
+  # allowing read-only reuse of the base branch. Depot cache access remains
+  # disabled for pull_request events because Depot's repository cache is not
+  # branch-isolated.
   CACHE_NAMESPACE: mesh-llm
   MODEL_URL: https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf
   MODEL_FILE: SmolLM2-135M-Instruct-Q8_0.gguf
@@ -45,6 +52,7 @@ jobs:
       test_crates: ${{ steps.compute.outputs.test_crates }}
       batches_json: ${{ steps.compute.outputs.batches_json }}
       test_batches_json: ${{ steps.compute.outputs.test_batches_json }}
+      linux_test_groups_json: ${{ steps.compute.outputs.linux_test_groups_json }}
       all_rust: ${{ steps.compute.outputs.all_rust }}
       docs_only: ${{ steps.compute.outputs.docs_only }}
       rust_changed: ${{ steps.compute.outputs.rust_changed }}
@@ -53,14 +61,29 @@ jobs:
       inference_artifact_required: ${{ steps.compute.outputs.inference_artifact_required }}
       backend_recipe_changed: ${{ steps.compute.outputs.backend_recipe_changed }}
       sdk_smoke_required: ${{ steps.compute.outputs.sdk_smoke_required }}
+      runner_contract_required: ${{ steps.compute.outputs.runner_contract_required }}
       ui_dist_cache_key: ${{ steps.ui_key.outputs.ui_dist_cache_key }}
       linux_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.compute.outputs.inference_artifact_required == 'true' }}
       macos_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.compute.outputs.inference_artifact_required == 'true' || steps.filter.outputs.benchmarks == 'true' }}
+      depot_enabled: ${{ steps.runners.outputs.depot_enabled }}
+      allow_depot_remote_cache: ${{ steps.runners.outputs.allow_depot_remote_cache }}
+      runner: ${{ steps.runners.outputs.runner }}
+      runner_4: ${{ steps.runners.outputs.runner_4 }}
+      runner_8: ${{ steps.runners.outputs.runner_8 }}
+      runner_16: ${{ steps.runners.outputs.runner_16 }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
-      - uses: dorny/paths-filter@v4
+      - name: Select trusted Linux runners
+        id: runners
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          manual_use_depot: ${{ inputs.use_depot == true }}
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: filter
         with:
           filters: |
@@ -144,8 +167,9 @@ jobs:
 
   public_runner_image_contract:
     needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.runner_contract_required == 'true' }}
     name: Runner image / GitHub-hosted public
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.changes.outputs.runner_4 }}
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       credentials:
@@ -156,7 +180,7 @@ jobs:
         shell: bash
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Verify prebuilt public environment
@@ -165,40 +189,11 @@ jobs:
           hf --help >/dev/null
           cargo check -p mesh-llm-config
 
-  arc_runner_image_contract:
+  linux_host_input:
     needs: changes
-    name: Runner image / ARC ${{ matrix.architecture }}
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - architecture: amd64
-            runner: mesh-llm-amd64
-            machine: x86_64
-          - architecture: arm64
-            runner: mesh-llm-arm64
-            machine: aarch64
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - name: Verify prebuilt ARC environment
-        env:
-          EXPECTED_MACHINE: ${{ matrix.machine }}
-        run: |
-          test "$(uname -m)" = "$EXPECTED_MACHINE"
-          verify-runner-image self-hosted
-          cargo check -p mesh-llm-config
-
-  linux_cpu_artifact:
-    needs: changes
-    if: ${{ needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
-    name: Linux CPU
-    runs-on: ubuntu-24.04
+    if: ${{ (needs.changes.outputs.linux_inference_artifact_required == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    name: Linux immutable host
+    runs-on: ${{ needs.changes.outputs.runner_8 }}
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       credentials:
@@ -208,17 +203,18 @@ jobs:
       run:
         shell: bash
     env:
-      LLAMA_STAGE_BACKEND: cpu
-      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-dynamic-cpu
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Verify prebuilt CI environment
         run: verify-runner-image public
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
 
       - name: Build UI
         if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.ui == 'true' }}
@@ -231,8 +227,8 @@ jobs:
         run: pnpm test
 
       - name: Save UI dist cache
-        if: ${{ github.ref == 'refs/heads/main' && needs.changes.outputs.ui == 'true' }}
-        uses: actions/cache/save@v4
+        if: ${{ needs.changes.outputs.ui == 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: crates/mesh-llm-ui/dist
           key: ${{ needs.changes.outputs.ui_dist_cache_key }}
@@ -245,7 +241,7 @@ jobs:
           rustflags = ["-C", "link-arg=-fuse-ld=lld"]
           EOF
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
         with:
           workspaces: . -> target
@@ -267,46 +263,130 @@ jobs:
             exit 1
           fi
 
-      - name: Build backend-neutral debug host
-        env:
-          MESH_LLM_SKIP_UI: "1"
-        run: scripts/build-host.sh --profile debug
-
-      - name: Package CPU native runtime beside debug host
-        run: scripts/package-native-runtime.sh --build --backend cpu --out target/debug/native-runtimes
-
-      - name: CLI smoke test
+      - name: Prepare UI placeholder
         run: |
-          target/debug/mesh-llm --log-format json --version
-          target/debug/mesh-llm --log-format json --help | head -5
-          target/debug/mesh-llm --log-format json runtime list
-      - name: Composed debug client readiness smoke
-        run: scripts/ci-client-readiness-smoke.sh target/debug/mesh-llm target/debug/native-runtimes
+          mkdir -p crates/mesh-llm-ui/dist
+          test -f crates/mesh-llm-ui/dist/index.html ||
+            printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
 
-      - name: Upload Linux inference binary
-        uses: actions/upload-artifact@v6
+      - name: Prepare backend-neutral host
+        uses: ./.github/actions/prepare-host-input
         with:
-          name: ci-linux-inference-binaries
-          path: |
-            target/debug/mesh-llm
-            target/debug/native-runtimes/**
+          profile: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && 'release' || 'debug' }}
+          output_dir: host-input
+          skip_ui: "true"
+
+      - name: Upload immutable host input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr-linux-host-input
+          path: host-input/
           if-no-files-found: error
           retention-days: 1
 
       - name: Show sccache stats
         if: ${{ always() }}
-        run: |
-          sccache --show-stats || true
-          requests="$(sccache --show-stats 2>/dev/null | awk '/Compile requests/ { print $3; exit }')"
-          if [ "${requests:-0}" = "0" ]; then
-            echo "::warning::sccache reported zero compile requests; check RUSTC_WRAPPER wiring if this was not a fully reused target cache."
-          fi
+        run: sccache --show-stats || true
+
+  linux_cpu_runtime_input:
+    needs: changes
+    if: ${{ needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    name: Linux CPU runtime
+    runs-on: ${{ needs.changes.outputs.runner_8 }}
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLAMA_STAGE_BACKEND: cpu
+      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-dynamic-cpu
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      SCCACHE_GHA_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Verify prebuilt CI environment
+        run: verify-runner-image public
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
+      - name: Prepare CPU native runtime
+        uses: ./.github/actions/prepare-native-runtime-input
+        with:
+          backend: cpu
+          target: x86_64-unknown-linux-gnu
+          output_dir: runtime-input
+
+      - name: Upload immutable CPU runtime input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr-linux-cpu-runtime-input
+          path: |
+            runtime-input/*.tar.gz
+            runtime-input/*.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Show sccache stats
+        if: ${{ always() }}
+        run: sccache --show-stats || true
+
+  linux_cpu_artifact:
+    needs: [changes, linux_host_input, linux_cpu_runtime_input]
+    if: ${{ needs.linux_host_input.result == 'success' && needs.linux_cpu_runtime_input.result == 'success' }}
+    name: Linux CPU product
+    runs-on: ${{ needs.changes.outputs.runner_4 }}
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Verify prebuilt CI environment
+        run: verify-runner-image public
+      - name: Download immutable host input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: pr-linux-host-input
+          path: host-input
+      - name: Download immutable CPU runtime input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: pr-linux-cpu-runtime-input
+          path: runtime-input
+      - name: Compose CPU product from producer inputs
+        id: compose
+        uses: ./.github/actions/compose-product-input
+        with:
+          host_input_dir: host-input
+          runtime_input_dir: runtime-input
+          output_dir: ci-product
+          backend: cpu
+
+      - name: Upload Linux inference binary
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-linux-inference-binaries
+          path: ${{ steps.compose.outputs.archive_path }}
+          if-no-files-found: error
+          retention-days: 1
 
   linux_targets:
-    needs: changes
+    needs: [changes, linux_host_input]
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux ${{ matrix.name }}
-    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && matrix.self_hosted_runs_on || matrix.runs_on) }}
+    runs-on: ${{ needs.changes.outputs.runner_8 }}
     container:
       image: ${{ matrix.container }}
       credentials:
@@ -321,133 +401,145 @@ jobs:
         include:
           - name: CUDA slim
             backend: cuda
-            container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:295341c6c9f17c9eb69281fd454bda953799406d6915f472c914fb5f024a88ed
-            cache_key: linux-cuda-slim
-            runs_on: '["ubuntu-24.04"]'
-            self_hosted_runs_on: '["self-hosted","Linux","X64","amd64","gpu-nvidia"]'
+            container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
+            build_dir: .deps/llama-build/build-stage-abi-dynamic-cuda-sm86
+            cuda_architectures: "86"
+            cuda_version: "12.9.2"
+            cuda_major: "12"
           - name: ROCm slim
             backend: rocm
             container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b88ca9371ada2c507d6e36b71f0e0538fee378c6a5e2b39c17249b4b7e5088a
-            cache_key: linux-rocm-slim
-            build_dir: .deps/llama-build/build-stage-abi-rocm-gfx1100
+            build_dir: .deps/llama-build/build-stage-abi-dynamic-rocm-gfx1100
             amdgpu_targets: gfx1100
-            runs_on: '"ubuntu-24.04"'
+            cmake_prefix_path: /opt/rocm
           - name: Vulkan
             backend: vulkan
             container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80
-            cache_key: linux-vulkan
-            build_dir: .deps/llama-build/build-stage-abi-vulkan
-            runs_on: '"ubuntu-24.04"'
+            build_dir: .deps/llama-build/build-stage-abi-dynamic-vulkan
     env:
-      RUN_LINUX_BACKEND: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true' }}
       LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
       LLAMA_STAGE_BUILD_DIR: ${{ matrix.build_dir }}
+      LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
       LLAMA_STAGE_AMDGPU_TARGETS: ${{ matrix.amdgpu_targets }}
-      MESH_LLM_SKIP_UI: "1"
+      MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
+      MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
+      CMAKE_PREFIX_PATH: ${{ matrix.cmake_prefix_path }}
       MESH_LLM_REQUIRE_SCCACHE: "1"
-      RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
       GGML_CUDA_NO_VMM: "1"
       LLAMA_STAGE_SKIP_NCCL: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+
       - name: Verify prebuilt backend environment
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
         run: verify-runner-image public "${{ matrix.backend }}"
-      - name: Skip Linux backend build
-        if: ${{ env.RUN_LINUX_BACKEND != 'true' }}
-        run: echo "Skipping Linux ${{ matrix.name }} backend build; backend inputs did not change."
-      - name: Configure Linux Rust linker
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [target.x86_64-unknown-linux-gnu]
-          rustflags = ["-C", "link-arg=-fuse-ld=lld"]
-          EOF
-      - uses: Swatinem/rust-cache@v2
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
-        continue-on-error: true
+      - uses: ./.github/actions/configure-sccache-gha
         with:
-          workspaces: . -> target
-          cache-bin: "false"
-          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
-          shared-key: ${{ matrix.cache_key }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Prepare UI placeholder
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
-        run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
+          allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
+
+      - name: Download immutable host input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: pr-linux-host-input
+          path: host-input
+
       - name: Ensure Vulkan ABI cache directory
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'vulkan' }}
+        if: matrix.backend == 'vulkan'
         run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
       - name: Cache Vulkan ABI build
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'vulkan' }}
-        id: backend_llama_cache
-        uses: actions/cache@v5
+        if: matrix.backend == 'vulkan'
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
-          path: .deps/llama-build/build-stage-abi-vulkan
+          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
           key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-abi-vulkan-${{ hashFiles('scripts/build-linux.sh', 'scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
-      - name: Build Linux CUDA backend
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'cuda' }}
-        env:
-          MESH_CUDA_VERSION: "12.9.2"
-        run: just --shell bash --shell-arg -lc release-build-cuda
-      - name: Build Linux ROCm backend
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'rocm' }}
+
+      - name: Prepare native runtime
+        uses: ./.github/actions/prepare-native-runtime-input
+        with:
+          backend: ${{ matrix.backend }}
+          target: x86_64-unknown-linux-gnu
+          output_dir: runtime-input
+
+      - name: Compose backend product from immutable inputs
+        id: compose
+        uses: ./.github/actions/compose-product-input
+        with:
+          host_input_dir: host-input
+          runtime_input_dir: runtime-input
+          output_dir: product-input
+          backend: ${{ matrix.backend }}
+
+      - name: Upload composed backend product
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr-linux-${{ matrix.backend }}-product
+          path: ${{ steps.compose.outputs.archive_path }}
+          if-no-files-found: error
+          retention-days: 1
+
+  linux_static_abi_input:
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' && (needs.changes.outputs.test_batches_json != '[]' || needs.changes.outputs.linux_test_groups_json != '[]') }}
+    name: Linux static ABI input
+    runs-on: ${{ needs.changes.outputs.runner_8 }}
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLAMA_STAGE_BACKEND: cpu
+      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      SCCACHE_GHA_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Verify prebuilt CI environment
+        run: verify-runner-image public
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
+      - name: Cache patched llama.cpp ABI build
+        id: static_abi_cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .deps/llama.cpp/build-stage-abi-static
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-abi-cpu-${{ hashFiles('scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
+      - name: Prepare patched llama.cpp ABI checkout
+        if: ${{ steps.static_abi_cache.outputs.cache-hit != 'true' }}
+        run: scripts/prepare-llama.sh pinned
+      - name: Build patched llama.cpp ABI libraries
+        if: ${{ steps.static_abi_cache.outputs.cache-hit != 'true' }}
+        run: scripts/build-llama.sh
+      - name: Archive immutable static ABI input
         run: |
-          export CMAKE_PREFIX_PATH="/opt/rocm:${CMAKE_PREFIX_PATH:-}"
-          just --shell bash --shell-arg -lc release-build-rocm gfx1100
-      - name: Build Linux Vulkan backend
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'vulkan' && steps.backend_llama_cache.outputs.cache-hit != 'true' }}
-        run: just --shell bash --shell-arg -lc release-build-vulkan
-      - name: Build Linux Vulkan binary only
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'vulkan' && steps.backend_llama_cache.outputs.cache-hit == 'true' }}
-        run: |
-          scripts/build-release.sh
-          scripts/package-native-runtime.sh \
-            --backend vulkan \
-            --target x86_64-unknown-linux-gnu \
-            --out dist/native-runtimes
-      - name: Linux CUDA CLI smoke test
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'cuda' }}
-        run: |
-          # This must work without libcuda.so.1 or an injected driver stub. The
-          # CUDA runtime is selected dynamically from the packaged artifact;
-          # the backend-neutral host must remain executable on a CPU-only node.
-          export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
-          target/release/mesh-llm --log-format json --version
-          target/release/mesh-llm --log-format json runtime list
-          scripts/ci-client-readiness-smoke.sh target/release/mesh-llm dist/native-runtimes
-      - name: Linux ROCm CLI smoke test
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'rocm' }}
-        run: |
-          export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
-          target/release/mesh-llm --log-format json --version
-          target/release/mesh-llm --log-format json runtime list
-          scripts/ci-client-readiness-smoke.sh target/release/mesh-llm dist/native-runtimes
-      - name: Linux Vulkan CLI smoke test
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'vulkan' }}
-        run: |
-          export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
-          target/release/mesh-llm --log-format json --version
-          target/release/mesh-llm --log-format json runtime list
-          scripts/ci-client-readiness-smoke.sh target/release/mesh-llm dist/native-runtimes
-      - name: Show sccache stats
-        if: ${{ env.RUN_LINUX_BACKEND == 'true' && (always()) }}
-        run: |
-          sccache --show-stats || true
-          requests="$(sccache --show-stats 2>/dev/null | awk '/Compile requests/ { print $3; exit }')"
-          if [ "${requests:-0}" = "0" ]; then
-            echo "::warning::sccache reported zero compile requests; check RUSTC_WRAPPER wiring if this was not a fully reused target cache."
-          fi
+          test -d "$LLAMA_STAGE_BUILD_DIR"
+          tar -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")" \
+            -czf "$RUNNER_TEMP/mesh-llm-static-abi.tar.gz" \
+            "$(basename "$LLAMA_STAGE_BUILD_DIR")"
+      - name: Upload immutable static ABI input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr-linux-static-abi-input
+          path: ${{ runner.temp }}/mesh-llm-static-abi.tar.gz
+          if-no-files-found: error
+          retention-days: 1
 
   rust_crate_tests:
-    needs: changes
-    if: ${{ needs.changes.outputs.rust_changed == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    needs: [changes, linux_static_abi_input]
+    if: ${{ needs.linux_static_abi_input.result == 'success' && needs.changes.outputs.test_batches_json != '[]' && needs.changes.outputs.docs_only != 'true' }}
     name: Rust crate tests (${{ matrix.batch.idx }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.changes.outputs.runner_8 }}
     permissions:
       contents: read
       packages: read
@@ -472,12 +564,15 @@ jobs:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Verify prebuilt CI environment
         run: verify-runner-image public
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
         with:
           workspaces: . -> target
@@ -490,20 +585,17 @@ jobs:
       - name: Prepare patched llama.cpp source checkout
         if: ${{ contains(matrix.batch.crates, 'skippy-quantize') }}
         run: scripts/prepare-llama.sh pinned
-      - name: Ensure ABI cache directory
-        run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
-      - name: Cache patched llama.cpp ABI build
-        id: rust_tests_llama_cache
-        uses: actions/cache@v5
+      - name: Download immutable static ABI input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          path: .deps/llama.cpp/build-stage-abi-static
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-abi-cpu-${{ hashFiles('scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
-      - name: Prepare patched llama.cpp ABI checkout
-        if: ${{ steps.rust_tests_llama_cache.outputs.cache-hit != 'true' }}
-        run: scripts/prepare-llama.sh pinned
-      - name: Build patched llama.cpp ABI libraries
-        if: ${{ steps.rust_tests_llama_cache.outputs.cache-hit != 'true' }}
-        run: scripts/build-llama.sh
+          name: pr-linux-static-abi-input
+          path: ${{ runner.temp }}/static-abi-input
+      - name: Restore immutable static ABI input
+        run: |
+          mkdir -p "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
+          tar -xzf "$RUNNER_TEMP/static-abi-input/mesh-llm-static-abi.tar.gz" \
+            -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
+          test -d "$LLAMA_STAGE_BUILD_DIR"
       - name: Run crate tests
         env:
           TEST_CRATES: ${{ toJson(matrix.batch.crates) }}
@@ -519,10 +611,10 @@ jobs:
         run: sccache --show-stats || true
 
   linux_test_groups:
-    needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.linux_inference_artifact_required == 'true' }}
+    needs: [changes, linux_static_abi_input]
+    if: ${{ needs.linux_static_abi_input.result == 'success' && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.linux_test_groups_json != '[]' }}
     name: Linux tests (${{ matrix.group }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.changes.outputs.runner_8 }}
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       credentials:
@@ -534,11 +626,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - group: protocol
-            cache_key: linux-tests-protocol
-          - group: skippy-smoke
-            cache_key: linux-tests-skippy-smoke
+        include: ${{ fromJson(needs.changes.outputs.linux_test_groups_json) }}
     env:
       AFFECTED: ${{ needs.changes.outputs.affected_crates }}
       ALL_RUST: ${{ needs.changes.outputs.all_rust }}
@@ -549,10 +637,13 @@ jobs:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Verify prebuilt CI environment
         run: verify-runner-image public
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
 
       - name: Configure Linux Rust linker
         run: |
@@ -562,7 +653,7 @@ jobs:
           rustflags = ["-C", "link-arg=-fuse-ld=lld"]
           EOF
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
         with:
           workspaces: . -> target
@@ -571,28 +662,22 @@ jobs:
           shared-key: ${{ matrix.cache_key }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Ensure ABI cache directory
-        run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
-
-      - name: Cache patched llama.cpp ABI build
-        id: llama_cache
-        uses: actions/cache@v5
+      - name: Download immutable static ABI input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          path: .deps/llama.cpp/build-stage-abi-static
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-abi-cpu-${{ hashFiles('scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
-
-      - name: Prepare patched llama.cpp ABI checkout
-        if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
-        run: scripts/prepare-llama.sh pinned
-
-      - name: Build patched llama.cpp ABI libraries
-        if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
-        run: scripts/build-llama.sh
+          name: pr-linux-static-abi-input
+          path: ${{ runner.temp }}/static-abi-input
+      - name: Restore immutable static ABI input
+        run: |
+          mkdir -p "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
+          tar -xzf "$RUNNER_TEMP/static-abi-input/mesh-llm-static-abi.tar.gz" \
+            -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
+          test -d "$LLAMA_STAGE_BUILD_DIR"
 
       - name: Restore Skippy smoke model cache
         if: ${{ matrix.group == 'skippy-smoke' }}
         id: skippy_smoke_model_cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ runner.temp }}/skippy-ci-smoke-models
           key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-ci-smoke-models-SmolLM2-135M-Instruct.Q4_K_M.gguf-Falcon-H1-0.5B-Instruct-Q4_K_M.gguf-${{ hashFiles('.github/cache-version.txt') }}
@@ -617,7 +702,7 @@ jobs:
 
       - name: Save Skippy smoke model cache
         if: ${{ matrix.group == 'skippy-smoke' && github.ref == 'refs/heads/main' && steps.skippy_smoke_model_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ runner.temp }}/skippy-ci-smoke-models
           key: ${{ steps.skippy_smoke_model_cache.outputs.cache-primary-key }}
@@ -636,22 +721,21 @@ jobs:
             echo "::warning::sccache reported zero compile requests; check RUSTC_WRAPPER wiring if this was not a fully reused target cache."
           fi
 
-  linux_client_auto_boot:
+  linux_public_mesh_admission:
     needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
-    name: Linux client-auto boot test
-    runs-on: ubuntu-24.04
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.linux_cpu_artifact.result == 'success' }}
+    name: Linux public-mesh admission
+    runs-on: ${{ needs.changes.outputs.runner_4 }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Install client-auto smoke dependencies
         run: sudo apt-get update && sudo apt-get install -y curl jq python3
-      - uses: actions/download-artifact@v6
+      - uses: ./.github/actions/restore-smoke-inputs
         with:
-          name: ci-linux-inference-binaries
-          path: target/debug
-      - name: Make mesh-llm executable
-        run: chmod +x target/debug/mesh-llm
-      - name: Client-auto boot test
+          artifact_name: ci-linux-inference-binaries
+          artifact_path: ci-artifacts/public-mesh
+          staged_binary_path: target/debug/mesh-llm
+      - name: Public-mesh client-auto admission
         run: scripts/ci-client-auto-test.sh target/debug/mesh-llm
 
   hf_download_smoke:
@@ -660,6 +744,7 @@ jobs:
     name: HuggingFace download smoke
     uses: ./.github/workflows/hf-download-smoke.yml
     with:
+      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
       timeout_minutes: 15
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -672,13 +757,14 @@ jobs:
       artifact_name: ci-linux-inference-binaries
       mesh_binary_target: target/debug/mesh-llm
       cache_key_prefix: ''
+      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   agent_live_smokes:
     needs: [changes, linux_cpu_artifact]
     if: ${{ needs.linux_cpu_artifact.result == 'success' && (vars.MESH_AGENT_BASE_URL != '' || vars.MESH_OPENCODE_BASE_URL != '') && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'openai-frontend') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client')) && needs.changes.outputs.docs_only != 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.changes.outputs.runner_4 }}
     timeout-minutes: 45
     env:
       MESH_AGENT_BASE_URL: ${{ vars.MESH_AGENT_BASE_URL || vars.MESH_OPENCODE_BASE_URL }}
@@ -693,8 +779,8 @@ jobs:
     steps:
       # Keep live-agent smoke on an explicit Node version so CI does not depend
       # on GitHub-hosted image defaults.
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
       - name: Install agent CLIs
@@ -731,6 +817,7 @@ jobs:
       staged_binary_path: target/debug/mesh-llm
       model_cache_scope: two-node-smoke-model
       smoke_script: scripts/ci-two-node-client-serving-smoke.sh
+      runs_on: ${{ toJson(needs.changes.outputs.runner_4) }}
       timeout_minutes: 20
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -745,6 +832,7 @@ jobs:
       staged_binary_path: target/debug/mesh-llm
       model_cache_scope: two-node-split-smoke-model
       smoke_script: scripts/ci-two-node-split-smoke.sh
+      runs_on: ${{ toJson(needs.changes.outputs.runner_4) }}
       timeout_minutes: 25
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -759,7 +847,7 @@ jobs:
       artifact_path: ci-artifacts/linux
       staged_binary_path: target/debug/mesh-llm
       model_cache_scope: sdk-smoke-model
-      runs_on: '"ubuntu-24.04"'
+      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
@@ -773,27 +861,24 @@ jobs:
       artifact_path: ci-artifacts/linux
       staged_binary_path: target/debug/mesh-llm
       model_cache_scope: sdk-smoke-model
-      runs_on: '"ubuntu-24.04"'
+      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
-  macos_cpu_artifact:
+  macos_host_input:
     needs: changes
     if: ${{ needs.changes.outputs.macos_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
-    name: macOS CPU
+    name: macOS immutable host
     runs-on: macos-15
-    env:
-      RUN_MACOS_CPU: "true"
-      LLAMA_STAGE_BACKEND: metal
-      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-metal
-      MESH_LLM_SKIP_UI: "1"
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.ui == 'true' }}
         with:
           version: latest
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.ui == 'true' }}
         with:
           node-version: 24
@@ -804,7 +889,7 @@ jobs:
       - name: Restore UI dist cache
         id: ui-cache
         if: ${{ needs.changes.outputs.ui == 'true' || github.event_name == 'workflow_dispatch' }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: crates/mesh-llm-ui/dist
           key: ${{ needs.changes.outputs.ui_dist_cache_key }}
@@ -829,8 +914,8 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.ui == 'true' }}
         working-directory: crates/mesh-llm-ui
         run: pnpm test
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
         with:
           workspaces: . -> target
@@ -838,45 +923,97 @@ jobs:
           prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
           shared-key: macos
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install build dependencies
-        run: brew install cmake ninja jq lld
-      - name: Configure macOS Rust linker
-        run: |
-          mkdir -p .cargo
-          lld_prefix="$(brew --prefix lld)"
-          cat > .cargo/config.toml <<EOF
-          [target.aarch64-apple-darwin]
-          rustflags = ["-C", "link-arg=-fuse-ld=$lld_prefix/bin/ld64.lld"]
+      - name: Install host build dependencies
+        run: brew install lld
+      - name: Prepare backend-neutral host
+        uses: ./.github/actions/prepare-host-input
+        with:
+          profile: debug
+          output_dir: host-input
+          skip_ui: "true"
+      - name: Upload immutable host input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr-macos-host-input
+          path: host-input/
+          if-no-files-found: error
+          retention-days: 1
 
-          [target.x86_64-apple-darwin]
-          rustflags = ["-C", "link-arg=-fuse-ld=$lld_prefix/bin/ld64.lld"]
-          EOF
-      - name: Build backend-neutral debug host
-        env:
-          MESH_LLM_SKIP_UI: "1"
-        run: scripts/build-host.sh --profile debug
-      - name: Package Metal native runtime beside debug host
-        run: scripts/package-native-runtime.sh --build --backend metal --out target/debug/native-runtimes
-      - name: CLI smoke test
-        run: |
-          target/debug/mesh-llm --log-format json --version
-          target/debug/mesh-llm --log-format json --help | head -5
-          target/debug/mesh-llm --log-format json runtime list
-      - name: Composed debug client readiness smoke
-        run: scripts/ci-client-readiness-smoke.sh target/debug/mesh-llm target/debug/native-runtimes
+  macos_metal_runtime_input:
+    needs: changes
+    if: ${{ needs.changes.outputs.macos_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    name: macOS Metal runtime
+    runs-on: macos-15
+    env:
+      LLAMA_STAGE_BACKEND: metal
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-metal
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Install native-runtime build dependencies
+        run: brew install cmake ninja
+      - name: Ensure Metal ABI cache directory
+        run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
+      - name: Cache Metal ABI build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .deps/llama-build/build-stage-abi-dynamic-metal
+          key: ${{ env.CACHE_NAMESPACE }}-github-macos-15-skippy-abi-dynamic-metal-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
+      - name: Prepare Metal native runtime
+        uses: ./.github/actions/prepare-native-runtime-input
+        with:
+          backend: metal
+          target: aarch64-apple-darwin
+          output_dir: runtime-input
+      - name: Upload immutable Metal runtime input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr-macos-metal-runtime-input
+          path: |
+            runtime-input/*.tar.gz
+            runtime-input/*.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  macos_cpu_artifact:
+    needs: [changes, macos_host_input, macos_metal_runtime_input]
+    if: ${{ needs.macos_host_input.result == 'success' && needs.macos_metal_runtime_input.result == 'success' }}
+    name: macOS CPU product
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Download immutable host input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: pr-macos-host-input
+          path: host-input
+      - name: Download immutable Metal runtime input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: pr-macos-metal-runtime-input
+          path: runtime-input
+      - name: Compose macOS product from producer inputs
+        id: compose
+        uses: ./.github/actions/compose-product-input
+        with:
+          host_input_dir: host-input
+          runtime_input_dir: runtime-input
+          output_dir: ci-product
+          backend: metal
       - name: Upload macOS inference binary
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ci-macos-inference-binaries
-          path: |
-            target/debug/mesh-llm
-            target/debug/native-runtimes/**
+          path: ${{ steps.compose.outputs.archive_path }}
           if-no-files-found: error
           retention-days: 1
 
   swift_sdk_smoke:
-    needs: [changes, macos_cpu_artifact]
-    if: ${{ needs.macos_cpu_artifact.result == 'success' && needs.changes.outputs.macos_inference_artifact_required == 'true' && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    needs: [changes, macos_cpu_artifact, macos_unit_tests]
+    if: ${{ always() && needs.macos_cpu_artifact.result == 'success' && (needs.macos_unit_tests.result == 'success' || needs.macos_unit_tests.result == 'skipped') && needs.changes.outputs.macos_inference_artifact_required == 'true' && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
     uses: ./.github/workflows/sdk-smoke.yml
     with:
       sdk_kind: swift
@@ -889,40 +1026,23 @@ jobs:
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
-  macos_targets:
-    needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
-    name: macOS ${{ matrix.name }}
-    runs-on: macos-15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: CUDA
-            backend: cuda
-          - name: ROCm
-            backend: rocm
-          - name: Vulkan
-            backend: vulkan
-    steps:
-      - name: Skip unsupported macOS GPU backend
-        run: echo "Skipping macOS ${{ matrix.name }} because CUDA, ROCm, and Vulkan PR builds are unsupported on macOS runners."
-
   macos_unit_tests:
-    needs: [changes, macos_cpu_artifact]
-    if: ${{ needs.macos_cpu_artifact.result == 'success' && needs.changes.outputs.docs_only != 'true' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-host-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm')) }}
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-host-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm')) }}
     name: macOS unit tests
     runs-on: macos-15
     env:
       AFFECTED: ${{ needs.changes.outputs.affected_crates }}
       ALL_RUST: ${{ needs.changes.outputs.all_rust }}
       LLAMA_STAGE_BACKEND: metal
-      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-metal
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-static-metal
       MESH_LLM_SKIP_UI: "1"
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
         with:
           workspaces: . -> target
@@ -945,12 +1065,12 @@ jobs:
           EOF
       - name: Ensure ABI cache directory
         run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
-      - name: Cache patched llama.cpp ABI build
+      - name: Cache static Metal ABI build
         id: llama_cache
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
-          path: .deps/llama.cpp/build-stage-abi-metal
-          key: ${{ env.CACHE_NAMESPACE }}-github-macos-15-skippy-abi-metal-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
+          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          key: ${{ env.CACHE_NAMESPACE }}-github-macos-15-skippy-abi-static-metal-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
       - name: Prepare patched llama.cpp ABI checkout
         if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/prepare-llama.sh pinned
@@ -972,17 +1092,138 @@ jobs:
             fi
           done
 
-  windows_targets:
+  windows_checks:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || needs.changes.outputs.windows_cpu == 'true' || needs.changes.outputs.windows_gpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
-    name: Windows ${{ matrix.name }}
+    name: Windows lightweight checks
+    runs-on: windows-2022
+    env:
+      RUN_WINDOWS_PRODUCT: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true' || needs.changes.outputs.windows_gpu == 'true' }}
+      RUN_WINDOWS_NODE_RELEASE: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.nodejs_release == 'true' }}
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: windows-checks
+          save-if: "false"
+      - name: Check mesh-llm binary on Windows
+        if: ${{ env.RUN_WINDOWS_PRODUCT != 'true' }}
+        shell: pwsh
+        run: cargo check --locked -p mesh-llm --bin mesh-llm --features dynamic-native-runtime
+      - name: Check Node SDK addon on Windows
+        shell: pwsh
+        run: cargo check --locked -p mesh-llm-nodejs
+      - name: Build Node SDK addon on Windows
+        if: ${{ env.RUN_WINDOWS_NODE_RELEASE == 'true' }}
+        shell: pwsh
+        run: cargo build --release --locked -p mesh-llm-nodejs
+
+  windows_host_input:
+    needs: changes
+    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true' || needs.changes.outputs.windows_gpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    name: Windows immutable debug host
+    runs-on: windows-2022
+    env:
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.x'
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: windows-host-debug
+          save-if: "false"
+      - name: Initialize MSVC for neutral host
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - name: Prepare immutable Windows debug host
+        uses: ./.github/actions/prepare-windows-host-input
+        with:
+          profile: debug
+          skip_ui: "true"
+      - name: Upload immutable Windows host input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr-windows-host-input
+          path: host-input/*
+          if-no-files-found: error
+          retention-days: 1
+
+  windows_cpu_runtime_input:
+    needs: changes
+    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    name: Windows CPU runtime input
+    runs-on: windows-2022
+    env:
+      LLAMA_STAGE_BACKEND: cpu
+      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-cpu
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.x'
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: windows-runtime-cpu
+          save-if: "false"
+      - name: Initialize MSVC for CPU runtime
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - name: Prepare immutable Windows CPU runtime
+        uses: ./.github/actions/prepare-native-runtime-input
+        with:
+          backend: cpu
+          target: x86_64-pc-windows-msvc
+          output_dir: runtime-input
+      - name: Upload immutable Windows CPU runtime input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr-windows-cpu-runtime-input
+          path: |
+            runtime-input/*.tar.gz
+            runtime-input/*.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  windows_gpu_runtime_inputs:
+    needs: changes
+    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_gpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    name: Windows ${{ matrix.name }} runtime input
     runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: CPU
-            backend: cpu
           - name: CUDA
             backend: cuda
             cuda_architectures: "75"
@@ -992,58 +1233,36 @@ jobs:
           - name: Vulkan
             backend: vulkan
     env:
-      RUN_WINDOWS_CPU_FULL: ${{ matrix.backend == 'cpu' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true') }}
-      RUN_WINDOWS_NODE_RELEASE: ${{ matrix.backend == 'cpu' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.nodejs_release == 'true') }}
-      RUN_WINDOWS_GPU: ${{ matrix.backend != 'cpu' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_gpu == 'true') }}
       LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-${{ matrix.backend }}
-      MESH_LLM_SKIP_UI: "1"
-      MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
       WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}
       WINDOWS_VULKAN_SDK_VERSION: ${{ vars.VULKAN_SDK_VERSION || '1.4.328.1' }}
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
     steps:
-      - name: Skip Windows CPU full build
-        if: ${{ matrix.backend == 'cpu' && env.RUN_WINDOWS_CPU_FULL != 'true' }}
-        shell: pwsh
-        run: Write-Host "Running Windows CPU cargo check because this change does not touch Windows CPU build inputs."
-      - name: Skip Windows GPU build
-        if: ${{ matrix.backend != 'cpu' && env.RUN_WINDOWS_GPU != 'true' }}
-        shell: pwsh
-        run: Write-Host "Skipping Windows ${{ matrix.name }} because this change does not touch Windows GPU build inputs."
-      - uses: actions/checkout@v5
-        if: ${{ matrix.backend == 'cpu' || env.RUN_WINDOWS_GPU == 'true' }}
-      - uses: actions/setup-python@v6
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.x'
       - name: Test Windows native-runtime dependency resolver
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' }}
+        if: ${{ matrix.backend == 'vulkan' }}
         shell: pwsh
         run: python -m unittest scripts.tests.test_windows_native_runtime_deps -v
-      - uses: dtolnay/rust-toolchain@stable
-        if: ${{ matrix.backend == 'cpu' || env.RUN_WINDOWS_GPU == 'true' }}
-      - uses: mozilla-actions/sccache-action@v0.0.9
-        if: ${{ matrix.backend == 'cpu' || env.RUN_WINDOWS_GPU == 'true' }}
-      - uses: Swatinem/rust-cache@v2
-        if: ${{ matrix.backend == 'cpu' || env.RUN_WINDOWS_GPU == 'true' }}
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
         with:
           workspaces: . -> target
           cache-bin: "false"
           prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
-          shared-key: windows-${{ matrix.backend }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Prepare UI placeholder
-        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path crates/mesh-llm-ui/dist | Out-Null
-          '<html></html>' | Set-Content -Path crates/mesh-llm-ui/dist/index.html -Encoding utf8
+          shared-key: windows-runtime-${{ matrix.backend }}
+          save-if: "false"
       - name: Install CUDA toolkit
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'cuda' }}
-        uses: Jimver/cuda-toolkit@v0.2.35
+        if: ${{ matrix.backend == 'cuda' }}
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76 # v0.2.35
         with:
           cuda: ${{ env.WINDOWS_CUDA_VERSION }}
           method: network
@@ -1052,28 +1271,24 @@ jobs:
           use-local-cache: true
           log-file-suffix: windows-cuda
       - name: Verify CUDA toolkit
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'cuda' }}
+        if: ${{ matrix.backend == 'cuda' }}
         shell: pwsh
         run: |
           if (-not $env:CUDA_PATH -or -not (Test-Path $env:CUDA_PATH)) {
             throw "CUDA_PATH was not configured by Jimver/cuda-toolkit."
           }
           & nvcc --version
-          foreach ($library in @("cuda.lib", "cudart.lib", "cublas.lib", "cublasLt.lib")) {
-            $path = Join-Path $env:CUDA_PATH "lib\x64\$library"
-            if (-not (Test-Path $path)) {
-              throw "Expected CUDA import library was not found: $path"
-            }
-          }
+          $cudaMajor = ("$env:WINDOWS_CUDA_VERSION".Trim() -split '\.', 2)[0]
+          "MESH_LLM_CUDA_TOOLKIT_MAJOR=$cudaMajor" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Install Vulkan SDK
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' }}
-        uses: jakoch/install-vulkan-sdk-action@v1.5.2
+        if: ${{ matrix.backend == 'vulkan' }}
+        uses: jakoch/install-vulkan-sdk-action@3c53c378c9bfbb2ea122a1cc164a837d4004c871 # v1.5.2
         with:
           vulkan_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
           cache: true
           stripdown: true
       - name: Verify Vulkan SDK
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' }}
+        if: ${{ matrix.backend == 'vulkan' }}
         shell: pwsh
         run: |
           if (-not $env:VULKAN_SDK -or -not (Test-Path $env:VULKAN_SDK)) {
@@ -1084,59 +1299,120 @@ jobs:
             throw "glslc.exe was not found at $glslc"
           }
           & $glslc --version
-          $vulkanLib = Join-Path $env:VULKAN_SDK "Lib\vulkan-1.lib"
-          if (-not (Test-Path $vulkanLib)) {
-            throw "Expected Vulkan import library was not found: $vulkanLib"
-          }
       - name: Install ROCm HIP SDK
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'rocm' }}
+        if: ${{ matrix.backend == 'rocm' }}
         uses: ./.github/actions/setup-windows-rocm-sdk
         with:
           rocm-hip-sdk-filename: ${{ env.ROCM_HIP_SDK_FILENAME }}
-      - name: Initialize MSVC for composed product
-        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+      - name: Initialize MSVC for native runtime
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
-      - name: Build backend-neutral Windows release host
-        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
-        shell: pwsh
-        run: .\scripts\build-windows.ps1 -BuildProfile release -HostOnly
-      - name: Package Windows native runtime
-        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
-        shell: bash
+      - name: Prepare immutable Windows GPU runtime
+        uses: ./.github/actions/prepare-native-runtime-input
         env:
           LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
           LLAMA_STAGE_AMDGPU_TARGETS: ${{ matrix.rocm_architectures }}
-          MESH_LLM_CUDA_TOOLKIT_MAJOR: "12"
-        run: |
-          scripts/package-native-runtime.sh \
-            --build \
-            --backend "${{ matrix.backend }}" \
-            --target x86_64-pc-windows-msvc \
-            --out target/release/native-runtimes
-      - name: Check mesh-llm binary on Windows
-        if: ${{ matrix.backend == 'cpu' && env.RUN_WINDOWS_CPU_FULL != 'true' }}
-        shell: pwsh
-        run: cargo check --locked -p mesh-llm --bin mesh-llm --features dynamic-native-runtime
-      - name: Check Node SDK addon on Windows
-        if: ${{ matrix.backend == 'cpu' }}
-        shell: pwsh
-        run: cargo check --locked -p mesh-llm-nodejs
-      - name: Build Node SDK addon on Windows
-        if: ${{ env.RUN_WINDOWS_NODE_RELEASE == 'true' }}
-        shell: pwsh
-        run: cargo build --release --locked -p mesh-llm-nodejs
-      - name: Composed Windows CLI and client readiness smoke
-        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
-        shell: pwsh
-        run: |
-          .\target\release\mesh-llm.exe --log-format json --version
-          if ($LASTEXITCODE -ne 0) { throw "mesh-llm --version failed with exit code $LASTEXITCODE" }
-          .\target\release\mesh-llm.exe --log-format json --help | Select-Object -First 5
-          if ($LASTEXITCODE -ne 0) { throw "mesh-llm --help failed with exit code $LASTEXITCODE" }
-          $env:MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR = "$PWD\target\release\native-runtimes"
-          .\target\release\mesh-llm.exe --log-format json runtime list
-          if ($LASTEXITCODE -ne 0) { throw "mesh-llm runtime list failed with exit code $LASTEXITCODE" }
-          bash scripts/ci-client-readiness-smoke.sh target/release/mesh-llm.exe target/release/native-runtimes
-          if ($LASTEXITCODE -ne 0) { throw "composed Windows ${{ matrix.name }} client readiness smoke failed" }
+        with:
+          backend: ${{ matrix.backend }}
+          target: x86_64-pc-windows-msvc
+          output_dir: runtime-input
+      - name: Upload immutable Windows GPU runtime input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr-windows-${{ matrix.backend }}-runtime-input
+          path: |
+            runtime-input/*.tar.gz
+            runtime-input/*.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  windows_cpu_product:
+    needs: [changes, windows_host_input, windows_cpu_runtime_input]
+    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    name: Windows CPU
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.x'
+      - name: Download immutable Windows host input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: pr-windows-host-input
+          path: host-input
+      - name: Download immutable Windows CPU runtime input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: pr-windows-cpu-runtime-input
+          path: runtime-input
+      - name: Compose Windows CPU product
+        id: compose
+        uses: ./.github/actions/compose-product-input
+        with:
+          host_input_dir: host-input
+          runtime_input_dir: runtime-input
+          output_dir: product-input
+          backend: cpu
+          binary_name: mesh-llm.exe
+          readiness_smoke: "true"
+      - name: Upload composed Windows CPU product
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr-windows-cpu-product
+          path: ${{ steps.compose.outputs.archive_path }}
+          if-no-files-found: error
+          retention-days: 1
+
+  windows_gpu_products:
+    needs: [changes, windows_host_input, windows_gpu_runtime_inputs]
+    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_gpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    name: Windows ${{ matrix.name }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: CUDA
+            backend: cuda
+          - name: ROCm
+            backend: rocm
+          - name: Vulkan
+            backend: vulkan
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.x'
+      - name: Download immutable Windows host input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: pr-windows-host-input
+          path: host-input
+      - name: Download immutable Windows GPU runtime input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: pr-windows-${{ matrix.backend }}-runtime-input
+          path: runtime-input
+      - name: Compose Windows GPU product
+        id: compose
+        uses: ./.github/actions/compose-product-input
+        with:
+          host_input_dir: host-input
+          runtime_input_dir: runtime-input
+          output_dir: product-input
+          backend: ${{ matrix.backend }}
+          binary_name: mesh-llm.exe
+          readiness_smoke: "true"
+      - name: Upload composed Windows GPU product
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr-windows-${{ matrix.backend }}-product
+          path: ${{ steps.compose.outputs.archive_path }}
+          if-no-files-found: error
+          retention-days: 1

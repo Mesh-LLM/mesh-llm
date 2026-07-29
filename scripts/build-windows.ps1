@@ -1023,11 +1023,17 @@ if ($HostOnly) {
             }
         }
         Set-BuildVersionStamp
-        $hostArgs = @("build", "--release", "--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime")
+        $hostArgs = @("build")
+        $hostOutputProfile = "debug"
+        if ($buildProfile -eq "release") {
+            $hostArgs += "--release"
+            $hostOutputProfile = "release"
+        }
+        $hostArgs += @("--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime")
         Invoke-NativeCommand "cargo" $hostArgs
-        Write-Host "Mesh backend-neutral host: target\\release\\mesh-llm.exe"
+        Write-Host "Mesh backend-neutral host: target\\$hostOutputProfile\\mesh-llm.exe"
     }
-    exit 0
+    return
 }
 
 switch ($backendName) {

@@ -71,6 +71,21 @@ class ClientReadinessProcessTests(unittest.TestCase):
 
         kill.assert_called_once_with(4242, 1)
 
+    def test_windows_invalid_parameter_means_process_has_exited(self):
+        error = OSError("invalid parameter")
+        error.winerror = 87
+        with mock.patch.object(PROCESS.os, "kill", side_effect=error):
+            running = PROCESS.is_running(4242, is_windows=True)
+
+        self.assertFalse(running)
+
+    def test_unexpected_liveness_error_is_not_hidden(self):
+        error = OSError("unexpected")
+        error.winerror = 5
+        with mock.patch.object(PROCESS.os, "kill", side_effect=error):
+            with self.assertRaises(OSError):
+                PROCESS.is_running(4242, is_windows=True)
+
 
 if __name__ == "__main__":
     unittest.main()

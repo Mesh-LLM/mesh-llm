@@ -15,17 +15,32 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VerifyHostDependenciesTests(unittest.TestCase):
-    def test_release_workflow_uses_python_for_non_executable_verifier(self) -> None:
+    def test_shared_host_actions_invoke_non_executable_verifier_with_python(
+        self,
+    ) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        unix_action = (
+            ROOT / ".github" / "actions" / "prepare-host-input" / "action.yml"
+        ).read_text(encoding="utf-8")
+        windows_action = (
+            ROOT
+            / ".github"
+            / "actions"
+            / "prepare-windows-host-input"
+            / "action.yml"
+        ).read_text(encoding="utf-8")
 
         self.assertEqual(
-            workflow.count("python3 scripts/verify-host-dependencies.py"),
-            2,
+            unix_action.count("python3 scripts/verify-host-dependencies.py"),
+            1,
         )
-        self.assertNotIn(
-            "\n          scripts/verify-host-dependencies.py",
-            workflow,
+        self.assertEqual(
+            windows_action.count(
+                r"& python scripts\verify-host-dependencies.py",
+            ),
+            1,
         )
+        self.assertNotIn("verify-host-dependencies.py", workflow)
 
     def test_parses_elf_needed_entries(self) -> None:
         imports = MODULE.parse_elf_imports(
