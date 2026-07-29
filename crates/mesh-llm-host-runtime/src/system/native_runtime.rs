@@ -637,7 +637,7 @@ mod dynamic {
 
             let local_runtimes =
                 crate::system::native_runtime_install::discover_local_native_runtimes(
-                    &[bundled_runtime_dir.clone()],
+                    std::slice::from_ref(&bundled_runtime_dir),
                     &cache,
                 )
                 .unwrap();
