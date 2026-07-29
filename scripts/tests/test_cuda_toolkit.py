@@ -106,6 +106,27 @@ def test_canonical_path_falls_back_to_python(tmp_path: pathlib.Path) -> None:
     assert result.stdout.strip() == str(target.resolve())
 
 
+def test_windows_cmake_compiler_path_restores_missing_exe_suffix(tmp_path: pathlib.Path) -> None:
+    compiler = tmp_path / "nvcc.exe"
+    compiler.write_text("", encoding="utf-8")
+    env = os.environ.copy()
+    clean_cuda_env(env)
+    env["CUDACXX"] = str(compiler.with_suffix(""))
+
+    result = run_bash(
+        f"""
+        source {shlex.quote(str(CUDA_TOOLKIT_LIB))}
+        uname() {{ printf 'MINGW64_NT-10.0\\n'; }}
+        configure_cuda_toolkit_env
+        printf '%s\\n' "$CUDACXX"
+        """,
+        env,
+    )
+
+    result.check_returncode()
+    assert result.stdout.strip() == str(compiler)
+
+
 def test_propagates_helper_failure_when_nvcc_is_missing() -> None:
     env = os.environ.copy()
     env["PATH"] = ""

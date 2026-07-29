@@ -24,6 +24,24 @@ cuda_canonical_path() {
   printf '%s\n' "$path"
 }
 
+# Git Bash's `command -v nvcc` can report a Windows CUDA executable without
+# its `.exe` suffix. The shell can execute that path through PATHEXT, but CMake
+# requires the explicit existing compiler path when CUDACXX is set.
+cuda_cmake_compiler_path() {
+  local compiler="$1"
+
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if [[ ! -f "$compiler" && -f "${compiler}.exe" ]]; then
+        printf '%s\n' "${compiler}.exe"
+        return 0
+      fi
+      ;;
+  esac
+
+  printf '%s\n' "$compiler"
+}
+
 cuda_toolkit_root_for_compiler() {
   local compiler="$1"
   local resolved=""
@@ -81,8 +99,9 @@ configure_cuda_toolkit_env() {
     compiler="$(command -v nvcc 2>/dev/null || true)"
     [[ -n "$compiler" ]] || return 1
     compiler="$(cuda_canonical_path "$compiler")"
-    export CUDACXX="$compiler"
   fi
+  compiler="$(cuda_cmake_compiler_path "$compiler")"
+  export CUDACXX="$compiler"
 
   if [[ -z "$root" ]]; then
     root="$(cuda_toolkit_root_for_compiler "$compiler" || true)"
