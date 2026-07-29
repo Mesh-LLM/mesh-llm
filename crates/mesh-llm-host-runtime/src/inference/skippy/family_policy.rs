@@ -706,7 +706,7 @@ mod tests {
                 | "minicpm3" | "plamo" | "plamo3" | "plm" | "refact" | "smallthinker"
                 | "smollm3" | "arcee" | "chatglm" | "codeshell" | "deci" | "xverse" | "apertus"
                 | "bitnet" | "command_r" | "starcoder" | "ernie4_5" | "ernie4_5_moe" | "qwen"
-                | "jais" | "jais2" | "nemotron" | "llama4" | "mistral4" | "seed_oss" => {
+                | "jais" | "jais2" | "nemotron" | "llama4" | "mistral4" | "seed_oss" | "laguna" => {
                     assert_eq!(
                         policy.prefix_cache,
                         FamilyPrefixCachePolicy::Auto {
