@@ -117,6 +117,7 @@ jobs:
             nodejs_release:
               - 'crates/mesh-llm-nodejs/**'
             windows_cpu:
+              - 'crates/mesh-llm-release-footer/**'
               - 'crates/mesh-llm-nodejs/**'
               - 'crates/skippy-ffi/**'
               - 'scripts/build-windows.ps1'
