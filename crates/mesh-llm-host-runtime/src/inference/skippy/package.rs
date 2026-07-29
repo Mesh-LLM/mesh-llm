@@ -323,6 +323,14 @@ fn direct_gguf_layer_weight_bytes(
     source_files: &[SkippyPackageSourceFile],
     layer_count: u32,
 ) -> Result<Vec<u64>> {
+    if !skippy_runtime::native_runtime_loaded() {
+        tracing::debug!(
+            "GGUF tensor layout unavailable because the native runtime is not loaded; \
+             using capacity-based split planning"
+        );
+        return Ok(Vec::new());
+    }
+
     let mut tensors = Vec::new();
     for source_file in source_files {
         let info = match skippy_runtime::ModelInfo::open(&source_file.path) {
@@ -869,6 +877,23 @@ mod tests {
         ];
 
         assert_eq!(layer_weight_bytes_from_tensors(&tensors, 2), vec![17, 28]);
+    }
+
+    #[cfg(feature = "dynamic-native-runtime")]
+    #[test]
+    fn direct_gguf_weights_fall_back_when_dynamic_runtime_is_unloaded() {
+        assert!(!skippy_runtime::native_runtime_loaded());
+        let source_files = vec![SkippyPackageSourceFile {
+            path: PathBuf::from("/models/not-opened.gguf"),
+            bytes: 12,
+            sha256: "abc123".to_string(),
+        }];
+
+        assert!(
+            direct_gguf_layer_weight_bytes(&source_files, 2)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     fn tensor(

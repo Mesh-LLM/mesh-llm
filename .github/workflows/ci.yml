@@ -189,6 +189,7 @@ jobs:
       run:
         shell: bash
     env:
+      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-dynamic-cpu
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
