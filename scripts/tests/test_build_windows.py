@@ -7,6 +7,7 @@ import unittest
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCRIPT: Final = ROOT / "scripts" / "build-windows.ps1"
+PR_BUILDS: Final = ROOT / ".github" / "workflows" / "pr_builds.yml"
 
 
 class BuildWindowsScriptTests(unittest.TestCase):
@@ -46,6 +47,18 @@ class BuildWindowsScriptTests(unittest.TestCase):
             "-DynamicHost is retained as a compatibility switch; Windows hosts are always dynamic.",
             script,
         )
+
+    def test_windows_packaged_cli_smoke_checks_each_native_command(self) -> None:
+        workflow = PR_BUILDS.read_text(encoding="utf-8")
+        start = workflow.index("      - name: Composed Windows CLI and client readiness smoke")
+        smoke = workflow[start:]
+
+        self.assertIn(".\\target\\release\\mesh-llm.exe --log-format json --version", smoke)
+        self.assertIn(".\\target\\release\\mesh-llm.exe --log-format json runtime list", smoke)
+        self.assertIn("mesh-llm --version failed with exit code $LASTEXITCODE", smoke)
+        self.assertIn("mesh-llm --help failed with exit code $LASTEXITCODE", smoke)
+        self.assertIn("mesh-llm runtime list failed with exit code $LASTEXITCODE", smoke)
+        self.assertIn("failed with exit code $LASTEXITCODE", smoke)
 
 
 if __name__ == "__main__":

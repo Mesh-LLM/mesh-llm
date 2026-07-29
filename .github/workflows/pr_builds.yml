@@ -1131,8 +1131,11 @@ jobs:
         shell: pwsh
         run: |
           .\target\release\mesh-llm.exe --log-format json --version
+          if ($LASTEXITCODE -ne 0) { throw "mesh-llm --version failed with exit code $LASTEXITCODE" }
           .\target\release\mesh-llm.exe --log-format json --help | Select-Object -First 5
+          if ($LASTEXITCODE -ne 0) { throw "mesh-llm --help failed with exit code $LASTEXITCODE" }
           $env:MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR = "$PWD\target\release\native-runtimes"
           .\target\release\mesh-llm.exe --log-format json runtime list
+          if ($LASTEXITCODE -ne 0) { throw "mesh-llm runtime list failed with exit code $LASTEXITCODE" }
           bash scripts/ci-client-readiness-smoke.sh target/release/mesh-llm.exe target/release/native-runtimes
           if ($LASTEXITCODE -ne 0) { throw "composed Windows ${{ matrix.name }} client readiness smoke failed" }

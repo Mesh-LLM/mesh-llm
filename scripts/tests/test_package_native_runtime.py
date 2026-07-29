@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 
@@ -11,6 +13,49 @@ SCRIPT = ROOT / "scripts" / "package-native-runtime.sh"
 
 
 class PackageNativeRuntimeTests(unittest.TestCase):
+    def test_cpu_package_with_no_tools_is_safe_under_macos_bash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            build_dir = root / "build"
+            build_dir.mkdir()
+            (build_dir / "libllama.so").write_bytes(b"test native runtime")
+
+            tool_dir = root / "tools"
+            tool_dir.mkdir()
+            patchelf = tool_dir / "patchelf"
+            patchelf.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            patchelf.chmod(0o755)
+
+            env = os.environ.copy()
+            env["LLAMA_STAGE_BUILD_DIR"] = str(build_dir)
+            env["PATH"] = f"{tool_dir}{os.pathsep}{env['PATH']}"
+            result = subprocess.run(
+                [
+                    "/bin/bash",
+                    str(SCRIPT),
+                    "--backend",
+                    "cpu",
+                    "--target",
+                    "x86_64-unknown-linux-gnu",
+                    "--out",
+                    str(root / "output"),
+                ],
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+
+            result.check_returncode()
+            manifest = json.loads(
+                (
+                    root
+                    / "output"
+                    / "meshllm-native-runtime-linux-x86_64-cpu"
+                    / "manifest.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["runtime"]["tools"], {})
+
     def test_cuda_flavor_uses_mesh_cuda_version_major(self) -> None:
         self.assertEqual(
             self.backend_flavor("cuda", mesh_cuda_version="13.1.2"),

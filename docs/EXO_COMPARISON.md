@@ -17,7 +17,8 @@ focus, and operational model.
 - **Mesh LLM** pools machines into private or published inference meshes with
   embedded Skippy/llama.cpp staged execution, QUIC/iroh peer-to-peer networking,
   gossip-based state dissemination, and package-backed GGUF layer splits for large models.
-  Spans CUDA, ROCm, Vulkan, Metal, and CPU with a single binary.
+  Spans CUDA, ROCm, Vulkan, Metal, and CPU with one backend-neutral host paired
+  with a selected, versioned native runtime.
 
 Exo is a strong fit for local multi-device Apple Silicon clusters, especially
 with Thunderbolt 5 RDMA and tensor parallelism. Mesh LLM is a strong fit for
@@ -33,7 +34,7 @@ package-backed layer splits.
 | Inference backend | MLX, MLX distributed (Apple Silicon) | Embedded Skippy/llama.cpp stage runtime |
 | Model splitting | Tensor parallelism (all-reduce collectives), pipeline parallelism (layer-sequential), topology-aware auto placement with realtime device graph | Contiguous layer-range splits assigned by coordinator; each range loaded from a package-backed GGUF stage artifact |
 | Architecture pattern | Event sourcing with Master (single writer), Worker, Runner (isolated process), API, Election systems; 5 topic channels | Decentralized mesh with gossip protocol, QUIC/iroh peer-to-peer connections, heartbeat-based peer state, Nostr published discovery |
-| Hardware emphasis | Apple Silicon/macOS Tier 1 (M3 Ultra, M4 Pro, M5); Linux CPU Tier 3; Linux GPU (CUDA, Vulkan) under development | Release flavors for macOS, Linux, Windows, CUDA, ROCm, Vulkan, Metal, and CPU; all backends supported in the same binary |
+| Hardware emphasis | Apple Silicon/macOS Tier 1 (M3 Ultra, M4 Pro, M5); Linux CPU Tier 3; Linux GPU (CUDA, Vulkan) under development | Composed release flavors for macOS, Linux, Windows, CUDA, ROCm, Vulkan, Metal, and CPU; each product combines the same backend-neutral host for its platform with a selected native runtime |
 | RDMA support | RDMA over Thunderbolt 5, day-0; macOS 26.2+; 99% latency reduction between TB5-connected devices | Not applicable (no RDMA transport) |
 | Networking | libp2p, mDNS, bootstrap peers, `EXO_LIBP2P_NAMESPACE` for cluster isolation | QUIC/iroh mesh paths, Nostr discovery for published meshes, managed relays by default, private invite tokens |
 | API compatibility | OpenAI Chat Completions, Claude Messages, OpenAI Responses, Ollama API | OpenAI-compatible `/v1/models`, chat completions, completions, and Responses through `openai-frontend` |

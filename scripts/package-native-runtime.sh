@@ -504,7 +504,12 @@ if [[ -f "$LLAMA_WORKDIR/.mesh-llm-patch-digest" ]]; then
     patch_digest="$(tr -d '[:space:]' < "$LLAMA_WORKDIR/.mesh-llm-patch-digest")"
 fi
 
-"$(python_bin)" - "$stage_dir/manifest.json" "$primary_library" "${library_paths[@]}" -- "${tool_paths[@]}" <<PY
+manifest_args=("$stage_dir/manifest.json" "$primary_library" "${library_paths[@]}" --)
+if [[ "${#tool_paths[@]}" -gt 0 ]]; then
+    manifest_args+=("${tool_paths[@]}")
+fi
+
+"$(python_bin)" - "${manifest_args[@]}" <<PY
 import json
 import hashlib
 import os

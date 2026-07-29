@@ -258,7 +258,11 @@ fn sha256_file(path: &Path) -> Result<String> {
     let mut file =
         File::open(path).with_context(|| format!("open native runtime file {}", path.display()))?;
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
+    // This is reached through the Kotlin/UniFFI SDK while running on a JVM
+    // native thread. JVM-created native threads can have a 1 MiB stack, so a
+    // 1 MiB local array can overflow that stack before checksum verification
+    // even begins. Keep the read buffer on the heap instead.
+    let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
         let count = file
             .read(&mut buffer)
@@ -421,6 +425,24 @@ mod tests {
 
         assert!(error.to_string().contains("checksum mismatch"));
         assert!(error.to_string().contains("tools/mesh-llm-gpu-benchmark"));
+    }
+
+    #[test]
+    fn checksum_verification_runs_on_a_small_foreign_thread_stack() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        fs::write(file.path(), b"native runtime").unwrap();
+        let path = file.path().to_path_buf();
+
+        let checksum = std::thread::Builder::new()
+            .name("native-runtime-checksum-test".to_string())
+            .stack_size(256 * 1024)
+            .spawn(move || sha256_file(&path))
+            .unwrap()
+            .join()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(checksum, sha256_file(file.path()).unwrap());
     }
 
     #[test]

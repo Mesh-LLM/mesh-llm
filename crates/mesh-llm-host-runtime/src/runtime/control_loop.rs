@@ -38,7 +38,27 @@ pub(super) async fn wait_shutdown_signal() -> &'static str {
             _ = term.recv() => "SIGTERM",
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::ctrl_break;
+
+        // CTRL_BREAK_EVENT is distinct from CTRL_C_EVENT on Windows. The CI
+        // readiness smoke starts MeshLLM in a dedicated process group and
+        // uses CTRL_BREAK_EVENT to request graceful shutdown.
+        let mut ctrl_break = match ctrl_break() {
+            Ok(signal) => signal,
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+                return "CTRL-C";
+            }
+        };
+
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => "CTRL-C",
+            _ = ctrl_break.recv() => "CTRL-BREAK",
+        }
+    }
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = tokio::signal::ctrl_c().await;
         "CTRL-C"

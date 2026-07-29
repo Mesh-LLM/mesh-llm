@@ -47,7 +47,7 @@ Usage: install.ps1 [-PreRelease] [-InstallDir <DIR>] [-Flavor <FLAVOR>] [-NoPath
 Options:
   -PreRelease             Install the latest published GitHub prerelease instead of the latest stable release.
   -InstallDir <DIR>       Install directory. Defaults to %LOCALAPPDATA%\mesh-llm\bin.
-  -Flavor <FLAVOR>        Legacy compatibility flag. The installer always installs the Windows x64 host binary and ``mesh-llm.exe setup`` now chooses the runtime.
+  -Flavor <FLAVOR>        Legacy compatibility flag. The installer installs the Windows x64 product bundle, including its packaged runtime; ``mesh-llm.exe setup`` may select another compatible runtime.
   -NoPathUpdate           Do not add the install directory to the user Path.
   -NoSetup                Do not run ``mesh-llm.exe setup``; print the exact command instead.
   -Help                   Show this help text.
@@ -211,7 +211,7 @@ function Write-FlavorCompatibilityWarning {
         return
     }
 
-    Write-Warning "Ignoring legacy -Flavor '$legacyFlavor'. The Windows installer now always installs the x64 host binary; run ``mesh-llm.exe setup`` to choose the recommended runtime."
+    Write-Warning "Ignoring legacy -Flavor '$legacyFlavor'. The Windows installer now installs the x64 product bundle and its packaged runtime; run ``mesh-llm.exe setup`` to select the recommended runtime."
 }
 
 function Get-StaleBinaryNames {
@@ -682,7 +682,7 @@ $archive = Join-Path $tmpRoot $asset
 New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
 
 try {
-    Write-Host "Installing Windows x64 host binary"
+    Write-Host "Installing Windows x64 MeshLLM product bundle"
     if ($PreRelease) {
         Write-Host "Release channel: prerelease"
     } else {
