@@ -50,6 +50,10 @@ place runtimes at `mesh-bundle/native-runtimes/<runtime-id>`; Debian/Arch
 packages use `/usr/local/lib/mesh-llm/<version>/native-runtimes`; Homebrew uses
 formula-owned `libexec/native-runtimes`.
 
+The Windows host input also carries the checksum-protected `xtask` executable
+that performed producer-side attestation. Windows product composers invoke that
+prebuilt verifier for the immutable host instead of compiling workspace code.
+
 `ci.yml` applies the same executable-product rule to trusted main validation:
 Linux and macOS debug artifact producers upload both the backend-neutral host
 and its adjacent runtime; their consumer reruns JSON client readiness from those

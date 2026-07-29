@@ -219,7 +219,9 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   composition that records both immutable digests while retaining
   compatibility archive names. Host producers attest and import-check the host;
   consumers verify and copy those exact bytes rather than rebuilding or
-  re-stamping them. Product consumers never rebuild a missing producer. It
+  re-stamping them. The Windows host input includes a checksum-protected
+  producer-built attestation verifier so Windows composers do not compile
+  workspace code. Product consumers never rebuild a missing producer. It
   dispatches the completed release to `Mesh-LLM/mesh-packaging`,
   which owns package, GHCR, and npm publication.
 - `fly-deploy-console.yml` is a manual (`workflow_dispatch`) deploy of the

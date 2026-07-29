@@ -21,6 +21,7 @@ $nativeRuntimeRoot = if ($env:MESH_LLM_NATIVE_RUNTIME_ROOT) {
 }
 $attestationSigningKeyFile = $env:MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE
 $attestationPublicKeyFile = $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE
+$attestationVerifier = $env:MESH_RELEASE_ATTESTATION_VERIFIER
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -194,6 +195,26 @@ function Require-File {
     }
 }
 
+function Assert-FileChecksum {
+    param(
+        [string]$Path,
+        [string]$ChecksumPath
+    )
+
+    Require-File $Path
+    Require-File $ChecksumPath
+    $checksumText = (Get-Content -Path $ChecksumPath -Raw).Trim()
+    $expectedHash = ($checksumText -split '\s+')[0].ToLowerInvariant()
+    if ($expectedHash -notmatch '^[0-9a-f]{64}$') {
+        throw "Invalid SHA-256 checksum in ${ChecksumPath}"
+    }
+
+    $actualHash = Get-Sha256Hex $Path
+    if ($actualHash -ne $expectedHash) {
+        throw "SHA-256 checksum mismatch for ${Path}"
+    }
+}
+
 function Get-PythonCommand {
     foreach ($name in @("python3", "python")) {
         $command = Get-Command $name -ErrorAction SilentlyContinue
@@ -254,23 +275,34 @@ function Invoke-ReleaseAttestationStamp {
         if (-not (Test-Path $attestationPublicKeyFile) -or (Get-Item $attestationPublicKeyFile).Length -eq 0) {
             throw "MESH_RELEASE_HOST_PRESTAMPED=1 requires a non-empty MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
         }
-        Push-Location $repoRoot
-        try {
-            $inspectJson = & cargo run -q -p xtask -- release-attestation inspect `
+        if (Test-HasValue $attestationVerifier) {
+            Assert-FileChecksum -Path $attestationVerifier -ChecksumPath "${attestationVerifier}.sha256"
+            $inspectJson = & $attestationVerifier release-attestation inspect `
                 --binary $BinaryPath `
                 --public-key-file $attestationPublicKeyFile `
                 --json
             if ($LASTEXITCODE -ne 0) {
-                throw "release-attestation inspect failed for pre-stamped $BinaryPath"
+                throw "prebuilt release-attestation verifier failed for pre-stamped $BinaryPath"
             }
-            $inspectStatus = ($inspectJson | ConvertFrom-Json).status
-            if ($inspectStatus -ne "valid") {
-                throw "pre-stamped release host attestation reported status '$inspectStatus' for $BinaryPath"
+        } else {
+            Push-Location $repoRoot
+            try {
+                $inspectJson = & cargo run -q -p xtask -- release-attestation inspect `
+                    --binary $BinaryPath `
+                    --public-key-file $attestationPublicKeyFile `
+                    --json
+                if ($LASTEXITCODE -ne 0) {
+                    throw "release-attestation inspect failed for pre-stamped $BinaryPath"
+                }
+            } finally {
+                Pop-Location
             }
-            Write-Host "Release attestation: verified pre-stamped host"
-        } finally {
-            Pop-Location
         }
+        $inspectStatus = ($inspectJson | ConvertFrom-Json).status
+        if ($inspectStatus -ne "valid") {
+            throw "pre-stamped release host attestation reported status '$inspectStatus' for $BinaryPath"
+        }
+        Write-Host "Release attestation: verified pre-stamped host"
         return
     }
 

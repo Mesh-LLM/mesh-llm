@@ -200,6 +200,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install macOS attestation verifier linker
+        if: runner.os == 'macOS'
+        run: brew install lld
       - name: Download immutable host input
         uses: actions/download-artifact@v7
         with:
@@ -933,6 +936,7 @@ jobs:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Compose aarch64 CUDA release bundle from producer inputs
+        shell: bash
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -1016,6 +1020,7 @@ jobs:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Compose CUDA release bundle from producer inputs
+        shell: bash
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -1089,6 +1094,7 @@ jobs:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Compose ROCm release bundle from producer inputs
+        shell: bash
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -1159,6 +1165,7 @@ jobs:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Compose Vulkan release bundle from producer inputs
+        shell: bash
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -1234,6 +1241,9 @@ jobs:
           Copy-Item target\release\mesh-llm.exe host-input\mesh-llm.exe -Force
           cargo run -q -p xtask -- release-attestation stamp --binary host-input\mesh-llm.exe --signing-key-file $env:MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE
           cargo run -q -p xtask -- release-attestation inspect --binary host-input\mesh-llm.exe --public-key-file $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE --json
+          Copy-Item target\debug\xtask.exe host-input\release-attestation-verifier.exe -Force
+          $verifierHash = (Get-FileHash -Algorithm SHA256 host-input\release-attestation-verifier.exe).Hash.ToLowerInvariant()
+          Set-Content -Path host-input\release-attestation-verifier.exe.sha256 -Value "$verifierHash  release-attestation-verifier.exe" -NoNewline
           python scripts\verify-host-dependencies.py host-input\mesh-llm.exe --report host-input\host-imports.json
           $hash = (Get-FileHash -Algorithm SHA256 host-input\mesh-llm.exe).Hash.ToLowerInvariant()
           Set-Content -Path host-input\mesh-llm.exe.sha256 -Value "$hash  mesh-llm.exe" -NoNewline
@@ -1305,6 +1315,7 @@ jobs:
           MESH_LLM_RELEASE_BIN_DIR: ${{ github.workspace }}\host-input
           MESH_LLM_NATIVE_RUNTIME_ROOT: ${{ github.workspace }}\runtime-root
           MESH_RELEASE_HOST_PRESTAMPED: "1"
+          MESH_RELEASE_ATTESTATION_VERIFIER: ${{ github.workspace }}\host-input\release-attestation-verifier.exe
         run: |
           Set-Content -Path $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE -Value $env:RELEASE_ATTESTATION_PUBLIC_KEY -NoNewline
           $expectedHash = (Get-Content host-input\mesh-llm.exe.sha256).Split()[0]
@@ -1356,6 +1367,7 @@ jobs:
           MESH_LLM_RELEASE_BIN_DIR: ${{ github.workspace }}\host-input
           MESH_LLM_NATIVE_RUNTIME_ROOT: ${{ github.workspace }}\runtime-root
           MESH_RELEASE_HOST_PRESTAMPED: "1"
+          MESH_RELEASE_ATTESTATION_VERIFIER: ${{ github.workspace }}\host-input\release-attestation-verifier.exe
         run: |
           Set-Content -Path $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE -Value $env:RELEASE_ATTESTATION_PUBLIC_KEY -NoNewline
           $expectedHash = (Get-Content host-input\mesh-llm.exe.sha256).Split()[0]
