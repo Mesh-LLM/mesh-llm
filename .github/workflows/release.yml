@@ -159,7 +159,7 @@ jobs:
             --binary host-input/mesh-llm \
             --public-key-file "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE" \
             --json
-          scripts/verify-host-dependencies.py \
+          python3 scripts/verify-host-dependencies.py \
             host-input/mesh-llm \
             --report host-input/host-imports.json
           shasum -a 256 host-input/mesh-llm | awk '{print $1 "  mesh-llm"}' > host-input/mesh-llm.sha256
@@ -775,7 +775,7 @@ jobs:
           cargo run -q -p xtask -- release-attestation stamp \
             --binary host-input/mesh-llm \
             --signing-key-file "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
-          scripts/verify-host-dependencies.py \
+          python3 scripts/verify-host-dependencies.py \
             host-input/mesh-llm \
             --report host-input/host-imports.json
           shasum -a 256 host-input/mesh-llm | awk '{print $1 "  mesh-llm"}' > host-input/mesh-llm.sha256

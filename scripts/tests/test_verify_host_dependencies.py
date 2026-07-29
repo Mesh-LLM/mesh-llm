@@ -7,6 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "verify-host-dependencies.py"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 SPEC = importlib.util.spec_from_file_location("verify_host_dependencies", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -14,6 +15,18 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VerifyHostDependenciesTests(unittest.TestCase):
+    def test_release_workflow_uses_python_for_non_executable_verifier(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            workflow.count("python3 scripts/verify-host-dependencies.py"),
+            2,
+        )
+        self.assertNotIn(
+            "\n          scripts/verify-host-dependencies.py",
+            workflow,
+        )
+
     def test_parses_elf_needed_entries(self) -> None:
         imports = MODULE.parse_elf_imports(
             """
