@@ -325,6 +325,8 @@ class CiWorkflowArtifactTests(unittest.TestCase):
             "needs: [changes, macos_cpu_artifact, macos_unit_tests]",
             swift,
         )
+        self.assertIn("!cancelled()", swift)
+        self.assertNotIn("always()", swift)
         self.assertIn("needs.macos_cpu_artifact.result == 'success'", swift)
         self.assertIn("needs.macos_unit_tests.result == 'success'", swift)
         self.assertIn("needs.macos_unit_tests.result == 'skipped'", swift)

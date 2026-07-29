@@ -819,7 +819,7 @@ jobs:
 
   swift_sdk_smoke:
     needs: [changes, macos_cpu_artifact, macos_unit_tests]
-    if: ${{ always() && needs.macos_cpu_artifact.result == 'success' && (needs.macos_unit_tests.result == 'success' || needs.macos_unit_tests.result == 'skipped') && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.sdk == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ !cancelled() && needs.macos_cpu_artifact.result == 'success' && (needs.macos_unit_tests.result == 'success' || needs.macos_unit_tests.result == 'skipped') && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.sdk == 'true') && needs.changes.outputs.docs_only != 'true' }}
     permissions:
       contents: read
     uses: ./.github/workflows/sdk-smoke.yml
