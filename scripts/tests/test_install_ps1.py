@@ -64,6 +64,13 @@ class InstallPs1StaticTests(unittest.TestCase):
         self.assertIn("Installing supported legacy MeshLLM", contents)
         self.assertIn("requires product-manifest.json and native-runtimes", contents)
 
+    def test_tree_digest_normalizes_platform_path_separators(self) -> None:
+        contents = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("[System.IO.Path]::DirectorySeparatorChar", contents)
+        self.assertIn("[System.IO.Path]::AltDirectorySeparatorChar", contents)
+        self.assertIn("TrimStart($pathSeparators)", contents)
+
     def test_script_stages_replacement_and_removes_stale_host_imports(self) -> None:
         contents = SCRIPT.read_text(encoding="utf-8")
 

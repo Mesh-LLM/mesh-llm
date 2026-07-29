@@ -285,10 +285,14 @@ function Get-DeterministicTreeSha256 {
 
     $hasher = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $root = (Resolve-Path -LiteralPath $Path).ProviderPath.TrimEnd([char]'\')
+        $pathSeparators = [char[]]@(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        )
+        $root = (Resolve-Path -LiteralPath $Path).ProviderPath.TrimEnd($pathSeparators)
         $filesByRelativePath = @{}
         foreach ($file in Get-ChildItem -LiteralPath $Path -Recurse -File) {
-            $relative = $file.FullName.Substring($root.Length).TrimStart([char]'\') -replace '\\', '/'
+            $relative = $file.FullName.Substring($root.Length).TrimStart($pathSeparators) -replace '\\', '/'
             $filesByRelativePath[$relative] = $file.FullName
         }
         [string[]]$relativePaths = @($filesByRelativePath.Keys)
