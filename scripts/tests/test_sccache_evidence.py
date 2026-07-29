@@ -62,15 +62,15 @@ class SccacheEvidenceTests(unittest.TestCase):
         root = Path(temporary.name)
         fake_sccache = root / "sccache"
         fake_sccache.write_text(
-            "#!/usr/bin/env python3\n"
-            "import os\n"
-            "import sys\n"
-            "if sys.argv[1:] == ['--show-stats']:\n"
-            "    print('Compile requests                     12')\n"
-            "elif sys.argv[1:] == ['--show-stats', '--stats-format', 'json']:\n"
-            "    print(os.environ['FAKE_SCCACHE_JSON'])\n"
-            "else:\n"
-            "    raise SystemExit(2)\n",
+            "#!/bin/sh\n"
+            "if [ \"$#\" -eq 1 ] && [ \"$1\" = \"--show-stats\" ]; then\n"
+            "  printf '%s\\n' 'Compile requests                     12'\n"
+            "elif [ \"$#\" -eq 3 ] && [ \"$1\" = \"--show-stats\" ] "
+            "&& [ \"$2\" = \"--stats-format\" ] && [ \"$3\" = \"json\" ]; then\n"
+            "  printf '%s\\n' \"$FAKE_SCCACHE_JSON\"\n"
+            "else\n"
+            "  exit 2\n"
+            "fi\n",
             encoding="utf-8",
         )
         fake_sccache.chmod(
@@ -162,6 +162,22 @@ class SccacheEvidenceTests(unittest.TestCase):
 
         self.assertIn("['--zero-stats']", configure)
         self.assertEqual(configure.count("await resetStatistics("), 6)
+
+    def test_remote_multilevel_writes_finish_before_ephemeral_job_exit(self) -> None:
+        configure = CONFIGURE_ACTION.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            configure.count(
+                "core.exportVariable("
+                "'SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'all'"
+                ")",
+            ),
+            2,
+        )
+        self.assertNotIn(
+            "'SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'ignore'",
+            configure,
+        )
 
     def test_instrumented_workflows_use_unique_evidence_artifacts(self) -> None:
         expected_names = {

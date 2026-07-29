@@ -86,7 +86,13 @@ runs:
             core.exportVariable('SCCACHE_GHA_ENABLED', 'false');
             core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk,webdav');
             core.exportVariable('SCCACHE_IGNORE_SERVER_IO_ERROR', '1');
-            core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'ignore');
+            // sccache's ignore/l0 policies dispatch slower-level writes in the
+            // background. Ephemeral CI jobs can exit before those uploads
+            // finish, leaving a permanently partial remote cache. The all
+            // policy waits for every configured level before the compiler
+            // request completes; cache failures remain visible in the
+            // captured counters.
+            core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'all');
             await exec.exec('sccache', ['--stop-server'], {
               ignoreReturnCode: true,
             });
@@ -215,7 +221,11 @@ runs:
           core.exportVariable('ACTIONS_RUNTIME_TOKEN', runtimeToken);
           core.exportVariable('SCCACHE_IGNORE_SERVER_IO_ERROR', '1');
           core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk,gha');
-          core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'ignore');
+          // Wait for the GitHub Actions tier to finish each write. With the
+          // asynchronous policies, the runner can terminate while L1 uploads
+          // are still pending and the next identical run observes avoidable
+          // misses.
+          core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'all');
 
           await exec.exec('sccache', ['--stop-server'], {
             ignoreReturnCode: true,
