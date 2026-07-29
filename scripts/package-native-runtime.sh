@@ -134,9 +134,16 @@ sanitize_component() {
 }
 
 backend_flavor() {
+    local cuda_major
     case "$BACKEND" in
-        cuda) printf 'cuda%s\n' "$(cuda_toolkit_major)" ;;
-        cuda-blackwell) printf 'cuda%s-sm120\n' "$(cuda_toolkit_major)" ;;
+        cuda)
+            cuda_major="$(cuda_toolkit_major)"
+            printf 'cuda%s\n' "$cuda_major"
+            ;;
+        cuda-blackwell)
+            cuda_major="$(cuda_toolkit_major)"
+            printf 'cuda%s-sm120\n' "$cuda_major"
+            ;;
         rocm|hip) printf 'rocm\n' ;;
         *) printf '%s\n' "$BACKEND" ;;
     esac
@@ -144,6 +151,10 @@ backend_flavor() {
 
 cuda_toolkit_major() {
     if [[ -n "${MESH_LLM_CUDA_TOOLKIT_MAJOR:-}" ]]; then
+        if [[ ! "$MESH_LLM_CUDA_TOOLKIT_MAJOR" =~ ^[0-9]+$ ]]; then
+            echo "MESH_LLM_CUDA_TOOLKIT_MAJOR must be digits-only (for example: 12)" >&2
+            exit 1
+        fi
         printf '%s\n' "$MESH_LLM_CUDA_TOOLKIT_MAJOR"
         return 0
     fi

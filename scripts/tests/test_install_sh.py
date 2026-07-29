@@ -344,6 +344,68 @@ class InstallScriptTests(unittest.TestCase):
                 "old manifest\n",
             )
 
+    def test_install_bundle_preserves_existing_install_when_staging_mktemp_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+            old_host = install_dir / "mesh-llm"
+            old_host.write_text("old host\n", encoding="utf-8")
+            bundle_dir = self._write_installable_bundle(tmp_path, "new")
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                f"""
+                mktemp() {{ return 41; }}
+                install_bundle {shlex_quote(str(bundle_dir))}
+                """,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(old_host.read_text(encoding="utf-8"), "old host\n")
+            self.assertEqual(list(install_dir.glob(".mesh-llm-*")), [])
+
+    def test_install_bundle_rolls_back_when_terminated_during_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            existing_runtime = install_dir / "native-runtimes" / "old-runtime"
+            existing_runtime.mkdir(parents=True)
+            (existing_runtime / "old-library").write_text("old runtime\n", encoding="utf-8")
+            old_host = install_dir / "mesh-llm"
+            old_host.write_text("old host\n", encoding="utf-8")
+            old_host.chmod(0o755)
+            old_manifest = install_dir / "product-manifest.json"
+            old_manifest.write_text("old manifest\n", encoding="utf-8")
+            bundle_dir = self._write_installable_bundle(tmp_path, "new")
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                f"""
+                sent_term=0
+                mv() {{
+                    if [[ "$sent_term" == 0 && "$1" == *".mesh-llm-stage."*/native-runtimes ]]; then
+                        sent_term=1
+                        kill -TERM "$$"
+                        return 143
+                    fi
+                    command mv "$@"
+                }}
+                install_bundle {shlex_quote(str(bundle_dir))}
+                """,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(old_host.read_text(encoding="utf-8"), "old host\n")
+            self.assertEqual(
+                (existing_runtime / "old-library").read_text(encoding="utf-8"),
+                "old runtime\n",
+            )
+            self.assertEqual(old_manifest.read_text(encoding="utf-8"), "old manifest\n")
+            self.assertEqual(list(install_dir.glob(".mesh-llm-*")), [])
+
     def test_main_runs_setup_interactively(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result, calls, tools = self._run_main(tmp, interactive=True)

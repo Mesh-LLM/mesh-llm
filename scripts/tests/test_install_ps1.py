@@ -119,6 +119,9 @@ class InstallPs1BehaviorTests(unittest.TestCase):
             self.assertEqual(self._read_calls(calls), ["--version"])
             self.assertIn("Run this next:", result.stdout)
             self.assertIn('mesh-llm.exe" setup', result.stdout)
+            self.assertTrue(
+                (tmp_path / "bin/native-runtimes/test-runtime/manifest.json").is_file()
+            )
 
     def test_no_setup_prints_command_without_running_setup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -196,6 +199,26 @@ class InstallPs1BehaviorTests(unittest.TestCase):
                 (install_dir / "product-manifest.json").read_text(encoding="utf-8"),
                 "old-manifest\n",
             )
+
+    def test_stale_cleanup_failure_does_not_roll_back_committed_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            stale_binary = install_dir / "rpc-server.exe"
+            stale_binary.mkdir(parents=True)
+            (stale_binary / "child").write_text("prevent non-recursive removal\n", encoding="utf-8")
+
+            result, _calls = self._run_install(tmp_path, interactive=False)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue((install_dir / "mesh-llm.exe").is_file())
+            self.assertTrue(
+                (install_dir / "native-runtimes/test-runtime/manifest.json").is_file()
+            )
+            manifest = json.loads(
+                (install_dir / "product-manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["runtime"]["id"], "test-runtime")
 
     def _run_install(
         self,
@@ -301,6 +324,8 @@ class InstallPs1BehaviorTests(unittest.TestCase):
         runtime_files = {
             "manifest.json": runtime_manifest.encode(),
             "lib/llama.dll": b"runtime",
+            "Z-file": b"uppercase",
+            "a-file": b"lowercase",
         }
         runtime_digest = self._tree_sha256(runtime_files)
         host_digest = hashlib.sha256(contents.encode()).hexdigest()

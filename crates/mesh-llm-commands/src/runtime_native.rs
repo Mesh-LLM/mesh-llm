@@ -5,7 +5,7 @@ use anyhow::Result;
 use mesh_llm_native_runtime::{NativeRuntimePruneMode, NativeRuntimeResolver, RuntimeSelection};
 use mesh_llm_runtime_install::{
     CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeDownloadProgressCallback,
-    NativeRuntimeManifestOptions, discover_local_native_runtimes,
+    NativeRuntimeInstallOptions, NativeRuntimeManifestOptions, discover_local_native_runtimes,
     discover_native_runtime_bundle_dirs, host_runtime_profile, install_native_runtime,
     load_release_manifest, native_runtime_cache,
 };
@@ -133,16 +133,14 @@ pub async fn run_native_runtime_install(
         json_output,
     );
     let formatter = runtime_native_formatter(json_output);
-    let mut install_options = native_runtime_install_options(
+    let install_options = cli_native_runtime_install_options(native_runtime_install_options(
         resolved_selection.selection,
         manifest_path,
         bundle_dirs,
         cache_dir,
         configured,
         cli_download_progress(json_output),
-    );
-    install_options.bundle_install_policy =
-        NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache;
+    ));
     let outcome = match install_native_runtime(install_options).await {
         Ok(outcome) => outcome,
         Err(error) => {
@@ -151,6 +149,14 @@ pub async fn run_native_runtime_install(
         }
     };
     formatter.render_install(&outcome)
+}
+
+fn cli_native_runtime_install_options(
+    mut options: NativeRuntimeInstallOptions,
+) -> NativeRuntimeInstallOptions {
+    options.bundle_install_policy =
+        NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache;
+    options
 }
 
 fn print_configured_selector(configured: NativeRuntimeConfigSelection<'_>, json_output: bool) {
@@ -497,5 +503,27 @@ mod tests {
 
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].path, runtime_dir.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn cli_runtime_install_options_install_explicit_bundles_into_cache() {
+        let shared_options = native_runtime_install_options(
+            RuntimeSelection::Recommended,
+            None,
+            &[],
+            None,
+            NativeRuntimeConfigSelection::default(),
+            None,
+        );
+        let cli_options = cli_native_runtime_install_options(shared_options.clone());
+
+        assert_eq!(
+            shared_options.bundle_install_policy,
+            NativeRuntimeBundleInstallPolicy::UseInPlace
+        );
+        assert_eq!(
+            cli_options.bundle_install_policy,
+            NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache
+        );
     }
 }

@@ -160,6 +160,15 @@ class PackageReleaseTests(unittest.TestCase):
                 {},
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = json.loads(
+                (bundle / "product-manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["backend"], "cuda-blackwell")
+            self.assertEqual(manifest["runtime"]["id"], "linux-cuda13-sm120")
+            self.assertEqual(
+                manifest["runtime"]["path"],
+                "native-runtimes/linux-cuda13-sm120",
+            )
 
     def test_product_manifest_accepts_hip_backend_alias(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -182,6 +191,12 @@ class PackageReleaseTests(unittest.TestCase):
                 {},
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = json.loads(
+                (bundle / "product-manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["backend"], "hip")
+            self.assertEqual(manifest["runtime"]["id"], "linux-rocm")
+            self.assertEqual(manifest["runtime"]["path"], "native-runtimes/linux-rocm")
 
 
 if __name__ == "__main__":

@@ -202,7 +202,8 @@ mod dynamic {
             crate::system::native_runtime_install::discover_native_runtime_bundle_dirs(
                 &options.bundle_dirs,
             )?;
-        if discovered_bundle_dirs.is_empty() {
+        let discovered_bundle_dirs_empty = discovered_bundle_dirs.is_empty();
+        if discovered_bundle_dirs_empty {
             if let Some(plan) = resolve_installed_native_runtime_plan(
                 &cache,
                 &profile,
@@ -220,7 +221,8 @@ mod dynamic {
         tracing::info!(
             cache_root = %cache.root().display(),
             mesh_version = %options.mesh_version,
-            "No compatible installed MeshLLM native runtime found; attempting one-shot startup install"
+            "{}",
+            startup_install_message(discovered_bundle_dirs_empty)
         );
 
         let install_result = install_executor(options.clone()).await;
@@ -258,6 +260,14 @@ mod dynamic {
             "no compatible MeshLLM native runtime is installed or installable for MeshLLM {} / Skippy ABI {abi}; run `mesh-llm runtime install` or inspect available runtimes with `mesh-llm runtime list --available`",
             options.mesh_version
         )
+    }
+
+    const fn startup_install_message(discovered_bundle_dirs_empty: bool) -> &'static str {
+        if discovered_bundle_dirs_empty {
+            "No compatible installed MeshLLM native runtime found; attempting one-shot startup install"
+        } else {
+            "Discovered native runtime bundles take precedence over installed runtimes; attempting one-shot startup install"
+        }
     }
 
     fn resolve_installed_native_runtime_plan(
@@ -933,6 +943,18 @@ mod dynamic {
             assert!(message.contains("mesh-llm runtime list --available"));
             assert_eq!(install_calls.lock().unwrap().len(), 1);
             assert_eq!(*load_calls.lock().unwrap(), 0);
+        }
+
+        #[test]
+        fn startup_install_message_distinguishes_empty_and_nonempty_discovery() {
+            assert_eq!(
+                startup_install_message(true),
+                "No compatible installed MeshLLM native runtime found; attempting one-shot startup install"
+            );
+            assert_eq!(
+                startup_install_message(false),
+                "Discovered native runtime bundles take precedence over installed runtimes; attempting one-shot startup install"
+            );
         }
     }
 }

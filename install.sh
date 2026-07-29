@@ -638,7 +638,9 @@ install_bundle() {
     mkdir -p "$INSTALL_DIR"
     local staging_dir
     local backup_dir
-    staging_dir="$(mktemp -d "$INSTALL_DIR/.mesh-llm-stage.XXXXXX")"
+    if ! staging_dir="$(mktemp -d "$INSTALL_DIR/.mesh-llm-stage.XXXXXX")"; then
+        return 1
+    fi
     if ! backup_dir="$(mktemp -d "$INSTALL_DIR/.mesh-llm-backup.XXXXXX")"; then
         rm -rf -- "$staging_dir"
         return 1
@@ -653,6 +655,7 @@ install_bundle() {
     fi
 
     local -a installed_names=()
+    trap 'restore_bundle_install "$backup_dir" ${installed_names[@]+"${installed_names[@]}"}; rm -rf -- "$staging_dir" "$backup_dir"; trap - INT TERM; exit 130' INT TERM
     local staged_item
     local item_name
     local destination
@@ -665,6 +668,7 @@ install_bundle() {
                     "$backup_dir" \
                     ${installed_names[@]+"${installed_names[@]}"}
                 rm -rf -- "$staging_dir" "$backup_dir"
+                trap - INT TERM
                 return 1
             fi
         fi
@@ -673,11 +677,13 @@ install_bundle() {
                 "$backup_dir" \
                 ${installed_names[@]+"${installed_names[@]}"}
             rm -rf -- "$staging_dir" "$backup_dir"
+            trap - INT TERM
             return 1
         fi
         installed_names+=("$item_name")
     done < <(find "$staging_dir" -mindepth 1 -maxdepth 1 -print0)
 
+    trap - INT TERM
     rm -rf -- "$staging_dir" "$backup_dir"
     remove_stale_binaries
 }

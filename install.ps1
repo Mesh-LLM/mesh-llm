@@ -285,12 +285,17 @@ function Get-DeterministicTreeSha256 {
     $hasher = [System.Security.Cryptography.SHA256]::Create()
     try {
         $root = (Resolve-Path -LiteralPath $Path).ProviderPath.TrimEnd([char]'\')
-        $files = Get-ChildItem -LiteralPath $Path -Recurse -File | Sort-Object FullName
-        foreach ($file in $files) {
+        $filesByRelativePath = @{}
+        foreach ($file in Get-ChildItem -LiteralPath $Path -Recurse -File) {
             $relative = $file.FullName.Substring($root.Length).TrimStart([char]'\') -replace '\\', '/'
+            $filesByRelativePath[$relative] = $file.FullName
+        }
+        [string[]]$relativePaths = @($filesByRelativePath.Keys)
+        [Array]::Sort($relativePaths, [StringComparer]::Ordinal)
+        foreach ($relative in $relativePaths) {
             $relativeBytes = [System.Text.Encoding]::UTF8.GetBytes($relative)
             $relativeLength = Convert-UInt64ToBigEndianBytes ([UInt64]$relativeBytes.Length)
-            $fileDigest = Convert-HexToBytes ((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant())
+            $fileDigest = Convert-HexToBytes ((Get-FileHash -LiteralPath $filesByRelativePath[$relative] -Algorithm SHA256).Hash.ToLowerInvariant())
             Update-Sha256Bytes -Hasher $hasher -Bytes $relativeLength
             Update-Sha256Bytes -Hasher $hasher -Bytes $relativeBytes
             Update-Sha256Bytes -Hasher $hasher -Bytes $fileDigest
@@ -378,12 +383,12 @@ function Assert-ProductBundle {
     [void](Assert-StringField -Value (Assert-JsonProperty -Object $manifest -Name "mesh_version" -Label "mesh_version") -Label "mesh_version")
     [void](Assert-StringField -Value (Assert-JsonProperty -Object $manifest -Name "backend" -Label "backend") -Label "backend")
 
-    $host = Assert-JsonProperty -Object $manifest -Name "host" -Label "host"
-    $hostPath = Assert-SafeRelativePath -Path (Assert-StringField -Value (Assert-JsonProperty -Object $host -Name "path" -Label "host.path") -Label "host.path") -Label "host.path"
+    $hostArtifact = Assert-JsonProperty -Object $manifest -Name "host" -Label "host"
+    $hostPath = Assert-SafeRelativePath -Path (Assert-StringField -Value (Assert-JsonProperty -Object $hostArtifact -Name "path" -Label "host.path") -Label "host.path") -Label "host.path"
     if ($hostPath -ne "mesh-llm.exe") {
         throw "product-manifest.json host.path must be mesh-llm.exe"
     }
-    $hostSha256 = Assert-Sha256Field -Value (Assert-JsonProperty -Object $host -Name "sha256" -Label "host.sha256") -Label "host.sha256"
+    $hostSha256 = Assert-Sha256Field -Value (Assert-JsonProperty -Object $hostArtifact -Name "sha256" -Label "host.sha256") -Label "host.sha256"
     $hostSource = Join-Path $BundleDir $hostPath
     if (-not (Test-Path $hostSource -PathType Leaf)) {
         throw "product-manifest.json referenced host path was not found: $hostPath"
@@ -425,6 +430,7 @@ function Assert-ProductBundle {
 
     return [PSCustomObject]@{
         HostSource = $hostSource
+        RuntimeId = $runtimeId
         RuntimeSource = $runtimeSource
         ProductManifestSource = $productManifestSource
         HostImportsSource = Join-Path $BundleDir "host-imports.json"
@@ -490,7 +496,8 @@ function Stage-IncomingBundle {
 
     try {
         Copy-Item -Path $Bundle.HostSource -Destination $Paths.MeshBinaryStaging -Force
-        Copy-Item -Path $Bundle.RuntimeSource -Destination $Paths.RuntimeStaging -Recurse -Force
+        New-Item -ItemType Directory -Path $Paths.RuntimeStaging -Force | Out-Null
+        Copy-Item -Path $Bundle.RuntimeSource -Destination (Join-Path $Paths.RuntimeStaging $Bundle.RuntimeId) -Recurse -Force
         Copy-Item -Path $Bundle.ProductManifestSource -Destination $Paths.ProductManifestStaging -Force
         if (Test-Path $Bundle.HostImportsSource -PathType Leaf) {
             Copy-Item -Path $Bundle.HostImportsSource -Destination $Paths.HostImportsStaging -Force
@@ -554,7 +561,6 @@ function Install-MeshBinary {
             }
         }
         Remove-InstallBackups -Paths $paths
-        Remove-StaleBinaries
     } catch {
         Restore-InstallBackup -Paths $paths
         throw
@@ -564,6 +570,7 @@ function Install-MeshBinary {
         Remove-InstallStagingPath -Path $paths.ProductManifestStaging
         Remove-InstallStagingPath -Path $paths.HostImportsStaging
     }
+    Remove-StaleBinaries
 }
 
 function Add-InstallDirToPath {

@@ -324,12 +324,9 @@ fn bundle_path_matches_explicit_root(
         )
     })?;
     for explicit_dir in explicit_dirs {
-        let explicit_dir = explicit_dir.canonicalize().with_context(|| {
-            format!(
-                "canonicalize explicit native runtime bundle {}",
-                explicit_dir.display()
-            )
-        })?;
+        let Ok(explicit_dir) = explicit_dir.canonicalize() else {
+            continue;
+        };
         if bundle_path.starts_with(&explicit_dir) {
             return Ok(true);
         }
@@ -893,6 +890,22 @@ mod tests {
             !bundle_path_matches_explicit_root(&runtime_bundle, std::slice::from_ref(&sibling))
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn explicit_bundle_root_matching_skips_uncanonicalizable_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let product_bundle = temp.path().join("mesh-bundle");
+        let runtime_bundle = product_bundle.join("native-runtimes/runtime-a");
+        std::fs::create_dir_all(&runtime_bundle).unwrap();
+
+        let matches = bundle_path_matches_explicit_root(
+            &runtime_bundle,
+            &[temp.path().join("missing"), product_bundle.clone()],
+        )
+        .unwrap();
+
+        assert!(matches);
     }
 
     #[test]
