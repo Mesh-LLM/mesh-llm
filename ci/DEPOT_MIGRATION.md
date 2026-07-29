@@ -115,6 +115,9 @@ PRs optimize for the earliest reliable signal:
 - make SDK smokes consume the staged product runtime and reject hidden rebuilds;
 - keep public-mesh admission out of required PR checks. It remains an explicit
   manual integration probe, while product readiness uses hermetic local mDNS.
+- gate fan-in jobs that must tolerate skipped dependencies with
+  [`!cancelled()`](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation),
+  never `always()`, so cancelling a superseded run releases its runner capacity.
 
 Main is the exhaustive trust boundary:
 
