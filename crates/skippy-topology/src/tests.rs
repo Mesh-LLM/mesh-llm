@@ -1581,3 +1581,69 @@ fn reviewed_supported_families_smoke_plan_with_expected_policy_signals() {
         }
     }
 }
+
+#[test]
+fn qwen35_series_inference_covers_qwen36_release_names() {
+    // Qwen3.6 loads as llama.cpp `qwen35`/`qwen35moe`; there is no `qwen36` arch.
+    // Every quant and uploader must resolve to the recurrent series, not qwen3moe.
+    for identity in [
+        "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
+        "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M",
+        "bartowski/Qwen3.6-35B-A3B-GGUF:Q4_K_M",
+        "Qwen/Qwen3.6-35B-A3B-Instruct-GGUF:Q5_K_M",
+        "unsloth/Qwen3.5-35B-A3B-GGUF:Q4_K_M",
+        "qwen35moe",
+        "qwen36moe",
+    ] {
+        let family = infer_family_capability(identity, 40, 2048)
+            .unwrap_or_else(|| panic!("expected qwen35moe capability for {identity}"));
+        assert_eq!(family.family_id, "qwen35moe", "wrong family for {identity}");
+        assert_eq!(
+            family.recurrent_ranges,
+            vec![LayerRange { start: 0, end: 40 }],
+            "qwen35moe must expose a recurrent range for {identity}"
+        );
+        assert_eq!(
+            family.exact_state_mobility,
+            ExactStateMobility::RejectedTooLarge,
+            "qwen35moe full-state handoff must stay rejected for {identity}"
+        );
+    }
+
+    for identity in [
+        "unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL",
+        "unsloth/Qwen3.5-4B-GGUF:Q4_K_M",
+        "qwen35",
+        "qwen36",
+    ] {
+        let family = infer_family_capability(identity, 32, 2560)
+            .unwrap_or_else(|| panic!("expected qwen35 capability for {identity}"));
+        assert_eq!(family.family_id, "qwen35", "wrong family for {identity}");
+        assert_eq!(
+            family.recurrent_ranges,
+            vec![LayerRange { start: 0, end: 32 }],
+            "qwen35 must expose a recurrent range for {identity}"
+        );
+    }
+}
+
+#[test]
+fn qwen3_parameter_sizes_are_not_mistaken_for_qwen35_series() {
+    // `Qwen3-5B` compacts to `qwen35b`: the digit is a parameter count, not a
+    // series number, so these must stay on the non-recurrent Qwen3 families.
+    for (identity, expected) in [
+        ("Qwen/Qwen3-5B-GGUF:Q4_K_M", "qwen3_dense"),
+        ("Qwen/Qwen3-6B-GGUF:Q4_K_M", "qwen3_dense"),
+        ("Qwen/Qwen3-0.6B:Q8_0", "qwen3_dense"),
+        ("Qwen/Qwen3-35B-A3B-GGUF:Q4_K_M", "qwen3moe"),
+        ("Qwen/Qwen3-30B-A3B-GGUF:Q4_K_M", "qwen3moe"),
+    ] {
+        let family = infer_family_capability(identity, 40, 2048)
+            .unwrap_or_else(|| panic!("expected capability for {identity}"));
+        assert_eq!(family.family_id, expected, "wrong family for {identity}");
+        assert!(
+            family.recurrent_ranges.is_empty(),
+            "{identity} must not be treated as recurrent"
+        );
+    }
+}

@@ -725,6 +725,34 @@ pub fn falcon_h1_capability(layer_count: u32, activation_width: u32) -> FamilyCa
     }
 }
 
+/// Capability for the Qwen3.5 series (llama.cpp `qwen35` / `qwen35moe`).
+///
+/// Qwen3.6 releases share this architecture pair; there is no separate `qwen36`
+/// architecture in llama.cpp. Certified evidence for both
+/// `mradermacher/UnifiedReward-Edit-qwen35-4b-i1-GGUF` (`qwen35`) and
+/// `unsloth/Qwen3.6-35B-A3B-GGUF` (`qwen35moe`) records state mobility as
+/// rejected-too-large, so exact full-state handoff must not be advertised.
+pub fn qwen35_series_capability(
+    family_id: &str,
+    layer_count: u32,
+    activation_width: u32,
+) -> FamilyCapabilityRecord {
+    FamilyCapabilityRecord {
+        family_id: family_id.to_string(),
+        layer_count,
+        activation_width,
+        default_wire_dtype: WireDType::F16,
+        q8_wire_validation: WireValidation::Untested,
+        exact_state_mobility: ExactStateMobility::RejectedTooLarge,
+        recurrent_ranges: vec![LayerRange {
+            start: 0,
+            end: layer_count,
+        }],
+        split_constraints: Vec::new(),
+        sidebands: Vec::new(),
+    }
+}
+
 pub fn qwen3next_capability(
     layer_count: u32,
     activation_width: u32,
@@ -1147,16 +1175,9 @@ fn infer_qwen_capability(
     if compact.contains("qwen2moe") {
         return Some(qwen2moe_capability(layer_count, activation_width));
     }
-    if compact.contains("qwen35moe") {
-        return Some(recurrent_family_capability(
-            "qwen35moe",
-            layer_count,
-            activation_width,
-        ));
-    }
-    if compact.contains("qwen35") {
-        return Some(recurrent_family_capability(
-            "qwen35",
+    if let Some(family_id) = qwen35_series_family_id(compact) {
+        return Some(qwen35_series_capability(
+            family_id,
             layer_count,
             activation_width,
         ));
@@ -1463,6 +1484,42 @@ fn infer_stage_runtime_fallback_capability(
     }
 
     None
+}
+
+/// Resolves the Qwen3.5-series family id (`qwen35moe` or `qwen35`), if any.
+///
+/// Qwen3.5 and Qwen3.6 releases both load as llama.cpp `qwen35` / `qwen35moe`;
+/// there is no separate `qwen36` architecture. Release names spell the series
+/// with a dot (`Qwen3.6-35B-A3B`), and the compacted identity keeps that dot,
+/// so both the dotted release spelling and the dotless architecture string have
+/// to be recognized here.
+fn qwen35_series_family_id(compact_identity: &str) -> Option<&'static str> {
+    if !is_qwen35_series(compact_identity) {
+        return None;
+    }
+    if compact_identity.contains("moe") || is_qwen3_active_parameter_moe(compact_identity) {
+        return Some("qwen35moe");
+    }
+    Some("qwen35")
+}
+
+fn is_qwen35_series(compact_identity: &str) -> bool {
+    if compact_identity.contains("qwen3.5") || compact_identity.contains("qwen3.6") {
+        return true;
+    }
+    ["qwen35", "qwen36"].into_iter().any(|marker| {
+        compact_identity
+            .match_indices(marker)
+            .any(|(index, _)| !is_parameter_size_suffix(compact_identity, index + marker.len()))
+    })
+}
+
+/// Distinguishes `Qwen3-5B` (compacts to `qwen35b`) from the Qwen3.5 series.
+///
+/// A `b` directly after the marker is a parameter-count suffix, so the digit
+/// belongs to the model size rather than to a series number.
+fn is_parameter_size_suffix(compact_identity: &str, index: usize) -> bool {
+    compact_identity.as_bytes().get(index) == Some(&b'b')
 }
 
 fn is_qwen3_active_parameter_moe(compact_identity: &str) -> bool {

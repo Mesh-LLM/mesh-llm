@@ -703,6 +703,13 @@ mod tests {
             "latestissue/rwkv-6-finch-1b6-gguf:Q4_K",
             "Mungert/rwkv7-191M-world-GGUF:Q4_K",
             "mradermacher/UnifiedReward-Edit-qwen35-4b-i1-GGUF:IQ2_M",
+            // Qwen3.6 loads as the qwen35/qwen35moe recurrent pair, so every
+            // uploader and quant must select KvRecurrent rather than ResidentKv.
+            "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
+            "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M",
+            "bartowski/Qwen3.6-35B-A3B-GGUF:Q4_K_M",
+            "unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL",
+            "unsloth/Qwen3.5-35B-A3B-GGUF:Q4_K_M",
         ] {
             let policy = family_policy_for_model_id(model_id);
             assert!(

@@ -14,7 +14,7 @@ pub use family_capability::{
     gemma4_a4b_capability, gemma4_e4b_capability, glm4_capability, glm47_flash_capability,
     infer_family_capability, kimi_linear_capability, llama_capability, minimax_m27_capability,
     olmo_capability, qwen2moe_capability, qwen3_dense_capability, qwen3moe_capability,
-    qwen3next_capability, qwen3next_layers, recurrent_family_capability,
+    qwen3next_capability, qwen3next_layers, qwen35_series_capability, recurrent_family_capability,
     reviewed_capability_for_identity, reviewed_capability_records, rwkv6_capability,
     rwkv7_capability,
 };
