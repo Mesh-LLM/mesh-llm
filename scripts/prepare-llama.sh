@@ -76,7 +76,7 @@ clone_llama_workdir() {
 
   while (( attempt <= max_attempts )); do
     rm -rf "$LLAMA_WORKDIR"
-    if git clone --filter=blob:none "$LLAMA_UPSTREAM_URL" "$LLAMA_WORKDIR"; then
+    if git clone "$LLAMA_UPSTREAM_URL" "$LLAMA_WORKDIR"; then
       return 0
     else
       status=$?
@@ -94,15 +94,26 @@ clone_llama_workdir() {
   done
 }
 
-# Re-clone unless $LLAMA_WORKDIR is genuinely its own git repository. A bare
-# `[[ ! -d "$LLAMA_WORKDIR/.git" ]]` check passes a partial/corrupt checkout
-# (dir present, .git missing or incomplete) straight through to the `git -C`
-# operations below; combined with discovery walking upward, that is what lets
-# this script escape into an enclosing repo. `rev-parse --git-dir` only
-# succeeds for a real repo rooted at the workdir (discovery cannot escape past
-# GIT_CEILING_DIRECTORIES set above). clone_llama_workdir rm -rf's first, so
-# re-cloning a partial dir is safe.
-if ! git -C "$LLAMA_WORKDIR" rev-parse --git-dir >/dev/null 2>&1; then
+is_partial_llama_workdir() {
+  local promisor
+  promisor="$(git -C "$LLAMA_WORKDIR" config --bool --get remote.origin.promisor 2>/dev/null || true)"
+  [[ "$promisor" == "true" ]] ||
+    [[ -n "$(git -C "$LLAMA_WORKDIR" config --get extensions.partialClone 2>/dev/null || true)" ]]
+}
+
+# Re-clone unless $LLAMA_WORKDIR is genuinely its own complete git repository.
+# A bare `[[ ! -d "$LLAMA_WORKDIR/.git" ]]` check passes a partial/corrupt
+# checkout (dir present, .git missing or incomplete) straight through to the
+# `git -C` operations below; combined with discovery walking upward, that is
+# what lets this script escape into an enclosing repo. A blobless checkout is
+# also unsuitable: `git am --3way` must read both older upstream preimages and
+# patch-result object IDs, which a promisor remote can incorrectly try to
+# fetch from upstream. `rev-parse --git-dir` only succeeds for a real repo
+# rooted at the workdir (discovery cannot escape past GIT_CEILING_DIRECTORIES
+# set above). clone_llama_workdir rm -rf's first, so re-cloning this generated
+# dependency worktree is safe.
+if ! git -C "$LLAMA_WORKDIR" rev-parse --git-dir >/dev/null 2>&1 ||
+    is_partial_llama_workdir; then
   clone_llama_workdir
 fi
 
@@ -169,7 +180,7 @@ sha256_stream() {
 compute_patch_digest() {
   (
     for patch in "${PATCHES[@]}"; do
-      rel="${patch#$PATCH_DIR/}"
+      rel="${patch#"$PATCH_DIR"/}"
       checksum="$(sha256_file "$patch")"
       printf '%s\n' "$rel"
       printf '%s\n' "$checksum"
