@@ -85,6 +85,21 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             "build_native_runtime",
             "build_native_runtime_linux_aarch64_cuda",
         )
+        arm_host = job_block(
+            workflow,
+            "build_linux_arm64",
+            "compose_linux_arm64_cpu",
+        )
+        arm_compose = job_block(
+            workflow,
+            "compose_linux_arm64_cpu",
+            "smoke_linux_arm64_artifact",
+        )
+        arm_smoke = job_block(
+            workflow,
+            "smoke_linux_arm64_artifact",
+            "compose_linux_aarch64_cuda",
+        )
         rocm = job_block(
             workflow,
             "build_native_runtime_linux_x86_64_rocm",
@@ -112,6 +127,10 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
                 "needs.metadata.outputs.runner_8",
                 producer,
             )
+            self.assertIn(
+                "needs.metadata.outputs.runner_arm_8",
+                producer,
+            )
         for producer in (rocm, vulkan):
             self.assertIn(
                 "runs-on: ${{ needs.metadata.outputs.runner_16 }}",
@@ -124,6 +143,18 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             )
         self.assertIn("runs-on: ubuntu-24.04", publish)
         self.assertNotIn("needs.metadata.outputs.runner", publish)
+        self.assertIn("RELEASE_ATTESTATION_SIGNING_KEY", arm_host)
+        self.assertIn("runs-on: ubuntu-24.04-arm", arm_host)
+        self.assertNotIn("needs.metadata.outputs.runner_arm", arm_host)
+        self.assertIn(
+            "runs-on: ${{ needs.metadata.outputs.runner_arm_4 }}",
+            arm_compose,
+        )
+        self.assertIn(
+            "runs-on: ${{ needs.metadata.outputs.runner_arm }}",
+            arm_smoke,
+        )
+        self.assertNotIn("USE_SELF_HOSTED", arm_smoke)
 
     def test_inference_smoke_consumes_composed_product(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
@@ -141,6 +172,15 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         self.assertIn(
             "path: ${{ steps.compose.outputs.archive_path }}",
             workflow,
+        )
+        inference = job_block(
+            workflow,
+            "inference_smoke_tests",
+            "build_native_sdk_runtime",
+        )
+        self.assertIn(
+            "runs_on: ${{ toJson(needs.metadata.outputs.runner_8) }}",
+            inference,
         )
 
     def test_release_permissions_are_least_privilege(self) -> None:

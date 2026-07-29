@@ -23,9 +23,13 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             "depot-ubuntu-24.04-4",
             "depot-ubuntu-24.04-8",
             "depot-ubuntu-24.04-16",
+            "depot-ubuntu-24.04-arm",
+            "depot-ubuntu-24.04-arm-8",
         ):
             with self.subTest(runner=runner):
                 self.assertIn(f"- {runner}", self.workflow)
+        self.assertIn("expected_arch=aarch64", self.workflow)
+        self.assertIn('actual_arch="$(uname -m)"', self.workflow)
 
     def test_canary_uses_a_pinned_cache_action_without_printing_tokens(
         self,

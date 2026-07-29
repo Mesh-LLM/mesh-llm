@@ -20,13 +20,27 @@ jobs:
           - depot-ubuntu-24.04-4
           - depot-ubuntu-24.04-8
           - depot-ubuntu-24.04-16
+          - depot-ubuntu-24.04-arm
+          - depot-ubuntu-24.04-arm-8
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     steps:
       - name: Verify ephemeral runner resources
         shell: bash
+        env:
+          CANARY_RUNNER_LABEL: ${{ matrix.runner }}
         run: |
           set -euo pipefail
+
+          expected_arch=x86_64
+          if [[ "$CANARY_RUNNER_LABEL" == *-arm* ]]; then
+            expected_arch=aarch64
+          fi
+          actual_arch="$(uname -m)"
+          if [[ "$actual_arch" != "$expected_arch" ]]; then
+            echo "runner architecture mismatch: expected $expected_arch, got $actual_arch" >&2
+            exit 1
+          fi
 
           {
             echo "### ${{ matrix.runner }}"

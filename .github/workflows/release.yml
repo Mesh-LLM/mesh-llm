@@ -1,7 +1,7 @@
 name: Release
 
-# Set USE_SELF_HOSTED=true to route x86_64 CUDA release jobs and ARM64 smoke
-# validation to self-hosted runners; unset or false uses GitHub-hosted runners.
+# Set USE_SELF_HOSTED=true to route x86_64 CUDA release jobs to the dedicated
+# GPU runner; unset or false uses GitHub-hosted runners.
 
 on:
   push:
@@ -23,7 +23,7 @@ on:
         default: false
         type: boolean
       force_hosted_runners:
-        description: Route self-hosted release lanes (x86_64 CUDA, ARM64 smoke) to GitHub-hosted runners for this run only
+        description: Route the self-hosted x86_64 CUDA release lane to GitHub-hosted runners for this run only
         required: true
         default: false
         type: boolean
@@ -66,6 +66,10 @@ jobs:
       runner_4: ${{ steps.runners.outputs.runner_4 }}
       runner_8: ${{ steps.runners.outputs.runner_8 }}
       runner_16: ${{ steps.runners.outputs.runner_16 }}
+      runner_arm: ${{ steps.runners.outputs.runner_arm }}
+      runner_arm_4: ${{ steps.runners.outputs.runner_arm_4 }}
+      runner_arm_8: ${{ steps.runners.outputs.runner_arm_8 }}
+      runner_arm_16: ${{ steps.runners.outputs.runner_arm_16 }}
     steps:
       - name: Require the trusted release ref
         shell: bash
@@ -314,13 +318,14 @@ jobs:
       mesh_binary_target: target/release/mesh-llm
       cache_key_prefix: release-
       release_tag: ${{ needs.metadata.outputs.tag }}
+      runs_on: ${{ toJson(needs.metadata.outputs.runner_8) }}
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   build_native_sdk_runtime:
     name: Build native SDK runtime ${{ matrix.name }}
     needs: metadata
-    runs-on: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && needs.metadata.outputs.runner_8 || matrix.os }}
+    runs-on: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && needs.metadata.outputs.runner_8 || matrix.target == 'aarch64-unknown-linux-gnu' && needs.metadata.outputs.runner_arm_8 || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -423,7 +428,7 @@ jobs:
   build_native_runtime:
     name: Build native runtime ${{ matrix.name }}
     needs: metadata
-    runs-on: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && needs.metadata.outputs.runner_8 || matrix.os }}
+    runs-on: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && needs.metadata.outputs.runner_8 || matrix.target == 'aarch64-unknown-linux-gnu' && needs.metadata.outputs.runner_arm_8 || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -800,6 +805,8 @@ jobs:
   build_linux_arm64:
     name: Build immutable host Linux ARM64
     needs: metadata
+    # Host attestation consumes the signing key. Keep this producer on GitHub
+    # until compilation and signing are split into separate jobs.
     runs-on: ubuntu-24.04-arm
     env:
       LLAMA_STAGE_BACKEND: cpu
@@ -854,7 +861,7 @@ jobs:
   compose_linux_arm64_cpu:
     name: Compose Linux ARM64 CPU product
     needs: [metadata, build_linux_arm64, build_native_runtime]
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ needs.metadata.outputs.runner_arm_4 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -910,7 +917,7 @@ jobs:
     name: Smoke Linux ARM64 artifact
     needs: [metadata, compose_linux_arm64_cpu]
     if: ${{ needs.compose_linux_arm64_cpu.result == 'success' }}
-    runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && needs.metadata.outputs.force_hosted_runners != 'true' && '["self-hosted","Linux","ARM64"]' || '["ubuntu-24.04-arm"]') }}
+    runs-on: ${{ needs.metadata.outputs.runner_arm }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:

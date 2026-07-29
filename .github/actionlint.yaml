@@ -3,7 +3,6 @@ self-hosted-runner:
     - self-hosted
     - Linux
     - X64
-    - ARM64
     - amd64
     - gpu-nvidia
     - mesh-llm-amd64
@@ -12,3 +11,7 @@ self-hosted-runner:
     - depot-ubuntu-24.04-4
     - depot-ubuntu-24.04-8
     - depot-ubuntu-24.04-16
+    - depot-ubuntu-24.04-arm
+    - depot-ubuntu-24.04-arm-4
+    - depot-ubuntu-24.04-arm-8
+    - depot-ubuntu-24.04-arm-16

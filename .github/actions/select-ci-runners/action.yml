@@ -36,6 +36,18 @@ outputs:
   runner_16:
     description: Sixteen-vCPU Linux runner label for measured high-parallelism builds.
     value: ${{ steps.select.outputs.runner_16 }}
+  runner_arm:
+    description: Default two-vCPU Linux ARM64 runner label.
+    value: ${{ steps.select.outputs.runner_arm }}
+  runner_arm_4:
+    description: Four-vCPU Linux ARM64 runner label.
+    value: ${{ steps.select.outputs.runner_arm_4 }}
+  runner_arm_8:
+    description: Eight-vCPU Linux ARM64 runner label.
+    value: ${{ steps.select.outputs.runner_arm_8 }}
+  runner_arm_16:
+    description: Sixteen-vCPU Linux ARM64 runner label for measured high-parallelism builds.
+    value: ${{ steps.select.outputs.runner_arm_16 }}
 
 runs:
   using: composite
@@ -96,11 +108,19 @@ runs:
           runner_4=depot-ubuntu-24.04-4
           runner_8=depot-ubuntu-24.04-8
           runner_16=depot-ubuntu-24.04-16
+          runner_arm=depot-ubuntu-24.04-arm
+          runner_arm_4=depot-ubuntu-24.04-arm-4
+          runner_arm_8=depot-ubuntu-24.04-arm-8
+          runner_arm_16=depot-ubuntu-24.04-arm-16
         else
           runner=ubuntu-24.04
           runner_4=ubuntu-24.04
           runner_8=ubuntu-24.04
           runner_16=ubuntu-24.04
+          runner_arm=ubuntu-24.04-arm
+          runner_arm_4=ubuntu-24.04-arm
+          runner_arm_8=ubuntu-24.04-arm
+          runner_arm_16=ubuntu-24.04-arm
         fi
 
         {
@@ -110,4 +130,8 @@ runs:
           echo "runner_4=$runner_4"
           echo "runner_8=$runner_8"
           echo "runner_16=$runner_16"
+          echo "runner_arm=$runner_arm"
+          echo "runner_arm_4=$runner_arm_4"
+          echo "runner_arm_8=$runner_arm_8"
+          echo "runner_arm_16=$runner_arm_16"
         } >> "$GITHUB_OUTPUT"

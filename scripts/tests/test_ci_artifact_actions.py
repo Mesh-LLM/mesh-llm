@@ -890,6 +890,7 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("depot_enabled=false", default_case)
         self.assertNotIn("depot_enabled=true", default_case)
         self.assertIn("depot-ubuntu-24.04-16", action)
+        self.assertIn("depot-ubuntu-24.04-arm-16", action)
 
         cases = (
             ("pull_request", "refs/pull/12/merge", "true", "true", "false", "ubuntu-24.04"),
@@ -913,6 +914,22 @@ class CiArtifactActionTests(unittest.TestCase):
                 self.assertEqual(outputs["depot_enabled"], enabled)
                 self.assertEqual(outputs["allow_depot_remote_cache"], enabled)
                 self.assertEqual(outputs["runner"], runner)
+                expected_arm = (
+                    "depot-ubuntu-24.04-arm"
+                    if enabled == "true"
+                    else "ubuntu-24.04-arm"
+                )
+                self.assertEqual(outputs["runner_arm"], expected_arm)
+                for size in ("4", "8", "16"):
+                    expected_sized_arm = (
+                        f"depot-ubuntu-24.04-arm-{size}"
+                        if enabled == "true"
+                        else "ubuntu-24.04-arm"
+                    )
+                    self.assertEqual(
+                        outputs[f"runner_arm_{size}"],
+                        expected_sized_arm,
+                    )
 
     def test_pr_caches_rely_on_github_ref_scoping_while_depot_is_blocked(
         self,

@@ -430,8 +430,10 @@ because PR workflow and local-action files are themselves PR-controlled.
 Trusted main/release jobs use `DEPOT_RUNNERS_ENABLED`, and a trusted main-ref
 manual dispatch can use `use_depot=true` for a bounded canary. The selector
 requires `refs/heads/main`; tag pushes and feature refs fall back to hosted
-runners. Depot-managed runners register in the organization `Default` runner
-group. Before enabling public access, restrict that group to
+runners. It emits both Intel and ARM64 labels from the same trust decision, so
+release CPU producers, composers, and smokes do not bypass the policy.
+Depot-managed runners register in the organization `Default` runner group.
+Before enabling public access, restrict that group to
 `Mesh-LLM/mesh-llm` and exact default-branch workflow refs, beginning with
 `depot-canary.yml@refs/heads/main`. The existing `mesh-llm` runner group owns
 the dedicated GPU scale sets and is not the Depot group.

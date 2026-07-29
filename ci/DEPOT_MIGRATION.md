@@ -187,7 +187,8 @@ Activation prerequisites:
 3. Only after both restrictions are saved, enable public repositories for the
    `Default` group. Depot-managed ephemeral runners register in that group.
 4. Dispatch `depot-canary.yml` from `refs/heads/main` twice. Verify all four
-   runner sizes and a cold-to-warm cache hit without printing credentials.
+   Intel runner sizes, both ARM runner sizes, their reported architectures,
+   and a cold-to-warm cache hit without printing credentials.
 5. Dispatch the canary from a feature ref, prove that it cannot acquire a
    Depot runner, and cancel that exact queued run.
 6. Add exact default-branch workflow refs only as their phase starts. Reusable
