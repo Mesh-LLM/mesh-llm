@@ -239,9 +239,11 @@ update the skill resources in the same change.
   they must not re-stamp, relink, or otherwise mutate a host per backend alias.
 - Main CI executable lanes follow the same product contract: CPU artifact
   producers upload a backend-neutral host together with its adjacent packaged
-  runtime, and every backend lane builds the host separately from its runtime.
-  Do not upload or consume a raw host binary, rebuild a host after restoring a
-  runtime cache, or use a driver stub to make an executable test pass.
+  runtime. A backend product lane consumes the unchanged, verified host from
+  its OS/architecture producer and combines it with its selected runtime; it
+  must not independently produce a backend-specific host. Do not upload or
+  consume a raw host binary, rebuild a host after restoring a runtime cache, or
+  use a driver stub to make an executable test pass.
 - No-driver smoke is mandatory for every product alias, native package, and OCI
   image. CUDA/ROCm/Vulkan device absence is not a skip condition for
   `--version`, runtime discovery/listing, or client startup. Hardware-qualified

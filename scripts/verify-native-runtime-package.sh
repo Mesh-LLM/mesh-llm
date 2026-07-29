@@ -140,8 +140,8 @@ for rel_path in runtime["libraries"]:
     if not os.path.isfile(path):
         raise SystemExit(f"missing library: {path}")
 
-files = runtime.get("files") or {}
-tools = runtime.get("tools") or {}
+files = runtime["files"] if "files" in runtime else {}
+tools = runtime["tools"] if "tools" in runtime else {}
 if not isinstance(files, dict) or not isinstance(tools, dict):
     raise SystemExit("runtime files and tools must be checksum maps")
 for kind, checksums in (("file", files), ("tool", tools)):

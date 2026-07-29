@@ -25,6 +25,11 @@ while (($# > 0)); do
             exit 2
             ;;
         -h|--help) usage; exit 0 ;;
+        -*)
+            echo "unknown option: $1" >&2
+            usage
+            exit 2
+            ;;
         *)
             # Keep the former positional CUDA-architecture compatibility.
             [[ -z "$CUDA_ARCH" ]] || { usage; exit 2; }

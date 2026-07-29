@@ -7,12 +7,14 @@ set -euo pipefail
 MESH_LLM="${1:?usage: $0 <mesh-llm-binary> <native-runtime-root>}"
 RUNTIME_ROOT="${2:?usage: $0 <mesh-llm-binary> <native-runtime-root>}"
 MAX_WAIT="${MESH_LLM_CLIENT_READY_MAX_WAIT:-60}"
+SHUTDOWN_MAX_WAIT="${MESH_LLM_CLIENT_SHUTDOWN_MAX_WAIT:-15}"
 LOG="$(mktemp "${MESH_LLM_CLIENT_STATE_PARENT:-/tmp}/mlc-ready.XXXXXX.log")"
 STATE_DIR="$(mktemp -d "${MESH_LLM_CLIENT_STATE_PARENT:-/tmp}/mlc-state.XXXXXX")"
 
 [[ -x "$MESH_LLM" ]] || { echo "missing executable: $MESH_LLM" >&2; exit 2; }
 [[ -d "$RUNTIME_ROOT" ]] || { echo "missing native runtime root: $RUNTIME_ROOT" >&2; exit 2; }
 [[ "$MAX_WAIT" =~ ^[1-9][0-9]*$ ]] || { echo "MESH_LLM_CLIENT_READY_MAX_WAIT must be a positive integer" >&2; exit 2; }
+[[ "$SHUTDOWN_MAX_WAIT" =~ ^[1-9][0-9]*$ ]] || { echo "MESH_LLM_CLIENT_SHUTDOWN_MAX_WAIT must be a positive integer" >&2; exit 2; }
 mkdir -p "$STATE_DIR/home" "$STATE_DIR/cache" "$STATE_DIR/config" "$STATE_DIR/xdg-runtime" "$STATE_DIR/runtime-cache" "$STATE_DIR/runtime"
 chmod 700 "$STATE_DIR" "$STATE_DIR/home" "$STATE_DIR/cache" "$STATE_DIR/config" "$STATE_DIR/xdg-runtime" "$STATE_DIR/runtime-cache" "$STATE_DIR/runtime"
 
@@ -26,33 +28,67 @@ PY
 )"
 
 pid=""
+# shellcheck disable=SC2329 # Invoked by the EXIT cleanup trap.
+shutdown_client() {
+    local child_status=0
+    local deadline_pid
+    local shutdown_done="$STATE_DIR/shutdown-done"
+    local shutdown_timed_out="$STATE_DIR/shutdown-timed-out"
+
+    rm -f "$shutdown_done" "$shutdown_timed_out"
+    kill -INT "$pid" 2>/dev/null || true
+    (
+        for ((attempt = 0; attempt < SHUTDOWN_MAX_WAIT; attempt++)); do
+            sleep 1
+            [[ ! -e "$shutdown_done" ]] || exit 0
+        done
+        if [[ ! -e "$shutdown_done" ]] && kill -0 "$pid" 2>/dev/null; then
+            : >"$shutdown_timed_out"
+            kill -TERM "$pid" 2>/dev/null || true
+            sleep 1
+            [[ -e "$shutdown_done" ]] || kill -KILL "$pid" 2>/dev/null || true
+        fi
+    ) </dev/null >/dev/null 2>&1 &
+    deadline_pid=$!
+
+    if wait "$pid"; then
+        child_status=0
+    else
+        child_status=$?
+    fi
+    pid=""
+    : >"$shutdown_done"
+    wait "$deadline_pid" 2>/dev/null || true
+
+    if [[ -e "$shutdown_timed_out" ]]; then
+        echo "client did not stop cleanly after SIGINT within ${SHUTDOWN_MAX_WAIT}s" >&2
+        return 1
+    fi
+    if [[ "$child_status" -ne 0 ]]; then
+        echo "client exited non-cleanly after SIGINT: $child_status" >&2
+        return 1
+    fi
+    return 0
+}
+
 # shellcheck disable=SC2329 # Invoked by the EXIT trap.
 cleanup() {
+    local original_status=$?
     local cleanup_status=0
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-        kill -INT "$pid" 2>/dev/null || true
-        for _ in $(seq 1 15); do
-            kill -0 "$pid" 2>/dev/null || break
-            sleep 1
-        done
-        if kill -0 "$pid" 2>/dev/null; then
-            echo "client did not stop cleanly after SIGINT" >&2
-            kill -TERM "$pid" 2>/dev/null || true
-            wait "$pid" 2>/dev/null || true
-            cleanup_status=1
-        fi
-        set +e
-        wait "$pid"
-        status=$?
-        set -e
-        if [[ "$status" -ne 0 ]]; then
-            echo "client exited non-cleanly after SIGINT: $status" >&2
-            cleanup_status=1
-        fi
+    trap - EXIT
+    set +e
+
+    if [[ -n "$pid" ]] && ! shutdown_client; then
+        cleanup_status=1
+        cat "$LOG" >&2
     fi
-    rm -rf "$STATE_DIR"
-    rm -f "$LOG"
-    return "$cleanup_status"
+    rm -rf "$STATE_DIR" || cleanup_status=1
+    rm -f "$LOG" || cleanup_status=1
+
+    if [[ "$cleanup_status" -ne 0 ]]; then
+        exit "$cleanup_status"
+    fi
+    exit "$original_status"
 }
 trap cleanup EXIT
 
@@ -94,26 +130,6 @@ raise SystemExit(1)
 PY
     then
         echo "client readiness observed on port $port"
-        kill -INT "$pid"
-        for _ in $(seq 1 15); do
-            kill -0 "$pid" 2>/dev/null || break
-            sleep 1
-        done
-        if kill -0 "$pid" 2>/dev/null; then
-            cat "$LOG" >&2
-            echo "client did not stop cleanly after SIGINT" >&2
-            exit 1
-        fi
-        set +e
-        wait "$pid"
-        status=$?
-        set -e
-        if [[ "$status" -ne 0 ]]; then
-            cat "$LOG" >&2
-            echo "client exited non-cleanly after SIGINT: $status" >&2
-            exit 1
-        fi
-        pid=""
         exit 0
     fi
     sleep 1

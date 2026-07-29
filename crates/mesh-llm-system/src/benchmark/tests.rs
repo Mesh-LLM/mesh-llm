@@ -84,6 +84,28 @@ fn write_test_child(root: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn runtime_benchmark_library_lookup_uses_sibling_lib_and_preserves_existing_entries() {
+    let runtime = Path::new("/tmp/mesh-runtime");
+    let binary = runtime.join("tools/mesh-llm-gpu-benchmark");
+    let existing = std::env::join_paths([Path::new("/existing/one"), Path::new("/existing/two")])
+        .expect("construct existing library path");
+
+    let lookup = runtime_benchmark_library_lookup(&binary, Some(existing))
+        .expect("derive benchmark library lookup path");
+    let paths = std::env::split_paths(&lookup).collect::<Vec<_>>();
+
+    assert_eq!(
+        paths,
+        vec![
+            runtime.join("lib"),
+            PathBuf::from("/existing/one"),
+            PathBuf::from("/existing/two"),
+        ]
+    );
+}
+
 #[cfg(windows)]
 fn write_test_child(root: &Path, name: &str, body: &str) -> PathBuf {
     let path = root.join(name);

@@ -29,11 +29,13 @@ attestation format are implemented.
 
 Both development and release use the same product boundary: a dynamic,
 backend-neutral host plus exactly one selected runtime directory. `just build`
-composes that product locally; only `package-native-runtime.sh --build` (and its
-explicit `just build-runtime` spelling) compiles the static native ABI. Release
-host producers attest and import-check the host once per OS/architecture;
-consumer jobs verify its checksum and attestation, then copy the same bytes into
-each backend product without rebuilding or re-stamping it.
+composes that product locally; only `package-native-runtime.sh --build` compiles
+the static native ABI. The low-level recipe spelling is platform-specific:
+Linux uses `just build-runtime` (or `just build-linux`), while macOS uses
+`just build-mac`. Release host producers attest and import-check the host once
+per OS/architecture; consumer jobs verify its checksum and attestation, then
+copy the same bytes into each backend product without rebuilding or re-stamping
+it.
 
 ## Artifact Identity
 

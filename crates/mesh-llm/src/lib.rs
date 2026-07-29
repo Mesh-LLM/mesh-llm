@@ -31,10 +31,6 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     );
     let explicit_surface = normalized_args.explicit_surface.map(map_runtime_surface);
 
-    if should_initialize_host_runtime_pre_dispatch(cli.command.as_ref()) {
-        mesh_llm_host_runtime::initialize_host_runtime_with_config(cli.config.as_deref()).await?;
-    }
-
     if commands::dispatch(&cli).await? {
         return Ok(());
     }
@@ -48,13 +44,6 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     mesh_llm_tui::install_terminal_panic_hook();
 
     mesh_llm_host_runtime::run_runtime_initialized(options, explicit_surface, warning).await
-}
-
-fn should_initialize_host_runtime_pre_dispatch(command: Option<&mesh_llm_cli::Command>) -> bool {
-    matches!(
-        command,
-        Some(mesh_llm_cli::Command::Gpus { .. }) | Some(mesh_llm_cli::Command::Benchmark { .. })
-    )
 }
 
 fn maybe_print_binary_help_and_exit() {

@@ -227,13 +227,22 @@ jobs:
           test -s host-input/mesh-llm.sha256
           (cd host-input && shasum -a 256 -c mesh-llm.sha256)
           mkdir -p runtime-root
-          mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
-          test "${#runtime_archives[@]}" -eq 1
-          runtime_archive="${runtime_archives[0]}"
+          runtime_archive=""
+          runtime_archive_count=0
+          while IFS= read -r archive; do
+            runtime_archive="$archive"
+            runtime_archive_count=$((runtime_archive_count + 1))
+          done < <(find runtime-input -name '*.tar.gz' -type f -print)
+          test "$runtime_archive_count" -eq 1
           tar -xzf "$runtime_archive" -C runtime-root
-          mapfile -t runtime_dirs < <(find runtime-root -mindepth 1 -maxdepth 1 -type d -print)
-          test "${#runtime_dirs[@]}" -eq 1
-          scripts/verify-native-runtime-package.sh "${runtime_dirs[0]}"
+          runtime_dir=""
+          runtime_dir_count=0
+          while IFS= read -r directory; do
+            runtime_dir="$directory"
+            runtime_dir_count=$((runtime_dir_count + 1))
+          done < <(find runtime-root -mindepth 1 -maxdepth 1 -type d -print)
+          test "$runtime_dir_count" -eq 1
+          scripts/verify-native-runtime-package.sh "$runtime_dir"
           scripts/ci-client-readiness-smoke.sh host-input/mesh-llm runtime-root
           scripts/package-release.sh "$RELEASE_TAG" dist
       - name: Upload composed release product

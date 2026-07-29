@@ -36,8 +36,9 @@ fn hidden_gpu_benchmark_backend_errors_are_visible_on_stderr() {
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
     assert!(
         stderr.contains("CUDA benchmark backend was not compiled")
-            || stderr.contains("benchmark backend"),
-        "stderr should include the benchmark backend error, got: {stderr:?}"
+            || stderr.contains("benchmark backend")
+            || stderr.contains("cuda native runtime with a benchmark tool"),
+        "stderr should include the benchmark backend or native-runtime error, got: {stderr:?}"
     );
 }
 

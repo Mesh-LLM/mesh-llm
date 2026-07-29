@@ -9,8 +9,10 @@ use mesh_llm_runtime_install::{
     discover_local_native_runtimes, host_runtime_profile,
 };
 use serde::{Deserialize, Serialize};
-#[cfg(any(test, windows))]
+#[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
 use std::env;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -167,19 +169,7 @@ fn run_benchmark_subprocess(binary: &Path, timeout: Duration) -> Result<Vec<Benc
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    #[cfg(windows)]
-    {
-        let runtime_lib = binary
-            .parent()
-            .and_then(Path::parent)
-            .context("native runtime benchmark tool has no runtime root")?
-            .join("lib");
-        let mut path_entries = vec![runtime_lib];
-        if let Some(current_path) = env::var_os("PATH") {
-            path_entries.extend(env::split_paths(&current_path));
-        }
-        command.env("PATH", env::join_paths(path_entries)?);
-    }
+    configure_runtime_benchmark_library_lookup(&mut command, binary)?;
 
     let mut child = command.spawn().with_context(|| {
         format!(
@@ -219,6 +209,51 @@ fn run_benchmark_subprocess(binary: &Path, timeout: Duration) -> Result<Vec<Benc
 
     parse_benchmark_output(&output.stdout)
         .ok_or_else(|| anyhow!("benchmark child returned invalid output"))
+}
+
+fn configure_runtime_benchmark_library_lookup(command: &mut Command, binary: &Path) -> Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let variable = if cfg!(target_os = "linux") {
+            "LD_LIBRARY_PATH"
+        } else {
+            "DYLD_LIBRARY_PATH"
+        };
+        command.env(
+            variable,
+            runtime_benchmark_library_lookup(binary, env::var_os(variable))?,
+        );
+    }
+
+    #[cfg(windows)]
+    {
+        let runtime_lib = binary
+            .parent()
+            .and_then(Path::parent)
+            .context("native runtime benchmark tool has no runtime root")?
+            .join("lib");
+        let mut path_entries = vec![runtime_lib];
+        if let Some(current_path) = env::var_os("PATH") {
+            path_entries.extend(env::split_paths(&current_path));
+        }
+        command.env("PATH", env::join_paths(path_entries)?);
+    }
+
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn runtime_benchmark_library_lookup(binary: &Path, existing: Option<OsString>) -> Result<OsString> {
+    let runtime_lib = binary
+        .parent()
+        .and_then(Path::parent)
+        .context("native runtime benchmark tool has no runtime root")?
+        .join("lib");
+    let mut paths = vec![runtime_lib];
+    if let Some(existing) = existing {
+        paths.extend(env::split_paths(&existing));
+    }
+    env::join_paths(paths).context("join native runtime benchmark library lookup path")
 }
 
 pub fn run_backend_by_name(backend: &str) -> Result<Vec<BenchmarkOutput>> {
