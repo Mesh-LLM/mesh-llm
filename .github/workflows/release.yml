@@ -226,6 +226,7 @@ jobs:
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           test -s host-input/mesh-llm.sha256
           (cd host-input && shasum -a 256 -c mesh-llm.sha256)
+          chmod +x host-input/mesh-llm
           mkdir -p runtime-root
           runtime_archive=""
           runtime_archive_count=0
@@ -830,6 +831,7 @@ jobs:
           set -euo pipefail
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           (cd host-input && sha256sum -c mesh-llm.sha256)
+          chmod +x host-input/mesh-llm
           mkdir -p runtime-root
           mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
           test "${#runtime_archives[@]}" -eq 1
@@ -941,6 +943,7 @@ jobs:
         run: |
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           (cd host-input && sha256sum -c mesh-llm.sha256)
+          chmod +x host-input/mesh-llm
           mkdir -p runtime-root
           mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
           test "${#runtime_archives[@]}" -eq 1
@@ -1023,6 +1026,7 @@ jobs:
         run: |
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           (cd host-input && sha256sum -c mesh-llm.sha256)
+          chmod +x host-input/mesh-llm
           mkdir -p runtime-root
           mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
           test "${#runtime_archives[@]}" -eq 1
@@ -1095,6 +1099,7 @@ jobs:
         run: |
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           (cd host-input && sha256sum -c mesh-llm.sha256)
+          chmod +x host-input/mesh-llm
           mkdir -p runtime-root
           mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
           test "${#runtime_archives[@]}" -eq 1
@@ -1164,6 +1169,7 @@ jobs:
         run: |
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           (cd host-input && sha256sum -c mesh-llm.sha256)
+          chmod +x host-input/mesh-llm
           mkdir -p runtime-root
           mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
           test "${#runtime_archives[@]}" -eq 1

@@ -9,6 +9,19 @@ RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
 class ReleaseWorkflowArtifactTests(unittest.TestCase):
+    def test_unix_composition_restores_downloaded_host_executable_bit(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        readiness_command = (
+            "scripts/ci-client-readiness-smoke.sh "
+            "host-input/mesh-llm runtime-root"
+        )
+
+        self.assertEqual(workflow.count(readiness_command), 6)
+        self.assertEqual(
+            workflow.count("chmod +x host-input/mesh-llm"),
+            workflow.count(readiness_command),
+        )
+
     def test_inference_smoke_consumes_composed_product(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
