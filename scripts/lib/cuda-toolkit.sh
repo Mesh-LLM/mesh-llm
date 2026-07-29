@@ -32,10 +32,15 @@ cuda_cmake_compiler_path() {
 
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
-      if [[ ! -f "$compiler" && -f "${compiler}.exe" ]]; then
-        printf '%s\n' "${compiler}.exe"
-        return 0
-      fi
+      case "$compiler" in
+        *.[Ee][Xx][Ee]) ;;
+        *)
+          if [[ -f "${compiler}.exe" ]]; then
+            printf '%s\n' "${compiler}.exe"
+            return 0
+          fi
+          ;;
+      esac
       ;;
   esac
 
