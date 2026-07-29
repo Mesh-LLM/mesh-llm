@@ -11,22 +11,26 @@
 ///
 /// Override with MESH_TOKIO_STACK_SIZE for CI or debugging (e.g. set to
 /// 1048576 to catch regressions with a 1 MB clamp).
-const DEFAULT_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
+const DEFAULT_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn main() {
     prepare_model_download_directories();
 
-    let stack_size = configured_stack_size();
-    let exit_code =
-        run_on_application_thread(stack_size, move || run_main_with_runtime(stack_size));
+    let worker_stack_size = configured_worker_stack_size();
+    // MESH_TOKIO_STACK_SIZE intentionally constrains only Tokio workers. CI
+    // uses a small worker stack to detect oversized spawned futures, while the
+    // application future still needs a stable stack across operating systems.
+    let exit_code = run_on_application_thread(DEFAULT_THREAD_STACK_SIZE, move || {
+        run_main_with_runtime(worker_stack_size)
+    });
     std::process::exit(exit_code);
 }
 
-fn configured_stack_size() -> usize {
+fn configured_worker_stack_size() -> usize {
     std::env::var("MESH_TOKIO_STACK_SIZE")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_WORKER_STACK_SIZE)
+        .unwrap_or(DEFAULT_THREAD_STACK_SIZE)
 }
 
 fn run_main_with_runtime(stack_size: usize) -> i32 {
@@ -78,7 +82,7 @@ mod tests {
     fn application_entrypoint_runs_off_the_os_main_thread() {
         let caller = std::thread::current().id();
         let worker =
-            run_on_application_thread(DEFAULT_WORKER_STACK_SIZE, || std::thread::current().id());
+            run_on_application_thread(DEFAULT_THREAD_STACK_SIZE, || std::thread::current().id());
 
         assert_ne!(caller, worker);
     }
