@@ -230,6 +230,9 @@ function Get-StaleBinaryNames {
 function Remove-StaleBinaries {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     foreach ($name in Get-StaleBinaryNames) {
+        if ($name -eq "mesh-llm.exe") {
+            continue
+        }
         $path = Join-Path $InstallDir $name
         if (Test-Path $path) {
             Remove-Item $path -Force
@@ -237,30 +240,329 @@ function Remove-StaleBinaries {
     }
 }
 
-function Install-MeshBinary {
+function Convert-HexToBytes {
+    param([string]$Hex)
+
+    $bytes = New-Object byte[] ($Hex.Length / 2)
+    for ($index = 0; $index -lt $bytes.Length; $index++) {
+        $bytes[$index] = [Convert]::ToByte($Hex.Substring($index * 2, 2), 16)
+    }
+    return $bytes
+}
+
+function Convert-UInt64ToBigEndianBytes {
+    param([UInt64]$Value)
+
+    $bytes = [BitConverter]::GetBytes($Value)
+    if ([BitConverter]::IsLittleEndian) {
+        [Array]::Reverse($bytes)
+    }
+    return $bytes
+}
+
+function Update-Sha256Bytes {
+    param(
+        [System.Security.Cryptography.HashAlgorithm]$Hasher,
+        [byte[]]$Bytes
+    )
+
+    if ($Bytes.Length -eq 0) {
+        return
+    }
+    [void]$Hasher.TransformBlock($Bytes, 0, $Bytes.Length, $Bytes, 0)
+}
+
+function Complete-Sha256 {
+    param([System.Security.Cryptography.HashAlgorithm]$Hasher)
+
+    [void]$Hasher.TransformFinalBlock([byte[]]@(), 0, 0)
+    return ([System.BitConverter]::ToString($Hasher.Hash).Replace("-", "")).ToLowerInvariant()
+}
+
+function Get-DeterministicTreeSha256 {
+    param([string]$Path)
+
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $root = (Resolve-Path -LiteralPath $Path).ProviderPath.TrimEnd([char]'\')
+        $files = Get-ChildItem -LiteralPath $Path -Recurse -File | Sort-Object FullName
+        foreach ($file in $files) {
+            $relative = $file.FullName.Substring($root.Length).TrimStart([char]'\') -replace '\\', '/'
+            $relativeBytes = [System.Text.Encoding]::UTF8.GetBytes($relative)
+            $relativeLength = Convert-UInt64ToBigEndianBytes ([UInt64]$relativeBytes.Length)
+            $fileDigest = Convert-HexToBytes ((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant())
+            Update-Sha256Bytes -Hasher $hasher -Bytes $relativeLength
+            Update-Sha256Bytes -Hasher $hasher -Bytes $relativeBytes
+            Update-Sha256Bytes -Hasher $hasher -Bytes $fileDigest
+        }
+        return Complete-Sha256 -Hasher $hasher
+    } finally {
+        $hasher.Dispose()
+    }
+}
+
+function Assert-JsonProperty {
+    param(
+        [object]$Object,
+        [string]$Name,
+        [string]$Label
+    )
+
+    if (-not $Object -or -not ($Object.PSObject.Properties.Name -contains $Name)) {
+        throw "product-manifest.json missing $Label"
+    }
+    return $Object.$Name
+}
+
+function Assert-StringField {
+    param(
+        [object]$Value,
+        [string]$Label
+    )
+
+    if ($Value -isnot [string] -or -not $Value) {
+        throw "product-manifest.json field $Label must be a non-empty string"
+    }
+    return $Value
+}
+
+function Assert-Sha256Field {
+    param(
+        [object]$Value,
+        [string]$Label
+    )
+
+    $digest = Assert-StringField -Value $Value -Label $Label
+    if ($digest -cnotmatch '^[0-9a-f]{64}$') {
+        throw "product-manifest.json field $Label must be a lowercase SHA-256 digest"
+    }
+    return $digest
+}
+
+function Assert-SafeRelativePath {
+    param(
+        [string]$Path,
+        [string]$Label
+    )
+
+    if (-not $Path -or [System.IO.Path]::IsPathRooted($Path) -or $Path.Contains("\")) {
+        throw "product-manifest.json field $Label must be a safe relative POSIX path"
+    }
+    $parts = $Path.Split('/')
+    foreach ($part in $parts) {
+        if (-not $part -or $part -eq "." -or $part -eq "..") {
+            throw "product-manifest.json field $Label must be a safe relative POSIX path"
+        }
+    }
+    return $Path
+}
+
+function Assert-ProductBundle {
     param([string]$BundleDir)
 
-    $meshBinarySource = Join-Path $BundleDir "mesh-llm.exe"
-    $runtimeSource = Join-Path $BundleDir "native-runtimes"
     $productManifestSource = Join-Path $BundleDir "product-manifest.json"
-    if (-not (Test-Path $meshBinarySource)) {
-        throw "release archive did not contain mesh-bundle/mesh-llm.exe"
-    }
-    if (-not (Test-Path $runtimeSource) -or -not (Test-Path $productManifestSource)) {
+    $runtimeRoot = Join-Path $BundleDir "native-runtimes"
+    if (-not (Test-Path $productManifestSource -PathType Leaf) -or -not (Test-Path $runtimeRoot -PathType Container)) {
         throw "release archive did not contain a composed native runtime bundle"
     }
 
-    Remove-StaleBinaries
-    Copy-Item -Path $meshBinarySource -Destination (Join-Path $InstallDir "mesh-llm.exe") -Force
-    $installedRuntimes = Join-Path $InstallDir "native-runtimes"
-    if (Test-Path $installedRuntimes) {
-        Remove-Item $installedRuntimes -Recurse -Force
+    $manifest = Get-Content -Path $productManifestSource -Raw | ConvertFrom-Json
+    $schemaVersion = Assert-JsonProperty -Object $manifest -Name "schema_version" -Label "schema_version"
+    if ([int]$schemaVersion -ne 2) {
+        throw "product-manifest.json schema_version must be 2"
     }
-    Copy-Item -Path $runtimeSource -Destination $installedRuntimes -Recurse -Force
-    Copy-Item -Path $productManifestSource -Destination (Join-Path $InstallDir "product-manifest.json") -Force
-    $hostImportsSource = Join-Path $BundleDir "host-imports.json"
-    if (Test-Path $hostImportsSource) {
-        Copy-Item -Path $hostImportsSource -Destination (Join-Path $InstallDir "host-imports.json") -Force
+    $contract = Assert-StringField -Value (Assert-JsonProperty -Object $manifest -Name "contract" -Label "contract") -Label "contract"
+    if ($contract -ne "mesh-llm-product-v2") {
+        throw "product-manifest.json contract must be mesh-llm-product-v2"
+    }
+    [void](Assert-StringField -Value (Assert-JsonProperty -Object $manifest -Name "mesh_version" -Label "mesh_version") -Label "mesh_version")
+    [void](Assert-StringField -Value (Assert-JsonProperty -Object $manifest -Name "backend" -Label "backend") -Label "backend")
+
+    $host = Assert-JsonProperty -Object $manifest -Name "host" -Label "host"
+    $hostPath = Assert-SafeRelativePath -Path (Assert-StringField -Value (Assert-JsonProperty -Object $host -Name "path" -Label "host.path") -Label "host.path") -Label "host.path"
+    if ($hostPath -ne "mesh-llm.exe") {
+        throw "product-manifest.json host.path must be mesh-llm.exe"
+    }
+    $hostSha256 = Assert-Sha256Field -Value (Assert-JsonProperty -Object $host -Name "sha256" -Label "host.sha256") -Label "host.sha256"
+    $hostSource = Join-Path $BundleDir $hostPath
+    if (-not (Test-Path $hostSource -PathType Leaf)) {
+        throw "product-manifest.json referenced host path was not found: $hostPath"
+    }
+    $actualHostSha256 = (Get-FileHash -Path $hostSource -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHostSha256 -ne $hostSha256) {
+        throw "host.sha256 mismatch: expected $hostSha256, got $actualHostSha256"
+    }
+
+    $runtime = Assert-JsonProperty -Object $manifest -Name "runtime" -Label "runtime"
+    $runtimeId = Assert-StringField -Value (Assert-JsonProperty -Object $runtime -Name "id" -Label "runtime.id") -Label "runtime.id"
+    $runtimePath = Assert-SafeRelativePath -Path (Assert-StringField -Value (Assert-JsonProperty -Object $runtime -Name "path" -Label "runtime.path") -Label "runtime.path") -Label "runtime.path"
+    $runtimeSha256 = Assert-Sha256Field -Value (Assert-JsonProperty -Object $runtime -Name "sha256" -Label "runtime.sha256") -Label "runtime.sha256"
+    $runtimeManifestSha256 = Assert-Sha256Field -Value (Assert-JsonProperty -Object $runtime -Name "manifest_sha256" -Label "runtime.manifest_sha256") -Label "runtime.manifest_sha256"
+    $runtimeParts = $runtimePath.Split('/')
+    if ($runtimeParts.Length -ne 2 -or $runtimeParts[0] -ne "native-runtimes" -or $runtimeParts[1] -ne $runtimeId) {
+        throw "product-manifest.json runtime.path must be native-runtimes/$runtimeId"
+    }
+    $runtimeSource = Join-Path $BundleDir $runtimePath
+    if (-not (Test-Path $runtimeSource -PathType Container)) {
+        throw "product-manifest.json referenced runtime path was not found: $runtimePath"
+    }
+    $runtimeChildren = @(Get-ChildItem -LiteralPath $runtimeRoot)
+    if ($runtimeChildren.Count -ne 1 -or -not $runtimeChildren[0].PSIsContainer -or $runtimeChildren[0].Name -ne $runtimeId) {
+        throw "release archive must contain exactly one selected native runtime tree"
+    }
+    $runtimeManifestSource = Join-Path $runtimeSource "manifest.json"
+    if (-not (Test-Path $runtimeManifestSource -PathType Leaf)) {
+        throw "product-manifest.json referenced runtime manifest was not found: $runtimePath/manifest.json"
+    }
+    $actualRuntimeManifestSha256 = (Get-FileHash -Path $runtimeManifestSource -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualRuntimeManifestSha256 -ne $runtimeManifestSha256) {
+        throw "runtime.manifest_sha256 mismatch: expected $runtimeManifestSha256, got $actualRuntimeManifestSha256"
+    }
+    $actualRuntimeSha256 = Get-DeterministicTreeSha256 -Path $runtimeSource
+    if ($actualRuntimeSha256 -ne $runtimeSha256) {
+        throw "runtime.sha256 mismatch: expected $runtimeSha256, got $actualRuntimeSha256"
+    }
+
+    return [PSCustomObject]@{
+        HostSource = $hostSource
+        RuntimeSource = $runtimeSource
+        ProductManifestSource = $productManifestSource
+        HostImportsSource = Join-Path $BundleDir "host-imports.json"
+    }
+}
+
+function Remove-InstallStagingPath {
+    param([string]$Path)
+
+    if (Test-Path $Path) {
+        Remove-Item $Path -Recurse -Force
+    }
+}
+
+function Move-IfExists {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    if (Test-Path $Source) {
+        Move-Item -Path $Source -Destination $Destination -Force
+        return $true
+    }
+    return $false
+}
+
+function Restore-InstallBackup {
+    param([object]$Paths)
+
+    Remove-InstallStagingPath -Path $Paths.MeshBinaryDestination
+    Remove-InstallStagingPath -Path $Paths.RuntimeDestination
+    Remove-InstallStagingPath -Path $Paths.ProductManifestDestination
+    Remove-InstallStagingPath -Path $Paths.HostImportsDestination
+    if (Test-Path $Paths.MeshBinaryBackup) {
+        Move-Item -Path $Paths.MeshBinaryBackup -Destination $Paths.MeshBinaryDestination -Force
+    }
+    if (Test-Path $Paths.RuntimeBackup) {
+        Move-Item -Path $Paths.RuntimeBackup -Destination $Paths.RuntimeDestination -Force
+    }
+    if (Test-Path $Paths.ProductManifestBackup) {
+        Move-Item -Path $Paths.ProductManifestBackup -Destination $Paths.ProductManifestDestination -Force
+    }
+    if (Test-Path $Paths.HostImportsBackup) {
+        Move-Item -Path $Paths.HostImportsBackup -Destination $Paths.HostImportsDestination -Force
+    }
+}
+
+function Remove-InstallBackups {
+    param([object]$Paths)
+
+    Remove-InstallStagingPath -Path $Paths.MeshBinaryBackup
+    Remove-InstallStagingPath -Path $Paths.RuntimeBackup
+    Remove-InstallStagingPath -Path $Paths.ProductManifestBackup
+    Remove-InstallStagingPath -Path $Paths.HostImportsBackup
+}
+
+function Stage-IncomingBundle {
+    param(
+        [object]$Bundle,
+        [object]$Paths
+    )
+
+    try {
+        Copy-Item -Path $Bundle.HostSource -Destination $Paths.MeshBinaryStaging -Force
+        Copy-Item -Path $Bundle.RuntimeSource -Destination $Paths.RuntimeStaging -Recurse -Force
+        Copy-Item -Path $Bundle.ProductManifestSource -Destination $Paths.ProductManifestStaging -Force
+        if (Test-Path $Bundle.HostImportsSource -PathType Leaf) {
+            Copy-Item -Path $Bundle.HostImportsSource -Destination $Paths.HostImportsStaging -Force
+        }
+    } catch {
+        Remove-InstallStagingPath -Path $Paths.MeshBinaryStaging
+        Remove-InstallStagingPath -Path $Paths.RuntimeStaging
+        Remove-InstallStagingPath -Path $Paths.ProductManifestStaging
+        Remove-InstallStagingPath -Path $Paths.HostImportsStaging
+        throw
+    }
+}
+
+function Install-MeshBinary {
+    param([string]$BundleDir)
+
+    $bundle = Assert-ProductBundle -BundleDir $BundleDir
+
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    $paths = [PSCustomObject]@{
+        MeshBinaryDestination = Join-Path $InstallDir "mesh-llm.exe"
+        RuntimeDestination = Join-Path $InstallDir "native-runtimes"
+        ProductManifestDestination = Join-Path $InstallDir "product-manifest.json"
+        HostImportsDestination = Join-Path $InstallDir "host-imports.json"
+        MeshBinaryStaging = Join-Path $InstallDir "mesh-llm.exe.incoming"
+        RuntimeStaging = Join-Path $InstallDir "native-runtimes.incoming"
+        ProductManifestStaging = Join-Path $InstallDir "product-manifest.json.incoming"
+        HostImportsStaging = Join-Path $InstallDir "host-imports.json.incoming"
+        MeshBinaryBackup = Join-Path $InstallDir "mesh-llm.exe.backup"
+        RuntimeBackup = Join-Path $InstallDir "native-runtimes.backup"
+        ProductManifestBackup = Join-Path $InstallDir "product-manifest.json.backup"
+        HostImportsBackup = Join-Path $InstallDir "host-imports.json.backup"
+    }
+
+    Remove-InstallStagingPath -Path $paths.MeshBinaryStaging
+    Remove-InstallStagingPath -Path $paths.RuntimeStaging
+    Remove-InstallStagingPath -Path $paths.ProductManifestStaging
+    Remove-InstallStagingPath -Path $paths.HostImportsStaging
+    Remove-InstallBackups -Paths $paths
+
+    Stage-IncomingBundle -Bundle $bundle -Paths $paths
+
+    $hostImportsDestination = $paths.HostImportsDestination
+    try {
+        [void](Move-IfExists -Source $paths.MeshBinaryDestination -Destination $paths.MeshBinaryBackup)
+        [void](Move-IfExists -Source $paths.RuntimeDestination -Destination $paths.RuntimeBackup)
+        [void](Move-IfExists -Source $paths.ProductManifestDestination -Destination $paths.ProductManifestBackup)
+        [void](Move-IfExists -Source $paths.HostImportsDestination -Destination $paths.HostImportsBackup)
+
+        Move-Item -Path $paths.MeshBinaryStaging -Destination $paths.MeshBinaryDestination -Force
+        Move-Item -Path $paths.RuntimeStaging -Destination $paths.RuntimeDestination -Force
+        if ((Test-Truthy $env:MESH_LLM_INSTALL_TEST_ALLOW_NONWINDOWS) -and (Test-Truthy $env:MESH_LLM_INSTALL_TEST_FAIL_AFTER_RUNTIME_REPLACE)) {
+            throw "test requested failure after runtime replacement"
+        }
+        Move-Item -Path $paths.ProductManifestStaging -Destination $paths.ProductManifestDestination -Force
+        if (Test-Path $paths.HostImportsStaging) {
+            Move-Item -Path $paths.HostImportsStaging -Destination $paths.HostImportsDestination -Force
+        } else {
+            if (Test-Path $paths.HostImportsDestination) {
+                Remove-Item $hostImportsDestination -Force
+            }
+        }
+        Remove-InstallBackups -Paths $paths
+        Remove-StaleBinaries
+    } catch {
+        Restore-InstallBackup -Paths $paths
+        throw
+    } finally {
+        Remove-InstallStagingPath -Path $paths.MeshBinaryStaging
+        Remove-InstallStagingPath -Path $paths.RuntimeStaging
+        Remove-InstallStagingPath -Path $paths.ProductManifestStaging
+        Remove-InstallStagingPath -Path $paths.HostImportsStaging
     }
 }
 

@@ -575,7 +575,6 @@ download_release_archive() {
 
 stale_binary_names() {
     cat <<'EOF'
-mesh-llm
 rpc-server
 llama-server
 llama-moe-split
@@ -601,6 +600,20 @@ remove_stale_binaries() {
     done < <(stale_binary_names)
 }
 
+restore_bundle_install() {
+    local backup_dir="$1"
+    shift
+    local installed_name
+    for installed_name in "$@"; do
+        rm -rf -- "${INSTALL_DIR:?}/$installed_name"
+    done
+
+    local backup_item
+    while IFS= read -r -d '' backup_item; do
+        mv "$backup_item" "$INSTALL_DIR/$(basename "$backup_item")"
+    done < <(find "$backup_dir" -mindepth 1 -maxdepth 1 -print0)
+}
+
 validate_bundle() {
     local bundle_dir="$1"
     local binary="$bundle_dir/mesh-llm"
@@ -621,11 +634,52 @@ validate_bundle() {
 install_bundle() {
     local bundle_dir="$1"
     validate_bundle "$bundle_dir"
+
+    mkdir -p "$INSTALL_DIR"
+    local staging_dir
+    local backup_dir
+    staging_dir="$(mktemp -d "$INSTALL_DIR/.mesh-llm-stage.XXXXXX")"
+    if ! backup_dir="$(mktemp -d "$INSTALL_DIR/.mesh-llm-backup.XXXXXX")"; then
+        rm -rf -- "$staging_dir"
+        return 1
+    fi
+    if ! cp -R "$bundle_dir/." "$staging_dir/"; then
+        rm -rf -- "$staging_dir" "$backup_dir"
+        return 1
+    fi
+    if ! validate_bundle "$staging_dir"; then
+        rm -rf -- "$staging_dir" "$backup_dir"
+        return 1
+    fi
+
+    local -a installed_names=()
+    local staged_item
+    local item_name
+    local destination
+    while IFS= read -r -d '' staged_item; do
+        item_name="$(basename "$staged_item")"
+        destination="$INSTALL_DIR/$item_name"
+        if [[ -e "$destination" || -L "$destination" ]]; then
+            if ! mv "$destination" "$backup_dir/$item_name"; then
+                restore_bundle_install \
+                    "$backup_dir" \
+                    ${installed_names[@]+"${installed_names[@]}"}
+                rm -rf -- "$staging_dir" "$backup_dir"
+                return 1
+            fi
+        fi
+        if ! mv "$staged_item" "$destination"; then
+            restore_bundle_install \
+                "$backup_dir" \
+                ${installed_names[@]+"${installed_names[@]}"}
+            rm -rf -- "$staging_dir" "$backup_dir"
+            return 1
+        fi
+        installed_names+=("$item_name")
+    done < <(find "$staging_dir" -mindepth 1 -maxdepth 1 -print0)
+
+    rm -rf -- "$staging_dir" "$backup_dir"
     remove_stale_binaries
-    local file
-    for file in "$bundle_dir"/*; do
-        mv -f "$file" "$INSTALL_DIR/"
-    done
 }
 
 shell_is_interactive() {

@@ -497,6 +497,7 @@ mod tests {
         CudaRuntimeRequirements, HostCudaProfile, HostRocmProfile, HostRuntimeProfile,
         NativeRuntimeBackend, NativeRuntimeManifest, NativeRuntimePlatform,
     };
+    use std::path::Path;
 
     fn artifact(id: &str, backend: NativeRuntimeBackend) -> NativeRuntimeArtifact {
         NativeRuntimeArtifact {
@@ -511,10 +512,20 @@ mod tests {
             backend,
             rank: 0,
             libraries: vec!["lib/libllama.so".to_string()],
+            files: Default::default(),
+            tools: Default::default(),
             url: None,
             sha256: None,
             signature: None,
         }
+    }
+
+    fn write_bundle_runtime(path: &Path, runtime: NativeRuntimeArtifact) {
+        std::fs::create_dir_all(path.join("lib")).unwrap();
+        std::fs::write(path.join("lib/libllama.so"), b"native runtime").unwrap();
+        NativeRuntimeManifest { runtime }
+            .write_to_dir(path)
+            .unwrap();
     }
 
     fn profile() -> HostRuntimeProfile {
@@ -804,11 +815,7 @@ mod tests {
             "meshllm-runtime-linux-x86_64-cpu",
             NativeRuntimeBackend::cpu(),
         );
-        NativeRuntimeManifest {
-            runtime: bundled_artifact.clone(),
-        }
-        .write_to_dir(bundle.path())
-        .unwrap();
+        write_bundle_runtime(bundle.path(), bundled_artifact.clone());
 
         let resolution = NativeRuntimeResolver::new(
             "0.68.0",
@@ -844,11 +851,7 @@ mod tests {
             "meshllm-runtime-linux-x86_64-cpu",
             NativeRuntimeBackend::cpu(),
         );
-        NativeRuntimeManifest {
-            runtime: bundled_artifact,
-        }
-        .write_to_dir(bundle.path())
-        .unwrap();
+        write_bundle_runtime(bundle.path(), bundled_artifact);
         let cache = NativeRuntimeCache::new(cache_root.path());
         cache.install_from_dir(bundle.path()).unwrap();
 
@@ -888,11 +891,7 @@ mod tests {
             mesh_version: Some("0.67.0".to_string()),
             ..artifact(runtime_id, NativeRuntimeBackend::cpu())
         };
-        NativeRuntimeManifest {
-            runtime: stale_bundle_artifact,
-        }
-        .write_to_dir(bundle.path())
-        .unwrap();
+        write_bundle_runtime(bundle.path(), stale_bundle_artifact);
 
         let resolution = NativeRuntimeResolver::new(
             "0.68.0",

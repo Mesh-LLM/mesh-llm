@@ -101,11 +101,12 @@ just ui-clean      # nuke node_modules + dist (fixes stale npm state)
   they skip llama.cpp ABI prep and the UI, and `cargo check` produces no
   binary at all.
 
-When in doubt for testing or shipping changes: use `just release-build` and
-then copy `./target/release/mesh-llm`. For native ABI development, first decide
-whether you need the default dynamic release packaging path or an embedded
-branch-local native ABI; do not test new ABI symbols against downloaded release
-native runtimes.
+When in doubt for testing or shipping changes: use the composed output from
+`just release-bundle vX.Y.Z <output>`, which packages the backend-neutral host
+with one selected runtime under `native-runtimes/`. For native ABI development,
+first decide whether you need the default dynamic release packaging path or an
+embedded branch-local native ABI; do not test new ABI symbols against downloaded
+release native runtimes.
 
 Release artifacts follow one three-layer graph:
 

@@ -5,8 +5,8 @@ mod dynamic {
     };
     use anyhow::{Context, Result};
     use mesh_llm_native_runtime::{
-        HostRuntimeProfile, NativeRuntimeArtifact, NativeRuntimeCache, NativeRuntimeLoadPlan,
-        NativeRuntimeReleaseManifest, RuntimeSelection,
+        HostRuntimeProfile, InstalledNativeRuntime, NativeRuntimeArtifact, NativeRuntimeCache,
+        NativeRuntimeLoadPlan, NativeRuntimeReleaseManifest, RuntimeSelection,
     };
     use std::{future::Future, path::PathBuf};
 
@@ -19,6 +19,7 @@ mod dynamic {
     #[derive(Clone, Debug, Eq, PartialEq)]
     pub(crate) enum NativeRuntimePlanSource {
         CacheHit,
+        LocalDiscovery,
         PostInstall,
     }
 
@@ -63,14 +64,16 @@ mod dynamic {
         }
     }
 
-    pub(crate) fn load_cached_native_runtime_for_embedded_serving()
+    pub(crate) fn load_local_native_runtime_for_embedded_serving()
     -> Result<Option<LoadedNativeRuntime>> {
         if skippy_runtime::native_runtime_loaded() {
             return Ok(None);
         }
         let cache = default_native_runtime_cache()?;
-        let Some(plan) = resolve_installed_native_runtime_plan(
-            &cache,
+        let local_runtimes =
+            crate::system::native_runtime_install::discover_local_native_runtimes(&[], &cache)?;
+        let Some(plan) = resolve_local_native_runtime_plan(
+            &local_runtimes,
             &host_runtime_profile(),
             crate::BUILD_VERSION,
             crate::RELEASE_VERSION,
@@ -84,7 +87,7 @@ mod dynamic {
             .map_err(anyhow::Error::from)
             .with_context(|| {
                 format!(
-                    "load cached native runtime {} from {} for embedded serving",
+                    "load local native runtime {} from {} for embedded serving",
                     plan.native_runtime_id,
                     plan.root.display()
                 )
@@ -188,23 +191,30 @@ mod dynamic {
     {
         let cache = cache()?;
         let profile = profile();
-        if let Some(plan) = resolve_installed_native_runtime_plan(
-            &cache,
-            &profile,
-            crate::BUILD_VERSION,
-            &startup_selection.mesh_version,
-            startup_selection.skippy_abi.as_deref(),
-            &startup_selection.runtime_selection,
-        )? {
-            return Ok(Some(plan));
-        }
-
         let mut options = install_options();
         options.mesh_version = startup_selection.mesh_version.clone();
         options.skippy_abi_version = startup_selection.skippy_abi.clone();
         options.selection = startup_selection.runtime_selection.clone();
         if options.cache_dir.is_none() {
             options.cache_dir = Some(cache.root().to_path_buf());
+        }
+        let discovered_bundle_dirs =
+            crate::system::native_runtime_install::discover_native_runtime_bundle_dirs(
+                &options.bundle_dirs,
+            )?;
+        if discovered_bundle_dirs.is_empty() {
+            if let Some(plan) = resolve_installed_native_runtime_plan(
+                &cache,
+                &profile,
+                crate::BUILD_VERSION,
+                &startup_selection.mesh_version,
+                startup_selection.skippy_abi.as_deref(),
+                &startup_selection.runtime_selection,
+            )? {
+                return Ok(Some(plan));
+            }
+        } else {
+            options.bundle_dirs = discovered_bundle_dirs;
         }
 
         tracing::info!(
@@ -282,6 +292,50 @@ mod dynamic {
             return Ok(None);
         };
         load_plan_from_candidate(cache, &manifest, candidate.artifact)
+    }
+
+    fn resolve_local_native_runtime_plan(
+        runtimes: &[InstalledNativeRuntime],
+        profile: &HostRuntimeProfile,
+        build_version: &str,
+        target_mesh_version: &str,
+        target_skippy_abi: Option<&str>,
+        selection: &RuntimeSelection,
+    ) -> Result<Option<NativeRuntimeStartupLoadPlan>> {
+        if runtimes.is_empty() {
+            return Ok(None);
+        }
+        let cache_mesh_version =
+            startup_native_runtime_cache_version(build_version, target_mesh_version);
+        let artifacts = runtimes
+            .iter()
+            .map(|runtime| runtime.manifest.runtime.clone())
+            .collect::<Vec<_>>();
+        let Some(candidate) = mesh_llm_native_runtime::select_native_runtime_from_artifacts(
+            &artifacts,
+            profile,
+            cache_mesh_version,
+            target_skippy_abi,
+            selection,
+        ) else {
+            return Ok(None);
+        };
+        let selected_mesh_version = candidate
+            .artifact
+            .mesh_version_or(cache_mesh_version)
+            .to_string();
+        let Some(runtime) = runtimes.iter().find(|runtime| {
+            runtime.mesh_version == selected_mesh_version
+                && runtime.native_runtime_id == candidate.artifact.native_runtime_id()
+                && runtime.manifest.runtime.skippy_abi == candidate.artifact.skippy_abi
+        }) else {
+            return Ok(None);
+        };
+        Ok(Some(startup_load_plan_from_installed(
+            selected_mesh_version,
+            runtime.load_plan()?,
+            NativeRuntimePlanSource::LocalDiscovery,
+        )?))
     }
 
     fn startup_native_runtime_cache_version<'a>(
@@ -394,6 +448,8 @@ mod dynamic {
                     backend: NativeRuntimeBackend::cpu(),
                     rank: 0,
                     libraries: vec![library_rel_path.to_string_lossy().to_string()],
+                    files: Default::default(),
+                    tools: Default::default(),
                     url: None,
                     sha256: None,
                     signature: None,
@@ -552,6 +608,46 @@ mod dynamic {
         }
 
         #[test]
+        fn local_discovery_prefers_bundle_over_identical_cached_runtime() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            write_runtime(
+                &cache.runtime_dir(release_version, runtime_id),
+                release_version,
+                runtime_id,
+            );
+            let bundled_runtime_dir = temp
+                .path()
+                .join("product")
+                .join("native-runtimes")
+                .join(runtime_id);
+            write_runtime(&bundled_runtime_dir, release_version, runtime_id);
+
+            let local_runtimes =
+                crate::system::native_runtime_install::discover_local_native_runtimes(
+                    &[bundled_runtime_dir.clone()],
+                    &cache,
+                )
+                .unwrap();
+            let plan = resolve_local_native_runtime_plan(
+                &local_runtimes,
+                &HostRuntimeProfile::current_without_gpu_probe(),
+                release_version,
+                release_version,
+                Some("0.1.25"),
+                &RuntimeSelection::Recommended,
+            )
+            .unwrap()
+            .expect("expected bundled runtime plan");
+
+            assert_eq!(plan.native_runtime_id, runtime_id);
+            assert_eq!(plan.source, NativeRuntimePlanSource::LocalDiscovery);
+            assert_eq!(plan.root, bundled_runtime_dir.canonicalize().unwrap());
+        }
+
+        #[test]
         fn disappeared_cache_entry_is_treated_as_cache_miss() {
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
@@ -574,6 +670,8 @@ mod dynamic {
                 backend: NativeRuntimeBackend::cpu(),
                 rank: 0,
                 libraries: vec![test_library_rel_path().to_string_lossy().to_string()],
+                files: Default::default(),
+                tools: Default::default(),
                 url: None,
                 sha256: None,
                 signature: None,
@@ -633,6 +731,77 @@ mod dynamic {
             assert_eq!(
                 runtime.libraries,
                 vec![runtime_dir.join(test_library_rel_path())]
+            );
+            assert_eq!(load_calls.lock().unwrap().as_slice(), &[runtime.libraries]);
+        }
+
+        #[tokio::test]
+        async fn bundled_runtime_precedes_identical_cache_entry_at_startup() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            let cached_runtime_dir = cache.runtime_dir(release_version, runtime_id);
+            write_runtime(&cached_runtime_dir, release_version, runtime_id);
+            let product_root = temp.path().join("mesh-bundle");
+            let bundled_runtime_dir = product_root.join("native-runtimes").join(runtime_id);
+            write_runtime(&bundled_runtime_dir, release_version, runtime_id);
+
+            let install_calls = Arc::new(Mutex::new(0_usize));
+            let load_calls = Arc::new(Mutex::new(Vec::<Vec<PathBuf>>::new()));
+            let options_product_root = product_root.clone();
+            let options_cache_root = cache.root().to_path_buf();
+
+            let runtime = try_load_installed_native_runtime_with(
+                || false,
+                || Ok(cache.clone()),
+                HostRuntimeProfile::current_without_gpu_probe,
+                move || NativeRuntimeInstallOptions {
+                    mesh_version: release_version.to_string(),
+                    skippy_abi_version: Some("0.1.25".to_string()),
+                    bundle_dirs: vec![options_product_root.clone()],
+                    cache_dir: Some(options_cache_root.clone()),
+                    allow_download: false,
+                    ..Default::default()
+                },
+                {
+                    let install_calls = Arc::clone(&install_calls);
+                    move |options| {
+                        let install_calls = Arc::clone(&install_calls);
+                        async move {
+                            *install_calls.lock().unwrap() += 1;
+                            crate::system::native_runtime_install::install_native_runtime(options)
+                                .await
+                        }
+                    }
+                },
+                NativeRuntimeStartupSelection::explicit(
+                    release_version.to_string(),
+                    Some("0.1.25".to_string()),
+                    RuntimeSelection::Recommended,
+                ),
+                {
+                    let load_calls = Arc::clone(&load_calls);
+                    move |libraries| {
+                        load_calls.lock().unwrap().push(libraries.to_vec());
+                        Ok(())
+                    }
+                },
+            )
+            .await
+            .unwrap()
+            .expect("expected bundled runtime to load");
+
+            assert_eq!(*install_calls.lock().unwrap(), 1);
+            assert_eq!(runtime.native_runtime_id, runtime_id);
+            assert_eq!(
+                runtime.libraries,
+                vec![
+                    bundled_runtime_dir
+                        .canonicalize()
+                        .unwrap()
+                        .join(test_library_rel_path())
+                ]
             );
             assert_eq!(load_calls.lock().unwrap().as_slice(), &[runtime.libraries]);
         }

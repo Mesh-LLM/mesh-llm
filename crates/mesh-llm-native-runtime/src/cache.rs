@@ -241,6 +241,8 @@ mod tests {
                 backend: NativeRuntimeBackend::cpu(),
                 rank: 0,
                 libraries: vec!["lib/libmeshllm_ffi.so".to_string()],
+                files: Default::default(),
+                tools: Default::default(),
                 url: None,
                 sha256: None,
                 signature: None,

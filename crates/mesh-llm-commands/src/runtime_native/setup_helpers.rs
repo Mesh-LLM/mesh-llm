@@ -159,7 +159,9 @@ mod tests {
         NativeRuntimeBackendKind, NativeRuntimePlatform, NativeRuntimeResolution,
         NativeRuntimeSource,
     };
-    use mesh_llm_runtime_install::{CURRENT_MESH_VERSION, NativeRuntimeInstallStatus};
+    use mesh_llm_runtime_install::{
+        CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeInstallStatus,
+    };
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -204,6 +206,10 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].mesh_version, "0.68.0");
         assert_eq!(calls[0].skippy_abi_version.as_deref(), Some("0.1.25"));
+        assert_eq!(
+            calls[0].bundle_install_policy,
+            NativeRuntimeBundleInstallPolicy::UseInPlace
+        );
         assert_eq!(
             calls[0].selection,
             RuntimeSelection::Backend {
@@ -307,6 +313,8 @@ mod tests {
             backend: NativeRuntimeBackend::cpu(),
             rank: 0,
             libraries: vec!["libmeshllm_runtime.so".to_string()],
+            files: Default::default(),
+            tools: Default::default(),
             url: None,
             sha256: None,
             signature: None,

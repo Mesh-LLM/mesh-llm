@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import json
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
@@ -51,6 +52,47 @@ class InstallPs1StaticTests(unittest.TestCase):
         self.assertNotIn("::OSArchitecture.ToString()", contents)
         self.assertIn("$env:PROCESSOR_ARCHITECTURE", contents)
 
+    def test_script_validates_product_bundle_before_mutation(self) -> None:
+        contents = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("Assert-ProductBundle", contents)
+        self.assertIn("mesh-llm-product-v2", contents)
+        self.assertIn("runtime.manifest_sha256", contents)
+        self.assertIn("Get-DeterministicTreeSha256", contents)
+        self.assertIn("Assert-SafeRelativePath", contents)
+
+    def test_script_stages_replacement_and_removes_stale_host_imports(self) -> None:
+        contents = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("mesh-llm.exe.incoming", contents)
+        self.assertIn("native-runtimes.incoming", contents)
+        self.assertIn("Stage-IncomingBundle", contents)
+        self.assertIn("Restore-InstallBackup", contents)
+        self.assertIn("host-imports.json.backup", contents)
+        self.assertIn("Remove-Item $hostImportsDestination -Force", contents)
+
+    def test_script_stages_before_mutation_and_cleans_failed_staging(self) -> None:
+        contents = SCRIPT.read_text(encoding="utf-8")
+        install_start = contents.index("function Install-MeshBinary")
+        install_body = contents[install_start:]
+
+        self.assertLess(
+            install_body.index("Stage-IncomingBundle"),
+            install_body.index("Move-IfExists"),
+        )
+        self.assertLess(
+            install_body.index("Stage-IncomingBundle"),
+            install_body.index("Remove-StaleBinaries"),
+        )
+        self.assertLess(
+            install_body.index("Remove-InstallStagingPath -Path $paths.MeshBinaryStaging"),
+            install_body.index("Restore-InstallBackup"),
+        )
+        self.assertLess(
+            install_body.index("Remove-InstallBackups -Paths $paths"),
+            install_body.index("Remove-StaleBinaries"),
+        )
+
 
 @unittest.skipUnless(PWSH, "pwsh not installed")
 class InstallPs1BehaviorTests(unittest.TestCase):
@@ -92,25 +134,95 @@ class InstallPs1BehaviorTests(unittest.TestCase):
             self.assertIn("Run this next:", result.stdout)
             self.assertIn('mesh-llm.exe" setup', result.stdout)
 
+    def test_tampered_product_manifest_fails_before_existing_install_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+            existing_binary = install_dir / "mesh-llm.exe"
+            existing_binary.write_text("existing\n", encoding="utf-8")
+            (install_dir / "product-manifest.json").write_text(
+                '{"existing":true}\n', encoding="utf-8"
+            )
+
+            result, _calls = self._run_install(
+                tmp_path,
+                interactive=False,
+                archive_options={"tamper_host_digest": True},
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("host.sha256 mismatch", self._combined_output(result))
+            self.assertEqual(existing_binary.read_text(encoding="utf-8"), "existing\n")
+            self.assertEqual(
+                (install_dir / "product-manifest.json").read_text(encoding="utf-8"),
+                '{"existing":true}\n',
+            )
+
+    def test_stale_host_imports_is_removed_when_bundle_omits_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+            (install_dir / "host-imports.json").write_text("stale\n", encoding="utf-8")
+
+            result, _calls = self._run_install(tmp_path, interactive=False)
+
+            self.assertEqual(result.returncode, 0, self._combined_output(result))
+            self.assertFalse((install_dir / "host-imports.json").exists())
+
+    def test_failed_runtime_replacement_restores_previous_install(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+            existing_binary = install_dir / "mesh-llm.exe"
+            existing_binary.write_text("existing\n", encoding="utf-8")
+            existing_runtime = install_dir / "native-runtimes" / "old-runtime"
+            existing_runtime.mkdir(parents=True)
+            (existing_runtime / "manifest.json").write_text("old-runtime\n", encoding="utf-8")
+            (install_dir / "product-manifest.json").write_text("old-manifest\n", encoding="utf-8")
+
+            result, _calls = self._run_install(
+                tmp_path,
+                interactive=False,
+                extra_env={"MESH_LLM_INSTALL_TEST_FAIL_AFTER_RUNTIME_REPLACE": "1"},
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(existing_binary.read_text(encoding="utf-8"), "existing\n")
+            self.assertTrue((install_dir / "native-runtimes" / "old-runtime").is_dir())
+            self.assertEqual(
+                (install_dir / "product-manifest.json").read_text(encoding="utf-8"),
+                "old-manifest\n",
+            )
+
     def _run_install(
         self,
         tmp_path: Path,
         *,
         interactive: bool,
         args: list[str] | None = None,
+        archive_options: dict[str, bool] | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], Path]:
         install_dir = tmp_path / "bin"
-        install_dir.mkdir()
+        install_dir.mkdir(exist_ok=True)
         assets_dir = tmp_path / "assets"
         assets_dir.mkdir()
         calls = tmp_path / "mesh-llm-calls.log"
-        self._write_release_archive(assets_dir / HOST_ASSET, calls)
+        self._write_release_archive(
+            assets_dir / HOST_ASSET,
+            calls,
+            **(archive_options or {}),
+        )
 
         with AssetServer(assets_dir) as server:
             env = os.environ.copy()
             env["MESH_LLM_INSTALL_INTERACTIVE"] = "1" if interactive else "0"
             env["MESH_LLM_INSTALL_TEST_ALLOW_NONWINDOWS"] = "1"
             env["MESH_LLM_INSTALL_URL_BASE"] = server.base_url
+            env.update(extra_env or {})
             command = [
                 PWSH,
                 "-NoProfile",
@@ -131,7 +243,14 @@ class InstallPs1BehaviorTests(unittest.TestCase):
             )
         return result, calls
 
-    def _write_release_archive(self, archive_path: Path, calls: Path) -> None:
+    def _write_release_archive(
+        self,
+        archive_path: Path,
+        calls: Path,
+        *,
+        tamper_host_digest: bool = False,
+        include_host_imports: bool = False,
+    ) -> None:
         script_contents = (
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
@@ -141,6 +260,8 @@ class InstallPs1BehaviorTests(unittest.TestCase):
             archive_path,
             member_name="mesh-bundle/mesh-llm.exe",
             contents=script_contents,
+            tamper_host_digest=tamper_host_digest,
+            include_host_imports=include_host_imports,
         )
         archive_path.with_name(f"{archive_path.name}.sha256").write_text(
             f"{digest}  {archive_path.name}\n",
@@ -153,19 +274,77 @@ class InstallPs1BehaviorTests(unittest.TestCase):
         *,
         member_name: str,
         contents: str,
+        tamper_host_digest: bool,
+        include_host_imports: bool,
     ) -> str:
+        runtime_manifest = json.dumps(
+            {
+                "runtime": {
+                    "id": "test-runtime",
+                    "mesh_version": "0.73.1",
+                    "skippy_abi": "0.1.0",
+                    "platform": {
+                        "os": "windows",
+                        "arch": "x86_64",
+                        "target": "x86_64-pc-windows-msvc",
+                    },
+                    "backend": {"kind": "cpu"},
+                    "rank": 0,
+                    "libraries": ["lib/llama.dll"],
+                    "url": None,
+                    "sha256": None,
+                    "signature": None,
+                }
+            },
+            sort_keys=True,
+        ) + "\n"
+        runtime_files = {
+            "manifest.json": runtime_manifest.encode(),
+            "lib/llama.dll": b"runtime",
+        }
+        runtime_digest = self._tree_sha256(runtime_files)
+        host_digest = hashlib.sha256(contents.encode()).hexdigest()
+        if tamper_host_digest:
+            host_digest = "0" * 64
+        product_manifest = json.dumps(
+            {
+                "schema_version": 2,
+                "contract": "mesh-llm-product-v2",
+                "mesh_version": "0.73.1",
+                "backend": "cpu",
+                "host": {"path": "mesh-llm.exe", "sha256": host_digest},
+                "runtime": {
+                    "id": "test-runtime",
+                    "path": "native-runtimes/test-runtime",
+                    "sha256": runtime_digest,
+                    "manifest_sha256": hashlib.sha256(
+                        runtime_files["manifest.json"]
+                    ).hexdigest(),
+                },
+            },
+            sort_keys=True,
+        ) + "\n"
         with zipfile.ZipFile(archive_path, "w") as archive:
             info = zipfile.ZipInfo(member_name)
             info.external_attr = 0o755 << 16
             archive.writestr(info, contents)
-            archive.writestr("mesh-bundle/product-manifest.json", "{}\n")
-            archive.writestr(
-                "mesh-bundle/native-runtimes/test-runtime/manifest.json", "{}\n"
-            )
-            archive.writestr(
-                "mesh-bundle/native-runtimes/test-runtime/lib/llama.dll", b"runtime"
-            )
+            archive.writestr("mesh-bundle/product-manifest.json", product_manifest)
+            for relative_path, data in runtime_files.items():
+                archive.writestr(
+                    f"mesh-bundle/native-runtimes/test-runtime/{relative_path}", data
+                )
+            if include_host_imports:
+                archive.writestr("mesh-bundle/host-imports.json", '{"imports":[]}\n')
         return hashlib.sha256(archive_path.read_bytes()).hexdigest()
+
+    def _tree_sha256(self, files: dict[str, bytes]) -> str:
+        digest = hashlib.sha256()
+        for relative_path in sorted(files):
+            relative = relative_path.encode()
+            digest.update(len(relative).to_bytes(8, "big"))
+            digest.update(relative)
+            digest.update(hashlib.sha256(files[relative_path]).digest())
+        return digest.hexdigest()
 
     def _combined_output(self, result: subprocess.CompletedProcess[str]) -> str:
         return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"

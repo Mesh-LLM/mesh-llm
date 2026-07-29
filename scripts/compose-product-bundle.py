@@ -5,6 +5,33 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from typing import NotRequired, TypedDict
+
+
+BACKEND_KIND_ALIASES = {"cuda-blackwell": "cuda", "hip": "rocm"}
+
+
+class RuntimeBackend(TypedDict):
+    kind: str
+
+
+class RuntimeData(TypedDict):
+    id: str
+    mesh_version: str
+    backend: RuntimeBackend
+
+
+class BuildData(TypedDict):
+    backend: str
+
+
+class RuntimeManifest(TypedDict):
+    runtime: RuntimeData
+    build: NotRequired[BuildData]
+
+
+def expected_backend_kind(backend: str) -> str:
+    return BACKEND_KIND_ALIASES.get(backend, backend)
 
 
 def file_sha256(path: Path) -> str:
@@ -25,6 +52,29 @@ def tree_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def validate_runtime_backend(
+    runtime_id: str,
+    runtime_manifest: RuntimeManifest,
+    runtime_data: RuntimeData,
+    requested_backend: str,
+) -> None:
+    expected_kind = expected_backend_kind(requested_backend)
+    runtime_backend = runtime_data["backend"]
+    runtime_kind = runtime_backend["kind"]
+    if runtime_kind != expected_kind:
+        raise ValueError(
+            f"native runtime {runtime_id} backend mismatch: found {runtime_kind}, "
+            f"expected {expected_kind} for requested backend {requested_backend}"
+        )
+
+    build_data = runtime_manifest.get("build")
+    if build_data is not None and expected_backend_kind(build_data["backend"]) != expected_kind:
+        raise ValueError(
+            f"native runtime {runtime_id} build backend mismatch: found {build_data['backend']}, "
+            f"expected runtime family {expected_kind} for requested backend {requested_backend}"
+        )
+
+
 def compose_manifest(
     bundle: Path,
     host: Path,
@@ -34,7 +84,9 @@ def compose_manifest(
 ) -> dict[str, object]:
     version = version.removeprefix("v")
     runtime_manifest_path = runtime / "manifest.json"
-    runtime_manifest = json.loads(runtime_manifest_path.read_text(encoding="utf-8"))
+    runtime_manifest: RuntimeManifest = json.loads(
+        runtime_manifest_path.read_text(encoding="utf-8")
+    )
     runtime_data = runtime_manifest["runtime"]
     runtime_id = runtime_data["id"]
     runtime_mesh_version = runtime_data["mesh_version"].removeprefix("v")
@@ -43,6 +95,7 @@ def compose_manifest(
             f"native runtime {runtime_id} targets MeshLLM {runtime_mesh_version}, "
             f"expected {version}"
         )
+    validate_runtime_backend(runtime_id, runtime_manifest, runtime_data, backend)
     return {
         "schema_version": 2,
         "contract": "mesh-llm-product-v2",

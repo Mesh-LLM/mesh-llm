@@ -331,13 +331,27 @@ try {
     } else {
         ""
     }
-    $runtimeDir = (& $python (Join-Path $scriptDir "select-native-runtime.py") `
-        --root $nativeRuntimeRoot `
-        --os windows `
-        --arch x86_64 `
-        --backend $releaseFlavor `
-        --cuda-major $cudaMajor).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $runtimeDir) {
+    $selectorArgs = @(
+        (Join-Path $scriptDir "select-native-runtime.py")
+        "--root"
+        $nativeRuntimeRoot
+        "--os"
+        "windows"
+        "--arch"
+        "x86_64"
+        "--backend"
+        $releaseFlavor
+    )
+    if (Test-HasValue $cudaMajor) {
+        $selectorArgs += @("--cuda-major", $cudaMajor)
+    }
+    $selectorOutput = & $python @selectorArgs
+    $selectorExitCode = $LASTEXITCODE
+    if ($selectorExitCode -ne 0) {
+        throw "failed to select the packaged Windows native runtime"
+    }
+    $runtimeDir = $selectorOutput | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Last 1
+    if (-not $runtimeDir) {
         throw "failed to select the packaged Windows native runtime"
     }
     $runtimeDestinationRoot = Join-Path $bundleDir "native-runtimes"

@@ -191,6 +191,8 @@ mod tests {
                 backend: NativeRuntimeBackend::cpu(),
                 rank: 0,
                 libraries: vec!["lib/libllama.so".to_string()],
+                files: Default::default(),
+                tools: Default::default(),
                 url: None,
                 sha256: None,
                 signature: None,

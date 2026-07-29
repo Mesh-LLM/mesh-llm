@@ -271,6 +271,79 @@ class InstallScriptTests(unittest.TestCase):
                 "existing binary\n",
             )
 
+    def test_install_bundle_replaces_existing_nonempty_runtime_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            existing_runtime = install_dir / "native-runtimes" / "old-runtime"
+            existing_runtime.mkdir(parents=True)
+            (existing_runtime / "old-library").write_text("old\n", encoding="utf-8")
+            (install_dir / "mesh-llm").write_text("old host\n", encoding="utf-8")
+
+            bundle_dir = self._write_installable_bundle(tmp_path, "new")
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                f"install_bundle {shlex_quote(str(bundle_dir))}",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                (install_dir / "mesh-llm").read_text(encoding="utf-8"),
+                "new host\n",
+            )
+            self.assertTrue(
+                (
+                    install_dir
+                    / "native-runtimes"
+                    / "new-runtime"
+                    / "lib"
+                    / "libllama.so"
+                ).is_file()
+            )
+            self.assertFalse(existing_runtime.exists())
+
+    def test_install_bundle_rolls_back_when_a_staged_move_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            existing_runtime = install_dir / "native-runtimes" / "old-runtime"
+            existing_runtime.mkdir(parents=True)
+            (existing_runtime / "old-library").write_text("old runtime\n", encoding="utf-8")
+            old_host = install_dir / "mesh-llm"
+            old_host.write_text("old host\n", encoding="utf-8")
+            old_host.chmod(0o755)
+            old_manifest = install_dir / "product-manifest.json"
+            old_manifest.write_text("old manifest\n", encoding="utf-8")
+
+            bundle_dir = self._write_installable_bundle(tmp_path, "new")
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                f"""
+                failed_runtime_move=0
+                mv() {{
+                    if [[ "$failed_runtime_move" == 0 && "$1" == *".mesh-llm-stage."*/native-runtimes ]]; then
+                        failed_runtime_move=1
+                        return 42
+                    fi
+                    command mv "$@"
+                }}
+                install_bundle {shlex_quote(str(bundle_dir))}
+                """,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(old_host.read_text(encoding="utf-8"), "old host\n")
+            self.assertEqual(
+                (existing_runtime / "old-library").read_text(encoding="utf-8"),
+                "old runtime\n",
+            )
+            self.assertEqual(
+                old_manifest.read_text(encoding="utf-8"),
+                "old manifest\n",
+            )
+
     def test_main_runs_setup_interactively(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result, calls, tools = self._run_main(tmp, interactive=True)
@@ -438,6 +511,27 @@ class InstallScriptTests(unittest.TestCase):
         path.write_text(contents, encoding="utf-8")
         digest = hashlib.sha256(contents.encode("utf-8")).hexdigest()
         path.with_name(f"{path.name}.sha256").write_text(f"{digest}  {path.name}\n", encoding="utf-8")
+
+    def _write_installable_bundle(self, root: Path, marker: str) -> Path:
+        bundle = root / f"{marker}-mesh-bundle"
+        runtime = bundle / "native-runtimes" / f"{marker}-runtime" / "lib"
+        runtime.mkdir(parents=True)
+        mesh_llm = bundle / "mesh-llm"
+        mesh_llm.write_text(f"{marker} host\n", encoding="utf-8")
+        mesh_llm.chmod(0o755)
+        (bundle / "product-manifest.json").write_text(
+            f"{marker} manifest\n",
+            encoding="utf-8",
+        )
+        (runtime.parent / "manifest.json").write_text(
+            f"{marker} runtime manifest\n",
+            encoding="utf-8",
+        )
+        (runtime / "libllama.so").write_text(
+            f"{marker} runtime\n",
+            encoding="utf-8",
+        )
+        return bundle
 
     def _write_release_archive(self, archive_path: Path, calls: Path) -> None:
         with tempfile.TemporaryDirectory() as bundle_tmp:

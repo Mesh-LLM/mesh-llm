@@ -101,8 +101,10 @@ validated, and they are searched in this order:
 6. the user cache and, only when allowed, a verified download.
 
 A path may name one runtime, a `native-runtimes` root, or a portable
-`mesh-bundle` root. The current working directory is never searched. A matching
-package-owned runtime is loaded in place and is not copied into the user cache.
+`mesh-bundle` root. The current working directory is not implicitly searched,
+but it can be searched when explicitly provided through API or CLI directory
+configuration. A matching package-owned runtime is loaded in place and is not
+copied into the user cache.
 
 ## Cache And Progress
 

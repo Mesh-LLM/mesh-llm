@@ -38,6 +38,14 @@ pub enum NativeRuntimeVerificationPolicy {
     RequireChecksumAndSignature,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeRuntimeBundleInstallPolicy {
+    #[default]
+    UseInPlace,
+    InstallExplicitBundlesIntoCache,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NativeRuntimeDownloadProgress {
     pub native_runtime_id: String,
@@ -66,6 +74,7 @@ pub struct NativeRuntimeInstallOptions {
     pub bundle_dirs: Vec<PathBuf>,
     pub cache_dir: Option<PathBuf>,
     pub verification_policy: NativeRuntimeVerificationPolicy,
+    pub bundle_install_policy: NativeRuntimeBundleInstallPolicy,
     pub progress: Option<NativeRuntimeDownloadProgressCallback>,
     pub allow_download: bool,
 }
@@ -107,6 +116,7 @@ impl Default for NativeRuntimeInstallOptions {
             bundle_dirs: Vec::new(),
             cache_dir: None,
             verification_policy: NativeRuntimeVerificationPolicy::RequireChecksum,
+            bundle_install_policy: NativeRuntimeBundleInstallPolicy::UseInPlace,
             progress: None,
             allow_download: true,
         }
@@ -254,30 +264,22 @@ async fn install_resolved_runtime(
     resolution: mesh_llm_native_runtime::NativeRuntimeResolution,
     options: &NativeRuntimeInstallOptions,
 ) -> Result<NativeRuntimeInstallOutcome> {
-    match &resolution.source {
+    match resolution.source.clone() {
         NativeRuntimeSource::Installed { path: _ } => installed_outcome(cache, resolution),
         NativeRuntimeSource::Bundle { path } => {
-            let manifest = NativeRuntimeManifest::read_from_dir(path)?;
-            let runtime = InstalledNativeRuntime {
-                mesh_version: manifest
-                    .runtime
-                    .mesh_version
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string()),
-                native_runtime_id: manifest.runtime.id.clone(),
-                flavor: manifest.runtime.backend.kind.to_string(),
-                path: path.clone(),
-                manifest,
-            };
-            Ok(NativeRuntimeInstallOutcome {
-                status: NativeRuntimeInstallStatus::AlreadyInstalled,
-                runtime,
-                resolution,
-            })
+            if should_install_explicit_bundle_into_cache(&path, options)? {
+                let runtime = cache.install_from_dir(&path)?;
+                return Ok(NativeRuntimeInstallOutcome {
+                    status: NativeRuntimeInstallStatus::Installed,
+                    runtime,
+                    resolution,
+                });
+            }
+            in_place_bundle_outcome(&path, resolution)
         }
         NativeRuntimeSource::Download { url } if options.allow_download => {
             let runtime =
-                download_and_install_runtime(cache, &resolution.selected, url, options).await?;
+                download_and_install_runtime(cache, &resolution.selected, &url, options).await?;
             Ok(NativeRuntimeInstallOutcome {
                 status: NativeRuntimeInstallStatus::Installed,
                 runtime,
@@ -294,6 +296,68 @@ async fn install_resolved_runtime(
             )
         }
     }
+}
+
+fn should_install_explicit_bundle_into_cache(
+    bundle_path: &Path,
+    options: &NativeRuntimeInstallOptions,
+) -> Result<bool> {
+    match options.bundle_install_policy {
+        NativeRuntimeBundleInstallPolicy::UseInPlace => Ok(false),
+        NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache => {
+            bundle_path_matches_explicit_root(bundle_path, &options.bundle_dirs)
+        }
+    }
+}
+
+fn bundle_path_matches_explicit_root(
+    bundle_path: &Path,
+    explicit_dirs: &[PathBuf],
+) -> Result<bool> {
+    if explicit_dirs.is_empty() {
+        return Ok(false);
+    }
+    let bundle_path = bundle_path.canonicalize().with_context(|| {
+        format!(
+            "canonicalize native runtime bundle {}",
+            bundle_path.display()
+        )
+    })?;
+    for explicit_dir in explicit_dirs {
+        let explicit_dir = explicit_dir.canonicalize().with_context(|| {
+            format!(
+                "canonicalize explicit native runtime bundle {}",
+                explicit_dir.display()
+            )
+        })?;
+        if bundle_path.starts_with(&explicit_dir) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn in_place_bundle_outcome(
+    path: &Path,
+    resolution: mesh_llm_native_runtime::NativeRuntimeResolution,
+) -> Result<NativeRuntimeInstallOutcome> {
+    let manifest = NativeRuntimeManifest::read_from_dir(path)?;
+    let runtime = InstalledNativeRuntime {
+        mesh_version: manifest
+            .runtime
+            .mesh_version
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
+        native_runtime_id: manifest.runtime.id.clone(),
+        flavor: manifest.runtime.backend.kind.to_string(),
+        path: path.to_path_buf(),
+        manifest,
+    };
+    Ok(NativeRuntimeInstallOutcome {
+        status: NativeRuntimeInstallStatus::AlreadyInstalled,
+        runtime,
+        resolution,
+    })
 }
 
 fn installed_outcome(
@@ -618,6 +682,8 @@ mod tests {
             backend: NativeRuntimeBackend::cpu(),
             rank: 0,
             libraries: vec!["lib/libllama.so".to_string()],
+            files: Default::default(),
+            tools: Default::default(),
             url: Some("https://example.invalid/runtime.tar.gz".to_string()),
             sha256: Some("a".repeat(64)),
             signature: signature.map(str::to_string),
@@ -687,6 +753,145 @@ mod tests {
                     artifact.native_runtime_id()
                 )
                 .exists()
+        );
+    }
+
+    #[test]
+    fn bundled_runtime_is_used_in_place_when_policy_has_no_explicit_root_match() {
+        let bundle = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        let mut artifact = artifact_with_sha(None);
+        artifact.url = None;
+        artifact.sha256 = None;
+        std::fs::create_dir_all(bundle.path().join("lib")).unwrap();
+        std::fs::write(bundle.path().join("lib/libllama.so"), b"runtime").unwrap();
+        NativeRuntimeManifest {
+            runtime: artifact.clone(),
+        }
+        .write_to_dir(bundle.path())
+        .unwrap();
+        let cache = NativeRuntimeCache::new(cache_root.path());
+        let resolution = NativeRuntimeResolution {
+            selected: artifact.clone(),
+            source: NativeRuntimeSource::Bundle {
+                path: bundle.path().to_path_buf(),
+            },
+            evaluated: Vec::new(),
+        };
+
+        let outcome = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(install_resolved_runtime(
+                &cache,
+                resolution,
+                &NativeRuntimeInstallOptions {
+                    bundle_install_policy:
+                        NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache,
+                    allow_download: false,
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+
+        assert_eq!(outcome.status, NativeRuntimeInstallStatus::AlreadyInstalled);
+        assert_eq!(outcome.runtime.path, bundle.path());
+        assert!(
+            !cache
+                .runtime_dir(
+                    artifact.mesh_version.as_deref().unwrap(),
+                    artifact.native_runtime_id()
+                )
+                .exists()
+        );
+    }
+
+    #[test]
+    fn explicit_product_bundle_root_is_installed_into_cache_when_policy_requires_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        let product_bundle = temp.path().join("mesh-bundle");
+        let runtime_bundle = product_bundle.join("native-runtimes/runtime-a");
+        let mut artifact = artifact_with_sha(None);
+        artifact.url = None;
+        artifact.sha256 = None;
+        std::fs::create_dir_all(runtime_bundle.join("lib")).unwrap();
+        std::fs::write(runtime_bundle.join("lib/libllama.so"), b"runtime").unwrap();
+        NativeRuntimeManifest {
+            runtime: artifact.clone(),
+        }
+        .write_to_dir(&runtime_bundle)
+        .unwrap();
+        let cache = NativeRuntimeCache::new(cache_root.path());
+        let resolution = NativeRuntimeResolution {
+            selected: artifact.clone(),
+            source: NativeRuntimeSource::Bundle {
+                path: runtime_bundle.clone(),
+            },
+            evaluated: Vec::new(),
+        };
+
+        let outcome = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(install_resolved_runtime(
+                &cache,
+                resolution,
+                &NativeRuntimeInstallOptions {
+                    bundle_dirs: vec![product_bundle],
+                    bundle_install_policy:
+                        NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache,
+                    allow_download: false,
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+
+        let cached_path = cache.runtime_dir(
+            artifact.mesh_version.as_deref().unwrap(),
+            artifact.native_runtime_id(),
+        );
+        assert_eq!(outcome.status, NativeRuntimeInstallStatus::Installed);
+        assert_eq!(outcome.runtime.path, cached_path);
+        assert!(outcome.runtime.path.join("lib/libllama.so").exists());
+    }
+
+    #[test]
+    fn explicit_bundle_root_matching_accepts_runtime_native_runtimes_and_product_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let product_bundle = temp.path().join("mesh-bundle");
+        let native_runtimes_root = product_bundle.join("native-runtimes");
+        let runtime_bundle = native_runtimes_root.join("runtime-a");
+        let sibling = temp.path().join("other-bundle");
+        std::fs::create_dir_all(&runtime_bundle).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+
+        assert!(
+            bundle_path_matches_explicit_root(
+                &runtime_bundle,
+                std::slice::from_ref(&runtime_bundle)
+            )
+            .unwrap()
+        );
+        assert!(
+            bundle_path_matches_explicit_root(
+                &runtime_bundle,
+                std::slice::from_ref(&native_runtimes_root)
+            )
+            .unwrap()
+        );
+        assert!(
+            bundle_path_matches_explicit_root(
+                &runtime_bundle,
+                std::slice::from_ref(&product_bundle)
+            )
+            .unwrap()
+        );
+        assert!(
+            !bundle_path_matches_explicit_root(&runtime_bundle, std::slice::from_ref(&sibling))
+                .unwrap()
         );
     }
 

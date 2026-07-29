@@ -62,6 +62,20 @@ mesh-llm:
             imports[1:],
         )
 
+    def test_rejects_windows_cuda_and_rocm_runtime_dll_names(self) -> None:
+        imports = [
+            "KERNEL32.dll",
+            "nvcuda.dll",
+            "cudart64_12.dll",
+            "cublas64_12.dll",
+            "cublasLt64_12.dll",
+            "amdhip64.dll",
+            "hipblas.dll",
+            "rocblas.dll",
+        ]
+
+        self.assertEqual(MODULE.forbidden_imports(imports), imports[1:])
+
 
 if __name__ == "__main__":
     unittest.main()

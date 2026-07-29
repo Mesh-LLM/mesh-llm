@@ -155,9 +155,11 @@ release-runtime-build backend="" target="":
     if [[ -z "$selected_backend" ]]; then
         if [[ "$(uname -s)" == Darwin ]]; then selected_backend=metal; else selected_backend=cpu; fi
     fi
-    target_args=()
-    if [[ -n "{{ target }}" ]]; then target_args+=(--target "{{ target }}"); fi
-    scripts/package-native-runtime.sh --build --backend "$selected_backend" "${target_args[@]}"
+    if [[ -n "{{ target }}" ]]; then
+        scripts/package-native-runtime.sh --build --backend "$selected_backend" --target "{{ target }}"
+    else
+        scripts/package-native-runtime.sh --build --backend "$selected_backend"
+    fi
 
 # Build the backend-neutral host and the default runtime for this platform.
 release-build: release-host-build release-runtime-build
@@ -169,7 +171,9 @@ release-build-aarch64: release-host-build
 # Build a Linux aarch64 CUDA release artifact (Jetson/Orin).
 # SM arches selected by MESH_CUDA_VERSION env (set by CI matrix).
 release-build-aarch64-cuda: release-host-build
-    @LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90;110'; else echo '75;80;86;87;89;90'; fi)" \
+    @cuda_version="${MESH_CUDA_VERSION:-12}"; \
+      MESH_LLM_CUDA_TOOLKIT_MAJOR="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-${cuda_version%%.*}}" \
+      LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "$cuda_version" == 13.* ]]; then echo '75;80;86;87;89;90;110'; else echo '75;80;86;87;89;90'; fi)" \
       scripts/package-native-runtime.sh --build --backend cuda --target aarch64-unknown-linux-gnu
 
 # Prepare the pinned llama.cpp checkout and apply the Mesh-LLM ABI patch queue.
@@ -190,7 +194,9 @@ release-build-windows:
 # Build a Linux CUDA release artifact.
 # SM arches selected by MESH_CUDA_VERSION env (set by CI matrix).
 release-build-cuda: release-host-build
-    @LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'; else echo '75;80;86;87;89;90'; fi)" \
+    @cuda_version="${MESH_CUDA_VERSION:-12}"; \
+      MESH_LLM_CUDA_TOOLKIT_MAJOR="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-${cuda_version%%.*}}" \
+      LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "$cuda_version" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'; else echo '75;80;86;87;89;90'; fi)" \
       scripts/package-native-runtime.sh --build --backend cuda --target x86_64-unknown-linux-gnu
 
 release-build-cuda-windows cuda_arch="75;80;86;87;89;90":
@@ -308,22 +314,34 @@ mesh-join join="" port="9337" gguf=model split="":
     fi
     exec "{{ mesh_bin }}" $ARGS
 
-# Create a portable tarball with all binaries for deployment to another machine.
-bundle output="/tmp/mesh-llm-bundle.tar.gz":
+# Create a portable product tarball containing the neutral host and default runtime.
+bundle output="/tmp/mesh-llm-bundle.tar.gz": release-build
     #!/usr/bin/env bash
     set -euo pipefail
-    DIR=$(mktemp -d)
-    BUNDLE="$DIR/mesh-bundle"
-    mkdir -p "$BUNDLE"
-    cp "{{ mesh_bin }}" "$BUNDLE/"
-    # Fix rpaths for portability
-    for bin in "$BUNDLE/mesh-llm"; do
-        [ -f "$bin" ] || continue
-        install_name_tool -add_rpath @executable_path/ "$bin" 2>/dev/null || true
+    staging_dir="$(mktemp -d)"
+    trap 'rm -rf "$staging_dir"' EXIT
+    version="v$("{{ mesh_bin }}" --version | awk '{print $NF}')"
+    scripts/package-release.sh "$version" "$staging_dir"
+    stable_archive=""
+    for candidate in "$staging_dir"/mesh-llm-*.tar.gz; do
+        [[ -f "$candidate" ]] || continue
+        case "$(basename "$candidate")" in
+            mesh-llm-"$version"-*) continue ;;
+        esac
+        if [[ -n "$stable_archive" ]]; then
+            echo "multiple stable product archives were produced" >&2
+            exit 1
+        fi
+        stable_archive="$candidate"
     done
-    tar czf {{ output }} -C "$DIR" mesh-bundle/
-    rm -rf "$DIR"
-    echo "Bundle: {{ output }} ($(du -sh {{ output }} | cut -f1))"
+    if [[ -z "$stable_archive" ]]; then
+        echo "product packaging did not produce a stable archive" >&2
+        exit 1
+    fi
+    mkdir -p "$(dirname "{{ output }}")"
+    cp "$stable_archive" "{{ output }}"
+    cp "$stable_archive.sha256" "{{ output }}.sha256"
+    echo "Bundle: {{ output }} ($(du -sh "{{ output }}" | cut -f1))"
 
 # Create release archive(s) for the current platform.
 

@@ -135,11 +135,27 @@ sanitize_component() {
 
 backend_flavor() {
     case "$BACKEND" in
-        cuda) printf 'cuda%s\n' "${MESH_LLM_CUDA_TOOLKIT_MAJOR:-12}" ;;
-        cuda-blackwell) printf 'cuda%s-sm120\n' "${MESH_LLM_CUDA_TOOLKIT_MAJOR:-13}" ;;
+        cuda) printf 'cuda%s\n' "$(cuda_toolkit_major)" ;;
+        cuda-blackwell) printf 'cuda%s-sm120\n' "$(cuda_toolkit_major)" ;;
         rocm|hip) printf 'rocm\n' ;;
         *) printf '%s\n' "$BACKEND" ;;
     esac
+}
+
+cuda_toolkit_major() {
+    if [[ -n "${MESH_LLM_CUDA_TOOLKIT_MAJOR:-}" ]]; then
+        printf '%s\n' "$MESH_LLM_CUDA_TOOLKIT_MAJOR"
+        return 0
+    fi
+    if [[ -n "${MESH_CUDA_VERSION:-}" ]]; then
+        printf '%s\n' "${MESH_CUDA_VERSION%%.*}"
+        return 0
+    fi
+    if [[ "$BACKEND" == "cuda-blackwell" ]]; then
+        printf '13\n'
+    else
+        printf '12\n'
+    fi
 }
 
 build_backend() {
@@ -411,6 +427,7 @@ primary_library="lib/$primary_name"
 primary_sha="$(sha256_file "$stage_dir/$primary_library")"
 mesh_version="$(workspace_version)"
 abi_version="$(skippy_abi_version)"
+cuda_major="$(cuda_toolkit_major)"
 
 patched_sha=""
 upstream_sha=""
@@ -468,7 +485,7 @@ files = {
 backend_manifest = {"kind": kind}
 if kind == "cuda":
     backend_manifest["cuda"] = {
-        "toolkit_major": int(os.environ.get("MESH_LLM_CUDA_TOOLKIT_MAJOR") or (13 if backend == "cuda-blackwell" else 12)),
+        "toolkit_major": int("$cuda_major"),
         "gpu_arches": cuda_arches,
     }
     min_driver = os.environ.get("MESH_LLM_CUDA_MIN_DRIVER")

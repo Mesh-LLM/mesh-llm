@@ -727,6 +727,7 @@ fn parse_native_runtime_install_options(
         verification_policy: parse_native_runtime_verification_policy(
             optional_string(&value, "verificationPolicy").as_deref(),
         )?,
+        bundle_install_policy: Default::default(),
         progress: None,
         allow_download: value
             .get("allowDownload")

@@ -22,7 +22,13 @@ def run_bash(command: str, env: dict[str, str]) -> subprocess.CompletedProcess[s
 
 
 class PackageReleaseTests(unittest.TestCase):
-    def runtime(self, root: pathlib.Path, runtime_id: str, backend: str) -> pathlib.Path:
+    def runtime(
+        self,
+        root: pathlib.Path,
+        runtime_id: str,
+        backend: str,
+        build_backend: str | None = None,
+    ) -> pathlib.Path:
         runtime = root / runtime_id
         (runtime / "lib").mkdir(parents=True)
         (runtime / "lib" / "libllama.so").write_bytes(b"runtime")
@@ -45,7 +51,8 @@ class PackageReleaseTests(unittest.TestCase):
                         "url": None,
                         "sha256": None,
                         "signature": None,
-                    }
+                    },
+                    "build": {"backend": build_backend or backend},
                 }
             )
             + "\n",
@@ -112,6 +119,69 @@ class PackageReleaseTests(unittest.TestCase):
             self.assertEqual(
                 manifest["runtime"]["path"], "native-runtimes/linux-cpu"
             )
+
+    def test_rejects_product_runtime_backend_mismatch_before_manifest_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / "mesh-bundle"
+            runtime_root = bundle / "native-runtimes"
+            host = bundle / "mesh-llm"
+            bundle.mkdir()
+            host.write_bytes(b"host")
+            runtime = self.runtime(runtime_root, "linux-vulkan", "vulkan")
+            result = run_bash(
+                (
+                    f'write_product_manifest "{bundle}" "{host}" "{runtime}" '
+                    '"v0.73.1" "cpu"'
+                ),
+                {},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("backend mismatch", result.stderr)
+            self.assertFalse((bundle / "product-manifest.json").exists())
+
+    def test_product_manifest_accepts_cuda_blackwell_backend_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / "mesh-bundle"
+            runtime_root = bundle / "native-runtimes"
+            host = bundle / "mesh-llm"
+            bundle.mkdir()
+            host.write_bytes(b"host")
+            runtime = self.runtime(
+                runtime_root,
+                "linux-cuda13-sm120",
+                "cuda",
+                build_backend="cuda-blackwell",
+            )
+            result = run_bash(
+                (
+                    f'write_product_manifest "{bundle}" "{host}" "{runtime}" '
+                    '"v0.73.1" "cuda-blackwell"'
+                ),
+                {},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_product_manifest_accepts_hip_backend_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / "mesh-bundle"
+            runtime_root = bundle / "native-runtimes"
+            host = bundle / "mesh-llm"
+            bundle.mkdir()
+            host.write_bytes(b"host")
+            runtime = self.runtime(
+                runtime_root,
+                "linux-rocm",
+                "rocm",
+                build_backend="hip",
+            )
+            result = run_bash(
+                (
+                    f'write_product_manifest "{bundle}" "{host}" "{runtime}" '
+                    '"v0.73.1" "hip"'
+                ),
+                {},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
