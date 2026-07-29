@@ -525,8 +525,8 @@ fn check_release_container_contracts(
             "sccache GHA action disk-only fallback",
         ),
         (
-            "core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'ignore')",
-            "sccache GHA action write fallback",
+            "core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'all')",
+            "sccache GHA action synchronous remote writes",
         ),
         ("['--start-server']", "sccache GHA action server start"),
         ("['--stop-server']", "sccache GHA action server stop"),
@@ -851,7 +851,7 @@ process.env.SCCACHE_WEBDAV_ENDPOINT
 process.env.DEPOT_CACHE_TOKEN
 core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk,webdav')
 core.exportVariable('SCCACHE_MULTILEVEL_CHAIN', 'disk')
-core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'ignore')
+core.exportVariable('SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'all')
 ['--start-server']
 ['--stop-server']
 "#;
