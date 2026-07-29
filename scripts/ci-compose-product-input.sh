@@ -21,9 +21,55 @@ else
     exit 1
 fi
 
+to_shell_path() {
+    local path="${1%$'\r'}"
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -u "$path"
+    else
+        printf '%s\n' "$path"
+    fi
+}
+
+to_workflow_path() {
+    local path="$1"
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -m "$path"
+    else
+        printf '%s\n' "$path"
+    fi
+}
+
+require_file() {
+    local label="$1"
+    local path="$2"
+    if [[ ! -f "$path" ]]; then
+        echo "$label is missing: $path" >&2
+        exit 1
+    fi
+}
+
+require_nonempty_file() {
+    local label="$1"
+    local path="$2"
+    if [[ ! -s "$path" ]]; then
+        echo "$label is missing or empty: $path" >&2
+        exit 1
+    fi
+}
+
+require_checksum_match() {
+    local label="$1"
+    local expected="$2"
+    local actual="$3"
+    if [[ "$actual" != "$expected" ]]; then
+        echo "$label checksum mismatch: expected $expected, got $actual" >&2
+        exit 1
+    fi
+}
+
 canonical_paths=()
 while IFS= read -r path; do
-    canonical_paths+=("$path")
+    canonical_paths+=("$(to_shell_path "$path")")
 done < <(
     "$python_bin" - \
         "$GITHUB_WORKSPACE" \
@@ -93,31 +139,46 @@ host="$host_input_dir/$INPUT_BINARY_NAME"
 host_imports="$host_input_dir/host-imports.json"
 host_checksum="$host_input_dir/$INPUT_BINARY_NAME.sha256"
 
-test -f "$host"
+GITHUB_OUTPUT="$(to_shell_path "$GITHUB_OUTPUT")"
+if [[ -n "$INPUT_ATTESTATION_PUBLIC_KEY_FILE" ]]; then
+    INPUT_ATTESTATION_PUBLIC_KEY_FILE="$(
+        to_shell_path "$INPUT_ATTESTATION_PUBLIC_KEY_FILE"
+    )"
+fi
+if [[ -n "$INPUT_ATTESTATION_VERIFIER" ]]; then
+    INPUT_ATTESTATION_VERIFIER="$(to_shell_path "$INPUT_ATTESTATION_VERIFIER")"
+fi
+
+require_file "immutable host" "$host"
 chmod +x "$host"
-test -s "$host_imports"
-test -s "$host_checksum"
+require_nonempty_file "host import report" "$host_imports"
+require_nonempty_file "host checksum" "$host_checksum"
 expected_host_checksum="$(awk 'NR == 1 {print $1}' "$host_checksum")"
 if command -v sha256sum >/dev/null 2>&1; then
     actual_host_checksum="$(sha256sum "$host" | awk '{print $1}')"
 else
     actual_host_checksum="$(shasum -a 256 "$host" | awk '{print $1}')"
 fi
-test "$actual_host_checksum" = "$expected_host_checksum"
+require_checksum_match "immutable host" "$expected_host_checksum" "$actual_host_checksum"
 
 if [[ -n "$INPUT_ATTESTATION_PUBLIC_KEY_FILE" ]]; then
     attestation_verifier="${INPUT_ATTESTATION_VERIFIER:-$host_input_dir/release-attestation-verifier}"
     verifier_checksum="$attestation_verifier.sha256"
-    test -s "$INPUT_ATTESTATION_PUBLIC_KEY_FILE"
-    test -f "$attestation_verifier"
-    test -s "$verifier_checksum"
+    require_nonempty_file \
+        "release attestation public key" \
+        "$INPUT_ATTESTATION_PUBLIC_KEY_FILE"
+    require_file "release attestation verifier" "$attestation_verifier"
+    require_nonempty_file "release attestation verifier checksum" "$verifier_checksum"
     expected_verifier_checksum="$(awk 'NR == 1 {print $1}' "$verifier_checksum")"
     if command -v sha256sum >/dev/null 2>&1; then
         actual_verifier_checksum="$(sha256sum "$attestation_verifier" | awk '{print $1}')"
     else
         actual_verifier_checksum="$(shasum -a 256 "$attestation_verifier" | awk '{print $1}')"
     fi
-    test "$actual_verifier_checksum" = "$expected_verifier_checksum"
+    require_checksum_match \
+        "release attestation verifier" \
+        "$expected_verifier_checksum" \
+        "$actual_verifier_checksum"
     chmod +x "$attestation_verifier"
     "$attestation_verifier" release-attestation inspect \
         --binary "$host" \
@@ -207,7 +268,7 @@ fi
     --runtime "$runtime_dir" \
     --version "$version" \
     --backend "$INPUT_BACKEND"
-test -s "$output_dir/product-manifest.json"
+require_nonempty_file "composed product manifest" "$output_dir/product-manifest.json"
 
 if [[ "$INPUT_READINESS_SMOKE" == "true" ]]; then
     MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$output_dir/native-runtimes" \
@@ -227,11 +288,14 @@ runtime_name="$(basename "$runtime_dir")"
 archive_path="$product_dir.tar.gz"
 rm -f -- "$archive_path"
 tar -C "$product_dir" -czf "$archive_path" .
-test -s "$archive_path"
+require_nonempty_file "composed product archive" "$archive_path"
 {
-    echo "product_dir=$product_dir"
-    echo "binary_path=$product_dir/$INPUT_BINARY_NAME"
-    echo "runtime_root=$product_dir/native-runtimes"
-    echo "runtime_dir=$product_dir/native-runtimes/$runtime_name"
-    echo "archive_path=$archive_path"
+    printf 'product_dir=%s\n' "$(to_workflow_path "$product_dir")"
+    printf 'binary_path=%s\n' \
+        "$(to_workflow_path "$product_dir/$INPUT_BINARY_NAME")"
+    printf 'runtime_root=%s\n' \
+        "$(to_workflow_path "$product_dir/native-runtimes")"
+    printf 'runtime_dir=%s\n' \
+        "$(to_workflow_path "$product_dir/native-runtimes/$runtime_name")"
+    printf 'archive_path=%s\n' "$(to_workflow_path "$archive_path")"
 } >> "$GITHUB_OUTPUT"

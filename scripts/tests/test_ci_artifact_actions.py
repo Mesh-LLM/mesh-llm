@@ -8,12 +8,15 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import tomllib
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
 ACTIONS = ROOT / ".github" / "actions"
 COMPOSE_SCRIPT = ROOT / "scripts" / "ci-compose-product-input.sh"
+RELEASE_FOOTER_MANIFEST = ROOT / "crates" / "mesh-llm-release-footer" / "Cargo.toml"
+XTASK_MANIFEST = ROOT / "tools" / "xtask" / "Cargo.toml"
 
 
 class CiArtifactActionTests(unittest.TestCase):
@@ -202,6 +205,19 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertNotIn("package-native-runtime.sh", action)
         self.assertNotIn("compose-product", action)
 
+    def test_windows_attestation_verifier_stays_native_abi_free(self) -> None:
+        xtask = tomllib.loads(XTASK_MANIFEST.read_text(encoding="utf-8"))
+        xtask_dependencies = xtask["dependencies"]
+        self.assertEqual(
+            xtask_dependencies["mesh-llm-release-footer"],
+            {"workspace": True},
+        )
+        self.assertNotIn("mesh-llm-system", xtask_dependencies)
+        self.assertNotIn("skippy-ffi", xtask_dependencies)
+
+        footer = tomllib.loads(RELEASE_FOOTER_MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(set(footer["dependencies"]), {"hex", "sha2"})
+
     def test_windows_debug_host_uses_the_package_version_for_composition(
         self,
     ) -> None:
@@ -221,6 +237,11 @@ class CiArtifactActionTests(unittest.TestCase):
             action.index("WINDOWS_CPU_INPUTS=")
             : action.index("# SDK smokes are consumer tests")
         ]
+        cpu_routing = routing[: routing.index("WINDOWS_GPU_INPUTS=")]
+        gpu_routing = routing[routing.index("WINDOWS_GPU_INPUTS=") :]
+
+        self.assertIn("^crates/mesh-llm-release-footer/", cpu_routing)
+        self.assertNotIn("^crates/mesh-llm-release-footer/", gpu_routing)
 
         for primitive in (
             "prepare-windows-host-input",
@@ -255,6 +276,23 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("scripts/ci-client-readiness-smoke.sh", script)
         self.assertIn('archive_path="$product_dir.tar.gz"', script)
         self.assertIn('tar -C "$product_dir" -czf "$archive_path" .', script)
+
+    def test_product_composer_normalizes_windows_shell_boundaries(self) -> None:
+        script = COMPOSE_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("local path=\"${1%$'\\r'}\"", script)
+        self.assertIn('cygpath -u "$path"', script)
+        self.assertIn('cygpath -m "$path"', script)
+        self.assertIn(
+            'canonical_paths+=("$(to_shell_path "$path")")',
+            script,
+        )
+        self.assertIn(
+            'GITHUB_OUTPUT="$(to_shell_path "$GITHUB_OUTPUT")"',
+            script,
+        )
+        self.assertIn('require_file "immutable host" "$host"', script)
+        self.assertNotIn('test -f "$host"', script)
 
     def test_product_archive_preserves_verified_executable_modes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -307,8 +345,8 @@ class CiArtifactActionTests(unittest.TestCase):
             product_script,
         )
         self.assertIn(
-            'test "$actual_verifier_checksum" = '
-            '"$expected_verifier_checksum"',
+            '"$expected_verifier_checksum" \\\n'
+            '        "$actual_verifier_checksum"',
             product_script,
         )
 
