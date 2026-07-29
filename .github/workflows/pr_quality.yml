@@ -98,9 +98,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # actionlint
-        with:
-          tool: actionlint@1.7.12
+      - uses: ./.github/actions/install-actionlint
       - name: Validate GitHub Actions
         run: actionlint -config-file .github/actionlint.yaml
       - name: Test CI, packaging, and SDK contracts

@@ -70,7 +70,11 @@ class CiArtifactActionTests(unittest.TestCase):
         contract = workflow[contract_start:contract_end]
         summary = workflow[workflow.index("  summary:") :]
 
-        self.assertIn("actionlint@1.7.12", contract)
+        self.assertIn(
+            "uses: ./.github/actions/install-actionlint",
+            contract,
+        )
+        self.assertNotIn("tool: actionlint@", contract)
         self.assertIn(
             "actionlint -config-file .github/actionlint.yaml",
             contract,
@@ -81,6 +85,24 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertIn("ci-contract", summary)
         self.assertIn("needs.ci-contract.result", summary)
+
+    def test_actionlint_installer_verifies_pinned_release_archives(
+        self,
+    ) -> None:
+        action = self.read_action("install-actionlint")
+
+        self.assertIn('ACTIONLINT_VERSION: "1.7.12"', action)
+        self.assertIn(
+            "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+            action,
+        )
+        self.assertIn(
+            "325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6",
+            action,
+        )
+        self.assertIn("actionlint archive checksum mismatch", action)
+        self.assertIn("scripts/safe-extract-tar.py", action)
+        self.assertNotIn("tar -x", action)
 
     def write_fake_product_inputs(
         self,

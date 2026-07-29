@@ -1,0 +1,58 @@
+name: Install pinned actionlint
+description: Install the repository-pinned actionlint release after verifying its official archive checksum.
+
+runs:
+  using: composite
+  steps:
+    - name: Install actionlint 1.7.12
+      shell: bash
+      env:
+        ACTIONLINT_VERSION: "1.7.12"
+      run: |
+        set -euo pipefail
+
+        case "$(uname -s)/$(uname -m)" in
+          Linux/x86_64)
+            platform="linux_amd64"
+            checksum="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+            ;;
+          Linux/aarch64 | Linux/arm64)
+            platform="linux_arm64"
+            checksum="325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6"
+            ;;
+          *)
+            echo "unsupported actionlint installer platform: $(uname -s)/$(uname -m)" >&2
+            exit 1
+            ;;
+        esac
+
+        archive_name="actionlint_${ACTIONLINT_VERSION}_${platform}.tar.gz"
+        archive="$RUNNER_TEMP/$archive_name"
+        install_dir="$RUNNER_TEMP/actionlint-${ACTIONLINT_VERSION}-${platform}"
+        curl \
+          --fail \
+          --location \
+          --retry 5 \
+          --retry-all-errors \
+          --show-error \
+          --silent \
+          "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive_name}" \
+          --output "$archive"
+        python3 - "$archive" "$checksum" <<'PY'
+        import hashlib
+        from pathlib import Path
+        import sys
+
+        archive, expected = Path(sys.argv[1]), sys.argv[2]
+        actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if actual != expected:
+            raise SystemExit(
+                f"actionlint archive checksum mismatch: {actual} != {expected}"
+            )
+        PY
+
+        mkdir -p "$install_dir"
+        python3 scripts/safe-extract-tar.py "$archive" "$install_dir"
+        test -x "$install_dir/actionlint"
+        "$install_dir/actionlint" -version
+        printf '%s\n' "$install_dir" >> "$GITHUB_PATH"
