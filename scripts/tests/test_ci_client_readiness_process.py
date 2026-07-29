@@ -21,6 +21,7 @@ class ClientReadinessProcessTests(unittest.TestCase):
             root = pathlib.Path(directory)
             pid_file = root / "child.pid"
             log_file = root / "client.log"
+            executable = pathlib.Path("target") / "release" / "mesh-llm.exe"
             with mock.patch.object(
                 PROCESS.subprocess,
                 "CREATE_NEW_PROCESS_GROUP",
@@ -28,7 +29,7 @@ class ClientReadinessProcessTests(unittest.TestCase):
                 create=True,
             ), mock.patch.object(PROCESS.subprocess, "Popen", return_value=child) as popen:
                 status = PROCESS.launch(
-                    ["mesh-llm.exe", "client", "--auto"],
+                    ["--", str(executable), "client", "--auto"],
                     pid_file,
                     log_file,
                     is_windows=True,
@@ -38,7 +39,14 @@ class ClientReadinessProcessTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(recorded_pid, "4242\n")
         self.assertEqual(popen.call_args.kwargs["creationflags"], 0x200)
-        self.assertEqual(popen.call_args.args[0], ["mesh-llm.exe", "client", "--auto"])
+        self.assertEqual(
+            popen.call_args.args[0],
+            [str(executable.resolve()), "client", "--auto"],
+        )
+
+    def test_missing_program_after_separator_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "run requires a program after --"):
+            PROCESS.command_for_platform(["--"], is_windows=True)
 
     def test_unix_launch_does_not_set_windows_creation_flags(self):
         child = mock.Mock(pid=4242)

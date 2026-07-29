@@ -17,12 +17,26 @@ def creationflags_for_platform(is_windows: bool) -> int:
     return getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 
+def command_for_platform(command: Sequence[str], *, is_windows: bool) -> list[str]:
+    prepared = list(command)
+    if prepared[:1] == ["--"]:
+        prepared = prepared[1:]
+    if not prepared:
+        raise ValueError("run requires a program after --")
+    if is_windows:
+        # Git Bash accepts repository-relative POSIX-style paths, but the native
+        # Python CreateProcess call does not reliably resolve them. Convert the
+        # executable to the native absolute path before crossing that boundary.
+        prepared[0] = str(Path(prepared[0]).resolve())
+    return prepared
+
+
 def launch(
     command: Sequence[str], pid_file: Path, log_file: Path, *, is_windows: bool
 ) -> int:
     with log_file.open("ab", buffering=0) as log_handle:
         process = subprocess.Popen(
-            command,
+            command_for_platform(command, is_windows=is_windows),
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             creationflags=creationflags_for_platform(is_windows),
@@ -76,7 +90,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.command == "run":
-        if not args.program:
+        if not args.program or args.program == ["--"]:
             raise SystemExit("run requires a program after --")
         return launch(args.program, args.pid_file, args.log, is_windows=os.name == "nt")
     if args.command == "ctrl-break":
