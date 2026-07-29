@@ -451,6 +451,11 @@ class InstallScriptTests(unittest.TestCase):
                 encoding="utf-8",
             )
             mesh_llm.chmod(0o755)
+            (bundle_root / "product-manifest.json").write_text("{}\n", encoding="utf-8")
+            runtime = bundle_root / "native-runtimes" / "test-runtime"
+            (runtime / "lib").mkdir(parents=True)
+            (runtime / "manifest.json").write_text("{}\n", encoding="utf-8")
+            (runtime / "lib" / "libllama.so").write_bytes(b"runtime")
             with tarfile.open(archive_path, "w:gz") as archive:
                 archive.add(bundle_root, arcname="mesh-bundle")
         digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()

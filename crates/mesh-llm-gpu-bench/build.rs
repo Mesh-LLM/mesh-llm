@@ -4,7 +4,7 @@ fn main() {
         return;
     }
 
-    if target_os_is("macos") {
+    if target_os_is("macos") && std::env::var_os("CARGO_FEATURE_METAL").is_some() {
         build_metal();
     }
 
@@ -42,7 +42,6 @@ fn build_metal() {
     println!("cargo:rerun-if-changed=native/metal/membench_metal.m");
     println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
     println!("cargo:rustc-link-lib=framework=Foundation");
-    println!("cargo:rustc-link-lib=framework=Metal");
 }
 
 fn add_macos_target_flags(command: &mut std::process::Command) {

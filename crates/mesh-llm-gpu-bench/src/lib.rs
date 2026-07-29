@@ -13,7 +13,7 @@ mod hip;
 #[cfg(feature = "intel")]
 mod intel;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 mod metal;
 
 pub use output::BenchmarkOutput;

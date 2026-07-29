@@ -29,6 +29,25 @@ fn mesh_requirements_policy_canonical_hash_is_stable() {
 }
 
 #[test]
+fn client_mode_does_not_require_a_native_runtime() {
+    let client = RuntimeOptions {
+        client: true,
+        ..Default::default()
+    };
+    assert!(!runtime_options_require_native_runtime(&client));
+
+    let plugin = RuntimeOptions {
+        plugin: Some("blobstore".to_string()),
+        ..Default::default()
+    };
+    assert!(!runtime_options_require_native_runtime(&plugin));
+
+    assert!(runtime_options_require_native_runtime(
+        &RuntimeOptions::default()
+    ));
+}
+
+#[test]
 fn mesh_requirements_policy_change_changes_mesh_id() {
     mesh::requirements::tests::assert_mesh_requirements_policy_change_changes_mesh_id();
 }

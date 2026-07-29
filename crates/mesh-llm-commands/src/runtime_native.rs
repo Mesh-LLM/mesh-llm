@@ -5,7 +5,8 @@ use anyhow::Result;
 use mesh_llm_native_runtime::{NativeRuntimePruneMode, NativeRuntimeResolver, RuntimeSelection};
 use mesh_llm_runtime_install::{
     CURRENT_MESH_VERSION, NativeRuntimeDownloadProgressCallback, NativeRuntimeManifestOptions,
-    host_runtime_profile, install_native_runtime, load_release_manifest, native_runtime_cache,
+    discover_local_native_runtimes, host_runtime_profile, install_native_runtime,
+    load_release_manifest, native_runtime_cache,
 };
 use mesh_llm_tui::terminal_progress::{
     ratio_complete_u64, render_inline_gauge_with_reserved_width,
@@ -103,7 +104,7 @@ pub async fn run_native_runtime_list(
         return formatter.render_available(&rows);
     }
 
-    let installed = cache.installed()?;
+    let installed = discover_local_native_runtimes(bundle_dirs, &cache)?;
     formatter.render_installed(&installed, cache.root())
 }
 

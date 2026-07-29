@@ -241,12 +241,27 @@ function Install-MeshBinary {
     param([string]$BundleDir)
 
     $meshBinarySource = Join-Path $BundleDir "mesh-llm.exe"
+    $runtimeSource = Join-Path $BundleDir "native-runtimes"
+    $productManifestSource = Join-Path $BundleDir "product-manifest.json"
     if (-not (Test-Path $meshBinarySource)) {
         throw "release archive did not contain mesh-bundle/mesh-llm.exe"
+    }
+    if (-not (Test-Path $runtimeSource) -or -not (Test-Path $productManifestSource)) {
+        throw "release archive did not contain a composed native runtime bundle"
     }
 
     Remove-StaleBinaries
     Copy-Item -Path $meshBinarySource -Destination (Join-Path $InstallDir "mesh-llm.exe") -Force
+    $installedRuntimes = Join-Path $InstallDir "native-runtimes"
+    if (Test-Path $installedRuntimes) {
+        Remove-Item $installedRuntimes -Recurse -Force
+    }
+    Copy-Item -Path $runtimeSource -Destination $installedRuntimes -Recurse -Force
+    Copy-Item -Path $productManifestSource -Destination (Join-Path $InstallDir "product-manifest.json") -Force
+    $hostImportsSource = Join-Path $BundleDir "host-imports.json"
+    if (Test-Path $hostImportsSource) {
+        Copy-Item -Path $hostImportsSource -Destination (Join-Path $InstallDir "host-imports.json") -Force
+    }
 }
 
 function Add-InstallDirToPath {

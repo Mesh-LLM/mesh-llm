@@ -4181,6 +4181,7 @@ dependencies = [
  "dirs",
  "hex",
  "libc",
+ "libloading",
  "mesh-llm-build-info",
  "mesh-llm-gpu-bench",
  "reqwest 0.12.28",

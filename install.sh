@@ -612,6 +612,10 @@ validate_bundle() {
         echo "error: mesh-llm binary in release archive is not executable" >&2
         return 1
     fi
+    if [[ ! -f "$bundle_dir/product-manifest.json" || ! -d "$bundle_dir/native-runtimes" ]]; then
+        echo "error: release archive did not contain a composed native runtime bundle" >&2
+        return 1
+    fi
 }
 
 install_bundle() {

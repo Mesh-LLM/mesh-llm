@@ -19,90 +19,61 @@ This file covers local build and development workflows for this repository.
 
 **Linux Vulkan**: Vulkan is supported when the Vulkan development files and `glslc` are installed. On Ubuntu/Debian, install `libvulkan-dev glslc`. On Arch Linux, install `vulkan-headers shaderc`.
 
-**Windows**: `just build` auto-detects `cuda`, `hip`/`rocm`, `vulkan`, or `cpu`. You can override with `just build backend=cuda` (or `rocm`, `vulkan`, `cpu`). Metal is not supported on Windows.
+**Windows**: native runtime builds support `cuda`, `hip`/`rocm`, `vulkan`, or
+`cpu`. Metal is not supported on Windows.
 
 ## Build from source
 
-Build everything (patched llama.cpp, mesh binary, and UI production build):
+Build the normal debug development binary, patched llama.cpp ABI, and UI:
 
 ```bash
 just build
 ```
 
-`just build` builds the mesh binary in release mode. For day-to-day iteration
-where the final release link is the slow step, use the debug-profile shortcut:
+Release and packaging work use a backend-neutral host plus a separate native
+runtime. Build the host once:
 
 ```bash
-just build-dev
+just release-host-build
 ```
 
-You can also keep the normal recipe shape and select the profile explicitly:
+Then build the backend runtime you are changing:
 
 ```bash
-MESH_LLM_BUILD_PROFILE=dev just build
+just release-runtime-build cpu
+just release-runtime-build metal
+just release-runtime-build cuda
+just release-runtime-build rocm
+just release-runtime-build vulkan
 ```
 
-On Linux, `just build` auto-detects CUDA vs ROCm vs Vulkan. For NVIDIA, make sure `nvcc` is in your `PATH` first:
+Backend toolchains must be available for the corresponding runtime build. For
+NVIDIA on Linux, put `nvcc` on `PATH`; runtime packaging detects the selected
+CUDA major and architecture from the toolchain/environment.
 
 ```bash
-# Arch Linux
-PATH=/opt/cuda/bin:$PATH just build
-
-# Ubuntu/Debian
-PATH=/usr/local/cuda/bin:$PATH just build
+PATH=/opt/cuda/bin:$PATH just release-runtime-build cuda
+# or
+PATH=/usr/local/cuda/bin:$PATH just release-runtime-build cuda
 ```
 
-For NVIDIA builds, the script auto-detects your GPU's CUDA architecture. To override:
+Exercise the exact release discovery boundary with an isolated cache:
 
 ```bash
-just build cuda_arch=90   # e.g. H100
+runtime_cache="$(mktemp -d)"
+MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes" \
+MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$runtime_cache" \
+  ./target/release/mesh-llm runtime list
 ```
 
-For AMD ROCm builds, you can force the backend explicitly:
+The resolver validates version, Skippy ABI, OS, architecture, and backend. It
+does not search the current working directory or copy a matching bundled
+runtime into the user cache.
+
+Create a portable product bundle after building both layers:
 
 ```bash
-just build backend=rocm
-```
-
-To override the AMD GPU target list:
-
-```bash
-just build backend=rocm rocm_arch="gfx90a;gfx942;gfx1100"
-```
-
-For Vulkan builds, force the backend explicitly:
-
-```bash
-just build backend=vulkan
-```
-
-For CPU-only builds (no GPU acceleration):
-
-```bash
-just build backend=cpu
-```
-
-On Windows, you can override the detected backend if needed:
-
-```powershell
-just build backend=vulkan
-just build backend=cpu
-just build backend=cuda cuda_arch=90
-```
-
-Windows release bundles use dedicated Windows release recipes:
-
-```powershell
-just release-build-cuda-windows
-just release-bundle-cuda-windows v0.X.0
-```
-
-GitHub Actions uses Blacksmith Windows 2025 runners for compile-only Windows CI and release bundle validation.
-
-Create a portable bundle:
-
-```bash
-just bundle
+just release-bundle v0.X.0 dist
 ```
 
 ## UI development workflow

@@ -5,12 +5,12 @@ use crate::MeshGuardrailCliMode;
 
 #[derive(Subcommand, Debug)]
 pub enum RuntimeCommand {
-    /// List available or installed native runtimes.
+    /// List available or locally discoverable native runtimes.
     List {
         /// List release-manifest or bundled runtimes instead of installed runtimes.
         #[arg(long, conflicts_with = "installed")]
         available: bool,
-        /// List installed native runtimes. This is the default when no list mode is supplied.
+        /// List locally discoverable native runtimes. This is the default.
         #[arg(long, conflicts_with = "available")]
         installed: bool,
         /// Release manifest JSON to inspect.

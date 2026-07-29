@@ -14,6 +14,7 @@ default = ["web-ui"]
 # lib-style / headless consumers that don't need the console assets.
 # Propagates to `mesh-llm-ui/embed-assets`.
 web-ui = ["mesh-llm-ui/embed-assets"]
+gpu-bench-metal = ["mesh-llm-system/gpu-bench-metal"]
 gpu-bench-cuda = ["mesh-llm-system/gpu-bench-cuda"]
 gpu-bench-hip = ["mesh-llm-system/gpu-bench-hip"]
 gpu-bench-intel = ["mesh-llm-system/gpu-bench-intel"]

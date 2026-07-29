@@ -24,7 +24,7 @@ command instead.
 
 ## Bootstrap Scripts
 
-`install.sh` and `install.ps1` own only first-stage executable installation:
+`install.sh` and `install.ps1` own only first-stage product installation:
 
 - parse minimal bootstrap flags
 - detect the host platform and architecture
@@ -32,13 +32,16 @@ command instead.
 - verify checksum sidecars when available
 - warn and continue when a `.sha256` checksum sidecar is missing by default;
   fail closed only when `MESH_LLM_REQUIRE_CHECKSUM=1` is set
-- install the `mesh-llm` executable into the selected directory
+- require the product-v2 manifest and selected `native-runtimes/` tree
+- install the `mesh-llm` executable, product manifests, and adjacent runtime
+  tree into the selected product directory
 - update or print PATH guidance
 - run or print `mesh-llm setup`
 
-They must not own native-runtime flavor selection, GPU/backend detection,
-runtime install or prune, service setup, doctor/readiness interpretation, or
-GitHub account mutations.
+They select the published archive flavor for the detected platform, but must
+not reimplement runtime candidate scoring, copy backend libraries beside the
+host, install the bundled runtime into the user cache, prune cached runtimes,
+own service setup, interpret doctor/readiness, or mutate GitHub accounts.
 
 Legacy script service/runtime flags may emit compatibility warnings or forward
 direct setup flags, but they must not reintroduce shell or PowerShell-owned

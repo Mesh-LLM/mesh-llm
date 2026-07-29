@@ -29,6 +29,12 @@ attestation format are implemented.
 
 ## Artifact Identity
 
+The composed-product layer is defined by
+[`schemas/product-v2.schema.json`](../../schemas/product-v2.schema.json).
+`mesh-packaging` carries an identical schema at the same relative repository
+location; contract changes update and compare both copies in the same
+transition.
+
 A native runtime is identified by:
 
 - MeshLLM version, for example `0.72.1`
@@ -79,6 +85,24 @@ The ranking policy is shared policy, not SDK-specific glue. For example, a
 Linux NVIDIA host with CUDA 13 and `sm_120` support may rank
 `cuda13-sm120` above generic `cuda13`, and accelerated runtimes above `cpu`,
 when all compatibility checks pass.
+
+### Installed bundle discovery
+
+The runtime directory contract is `native-runtimes/<runtime-id>/manifest.json`.
+At process startup, runtime candidates are canonicalized, their manifests are
+validated, and they are searched in this order:
+
+1. explicit API/CLI bundle directories;
+2. the path list in `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR`;
+3. `native-runtimes` adjacent to the installed executable;
+4. `<prefix>/lib/mesh-llm/<mesh-version>/native-runtimes`, followed by the
+   legacy unversioned package root;
+5. Homebrew formula-owned `<prefix>/libexec/native-runtimes`;
+6. the user cache and, only when allowed, a verified download.
+
+A path may name one runtime, a `native-runtimes` root, or a portable
+`mesh-bundle` root. The current working directory is never searched. A matching
+package-owned runtime is loaded in place and is not copied into the user cache.
 
 ## Cache And Progress
 
@@ -381,27 +405,21 @@ runtimes are release artifacts resolved at install/update time.
 
 ## Development Loop Boundary
 
-Native runtime artifacts are a distribution boundary, not the normal way to
-iterate on the Skippy ABI. When changing `third_party/llama.cpp/patches`,
-`skippy-ffi`, hidden-state/tensor surfaces, activation-frame execution, or other
-native ABI behavior, build the branch-local native code and Rust together with
-the standard `just build` path. That path prepares the patched llama.cpp
-checkout, builds the static ABI libraries, builds the UI, and links the local
-debug `mesh-llm` binary against those libraries.
-
-Use dynamic native runtimes when validating release, SDK, installer,
-autoupdate, or packaged-app behavior. A dynamic build must load a runtime
-artifact whose `skippy_abi` matches the Rust loader; downloaded release
-artifacts will not contain new branch-local ABI symbols until that runtime has
-also been packaged from the same branch.
-
-For release-mode performance or behavior testing of a new native ABI before a
-matching native runtime package exists, build the release binary with embedded
-branch-local native libraries instead of the default dynamic release path:
+Release, SDK, installer, package, and image validation always use the dynamic
+boundary. Build a branch-local runtime and point an isolated host at it:
 
 ```bash
-MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 just release-build
+just release-host-build
+just release-runtime-build cpu
+MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes" \
+MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$(mktemp -d)" \
+  ./target/release/mesh-llm runtime list
 ```
+
+For ABI work, replace `cpu` with the backend under test. The host and runtime
+must come from the same branch and declare the same MeshLLM version and Skippy
+ABI. `MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0` is rejected for release builds; static
+backend linkage is not a release or packaging lane.
 
 ## Generated Runtime Crates
 
@@ -414,16 +432,10 @@ Cargo-target selection is a product requirement.
 
 ## Initial Release Matrix
 
-The initial release workflow packages native runtimes only where the current CI
-environment can build and smoke them reliably:
-
-- macOS `aarch64` Metal
-- Linux `x86_64` CPU
-
-CUDA 12, CUDA 13, Blackwell-specific CUDA, ROCm, Vulkan, Windows, and additional architecture lanes
-use the same manifest/backend model but still need dedicated runner/toolchain
-work before the release matrix can claim coverage. The resolver is designed so
-adding these artifacts is manifest data plus release jobs, not SDK API churn.
+The release workflow uses the same manifested runtime format for macOS Metal,
+Linux CPU/CUDA/ROCm/Vulkan, and Windows CPU/CUDA/ROCm/Vulkan lanes. Additional
+architecture/backend pairs are added as runtime matrix data; they do not create
+new host binaries or SDK APIs.
 
 ## Dynamic Loading Shape
 

@@ -64,3 +64,10 @@ Shared wire protocol ownership lives at
 [../crates/mesh-llm-protocol/README.md](../crates/mesh-llm-protocol/README.md).
 Shared routing target ownership lives at
 [../crates/mesh-llm-routing/README.md](../crates/mesh-llm-routing/README.md).
+
+Developers migrating from backend-linked release commands should use the
+host/runtime/product commands in
+[design/NATIVE_RUNTIMES.md](design/NATIVE_RUNTIMES.md#development-loop-boundary).
+Installed and portable products keep their selected runtime beside the neutral
+host or in the documented package-owned directory, with the user cache only as
+a fallback.

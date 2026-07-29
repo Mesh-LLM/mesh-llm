@@ -164,10 +164,13 @@ llama.cpp parity queue.
 Tagged releases publish macOS bundles plus Linux CPU, Linux ARM64 CPU, Linux
 ARM64 CUDA, Linux CUDA, Linux CUDA Blackwell, Linux ROCm, Linux Vulkan, Windows
 CPU, Windows CUDA, Windows ROCm, and Windows Vulkan bundles. Metal is
-macOS-only. The Linux ARM64 CPU artifact is
+macOS-only. Every flavor is composed from the same backend-neutral host for its
+OS/architecture plus one versioned native runtime. The Linux ARM64 CPU artifact is
 `mesh-llm-aarch64-unknown-linux-gnu.tar.gz`; the Linux ARM64 CUDA artifact is
 `mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz`. In install and release
-contexts, `arm64` and `aarch64` mean the same 64-bit ARM target.
+contexts, `arm64` and `aarch64` mean the same 64-bit ARM target. Portable
+archives work offline: the host discovers the adjacent
+`native-runtimes/<runtime-id>` tree before consulting the user cache.
 
 Build from source with `just`:
 
@@ -177,9 +180,21 @@ cd mesh-llm
 just build
 ```
 
-Source builds require `just`, `cmake`, Rust, and Node.js 24 + npm. CUDA builds
-need `nvcc`, ROCm builds need ROCm/HIP, and Vulkan builds need Vulkan dev files
-plus `glslc`.
+Source builds require `just`, `cmake`, Rust, and Node.js 24 + npm. To exercise
+the release boundary locally, build the neutral host and one runtime:
+
+```bash
+just release-host-build
+just release-runtime-build metal # or cpu, cuda, rocm, vulkan
+MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes" \
+MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$(mktemp -d)" \
+  ./target/release/mesh-llm runtime list
+```
+
+CUDA runtimes need `nvcc`, ROCm runtimes need ROCm/HIP, and Vulkan runtimes need
+Vulkan development files plus `glslc`. See
+[docs/design/NATIVE_RUNTIMES.md](docs/design/NATIVE_RUNTIMES.md) for the
+manifest, discovery, and compatibility contract.
 
 The shipped `mesh-llm` executable uses embedded release attestation for
 provenance and admission hardening only. It does not apply to SDK, XCFramework,

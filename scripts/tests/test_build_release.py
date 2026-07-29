@@ -15,42 +15,39 @@ SCRIPT = ROOT / "scripts" / "build-release.sh"
 
 
 class BuildReleaseScriptTests(unittest.TestCase):
-    def test_cuda_release_build_enables_cuda_gpu_benchmark_feature(self) -> None:
+    def test_release_host_never_enables_backend_gpu_features(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
 
-        self.assertIn('"$BACKEND"', script)
-        self.assertIn('cuda) cargo_features+=(--features gpu-bench-cuda)', script)
+        self.assertNotIn("gpu-bench-cuda", script)
+        self.assertNotIn("gpu-bench-hip", script)
+        self.assertNotIn("build-llama.sh", script)
 
-    def test_rocm_release_build_enables_hip_gpu_benchmark_feature(self) -> None:
+    def test_dynamic_native_runtime_feature_is_required(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
 
-        self.assertIn('"$BACKEND"', script)
-        self.assertIn('rocm) cargo_features+=(--features gpu-bench-hip)', script)
+        self.assertIn("--features web-ui,dynamic-native-runtime", script)
+        self.assertIn("--no-default-features", script)
+        self.assertIn("MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 is unsupported", script)
 
-    def test_dynamic_native_runtime_feature_is_preserved(self) -> None:
-        script = SCRIPT.read_text(encoding="utf-8")
-
-        self.assertIn('cargo_features+=(--features dynamic-native-runtime)', script)
-
-    def test_cuda_release_build_passes_cuda_gpu_benchmark_feature_to_cargo(self) -> None:
+    def test_cuda_selection_does_not_change_host_build(self) -> None:
         cargo_log = self.run_build_release_with_backend("cuda")
 
         self.assertIn("build --release --locked -p mesh-llm", cargo_log)
-        self.assertIn("--features gpu-bench-cuda", cargo_log)
-        self.assertIn("--features dynamic-native-runtime", cargo_log)
+        self.assertIn("--features web-ui,dynamic-native-runtime", cargo_log)
+        self.assertNotIn("gpu-bench-cuda", cargo_log)
+        self.assertNotIn("gpu-bench-hip", cargo_log)
 
-    def test_rocm_release_build_passes_hip_gpu_benchmark_feature_to_cargo(self) -> None:
+    def test_rocm_selection_does_not_change_host_build(self) -> None:
         cargo_log = self.run_build_release_with_backend("rocm")
 
         self.assertIn("build --release --locked -p mesh-llm", cargo_log)
-        self.assertIn("--features gpu-bench-hip", cargo_log)
-        self.assertIn("--features dynamic-native-runtime", cargo_log)
+        self.assertIn("--features web-ui,dynamic-native-runtime", cargo_log)
+        self.assertNotIn("gpu-bench-cuda", cargo_log)
+        self.assertNotIn("gpu-bench-hip", cargo_log)
 
-    def test_static_release_build_handles_an_empty_feature_list(self) -> None:
-        cargo_log = self.run_build_release_with_backend("metal", dynamic_native_runtime=False)
-
-        self.assertIn("build --release --locked -p mesh-llm", cargo_log)
-        self.assertNotIn("--features", cargo_log)
+    def test_static_release_host_request_is_rejected(self) -> None:
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_build_release_with_backend("metal", dynamic_native_runtime=False)
 
     def run_build_release_with_backend(
         self, backend: str, *, dynamic_native_runtime: bool = True

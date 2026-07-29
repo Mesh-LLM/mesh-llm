@@ -1056,7 +1056,7 @@ Invoke-InRepo {
         "-DGGML_AVX2=ON",
         "-DGGML_AVX512=OFF",
         "-DGGML_BMI2=OFF",
-        "-DBUILD_SHARED_LIBS=OFF",
+        "-DBUILD_SHARED_LIBS=$(if ($buildProfile -eq 'release') { 'ON' } else { 'OFF' })",
         "-DLLAMA_CURL=OFF",
         "-DLLAMA_BUILD_EXAMPLES=OFF",
         "-DLLAMA_BUILD_TESTS=OFF",
@@ -1133,6 +1133,22 @@ Invoke-InRepo {
     Show-SccacheStats
     Assert-RequiredSccacheUsage $backendName $sccacheStats
 
+    if ($buildProfile -eq "release") {
+        $env:LLAMA_STAGE_BUILD_DIR = $buildDir
+        if ($CudaArch) {
+            $env:LLAMA_STAGE_CUDA_ARCHITECTURES = $CudaArch
+        }
+        if ($RocmArch) {
+            $env:LLAMA_STAGE_AMDGPU_TARGETS = $RocmArch
+        }
+        Invoke-NativeCommand "bash" @(
+            (Join-Path $scriptDir "package-native-runtime.sh"),
+            "--backend", $backendName,
+            "--target", "x86_64-pc-windows-msvc",
+            "--out", (Join-Path $repoRoot "dist\native-runtimes")
+        )
+    }
+
     if ($env:MESH_LLM_SKIP_UI -eq "1") {
         Write-Host "Skipping mesh-llm UI build because MESH_LLM_SKIP_UI=1."
     } elseif (Test-Path $meshUiDir) {
@@ -1155,10 +1171,10 @@ Invoke-InRepo {
 
     Write-Host "Building mesh-llm..."
     $env:LLAMA_STAGE_BUILD_DIR = $buildDir
-    $cargoFeatureArgs = @()
-    switch ($backendName) {
-        "cuda" { $cargoFeatureArgs = @("--features", "gpu-bench-cuda") }
-        "rocm" { $cargoFeatureArgs = @("--features", "gpu-bench-hip") }
+    $cargoFeatureArgs = if ($buildProfile -eq "release") {
+        @("--features", "dynamic-native-runtime")
+    } else {
+        @()
     }
     Set-BuildVersionStamp
     switch ($buildProfile) {

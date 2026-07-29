@@ -376,10 +376,19 @@ for library in "${runtime_libraries[@]}"; do
     library_paths+=("lib/$name")
 done
 
-if [[ "$runtime_os" == "windows" && "$BACKEND" == "vulkan" ]]; then
+if [[ "$runtime_os" == "windows" ]]; then
     dependency_args=()
     for library in "${runtime_libraries[@]}"; do
         dependency_args+=(--search-dir "$(dirname "$library")")
+    done
+    for dependency_root in CUDA_PATH ROCM_PATH VULKAN_SDK; do
+        dependency_dir="${!dependency_root:-}"
+        if [[ -n "$dependency_dir" ]]; then
+            dependency_dir="$dependency_dir/$(if [[ "$dependency_root" == VULKAN_SDK ]]; then printf Bin; else printf bin; fi)"
+            if [[ -d "$dependency_dir" ]]; then
+                dependency_args+=(--search-dir "$dependency_dir")
+            fi
+        fi
     done
     "$(python_bin)" "$SCRIPT_DIR/windows-native-runtime-deps.py" collect \
         --lib-dir "$stage_dir/lib" \
@@ -418,6 +427,7 @@ fi
 
 "$(python_bin)" - "$stage_dir/manifest.json" "$primary_library" "${library_paths[@]}" <<PY
 import json
+import hashlib
 import os
 import sys
 
@@ -443,6 +453,18 @@ rocm_arches = split_arches(
     or os.environ.get("SKIPPY_AMDGPU_TARGETS")
     or ""
 )
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+files = {
+    path: file_sha256(os.path.join(os.path.dirname(manifest_path), path))
+    for path in library_paths
+}
 backend_manifest = {"kind": kind}
 if kind == "cuda":
     backend_manifest["cuda"] = {
@@ -478,6 +500,8 @@ manifest = {
         "backend": backend_manifest,
         "rank": int(os.environ.get("MESH_LLM_NATIVE_RUNTIME_RANK") or 0),
         "libraries": library_paths,
+        "files": files,
+        "tools": {},
         "url": None,
         "sha256": None,
         "signature": None,
@@ -490,7 +514,6 @@ manifest = {
         "llama_upstream_sha": "$upstream_sha" or None,
         "llama_patched_sha": "$patched_sha" or None,
         "llama_patch_digest": "$patch_digest" or None,
-        "llama_build_dir": os.path.abspath("$LLAMA_STAGE_BUILD_DIR"),
     },
 }
 with open(manifest_path, "w", encoding="utf-8") as fh:

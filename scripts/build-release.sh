@@ -5,10 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-LLAMA_DIR="${MESH_LLM_LLAMA_DIR:-$REPO_ROOT/.deps/llama.cpp}"
-LLAMA_BUILD_ROOT="${MESH_LLM_LLAMA_BUILD_ROOT:-$REPO_ROOT/.deps/llama-build}"
 UI_DIR="$REPO_ROOT/crates/mesh-llm-ui"
-DYNAMIC_NATIVE_RUNTIME="${MESH_LLM_DYNAMIC_NATIVE_RUNTIME:-1}"
 
 append_rustflag() {
     local flag="$1"
@@ -120,62 +117,30 @@ configure_rust_cache() {
     fi
 }
 
-os_name="$(uname -s)"
-case "$os_name" in
-    Darwin)
-        BACKEND="${LLAMA_STAGE_BACKEND:-metal}"
-        ;;
-    Linux)
-        BACKEND="${LLAMA_STAGE_BACKEND:-cpu}"
+case "$(uname -s)" in
+    Darwin|Linux)
         ;;
     *)
-        echo "Unsupported OS for release build: $os_name" >&2
+        echo "Unsupported OS for release build: $(uname -s)" >&2
         exit 1
         ;;
 esac
 
-if [[ -z "${LLAMA_STAGE_BUILD_DIR:-}" && -n "${SKIPPY_LLAMA_BUILD_DIR:-}" ]]; then
-    export LLAMA_STAGE_BUILD_DIR="$SKIPPY_LLAMA_BUILD_DIR"
-fi
-if [[ -z "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
-    export LLAMA_STAGE_BUILD_DIR="$(
-        LLAMA_STAGE_BACKEND="$BACKEND" \
-            LLAMA_STAGE_LINK_MODE=static \
-            "$SCRIPT_DIR/build-llama.sh" --print-build-dir
-    )"
+if [[ "${MESH_LLM_DYNAMIC_NATIVE_RUNTIME:-1}" != "1" ]]; then
+    echo "Release hosts must use dynamic native runtimes; MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 is unsupported." >&2
+    exit 1
 fi
 
 configure_lld_linker
 configure_rust_cache
 
-if [[ "$DYNAMIC_NATIVE_RUNTIME" == "1" ]]; then
-    echo "Skipping embedded llama.cpp ABI build; release binary will load native runtimes dynamically."
-else
-    echo "Preparing patched llama.cpp ABI checkout..."
-    LLAMA_WORKDIR="$LLAMA_DIR" "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
-
-    echo "Building patched llama.cpp ABI ($BACKEND)..."
-    LLAMA_WORKDIR="$LLAMA_DIR" \
-        LLAMA_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
-        LLAMA_STAGE_BACKEND="$BACKEND" \
-        "$SCRIPT_DIR/build-llama.sh"
-fi
+echo "Building backend-neutral host with dynamic native-runtime support."
 
 echo "Building UI..."
 MESH_LLM_BUILD_PROFILE=release "$SCRIPT_DIR/build-ui.sh" "$UI_DIR"
 
 echo "Building mesh-llm..."
-cargo_features=()
-if [[ "$DYNAMIC_NATIVE_RUNTIME" == "1" ]]; then
-    cargo_features+=(--features dynamic-native-runtime)
-fi
-case "$BACKEND" in
-    cuda) cargo_features+=(--features gpu-bench-cuda) ;;
-    rocm) cargo_features+=(--features gpu-bench-hip) ;;
-esac
 stamp_build_version
-if ((${#cargo_features[@]})); then
-    (cd "$REPO_ROOT" && cargo build --release --locked -p mesh-llm "${cargo_features[@]}")
-else
-    (cd "$REPO_ROOT" && cargo build --release --locked -p mesh-llm)
-fi
+(cd "$REPO_ROOT" && cargo build --release --locked -p mesh-llm \
+    --no-default-features \
+    --features web-ui,dynamic-native-runtime,gpu-bench-metal)

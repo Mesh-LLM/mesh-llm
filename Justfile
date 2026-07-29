@@ -143,21 +143,34 @@ build-runtime backend="" cuda_arch="" rocm_arch="":
 release version *ARGS:
     @scripts/release.sh "{{ version }}" {{ ARGS }}
 
-# Release builds default to dynamic native runtimes. Set
-# MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 when validating a release binary with
-# branch-local llama.cpp ABI changes embedded.
-release-build:
+# Build the backend-neutral release host once for the current platform.
+release-host-build:
     @scripts/build-release.sh
 
+# Build one packageable native runtime for the current platform.
+release-runtime-build backend="" target="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    selected_backend="{{ backend }}"
+    if [[ -z "$selected_backend" ]]; then
+        if [[ "$(uname -s)" == Darwin ]]; then selected_backend=metal; else selected_backend=cpu; fi
+    fi
+    target_args=()
+    if [[ -n "{{ target }}" ]]; then target_args+=(--target "{{ target }}"); fi
+    scripts/package-native-runtime.sh --build --backend "$selected_backend" "${target_args[@]}"
+
+# Build the backend-neutral host and the default runtime for this platform.
+release-build: release-host-build release-runtime-build
+
 # Build a Linux aarch64 CPU release artifact on a native aarch64 runner.
-release-build-aarch64:
-    @scripts/build-release.sh
+release-build-aarch64: release-host-build
+    @scripts/package-native-runtime.sh --build --backend cpu --target aarch64-unknown-linux-gnu
 
 # Build a Linux aarch64 CUDA release artifact (Jetson/Orin).
 # SM arches selected by MESH_CUDA_VERSION env (set by CI matrix).
-release-build-aarch64-cuda:
-    @MESH_LLM_BUILD_PROFILE=release MESH_RELEASE_ARCH=aarch64 scripts/build-linux.sh --backend cuda \
-      --cuda-arch "$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90;110'; else echo '75;80;86;87;89;90'; fi)"
+release-build-aarch64-cuda: release-host-build
+    @LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90;110'; else echo '75;80;86;87;89;90'; fi)" \
+      scripts/package-native-runtime.sh --build --backend cuda --target aarch64-unknown-linux-gnu
 
 # Prepare the pinned llama.cpp checkout and apply the Mesh-LLM ABI patch queue.
 llama-prepare:
@@ -176,23 +189,24 @@ release-build-windows:
 
 # Build a Linux CUDA release artifact.
 # SM arches selected by MESH_CUDA_VERSION env (set by CI matrix).
-release-build-cuda:
-    @MESH_LLM_BUILD_PROFILE=release scripts/build-linux.sh --backend cuda \
-      --cuda-arch "$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'; else echo '75;80;86;87;89;90'; fi)"
+release-build-cuda: release-host-build
+    @LLAMA_STAGE_CUDA_ARCHITECTURES="$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'; else echo '75;80;86;87;89;90'; fi)" \
+      scripts/package-native-runtime.sh --build --backend cuda --target x86_64-unknown-linux-gnu
 
 release-build-cuda-windows cuda_arch="75;80;86;87;89;90":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cuda -CudaArch "{{cuda_arch}}" -BuildProfile release
 
 # Build a Linux ROCm ABI release artifact with an explicit architecture list.
-release-build-rocm rocm_arch="gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201":
-    @MESH_LLM_BUILD_PROFILE=release scripts/build-linux-rocm.sh "{{ rocm_arch }}"
+release-build-rocm rocm_arch="gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201": release-host-build
+    @LLAMA_STAGE_AMDGPU_TARGETS="{{ rocm_arch }}" \
+      scripts/package-native-runtime.sh --build --backend rocm --target x86_64-unknown-linux-gnu
 
 release-build-rocm-windows rocm_arch="gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend rocm -RocmArch "{{rocm_arch}}" -BuildProfile release
 
 # Build a Linux Vulkan ABI release artifact.
-release-build-vulkan:
-    @MESH_LLM_BUILD_PROFILE=release scripts/build-linux.sh --backend vulkan
+release-build-vulkan: release-host-build
+    @scripts/package-native-runtime.sh --build --backend vulkan --target x86_64-unknown-linux-gnu
 
 release-build-vulkan-windows:
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend vulkan -BuildProfile release

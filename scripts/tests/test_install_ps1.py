@@ -158,6 +158,13 @@ class InstallPs1BehaviorTests(unittest.TestCase):
             info = zipfile.ZipInfo(member_name)
             info.external_attr = 0o755 << 16
             archive.writestr(info, contents)
+            archive.writestr("mesh-bundle/product-manifest.json", "{}\n")
+            archive.writestr(
+                "mesh-bundle/native-runtimes/test-runtime/manifest.json", "{}\n"
+            )
+            archive.writestr(
+                "mesh-bundle/native-runtimes/test-runtime/lib/llama.dll", b"runtime"
+            )
         return hashlib.sha256(archive_path.read_bytes()).hexdigest()
 
     def _combined_output(self, result: subprocess.CompletedProcess[str]) -> str:

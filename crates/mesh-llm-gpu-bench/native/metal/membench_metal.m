@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <dlfcn.h>
 #include <stdlib.h>
 #include <string.h>
 #include <float.h>
@@ -10,6 +11,37 @@ typedef struct {
     const char *variant;
     double gbps;
 } ChipBandwidth;
+
+static id<MTLDevice> load_default_metal_device(char **error_out) {
+    void *metal = dlopen(
+        "/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+        RTLD_LAZY | RTLD_LOCAL);
+    if (metal == NULL) {
+        if (error_out != NULL) {
+            NSString *message = [NSString
+                stringWithFormat:@"failed to load Metal framework: %s", dlerror()];
+            *error_out = strdup([message UTF8String]);
+        }
+        return nil;
+    }
+
+    typedef id<MTLDevice> (*CreateSystemDefaultDeviceFn)(void);
+    CreateSystemDefaultDeviceFn create_device =
+        (CreateSystemDefaultDeviceFn)dlsym(metal, "MTLCreateSystemDefaultDevice");
+    if (create_device == NULL) {
+        if (error_out != NULL) {
+            NSString *message = [NSString
+                stringWithFormat:@"Metal device entrypoint is unavailable: %s", dlerror()];
+            *error_out = strdup([message UTF8String]);
+        }
+        return nil;
+    }
+
+    // Keep the framework loaded for the process lifetime. ARC may release
+    // Metal objects after this helper returns, so closing the handle here would
+    // invalidate their implementation classes.
+    return create_device();
+}
 
 static const ChipBandwidth RATED_BANDWIDTH[] = {
     {"M5", "all", 153},       {"M5 Pro", "all", 307},
@@ -174,9 +206,9 @@ char *mesh_llm_gpu_bench_metal_json(char **error_out) {
             *error_out = NULL;
         }
 
-        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        id<MTLDevice> device = load_default_metal_device(error_out);
         if (device == nil) {
-            if (error_out != NULL) {
+            if (error_out != NULL && *error_out == NULL) {
                 *error_out = copy_c_string(@"Metal device not available");
             }
             return NULL;

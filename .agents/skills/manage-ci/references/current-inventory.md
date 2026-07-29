@@ -31,6 +31,20 @@ the commands at the end before operational changes.
 | `reset-caches.yml` | Confirmed dispatch | Destructive repository cache reset |
 | `stale-prs.yml` | Schedule, dispatch | PR warning/closure maintenance |
 
+`release.yml` is migrating to the contract-v2 three-layer artifact graph:
+
+- host matrix: one dynamic, backend-neutral executable and import report per
+  supported OS/architecture;
+- native-runtime matrix: one manifested/checksummed runtime per supported
+  OS/architecture/backend/backend-version;
+- product matrix: digest-verified composition of a host plus one runtime while
+  retaining existing backend-flavored public archive names as aliases.
+
+Release and packaging consumers must not rebuild either input. Portable bundles
+place runtimes at `mesh-bundle/native-runtimes/<runtime-id>`; Debian/Arch
+packages use `/usr/local/lib/mesh-llm/<version>/native-runtimes`; Homebrew uses
+formula-owned `libexec/native-runtimes`.
+
 Local actions:
 
 - `.github/actions/compute-changes` owns path, crate, backend, SDK, UI, website,

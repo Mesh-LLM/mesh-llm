@@ -111,12 +111,12 @@ pub fn run_benchmark(runner: BenchmarkRunner, _timeout: Duration) -> Result<Vec<
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 fn run_metal_benchmark() -> Result<Vec<BenchmarkOutput>> {
     crate::metal::run()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(all(target_os = "macos", feature = "metal")))]
 fn run_metal_benchmark() -> Result<Vec<BenchmarkOutput>> {
     Err(anyhow!(
         "Metal benchmark backend was not compiled into this mesh-llm binary"

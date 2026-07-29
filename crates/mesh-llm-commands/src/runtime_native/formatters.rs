@@ -235,11 +235,11 @@ fn print_available_human(rows: &[AvailableRuntimeRow]) {
 
 fn print_installed_human(installed: &[InstalledNativeRuntime], cache_root: &Path) {
     if installed.is_empty() {
-        println!("📦 No native runtimes installed");
+        println!("📦 No local native runtimes found");
         println!("   cache: {}", cache_root.display());
         return;
     }
-    println!("📦 Installed native runtimes");
+    println!("📦 Local native runtimes");
     println!("   cache: {}", cache_root.display());
     for runtime in installed {
         println!(

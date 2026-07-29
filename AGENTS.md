@@ -86,13 +86,12 @@ just ui-clean      # nuke node_modules + dist (fixes stale npm state)
   or surface bugs that release builds don't.
 - `just release-build` → produces `./target/release/mesh-llm`. Use this for any
   serious testing, deploying to test machines, bundling, or releases. Release
-  builds default to `MESH_LLM_DYNAMIC_NATIVE_RUNTIME=1`, so the binary loads a
-  compatible installed native runtime at startup instead of embedding the
-  branch-local llama.cpp ABI libraries. When validating branch-local Skippy ABI,
-  llama.cpp patch, MAS hidden-state, or native tensor changes, either use
-  `just build` for the normal static local dev loop or run
-  `MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 just release-build` before release-mode
-  behavior/performance testing.
+  builds always produce one backend-neutral host plus a packageable native
+  runtime. When validating branch-local Skippy ABI, llama.cpp patches, MAS
+  hidden-state, or native tensor changes, use `just release-host-build` and
+  `just release-runtime-build <backend>`, then point the host at
+  `dist/native-runtimes` with `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR`. Static
+  backend linkage is not a release or packaging lane.
 - `./target/release/mesh-llm` may exist from a *previous* `just release-build`
   or `just build-dev` invocation even after you run only `just build` — its
   presence is **not** evidence that your latest code is in it. When in doubt,
@@ -107,6 +106,23 @@ then copy `./target/release/mesh-llm`. For native ABI development, first decide
 whether you need the default dynamic release packaging path or an embedded
 branch-local native ABI; do not test new ABI symbols against downloaded release
 native runtimes.
+
+Release artifacts follow one three-layer graph:
+
+| Layer | Command | Output |
+|---|---|---|
+| Neutral host | `just release-host-build` | `target/release/mesh-llm` plus an import-policy report during packaging |
+| Native runtime | `just release-runtime-build <backend>` | `dist/native-runtimes/<runtime-id>/` plus archive/checksum |
+| Product | `just release-bundle vX.Y.Z <output>` | `mesh-bundle/` containing the host, one runtime, and product/host-import manifests |
+
+The host dependency policy is enforced by
+`scripts/verify-host-dependencies.py`. Release, installer, SDK, native-package,
+and image lanes must not bypass it or copy backend libraries beside the host.
+For an isolated local runtime test, set
+`MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"` and a fresh
+`MESH_LLM_NATIVE_RUNTIME_CACHE_DIR`. Discovery never searches the current
+working directory. Do not reintroduce an external `llama-server` or
+`rpc-server` lane.
 
 ### npm "Exit handler never called" error
 

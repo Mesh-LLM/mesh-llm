@@ -62,9 +62,10 @@ The outer archive filename distinguishes the lanes:
 - `mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz`
 - `mesh-llm-x86_64-unknown-linux-gnu-cuda-blackwell.tar.gz`
 
-Both archives contain the same `mesh-llm` runtime binary name. The outer
-archive filename distinguishes the CUDA lane, and the embedded runtime
-uses the selected bundle's ABI libraries. Use `mesh-llm update --flavor`
+Both archives contain byte-identical backend-neutral `mesh-llm` host bytes.
+The outer archive filename distinguishes the CUDA lane, and the selected
+`native-runtimes/<runtime-id>` directory contains that lane's ABI and CUDA
+libraries. Use `mesh-llm update --flavor`
 when you want to choose a specific update bundle:
 
 - `mesh-llm update --flavor cuda` for the primary CUDA lane

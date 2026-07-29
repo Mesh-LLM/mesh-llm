@@ -199,9 +199,12 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   Rust/build/smoke jobs.
 - Docker image and npm publishing are intentionally not part of pull request
   CI. `docker.yml` is a manual, non-publishing client Dockerfile validation
-  workflow. `release.yml` owns release archives and dispatches the completed
-  full release to `Mesh-LLM/mesh-packaging`, which owns package, GHCR, and npm
-  publication.
+  workflow. `release.yml` owns backend-neutral host artifacts per
+  OS/architecture, manifested native runtimes per backend lane, and product
+  composition that records both immutable digests while retaining
+  compatibility archive names. Product consumers never rebuild a missing
+  producer. It dispatches the completed release to `Mesh-LLM/mesh-packaging`,
+  which owns package, GHCR, and npm publication.
 - `fly-deploy-console.yml` is a manual (`workflow_dispatch`) deploy of the
   `mesh-llm-console` Fly app. It builds the image on Fly's remote builders from
   `fly/Dockerfile` and authenticates with the app-scoped `FLY_API_TOKEN` repo

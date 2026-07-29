@@ -189,6 +189,14 @@ impl NativeRuntimeResolver {
     }
 
     fn source_for_artifact(&self, artifact: &NativeRuntimeArtifact) -> Result<NativeRuntimeSource> {
+        for dir in &self.bundle_dirs {
+            let Ok(manifest) = crate::NativeRuntimeManifest::read_from_dir(dir) else {
+                continue;
+            };
+            if artifact_identity_matches(&manifest.runtime, artifact) {
+                return Ok(NativeRuntimeSource::Bundle { path: dir.clone() });
+            }
+        }
         let installed = self.cache.find_installed(
             artifact.mesh_version_or(&self.mesh_version),
             artifact.native_runtime_id(),
@@ -197,14 +205,6 @@ impl NativeRuntimeResolver {
             return Ok(NativeRuntimeSource::Installed {
                 path: installed.path,
             });
-        }
-        for dir in &self.bundle_dirs {
-            let Ok(manifest) = crate::NativeRuntimeManifest::read_from_dir(dir) else {
-                continue;
-            };
-            if artifact_identity_matches(&manifest.runtime, artifact) {
-                return Ok(NativeRuntimeSource::Bundle { path: dir.clone() });
-            }
         }
         Ok(artifact
             .url
@@ -834,6 +834,49 @@ mod tests {
             resolution.source,
             NativeRuntimeSource::Bundle { .. }
         ));
+    }
+
+    #[test]
+    fn resolve_prefers_bundle_over_identical_cache_entry() {
+        let bundle = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        let bundled_artifact = artifact(
+            "meshllm-runtime-linux-x86_64-cpu",
+            NativeRuntimeBackend::cpu(),
+        );
+        NativeRuntimeManifest {
+            runtime: bundled_artifact,
+        }
+        .write_to_dir(bundle.path())
+        .unwrap();
+        let cache = NativeRuntimeCache::new(cache_root.path());
+        cache.install_from_dir(bundle.path()).unwrap();
+
+        let resolution = NativeRuntimeResolver::new(
+            "0.68.0",
+            HostRuntimeProfile {
+                available_flavors: BTreeSet::from([NativeRuntimeBackendKind::Cpu]),
+                cuda: None,
+                ..profile()
+            },
+            NativeRuntimeReleaseManifest {
+                mesh_version: "0.68.0".to_string(),
+                skippy_abi: "0.1.25".to_string(),
+                artifacts: Vec::new(),
+            },
+            cache,
+        )
+        .with_bundle_dirs(vec![bundle.path().to_path_buf()])
+        .with_skippy_abi_version("0.1.25")
+        .resolve(&RuntimeSelection::Recommended)
+        .unwrap();
+
+        assert_eq!(
+            resolution.source,
+            NativeRuntimeSource::Bundle {
+                path: bundle.path().to_path_buf()
+            }
+        );
     }
 
     #[test]

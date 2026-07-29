@@ -59,7 +59,7 @@ pub async fn run_runtime(
     explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
 ) -> Result<()> {
-    initialize_host_runtime_with_config(options.config.as_deref()).await?;
+    initialize_host_runtime_for_options(&options).await?;
     run_runtime_initialized(options, explicit_surface, legacy_warning).await
 }
 
@@ -73,6 +73,17 @@ pub async fn run_runtime_initialized(
 
 pub async fn initialize_host_runtime() -> Result<()> {
     initialize_host_runtime_with_config(None).await
+}
+
+pub async fn initialize_host_runtime_for_options(options: &RuntimeOptions) -> Result<()> {
+    if !runtime_options_require_native_runtime(options) {
+        return Ok(());
+    }
+    initialize_host_runtime_with_config(options.config.as_deref()).await
+}
+
+fn runtime_options_require_native_runtime(options: &RuntimeOptions) -> bool {
+    !options.client && options.plugin.is_none()
 }
 
 pub async fn initialize_host_runtime_with_config(config_path: Option<&Path>) -> Result<()> {

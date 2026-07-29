@@ -9,6 +9,7 @@ trap 'rm -rf "$_STAGING_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RELEASE_BIN_DIR="$REPO_ROOT/target/release"
+NATIVE_RUNTIME_ROOT="${MESH_LLM_NATIVE_RUNTIME_ROOT:-$REPO_ROOT/dist/native-runtimes}"
 ATTESTATION_SIGNING_KEY_FILE="${MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE:-}"
 ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
 
@@ -157,6 +158,39 @@ write_checksum_sidecar() {
         exit 1
     fi
     printf '%s  %s\n' "$digest" "$(basename "$file")" > "$file.sha256"
+}
+
+select_native_runtime_dir() {
+    local platform
+    local flavor
+    local cuda_major
+    local cuda_version
+    platform="$(normalized_release_platform)"
+    flavor="$(effective_release_flavor)"
+    cuda_version="${MESH_CUDA_VERSION:-}"
+    cuda_major="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-${cuda_version%%.*}}"
+
+    "$(python_bin)" "$SCRIPT_DIR/select-native-runtime.py" \
+        --root "$NATIVE_RUNTIME_ROOT" \
+        --os "${platform%%/*}" \
+        --arch "${platform#*/}" \
+        --backend "$flavor" \
+        --cuda-major "$cuda_major"
+}
+
+write_product_manifest() {
+    local bundle_dir="$1"
+    local host_path="$2"
+    local runtime_path="$3"
+    local version="$4"
+    local flavor="$5"
+
+    "$(python_bin)" "$SCRIPT_DIR/compose-product-bundle.py" \
+        --bundle "$bundle_dir" \
+        --host "$host_path" \
+        --runtime "$runtime_path" \
+        --version "$version" \
+        --backend "$flavor"
 }
 
 validate_attestation_env() {
@@ -383,67 +417,9 @@ usage() {
     echo "usage: scripts/package-release.sh <version> [output_dir]" >&2
 }
 
-cuda_version_check_needs_stub() {
-    [[ "$(release_os_name)" == "Linux" ]] || return 1
-
-    case "$(effective_release_flavor)" in
-        cuda|cuda-blackwell)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-cuda_stub_library_path() {
-    local candidate
-    local candidates=()
-
-    if [[ -n "${CUDA_HOME:-}" ]]; then
-        candidates+=("$CUDA_HOME/lib64/stubs/libcuda.so")
-        candidates+=("$CUDA_HOME/targets/x86_64-linux/lib/stubs/libcuda.so")
-    fi
-    if [[ -n "${CUDA_PATH:-}" ]]; then
-        candidates+=("$CUDA_PATH/lib64/stubs/libcuda.so")
-        candidates+=("$CUDA_PATH/targets/x86_64-linux/lib/stubs/libcuda.so")
-    fi
-
-    candidates+=(
-        "/usr/local/cuda/lib64/stubs/libcuda.so"
-        "/usr/local/cuda/targets/x86_64-linux/lib/stubs/libcuda.so"
-    )
-
-    for candidate in "${candidates[@]}"; do
-        if [[ -f "$candidate" ]]; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
 run_mesh_binary_version_check() {
     local binary="$1"
-    local cuda_stub
-    local cuda_stub_dir
-
-    if ! cuda_version_check_needs_stub; then
-        "$binary" --version
-        return
-    fi
-
-    if ! cuda_stub="$(cuda_stub_library_path)"; then
-        echo "CUDA release binary needs libcuda.so.1 for version verification, but no CUDA stub libcuda.so was found." >&2
-        exit 1
-    fi
-
-    cuda_stub_dir="$_STAGING_DIR/cuda-version-stubs"
-    mkdir -p "$cuda_stub_dir"
-    ln -sf "$cuda_stub" "$cuda_stub_dir/libcuda.so.1"
-
-    LD_LIBRARY_PATH="$cuda_stub_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$binary" --version
+    "$binary" --version
 }
 
 verify_mesh_binary_version() {
@@ -479,6 +455,8 @@ main() {
     local os_name
     local bundle_dir
     local bundle_binary
+    local runtime_dir
+    local bundled_runtime
     local versioned_asset
 
     validate_attestation_env
@@ -505,6 +483,21 @@ main() {
     fi
 
     stamp_bundle_binary "$bundle_binary"
+    verify_mesh_binary_version "$bundle_binary" "$version"
+    "$(python_bin)" "$SCRIPT_DIR/verify-host-dependencies.py" \
+        "$bundle_binary" \
+        --report "$bundle_dir/host-imports.json"
+
+    runtime_dir="$(select_native_runtime_dir)"
+    bundled_runtime="$bundle_dir/native-runtimes/$(basename "$runtime_dir")"
+    mkdir -p "$(dirname "$bundled_runtime")"
+    cp -R "$runtime_dir" "$bundled_runtime"
+    write_product_manifest \
+        "$bundle_dir" \
+        "$bundle_binary" \
+        "$bundled_runtime" \
+        "$version" \
+        "$(effective_release_flavor)"
 
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
     write_checksum_sidecar "$output_dir/$versioned_asset"

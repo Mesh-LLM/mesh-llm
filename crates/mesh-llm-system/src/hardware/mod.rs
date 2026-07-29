@@ -249,11 +249,6 @@ fn read_windows_video_controllers() -> Vec<(String, u64)> {
 fn query_metal_recommended_working_set_bytes() -> Option<u64> {
     use std::ffi::{c_char, c_void};
 
-    #[link(name = "Metal", kind = "framework")]
-    unsafe extern "C" {
-        fn MTLCreateSystemDefaultDevice() -> *mut c_void;
-    }
-
     #[link(name = "objc")]
     unsafe extern "C" {
         fn sel_registerName(name: *const c_char) -> *mut c_void;
@@ -261,7 +256,13 @@ fn query_metal_recommended_working_set_bytes() -> Option<u64> {
     }
 
     unsafe {
-        let device = MTLCreateSystemDefaultDevice();
+        let metal =
+            libloading::Library::new("/System/Library/Frameworks/Metal.framework/Versions/A/Metal")
+                .ok()?;
+        let create_device = metal
+            .get::<unsafe extern "C" fn() -> *mut c_void>(b"MTLCreateSystemDefaultDevice")
+            .ok()?;
+        let device = create_device();
         if device.is_null() {
             return None;
         }

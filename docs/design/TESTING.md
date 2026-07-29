@@ -1152,6 +1152,38 @@ mesh-llm client --join <TOKEN> --port 9338
 - Inference routes through QUIC tunnel to host
 - Host does NOT see client in its peer list (zero per-client state)
 
+### 16. Release host/runtime/product boundary
+
+For release, installer, SDK, or packaging changes, validate the three layers
+without relying on a pre-existing user runtime:
+
+```bash
+just release-host-build
+just release-runtime-build metal # choose the platform backend
+product_out="$(mktemp -d)"
+just release-bundle "v$(./target/release/mesh-llm --version | awk '{print $NF}')" "$product_out"
+```
+
+Required evidence:
+
+- `scripts/verify-host-dependencies.py target/release/mesh-llm` reports no
+  rejected backend imports.
+- Extracting the product archive yields one host, one runtime tree,
+  `product-manifest.json`, and `host-imports.json`; all recorded digests match.
+- With isolated `HOME`, XDG cache, and
+  `MESH_LLM_NATIVE_RUNTIME_CACHE_DIR`, the extracted host passes `--version`,
+  `--help`, and `runtime list`. The adjacent runtime is listed and the isolated
+  cache remains empty.
+- A product with an incompatible MeshLLM version or Skippy ABI is rejected
+  before loading.
+- `client --auto --log-format json --no-console` starts without a native
+  runtime or GPU driver, emits a real ready event, and stops cleanly on SIGINT.
+
+Run the command-surface smoke on every product platform without device
+passthrough. Separately qualify backend loading and a minimal operation on
+suitable CUDA, ROCm, Vulkan, or Metal hardware. Preserve unique temp paths and
+ports and verify process/listener cleanup.
+
 ## Deploy to remote node
 
 ```bash
