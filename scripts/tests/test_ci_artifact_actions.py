@@ -942,10 +942,19 @@ class CiArtifactActionTests(unittest.TestCase):
                 self.assertIn("CACHE_NAMESPACE: mesh-llm", workflow)
                 self.assertNotIn("CACHE_NAMESPACE: mesh-llm-pr", workflow)
                 self.assertNotIn("'mesh-llm-pr'", workflow)
+                self.assertNotIn(
+                    'SCCACHE_GHA_ENABLED: "false"',
+                    workflow,
+                )
                 self.assertIn(
                     "save-if: ${{ github.ref == 'refs/heads/main' }}",
                     workflow,
                 )
+
+        main = (
+            ROOT / ".github" / "workflows" / "ci.yml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn('SCCACHE_GHA_ENABLED: "false"', main)
 
         quality = (
             ROOT / ".github" / "workflows" / "pr_quality.yml"

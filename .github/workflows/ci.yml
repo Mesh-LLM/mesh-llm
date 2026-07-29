@@ -177,7 +177,6 @@ jobs:
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -283,7 +282,6 @@ jobs:
       LLAMA_STAGE_BACKEND: cpu
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-dynamic-cpu
       MESH_LLM_REQUIRE_SCCACHE: "1"
-      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -388,7 +386,6 @@ jobs:
       LLAMA_STAGE_BACKEND: cpu
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
       MESH_LLM_REQUIRE_SCCACHE: "1"
-      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -451,7 +448,6 @@ jobs:
       MESH_LLM_SKIP_UI: "1"
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -529,7 +525,6 @@ jobs:
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -1008,7 +1003,6 @@ jobs:
       GGML_CUDA_NO_VMM: "1"
       LLAMA_STAGE_SKIP_NCCL: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
-      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -1104,7 +1098,6 @@ jobs:
       LLAMA_STAGE_AMDGPU_TARGETS: gfx1100
       CMAKE_PREFIX_PATH: /opt/rocm
       MESH_LLM_REQUIRE_SCCACHE: "1"
-      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -1198,7 +1191,6 @@ jobs:
       LLAMA_STAGE_BACKEND: vulkan
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-vulkan
       MESH_LLM_REQUIRE_SCCACHE: "1"
-      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
