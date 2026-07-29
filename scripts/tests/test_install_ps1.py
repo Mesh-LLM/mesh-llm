@@ -118,7 +118,7 @@ class InstallPs1BehaviorTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, self._combined_output(result))
             self.assertEqual(self._read_calls(calls), ["--version", "setup"])
-            self.assertIn("Installing Windows x64 host binary", result.stdout)
+            self.assertIn("Installing Windows x64 MeshLLM product bundle", result.stdout)
             self.assertIn("Ignoring legacy -Flavor 'cuda'", self._combined_output(result))
 
     def test_noninteractive_install_prints_setup_command(self) -> None:
