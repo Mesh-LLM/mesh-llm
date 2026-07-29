@@ -33,6 +33,19 @@ runs:
             process.env.SCCACHE_WEBDAV_TOKEN ||
             process.env.DEPOT_CACHE_TOKEN ||
             '';
+          const diskCacheDirectory =
+            process.env.SCCACHE_DIR ||
+            (process.env.RUNNER_TEMP
+              ? `${process.env.RUNNER_TEMP}/mesh-llm-sccache`
+              : '');
+          if (!diskCacheDirectory) {
+            core.setFailed(
+              'SCCACHE_DIR or RUNNER_TEMP is required for the job-local disk cache.',
+            );
+            return;
+          }
+          await io.mkdirP(diskCacheDirectory);
+          core.exportVariable('SCCACHE_DIR', diskCacheDirectory);
           const diskOnlyEnvironment = () => ({
             ...process.env,
             ACTIONS_CACHE_URL: '',
@@ -42,6 +55,7 @@ runs:
             SCCACHE_WEBDAV_TOKEN: '',
             SCCACHE_WEBDAV_USERNAME: '',
             SCCACHE_WEBDAV_PASSWORD: '',
+            SCCACHE_DIR: diskCacheDirectory,
           });
 
           if (

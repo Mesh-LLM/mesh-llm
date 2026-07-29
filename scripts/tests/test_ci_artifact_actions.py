@@ -390,6 +390,14 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn('default: "false"', action)
         self.assertIn("SCCACHE_WEBDAV_ENDPOINT", action)
         self.assertIn("DEPOT_CACHE_TOKEN", action)
+        self.assertIn("process.env.SCCACHE_DIR", action)
+        self.assertIn("process.env.RUNNER_TEMP", action)
+        self.assertIn("await io.mkdirP(diskCacheDirectory)", action)
+        self.assertIn(
+            "core.exportVariable('SCCACHE_DIR', diskCacheDirectory)",
+            action,
+        )
+        self.assertIn("SCCACHE_DIR: diskCacheDirectory", action)
         self.assertIn("'disk,webdav'", action)
         self.assertIn("'disk'", action)
         self.assertIn(
