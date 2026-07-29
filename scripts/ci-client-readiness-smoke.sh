@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Start a composed MeshLLM product in noninteractive client mode and require a
-# JSON readiness event followed by a bounded platform-appropriate graceful
-# shutdown.
+# Start a composed MeshLLM product in hermetic noninteractive client mode and
+# require a JSON readiness event followed by a bounded platform-appropriate
+# graceful shutdown. Public auto-discovery is intentionally tested elsewhere;
+# product composition must not depend on a mutable external mesh.
 
 set -euo pipefail
 
@@ -162,7 +163,8 @@ if [[ "$is_windows" == "1" ]]; then
     XDG_CONFIG_HOME="$STATE_DIR/config" \
     XDG_RUNTIME_DIR="$STATE_DIR/xdg-runtime" \
         python3 "$WINDOWS_PROCESS_HELPER" run --pid-file "$native_pid_file" --log "$LOG" -- \
-        "$MESH_LLM" --log-format json --port "$port" --no-console client --auto &
+        "$MESH_LLM" --log-format json --port "$port" --no-console \
+        client --mesh-discovery-mode mdns &
 else
     MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$RUNTIME_ROOT" \
     MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$STATE_DIR/runtime-cache" \
@@ -172,7 +174,8 @@ else
     XDG_CACHE_HOME="$STATE_DIR/cache" \
     XDG_CONFIG_HOME="$STATE_DIR/config" \
     XDG_RUNTIME_DIR="$STATE_DIR/xdg-runtime" \
-        "$MESH_LLM" --log-format json --port "$port" --no-console client --auto >"$LOG" 2>&1 &
+        "$MESH_LLM" --log-format json --port "$port" --no-console \
+        client --mesh-discovery-mode mdns >"$LOG" 2>&1 &
 fi
 pid=$!
 
@@ -209,5 +212,5 @@ PY
 done
 
 cat "$LOG" >&2
-echo "timed out waiting for structured client readiness" >&2
+echo "timed out waiting for hermetic structured client readiness" >&2
 exit 1

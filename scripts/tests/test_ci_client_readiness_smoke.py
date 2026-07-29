@@ -38,6 +38,12 @@ while True:
 
 
 class CiClientReadinessSmokeTests(unittest.TestCase):
+    def test_product_readiness_is_hermetic(self):
+        script = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("client --mesh-discovery-mode mdns", script)
+        self.assertNotIn("client --auto", script)
+
     def run_smoke(
         self, runtime: pathlib.Path, root: pathlib.Path
     ) -> subprocess.CompletedProcess[str]:
