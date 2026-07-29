@@ -313,6 +313,34 @@ compatibility `self-hosted-*` manifest preserves the deployed K3s topology by
 selecting CUDA 12 on AMD64 and CPU on ARM64. New consumers should use an
 explicit backend image instead of relying on those aliases.
 
+The current image family is a compatibility contract, not the final
+role-isolated topology. The planned split has these prerequisites:
+
+- a Node-capable UI producer uploads prepared UI assets before the Node-free
+  `public-rust-host` role starts;
+- `public-native-cpu` and the
+  `public-native-{cuda,rocm,vulkan}` roles own only their matching native
+  toolchain and packaging surface;
+- `public-compose` owns artifact extraction, verification, and composition,
+  without a compiler or backend SDK;
+- every role has a role-specific verifier that checks required capabilities
+  and forbidden dependency overlap;
+- a pinned JavaScript action is canaried in every public role on both
+  GitHub-hosted and trusted Depot runners, proving the Actions Node-external
+  contract even for Node-free images;
+- `self-hosted-*` runner/device overlays are added and verified last.
+
+Runner-image publication will follow one immutable chain:
+`build once -> stage digest -> verify that exact digest -> promote digest`.
+Manifest assembly and human-facing tags consume verified digests and must not
+rebuild an architecture image. The latest measured compatibility-image
+[run 30248081255](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30248081255)
+took 39m 15s across 55 jobs; its slowest test build step was 14m 25s and a
+later second public ROCm 7.2 AMD64 publication build took 18m 03s. That run
+demonstrates duplicate construction, but it did not retain authoritative
+compressed-size or controlled cold-pull evidence. Role-size and pull-time
+thresholds remain proposed rollout gates until measured.
+
 Production workflows and Flux resources must pin the multi-architecture OCI
 digest, using `ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:<digest>`. Timestamp,
 source-revision, and `*-latest` tags are discovery or evaluation inputs only;

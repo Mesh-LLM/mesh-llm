@@ -276,30 +276,50 @@ Relevant Depot documentation:
 Runner images own stable tools and backend SDKs, not commit-specific products.
 The next image revision should:
 
-1. publish a `public-rust-host` image with Rust/Cargo/sccache, host libraries,
-   CMake/Ninja, lld, and only Cargo dependency warming;
-2. publish `public-native-{cpu,cuda,rocm,vulkan}` images with the C/C++ SDK and
-   packaging tools but no Rust registry, Node, pnpm, UI, website, or Python
+1. build the UI once in a Node-capable producer and upload it before any
+   Node-free host role starts; `public-rust-host` consumes those prepared UI
+   bytes and contains Rust/Cargo/sccache, host libraries, CMake/Ninja, lld, and
+   only Cargo dependency warming;
+2. publish `public-native-cpu` with the CPU C/C++ toolchain and packaging tools,
+   and separate `public-native-{cuda,rocm,vulkan}` roles with only the matching
+   GPU SDK. None of these roles owns Rust, Node, pnpm, UI, website, or Python
    application dependencies;
-3. publish a `public-compose` image with only Bash, Python standard library,
-   tar/coreutils, runtime libraries, and artifact verifiers. Composition jobs
-   must never pull a multi-gigabyte backend SDK;
-4. retain the Actions runner only in `self-hosted-*` overlays; keep it out of
-   public builder and composition images;
-5. make one content-addressed architecture base feed every backend overlay,
+3. publish `public-compose` with only Bash, Python standard library,
+   tar/coreutils, required runtime libraries, and artifact verifiers.
+   Composition jobs must not carry a backend compiler or SDK;
+4. give every role its own verifier that asserts both required capabilities and
+   forbidden tools/layers;
+5. canary a pinned JavaScript action inside every public role as a job container
+   on both GitHub-hosted and trusted Depot runners. This proves the Actions
+   Node-external mount contract independently of whether the image ships Node;
+6. make one content-addressed architecture base feed every backend overlay,
    and move source-revision provenance after dependency-warm layers;
-6. build each architecture once, verify that exact staged digest, and assemble
-   manifests/tags without rebuilding;
-7. gate updates on compressed size and cold-pull measurements.
+7. build each architecture/role once, push it under an immutable staging
+   digest, run the role verifier and canaries against that exact digest, then
+   promote only the verified digest into multi-architecture manifests and
+   human-facing tags. Promotion must not invoke another image build;
+8. add `self-hosted-*` Actions-runner/device overlays only after all public
+   roles pass. Keep the runner agent out of public builder and composition
+   images;
+9. gate updates on retained compressed-size and controlled cold-pull
+   measurements.
 
-The current pinned CPU image is about 1.53 GB compressed, while the latest
-candidate is about 1.92 GB (+25.5%). Do not bump that candidate until it beats
-the current image's size/cold-start contract. Existing cold initialization
-medians were approximately 80s CPU, 45–49s CUDA, 124–155s ROCm, and 78–81s
-Vulkan. Initial acceptance targets are at most 1.0 GB for `public-rust-host`,
-500 MB for a CPU native builder, 250 MB and 20s cold-pull p50 for
-`public-compose`, at least 1 GB removed from each backend image, and image
-publication reduced from 39 minutes to 25 minutes.
+The latest measured publication evidence is
+[runner-images run 30248081255](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30248081255).
+It completed 55 jobs in 39m 15s. Its slowest initial `Build and verify test
+image` step took 14m 25s, then the later publication pass rebuilt the public
+ROCm 7.2 AMD64 image in an 18m 03s `Build and push architecture image by
+digest` step. This demonstrates duplicate test/publish image construction; it
+does not measure image size, cold-pull time, or cache effectiveness.
+
+No retained audit evidence currently substantiates the previously cited
+1.53 GB/1.92 GB compressed sizes or backend cold-initialization medians, so
+those values are not migration baselines. The following are provisional design
+budgets, not measurements: at most 1.0 GB for `public-rust-host`, 500 MB for a
+CPU native builder, 250 MB and 20s cold-pull p50 for `public-compose`, at least
+1 GB removed from each backend image, and publication under 25 minutes. Record
+per-platform compressed bytes and controlled cold-pull samples before enforcing
+or revising any of these gates.
 
 GHCR remains canonical. After the split, a trusted Depot canary may compare a
 Depot Registry pull-through reference and the containerd layer store against

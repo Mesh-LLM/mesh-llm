@@ -160,6 +160,38 @@ runtime. This single capacity-contaminated observation validates artifact reuse
 but does not replace the multi-run baseline. It also predates the final split
 of the Linux GPU matrix into independent runtime producers and thin composers.
 
+## Runner-image publication observation
+
+The latest read-only runner-image observation is
+[run 30248081255](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30248081255)
+at source `890cdc6a1472028a67f7013baa29e29be57e6529`. GitHub's run and job
+timestamps provide the following measured evidence:
+
+| Observation | Measured value |
+| --- | ---: |
+| Workflow wall time | 39m 15s |
+| Completed jobs | 55 |
+| Slowest initial `Build and verify test image` step | 14m 25s |
+| Later public ROCm 7.2 AMD64 `Build and push architecture image by digest` step | 18m 03s |
+
+The initial test matrix and later publish matrix both build architecture
+images. The second timing is therefore evidence of duplicate image
+construction on the publication path. It is not evidence of a cold pull,
+compressed image size, or the amount of reusable cache.
+
+The runner-image migration must measure one explicit lifecycle:
+
+```text
+build once -> stage immutable digest -> verify exact digest -> promote digest
+```
+
+Record the role, platform, backend, source SHA, staged digest, build duration,
+verification duration, promotion duration, compressed bytes, provider, and
+runner class. Measure cold pull only in a controlled fresh-worker cohort and
+retain the raw observations. Until those records exist, the proposed role-size,
+cold-pull, and publication-time thresholds in
+[`DEPOT_MIGRATION.md`](DEPOT_MIGRATION.md) are design budgets, not baselines.
+
 | Phase | Change class | Provider / runner | Samples | p50 | p90 | p95 | Notes |
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
 | Product-v2 PR graph | full CI refactor | hosted mix | 1 | 1h 7m 34s | 1h 7m 34s | 1h 7m 34s | Green; queue-contaminated; composition 10s–70s |
