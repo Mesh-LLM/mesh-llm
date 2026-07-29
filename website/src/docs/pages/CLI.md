@@ -529,6 +529,8 @@ operations against an explicitly targeted node:
 
 ```bash
 mesh-llm runtime list
+mesh-llm runtime list --available
+mesh-llm runtime list --installed
 mesh-llm runtime install
 mesh-llm runtime install cuda13
 mesh-llm runtime remove <RUNTIME_ID>
@@ -540,6 +542,11 @@ mesh-llm runtime unload-model --endpoint '<control-endpoint>' --model '<canonica
 mesh-llm runtime ensure-model --endpoint '<control-endpoint>' --model '<canonical-model-ref>'
 mesh-llm runtime drain-model --endpoint '<control-endpoint>' --instance-id '<instance-id>'
 ```
+
+Plain `mesh-llm runtime list` lists locally discoverable native runtimes. Use
+`mesh-llm runtime list --available` to list release-manifest or bundled
+runtimes instead. `--installed` is the explicit compatibility spelling for the
+default local-discovery behavior.
 
 Use `--json` for machine-readable output. Runtime selection is constrained by
 the running Mesh version, platform, backend, and Skippy ABI.

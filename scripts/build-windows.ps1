@@ -1145,7 +1145,7 @@ Invoke-InRepo {
             (Join-Path $scriptDir "package-native-runtime.sh"),
             "--backend", $backendName,
             "--target", "x86_64-pc-windows-msvc",
-            "--out", (Join-Path $repoRoot "dist\native-runtimes")
+            "--out", "dist/native-runtimes"
         )
     }
 
