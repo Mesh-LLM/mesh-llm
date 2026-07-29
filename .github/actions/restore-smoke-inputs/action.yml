@@ -60,35 +60,167 @@ runs:
           echo "expected exactly one composed product archive in $artifact_path; found $archive_count" >&2
           exit 1
         fi
-        tar -xzf "$archive" -C "$artifact_path"
-        rm -f -- "$archive"
 
-        product_manifest="$artifact_path/product-manifest.json"
+        extract_root="$(mktemp -d)"
+        trap 'rm -rf -- "$extract_root"' EXIT
+        python3 scripts/safe-extract-tar.py "$archive" "$extract_root"
+
+        product_manifest="$extract_root/product-manifest.json"
         test -s "$product_manifest"
         IFS=$'\t' read -r version backend host_path runtime_path < <(
-          python3 - "$product_manifest" <<'PY'
+          python3 - \
+            "$product_manifest" \
+            "$extract_root" \
+            "${{ inputs.binary_name }}" <<'PY'
         import json
+        from pathlib import Path, PurePosixPath
+        import re
         import sys
 
-        with open(sys.argv[1], encoding="utf-8") as handle:
+        manifest_path, product_root_raw, binary_name = sys.argv[1:4]
+        product_root = Path(product_root_raw).resolve(strict=True)
+        windows_drive = re.compile(r"^[A-Za-z]:")
+
+
+        def product_path(label, raw_path, *, require_directory):
+            if (
+                not isinstance(raw_path, str)
+                or not raw_path
+                or any(character in raw_path for character in ("\0", "\r", "\n", "\t"))
+                or "\\" in raw_path
+            ):
+                raise SystemExit(f"{label} must be a portable relative path")
+            relative = PurePosixPath(raw_path)
+            if (
+                relative.is_absolute()
+                or windows_drive.match(raw_path)
+                or ".." in relative.parts
+            ):
+                raise SystemExit(
+                    f"{label} escapes the composed product: {raw_path}"
+                )
+            candidate = product_root.joinpath(*relative.parts)
+            try:
+                resolved = candidate.resolve(strict=True)
+                resolved.relative_to(product_root)
+            except (OSError, ValueError):
+                raise SystemExit(
+                    f"{label} is missing or escapes the composed product: "
+                    f"{raw_path}"
+                ) from None
+            if candidate.is_symlink():
+                raise SystemExit(f"{label} cannot be a symlink: {raw_path}")
+            if require_directory != resolved.is_dir():
+                expected = "directory" if require_directory else "file"
+                raise SystemExit(f"{label} must resolve to a {expected}: {raw_path}")
+            return relative.as_posix()
+
+
+        with open(manifest_path, encoding="utf-8") as handle:
             manifest = json.load(handle)
+        if not isinstance(manifest, dict):
+            raise SystemExit("product manifest must be an object")
+        if manifest.get("schema_version") != 2:
+            raise SystemExit("product manifest schema_version must be 2")
+        if manifest.get("contract") != "mesh-llm-product-v2":
+            raise SystemExit("product manifest contract is invalid")
+
+        version = manifest.get("mesh_version")
+        backend = manifest.get("backend")
+        if not isinstance(version, str) or not version:
+            raise SystemExit("product mesh_version must be a non-empty string")
+        if backend not in {
+            "cpu",
+            "metal",
+            "cuda",
+            "cuda-blackwell",
+            "rocm",
+            "hip",
+            "vulkan",
+        }:
+            raise SystemExit(f"unsupported product backend: {backend!r}")
+
+        host = manifest.get("host")
+        runtime = manifest.get("runtime")
+        if not isinstance(host, dict) or not isinstance(runtime, dict):
+            raise SystemExit("product host and runtime entries must be objects")
+        host_path = product_path(
+            "product host",
+            host.get("path"),
+            require_directory=False,
+        )
+        if host_path != binary_name:
+            raise SystemExit(
+                f"product host path must be {binary_name!r}, got {host_path!r}"
+            )
+        product_path(
+            "host import report",
+            "host-imports.json",
+            require_directory=False,
+        )
+        runtime_path = product_path(
+            "product runtime",
+            runtime.get("path"),
+            require_directory=True,
+        )
+        runtime_parts = PurePosixPath(runtime_path).parts
+        if len(runtime_parts) != 2 or runtime_parts[0] != "native-runtimes":
+            raise SystemExit(
+                "product runtime must be one direct child of native-runtimes"
+            )
+        allowed_top_level = {
+            binary_name,
+            "host-imports.json",
+            "native-runtimes",
+            "product-manifest.json",
+        }
+        actual_top_level = {entry.name for entry in product_root.iterdir()}
+        if actual_top_level != allowed_top_level:
+            unexpected = sorted(actual_top_level - allowed_top_level)
+            missing = sorted(allowed_top_level - actual_top_level)
+            raise SystemExit(
+                "product top-level contents are not canonical: "
+                f"unexpected={unexpected}, missing={missing}"
+            )
+        top_level_links = sorted(
+            entry.name for entry in product_root.iterdir() if entry.is_symlink()
+        )
+        if top_level_links:
+            raise SystemExit(
+                f"product top-level entries cannot be symlinks: {top_level_links}"
+            )
+        runtime_entries = list((product_root / "native-runtimes").iterdir())
+        selected_runtime = product_root.joinpath(
+            *PurePosixPath(runtime_path).parts
+        )
+        if (
+            len(runtime_entries) != 1
+            or runtime_entries[0].resolve(strict=True)
+            != selected_runtime.resolve(strict=True)
+        ):
+            raise SystemExit(
+                "product must contain exactly its manifest-selected runtime"
+            )
         print(
-            manifest["mesh_version"],
-            manifest["backend"],
-            manifest["host"]["path"],
-            manifest["runtime"]["path"],
+            version,
+            backend,
+            host_path,
+            runtime_path,
             sep="\t",
         )
         PY
         )
-        scripts/verify-native-runtime-package.sh "$artifact_path/$runtime_path"
+        scripts/verify-native-runtime-package.sh "$extract_root/$runtime_path"
         python3 scripts/compose-product-bundle.py \
-          --bundle "$artifact_path" \
-          --host "$artifact_path/$host_path" \
-          --runtime "$artifact_path/$runtime_path" \
+          --bundle "$extract_root" \
+          --host "$extract_root/$host_path" \
+          --runtime "$extract_root/$runtime_path" \
           --version "$version" \
           --backend "$backend" \
           --check
+
+        rm -f -- "$archive"
+        cp -a "$extract_root/." "$artifact_path/"
 
     - name: Stage mesh-llm binary
       shell: bash

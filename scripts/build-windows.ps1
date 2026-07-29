@@ -1176,7 +1176,10 @@ Invoke-InRepo {
         $env:LLAMA_STAGE_AMDGPU_TARGETS = $RocmArch
     }
     $profileDir = if ($buildProfile -eq "release") { "release" } else { "debug" }
-    $runtimeOut = Join-Path (Join-Path (Join-Path $repoRoot "target") $profileDir) "native-runtimes"
+    # Invoke-InRepo makes this shell-relative path portable across Git Bash and
+    # WSL. Passing a native `D:\...` path to GNU tar makes it parse `D:` as a
+    # remote host and fail after the expensive ABI build has already completed.
+    $runtimeOut = "target/$profileDir/native-runtimes"
     Invoke-NativeCommand "bash" @(
         (Join-Path $scriptDir "package-native-runtime.sh"),
         "--backend", $backendName,

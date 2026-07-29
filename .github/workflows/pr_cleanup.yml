@@ -445,7 +445,7 @@ jobs:
             }
 
       - name: Upload cache deletion result
-        if: ${{ always() }}
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pr-cache-cleanup-result-${{ github.event.inputs.pr_number || github.event.pull_request.number }}-${{ matrix.shard.number }}
@@ -456,7 +456,7 @@ jobs:
   delete_pr_artifacts:
     name: Delete PR artifacts
     needs: delete_pr_caches
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     permissions:
       actions: write
@@ -602,7 +602,7 @@ jobs:
       - plan_cache_cleanup
       - delete_pr_caches
       - delete_pr_artifacts
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     permissions:
       actions: read

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -48,6 +49,39 @@ class CiArtifactActionTests(unittest.TestCase):
                 ):
                     self.assertRegex(value, exact_pin)
 
+    def test_workflow_status_gates_do_not_resist_cancellation(self) -> None:
+        workflow_files = sorted(
+            (ROOT / ".github" / "workflows").glob("*.yml"),
+        )
+
+        for path in workflow_files:
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertNotIn(
+                    "always()",
+                    path.read_text(encoding="utf-8"),
+                )
+
+    def test_pr_quality_requires_ci_contract_validation(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "pr_quality.yml"
+        ).read_text(encoding="utf-8")
+        contract_start = workflow.index("  ci-contract:")
+        contract_end = workflow.index("\n  rust-fmt:", contract_start)
+        contract = workflow[contract_start:contract_end]
+        summary = workflow[workflow.index("  summary:") :]
+
+        self.assertIn("actionlint@1.7.12", contract)
+        self.assertIn(
+            "actionlint -config-file .github/actionlint.yaml",
+            contract,
+        )
+        self.assertIn(
+            "python3 -m unittest discover -s scripts/tests -p 'test_*.py'",
+            contract,
+        )
+        self.assertIn("ci-contract", summary)
+        self.assertIn("needs.ci-contract.result", summary)
+
     def write_fake_product_inputs(
         self,
         workspace: Path,
@@ -76,7 +110,7 @@ class CiArtifactActionTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        runtime_id = "meshllm-native-runtime-test-x86_64-cpu"
+        runtime_id = "meshllm-native-runtime-darwin-x86_64-cpu"
         runtime = runtime_input / runtime_id
         (runtime / "lib").mkdir(parents=True)
         (runtime / "tools").mkdir()
@@ -91,10 +125,17 @@ class CiArtifactActionTests(unittest.TestCase):
             "runtime": {
                 "id": runtime_id,
                 "mesh_version": "1.2.3",
-                "skippy_abi": {"major": 1, "minor": 0, "patch": 0},
-                "platform": {"os": "test", "arch": "x86_64"},
+                "skippy_abi": "1.0.0",
+                "platform": {
+                    "os": "macos",
+                    "arch": "x86_64",
+                    "target": "x86_64-apple-darwin",
+                },
                 "backend": {"kind": "cpu"},
                 "libraries": ["lib/libmesh_fake.a"],
+                "files": {
+                    "lib/libmesh_fake.a": library_digest,
+                },
                 "tools": {"tools/mesh-runtime-bench": tool_digest},
             },
             "build": {
@@ -109,31 +150,98 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         return host_input, runtime_input
 
+    def write_noncanonical_sidecar(
+        self,
+        artifact: Path,
+        mode: str,
+    ) -> None:
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        if mode == "wrong-name":
+            contents = f"{digest}  unexpected-name\n"
+        elif mode == "multiline":
+            contents = (
+                f"{digest}  {artifact.name}\n"
+                f"{digest}  {artifact.name}\n"
+            )
+        else:
+            raise ValueError(f"unsupported sidecar mode: {mode}")
+        artifact.with_name(f"{artifact.name}.sha256").write_text(
+            contents,
+            encoding="utf-8",
+        )
+
     def run_product_composer(
         self,
         workspace: Path,
         *,
         host_version: str = "1.2.3",
+        runtime_archive: str | None = None,
+        host_sidecar: str | None = None,
+        attestation_sidecar: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         host_input, runtime_input = self.write_fake_product_inputs(
             workspace,
             host_version=host_version,
         )
+        if host_sidecar is not None:
+            self.write_noncanonical_sidecar(
+                host_input / "mesh-llm",
+                host_sidecar,
+            )
+        if runtime_archive is not None:
+            runtime_dir = next(
+                path
+                for path in runtime_input.iterdir()
+                if path.is_dir()
+            )
+            archive = runtime_input / f"{runtime_dir.name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(runtime_dir, arcname=runtime_dir.name)
+            shutil.rmtree(runtime_dir)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            if runtime_archive != "missing":
+                sidecar_digest = (
+                    "0" * 64
+                    if runtime_archive == "corrupt"
+                    else digest
+                )
+                archive.with_name(f"{archive.name}.sha256").write_text(
+                    f"{sidecar_digest}  {archive.name}\n",
+                    encoding="utf-8",
+                )
+            if runtime_archive == "duplicate":
+                (runtime_input / "unrelated.tar.gz.sha256").write_text(
+                    f"{digest}  unrelated.tar.gz\n",
+                    encoding="utf-8",
+                )
+        environment = {
+            **os.environ,
+            "GITHUB_WORKSPACE": str(workspace),
+            "GITHUB_OUTPUT": str(workspace / "github-output"),
+            "INPUT_HOST_INPUT_DIR": str(host_input),
+            "INPUT_RUNTIME_INPUT_DIR": str(runtime_input),
+            "INPUT_OUTPUT_DIR": str(workspace / "product-input"),
+            "INPUT_BACKEND": "cpu",
+            "INPUT_VERSION": "1.2.3",
+            "INPUT_BINARY_NAME": "mesh-llm",
+            "INPUT_READINESS_SMOKE": "false",
+        }
+        if attestation_sidecar is not None:
+            verifier = host_input / "release-attestation-verifier"
+            verifier.write_bytes(b"test verifier")
+            self.write_noncanonical_sidecar(
+                verifier,
+                attestation_sidecar,
+            )
+            public_key = workspace / "release-attestation-public-key.json"
+            public_key.write_text("{}\n", encoding="utf-8")
+            environment["INPUT_ATTESTATION_PUBLIC_KEY_FILE"] = str(
+                public_key,
+            )
         return subprocess.run(
             [str(COMPOSE_SCRIPT)],
             cwd=ROOT,
-            env={
-                **os.environ,
-                "GITHUB_WORKSPACE": str(workspace),
-                "GITHUB_OUTPUT": str(workspace / "github-output"),
-                "INPUT_HOST_INPUT_DIR": str(host_input),
-                "INPUT_RUNTIME_INPUT_DIR": str(runtime_input),
-                "INPUT_OUTPUT_DIR": str(workspace / "product-input"),
-                "INPUT_BACKEND": "cpu",
-                "INPUT_VERSION": "1.2.3",
-                "INPUT_BINARY_NAME": "mesh-llm",
-                "INPUT_READINESS_SMOKE": "false",
-            },
+            env=environment,
             check=False,
             capture_output=True,
             text=True,
@@ -242,6 +350,17 @@ class CiArtifactActionTests(unittest.TestCase):
 
         self.assertIn("^crates/mesh-llm-release-footer/", cpu_routing)
         self.assertNotIn("^crates/mesh-llm-release-footer/", gpu_routing)
+        self.assertIn("package-release", cpu_routing)
+        self.assertIn("package-release", gpu_routing)
+        for workflow in (
+            "ci",
+            "pr_builds",
+            "release",
+            "windows-warm-caches",
+        ):
+            with self.subTest(workflow=workflow):
+                self.assertIn(workflow, cpu_routing)
+                self.assertIn(workflow, gpu_routing)
 
         for primitive in (
             "prepare-windows-host-input",
@@ -249,12 +368,186 @@ class CiArtifactActionTests(unittest.TestCase):
             "compose-product-input",
             "package-native-runtime",
             "verify-native-runtime-package",
+            "verify-checksum-sidecar",
+            "safe-extract-tar",
             "compose-product-bundle",
             "ci-compose-product-input",
             "ci-client-readiness-smoke",
         ):
             with self.subTest(primitive=primitive):
                 self.assertIn(primitive, routing)
+
+    def test_windows_abi_cache_action_keys_every_compatibility_boundary(
+        self,
+    ) -> None:
+        action = self.read_action("restore-windows-abi-cache")
+
+        for action_input in (
+            "backend:",
+            "build_dir:",
+            "architecture_set:",
+            "cuda_toolchain_version:",
+            "vulkan_toolchain_version:",
+            "rocm_toolchain_version:",
+        ):
+            with self.subTest(action_input=action_input):
+                self.assertIn(action_input, action)
+
+        self.assertIn(
+            '$backend -notin @("cpu", "cuda", "rocm", "vulkan")',
+            action,
+        )
+        self.assertIn(
+            '$backend -in @("cuda", "rocm") -and -not $architectureSet',
+            action,
+        )
+        self.assertIn(
+            "build_dir must resolve inside GITHUB_WORKSPACE",
+            action,
+        )
+        self.assertIn(
+            "build_dir must remain outside the replaceable llama.cpp ",
+            action,
+        )
+        self.assertIn(
+            "worktree: $resolvedBuildDir",
+            action,
+        )
+        for toolchain_boundary in (
+            "cuda-$version-Jimver-v0.2.35",
+            "vulkan-$version-jakoch-v1.5.2",
+            "rocm-$version",
+        ):
+            with self.subTest(toolchain_boundary=toolchain_boundary):
+                self.assertIn(toolchain_boundary, action)
+
+        expected_hash = (
+            "${{ hashFiles("
+            "'.github/actions/restore-windows-abi-cache/action.yml', "
+            "'.github/actions/prepare-native-runtime-input/action.yml', "
+            "'.github/actions/setup-windows-rocm-sdk/action.yml', "
+            "'scripts/build-llama.sh', 'scripts/prepare-llama.sh', "
+            "'scripts/package-native-runtime.sh', "
+            "'third_party/llama.cpp/upstream.txt', "
+            "'third_party/llama.cpp/patches/**', "
+            "'.github/cache-version.txt') }}"
+        )
+        self.assertIn(expected_hash, action)
+        self.assertIn(
+            '"mesh-llm-windows-2022-skippy-abi-'
+            '$backend-$architectureSet-$toolchain-$inputHash"',
+            action,
+        )
+        self.assertIn(
+            "actions/cache/restore@"
+            "caa296126883cff596d87d8935842f9db880ef25 # v5.1.0",
+            action,
+        )
+        self.assertNotIn("restore-keys:", action)
+        self.assertIn(
+            "value: ${{ steps.restore.outputs.cache-hit }}",
+            action,
+        )
+        self.assertIn(
+            "value: ${{ steps.restore.outputs.cache-primary-key }}",
+            action,
+        )
+
+    def test_push_routing_diffs_the_complete_event_range(self) -> None:
+        action = self.read_action("compute-changes")
+        push_start = action.index(
+            'elif [[ "${{ inputs.event_name }}" == "push" ]]',
+        )
+        push_end = action.index(
+            'elif [[ "${{ inputs.event_name }}" == "workflow_dispatch" ]]',
+            push_start,
+        )
+        push = action[push_start:push_end]
+
+        self.assertIn('base_sha="${{ inputs.base_sha }}"', push)
+        self.assertIn('head_sha="${{ inputs.head_sha }}"', push)
+        self.assertIn('git diff --name-only "$base_sha" "$head_sha"', push)
+        self.assertIn('"$base_sha" =~ ^0+$', push)
+        self.assertIn('"__force_all__"', push)
+        self.assertNotIn("HEAD^", action)
+        self.assertIn('if [[ "$FORCE_ALL" == "true" ]]', action)
+        force_windows = action[
+            action.index('if [[ "$FORCE_ALL" == "true" ]]')
+            : action.index(
+                "# SDK smokes are consumer tests",
+            )
+        ]
+        self.assertIn('WINDOWS_CPU_BUILD_REQUIRED="true"', force_windows)
+        self.assertIn('WINDOWS_GPU_BUILD_REQUIRED="true"', force_windows)
+
+    def test_runner_contract_routing_covers_cache_evidence_actions(
+        self,
+    ) -> None:
+        action = self.read_action("compute-changes")
+        routing = action[
+            action.index("RUNNER_CONTRACT_INPUTS=")
+            : action.index("# Determine docs_only")
+        ]
+
+        for local_action in (
+            "capture-sccache-stats",
+            "configure-sccache-gha",
+            "select-ci-runners",
+        ):
+            with self.subTest(local_action=local_action):
+                self.assertIn(local_action, routing)
+
+    def test_justfile_release_primitives_route_backend_builds(self) -> None:
+        action = self.read_action("compute-changes")
+        match = re.search(
+            r"function is_backend_recipe\(name\).*?"
+            r"return name ~ /\^\((.*?)\)\$/",
+            action,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        recipe_names = set(match.group(1).split("|"))
+
+        for recipe in (
+            "release-host-build",
+            "release-runtime-build",
+            "release-host-build-windows",
+        ):
+            with self.subTest(recipe=recipe):
+                self.assertIn(recipe, recipe_names)
+
+    def test_sdk_routing_covers_every_direct_smoke_script(self) -> None:
+        action = self.read_action("compute-changes")
+        match = re.search(
+            r"DIRECT_SDK_INPUTS=.*?grep -E '([^']+)'",
+            action,
+        )
+        self.assertIsNotNone(match)
+        direct_sdk_pattern = re.compile(match.group(1))
+        self.assertRegex(
+            ".github/actions/restore-smoke-inputs/action.yml",
+            direct_sdk_pattern,
+        )
+        smoke_scripts = (
+            ROOT / "scripts" / "ci-rust-sdk-smoke.sh",
+            ROOT / "scripts" / "ci-kotlin-sdk-smoke.sh",
+            ROOT / "scripts" / "ci-swift-sdk-smoke.sh",
+        )
+
+        direct_calls: set[str] = set()
+        for smoke_script in smoke_scripts:
+            direct_calls.update(
+                f"scripts/{name}"
+                for name in re.findall(
+                    r"(?m)^\s*(?:retry_transient\s+)?"
+                    r"scripts/([A-Za-z0-9_.-]+\.sh)",
+                    smoke_script.read_text(encoding="utf-8"),
+                )
+            )
+
+        for script in sorted(direct_calls):
+            with self.subTest(script=script):
+                self.assertRegex(script, direct_sdk_pattern)
 
     def test_runtime_action_never_builds_the_host(self) -> None:
         action = self.read_action("prepare-native-runtime-input")
@@ -273,6 +566,8 @@ class CiArtifactActionTests(unittest.TestCase):
         script = COMPOSE_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("scripts/compose-product-bundle.py", script)
         self.assertIn("scripts/verify-native-runtime-package.sh", script)
+        self.assertIn("scripts/verify-checksum-sidecar.py", script)
+        self.assertIn("scripts/safe-extract-tar.py", script)
         self.assertIn("scripts/ci-client-readiness-smoke.sh", script)
         self.assertIn('archive_path="$product_dir.tar.gz"', script)
         self.assertIn('tar -C "$product_dir" -czf "$archive_path" .', script)
@@ -330,6 +625,72 @@ class CiArtifactActionTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("composed host version mismatch", result.stderr)
 
+    def test_product_composer_accepts_one_checksums_runtime_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = self.run_product_composer(
+                Path(temp_dir),
+                runtime_archive="valid",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_product_composer_requires_exact_runtime_archive_sidecar(
+        self,
+    ) -> None:
+        for mode in ("missing", "duplicate"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp_dir:
+                result = self.run_product_composer(
+                    Path(temp_dir),
+                    runtime_archive=mode,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("expected exactly one checksum sidecar", result.stderr)
+
+    def test_product_composer_rejects_corrupt_runtime_archive_sidecar(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = self.run_product_composer(
+                Path(temp_dir),
+                runtime_archive="corrupt",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("archive checksum mismatch", result.stderr)
+
+    def test_product_composer_rejects_noncanonical_host_sidecar(self) -> None:
+        expected_errors = {
+            "wrong-name": "checksum sidecar names",
+            "multiline": "exactly one canonical line",
+        }
+        for mode, expected_error in expected_errors.items():
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp_dir:
+                result = self.run_product_composer(
+                    Path(temp_dir),
+                    host_sidecar=mode,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
+    def test_product_composer_rejects_noncanonical_verifier_sidecar(
+        self,
+    ) -> None:
+        expected_errors = {
+            "wrong-name": "checksum sidecar names",
+            "multiline": "exactly one canonical line",
+        }
+        for mode, expected_error in expected_errors.items():
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp_dir:
+                result = self.run_product_composer(
+                    Path(temp_dir),
+                    attestation_sidecar=mode,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
     def test_release_attestation_is_verified_without_compiling_in_composer(
         self,
     ) -> None:
@@ -345,8 +706,8 @@ class CiArtifactActionTests(unittest.TestCase):
             product_script,
         )
         self.assertIn(
-            '"$expected_verifier_checksum" \\\n'
-            '        "$actual_verifier_checksum"',
+            '"$python_bin" scripts/verify-checksum-sidecar.py \\\n'
+            '        "$attestation_verifier"',
             product_script,
         )
 
@@ -354,7 +715,18 @@ class CiArtifactActionTests(unittest.TestCase):
         action = self.read_action("restore-smoke-inputs")
 
         self.assertIn("expected exactly one composed product archive", action)
-        self.assertIn("tar -xzf", action)
+        self.assertIn("scripts/safe-extract-tar.py", action)
+        self.assertNotIn("tar -xzf", action)
+        self.assertIn("product host path must be", action)
+        self.assertIn(
+            "product runtime must be one direct child of native-runtimes",
+            action,
+        )
+        self.assertIn("product top-level contents are not canonical", action)
+        self.assertIn(
+            "product must contain exactly its manifest-selected runtime",
+            action,
+        )
         self.assertIn("scripts/verify-native-runtime-package.sh", action)
         self.assertIn("--check", action)
 

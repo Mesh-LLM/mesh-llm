@@ -39,6 +39,21 @@ def host_arch() -> str:
     return machine
 
 
+def host_target() -> str:
+    targets = {
+        ("macos", "aarch64"): "aarch64-apple-darwin",
+        ("macos", "x86_64"): "x86_64-apple-darwin",
+        ("linux", "aarch64"): "aarch64-unknown-linux-gnu",
+        ("linux", "x86_64"): "x86_64-unknown-linux-gnu",
+        ("windows", "x86_64"): "x86_64-pc-windows-msvc",
+    }
+    return targets[(host_os(), host_arch())]
+
+
+def accelerated_backend() -> str:
+    return "metal" if host_os() == "macos" else "vulkan"
+
+
 def make_executable(path: Path) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
@@ -72,11 +87,19 @@ class CiPrepareNativeRuntimeTests(unittest.TestCase):
                 "id": runtime_id,
                 "mesh_version": "0.72.1",
                 "skippy_abi": skippy_abi or current_skippy_abi(),
-                "platform": {"os": host_os(), "arch": host_arch()},
+                "platform": {
+                    "os": host_os(),
+                    "arch": host_arch(),
+                    "target": host_target(),
+                },
                 "backend": {"kind": backend},
                 "libraries": ["lib/runtime.bin"],
                 "files": {"lib/runtime.bin": digest},
-            }
+            },
+            "build": {
+                "primary_library": "lib/runtime.bin",
+                "library_sha256": digest,
+            },
         }
         (artifact / "manifest.json").write_text(
             json.dumps(manifest), encoding="utf-8"
@@ -167,9 +190,14 @@ cat "$(dirname "$0")/runtime-rows.json"
             product = Path(directory) / "product"
             runtime = self.write_runtime(
                 product / "native-runtimes",
-                backend="metal",
+                backend=accelerated_backend(),
             )
-            binary = self.write_fake_binary(product, runtime.name, "metal", True)
+            binary = self.write_fake_binary(
+                product,
+                runtime.name,
+                accelerated_backend(),
+                True,
+            )
             out = Path(directory) / "fallback"
 
             result = self.run_script(out, binary)

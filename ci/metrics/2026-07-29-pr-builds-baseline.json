@@ -1,0 +1,1747 @@
+{
+  "benchmark_labels": {
+    "cohort": "historical-pre-product-v2-workload-mix",
+    "collected_at": "2026-07-29T16:25:58Z"
+  },
+  "definitions": {
+    "job_duration_seconds": "job started_at to completed_at",
+    "job_queue_seconds": "job created_at to started_at; unavailable without job created_at",
+    "job_start_delay_seconds": "first-attempt workflow created_at to job started_at; includes dependency wait; reruns excluded",
+    "terminal_job": "last non-skipped job to finish; a critical-path candidate",
+    "workflow_queue_seconds": "first-attempt run created_at to started_at; reruns excluded",
+    "workflow_wall_seconds": "first-attempt run created_at to updated_at; reruns excluded"
+  },
+  "generated_at": "2026-07-29T21:57:43.409412Z",
+  "jobs": {
+    "by_name": [
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 3145.0,
+          "mean": 1476.714,
+          "min": 66.0,
+          "p50": 1742.5,
+          "p90": 2121.4,
+          "p95": 2528.8
+        },
+        "name": "Windows CUDA",
+        "queue_seconds": {
+          "count": 14,
+          "max": 414.0,
+          "mean": 76.714,
+          "min": 2.0,
+          "p50": 4.0,
+          "p90": 296.1,
+          "p95": 355.5
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 493.0,
+          "mean": 129.571,
+          "min": 16.0,
+          "p50": 70.5,
+          "p90": 365.4,
+          "p95": 428.0
+        },
+        "terminal_count": 2
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 2684.0,
+          "mean": 1321.714,
+          "min": 62.0,
+          "p50": 1499.5,
+          "p90": 2103.6,
+          "p95": 2362.9
+        },
+        "name": "Windows ROCm",
+        "queue_seconds": {
+          "count": 14,
+          "max": 548.0,
+          "mean": 84.786,
+          "min": 2.0,
+          "p50": 4.5,
+          "p90": 367.4,
+          "p95": 503.15
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 618.0,
+          "mean": 137.643,
+          "min": 16.0,
+          "p50": 68.0,
+          "p90": 431.9,
+          "p95": 572.5
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 2490.0,
+          "mean": 1413.429,
+          "min": 1025.0,
+          "p50": 1372.0,
+          "p90": 1617.2,
+          "p95": 1925.8
+        },
+        "name": "Windows CPU",
+        "queue_seconds": {
+          "count": 14,
+          "max": 345.0,
+          "mean": 48.571,
+          "min": 2.0,
+          "p50": 5.0,
+          "p90": 162.8,
+          "p95": 256.6
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 414.0,
+          "mean": 101.429,
+          "min": 16.0,
+          "p50": 61.5,
+          "p90": 235.5,
+          "p95": 326.25
+        },
+        "terminal_count": 1
+      },
+      {
+        "conclusions": {
+          "success": 15
+        },
+        "duration_seconds": {
+          "count": 15,
+          "max": 1640.0,
+          "mean": 1409.4,
+          "min": 1202.0,
+          "p50": 1406.0,
+          "p90": 1616.0,
+          "p95": 1631.6
+        },
+        "name": "swift_sdk_smoke / swift SDK Smoke",
+        "queue_seconds": {
+          "count": 15,
+          "max": 385.0,
+          "mean": 78.733,
+          "min": 3.0,
+          "p50": 8.0,
+          "p90": 230.0,
+          "p95": 284.9
+        },
+        "sample_count": 15,
+        "start_delay_seconds": {
+          "count": 15,
+          "max": 1631.0,
+          "mean": 640.133,
+          "min": 205.0,
+          "p50": 559.0,
+          "p90": 934.6,
+          "p95": 1155.0
+        },
+        "terminal_count": 8
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 1570.0,
+          "mean": 1459.0,
+          "min": 1194.0,
+          "p50": 1469.0,
+          "p90": 1545.8,
+          "p95": 1555.05
+        },
+        "name": "Linux ROCm slim",
+        "queue_seconds": {
+          "count": 14,
+          "max": 1187.0,
+          "mean": 98.643,
+          "min": 2.0,
+          "p50": 9.0,
+          "p90": 73.7,
+          "p95": 473.3
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 1257.0,
+          "mean": 151.5,
+          "min": 18.0,
+          "p50": 71.5,
+          "p90": 105.8,
+          "p95": 509.5
+        },
+        "terminal_count": 1
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 1591.0,
+          "mean": 987.143,
+          "min": 72.0,
+          "p50": 1233.5,
+          "p90": 1462.3,
+          "p95": 1516.9
+        },
+        "name": "Windows Vulkan",
+        "queue_seconds": {
+          "count": 14,
+          "max": 304.0,
+          "mean": 57.643,
+          "min": 2.0,
+          "p50": 7.0,
+          "p90": 226.1,
+          "p95": 287.1
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 374.0,
+          "mean": 110.5,
+          "min": 18.0,
+          "p50": 73.0,
+          "p90": 302.1,
+          "p95": 362.95
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 1104.0,
+          "mean": 855.143,
+          "min": 445.0,
+          "p50": 900.5,
+          "p90": 1072.3,
+          "p95": 1100.75
+        },
+        "name": "Rust crate tests (0)",
+        "queue_seconds": {
+          "count": 14,
+          "max": 1186.0,
+          "mean": 161.071,
+          "min": 2.0,
+          "p50": 3.5,
+          "p90": 645.8,
+          "p95": 966.3
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 1256.0,
+          "mean": 212.786,
+          "min": 15.0,
+          "p50": 66.0,
+          "p90": 698.3,
+          "p95": 1035.65
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 1101.0,
+          "mean": 764.214,
+          "min": 387.0,
+          "p50": 768.0,
+          "p90": 1019.3,
+          "p95": 1084.75
+        },
+        "name": "Rust crate tests (1)",
+        "queue_seconds": {
+          "count": 14,
+          "max": 892.0,
+          "mean": 121.857,
+          "min": 2.0,
+          "p50": 3.0,
+          "p90": 534.7,
+          "p95": 802.3
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 961.0,
+          "mean": 173.571,
+          "min": 16.0,
+          "p50": 62.5,
+          "p90": 602.3,
+          "p95": 871.95
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 1111.0,
+          "mean": 906.429,
+          "min": 659.0,
+          "p50": 980.0,
+          "p90": 1023.4,
+          "p95": 1058.35
+        },
+        "name": "Linux Vulkan",
+        "queue_seconds": {
+          "count": 14,
+          "max": 925.0,
+          "mean": 135.357,
+          "min": 2.0,
+          "p50": 3.0,
+          "p90": 536.3,
+          "p95": 744.3
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 994.0,
+          "mean": 188.214,
+          "min": 16.0,
+          "p50": 65.0,
+          "p90": 609.0,
+          "p95": 813.95
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 15
+        },
+        "duration_seconds": {
+          "count": 15,
+          "max": 1053.0,
+          "mean": 972.2,
+          "min": 832.0,
+          "p50": 1001.0,
+          "p90": 1024.2,
+          "p95": 1036.2
+        },
+        "name": "kotlin_sdk_smoke / kotlin SDK Smoke",
+        "queue_seconds": {
+          "count": 15,
+          "max": 1146.0,
+          "mean": 234.267,
+          "min": 1.0,
+          "p50": 65.0,
+          "p90": 616.0,
+          "p95": 894.0
+        },
+        "sample_count": 15,
+        "start_delay_seconds": {
+          "count": 15,
+          "max": 1663.0,
+          "mean": 754.933,
+          "min": 281.0,
+          "p50": 650.0,
+          "p90": 1301.6,
+          "p95": 1428.5
+        },
+        "terminal_count": 2
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 867.0,
+          "mean": 841.571,
+          "min": 822.0,
+          "p50": 836.5,
+          "p90": 864.6,
+          "p95": 867.0
+        },
+        "name": "Linux CUDA slim",
+        "queue_seconds": {
+          "count": 14,
+          "max": 3214.0,
+          "mean": 425.571,
+          "min": 10.0,
+          "p50": 36.0,
+          "p90": 1103.0,
+          "p95": 1943.25
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 3284.0,
+          "mean": 478.429,
+          "min": 26.0,
+          "p50": 102.5,
+          "p90": 1175.0,
+          "p95": 2012.6
+        },
+        "terminal_count": 1
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 858.0,
+          "mean": 635.429,
+          "min": 263.0,
+          "p50": 667.5,
+          "p90": 823.2,
+          "p95": 848.25
+        },
+        "name": "Rust crate tests (3)",
+        "queue_seconds": {
+          "count": 14,
+          "max": 104.0,
+          "mean": 22.857,
+          "min": 2.0,
+          "p50": 7.5,
+          "p90": 82.3,
+          "p95": 99.45
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 173.0,
+          "mean": 74.571,
+          "min": 16.0,
+          "p50": 66.0,
+          "p90": 115.9,
+          "p95": 137.25
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 859.0,
+          "mean": 642.5,
+          "min": 362.0,
+          "p50": 666.5,
+          "p90": 820.9,
+          "p95": 835.6
+        },
+        "name": "Rust crate tests (2)",
+        "queue_seconds": {
+          "count": 14,
+          "max": 1250.0,
+          "mean": 154.643,
+          "min": 2.0,
+          "p50": 6.0,
+          "p90": 422.8,
+          "p95": 720.9
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 1320.0,
+          "mean": 206.357,
+          "min": 22.0,
+          "p50": 62.5,
+          "p90": 494.8,
+          "p95": 790.25
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 16
+        },
+        "duration_seconds": {
+          "count": 16,
+          "max": 860.0,
+          "mean": 378.438,
+          "min": 177.0,
+          "p50": 328.0,
+          "p90": 591.0,
+          "p95": 734.75
+        },
+        "name": "macOS CPU",
+        "queue_seconds": {
+          "count": 16,
+          "max": 1190.0,
+          "mean": 126.188,
+          "min": 2.0,
+          "p50": 9.0,
+          "p90": 359.5,
+          "p95": 659.75
+        },
+        "sample_count": 16,
+        "start_delay_seconds": {
+          "count": 16,
+          "max": 1260.0,
+          "mean": 178.375,
+          "min": 17.0,
+          "p50": 67.5,
+          "p90": 406.0,
+          "p95": 736.5
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 668.0,
+          "mean": 509.143,
+          "min": 354.0,
+          "p50": 518.0,
+          "p90": 636.4,
+          "p95": 667.35
+        },
+        "name": "macOS unit tests",
+        "queue_seconds": {
+          "count": 14,
+          "max": 914.0,
+          "mean": 176.071,
+          "min": 2.0,
+          "p50": 6.5,
+          "p90": 671.0,
+          "p95": 832.1
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 1617.0,
+          "mean": 745.714,
+          "min": 198.0,
+          "p50": 730.0,
+          "p90": 1290.1,
+          "p95": 1436.3
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 15
+        },
+        "duration_seconds": {
+          "count": 15,
+          "max": 596.0,
+          "mean": 537.733,
+          "min": 470.0,
+          "p50": 542.0,
+          "p90": 564.2,
+          "p95": 574.3
+        },
+        "name": "rust_sdk_smoke / rust SDK Smoke",
+        "queue_seconds": {
+          "count": 15,
+          "max": 1237.0,
+          "mean": 300.733,
+          "min": 1.0,
+          "p50": 21.0,
+          "p90": 990.2,
+          "p95": 1161.4
+        },
+        "sample_count": 15,
+        "start_delay_seconds": {
+          "count": 15,
+          "max": 1779.0,
+          "mean": 821.4,
+          "min": 280.0,
+          "p50": 552.0,
+          "p90": 1614.0,
+          "p95": 1685.9
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 16
+        },
+        "duration_seconds": {
+          "count": 16,
+          "max": 843.0,
+          "mean": 394.75,
+          "min": 238.0,
+          "p50": 431.5,
+          "p90": 464.5,
+          "p95": 564.75
+        },
+        "name": "Linux CPU",
+        "queue_seconds": {
+          "count": 16,
+          "max": 450.0,
+          "mean": 59.5,
+          "min": 2.0,
+          "p50": 6.0,
+          "p90": 218.5,
+          "p95": 401.25
+        },
+        "sample_count": 16,
+        "start_delay_seconds": {
+          "count": 16,
+          "max": 529.0,
+          "mean": 111.688,
+          "min": 16.0,
+          "p50": 62.5,
+          "p90": 288.0,
+          "p95": 473.5
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 347.0,
+          "mean": 297.286,
+          "min": 97.0,
+          "p50": 313.5,
+          "p90": 331.7,
+          "p95": 337.25
+        },
+        "name": "inference_smoke_tests / Skippy Inference Smoke Tests",
+        "queue_seconds": {
+          "count": 14,
+          "max": 797.0,
+          "mean": 169.857,
+          "min": 2.0,
+          "p50": 20.5,
+          "p90": 589.6,
+          "p95": 718.35
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 1339.0,
+          "mean": 705.286,
+          "min": 287.0,
+          "p50": 602.5,
+          "p90": 1248.9,
+          "p95": 1309.1
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 16
+        },
+        "duration_seconds": {
+          "count": 16,
+          "max": 380.0,
+          "mean": 230.188,
+          "min": 33.0,
+          "p50": 233.5,
+          "p90": 267.5,
+          "p95": 302.0
+        },
+        "name": "Linux client-auto boot test",
+        "queue_seconds": {
+          "count": 16,
+          "max": 2752.0,
+          "mean": 392.812,
+          "min": 2.0,
+          "p50": 8.0,
+          "p90": 973.5,
+          "p95": 1554.25
+        },
+        "sample_count": 16,
+        "start_delay_seconds": {
+          "count": 16,
+          "max": 3050.0,
+          "mean": 899.562,
+          "min": 286.0,
+          "p50": 663.5,
+          "p90": 1582.5,
+          "p95": 2035.25
+        },
+        "terminal_count": 1
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 290.0,
+          "mean": 236.643,
+          "min": 69.0,
+          "p50": 243.0,
+          "p90": 282.1,
+          "p95": 285.45
+        },
+        "name": "two_node_split_smoke / Scripted Binary Smoke",
+        "queue_seconds": {
+          "count": 14,
+          "max": 762.0,
+          "mean": 110.5,
+          "min": 1.0,
+          "p50": 33.0,
+          "p90": 194.2,
+          "p95": 401.9
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 1304.0,
+          "mean": 645.929,
+          "min": 286.0,
+          "p50": 546.0,
+          "p90": 970.5,
+          "p95": 1111.6
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 298.0,
+          "mean": 240.857,
+          "min": 67.0,
+          "p50": 249.0,
+          "p90": 272.9,
+          "p95": 283.05
+        },
+        "name": "two_node_client_serving_smoke / Scripted Binary Smoke",
+        "queue_seconds": {
+          "count": 14,
+          "max": 1159.0,
+          "mean": 184.857,
+          "min": 2.0,
+          "p50": 37.0,
+          "p90": 396.9,
+          "p95": 666.95
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 1676.0,
+          "mean": 720.286,
+          "min": 286.0,
+          "p50": 623.5,
+          "p90": 983.7,
+          "p95": 1241.8
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 16
+        },
+        "duration_seconds": {
+          "count": 16,
+          "max": 262.0,
+          "mean": 220.625,
+          "min": 115.0,
+          "p50": 225.0,
+          "p90": 255.5,
+          "p95": 258.25
+        },
+        "name": "Linux tests (protocol)",
+        "queue_seconds": {
+          "count": 16,
+          "max": 2635.0,
+          "mean": 419.875,
+          "min": 1.0,
+          "p50": 8.0,
+          "p90": 1129.5,
+          "p95": 1567.75
+        },
+        "sample_count": 16,
+        "start_delay_seconds": {
+          "count": 16,
+          "max": 2933.0,
+          "mean": 926.625,
+          "min": 286.0,
+          "p50": 626.0,
+          "p90": 1659.0,
+          "p95": 2048.75
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 16
+        },
+        "duration_seconds": {
+          "count": 16,
+          "max": 195.0,
+          "mean": 157.5,
+          "min": 139.0,
+          "p50": 156.5,
+          "p90": 167.0,
+          "p95": 175.5
+        },
+        "name": "Linux tests (skippy-smoke)",
+        "queue_seconds": {
+          "count": 16,
+          "max": 1767.0,
+          "mean": 368.562,
+          "min": 2.0,
+          "p50": 38.5,
+          "p90": 1079.5,
+          "p95": 1264.5
+        },
+        "sample_count": 16,
+        "start_delay_seconds": {
+          "count": 16,
+          "max": 2065.0,
+          "mean": 875.312,
+          "min": 286.0,
+          "p50": 729.0,
+          "p90": 1609.0,
+          "p95": 1726.75
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 20
+        },
+        "duration_seconds": {
+          "count": 20,
+          "max": 169.0,
+          "mean": 156.4,
+          "min": 153.0,
+          "p50": 155.5,
+          "p90": 158.1,
+          "p95": 159.5
+        },
+        "name": "Runner image / ARC arm64",
+        "queue_seconds": {
+          "count": 20,
+          "max": 10.0,
+          "mean": 8.8,
+          "min": 8.0,
+          "p50": 9.0,
+          "p90": 9.1,
+          "p95": 10.0
+        },
+        "sample_count": 20,
+        "start_delay_seconds": {
+          "count": 20,
+          "max": 90.0,
+          "mean": 62.45,
+          "min": 21.0,
+          "p50": 66.5,
+          "p90": 88.1,
+          "p95": 89.05
+        },
+        "terminal_count": 3
+      },
+      {
+        "conclusions": {
+          "success": 20
+        },
+        "duration_seconds": {
+          "count": 20,
+          "max": 114.0,
+          "mean": 106.0,
+          "min": 91.0,
+          "p50": 108.5,
+          "p90": 112.1,
+          "p95": 113.05
+        },
+        "name": "Runner image / GitHub-hosted public",
+        "queue_seconds": {
+          "count": 20,
+          "max": 565.0,
+          "mean": 41.0,
+          "min": 2.0,
+          "p50": 7.5,
+          "p90": 24.8,
+          "p95": 178.35
+        },
+        "sample_count": 20,
+        "start_delay_seconds": {
+          "count": 20,
+          "max": 635.0,
+          "mean": 94.65,
+          "min": 16.0,
+          "p50": 62.5,
+          "p90": 104.7,
+          "p95": 256.9
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 67.0,
+          "mean": 46.0,
+          "min": 33.0,
+          "p50": 45.0,
+          "p90": 60.7,
+          "p95": 65.05
+        },
+        "name": "HuggingFace download smoke / HuggingFace download smoke",
+        "queue_seconds": {
+          "count": 14,
+          "max": 587.0,
+          "mean": 56.643,
+          "min": 3.0,
+          "p50": 8.5,
+          "p90": 84.1,
+          "p95": 274.35
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 657.0,
+          "mean": 108.357,
+          "min": 19.0,
+          "p50": 71.5,
+          "p90": 111.0,
+          "p95": 307.95
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 20
+        },
+        "duration_seconds": {
+          "count": 20,
+          "max": 65.0,
+          "mean": 40.55,
+          "min": 11.0,
+          "p50": 46.0,
+          "p90": 56.1,
+          "p95": 57.4
+        },
+        "name": "changes",
+        "queue_seconds": {
+          "count": 20,
+          "max": 48.0,
+          "mean": 7.6,
+          "min": 1.0,
+          "p50": 2.0,
+          "p90": 20.6,
+          "p95": 27.1
+        },
+        "sample_count": 20,
+        "start_delay_seconds": {
+          "count": 20,
+          "max": 54.0,
+          "mean": 12.95,
+          "min": 2.0,
+          "p50": 9.0,
+          "p90": 23.3,
+          "p95": 27.4
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 20
+        },
+        "duration_seconds": {
+          "count": 20,
+          "max": 17.0,
+          "mean": 14.35,
+          "min": 12.0,
+          "p50": 14.0,
+          "p90": 16.0,
+          "p95": 16.05
+        },
+        "name": "Runner image / ARC amd64",
+        "queue_seconds": {
+          "count": 20,
+          "max": 2531.0,
+          "mean": 780.6,
+          "min": 10.0,
+          "p50": 169.0,
+          "p90": 2157.9,
+          "p95": 2355.25
+        },
+        "sample_count": 20,
+        "start_delay_seconds": {
+          "count": 20,
+          "max": 2585.0,
+          "mean": 834.25,
+          "min": 23.0,
+          "p50": 238.5,
+          "p90": 2227.0,
+          "p95": 2424.45
+        },
+        "terminal_count": 1
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 7.0,
+          "mean": 3.857,
+          "min": 2.0,
+          "p50": 3.5,
+          "p90": 5.0,
+          "p95": 5.7
+        },
+        "name": "macOS ROCm",
+        "queue_seconds": {
+          "count": 14,
+          "max": 918.0,
+          "mean": 166.214,
+          "min": 2.0,
+          "p50": 10.0,
+          "p90": 660.0,
+          "p95": 758.1
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 988.0,
+          "mean": 219.071,
+          "min": 17.0,
+          "p50": 72.0,
+          "p90": 696.5,
+          "p95": 801.45
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 5.0,
+          "mean": 3.857,
+          "min": 2.0,
+          "p50": 4.0,
+          "p90": 5.0,
+          "p95": 5.0
+        },
+        "name": "macOS CUDA",
+        "queue_seconds": {
+          "count": 14,
+          "max": 932.0,
+          "mean": 74.429,
+          "min": 2.0,
+          "p50": 3.5,
+          "p90": 38.0,
+          "p95": 356.75
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 1002.0,
+          "mean": 127.286,
+          "min": 16.0,
+          "p50": 66.0,
+          "p90": 106.4,
+          "p95": 426.1
+        },
+        "terminal_count": 0
+      },
+      {
+        "conclusions": {
+          "success": 14
+        },
+        "duration_seconds": {
+          "count": 14,
+          "max": 5.0,
+          "mean": 3.857,
+          "min": 2.0,
+          "p50": 4.0,
+          "p90": 5.0,
+          "p95": 5.0
+        },
+        "name": "macOS Vulkan",
+        "queue_seconds": {
+          "count": 14,
+          "max": 878.0,
+          "mean": 72.143,
+          "min": 3.0,
+          "p50": 4.0,
+          "p90": 56.9,
+          "p95": 357.35
+        },
+        "sample_count": 14,
+        "start_delay_seconds": {
+          "count": 14,
+          "max": 947.0,
+          "mean": 125.0,
+          "min": 16.0,
+          "p50": 68.5,
+          "p90": 90.4,
+          "p95": 390.6
+        },
+        "terminal_count": 0
+      }
+    ],
+    "critical_finish_candidates": [
+      {
+        "name": "swift_sdk_smoke / swift SDK Smoke",
+        "share": 0.4,
+        "terminal_count": 8
+      },
+      {
+        "name": "Runner image / ARC arm64",
+        "share": 0.15,
+        "terminal_count": 3
+      },
+      {
+        "name": "Windows CUDA",
+        "share": 0.1,
+        "terminal_count": 2
+      },
+      {
+        "name": "kotlin_sdk_smoke / kotlin SDK Smoke",
+        "share": 0.1,
+        "terminal_count": 2
+      },
+      {
+        "name": "Runner image / ARC amd64",
+        "share": 0.05,
+        "terminal_count": 1
+      },
+      {
+        "name": "Windows CPU",
+        "share": 0.05,
+        "terminal_count": 1
+      },
+      {
+        "name": "Linux client-auto boot test",
+        "share": 0.05,
+        "terminal_count": 1
+      },
+      {
+        "name": "Linux ROCm slim",
+        "share": 0.05,
+        "terminal_count": 1
+      },
+      {
+        "name": "Linux CUDA slim",
+        "share": 0.05,
+        "terminal_count": 1
+      }
+    ],
+    "duration_seconds": {
+      "count": 471,
+      "max": 3145.0,
+      "mean": 529.229,
+      "min": 2.0,
+      "p50": 298.0,
+      "p90": 1400.0,
+      "p95": 1558.5
+    },
+    "queue_seconds": {
+      "count": 471,
+      "max": 3214.0,
+      "mean": 172.856,
+      "min": 1.0,
+      "p50": 8.0,
+      "p90": 647.0,
+      "p95": 989.5
+    },
+    "sample_count": 471,
+    "slowest_observations": [
+      {
+        "conclusion": "success",
+        "duration_seconds": 3145.0,
+        "job_id": 90226220305,
+        "job_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30344045951/job/90226220305",
+        "name": "Windows CUDA",
+        "queue_seconds": 231.0,
+        "run_attempt": 1,
+        "run_id": 30344045951,
+        "run_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30344045951",
+        "runner_labels": [
+          "windows-2022"
+        ],
+        "start_delay_seconds": 301.0
+      },
+      {
+        "conclusion": "success",
+        "duration_seconds": 2684.0,
+        "job_id": 90226220362,
+        "job_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30344045951/job/90226220362",
+        "name": "Windows ROCm",
+        "queue_seconds": 548.0,
+        "run_attempt": 1,
+        "run_id": 30344045951,
+        "run_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30344045951",
+        "runner_labels": [
+          "windows-2022"
+        ],
+        "start_delay_seconds": 618.0
+      },
+      {
+        "conclusion": "success",
+        "duration_seconds": 2490.0,
+        "job_id": 90522879634,
+        "job_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30435682397/job/90522879634",
+        "name": "Windows CPU",
+        "queue_seconds": 3.0,
+        "run_attempt": 1,
+        "run_id": 30435682397,
+        "run_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30435682397",
+        "runner_labels": [
+          "windows-2022"
+        ],
+        "start_delay_seconds": 38.0
+      },
+      {
+        "conclusion": "success",
+        "duration_seconds": 2197.0,
+        "job_id": 90522879591,
+        "job_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30435682397/job/90522879591",
+        "name": "Windows CUDA",
+        "queue_seconds": 3.0,
+        "run_attempt": 1,
+        "run_id": 30435682397,
+        "run_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30435682397",
+        "runner_labels": [
+          "windows-2022"
+        ],
+        "start_delay_seconds": 38.0
+      },
+      {
+        "conclusion": "success",
+        "duration_seconds": 2190.0,
+        "job_id": 90522879567,
+        "job_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30435682397/job/90522879567",
+        "name": "Windows ROCm",
+        "queue_seconds": 3.0,
+        "run_attempt": 1,
+        "run_id": 30435682397,
+        "run_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30435682397",
+        "runner_labels": [
+          "windows-2022"
+        ],
+        "start_delay_seconds": 38.0
+      },
+      {
+        "conclusion": "success",
+        "duration_seconds": 1945.0,
+        "job_id": 90465318251,
+        "job_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30416902770/job/90465318251",
+        "name": "Windows CUDA",
+        "queue_seconds": 63.0,
+        "run_attempt": 1,
+        "run_id": 30416902770,
+        "run_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30416902770",
+        "runner_labels": [
+          "windows-2022"
+        ],
+        "start_delay_seconds": 77.0
+      },
+      {
+        "conclusion": "success",
+        "duration_seconds": 1902.0,
+        "job_id": 90409838809,
+        "job_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30399212634/job/90409838809",
+        "name": "Windows ROCm",
+        "queue_seconds": 107.0,
+        "run_attempt": 1,
+        "run_id": 30399212634,
+        "run_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30399212634",
+        "runner_labels": [
+          "windows-2022"
+        ],
+        "start_delay_seconds": 161.0
+      },
+      {
+        "conclusion": "success",
+        "duration_seconds": 1895.0,
+        "job_id": 90409838754,
+        "job_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30399212634/job/90409838754",
+        "name": "Windows CUDA",
+        "queue_seconds": 2.0,
+        "run_attempt": 1,
+        "run_id": 30399212634,
+        "run_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30399212634",
+        "runner_labels": [
+          "windows-2022"
+        ],
+        "start_delay_seconds": 56.0
+      },
+      {
+        "conclusion": "success",
+        "duration_seconds": 1838.0,
+        "job_id": 90472166252,
+        "job_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30419140040/job/90472166252",
+        "name": "Windows CUDA",
+        "queue_seconds": 2.0,
+        "run_attempt": 1,
+        "run_id": 30419140040,
+        "run_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30419140040",
+        "runner_labels": [
+          "windows-2022"
+        ],
+        "start_delay_seconds": 50.0
+      },
+      {
+        "conclusion": "success",
+        "duration_seconds": 1832.0,
+        "job_id": 90240122010,
+        "job_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30348390498/job/90240122010",
+        "name": "Windows ROCm",
+        "queue_seconds": 4.0,
+        "run_attempt": 1,
+        "run_id": 30348390498,
+        "run_url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30348390498",
+        "runner_labels": [
+          "windows-2022"
+        ],
+        "start_delay_seconds": 71.0
+      }
+    ],
+    "start_delay_seconds": {
+      "count": 471,
+      "max": 3284.0,
+      "mean": 374.223,
+      "min": 2.0,
+      "p50": 88.0,
+      "p90": 994.0,
+      "p95": 1403.5
+    }
+  },
+  "runs": [
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 4,
+      "head_branch": "codex/release-composed-smoke-artifact",
+      "head_sha": "eda9c348ebcfcd9a73d834c8eabc7784e4e0f1c2",
+      "id": 30470003625,
+      "longest_job": "Runner image / ARC arm64",
+      "longest_job_seconds": 156.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 17,
+      "terminal_job": "Runner image / ARC arm64",
+      "title": "Fix release inference smoke artifact composition",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30470003625",
+      "wall_seconds": 235.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 4,
+      "head_branch": "codex/release-composed-smoke-artifact",
+      "head_sha": "eda9c348ebcfcd9a73d834c8eabc7784e4e0f1c2",
+      "id": 30469571715,
+      "longest_job": "Runner image / ARC arm64",
+      "longest_job_seconds": 155.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 17,
+      "terminal_job": "Runner image / ARC arm64",
+      "title": "Fix release inference smoke artifact composition",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30469571715",
+      "wall_seconds": 215.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 4,
+      "head_branch": "codex/release-host-import-python",
+      "head_sha": "e7a7dbeff2eca7c3f16fb972c49e64bff5050236",
+      "id": 30468256564,
+      "longest_job": "Runner image / ARC arm64",
+      "longest_job_seconds": 154.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 17,
+      "terminal_job": "Runner image / ARC amd64",
+      "title": "Fix release host dependency verifier invocation",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30468256564",
+      "wall_seconds": 400.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "codex/build-unification-foundation",
+      "head_sha": "c594ab435576e84a13cda19ff8101a11b8351b66",
+      "id": 30435682397,
+      "longest_job": "Windows CPU",
+      "longest_job_seconds": 2490.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "Windows CPU",
+      "title": "task: unify release hosts, native runtimes, and product bundles",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30435682397",
+      "wall_seconds": 2531.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "feat/laguna-certification",
+      "head_sha": "6ee85338063f3968285777064360b0cce31bfb97",
+      "id": 30419140040,
+      "longest_job": "Windows CUDA",
+      "longest_job_seconds": 1838.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "Windows CUDA",
+      "title": "feat(skippy): add Poolside Laguna staged-runtime candidate",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30419140040",
+      "wall_seconds": 1889.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "codex/inkling-q2-skippy",
+      "head_sha": "f6f5adad42c9abd4113108882d0b47cd00df3c08",
+      "id": 30416902770,
+      "longest_job": "Windows CUDA",
+      "longest_job_seconds": 1945.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "swift_sdk_smoke / swift SDK Smoke",
+      "title": "Add Inkling Q2 staged runtime and certify text split serving",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30416902770",
+      "wall_seconds": 2223.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "fix/skippy-hybrid-verify-recovery",
+      "head_sha": "0abff1a25f336f9135e53843097dec42b931191b",
+      "id": 30416288428,
+      "longest_job": "Windows CUDA",
+      "longest_job_seconds": 1675.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "Windows CUDA",
+      "title": "skippy: recover hybrid speculative windows and orphaned lanes",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30416288428",
+      "wall_seconds": 1757.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "agent/refresh-llama-patch-queue",
+      "head_sha": "a32fc98e06f94cbcb127f6e0d0e166c2e225f1b8",
+      "id": 30406445718,
+      "longest_job": "Linux ROCm slim",
+      "longest_job_seconds": 1448.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "swift_sdk_smoke / swift SDK Smoke",
+      "title": "Refresh llama.cpp upstream patch queue",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30406445718",
+      "wall_seconds": 1789.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "agent/refresh-llama-patch-queue",
+      "head_sha": "61e67fe992c949b06470d6713abaaade7b691d53",
+      "id": 30403101741,
+      "longest_job": "Windows CUDA",
+      "longest_job_seconds": 1650.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "swift_sdk_smoke / swift SDK Smoke",
+      "title": "Refresh llama.cpp upstream patch queue",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30403101741",
+      "wall_seconds": 2101.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 19,
+      "head_branch": "revert-1099-agent/refresh-llama-patch-queue",
+      "head_sha": "b0e2a21e8c6ae932341d81c9e2b0c2aeb680c0ef",
+      "id": 30399212634,
+      "longest_job": "Windows ROCm",
+      "longest_job_seconds": 1902.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 10,
+      "terminal_job": "Linux client-auto boot test",
+      "title": "Revert \"Refresh llama.cpp upstream patch queue\"",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30399212634",
+      "wall_seconds": 3290.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "codex/inkling-q2-skippy",
+      "head_sha": "19653da20721d287b8856dc56eca097d3868fd83",
+      "id": 30397484523,
+      "longest_job": "Linux ROCm slim",
+      "longest_job_seconds": 1442.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "Linux ROCm slim",
+      "title": "Add Inkling Q2 staged runtime and certify text split serving",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30397484523",
+      "wall_seconds": 1461.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 21,
+      "head_branch": "chore/code-quality-review",
+      "head_sha": "3770a3ef5955f9f25a781a1615ea6cdc4c71f141",
+      "id": 30388836882,
+      "longest_job": "swift_sdk_smoke / swift SDK Smoke",
+      "longest_job_seconds": 1544.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 4,
+      "terminal_job": "swift_sdk_smoke / swift SDK Smoke",
+      "title": "chore(code-quality): generalized code-quality refactoring",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30388836882",
+      "wall_seconds": 1778.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "codex/inkling-q2-skippy",
+      "head_sha": "19653da20721d287b8856dc56eca097d3868fd83",
+      "id": 30387256890,
+      "longest_job": "Windows CUDA",
+      "longest_job_seconds": 1817.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "swift_sdk_smoke / swift SDK Smoke",
+      "title": "Add Inkling Q2 staged runtime and certify text split serving",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30387256890",
+      "wall_seconds": 2086.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 4,
+      "head_branch": "codex/canonical-homebrew-tap",
+      "head_sha": "66f946e4e70d187ec73d84b9a6e9cd2dda14e251",
+      "id": 30387136356,
+      "longest_job": "Runner image / ARC arm64",
+      "longest_job_seconds": 159.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 17,
+      "terminal_job": "Runner image / ARC arm64",
+      "title": "Document canonical Homebrew tap",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30387136356",
+      "wall_seconds": 227.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 12,
+      "head_branch": "codex/rename-node-sdk-npm-scope",
+      "head_sha": "da0b68c53b0906aaa68ab5f9bc9cff16f02a6d37",
+      "id": 30380850230,
+      "longest_job": "swift_sdk_smoke / swift SDK Smoke",
+      "longest_job_seconds": 1449.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 10,
+      "terminal_job": "swift_sdk_smoke / swift SDK Smoke",
+      "title": "Rename the Node SDK npm package scope",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30380850230",
+      "wall_seconds": 1898.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "fix/skippy-hybrid-verify-recovery",
+      "head_sha": "1d3ee4a065d820603d5343abcefbde96182ea005",
+      "id": 30351493597,
+      "longest_job": "Linux ROCm slim",
+      "longest_job_seconds": 1518.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "swift_sdk_smoke / swift SDK Smoke",
+      "title": "skippy: recover hybrid speculative windows and orphaned lanes",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30351493597",
+      "wall_seconds": 2210.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "feat/laguna-certification",
+      "head_sha": "28e66d1562cd0f5c6bcd3f7c6d064cfd703252c7",
+      "id": 30351368311,
+      "longest_job": "Linux ROCm slim",
+      "longest_job_seconds": 1532.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "swift_sdk_smoke / swift SDK Smoke",
+      "title": "feat(skippy): add Poolside Laguna staged-runtime candidate",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30351368311",
+      "wall_seconds": 2096.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "feat/laguna-certification",
+      "head_sha": "181360e00b51a7cdf5e08e739fe83fd8eda94358",
+      "id": 30348404840,
+      "longest_job": "Windows CUDA",
+      "longest_job_seconds": 1810.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "kotlin_sdk_smoke / kotlin SDK Smoke",
+      "title": "feat(skippy): add Poolside Laguna staged-runtime candidate",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30348404840",
+      "wall_seconds": 2330.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "fix/skippy-hybrid-verify-recovery",
+      "head_sha": "1d3ee4a065d820603d5343abcefbde96182ea005",
+      "id": 30348390498,
+      "longest_job": "Windows ROCm",
+      "longest_job_seconds": 1832.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "kotlin_sdk_smoke / kotlin SDK Smoke",
+      "title": "skippy: recover hybrid speculative windows and orphaned lanes",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30348390498",
+      "wall_seconds": 2658.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    },
+    {
+      "attempt": 1,
+      "conclusion": "success",
+      "event": "pull_request",
+      "executed_job_count": 31,
+      "head_branch": "codex/inkling-q2-skippy",
+      "head_sha": "976c30152492b96b7181f431a47864215bf7627e",
+      "id": 30344045951,
+      "longest_job": "Windows CUDA",
+      "longest_job_seconds": 3145.0,
+      "queue_seconds": 0.0,
+      "skipped_job_count": 1,
+      "terminal_job": "Linux CUDA slim",
+      "title": "Add Inkling Q2 staged runtime and certify text split serving",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/actions/runs/30344045951",
+      "wall_seconds": 4141.0,
+      "workflow": "PR Builds",
+      "workflow_timing_excluded": false
+    }
+  ],
+  "schema_version": 1,
+  "selection": {
+    "included_run_count": 20,
+    "requested_status": "success",
+    "seen_run_count": 20,
+    "skipped_runs": {},
+    "workflow_timing_excluded_reruns": 0
+  },
+  "source": {
+    "description": "Mesh-LLM/mesh-llm:30470003625,30469571715,30468256564,30435682397,30419140040,30416902770,30416288428,30406445718,30403101741,30399212634,30397484523,30388836882,30387256890,30387136356,30380850230,30351493597,30351368311,30348404840,30348390498,30344045951",
+    "kind": "github",
+    "repository": "Mesh-LLM/mesh-llm",
+    "workflow": null
+  },
+  "workflow": {
+    "queue_seconds": {
+      "count": 20,
+      "max": 0.0,
+      "mean": 0.0,
+      "min": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "p95": 0.0
+    },
+    "wall_seconds": {
+      "count": 20,
+      "max": 4141.0,
+      "mean": 1865.75,
+      "min": 215.0,
+      "p50": 1992.0,
+      "p90": 2721.2,
+      "p95": 3332.55
+    }
+  }
+}

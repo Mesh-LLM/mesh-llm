@@ -57,10 +57,11 @@ prebuilt verifier for the immutable host instead of compiling workspace code.
 `ci.yml` applies the same executable-product rule to trusted main validation.
 Linux and macOS build immutable release-profile hosts and separately packaged
 CPU or Metal runtimes, then upload complete product-v2 trees from
-composition-only jobs. Linux CUDA, ROCm, and Vulkan rows download the same
-Linux host, build only one selected runtime, and compose a product through the
-shared action. SDK consumers reuse the producer's adjacent runtime and fail if
-CI would silently rebuild it. Windows likewise builds one immutable
+composition-only jobs. Linux CUDA, ROCm, and Vulkan each use an independent
+runtime producer plus a thin composer that downloads the same immutable Linux
+host; no backend waits on a matrix-wide fan-in. SDK consumers reuse the
+producer's adjacent runtime and fail if CI would silently rebuild it. Windows
+likewise builds one immutable
 release-profile host, independent CPU/CUDA/ROCm/Vulkan runtime inputs, and
 composition-only products. Broad main Rust changes exercise the Windows CPU
 product; Windows GPU products remain limited to GPU/backend inputs or manual
@@ -68,9 +69,9 @@ dispatch. Every composed backend product requires `runtime list` plus
 no-driver client readiness; hosted GPU rows neither inject a driver stub nor
 skip startup because no device is present.
 
-`pr_builds.yml` uses the same split producer/composer shape for Linux CPU and
-macOS Metal products while retaining debug-profile hosts for lightweight PR
-iteration. Windows broad-Rust validation stays at lightweight Cargo checks;
+`pr_builds.yml` uses the same split producer/composer shape for Linux CPU/GPU
+and macOS Metal products while retaining debug-profile hosts for lightweight
+PR iteration. Windows broad-Rust validation stays at lightweight Cargo checks;
 the debug host plus CPU or GPU runtime/product graph runs only for its
 platform/backend input or manual dispatch. Unsupported macOS CUDA, ROCm, and
 Vulkan combinations are omitted rather than emitted as no-op jobs.
@@ -87,8 +88,12 @@ Local actions:
   permission is derived from the same typed trust decision.
 - `.github/actions/configure-sccache-gha` exports ephemeral Actions cache
   credentials to the baked `sccache`, permits Depot WebDAV only for an explicit
-  trusted call, and uses disk-only storage if a future pull-request trust
-  context is ever evaluated on Depot.
+  trusted call, uses disk-only storage if a future pull-request trust context is
+  ever evaluated on Depot, and resets counters after configuring the server.
+- `.github/actions/capture-sccache-stats` validates and uploads one
+  machine-readable sccache evidence artifact per instrumented job or matrix
+  row. Evidence is retained for 14 days so cold/warm samples span the configured
+  Depot cache-retention window.
 - `.github/actions/prepare-host-input` owns Unix neutral-host build, optional
   release attestation, import-policy verification, and checksumming.
 - `.github/actions/prepare-windows-host-input` owns the equivalent Windows
@@ -100,6 +105,10 @@ Local actions:
   product-v2 tree without compiling, and runs CLI/client readiness.
 - `.github/actions/restore-smoke-inputs` owns producer artifact staging and
   model restoration for smoke consumers.
+- `.github/actions/restore-windows-abi-cache` owns the exact Windows CPU,
+  CUDA, ROCm, and Vulkan ABI cache identity shared by the trusted warmer and
+  PR/main/release runtime producers. Architecture sets and toolchain versions
+  are compatibility boundaries; the action never uses restore prefixes.
 - `.github/actions/setup-windows-rocm-sdk` owns reusable Windows ROCm setup.
 
 Routing and test-planning scripts:
@@ -112,6 +121,9 @@ Routing and test-planning scripts:
   workflow-owned test allowlist.
 - `scripts/test-portable.sh` owns the portable non-Cargo test aggregate used by
   the local `test-all` path.
+- `scripts/summarize-sccache-stats.py` aggregates downloaded sccache JSON
+  evidence offline and can enforce the migration hit-rate threshold without
+  GitHub or network access.
 
 ## Runner and image contract
 

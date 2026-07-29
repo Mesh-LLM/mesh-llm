@@ -67,8 +67,8 @@ jobs:
         id: compute
         with:
           event_name: ${{ github.event_name }}
-          base_sha: ${{ github.event.pull_request.base.sha || '' }}
-          head_sha: ${{ github.event.pull_request.head.sha || '' }}
+          base_sha: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
 
   ci-consistency:
     name: CI consistency
@@ -89,6 +89,22 @@ jobs:
         run: cargo run -p xtask -- repo-consistency ci-crate-lists
       - name: Check publish crate-chain drift
         run: cargo run -p xtask -- repo-consistency publish-crates
+
+  ci-contract:
+    name: CI contract
+    needs: changes
+    runs-on: ${{ needs.changes.outputs.runner_4 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # actionlint
+        with:
+          tool: actionlint@1.7.12
+      - name: Validate GitHub Actions
+        run: actionlint -config-file .github/actionlint.yaml
+      - name: Test CI, packaging, and SDK contracts
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
   rust-fmt:
     needs: changes
@@ -156,14 +172,11 @@ jobs:
             fi
             cargo clippy -p "$CRATE" --all-targets -- -D warnings
           done
-      - name: Show sccache stats
-        if: ${{ always() }}
-        run: |
-          sccache --show-stats || true
-          requests="$(sccache --show-stats 2>/dev/null | awk '/Compile requests/ { print $3; exit }')"
-          if [ "${requests:-0}" = "0" ]; then
-            echo "::warning::sccache reported zero compile requests; check RUSTC_WRAPPER wiring if this was not a fully reused target cache."
-          fi
+      - name: Capture sccache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-pr-quality-clippy-${{ matrix.batch.idx }}-${{ github.run_attempt }}
 
   ui-quality:
     needs: changes
@@ -231,14 +244,15 @@ jobs:
           EOF
 
   summary:
-    needs: [changes, ci-consistency, rust-fmt, rust-clippy, ui-quality, cli-docs-sync]
-    if: always()
+    needs: [changes, ci-consistency, ci-contract, rust-fmt, rust-clippy, ui-quality, cli-docs-sync]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
       - name: Check quality gate
         env:
           CHANGES: ${{ needs.changes.result }}
           CONSISTENCY: ${{ needs.ci-consistency.result }}
+          CONTRACT: ${{ needs.ci-contract.result }}
           FMT: ${{ needs.rust-fmt.result }}
           CLIPPY: ${{ needs.rust-clippy.result }}
           UI: ${{ needs.ui-quality.result }}
@@ -251,6 +265,7 @@ jobs:
             echo "| --- | --- |"
             printf '| %s | %s |\n' "changes" "$CHANGES"
             printf '| %s | %s |\n' "ci-consistency" "$CONSISTENCY"
+            printf '| %s | %s |\n' "ci-contract" "$CONTRACT"
             printf '| %s | %s |\n' "rust-fmt" "$FMT"
             printf '| %s | %s |\n' "rust-clippy" "$CLIPPY"
             printf '| %s | %s |\n' "ui-quality" "$UI"
@@ -258,7 +273,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           FAILED=false
-          for STATUS in "$CHANGES" "$CONSISTENCY" "$FMT" "$CLIPPY" "$UI" "$CLI_DOCS"; do
+          for STATUS in "$CHANGES" "$CONSISTENCY" "$CONTRACT" "$FMT" "$CLIPPY" "$UI" "$CLI_DOCS"; do
             if [[ "$STATUS" == "failure" || "$STATUS" == "cancelled" ]]; then
               FAILED=true
             fi

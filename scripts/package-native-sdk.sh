@@ -340,7 +340,6 @@ manifest = {
     "llama_upstream_sha": "$upstream_sha" or None,
     "llama_patched_sha": "$patched_sha" or None,
     "llama_patch_digest": "$patch_digest" or None,
-    "llama_build_dir": os.path.abspath("$LLAMA_STAGE_BUILD_DIR"),
     "cuda_architectures": os.environ.get("LLAMA_STAGE_CUDA_ARCHITECTURES") or os.environ.get("SKIPPY_CUDA_ARCHITECTURES"),
     "amdgpu_targets": os.environ.get("LLAMA_STAGE_AMDGPU_TARGETS") or os.environ.get("SKIPPY_AMDGPU_TARGETS"),
     "features": [

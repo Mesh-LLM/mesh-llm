@@ -37,13 +37,42 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         cls.cpu_product = job_section(
             cls.workflow,
             "linux_cpu_artifact",
-            "linux_targets",
+            "linux_cuda_runtime_input",
         )
-        cls.backend_products = job_section(
-            cls.workflow,
-            "linux_targets",
-            "rust_crate_tests",
-        )
+        cls.backend_runtimes = {
+            "cuda": job_section(
+                cls.workflow,
+                "linux_cuda_runtime_input",
+                "linux_cuda_product",
+            ),
+            "rocm": job_section(
+                cls.workflow,
+                "linux_rocm_runtime_input",
+                "linux_rocm_product",
+            ),
+            "vulkan": job_section(
+                cls.workflow,
+                "linux_vulkan_runtime_input",
+                "linux_vulkan_product",
+            ),
+        }
+        cls.backend_products = {
+            "cuda": job_section(
+                cls.workflow,
+                "linux_cuda_product",
+                "linux_rocm_runtime_input",
+            ),
+            "rocm": job_section(
+                cls.workflow,
+                "linux_rocm_product",
+                "linux_vulkan_runtime_input",
+            ),
+            "vulkan": job_section(
+                cls.workflow,
+                "linux_vulkan_product",
+                "linux_static_abi_input",
+            ),
+        }
         cls.macos_host = job_section(
             cls.workflow,
             "macos_host_input",
@@ -102,12 +131,13 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertIn("&& 'release' || 'debug'", self.host)
 
-        self.assertIn(
-            "github.event_name == 'workflow_dispatch' "
-            "|| needs.changes.outputs.backend_changed == 'true' "
-            "|| needs.changes.outputs.benchmarks == 'true'",
-            self.backend_products,
-        )
+        for runtime in self.backend_runtimes.values():
+            self.assertIn(
+                "github.event_name == 'workflow_dispatch' "
+                "|| needs.changes.outputs.backend_changed == 'true' "
+                "|| needs.changes.outputs.benchmarks == 'true'",
+                runtime,
+            )
 
     def test_cpu_runtime_only_runs_for_cpu_product_consumers(self) -> None:
         condition = (
@@ -134,16 +164,99 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             self.cpu_product,
         )
 
-    def test_backend_products_reuse_the_same_host_artifact(self) -> None:
-        self.assertIn("needs: [changes, linux_host_input]", self.backend_products)
-        self.assertIn("name: pr-linux-host-input", self.backend_products)
-        self.assertIn("path: host-input", self.backend_products)
-        self.assertNotIn("pr-linux-release-host-input", self.workflow)
-        self.assertIn("output_dir: product-input", self.backend_products)
-        self.assertIn(
-            "path: ${{ steps.compose.outputs.archive_path }}",
-            self.backend_products,
+    def test_backend_runtime_inputs_are_independent_producers(self) -> None:
+        artifacts = {
+            "cuda": "pr-linux-cuda-runtime-input",
+            "rocm": "pr-linux-rocm-runtime-input",
+            "vulkan": "pr-linux-vulkan-runtime-input",
+        }
+        expected = {
+            "cuda": (
+                "sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd",
+                'LLAMA_STAGE_CUDA_ARCHITECTURES: "86"',
+            ),
+            "rocm": (
+                "sha256:6b88ca9371ada2c507d6e36b71f0e0538fee378c6a5e2b39c17249b4b7e5088a",
+                "LLAMA_STAGE_AMDGPU_TARGETS: gfx1100",
+            ),
+            "vulkan": (
+                "sha256:ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80",
+                "build-stage-abi-dynamic-vulkan",
+            ),
+        }
+
+        self.assertNotIn("  linux_targets:", self.workflow)
+        for backend, runtime in self.backend_runtimes.items():
+            with self.subTest(backend=backend):
+                self.assertIn("needs: changes", runtime)
+                self.assertIn(
+                    "runs-on: ${{ needs.changes.outputs.runner_8 }}",
+                    runtime,
+                )
+                self.assertIn(expected[backend][0], runtime)
+                self.assertIn(expected[backend][1], runtime)
+                self.assertIn(
+                    "uses: ./.github/actions/prepare-native-runtime-input",
+                    runtime,
+                )
+                self.assertIn(f"backend: {backend}", runtime)
+                self.assertIn(f"name: {artifacts[backend]}", runtime)
+                self.assertIn("runtime-input/*.tar.gz", runtime)
+                self.assertIn("runtime-input/*.sha256", runtime)
+                self.assertNotIn("linux_host_input", runtime)
+                self.assertNotIn("name: pr-linux-host-input", runtime)
+                self.assertNotIn("prepare-host-input", runtime)
+                self.assertNotIn("compose-product-input", runtime)
+
+        self.assertIn("Cache Vulkan ABI build", self.backend_runtimes["vulkan"])
+        self.assertNotIn("Cache Vulkan ABI build", self.backend_runtimes["cuda"])
+        self.assertNotIn("Cache Vulkan ABI build", self.backend_runtimes["rocm"])
+
+    def test_backend_products_reuse_exact_immutable_inputs(self) -> None:
+        neutral_image = (
+            "sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d"
         )
+
+        self.assertNotIn("pr-linux-release-host-input", self.workflow)
+        for backend, product in self.backend_products.items():
+            with self.subTest(backend=backend):
+                self.assertIn(
+                    "needs: [changes, linux_host_input, "
+                    f"linux_{backend}_runtime_input]",
+                    product,
+                )
+                self.assertIn(
+                    "needs.linux_host_input.result == 'success' "
+                    f"&& needs.linux_{backend}_runtime_input.result == 'success'",
+                    product,
+                )
+                self.assertIn(
+                    "runs-on: ${{ needs.changes.outputs.runner_4 }}",
+                    product,
+                )
+                self.assertIn(neutral_image, product)
+                self.assertIn("name: pr-linux-host-input", product)
+                self.assertIn("path: host-input", product)
+                self.assertIn(
+                    f"name: pr-linux-{backend}-runtime-input",
+                    product,
+                )
+                self.assertIn("path: runtime-input", product)
+                self.assertIn(
+                    "uses: ./.github/actions/compose-product-input",
+                    product,
+                )
+                self.assertIn(f"backend: {backend}", product)
+                self.assertIn("output_dir: product-input", product)
+                self.assertIn(f"name: pr-linux-{backend}-product", product)
+                self.assertIn(
+                    "path: ${{ steps.compose.outputs.archive_path }}",
+                    product,
+                )
+                self.assertNotIn("prepare-native-runtime-input", product)
+                self.assertNotIn("configure-sccache-gha", product)
+                self.assertNotIn("LLAMA_STAGE_BUILD_DIR", product)
+                self.assertNotIn("matrix.", product)
 
     def test_cuda_runtime_uses_the_production_multiarch_image(self) -> None:
         self.assertIn(

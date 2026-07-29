@@ -3,11 +3,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP_ROOT=""
+ARTIFACT_DIR_RESULT=""
+ARTIFACT_INDEX=0
+PORTABLE=0
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 usage() {
     cat >&2 <<'EOF'
-Usage: scripts/verify-native-runtime-package.sh <artifact-dir-or-tar.gz> [...]
+Usage: scripts/verify-native-runtime-package.sh [--portable] <artifact-dir-or-tar.gz> [...]
 
 Verifies MeshLLM native runtime artifacts:
   - manifest schema and resolver fields
@@ -16,19 +19,12 @@ Verifies MeshLLM native runtime artifacts:
   - library_sha256 matches the primary library
   - Linux shared-library RUNPATH/RPATH is relocatable and resolves packaged deps
   - Windows non-system DLL imports are present in the artifact
-  - archive checksum sidecar when present
-EOF
-}
+  - required archive checksum sidecar
+  - archive paths and links cannot escape the extraction directory
 
-sha256_file() {
-    if command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "$1" | awk '{print $1}'
-    elif command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
-    else
-        echo "shasum or sha256sum is required" >&2
-        exit 1
-    fi
+--portable validates integrity, archive shape, manifest schema, paths, and
+checksums without running host-specific binary dependency probes.
+EOF
 }
 
 python_bin() {
@@ -46,25 +42,13 @@ python_bin() {
 
 verify_sidecar_checksum() {
     local archive="$1"
-    local sidecar="$archive.sha256"
-    if [[ ! -f "$sidecar" ]]; then
-        return 0
-    fi
-    local expected actual
-    expected="$(awk '{print $1}' "$sidecar")"
-    actual="$(sha256_file "$archive")"
-    if [[ "$expected" != "$actual" ]]; then
-        echo "archive checksum mismatch: $archive" >&2
-        echo "  expected: $expected" >&2
-        echo "  actual:   $actual" >&2
-        exit 1
-    fi
+    "$(python_bin)" "$SCRIPT_DIR/verify-checksum-sidecar.py" "$archive"
 }
 
 artifact_dir_for_input() {
     local input="$1"
     if [[ -d "$input" ]]; then
-        printf '%s\n' "$input"
+        ARTIFACT_DIR_RESULT="$input"
         return 0
     fi
     case "$input" in
@@ -74,21 +58,28 @@ artifact_dir_for_input() {
             exit 1
             ;;
     esac
-    verify_sidecar_checksum "$input"
+    verify_sidecar_checksum "$input" || return 1
     if [[ -z "$TMP_ROOT" ]]; then
         TMP_ROOT="$(mktemp -d)"
     fi
     local extract_dir
-    extract_dir="$TMP_ROOT/$(basename "$input" | tr -cd 'A-Za-z0-9_.-')"
+    extract_dir="$TMP_ROOT/artifact-$ARTIFACT_INDEX"
+    ARTIFACT_INDEX=$((ARTIFACT_INDEX + 1))
     mkdir -p "$extract_dir"
-    tar -C "$extract_dir" -xzf "$input"
-    local count
-    count="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-    if [[ "$count" != "1" ]]; then
+    "$(python_bin)" "$SCRIPT_DIR/safe-extract-tar.py" "$input" "$extract_dir" ||
+        return 1
+    local count entry
+    count="$(
+        find "$extract_dir" -mindepth 1 -maxdepth 1 -print |
+            wc -l |
+            tr -d ' '
+    )"
+    entry="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -print -quit)"
+    if [[ "$count" != "1" || ! -d "$entry" || -L "$entry" ]]; then
         echo "expected archive to contain one top-level artifact directory: $input" >&2
-        exit 1
+        return 1
     fi
-    find "$extract_dir" -mindepth 1 -maxdepth 1 -type d -print -quit
+    ARTIFACT_DIR_RESULT="$entry"
 }
 
 verify_artifact_dir() {
@@ -102,9 +93,48 @@ verify_artifact_dir() {
 import hashlib
 import json
 import os
+from pathlib import Path, PurePosixPath
+import re
 import sys
 
 artifact_dir, manifest_path = sys.argv[1:3]
+artifact_root = Path(artifact_dir).resolve(strict=True)
+windows_drive = re.compile(r"^[A-Za-z]:")
+
+
+def artifact_file(label, raw_path):
+    if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path:
+        raise SystemExit(f"{label} path must be a non-empty string")
+    if "\\" in raw_path:
+        raise SystemExit(
+            f"{label} path must use forward slashes inside the artifact: "
+            f"{raw_path}"
+        )
+    rel_path = PurePosixPath(raw_path)
+    if (
+        rel_path.is_absolute()
+        or windows_drive.match(raw_path)
+        or ".." in rel_path.parts
+    ):
+        raise SystemExit(
+            f"{label} path must be relative inside the artifact: {raw_path}"
+        )
+    candidate = artifact_root.joinpath(*rel_path.parts)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError:
+        raise SystemExit(f"missing {label}: {candidate}") from None
+    try:
+        resolved.relative_to(artifact_root)
+    except ValueError:
+        raise SystemExit(
+            f"{label} path resolves outside the artifact: {raw_path}"
+        ) from None
+    if not resolved.is_file():
+        raise SystemExit(f"missing {label}: {candidate}")
+    return resolved
+
+
 with open(manifest_path, encoding="utf-8") as fh:
     manifest = json.load(fh)
 
@@ -118,58 +148,150 @@ required = {
     "platform",
     "backend",
     "libraries",
+    "files",
 }
 missing = sorted(required - runtime.keys())
 if missing:
     raise SystemExit(f"missing runtime manifest field(s): {', '.join(missing)}")
+for field in ("id", "mesh_version", "skippy_abi"):
+    if not isinstance(runtime[field], str) or not runtime[field]:
+        raise SystemExit(f"runtime {field} must be a non-empty string")
 if os.path.basename(os.path.normpath(artifact_dir)) != runtime["id"]:
     raise SystemExit("artifact directory name must match runtime id")
 if not isinstance(runtime["libraries"], list) or not runtime["libraries"]:
     raise SystemExit("runtime libraries must be a non-empty list")
 platform = runtime["platform"]
-if not isinstance(platform, dict) or not platform.get("os") or not platform.get("arch"):
+if not isinstance(platform, dict):
+    raise SystemExit("runtime platform must be an object")
+runtime_os = platform.get("os")
+runtime_arch = platform.get("arch")
+if not isinstance(runtime_os, str) or not runtime_os:
     raise SystemExit("runtime platform must declare os and arch")
+if runtime_os not in {"linux", "macos", "windows"}:
+    raise SystemExit(f"unsupported runtime platform os: {runtime_os!r}")
+if not isinstance(runtime_arch, str) or not runtime_arch:
+    raise SystemExit("runtime platform must declare os and arch")
+if runtime_arch not in {"x86_64", "aarch64", "arm"}:
+    raise SystemExit(f"unsupported runtime platform arch: {runtime_arch!r}")
+target = platform.get("target")
+if not isinstance(target, str) or not target:
+    raise SystemExit("runtime platform target must be a non-empty string")
+target_contracts = {
+    "aarch64-apple-darwin": ("macos", "aarch64"),
+    "x86_64-apple-darwin": ("macos", "x86_64"),
+    "x86_64-unknown-linux-gnu": ("linux", "x86_64"),
+    "aarch64-unknown-linux-gnu": ("linux", "aarch64"),
+    "armv7-unknown-linux-gnueabihf": ("linux", "arm"),
+    "aarch64-linux-android": ("linux", "aarch64"),
+    "armv7-linux-androideabi": ("linux", "arm"),
+    "x86_64-linux-android": ("linux", "x86_64"),
+    "x86_64-pc-windows-msvc": ("windows", "x86_64"),
+}
+target_contract = target_contracts.get(target)
+if target_contract is None:
+    raise SystemExit(f"unsupported runtime platform target: {target}")
+if (runtime_os, runtime_arch) != target_contract:
+    raise SystemExit(
+        "runtime os/arch do not match target: "
+        f"{runtime_os}/{runtime_arch} != "
+        f"{target_contract[0]}/{target_contract[1]}"
+    )
 backend = runtime["backend"]
-if not isinstance(backend, dict) or not backend.get("kind"):
+if not isinstance(backend, dict):
+    raise SystemExit("runtime backend must be an object")
+backend_kind = backend.get("kind")
+if not isinstance(backend_kind, str) or not backend_kind:
     raise SystemExit("runtime backend must declare kind")
+if backend_kind not in {"cpu", "metal", "cuda", "rocm", "vulkan"}:
+    raise SystemExit(f"unsupported runtime backend kind: {backend_kind!r}")
+backend_operating_systems = {
+    "cpu": {"linux", "macos", "windows"},
+    "metal": {"macos"},
+    "cuda": {"linux", "windows"},
+    "rocm": {"linux", "windows"},
+    "vulkan": {"linux", "windows"},
+}
+if runtime_os not in backend_operating_systems[backend_kind]:
+    raise SystemExit(
+        f"runtime backend {backend_kind} is unsupported on {runtime_os}"
+    )
 
 for rel_path in runtime["libraries"]:
-    if os.path.isabs(rel_path) or ".." in rel_path.split(os.sep):
-        raise SystemExit(f"library path must be relative inside the artifact: {rel_path}")
-    path = os.path.join(artifact_dir, rel_path)
-    if not os.path.isfile(path):
-        raise SystemExit(f"missing library: {path}")
+    artifact_file("library", rel_path)
 
-files = runtime["files"] if "files" in runtime else {}
+files = runtime["files"]
 tools = runtime["tools"] if "tools" in runtime else {}
 if not isinstance(files, dict) or not isinstance(tools, dict):
     raise SystemExit("runtime files and tools must be checksum maps")
+if not files:
+    raise SystemExit("runtime files must be a non-empty checksum map")
+missing_library_checksums = [
+    rel_path
+    for rel_path in runtime["libraries"]
+    if rel_path not in files
+]
+if missing_library_checksums:
+    raise SystemExit(
+        "runtime libraries are missing file checksums: "
+        + ", ".join(missing_library_checksums)
+    )
+sha256_pattern = re.compile(r"^[0-9a-f]{64}$")
 for kind, checksums in (("file", files), ("tool", tools)):
     for rel_path, expected in checksums.items():
-        if os.path.isabs(rel_path) or ".." in rel_path.split(os.sep):
-            raise SystemExit(f"{kind} path must be relative inside the artifact: {rel_path}")
-        path = os.path.join(artifact_dir, rel_path)
-        if not os.path.isfile(path):
-            raise SystemExit(f"missing {kind}: {path}")
+        path = artifact_file(kind, rel_path)
+        if not isinstance(expected, str) or not sha256_pattern.fullmatch(
+            expected
+        ):
+            raise SystemExit(
+                f"{kind} checksum must be a canonical SHA-256 for {rel_path}"
+            )
         with open(path, "rb") as fh:
             actual = hashlib.sha256(fh.read()).hexdigest()
-        if actual != expected.removeprefix("sha256:").lower():
+        if actual != expected:
             raise SystemExit(f"{kind} checksum mismatch for {rel_path}")
-        if kind == "tool" and os.name != "nt" and not os.access(path, os.X_OK):
+        if (
+            kind == "tool"
+            and runtime_os != "windows"
+            and os.name != "nt"
+            and not os.access(path, os.X_OK)
+        ):
             raise SystemExit(f"runtime tool is not executable: {rel_path}")
 
-build = manifest.get("build") or {}
+build = manifest.get("build")
+if not isinstance(build, dict):
+    raise SystemExit("runtime build metadata must be an object")
 library_sha256 = build.get("library_sha256")
-primary_library = build.get("primary_library") or runtime["libraries"][0]
-if library_sha256:
-    primary = os.path.join(artifact_dir, primary_library)
-    with open(primary, "rb") as fh:
-        actual = hashlib.sha256(fh.read()).hexdigest()
-    if actual != library_sha256:
-        raise SystemExit(
-            f"library_sha256 mismatch for {primary_library}: {actual} != {library_sha256}"
-        )
+primary_library = build.get("primary_library")
+if not isinstance(primary_library, str) or not primary_library:
+    raise SystemExit("build.primary_library must be a non-empty string")
+if primary_library not in runtime["libraries"]:
+    raise SystemExit(
+        "build.primary_library must be declared in runtime.libraries"
+    )
+if not isinstance(library_sha256, str) or not sha256_pattern.fullmatch(
+    library_sha256
+):
+    raise SystemExit(
+        "build.library_sha256 must be a canonical SHA-256"
+    )
+if files[primary_library] != library_sha256:
+    raise SystemExit(
+        "build.library_sha256 must match runtime.files for "
+        f"{primary_library}"
+    )
+primary = artifact_file("primary library", primary_library)
+with open(primary, "rb") as fh:
+    actual = hashlib.sha256(fh.read()).hexdigest()
+if actual != library_sha256:
+    raise SystemExit(
+        f"library_sha256 mismatch for {primary_library}: "
+        f"{actual} != {library_sha256}"
+    )
 PY
+    if [[ "$PORTABLE" == "1" ]]; then
+        echo "verified portable native runtime artifact: $artifact_dir"
+        return 0
+    fi
     verify_macos_runtime_paths "$artifact_dir" "$manifest"
     verify_linux_runtime_paths "$artifact_dir" "$manifest"
     verify_windows_runtime_dependencies "$artifact_dir" "$manifest"
@@ -352,12 +474,33 @@ for rel_path in [*libraries, *tools]:
 PY
 }
 
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        --portable)
+            PORTABLE=1
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            echo "unknown argument: $1" >&2
+            usage
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
 if [[ "$#" -lt 1 ]]; then
     usage
     exit 1
 fi
 
 for input in "$@"; do
-    artifact_dir="$(artifact_dir_for_input "$input")"
-    verify_artifact_dir "$artifact_dir"
+    artifact_dir_for_input "$input"
+    verify_artifact_dir "$ARTIFACT_DIR_RESULT"
 done

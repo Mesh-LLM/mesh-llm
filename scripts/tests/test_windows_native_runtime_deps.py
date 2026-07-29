@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -113,19 +114,36 @@ class WindowsNativeRuntimeDepsTests(unittest.TestCase):
             write_pe(lib_dir / "ggml-vulkan.dll", ["vulkan-1.dll", "libstdc++-6.dll"])
             write_pe(lib_dir / "libstdc++-6.dll", ["KERNEL32.dll"])
             write_pe(lib_dir / "llama.dll", ["ggml-vulkan.dll"])
+            libraries = [
+                "lib/ggml-vulkan.dll",
+                "lib/libstdc++-6.dll",
+                "lib/llama.dll",
+            ]
+            files = {
+                path: hashlib.sha256(
+                    (artifact / path).read_bytes()
+                ).hexdigest()
+                for path in libraries
+            }
             manifest = {
                 "runtime": {
                     "id": artifact.name,
                     "mesh_version": "0.72.1",
                     "skippy_abi": "0.1.32",
-                    "platform": {"os": "windows", "arch": "x86_64"},
+                    "platform": {
+                        "os": "windows",
+                        "arch": "x86_64",
+                        "target": "x86_64-pc-windows-msvc",
+                    },
                     "backend": {"kind": "vulkan"},
-                    "libraries": [
-                        "lib/ggml-vulkan.dll",
-                        "lib/libstdc++-6.dll",
-                        "lib/llama.dll",
-                    ],
-                }
+                    "libraries": libraries,
+                    "files": files,
+                    "tools": {},
+                },
+                "build": {
+                    "primary_library": "lib/llama.dll",
+                    "library_sha256": files["lib/llama.dll"],
+                },
             }
             (artifact / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -147,22 +165,40 @@ class WindowsNativeRuntimeDepsTests(unittest.TestCase):
                     with tempfile.TemporaryDirectory() as directory:
                         artifact = (
                             pathlib.Path(directory)
-                            / "meshllm-native-runtime-test-x86_64-cpu"
+                            / "meshllm-native-runtime-darwin-x86_64-cpu"
                         )
                         lib_dir = artifact / "lib"
                         lib_dir.mkdir(parents=True)
                         (lib_dir / "llama.bin").write_bytes(b"runtime")
+                        digest = hashlib.sha256(
+                            (lib_dir / "llama.bin").read_bytes()
+                        ).hexdigest()
                         runtime = {
                             "id": artifact.name,
                             "mesh_version": "0.72.1",
                             "skippy_abi": "0.1.32",
-                            "platform": {"os": "test", "arch": "x86_64"},
+                            "platform": {
+                                "os": "macos",
+                                "arch": "x86_64",
+                                "target": "x86_64-apple-darwin",
+                            },
                             "backend": {"kind": "cpu"},
                             "libraries": ["lib/llama.bin"],
-                            field: value,
+                            "files": {"lib/llama.bin": digest},
+                            "tools": {},
                         }
+                        runtime[field] = value
                         (artifact / "manifest.json").write_text(
-                            json.dumps({"runtime": runtime}), encoding="utf-8"
+                            json.dumps(
+                                {
+                                    "runtime": runtime,
+                                    "build": {
+                                        "primary_library": "lib/llama.bin",
+                                        "library_sha256": digest,
+                                    },
+                                }
+                            ),
+                            encoding="utf-8",
                         )
 
                         result = subprocess.run(

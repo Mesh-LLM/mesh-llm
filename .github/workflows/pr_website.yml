@@ -74,7 +74,7 @@ jobs:
 
   summary:
     needs: [changes, website-build]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
       - name: Check website gate

@@ -8,6 +8,11 @@ import unittest
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCRIPT: Final = ROOT / "scripts" / "build-windows.ps1"
 PR_BUILDS: Final = ROOT / ".github" / "workflows" / "pr_builds.yml"
+CI_WORKFLOW: Final = ROOT / ".github" / "workflows" / "ci.yml"
+RELEASE_WORKFLOW: Final = ROOT / ".github" / "workflows" / "release.yml"
+WINDOWS_WARM_CACHES: Final = (
+    ROOT / ".github" / "workflows" / "windows-warm-caches.yml"
+)
 
 
 class BuildWindowsScriptTests(unittest.TestCase):
@@ -29,8 +34,106 @@ class BuildWindowsScriptTests(unittest.TestCase):
         package_call = package_call[: package_call.index("\n    )")]
 
         self.assertIn('"--out", $runtimeOut', package_call)
-        self.assertIn('Join-Path (Join-Path (Join-Path $repoRoot "target") $profileDir) "native-runtimes"', script)
+        self.assertIn(
+            '$runtimeOut = "target/$profileDir/native-runtimes"',
+            script,
+        )
+        self.assertNotIn(
+            'Join-Path (Join-Path (Join-Path $repoRoot "target")',
+            script,
+        )
         self.assertNotIn('"--out", (Join-Path $repoRoot', package_call)
+
+    def test_cache_warmers_use_the_canonical_runtime_action(self) -> None:
+        justfile = (ROOT / "Justfile").read_text(encoding="utf-8")
+        script = SCRIPT.read_text(encoding="utf-8")
+        workflow = WINDOWS_WARM_CACHES.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            workflow.count(
+                "uses: ./.github/actions/prepare-native-runtime-input",
+            ),
+            2,
+        )
+        self.assertEqual(workflow.count(".mesh-llm-build-stamp"), 2)
+        self.assertNotIn("run: just ", workflow)
+        self.assertNotIn("build-windows.ps1", workflow)
+        self.assertNotIn("release-runtime-abi-", justfile)
+        self.assertNotIn("[switch]$AbiOnly", script)
+
+    def test_every_windows_runtime_graph_consumes_the_shared_abi_cache(
+        self,
+    ) -> None:
+        workflows = {
+            "pr": PR_BUILDS,
+            "main": CI_WORKFLOW,
+            "release": RELEASE_WORKFLOW,
+            "warmer": WINDOWS_WARM_CACHES,
+        }
+
+        for name, path in workflows.items():
+            with self.subTest(workflow=name):
+                workflow = path.read_text(encoding="utf-8")
+                self.assertEqual(
+                    workflow.count(
+                        "uses: ./.github/actions/restore-windows-abi-cache",
+                    ),
+                    2,
+                )
+
+    def test_windows_abi_caches_live_outside_the_llama_worktree(self) -> None:
+        workflows = {
+            "pr": PR_BUILDS,
+            "main": CI_WORKFLOW,
+            "release": RELEASE_WORKFLOW,
+            "warmer": WINDOWS_WARM_CACHES,
+        }
+        unsafe_cpu = (
+            "LLAMA_STAGE_BUILD_DIR: "
+            ".deps/llama.cpp/build-stage-abi-cpu"
+        )
+        unsafe_matrix = (
+            "LLAMA_STAGE_BUILD_DIR: "
+            ".deps/llama.cpp/build-stage-abi-${{ matrix.backend }}"
+        )
+        safe_prefix = (
+            "LLAMA_STAGE_BUILD_DIR: "
+            ".deps/llama-build/windows/build-stage-abi-"
+        )
+
+        for name, path in workflows.items():
+            with self.subTest(workflow=name):
+                workflow = path.read_text(encoding="utf-8")
+                self.assertEqual(workflow.count(safe_prefix), 2)
+                self.assertNotIn(unsafe_cpu, workflow)
+                self.assertNotIn(unsafe_matrix, workflow)
+
+        script = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            "$buildDir = if ($env:LLAMA_STAGE_BUILD_DIR)",
+            script,
+        )
+        self.assertIn(
+            'Join-Path $repoRoot ".deps\\llama-build"',
+            script,
+        )
+
+    def test_release_windows_gpu_setup_matches_pr_and_main(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        start = workflow.index("  build_native_runtime_windows_gpu:")
+        end = workflow.index("\n  publish:", start)
+        windows_gpu = workflow[start:end]
+
+        self.assertIn("uses: Jimver/cuda-toolkit@", windows_gpu)
+        self.assertIn(
+            "uses: jakoch/install-vulkan-sdk-action@",
+            windows_gpu,
+        )
+        self.assertIn(
+            "uses: ./.github/actions/setup-windows-rocm-sdk",
+            windows_gpu,
+        )
+        self.assertNotIn("install-windows-sdk.ps1", windows_gpu)
 
     def test_all_normal_profiles_build_a_dynamic_host_and_adjacent_runtime(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")

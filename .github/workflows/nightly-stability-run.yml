@@ -132,7 +132,7 @@ jobs:
           scripts/qa-nightly-stability.py "${args[@]}"
 
       - name: Publish run summary
-        if: ${{ always() && steps.preflight.outputs.run == 'true' }}
+        if: ${{ !cancelled() && steps.preflight.outputs.run == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -147,7 +147,7 @@ jobs:
           fi
 
       - name: Upload stability evidence
-        if: ${{ always() && steps.preflight.outputs.run == 'true' }}
+        if: ${{ !cancelled() && steps.preflight.outputs.run == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: nightly-stability-${{ github.run_number }}-${{ github.sha }}

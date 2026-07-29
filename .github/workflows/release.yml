@@ -67,17 +67,28 @@ jobs:
       runner_8: ${{ steps.runners.outputs.runner_8 }}
       runner_16: ${{ steps.runners.outputs.runner_16 }}
     steps:
+      - name: Require the trusted release ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Manual releases must be dispatched from refs/heads/main, not $GITHUB_REF." >&2
+            exit 1
+          fi
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - name: Select trusted Linux runners
-        id: runners
-        uses: ./.github/actions/select-ci-runners
-        with:
-          event_name: ${{ github.event_name }}
-          ref: ${{ github.ref }}
-          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
-          manual_use_depot: ${{ inputs.use_depot == true }}
+          fetch-depth: 0
+      - name: Require release tags to point at main history
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "Release tag $GITHUB_REF must point at a commit reachable from main." >&2
+            exit 1
+          fi
       - id: meta
         shell: bash
         env:
@@ -109,6 +120,25 @@ jobs:
             echo "canary=$INPUT_CANARY"
             echo "force_hosted_runners=$INPUT_FORCE_HOSTED_RUNNERS"
           } >> "$GITHUB_OUTPUT"
+      - name: Reject an existing manual release tag
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.canary != true }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Manual release tag already exists and is immutable: $RELEASE_TAG" >&2
+            exit 1
+          fi
+      - name: Select trusted Linux runners
+        id: runners
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          manual_use_depot: ${{ inputs.use_depot == true }}
 
   build:
     name: Build immutable host ${{ matrix.name }}
@@ -882,6 +912,9 @@ jobs:
     if: ${{ needs.compose_linux_arm64_cpu.result == 'success' }}
     runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && needs.metadata.outputs.force_hosted_runners != 'true' && '["self-hosted","Linux","ARM64"]' || '["ubuntu-24.04-arm"]') }}
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-linux-arm64
@@ -891,18 +924,16 @@ jobs:
           EXPECTED_VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
-          cd release-linux-arm64
-          tarball="mesh-llm-aarch64-unknown-linux-gnu.tar.gz"
+          artifact_dir="release-linux-arm64"
+          tarball="$artifact_dir/mesh-llm-aarch64-unknown-linux-gnu.tar.gz"
           if [[ ! -f "$tarball" ]]; then
             echo "missing expected ARM64 release archive: $tarball" >&2
-            find . -maxdepth 1 -type f -print | sort >&2
+            find "$artifact_dir" -maxdepth 1 -type f -print | sort >&2
             exit 1
           fi
-          if command -v sha256sum >/dev/null 2>&1 && [[ -f "$tarball.sha256" ]]; then
-            sha256sum -c "$tarball.sha256"
-          fi
+          python3 scripts/verify-checksum-sidecar.py "$tarball"
           mkdir -p smoke
-          tar -xzf "$tarball" -C smoke
+          python3 scripts/safe-extract-tar.py "$tarball" smoke
           binary="smoke/mesh-bundle/mesh-llm"
           version_output="$("$binary" --version)"
           actual_version="$(awk '{print $NF}' <<<"$version_output")"
@@ -1408,6 +1439,7 @@ jobs:
     runs-on: windows-2022
     env:
       LLAMA_STAGE_BACKEND: cpu
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/windows/build-stage-abi-cpu
       MESH_NATIVE_RUNTIME_TARGET: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -1418,6 +1450,11 @@ jobs:
           python-version: '3.x'
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - name: Restore exact Windows CPU ABI cache
+        uses: ./.github/actions/restore-windows-abi-cache
+        with:
+          backend: cpu
+          build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
       - name: Initialize MSVC for native runtime
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
@@ -1451,6 +1488,8 @@ jobs:
     env:
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
       WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.9.2' }}
+      WINDOWS_VULKAN_SDK_VERSION: ${{ vars.VULKAN_SDK_VERSION || '1.4.328.1' }}
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/windows/build-stage-abi-${{ matrix.backend }}
       MESH_NATIVE_RUNTIME_TARGET: x86_64-pc-windows-msvc
     strategy:
       fail-fast: false
@@ -1482,6 +1521,15 @@ jobs:
           python-version: '3.x'
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - name: Restore exact Windows GPU ABI cache
+        uses: ./.github/actions/restore-windows-abi-cache
+        with:
+          backend: ${{ matrix.backend }}
+          build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          architecture_set: ${{ matrix.cuda_architectures || matrix.rocm_architectures || '' }}
+          cuda_toolchain_version: ${{ env.WINDOWS_CUDA_VERSION }}
+          vulkan_toolchain_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
+          rocm_toolchain_version: ${{ env.ROCM_HIP_SDK_FILENAME }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         shell: bash
@@ -1515,18 +1563,34 @@ jobs:
             throw "CUDA_PATH was not configured by Jimver/cuda-toolkit."
           }
           & nvcc --version
+      - name: Install Vulkan SDK
+        if: ${{ matrix.backend == 'vulkan' }}
+        uses: jakoch/install-vulkan-sdk-action@3c53c378c9bfbb2ea122a1cc164a837d4004c871 # v1.5.2
+        with:
+          vulkan_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
+          cache: true
+          stripdown: true
+      - name: Verify Vulkan SDK
+        if: ${{ matrix.backend == 'vulkan' }}
+        shell: pwsh
+        run: |
+          if (-not $env:VULKAN_SDK -or -not (Test-Path $env:VULKAN_SDK)) {
+            throw "VULKAN_SDK was not configured by jakoch/install-vulkan-sdk-action."
+          }
+          $glslc = Join-Path $env:VULKAN_SDK "Bin\glslc.exe"
+          if (-not (Test-Path $glslc)) {
+            throw "glslc.exe was not found at $glslc"
+          }
+          & $glslc --version
+      - name: Install ROCm HIP SDK
+        if: ${{ matrix.backend == 'rocm' }}
+        uses: ./.github/actions/setup-windows-rocm-sdk
+        with:
+          rocm-hip-sdk-filename: ${{ env.ROCM_HIP_SDK_FILENAME }}
       - name: Initialize MSVC for native runtime
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
-      - name: Install backend SDK
-        if: ${{ matrix.backend != 'cuda' }}
-        shell: pwsh
-        run: |
-          .\scripts\install-windows-sdk.ps1 `
-            -Backend "${{ matrix.backend }}" `
-            -RocmHipSdkFilename "$env:ROCM_HIP_SDK_FILENAME" `
-            -InstallerCacheDir "$HOME\sdk-installer-cache"
       - name: Package native runtime
         env:
           LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
@@ -1574,14 +1638,16 @@ jobs:
       - compose_windows_gpu
       - build_native_runtime_windows_cpu
       - build_native_runtime_windows_gpu
-    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.compose_cpu_products.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.compose_linux_arm64_cpu.result == 'success' && needs.smoke_linux_arm64_artifact.result == 'success' && (needs.compose_linux_aarch64_cuda.result == 'success' || needs.compose_linux_aarch64_cuda.result == 'skipped') && (needs.compose_linux_cuda.result == 'success' || needs.compose_linux_cuda.result == 'skipped') && (needs.compose_linux_rocm.result == 'success' || needs.compose_linux_rocm.result == 'skipped') && (needs.compose_linux_vulkan.result == 'success' || needs.compose_linux_vulkan.result == 'skipped') && needs.compose_windows_cpu.result == 'success' && (needs.compose_windows_gpu.result == 'success' || needs.compose_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.compose_cpu_products.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.compose_linux_arm64_cpu.result == 'success' && needs.smoke_linux_arm64_artifact.result == 'success' && (needs.compose_linux_aarch64_cuda.result == 'success' || needs.compose_linux_aarch64_cuda.result == 'skipped') && (needs.compose_linux_cuda.result == 'success' || needs.compose_linux_cuda.result == 'skipped') && (needs.compose_linux_rocm.result == 'success' || needs.compose_linux_rocm.result == 'skipped') && (needs.compose_linux_vulkan.result == 'success' || needs.compose_linux_vulkan.result == 'skipped') && needs.compose_windows_cpu.result == 'success' && (needs.compose_windows_gpu.result == 'success' || needs.compose_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          persist-credentials: true
+          # Archive verification and manifest generation run before any push
+          # credential is exposed to a shell.
+          persist-credentials: false
           fetch-depth: 0
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
@@ -1656,15 +1722,15 @@ jobs:
           name: swift-package-manifest
           path: generated-swift-manifest
 
-      - name: Create dispatched release tag
+      - name: Prepare dispatched release tag
         if: github.event_name == 'workflow_dispatch'
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: |
           set -euo pipefail
           if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release tag already exists: $RELEASE_TAG; reusing it"
-            exit 0
+            echo "Release tag already exists and cannot be reused: $RELEASE_TAG" >&2
+            exit 1
           fi
           scripts/release-version.sh "$RELEASE_TAG"
           cp generated-swift-manifest/Package.swift Package.swift
@@ -1688,14 +1754,23 @@ jobs:
             git commit -m "$RELEASE_TAG: prepare release source"
           fi
           git tag "$RELEASE_TAG"
-          git push origin "refs/tags/$RELEASE_TAG"
+
+      - name: Push dispatched release tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push "$release_remote" "refs/tags/$RELEASE_TAG"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ needs.metadata.outputs.tag }}
           prerelease: ${{ needs.metadata.outputs.prerelease }}
-          overwrite_files: true
+          overwrite_files: false
           files: release-artifacts/*
 
   dispatch_packaging_release:

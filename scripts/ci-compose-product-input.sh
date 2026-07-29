@@ -57,16 +57,6 @@ require_nonempty_file() {
     fi
 }
 
-require_checksum_match() {
-    local label="$1"
-    local expected="$2"
-    local actual="$3"
-    if [[ "$actual" != "$expected" ]]; then
-        echo "$label checksum mismatch: expected $expected, got $actual" >&2
-        exit 1
-    fi
-}
-
 canonical_paths=()
 while IFS= read -r path; do
     canonical_paths+=("$(to_shell_path "$path")")
@@ -153,13 +143,7 @@ require_file "immutable host" "$host"
 chmod +x "$host"
 require_nonempty_file "host import report" "$host_imports"
 require_nonempty_file "host checksum" "$host_checksum"
-expected_host_checksum="$(awk 'NR == 1 {print $1}' "$host_checksum")"
-if command -v sha256sum >/dev/null 2>&1; then
-    actual_host_checksum="$(sha256sum "$host" | awk '{print $1}')"
-else
-    actual_host_checksum="$(shasum -a 256 "$host" | awk '{print $1}')"
-fi
-require_checksum_match "immutable host" "$expected_host_checksum" "$actual_host_checksum"
+"$python_bin" scripts/verify-checksum-sidecar.py "$host"
 
 if [[ -n "$INPUT_ATTESTATION_PUBLIC_KEY_FILE" ]]; then
     attestation_verifier="${INPUT_ATTESTATION_VERIFIER:-$host_input_dir/release-attestation-verifier}"
@@ -169,16 +153,8 @@ if [[ -n "$INPUT_ATTESTATION_PUBLIC_KEY_FILE" ]]; then
         "$INPUT_ATTESTATION_PUBLIC_KEY_FILE"
     require_file "release attestation verifier" "$attestation_verifier"
     require_nonempty_file "release attestation verifier checksum" "$verifier_checksum"
-    expected_verifier_checksum="$(awk 'NR == 1 {print $1}' "$verifier_checksum")"
-    if command -v sha256sum >/dev/null 2>&1; then
-        actual_verifier_checksum="$(sha256sum "$attestation_verifier" | awk '{print $1}')"
-    else
-        actual_verifier_checksum="$(shasum -a 256 "$attestation_verifier" | awk '{print $1}')"
-    fi
-    require_checksum_match \
-        "release attestation verifier" \
-        "$expected_verifier_checksum" \
-        "$actual_verifier_checksum"
+    "$python_bin" scripts/verify-checksum-sidecar.py \
+        "$attestation_verifier"
     chmod +x "$attestation_verifier"
     "$attestation_verifier" release-attestation inspect \
         --binary "$host" \
@@ -199,13 +175,28 @@ runtime_archives=()
 while IFS= read -r archive; do
     runtime_archives+=("$archive")
 done < <(find "$runtime_input_dir" -type f -name '*.tar.gz' -print)
+runtime_sidecars=()
+while IFS= read -r sidecar; do
+    runtime_sidecars+=("$sidecar")
+done < <(find "$runtime_input_dir" -type f -name '*.tar.gz.sha256' -print)
 if [[ "${#runtime_archives[@]}" -gt 1 ]]; then
     echo "expected at most one runtime archive; found ${#runtime_archives[@]}" >&2
     exit 1
 elif [[ "${#runtime_archives[@]}" -eq 1 ]]; then
+    expected_sidecar="${runtime_archives[0]}.sha256"
+    if [[ "${#runtime_sidecars[@]}" -ne 1 || "${runtime_sidecars[0]}" != "$expected_sidecar" ]]; then
+        echo "expected exactly one checksum sidecar for ${runtime_archives[0]}; found ${#runtime_sidecars[@]}" >&2
+        exit 1
+    fi
     scripts/verify-native-runtime-package.sh "${runtime_archives[0]}"
-    tar -xzf "${runtime_archives[0]}" -C "$output_dir/native-runtimes"
+    "$python_bin" scripts/safe-extract-tar.py \
+        "${runtime_archives[0]}" \
+        "$output_dir/native-runtimes"
 else
+    if [[ "${#runtime_sidecars[@]}" -ne 0 ]]; then
+        echo "runtime checksum sidecar exists without a runtime archive" >&2
+        exit 1
+    fi
     runtime_dirs=()
     while IFS= read -r manifest; do
         runtime_dirs+=("$(dirname "$manifest")")

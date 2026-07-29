@@ -76,7 +76,12 @@ flowchart TD
             StaticABI["linux_static_abi_input\none immutable CPU llama ABI"]
             RustCrateTests["rust_crate_tests matrix\nmetadata-derived crate suites"]
             LinuxTests["linux_test_groups matrix\nprotocol · Skippy smoke"]
-            LinuxTargets["linux_targets matrix\nruntime-only CUDA / ROCm / Vulkan\ncompose with shared host"]
+            LinuxCUDARuntime["linux_cuda_runtime_input\none CUDA runtime"]
+            LinuxCUDAProduct["linux_cuda_product\ncompose host + CUDA runtime"]
+            LinuxROCmRuntime["linux_rocm_runtime_input\none ROCm runtime"]
+            LinuxROCmProduct["linux_rocm_product\ncompose host + ROCm runtime"]
+            LinuxVulkanRuntime["linux_vulkan_runtime_input\none Vulkan runtime"]
+            LinuxVulkanProduct["linux_vulkan_product\ncompose host + Vulkan runtime"]
             WindowsChecks["windows_checks\nlightweight broad-Rust signal"]
             WindowsHost["windows_host_input\none immutable debug host"]
             WindowsCPURuntime["windows_cpu_runtime_input\none CPU runtime"]
@@ -111,8 +116,15 @@ flowchart TD
     MacHost --> MacCPU
     MacRuntime --> MacCPU
     Affected --> MacTests
-    LinuxHost --> LinuxTargets
-    Backend --> LinuxTargets
+    Backend --> LinuxCUDARuntime
+    Backend --> LinuxROCmRuntime
+    Backend --> LinuxVulkanRuntime
+    LinuxHost --> LinuxCUDAProduct
+    LinuxCUDARuntime --> LinuxCUDAProduct
+    LinuxHost --> LinuxROCmProduct
+    LinuxROCmRuntime --> LinuxROCmProduct
+    LinuxHost --> LinuxVulkanProduct
+    LinuxVulkanRuntime --> LinuxVulkanProduct
     Affected --> WindowsChecks
     WindowsCPU --> WindowsHost
     WindowsCPU --> WindowsCPURuntime
@@ -169,10 +181,13 @@ flowchart TD
   smokes consume the staged runtime instead of compiling a private replacement.
 - Main builds immutable Linux, macOS, and Windows release hosts independently
   from their CPU, Metal, CUDA, ROCm, and Vulkan runtimes. Composition-only jobs
-  verify and combine those exact producer inputs. Linux and Windows backend
-  rows build only their runtime and reuse the platform host. Each product
-  requires `--version`, `runtime list`, and client readiness without a driver
-  stub. GPU availability remains separate hardware qualification.
+  verify and combine those exact producer inputs. Each Linux GPU backend has
+  its own runtime producer and matching thin composer, so a finished backend
+  never waits for unrelated runtime rows before its product is ready. Linux
+  and Windows backend rows build only their runtime and reuse the platform
+  host. Each product requires `--version`, `runtime list`, and client readiness
+  without a driver stub. GPU availability remains separate hardware
+  qualification.
 - `.github/actions/prepare-host-input`,
   `.github/actions/prepare-windows-host-input`,
   `.github/actions/prepare-native-runtime-input`, and
@@ -215,10 +230,12 @@ flowchart TD
   protocol compatibility and Skippy smoke remain separate integration rows.
   Linux host/CPU-runtime and macOS host/Metal-runtime producers run
   independently, and their product composers never compile. Linux backend rows
-  consume the same immutable host artifact and build only their selected
-  runtime. Windows follows the same graph: one debug neutral host, independent
-  CPU/CUDA/ROCm/Vulkan runtime inputs, and composition-only products.
-  Unsupported macOS CUDA, ROCm, and Vulkan rows are omitted.
+  are split into one independent CUDA, ROCm, or Vulkan runtime producer plus
+  one matching `runner_4` composition-only product job. They consume the same
+  immutable host without a matrix-wide fan-in barrier. Windows follows the
+  same graph: one debug neutral host, independent CPU/CUDA/ROCm/Vulkan runtime
+  inputs, and composition-only products. Unsupported macOS CUDA, ROCm, and
+  Vulkan rows are omitted.
 - Product readiness starts a local mDNS client and never depends on the mutable
   public mesh. The public `client --auto` admission probe is manual-only, so an
   external peer outage cannot block a pull request or release.
@@ -282,8 +299,8 @@ and published at `ghcr.io/mesh-llm/mesh-llm-cuda-runner`. Every image is built
 from the same core toolchain and selects an execution environment independently
 from its backend SDK:
 
-- `public-<backend>-*` runs as a job-level `container:` on an Ubuntu GitHub-hosted
-  or legacy container-capable self-hosted runner.
+- `public-<backend>-*` runs as a job-level `container:` on an Ubuntu
+  GitHub-hosted, Depot-managed, or legacy container-capable self-hosted runner.
 - `self-hosted-<backend>-*` adds the Actions runner and is used directly as an
   ARC pod image. Jobs targeting an ARC scale-set label must not wrap that pod in
   a second job container.
@@ -461,14 +478,17 @@ Use these checks when reviewing PR CI wall-clock regressions:
 - **Duplicate work count**: smoke jobs should consume uploaded Linux/macOS
   binaries through `.github/actions/restore-smoke-inputs`; they should not build
   `mesh-llm` or patched llama.cpp again.
-- **Prewarmed ABI cache hit ratio**: Windows ABI cache keys in PR Builds must
-  match the trusted `windows-warm-caches.yml` keys. Check
+- **Prewarmed ABI cache hit ratio**: Windows runtime producers in PR, main, and
+  release use `.github/actions/restore-windows-abi-cache`, the same exact key
+  contract as `windows-warm-caches.yml`. Architecture sets and backend
+  toolchain versions are part of the identity; there are no broad restore
+  prefixes. Check
   `gh cache list --branch main --limit 100` for
-  `mesh-llm-windows-2025-skippy-abi-*` entries before
+  `mesh-llm-windows-2022-skippy-abi-*` entries before
   treating a slow Windows miss as expected.
 - **Runner routing**: platform-specific work should run on its native runner
-  class (Blacksmith Windows 2025 for Windows ABI products, Blacksmith macOS for Swift/Metal, Linux
-  for Linux backends) and omit unsupported combinations.
+  class (Windows for Windows ABI products, macOS for Swift/Metal, Linux for
+  Linux backends) and omit unsupported combinations.
 
 For canonical agent-facing CI rules, start with
 `.agents/skills/manage-ci/SKILL.md`. The scoped `.github/AGENTS.md` file routes

@@ -9,7 +9,8 @@ main, and release products to drift.
 
 Use [`scripts/collect-ci-metrics.py`](../scripts/collect-ci-metrics.py) and the
 methodology in [`METRICS.md`](METRICS.md) for every before/after comparison.
-The initial mixed-change-class baseline is:
+The initial mixed-change-class baseline is recorded in
+[`metrics/2026-07-29-pr-builds-baseline.json`](metrics/2026-07-29-pr-builds-baseline.json):
 
 | Workflow/cohort | Sample | p50 wall | p95 wall | Maximum |
 | --- | ---: | ---: | ---: | ---: |
@@ -75,6 +76,10 @@ The shared implementation primitives are:
   runtime archive and run the release-grade runtime verifier.
 - `.github/actions/compose-product-input`: checksum and verify producer inputs,
   compose product-v2 without compiling, and run client readiness.
+- `.github/actions/restore-smoke-inputs`: safely extract a composed product,
+  revalidate its manifest and bytes, and stage that exact host/runtime pair.
+- `.github/actions/capture-sccache-stats`: retain per-job JSON counters for
+  offline aggregation with `scripts/summarize-sccache-stats.py`.
 
 `scripts/build-host.sh` is the only Unix host builder.
 `scripts/build-release.sh` is a compatibility wrapper. Backend recipes and
@@ -279,7 +284,8 @@ The next image revision should:
 3. publish a `public-compose` image with only Bash, Python standard library,
    tar/coreutils, runtime libraries, and artifact verifiers. Composition jobs
    must never pull a multi-gigabyte backend SDK;
-4. remove the duplicate Actions runner installation from self-hosted images;
+4. retain the Actions runner only in `self-hosted-*` overlays; keep it out of
+   public builder and composition images;
 5. make one content-addressed architecture base feed every backend overlay,
    and move source-revision provenance after dependency-warm layers;
 6. build each architecture once, verify that exact staged digest, and assemble
@@ -327,14 +333,15 @@ image digest, and change class:
 ```bash
 python3 scripts/collect-ci-metrics.py \
   --repo Mesh-LLM/mesh-llm \
-  --workflow pr_builds.yml \
-  --event pull_request \
-  --limit 30 \
+  --workflow ci.yml \
+  --branch main \
+  --event push \
+  --limit 5 \
   --label provider=depot \
   --label runner=depot-ubuntu-24.04-8 \
-  --raw-out /tmp/pr-depot-runs.json \
-  --json-out /tmp/pr-depot-metrics.json \
-  --markdown-out /tmp/pr-depot-metrics.md
+  --raw-out /tmp/main-depot-runs.json \
+  --json-out /tmp/main-depot-metrics.json \
+  --markdown-out /tmp/main-depot-metrics.md
 ```
 
 Rollout sequence:

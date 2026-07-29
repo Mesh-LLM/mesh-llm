@@ -57,6 +57,23 @@ runs:
             SCCACHE_WEBDAV_PASSWORD: '',
             SCCACHE_DIR: diskCacheDirectory,
           });
+          const resetStatistics = async (environment = process.env) => {
+            const resetExitCode = await exec.exec(
+              'sccache',
+              ['--zero-stats'],
+              {
+                env: environment,
+                ignoreReturnCode: true,
+              },
+            );
+            if (resetExitCode !== 0) {
+              core.setFailed(
+                'Unable to reset sccache statistics after configuring the server.',
+              );
+              return false;
+            }
+            return true;
+          };
 
           if (
             allowDepotRemoteCache === 'true' &&
@@ -77,6 +94,9 @@ runs:
               ignoreReturnCode: true,
             });
             if (depotExitCode === 0) {
+              if (!(await resetStatistics())) {
+                return;
+              }
               core.info(
                 'Baked sccache is using job-local disk with Depot WebDAV cache.',
               );
@@ -99,6 +119,10 @@ runs:
             );
             if (depotFallbackExitCode !== 0) {
               core.setFailed('Unable to start baked sccache with Depot or job-local storage.');
+              return;
+            }
+            if (!(await resetStatistics(diskOnlyEnvironment()))) {
+              return;
             }
             return;
           }
@@ -132,6 +156,10 @@ runs:
               core.setFailed(
                 'Unable to start baked sccache with its trust-isolated disk cache.',
               );
+              return;
+            }
+            if (!(await resetStatistics(diskOnlyEnvironment()))) {
+              return;
             }
             return;
           }
@@ -166,6 +194,10 @@ runs:
             );
             if (diskOnlyExitCode !== 0) {
               core.setFailed('Unable to start baked sccache with its disk-only cache.');
+              return;
+            }
+            if (!(await resetStatistics(diskOnlyEnvironment()))) {
+              return;
             }
             return;
           }
@@ -194,6 +226,9 @@ runs:
             ignoreReturnCode: true,
           });
           if (remoteExitCode === 0) {
+            if (!(await resetStatistics())) {
+              return;
+            }
             core.info(
               'Baked sccache is using job-local disk with a best-effort GitHub Actions cache.',
             );
@@ -219,4 +254,6 @@ runs:
           );
           if (localExitCode !== 0) {
             core.setFailed('Unable to start baked sccache with either remote or job-local storage.');
+            return;
           }
+          await resetStatistics(diskOnlyEnvironment());

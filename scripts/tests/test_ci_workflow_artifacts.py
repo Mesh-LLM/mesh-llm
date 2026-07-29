@@ -48,6 +48,25 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("runner: mesh-llm-amd64", pr_workflow)
         self.assertNotIn("runner: mesh-llm-arm64", pr_workflow)
 
+    def test_main_uses_event_range_and_centralized_platform_routes(self) -> None:
+        changes = job_section(self.workflow, "changes")
+
+        self.assertIn("base_sha: ${{ github.event.before || '' }}", changes)
+        self.assertIn("head_sha: ${{ github.sha }}", changes)
+        self.assertIn(
+            "windows_cpu: ${{ steps.compute.outputs.windows_cpu_build_required }}",
+            changes,
+        )
+        self.assertIn(
+            "windows_gpu: ${{ steps.compute.outputs.windows_gpu_build_required }}",
+            changes,
+        )
+        self.assertNotIn("steps.filter.outputs.windows_cpu", changes)
+        self.assertNotIn("steps.filter.outputs.windows_gpu", changes)
+        swift = job_section(self.workflow, "swift_sdk_smoke")
+        self.assertIn("needs.changes.outputs.sdk_smoke_required == 'true'", swift)
+        self.assertNotIn("needs.changes.outputs.sdk == 'true'", swift)
+
     def test_cpu_runtime_is_an_independent_producer(self) -> None:
         runtime = job_section(self.workflow, "linux_cpu_runtime_input")
 
@@ -80,26 +99,100 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("scripts/package-native-runtime.sh", product)
         self.assertNotIn("configure-sccache-gha", product)
 
-    def test_gpu_products_reuse_the_neutral_host(self) -> None:
-        artifacts = {
-            "linux_cuda": "ci-linux-cuda-product",
-            "linux_rocm": "ci-linux-rocm-product",
-            "linux_vulkan": "ci-linux-vulkan-product",
+    def test_gpu_runtime_inputs_are_independent_producers(self) -> None:
+        expected = {
+            "cuda": (
+                "sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd",
+                'LLAMA_STAGE_CUDA_ARCHITECTURES: "75;80;86;87;89;90"',
+            ),
+            "rocm": (
+                "sha256:0e13e5d2d2c121df265ff6c69be81e468989e09f81d6b7ff049b110cc0bb0d2b",
+                "LLAMA_STAGE_AMDGPU_TARGETS: gfx1100",
+            ),
+            "vulkan": (
+                "sha256:ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80",
+                "build-stage-abi-dynamic-vulkan",
+            ),
         }
 
-        for job_name, product_artifact in artifacts.items():
-            with self.subTest(job=job_name):
-                job = job_section(self.workflow, job_name)
-                self.assertIn("needs: [changes, linux_host_input]", job)
-                self.assertIn("name: ci-linux-host-input", job)
+        for backend, (image, backend_env) in expected.items():
+            with self.subTest(backend=backend):
+                runtime = job_section(
+                    self.workflow,
+                    f"linux_{backend}_runtime_input",
+                )
+                self.assertIn("needs: changes", runtime)
+                self.assertIn(
+                    "if: ${{ needs.changes.outputs.docs_only != 'true' }}",
+                    runtime,
+                )
+                self.assertIn(
+                    "runs-on: ${{ needs.changes.outputs.runner_8 }}",
+                    runtime,
+                )
+                self.assertIn(image, runtime)
+                self.assertIn(backend_env, runtime)
                 self.assertIn(
                     "uses: ./.github/actions/prepare-native-runtime-input",
-                    job,
+                    runtime,
                 )
-                self.assertIn("uses: ./.github/actions/compose-product-input", job)
-                self.assertIn(f"name: {product_artifact}", job)
-                self.assertNotIn("prepare-host-input", job)
-                self.assertNotIn("scripts/build-host.sh", job)
+                self.assertIn(f"backend: {backend}", runtime)
+                self.assertIn(
+                    f"name: ci-linux-{backend}-runtime-input",
+                    runtime,
+                )
+                self.assertIn("runtime-input/*.tar.gz", runtime)
+                self.assertIn("runtime-input/*.sha256", runtime)
+                self.assertNotIn("linux_host_input", runtime)
+                self.assertNotIn("name: ci-linux-host-input", runtime)
+                self.assertNotIn("prepare-host-input", runtime)
+                self.assertNotIn("compose-product-input", runtime)
+
+        for fused_job in ("linux_cuda", "linux_rocm", "linux_vulkan"):
+            self.assertNotIn(f"\n  {fused_job}:\n", self.workflow)
+
+    def test_gpu_products_reuse_exact_immutable_inputs(self) -> None:
+        neutral_image = (
+            "sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d"
+        )
+
+        for backend in ("cuda", "rocm", "vulkan"):
+            with self.subTest(backend=backend):
+                product = job_section(
+                    self.workflow,
+                    f"linux_{backend}_product",
+                )
+                self.assertIn(
+                    "needs: [changes, linux_host_input, "
+                    f"linux_{backend}_runtime_input]",
+                    product,
+                )
+                self.assertIn(
+                    "needs.linux_host_input.result == 'success' "
+                    f"&& needs.linux_{backend}_runtime_input.result == 'success'",
+                    product,
+                )
+                self.assertIn(
+                    "runs-on: ${{ needs.changes.outputs.runner_4 }}",
+                    product,
+                )
+                self.assertIn(neutral_image, product)
+                self.assertIn("name: ci-linux-host-input", product)
+                self.assertIn(
+                    f"name: ci-linux-{backend}-runtime-input",
+                    product,
+                )
+                self.assertIn(
+                    "uses: ./.github/actions/compose-product-input",
+                    product,
+                )
+                self.assertIn(f"backend: {backend}", product)
+                self.assertIn(f"name: ci-linux-{backend}-product", product)
+                self.assertNotIn("prepare-host-input", product)
+                self.assertNotIn("prepare-native-runtime-input", product)
+                self.assertNotIn("configure-sccache-gha", product)
+                self.assertNotIn("LLAMA_STAGE_BUILD_DIR", product)
+                self.assertNotIn("matrix.", product)
 
     def test_linux_tests_share_one_static_abi_producer(self) -> None:
         producer = job_section(self.workflow, "linux_static_abi_input")

@@ -283,6 +283,10 @@ update the skill resources in the same change.
   reuse unsafe: OS, architecture, backend/toolchain, relevant lockfiles,
   `.github/cache-version.txt`, and build inputs. Do not broaden restore keys
   across incompatible or untrusted contexts.
+- Windows native-runtime producers and the trusted warmer must use
+  `.github/actions/restore-windows-abi-cache`. Keep CPU, CUDA, ROCm, and Vulkan
+  architecture/toolchain identities exact; do not duplicate its key expression
+  in individual workflows or add broad restore prefixes.
 - GitHub-hosted PR jobs may share the normal key namespace with main because
   GitHub scopes PR writes to the merge ref and trusted main does not restore
   them. Do not assume that isolation applies to another cache provider.
@@ -298,7 +302,9 @@ update the skill resources in the same change.
   logs.
 - Use `retention-days: 1` for PR and smoke-only artifacts unless a documented
   debugging or release requirement needs longer retention. Release evidence
-  follows the release policy, not the PR default.
+  follows the release policy, not the PR default. Sccache migration evidence is
+  retained for 14 days so cold/warm samples cover the configured Depot
+  cache-retention window.
 - Restore producer artifacts through `.github/actions/restore-smoke-inputs`.
   Reuse `smoke.yml`, `scripted-binary-smoke.yml`, `sdk-smoke.yml`, and
   `hf-download-smoke.yml`; do not rebuild MeshLLM, native runtimes, or duplicate

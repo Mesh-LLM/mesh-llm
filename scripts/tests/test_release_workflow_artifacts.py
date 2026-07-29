@@ -15,6 +15,36 @@ def job_block(workflow: str, job_name: str, next_job_name: str) -> str:
 
 
 class ReleaseWorkflowArtifactTests(unittest.TestCase):
+    def test_release_entrypoint_rejects_untrusted_refs(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        metadata = job_block(workflow, "metadata", "build")
+
+        manual_guard = metadata.index("Require the trusted release ref")
+        checkout = metadata.index("uses: actions/checkout@")
+        selector = metadata.index(
+            "uses: ./.github/actions/select-ci-runners",
+        )
+        self.assertLess(manual_guard, checkout)
+        self.assertLess(checkout, selector)
+        self.assertIn(
+            '"$GITHUB_EVENT_NAME" == "workflow_dispatch"',
+            metadata,
+        )
+        self.assertIn(
+            '"$GITHUB_REF" != "refs/heads/main"',
+            metadata,
+        )
+        self.assertIn(
+            'git merge-base --is-ancestor "$GITHUB_SHA" '
+            "refs/remotes/origin/main",
+            metadata,
+        )
+        self.assertIn("Reject an existing manual release tag", metadata)
+        self.assertIn(
+            "Manual release tag already exists and is immutable",
+            metadata,
+        )
+
     def test_release_depot_policy_is_main_ref_only_and_selected_once(
         self,
     ) -> None:
@@ -133,6 +163,87 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             publish,
         )
         self.assertNotIn("packages: write", publish)
+
+    def test_publish_fan_in_stops_when_release_is_cancelled(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        publish = job_block(
+            workflow,
+            "publish",
+            "dispatch_packaging_release",
+        )
+
+        self.assertIn("if: ${{ !cancelled()", publish)
+        self.assertNotIn("always()", publish)
+
+    def test_release_assets_and_manual_tags_are_immutable(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        publish = job_block(
+            workflow,
+            "publish",
+            "dispatch_packaging_release",
+        )
+
+        self.assertIn("Release tag already exists and cannot be reused", publish)
+        self.assertNotIn("reusing it", publish)
+        self.assertIn("overwrite_files: false", publish)
+        self.assertIn("persist-credentials: false", publish)
+        self.assertNotIn("persist-credentials: true", publish)
+        self.assertIn(
+            'git push "$release_remote" "refs/tags/$RELEASE_TAG"',
+            publish,
+        )
+        self.assertNotIn(
+            'git push origin "refs/tags/$RELEASE_TAG"',
+            publish,
+        )
+
+    def test_release_push_token_is_isolated_to_the_push_step(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        publish = job_block(
+            workflow,
+            "publish",
+            "dispatch_packaging_release",
+        )
+        generate_start = publish.index(
+            "- name: Generate native runtime release manifest",
+        )
+        prepare_start = publish.index(
+            "- name: Prepare dispatched release tag",
+        )
+        push_start = publish.index(
+            "- name: Push dispatched release tag",
+        )
+        release_start = publish.index(
+            "- name: Publish GitHub release",
+        )
+        generate = publish[generate_start:prepare_start]
+        prepare = publish[prepare_start:push_start]
+        push = publish[push_start:release_start]
+
+        token_binding = "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}"
+        self.assertNotIn(token_binding, generate)
+        self.assertNotIn(token_binding, prepare)
+        self.assertIn(token_binding, push)
+        self.assertEqual(publish.count(token_binding), 1)
+        self.assertNotIn("release_remote=", prepare)
+        self.assertNotIn("git push", prepare)
+        self.assertIn(
+            'git push "$release_remote" "refs/tags/$RELEASE_TAG"',
+            push,
+        )
+
+    def test_arm64_smoke_requires_integrity_and_safe_extraction(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        smoke = job_block(
+            workflow,
+            "smoke_linux_arm64_artifact",
+            "compose_linux_aarch64_cuda",
+        )
+
+        self.assertIn("scripts/verify-checksum-sidecar.py", smoke)
+        self.assertIn("scripts/safe-extract-tar.py", smoke)
+        self.assertNotIn("tar -xzf", smoke)
+        self.assertNotIn("command -v sha256sum", smoke)
 
     def test_native_sdk_assets_are_staged_flat_for_publishing(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")

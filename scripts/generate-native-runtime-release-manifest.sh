@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT=""
 REPO="${GITHUB_REPOSITORY:-Mesh-LLM/mesh-llm}"
 TAG="${RELEASE_TAG:-}"
@@ -12,8 +13,9 @@ usage() {
 Usage: scripts/generate-native-runtime-release-manifest.sh --tag TAG --out FILE [--repo OWNER/REPO] <native-runtime.tar.gz> [...]
 
 Generates native-runtimes.json for a GitHub release from packaged native
-runtime artifacts. Each artifact archive must contain a manifest.json with the
-native runtime resolver fields emitted by package-native-runtime.sh.
+runtime artifacts. Each artifact archive must have its canonical .sha256
+sidecar and contain a manifest.json with the native runtime resolver fields
+emitted by package-native-runtime.sh.
 EOF
 }
 
@@ -59,17 +61,37 @@ if [[ -z "$TMP_ROOT" ]]; then
     TMP_ROOT="$(mktemp -d)"
 fi
 
-python3 - "$OUT" "$REPO" "$TAG" "$TMP_ROOT" "$@" <<'PY'
+for archive in "$@"; do
+    "$SCRIPT_DIR/verify-native-runtime-package.sh" --portable "$archive"
+done
+
+python3 - \
+    "$OUT" \
+    "$REPO" \
+    "$TAG" \
+    "$TMP_ROOT" \
+    "$SCRIPT_DIR/safe-extract-tar.py" \
+    "$@" <<'PY'
 import hashlib
 import json
 import os
+import subprocess
 import sys
-import tarfile
 
-out, repo, tag, tmp_root, *archives = sys.argv[1:]
+(
+    out,
+    repo,
+    tag,
+    tmp_root,
+    safe_extractor,
+    *archives,
+) = sys.argv[1:]
 artifacts = []
 mesh_version = None
 skippy_abi = None
+release_version = tag[1:] if tag.startswith("v") else tag
+if not release_version:
+    raise SystemExit("release tag must contain a version")
 
 required = {
     "id",
@@ -78,17 +100,31 @@ required = {
     "platform",
     "backend",
     "libraries",
+    "files",
 }
 
-for archive in archives:
-    archive = os.path.abspath(archive)
-    with open(archive, "rb") as fh:
-        archive_sha256 = hashlib.sha256(fh.read()).hexdigest()
 
-    extract_dir = os.path.join(tmp_root, os.path.basename(archive).replace(os.sep, "_"))
-    os.makedirs(extract_dir, exist_ok=True)
-    with tarfile.open(archive, "r:gz") as tar:
-        tar.extractall(extract_dir)
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+for index, archive in enumerate(archives):
+    archive = os.path.abspath(archive)
+    archive_sha256 = sha256_file(archive)
+
+    extract_dir = os.path.join(tmp_root, f"archive-{index}")
+    extraction_result = subprocess.run(
+        [sys.executable, safe_extractor, archive, extract_dir],
+        check=False,
+    )
+    if extraction_result.returncode != 0:
+        raise SystemExit(
+            f"unsafe or invalid native runtime archive: {archive}"
+        )
 
     manifest_paths = []
     for root, _, files in os.walk(extract_dir):
@@ -106,11 +142,23 @@ for archive in archives:
     if missing:
         raise SystemExit(f"{archive} is missing native runtime field(s): {', '.join(missing)}")
 
-    if mesh_version is None:
-        mesh_version = runtime["mesh_version"]
-    elif runtime["mesh_version"] != mesh_version:
+    runtime_version = runtime["mesh_version"]
+    normalized_runtime_version = (
+        runtime_version[1:]
+        if runtime_version.startswith("v")
+        else runtime_version
+    )
+    if normalized_runtime_version != release_version:
         raise SystemExit(
-            f"mixed mesh versions in native runtime artifacts: {runtime['mesh_version']} != {mesh_version}"
+            f"{archive} mesh_version {runtime_version} does not match "
+            f"release tag {tag}"
+        )
+
+    if mesh_version is None:
+        mesh_version = runtime_version
+    elif runtime_version != mesh_version:
+        raise SystemExit(
+            f"mixed mesh versions in native runtime artifacts: {runtime_version} != {mesh_version}"
         )
     if skippy_abi is None:
         skippy_abi = runtime["skippy_abi"]
