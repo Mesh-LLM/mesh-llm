@@ -244,6 +244,22 @@ jobs:
           test "$runtime_dir_count" -eq 1
           scripts/verify-native-runtime-package.sh "$runtime_dir"
           scripts/ci-client-readiness-smoke.sh host-input/mesh-llm runtime-root
+          if [[ "$MESH_RELEASE_OS" == "Linux" ]]; then
+            runtime_name="$(basename "$runtime_dir")"
+            rm -rf smoke-input
+            mkdir -p "smoke-input/native-runtimes"
+            cp host-input/mesh-llm smoke-input/mesh-llm
+            cp host-input/host-imports.json smoke-input/host-imports.json
+            cp -R "$runtime_dir" "smoke-input/native-runtimes/$runtime_name"
+            python3 scripts/compose-product-bundle.py \
+              --bundle smoke-input \
+              --host smoke-input/mesh-llm \
+              --runtime "smoke-input/native-runtimes/$runtime_name" \
+              --version "$RELEASE_TAG" \
+              --backend "$MESH_RELEASE_FLAVOR"
+            test -s smoke-input/product-manifest.json
+            test -s "smoke-input/native-runtimes/$runtime_name/manifest.json"
+          fi
           scripts/package-release.sh "$RELEASE_TAG" dist
       - name: Upload composed release product
         uses: actions/upload-artifact@v6
@@ -251,15 +267,12 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: dist/*
           if-no-files-found: error
-      - name: Upload Linux smoke binary
-        if: matrix.artifact_name == 'release-linux'
-        run: cp host-input/mesh-llm dist/mesh-llm
-      - name: Upload Linux smoke binary artifact
+      - name: Upload Linux composed smoke product
         if: matrix.artifact_name == 'release-linux'
         uses: actions/upload-artifact@v6
         with:
-          name: release-linux-inference-binary
-          path: dist/mesh-llm
+          name: release-linux-inference-product
+          path: smoke-input/
           if-no-files-found: error
 
   inference_smoke_tests:
@@ -267,7 +280,7 @@ jobs:
     if: needs.compose_cpu_products.result == 'success'
     uses: ./.github/workflows/smoke.yml
     with:
-      artifact_name: release-linux-inference-binary
+      artifact_name: release-linux-inference-product
       mesh_binary_target: target/release/mesh-llm
       cache_key_prefix: release-
       release_tag: ${{ needs.metadata.outputs.tag }}
