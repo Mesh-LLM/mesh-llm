@@ -54,13 +54,13 @@ struct BenchmarkChildOverrideGuard;
 impl Drop for BenchmarkChildOverrideGuard {
     fn drop(&mut self) {
         // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var(BENCHMARK_CHILD_ENV) };
+        unsafe { std::env::remove_var(BENCHMARK_TOOL_TEST_OVERRIDE_ENV) };
     }
 }
 
 fn with_benchmark_child_override<T>(path: &Path, f: impl FnOnce() -> T) -> T {
     // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var(BENCHMARK_CHILD_ENV, path) };
+    unsafe { std::env::set_var(BENCHMARK_TOOL_TEST_OVERRIDE_ENV, path) };
     let _guard = BenchmarkChildOverrideGuard;
     f()
 }
@@ -293,6 +293,68 @@ fn test_runner_for_windows_intel() {
 }
 
 #[test]
+fn test_intel_benchmark_requires_a_packaged_intel_runtime_tool() {
+    let error = runtime_selection_for_benchmark(mesh_llm_gpu_bench::BenchmarkBackend::Intel)
+        .expect_err("Intel has no published native runtime packaging lane");
+
+    assert!(
+        error
+            .to_string()
+            .contains("no published native-runtime tool")
+    );
+    assert!(error.to_string().contains("CUDA, ROCm, or Metal"));
+}
+
+#[test]
+fn test_runtime_tool_selection_excludes_preferred_legacy_runtime_without_tool() {
+    use mesh_llm_native_runtime::{
+        InstalledNativeRuntime, NativeRuntimeArtifact, NativeRuntimeBackend, NativeRuntimeManifest,
+        NativeRuntimePlatform,
+    };
+    use std::collections::BTreeMap;
+
+    let runtime = |id: &str, rank: i64, tools: BTreeMap<String, String>| InstalledNativeRuntime {
+        mesh_version: "0.74.0".to_string(),
+        native_runtime_id: id.to_string(),
+        flavor: "cuda".to_string(),
+        path: PathBuf::from(format!("/test/{id}")),
+        manifest: NativeRuntimeManifest {
+            runtime: NativeRuntimeArtifact {
+                id: id.to_string(),
+                mesh_version: Some("0.74.0".to_string()),
+                skippy_abi: "0.1.0".to_string(),
+                platform: NativeRuntimePlatform {
+                    os: "linux".to_string(),
+                    arch: "x86_64".to_string(),
+                    target: None,
+                },
+                backend: NativeRuntimeBackend::cuda(12, vec![]),
+                rank,
+                libraries: vec!["lib/libllama.so".to_string()],
+                files: BTreeMap::new(),
+                tools,
+                url: None,
+                sha256: None,
+                signature: None,
+            },
+        },
+    };
+    let runtimes = vec![
+        runtime("legacy-preferred", 999, BTreeMap::new()),
+        runtime(
+            "runtime-with-tool",
+            1,
+            BTreeMap::from([(GPU_BENCHMARK_TOOL_PATH.to_string(), "0".repeat(64))]),
+        ),
+    ];
+
+    let candidates = runtimes_with_benchmark_tools(&runtimes);
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].native_runtime_id, "runtime-with-tool");
+}
+
+#[test]
 fn test_runner_for_linux_cuda() {
     let hw = make_survey(1, vec![24_000_000_000], Some("NVIDIA RTX 4090"), false);
     let runner =
@@ -501,17 +563,15 @@ fn test_run_and_save_empty_stderr_child_failure_fails_cleanly() {
     let child = write_test_child(&root, "mesh-llm-child", "exit 1");
     #[cfg(windows)]
     let child = write_test_child(&root, "mesh-llm-child.cmd", "exit /b 1");
-    let marker = root.join("mesh-llm-benchmark-cuda");
-
     let err = with_benchmark_child_override(&child, || {
-        run_benchmark_subprocess(&marker, Duration::from_secs(5))
+        run_benchmark_subprocess(&child, Duration::from_secs(5))
             .expect_err("empty-stderr benchmark child failure should fail")
     });
     let _ = std::fs::remove_dir_all(&root);
 
     assert!(
         err.to_string()
-            .contains("benchmark child exited with status"),
+            .contains("benchmark tool exited with status"),
         "empty-stderr child failure should identify the child status, got: {err:#}"
     );
 }
@@ -534,12 +594,9 @@ fn test_run_benchmark_times_out_child_process() {
     let child = write_test_child(&root, "mesh-llm-child", "exec sleep 5");
     #[cfg(windows)]
     let child = write_test_child(&root, "mesh-llm-child.cmd", "timeout /t 5 >NUL");
-    let marker = root.join("mesh-llm-benchmark-cuda");
-
     let started = Instant::now();
-    let result = with_benchmark_child_override(&child, || {
-        run_benchmark(&marker, Duration::from_millis(100))
-    });
+    let result =
+        with_benchmark_child_override(&child, || run_benchmark(&child, Duration::from_millis(100)));
     let elapsed = started.elapsed();
     let _ = std::fs::remove_dir_all(&root);
 

@@ -271,6 +271,74 @@ class InstallScriptTests(unittest.TestCase):
                 "existing binary\n",
             )
 
+    def test_install_bundle_accepts_complete_legacy_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+            bundle_dir = tmp_path / "legacy-mesh-bundle"
+            bundle_dir.mkdir()
+            host = bundle_dir / "mesh-llm"
+            host.write_text(
+                "#!/usr/bin/env bash\nprintf '%s\\n' 'mesh-llm 0.74.0'\n",
+                encoding="utf-8",
+            )
+            host.chmod(0o755)
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                f"install_bundle {shlex_quote(str(bundle_dir))}",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("mesh-llm 0.74.0", (install_dir / "mesh-llm").read_text(encoding="utf-8"))
+            self.assertIn("supported legacy MeshLLM 0.74.0", result.stderr)
+
+    def test_install_bundle_rejects_partial_composed_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+            bundle_dir = tmp_path / "partial-mesh-bundle"
+            bundle_dir.mkdir()
+            host = bundle_dir / "mesh-llm"
+            host.write_text("partial host\n", encoding="utf-8")
+            host.chmod(0o755)
+            (bundle_dir / "product-manifest.json").write_text("{}\n", encoding="utf-8")
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                f"install_bundle {shlex_quote(str(bundle_dir))}",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("incomplete composed native runtime bundle", result.stderr)
+
+    def test_install_bundle_rejects_post_contract_legacy_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_dir = tmp_path / "bin"
+            install_dir.mkdir()
+            bundle_dir = tmp_path / "broken-current-bundle"
+            bundle_dir.mkdir()
+            host = bundle_dir / "mesh-llm"
+            host.write_text(
+                "#!/usr/bin/env bash\nprintf '%s\\n' 'mesh-llm 0.75.0'\n",
+                encoding="utf-8",
+            )
+            host.chmod(0o755)
+
+            result = self._run_helper(
+                tmp_path,
+                install_dir,
+                f"install_bundle {shlex_quote(str(bundle_dir))}",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires product-manifest.json", result.stderr)
+
     def test_install_bundle_replaces_existing_nonempty_runtime_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

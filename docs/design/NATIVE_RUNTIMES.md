@@ -27,6 +27,14 @@ today. The API already has a policy knob for requiring signatures, but
 signature verification intentionally fails closed until signing keys and
 attestation format are implemented.
 
+Both development and release use the same product boundary: a dynamic,
+backend-neutral host plus exactly one selected runtime directory. `just build`
+composes that product locally; only `package-native-runtime.sh --build` (and its
+explicit `just build-runtime` spelling) compiles the static native ABI. Release
+host producers attest and import-check the host once per OS/architecture;
+consumer jobs verify its checksum and attestation, then copy the same bytes into
+each backend product without rebuilding or re-stamping it.
+
 ## Artifact Identity
 
 The composed-product layer is defined by

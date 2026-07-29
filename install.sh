@@ -12,6 +12,10 @@ INSTALL_SERVICE_START="${MESH_LLM_INSTALL_SERVICE_START:-1}"
 RELEASE_URL_BASE="${MESH_LLM_INSTALL_URL_BASE:-}"
 REQUIRE_CHECKSUM="${MESH_LLM_REQUIRE_CHECKSUM:-0}"
 INSTALL_VERBOSE="${MESH_LLM_INSTALL_VERBOSE:-0}"
+# v0.75.0 is the first release whose public archives are required to contain a
+# contract-v2 host/runtime product. Keep the legacy path for older pinned tags
+# only; remove it after their documented support window ends.
+COMPOSED_PRODUCT_MIN_VERSION="0.75.0"
 AUTO_SETUP=1
 DOWNLOADED_ARCHIVE=""
 DOWNLOADED_ASSET=""
@@ -625,10 +629,48 @@ validate_bundle() {
         echo "error: mesh-llm binary in release archive is not executable" >&2
         return 1
     fi
-    if [[ ! -f "$bundle_dir/product-manifest.json" || ! -d "$bundle_dir/native-runtimes" ]]; then
-        echo "error: release archive did not contain a composed native runtime bundle" >&2
+    local has_product_manifest=0
+    local has_native_runtimes=0
+    [[ -f "$bundle_dir/product-manifest.json" ]] && has_product_manifest=1
+    [[ -d "$bundle_dir/native-runtimes" ]] && has_native_runtimes=1
+    if [[ "$has_product_manifest" != "$has_native_runtimes" ]]; then
+        echo "error: release archive has an incomplete composed native runtime bundle" >&2
         return 1
     fi
+    if [[ "$has_product_manifest" == 0 ]]; then
+        # Pinned/pre-contract release assets remain installable. Their hosts
+        # either carry the legacy static runtime or use their own historical
+        # runtime-install flow; requiring a v2 product manifest here would make
+        # a previously published, checksum-valid release unrecoverable.
+        local version_output legacy_version
+        if ! version_output="$("$binary" --version 2>&1)"; then
+            echo "error: cannot verify legacy release version before install: $version_output" >&2
+            return 1
+        fi
+        legacy_version="$(printf '%s\n' "$version_output" | sed -nE 's/^mesh-llm[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?).*$/\1/p' | head -n 1)"
+        if [[ -z "$legacy_version" ]]; then
+            echo "error: release archive omitted the composed runtime bundle and its host version is not parseable" >&2
+            return 1
+        fi
+        if version_at_least "$legacy_version" "$COMPOSED_PRODUCT_MIN_VERSION"; then
+            echo "error: MeshLLM $legacy_version requires product-manifest.json and native-runtimes (contract floor: v$COMPOSED_PRODUCT_MIN_VERSION)" >&2
+            return 1
+        fi
+        warn "installing supported legacy MeshLLM $legacy_version archive without a composed native runtime bundle"
+    fi
+}
+
+version_at_least() {
+    local candidate="${1%%-*}"
+    local floor="${2%%-*}"
+    local c_major c_minor c_patch f_major f_minor f_patch
+    IFS=. read -r c_major c_minor c_patch <<< "$candidate"
+    IFS=. read -r f_major f_minor f_patch <<< "$floor"
+    ((10#$c_major > 10#$f_major)) && return 0
+    ((10#$c_major < 10#$f_major)) && return 1
+    ((10#$c_minor > 10#$f_minor)) && return 0
+    ((10#$c_minor < 10#$f_minor)) && return 1
+    ((10#$c_patch >= 10#$f_patch))
 }
 
 install_bundle() {

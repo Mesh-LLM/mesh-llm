@@ -134,7 +134,22 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
     style MainRelease fill:#2a2a2a,stroke:#888,color:#ddd
 ```
 
-## Current PR Builds contract
+## Current PR and main CI product contracts
+
+### Current main CI product contract
+
+- `ci.yml` validates the same composed product shape on trusted main pushes and
+  manual dispatches: a backend-neutral host plus one separately packaged native
+  runtime. Linux and macOS debug artifact producers upload both layers, and the
+  Linux consumer reruns the JSON client-readiness smoke from the downloaded
+  host/runtime bytes without rebuilding either one.
+- CUDA, ROCm, Vulkan, and Windows rows build the host independently from the
+  selected runtime, require `--version`, `runtime list`, and client readiness,
+  and do so without a CUDA/ROCm/Vulkan driver, loader-path injection, or a
+  driver stub. GPU availability remains additional hardware qualification, not
+  a reason to skip the composed client-start check.
+
+### Current PR Builds contract
 
 - `pr_quality.yml` is named **PR Quality Checks** and owns the earliest Rust,
   React console, and CLI-documentation feedback: formatting, React console UI
@@ -202,8 +217,10 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   workflow. `release.yml` owns backend-neutral host artifacts per
   OS/architecture, manifested native runtimes per backend lane, and product
   composition that records both immutable digests while retaining
-  compatibility archive names. Product consumers never rebuild a missing
-  producer. It dispatches the completed release to `Mesh-LLM/mesh-packaging`,
+  compatibility archive names. Host producers attest and import-check the host;
+  consumers verify and copy those exact bytes rather than rebuilding or
+  re-stamping them. Product consumers never rebuild a missing producer. It
+  dispatches the completed release to `Mesh-LLM/mesh-packaging`,
   which owns package, GHCR, and npm publication.
 - `fly-deploy-console.yml` is a manual (`workflow_dispatch`) deploy of the
   `mesh-llm-console` Fly app. It builds the image on Fly's remote builders from

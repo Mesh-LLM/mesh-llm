@@ -24,14 +24,16 @@ This file covers local build and development workflows for this repository.
 
 ## Build from source
 
-Build the normal debug development binary, patched llama.cpp ABI, and UI:
+Build the normal debug product: a backend-neutral dynamic host, its adjacent
+locally packaged native runtime, and the UI:
 
 ```bash
 just build
 ```
 
-Release and packaging work use a backend-neutral host plus a separate native
-runtime. Build the host once:
+Release and packaging use the same host/runtime boundary. The only lower-level
+static compilation primitive is runtime packaging; it never builds a host.
+Build a release host once:
 
 ```bash
 just release-host-build

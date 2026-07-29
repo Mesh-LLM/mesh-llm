@@ -18,7 +18,6 @@
 set -euo pipefail
 
 MESH_LLM="${1:?Usage: $0 <mesh-llm-binary>}"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONSOLE_PORT=3132        # avoid clashing with other CI steps
 API_PORT=9338
 MAX_WAIT="${MESH_LLM_CLIENT_AUTO_MAX_WAIT:-300}" # seconds for public Nostr discovery + join attempt
@@ -36,8 +35,12 @@ if [ ! -f "$MESH_LLM" ]; then
     exit 1
 fi
 
-RUNTIME_CACHE="$("$REPO_ROOT/scripts/ci-install-native-runtime.sh" "$MESH_LLM" "$REPO_ROOT/target/client-auto-native-runtime" cpu)"
-export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$RUNTIME_CACHE"
+RUNTIME_BUNDLE="${MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR:-$(cd "$(dirname "$MESH_LLM")" && pwd)/native-runtimes}"
+if [[ ! -d "$RUNTIME_BUNDLE" ]]; then
+    echo "Missing packaged native runtime beside mesh-llm: $RUNTIME_BUNDLE" >&2
+    exit 1
+fi
+export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$RUNTIME_BUNDLE"
 
 # Start mesh-llm client --auto in background
 echo "Starting mesh-llm client --auto..."
@@ -51,6 +54,7 @@ echo "Starting mesh-llm client --auto..."
 MESH_PID=$!
 echo "  PID: $MESH_PID"
 
+# shellcheck disable=SC2329 # invoked through the EXIT trap below
 cleanup() {
     echo "Shutting down mesh-llm (PID $MESH_PID)..."
     kill "$MESH_PID" 2>/dev/null || true
@@ -177,7 +181,9 @@ sys.exit(1)
             echo "   Either the public mesh is currently down, or discovery is broken."
         fi
         echo "   Last /api/status body:"
-        echo "$STATUS" | sed 's/^/     /'
+        while IFS= read -r status_line; do
+            printf '     %s\n' "$status_line"
+        done <<<"$STATUS"
         exit 1
     fi
 

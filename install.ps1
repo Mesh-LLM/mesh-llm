@@ -13,6 +13,7 @@ $ProgressPreference = "SilentlyContinue"
 $Repo = if ($env:MESH_LLM_INSTALL_REPO) { $env:MESH_LLM_INSTALL_REPO } else { "Mesh-LLM/mesh-llm" }
 $HostArchive = "mesh-llm-x86_64-pc-windows-msvc.zip"
 $ReleaseUrlBase = $env:MESH_LLM_INSTALL_URL_BASE
+$ComposedProductMinVersion = [System.Version]::Parse("0.75.0")
 
 function Test-Truthy {
     param([string]$Value)
@@ -367,8 +368,26 @@ function Assert-ProductBundle {
 
     $productManifestSource = Join-Path $BundleDir "product-manifest.json"
     $runtimeRoot = Join-Path $BundleDir "native-runtimes"
-    if (-not (Test-Path $productManifestSource -PathType Leaf) -or -not (Test-Path $runtimeRoot -PathType Container)) {
-        throw "release archive did not contain a composed native runtime bundle"
+    $hasProductManifest = Test-Path $productManifestSource -PathType Leaf
+    $hasRuntimeRoot = Test-Path $runtimeRoot -PathType Container
+    if (-not $hasProductManifest -and -not $hasRuntimeRoot) {
+        $legacyHost = Join-Path $BundleDir "mesh-llm.exe"
+        if (-not (Test-Path $legacyHost -PathType Leaf)) {
+            throw "legacy release archive did not contain mesh-llm.exe"
+        }
+        $versionOutput = (& $legacyHost --version 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch '^mesh-llm\s+(?<version>\d+\.\d+\.\d+)') {
+            throw "cannot verify legacy release version before install: $versionOutput"
+        }
+        $legacyVersion = [System.Version]::Parse($Matches.version)
+        if ($legacyVersion -ge $ComposedProductMinVersion) {
+            throw "MeshLLM $legacyVersion requires product-manifest.json and native-runtimes (contract floor: v$ComposedProductMinVersion)"
+        }
+        Write-Warning "Installing supported legacy MeshLLM $legacyVersion archive without a composed native runtime bundle"
+        return [PSCustomObject]@{ IsLegacy = $true; HostSource = $legacyHost }
+    }
+    if (-not $hasProductManifest -or -not $hasRuntimeRoot) {
+        throw "release archive must contain both product-manifest.json and native-runtimes"
     }
 
     $manifest = Get-Content -Path $productManifestSource -Raw | ConvertFrom-Json
@@ -429,6 +448,7 @@ function Assert-ProductBundle {
     }
 
     return [PSCustomObject]@{
+        IsLegacy = $false
         HostSource = $hostSource
         RuntimeId = $runtimeId
         RuntimeSource = $runtimeSource
@@ -517,6 +537,25 @@ function Install-MeshBinary {
     $bundle = Assert-ProductBundle -BundleDir $BundleDir
 
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    if ($bundle.IsLegacy) {
+        $incoming = Join-Path $InstallDir "mesh-llm.exe.incoming"
+        $destination = Join-Path $InstallDir "mesh-llm.exe"
+        $backup = Join-Path $InstallDir "mesh-llm.exe.backup"
+        Remove-InstallStagingPath -Path $incoming
+        Copy-Item -Path $bundle.HostSource -Destination $incoming -Force
+        try {
+            [void](Move-IfExists -Source $destination -Destination $backup)
+            Move-Item -Path $incoming -Destination $destination -Force
+            Remove-InstallStagingPath -Path $backup
+        } catch {
+            Remove-InstallStagingPath -Path $destination
+            [void](Move-IfExists -Source $backup -Destination $destination)
+            throw
+        } finally {
+            Remove-InstallStagingPath -Path $incoming
+        }
+        return
+    }
     $paths = [PSCustomObject]@{
         MeshBinaryDestination = Join-Path $InstallDir "mesh-llm.exe"
         RuntimeDestination = Join-Path $InstallDir "native-runtimes"

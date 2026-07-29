@@ -1,13 +1,4 @@
 use crate::BenchmarkOutput;
-use anyhow::Result;
-#[cfg(any(
-    not(target_os = "macos"),
-    not(feature = "cuda"),
-    not(feature = "hip"),
-    not(feature = "intel")
-))]
-use anyhow::anyhow;
-use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BenchmarkBackend {
@@ -100,61 +91,4 @@ pub fn parse_benchmark_output(stdout: &[u8]) -> Option<Vec<BenchmarkOutput>> {
             None
         }
     }
-}
-
-pub fn run_benchmark(runner: BenchmarkRunner, _timeout: Duration) -> Result<Vec<BenchmarkOutput>> {
-    match runner.backend {
-        BenchmarkBackend::Metal => run_metal_benchmark(),
-        BenchmarkBackend::Cuda => run_cuda_benchmark(),
-        BenchmarkBackend::Hip => run_hip_benchmark(),
-        BenchmarkBackend::Intel => run_intel_benchmark(),
-    }
-}
-
-#[cfg(all(target_os = "macos", feature = "metal"))]
-fn run_metal_benchmark() -> Result<Vec<BenchmarkOutput>> {
-    crate::metal::run()
-}
-
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-fn run_metal_benchmark() -> Result<Vec<BenchmarkOutput>> {
-    Err(anyhow!(
-        "Metal benchmark backend was not compiled into this mesh-llm binary"
-    ))
-}
-
-#[cfg(feature = "cuda")]
-fn run_cuda_benchmark() -> Result<Vec<BenchmarkOutput>> {
-    crate::cuda::run()
-}
-
-#[cfg(not(feature = "cuda"))]
-fn run_cuda_benchmark() -> Result<Vec<BenchmarkOutput>> {
-    Err(anyhow!(
-        "CUDA benchmark backend was not compiled into this mesh-llm binary"
-    ))
-}
-
-#[cfg(feature = "hip")]
-fn run_hip_benchmark() -> Result<Vec<BenchmarkOutput>> {
-    crate::hip::run()
-}
-
-#[cfg(not(feature = "hip"))]
-fn run_hip_benchmark() -> Result<Vec<BenchmarkOutput>> {
-    Err(anyhow!(
-        "HIP benchmark backend was not compiled into this mesh-llm binary"
-    ))
-}
-
-#[cfg(feature = "intel")]
-fn run_intel_benchmark() -> Result<Vec<BenchmarkOutput>> {
-    crate::intel::run()
-}
-
-#[cfg(not(feature = "intel"))]
-fn run_intel_benchmark() -> Result<Vec<BenchmarkOutput>> {
-    Err(anyhow!(
-        "Intel benchmark backend was not compiled into this mesh-llm binary"
-    ))
 }

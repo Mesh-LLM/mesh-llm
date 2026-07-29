@@ -54,6 +54,23 @@ runs:
         chmod +x "${{ inputs.staged_binary_path }}"
         test -x "${{ inputs.staged_binary_path }}"
 
+    - name: Stage packaged native runtime
+      shell: bash
+      run: |
+        set -euo pipefail
+        source_runtime_root="${{ inputs.artifact_path }}/native-runtimes"
+        staged_runtime_root="$(dirname "${{ inputs.staged_binary_path }}")/native-runtimes"
+        [[ -d "$source_runtime_root" ]] || {
+          echo "artifact does not contain native-runtimes: $source_runtime_root" >&2
+          exit 1
+        }
+        rm -rf "$staged_runtime_root"
+        cp -a "$source_runtime_root" "$staged_runtime_root"
+        find "$staged_runtime_root" -type f -name manifest.json -print -quit | grep -q . || {
+          echo "staged native runtime has no manifest.json: $staged_runtime_root" >&2
+          exit 1
+        }
+
     - name: Restore integration model cache
       id: cache-model
       uses: actions/cache/restore@v5

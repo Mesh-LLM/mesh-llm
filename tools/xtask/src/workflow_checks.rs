@@ -29,8 +29,6 @@ pub(crate) fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<
     let ci_docs = fs::read_to_string(repo_root.join("ci/ci.md"))?;
     let pr_cleanup_workflow =
         fs::read_to_string(repo_root.join(".github/workflows/pr_cleanup.yml"))?;
-    let windows_warm_caches_workflow =
-        fs::read_to_string(repo_root.join(".github/workflows/windows-warm-caches.yml"))?;
 
     ensure_contains(
         &readme,
@@ -373,11 +371,7 @@ pub(crate) fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<
         "push:\n    branches: [main]",
         "main CI push trigger",
     )?;
-    check_windows_abi_cache_key_alignment(
-        &ci_workflow,
-        &pr_builds_workflow,
-        &windows_warm_caches_workflow,
-    )?;
+    check_windows_dynamic_runtime_contract(&ci_workflow, &pr_builds_workflow)?;
     check_release_dispatch_version_preparation(&release_workflow)?;
     check_release_container_contracts(&release_workflow, &configure_sccache_action)?;
     check_ci_crate_test_coverage(&ci_workflow, &pr_builds_workflow, &compute_changes_action)?;
@@ -560,46 +554,70 @@ fn release_container_job_names(release_workflow: &str) -> Vec<&str> {
         .collect()
 }
 
-fn check_windows_abi_cache_key_alignment(
+fn check_windows_dynamic_runtime_contract(
     ci_workflow: &str,
     pr_builds_workflow: &str,
-    windows_warm_caches_workflow: &str,
 ) -> DynResult<()> {
-    const WINDOWS_ABI_CACHE_HASH_INPUTS: &str = concat!(
-        "hashFiles('scripts/build-windows.ps1', 'scripts/install-windows-sdk.ps1', ",
-        "'.github/actions/setup-windows-rocm-sdk/action.yml', ",
-        "'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', ",
-        "'Justfile', '.github/cache-version.txt')",
-    );
-    let windows_cpu_abi_cache_key =
-        format!("windows-2022-skippy-abi-cpu--cpu-${{{{ {WINDOWS_ABI_CACHE_HASH_INPUTS} }}}}");
+    let ci_windows_cpu = workflow_job_section(ci_workflow, "windows_cpu")
+        .ok_or("main CI workflow: missing `windows_cpu` job")?;
+    let ci_windows_gpu = workflow_job_section(ci_workflow, "windows_gpu")
+        .ok_or("main CI workflow: missing `windows_gpu` job")?;
+    let pr_windows_targets = workflow_job_section(pr_builds_workflow, "windows_targets")
+        .ok_or("PR Builds workflow: missing `windows_targets` job")?;
 
-    ensure_contains(
-        ci_workflow,
-        &windows_cpu_abi_cache_key,
-        "main CI Windows CPU ABI cache key",
-    )?;
-    ensure_contains(
-        windows_warm_caches_workflow,
-        &windows_cpu_abi_cache_key,
-        "Windows warm-cache CPU ABI cache key",
-    )?;
-    ensure_contains(
-        pr_builds_workflow,
-        "windows-2022-skippy-abi-${{ matrix.backend }}-${{ matrix.build_args }}-",
-        "PR Builds Windows ABI cache key template",
-    )?;
-    ensure_contains(
-        pr_builds_workflow,
-        "|| 'cpu' }}-${{ hashFiles(",
-        "PR Builds Windows CPU ABI cache discriminator",
-    )?;
-    ensure_contains(
-        pr_builds_workflow,
-        WINDOWS_ABI_CACHE_HASH_INPUTS,
-        "PR Builds Windows ABI cache hash inputs",
-    )?;
+    for (workflow, context) in [
+        (ci_windows_cpu, "main CI Windows CPU"),
+        (ci_windows_gpu, "main CI Windows GPU"),
+        (pr_windows_targets, "PR Builds Windows targets"),
+    ] {
+        ensure_contains(
+            workflow,
+            "uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756",
+            &format!("{context} persistent MSVC environment"),
+        )?;
+    }
 
+    for (workflow, context) in [
+        (ci_workflow, "main CI"),
+        (pr_windows_targets, "PR Builds Windows targets"),
+    ] {
+        ensure_contains(
+            workflow,
+            "build-windows.ps1 -BuildProfile release -HostOnly",
+            &format!("{context} backend-neutral Windows host build"),
+        )?;
+        ensure_contains(
+            workflow,
+            "scripts/package-native-runtime.sh \\",
+            &format!("{context} packaged Windows native runtime"),
+        )?;
+        ensure_contains(
+            workflow,
+            "--target x86_64-pc-windows-msvc",
+            &format!("{context} Windows runtime target"),
+        )?;
+        ensure_contains(
+            workflow,
+            "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+            &format!("{context} composed Windows runtime discovery"),
+        )?;
+        ensure_contains(
+            workflow,
+            "scripts/ci-client-readiness-smoke.sh target/release/mesh-llm.exe target/release/native-runtimes",
+            &format!("{context} Windows client readiness smoke"),
+        )?;
+    }
+
+    ensure_not_contains(
+        pr_windows_targets,
+        "steps.llama_cache.outputs.cache-hit",
+        "PR Builds Windows target must not skip composition or startup on ABI-cache hits",
+    )?;
+    ensure_not_contains(
+        pr_windows_targets,
+        "Skipping Windows ${{ matrix.name }} launch smoke",
+        "PR Builds Windows target must not skip GPU client readiness",
+    )?;
     Ok(())
 }
 

@@ -8,7 +8,6 @@ set -euo pipefail
 MESH_LLM="${1:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path>}"
 BIN_DIR="${2:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path>}"
 MODEL="${3:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path>}"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API_PORT="${MESH_COMPAT_API_PORT:-9348}"
 CONSOLE_PORT="${MESH_COMPAT_CONSOLE_PORT:-3142}"
 MAX_WAIT="${MESH_COMPAT_MAX_WAIT:-180}"
@@ -55,8 +54,12 @@ fi
 
 inspect_release_attestation
 
-RUNTIME_CACHE="$("$REPO_ROOT/scripts/ci-install-native-runtime.sh" "$MESH_LLM" "$REPO_ROOT/target/compat-native-runtime" cpu)"
-export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$RUNTIME_CACHE"
+RUNTIME_BUNDLE="${MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR:-$(cd "$(dirname "$MESH_LLM")" && pwd)/native-runtimes}"
+if [[ ! -d "$RUNTIME_BUNDLE" ]]; then
+    echo "Missing packaged native runtime beside mesh-llm: $RUNTIME_BUNDLE" >&2
+    exit 1
+fi
+export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$RUNTIME_BUNDLE"
 
 env MESH_LLM_CONFIG="$SMOKE_CONFIG_PATH" MESH_LLM_RUNTIME_ROOT="$SMOKE_RUNTIME_ROOT" \
     "$MESH_LLM" \

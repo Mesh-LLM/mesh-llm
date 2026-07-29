@@ -12,7 +12,6 @@ set -euo pipefail
 MESH_LLM="${1:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path-or-ref>}"
 BIN_DIR="${2:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path-or-ref>}"
 MODEL="${MESH_TWO_NODE_SPLIT_MODEL:-${3:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path-or-ref>}}"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SEED_API_PORT="${MESH_TWO_NODE_SPLIT_SEED_API_PORT:-9367}"
 SEED_CONSOLE_PORT="${MESH_TWO_NODE_SPLIT_SEED_CONSOLE_PORT:-3161}"
@@ -50,8 +49,12 @@ if [[ ! -x "$MESH_LLM" ]]; then
     exit 1
 fi
 
-RUNTIME_CACHE="$("$REPO_ROOT/scripts/ci-install-native-runtime.sh" "$MESH_LLM" "$REPO_ROOT/target/two-node-split-native-runtime" cpu)"
-export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$RUNTIME_CACHE"
+RUNTIME_BUNDLE="${MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR:-$(cd "$(dirname "$MESH_LLM")" && pwd)/native-runtimes}"
+if [[ ! -d "$RUNTIME_BUNDLE" ]]; then
+    echo "Missing packaged native runtime beside mesh-llm: $RUNTIME_BUNDLE" >&2
+    exit 1
+fi
+export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$RUNTIME_BUNDLE"
 
 descendant_pids() {
     local pid="$1"

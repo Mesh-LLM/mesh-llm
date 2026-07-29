@@ -24,6 +24,12 @@ HOST_DLLS = {
     "kernel32.dll",
     "msvcp140.dll",
     "msvcrt.dll",
+    # NVIDIA deliberately ships the CUDA driver import library with the driver,
+    # not the redistributable toolkit. A native CUDA runtime must load it from
+    # the host at device-use time, just as Linux CUDA runtimes load libcuda.so.1.
+    # Keep cudart/cublas and every other toolkit DLL out of this allowlist: they
+    # remain redistributable dependencies that must be packaged.
+    "nvcuda.dll",
     "ntdll.dll",
     "ole32.dll",
     "oleaut32.dll",
@@ -166,10 +172,20 @@ def _packaged_dlls(lib_dir: pathlib.Path) -> dict[str, pathlib.Path]:
     }
 
 
-def dependency_gaps(lib_dir: pathlib.Path) -> dict[str, set[str]]:
+def dependency_gaps(
+    lib_dir: pathlib.Path, scan_dirs: list[pathlib.Path] | None = None
+) -> dict[str, set[str]]:
     packaged = _packaged_dlls(lib_dir)
     gaps: dict[str, set[str]] = {}
-    for name, library in sorted(packaged.items()):
+    scan_dirs = scan_dirs or [lib_dir]
+    libraries = {
+        path.name.casefold(): path
+        for scan_dir in scan_dirs
+        if scan_dir.is_dir()
+        for path in scan_dir.iterdir()
+        if path.is_file() and path.suffix.casefold() == ".dll"
+    }
+    for name, library in sorted(libraries.items()):
         missing = {
             dependency
             for dependency in imported_dlls(library)
@@ -181,12 +197,12 @@ def dependency_gaps(lib_dir: pathlib.Path) -> dict[str, set[str]]:
 
 
 def collect_dependencies(
-    lib_dir: pathlib.Path, search_dirs: list[pathlib.Path]
+    lib_dir: pathlib.Path, search_dirs: list[pathlib.Path], scan_dirs: list[pathlib.Path] | None = None
 ) -> list[pathlib.Path]:
     search_index = _dll_index([lib_dir, *search_dirs, *default_search_dirs()])
     copied: list[pathlib.Path] = []
     while True:
-        gaps = dependency_gaps(lib_dir)
+        gaps = dependency_gaps(lib_dir, scan_dirs)
         if not gaps:
             return copied
         unresolved: dict[str, set[str]] = {}
@@ -208,8 +224,8 @@ def collect_dependencies(
             raise RuntimeError(f"unresolved Windows runtime DLL dependencies: {details}")
 
 
-def verify_dependencies(lib_dir: pathlib.Path) -> None:
-    gaps = dependency_gaps(lib_dir)
+def verify_dependencies(lib_dir: pathlib.Path, scan_dirs: list[pathlib.Path] | None = None) -> None:
+    gaps = dependency_gaps(lib_dir, scan_dirs)
     if not gaps:
         return
     details = "; ".join(
@@ -225,8 +241,10 @@ def parse_args() -> argparse.Namespace:
     collect = subparsers.add_parser("collect")
     collect.add_argument("--lib-dir", type=pathlib.Path, required=True)
     collect.add_argument("--search-dir", type=pathlib.Path, action="append", default=[])
+    collect.add_argument("--scan-dir", type=pathlib.Path, action="append", default=[])
     verify = subparsers.add_parser("verify")
     verify.add_argument("--lib-dir", type=pathlib.Path, required=True)
+    verify.add_argument("--scan-dir", type=pathlib.Path, action="append", default=[])
     return parser.parse_args()
 
 
@@ -234,11 +252,12 @@ def main() -> int:
     args = parse_args()
     try:
         if args.command == "collect":
-            copied = collect_dependencies(args.lib_dir, args.search_dir)
+            scan_dirs = [args.lib_dir, *args.scan_dir]
+            copied = collect_dependencies(args.lib_dir, args.search_dir, scan_dirs)
             for path in copied:
                 print(f"bundled Windows runtime dependency: {path.name}")
         else:
-            verify_dependencies(args.lib_dir)
+            verify_dependencies(args.lib_dir, [args.lib_dir, *args.scan_dir])
     except (OSError, PeFormatError, RuntimeError) as error:
         print(error, file=sys.stderr)
         return 1

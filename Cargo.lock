@@ -3865,9 +3865,6 @@ dependencies = [
 name = "mesh-llm-gpu-bench"
 version = "0.72.1"
 dependencies = [
- "anyhow",
- "cc",
- "libc",
  "serde",
  "serde_json",
  "tracing",
@@ -4184,6 +4181,8 @@ dependencies = [
  "libloading",
  "mesh-llm-build-info",
  "mesh-llm-gpu-bench",
+ "mesh-llm-native-runtime",
+ "mesh-llm-runtime-install",
  "reqwest 0.12.28",
  "semver",
  "serde",

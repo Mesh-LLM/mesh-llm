@@ -8,8 +8,8 @@ mod manifest;
 mod resolver;
 
 pub use cache::{
-    CachePrunePlan, InstalledNativeRuntime, NativeRuntimeCache, NativeRuntimeCacheRoot,
-    NativeRuntimePruneMode, native_runtime_cache_root,
+    CachePrunePlan, GPU_BENCHMARK_TOOL_PATH, InstalledNativeRuntime, NativeRuntimeCache,
+    NativeRuntimeCacheRoot, NativeRuntimePruneMode, native_runtime_cache_root,
 };
 pub use flavor::{
     CudaRuntimeRequirements, NativeRuntimeBackend, NativeRuntimeBackendKind, NativeRuntimeFlavor,

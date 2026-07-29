@@ -6,6 +6,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Relative path of the hardware benchmark executable shipped by GPU runtimes.
+///
+/// The manifest checksum must include this path before the executable is
+/// selected or run. CPU and Vulkan runtimes intentionally do not provide it.
+#[cfg(target_os = "windows")]
+pub const GPU_BENCHMARK_TOOL_PATH: &str = "tools/mesh-llm-gpu-benchmark.exe";
+#[cfg(not(target_os = "windows"))]
+pub const GPU_BENCHMARK_TOOL_PATH: &str = "tools/mesh-llm-gpu-benchmark";
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NativeRuntimeCacheRoot {
     pub path: PathBuf,
@@ -18,6 +27,42 @@ pub struct InstalledNativeRuntime {
     pub flavor: String,
     pub path: PathBuf,
     pub manifest: NativeRuntimeManifest,
+}
+
+impl InstalledNativeRuntime {
+    /// Resolve the manifest-verified GPU benchmark helper inside this runtime.
+    pub fn gpu_benchmark_tool(&self) -> Result<PathBuf> {
+        if !self
+            .manifest
+            .runtime
+            .tools
+            .contains_key(GPU_BENCHMARK_TOOL_PATH)
+        {
+            anyhow::bail!(
+                "native runtime {} does not provide the GPU benchmark tool",
+                self.native_runtime_id
+            );
+        }
+        let path = self.path.join(GPU_BENCHMARK_TOOL_PATH);
+        if !path.is_file() {
+            anyhow::bail!(
+                "native runtime GPU benchmark tool is missing: {}",
+                path.display()
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            if fs::metadata(&path)?.permissions().mode() & 0o111 == 0 {
+                anyhow::bail!(
+                    "native runtime GPU benchmark tool is not executable: {}",
+                    path.display()
+                );
+            }
+        }
+        Ok(path)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -302,5 +347,34 @@ mod tests {
                     .join("lib/libmeshllm_ffi.so")
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gpu_benchmark_tool_must_be_declared_and_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        write_runtime(&source, "0.68.0", "meshllm-native-linux-x86_64-cuda12");
+
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        let mut installed = cache.install_from_dir(&source).unwrap();
+        let tool = installed.path.join(GPU_BENCHMARK_TOOL_PATH);
+        fs::create_dir_all(tool.parent().unwrap()).unwrap();
+        fs::write(&tool, b"benchmark tool").unwrap();
+        installed
+            .manifest
+            .runtime
+            .tools
+            .insert(GPU_BENCHMARK_TOOL_PATH.to_string(), "0".repeat(64));
+
+        let error = installed.gpu_benchmark_tool().unwrap_err();
+        assert!(error.to_string().contains("not executable"));
+
+        let mut permissions = fs::metadata(&tool).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&tool, permissions).unwrap();
+        assert_eq!(installed.gpu_benchmark_tool().unwrap(), tool);
     }
 }

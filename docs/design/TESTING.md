@@ -513,6 +513,12 @@ just build
 - Wakeable capacity renders in a separate section from topology peers and live nodes
 - Wakeable entries do not appear in the topology peer list
 - Validation uses `npm run test:run`, `npm run typecheck`, and `just build`
+- `just build` must leave `target/debug/mesh-llm` with exactly one adjacent
+  `target/debug/native-runtimes/<runtime-id>/` tree. Validate it with
+  `./target/debug/mesh-llm --log-format json runtime list`; CI also starts the
+  composed client noninteractively, observes either the JSON `Client ready`
+  message or the structured `passive_mode`/`status=ready`/`role=client` event,
+  and requires a clean SIGINT shutdown.
 
 ## Mesh Identity
 

@@ -380,6 +380,50 @@ mod tests {
     }
 
     #[test]
+    fn rejects_tampered_runtime_tool() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("lib/libllama.so");
+        let tool = temp.path().join("tools/mesh-llm-gpu-benchmark");
+        fs::create_dir_all(library.parent().unwrap()).unwrap();
+        fs::create_dir_all(tool.parent().unwrap()).unwrap();
+        fs::write(&library, b"native runtime").unwrap();
+        fs::write(&tool, b"benchmark tool").unwrap();
+        let manifest = NativeRuntimeManifest {
+            runtime: NativeRuntimeArtifact {
+                id: "meshllm-runtime-linux-x86_64-cuda12".to_string(),
+                mesh_version: Some("0.68.0".to_string()),
+                skippy_abi: "0.1.25".to_string(),
+                platform: NativeRuntimePlatform {
+                    os: "linux".to_string(),
+                    arch: "x86_64".to_string(),
+                    target: None,
+                },
+                backend: NativeRuntimeBackend::cuda(12, vec!["sm_90".to_string()]),
+                rank: 0,
+                libraries: vec!["lib/libllama.so".to_string()],
+                files: BTreeMap::from([(
+                    "lib/libllama.so".to_string(),
+                    sha256_file(&library).unwrap(),
+                )]),
+                tools: BTreeMap::from([(
+                    "tools/mesh-llm-gpu-benchmark".to_string(),
+                    sha256_file(&tool).unwrap(),
+                )]),
+                url: None,
+                sha256: None,
+                signature: None,
+            },
+        };
+        manifest.write_to_dir(temp.path()).unwrap();
+        fs::write(&tool, b"tampered benchmark tool").unwrap();
+
+        let error = NativeRuntimeManifest::read_from_dir(temp.path()).unwrap_err();
+
+        assert!(error.to_string().contains("checksum mismatch"));
+        assert!(error.to_string().contains("tools/mesh-llm-gpu-benchmark"));
+    }
+
+    #[test]
     fn rejects_runtime_manifest_without_file_checksums() {
         let temp = tempfile::tempdir().unwrap();
         fs::create_dir_all(temp.path().join("lib")).unwrap();

@@ -60,6 +60,9 @@ class InstallPs1StaticTests(unittest.TestCase):
         self.assertIn("runtime.manifest_sha256", contents)
         self.assertIn("Get-DeterministicTreeSha256", contents)
         self.assertIn("Assert-SafeRelativePath", contents)
+        self.assertIn('$ComposedProductMinVersion = [System.Version]::Parse("0.75.0")', contents)
+        self.assertIn("Installing supported legacy MeshLLM", contents)
+        self.assertIn("requires product-manifest.json and native-runtimes", contents)
 
     def test_script_stages_replacement_and_removes_stale_host_imports(self) -> None:
         contents = SCRIPT.read_text(encoding="utf-8")
@@ -75,18 +78,19 @@ class InstallPs1StaticTests(unittest.TestCase):
         contents = SCRIPT.read_text(encoding="utf-8")
         install_start = contents.index("function Install-MeshBinary")
         install_body = contents[install_start:]
+        product_install_body = install_body[install_body.index("$paths = [PSCustomObject]") :]
 
         self.assertLess(
-            install_body.index("Stage-IncomingBundle"),
-            install_body.index("Move-IfExists"),
+            product_install_body.index("Stage-IncomingBundle"),
+            product_install_body.index("Move-IfExists"),
         )
         self.assertLess(
-            install_body.index("Stage-IncomingBundle"),
-            install_body.index("Remove-StaleBinaries"),
+            product_install_body.index("Stage-IncomingBundle"),
+            product_install_body.index("Remove-StaleBinaries"),
         )
         self.assertLess(
-            install_body.index("Remove-InstallStagingPath -Path $paths.MeshBinaryStaging"),
-            install_body.index("Restore-InstallBackup"),
+            product_install_body.index("Remove-InstallStagingPath -Path $paths.MeshBinaryStaging"),
+            product_install_body.index("Restore-InstallBackup"),
         )
         self.assertLess(
             install_body.index("Remove-InstallBackups -Paths $paths"),

@@ -9,15 +9,11 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"
 
 [features]
-default = ["web-ui"]
+default = ["web-ui", "dynamic-native-runtime"]
 # Embed the React web console into the binary. Default on; turn off for
 # lib-style / headless consumers that don't need the console assets.
 # Propagates to `mesh-llm-ui/embed-assets`.
 web-ui = ["mesh-llm-ui/embed-assets"]
-gpu-bench-metal = ["mesh-llm-system/gpu-bench-metal"]
-gpu-bench-cuda = ["mesh-llm-system/gpu-bench-cuda"]
-gpu-bench-hip = ["mesh-llm-system/gpu-bench-hip"]
-gpu-bench-intel = ["mesh-llm-system/gpu-bench-intel"]
 dynamic-native-runtime = [
     "mesh-llm-system/dynamic-native-runtime",
     "skippy-runtime/dynamic-native-runtime",

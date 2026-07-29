@@ -140,6 +140,24 @@ for rel_path in runtime["libraries"]:
     if not os.path.isfile(path):
         raise SystemExit(f"missing library: {path}")
 
+files = runtime.get("files") or {}
+tools = runtime.get("tools") or {}
+if not isinstance(files, dict) or not isinstance(tools, dict):
+    raise SystemExit("runtime files and tools must be checksum maps")
+for kind, checksums in (("file", files), ("tool", tools)):
+    for rel_path, expected in checksums.items():
+        if os.path.isabs(rel_path) or ".." in rel_path.split(os.sep):
+            raise SystemExit(f"{kind} path must be relative inside the artifact: {rel_path}")
+        path = os.path.join(artifact_dir, rel_path)
+        if not os.path.isfile(path):
+            raise SystemExit(f"missing {kind}: {path}")
+        with open(path, "rb") as fh:
+            actual = hashlib.sha256(fh.read()).hexdigest()
+        if actual != expected.removeprefix("sha256:").lower():
+            raise SystemExit(f"{kind} checksum mismatch for {rel_path}")
+        if kind == "tool" and os.name != "nt" and not os.access(path, os.X_OK):
+            raise SystemExit(f"runtime tool is not executable: {rel_path}")
+
 build = manifest.get("build") or {}
 library_sha256 = build.get("library_sha256")
 primary_library = build.get("primary_library") or runtime["libraries"][0]
@@ -167,17 +185,14 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as fh:
     runtime = json.load(fh)["runtime"]
-is_windows_vulkan = (
-    runtime["platform"].get("os") == "windows"
-    and runtime["backend"].get("kind") == "vulkan"
-)
-raise SystemExit(0 if is_windows_vulkan else 1)
+raise SystemExit(0 if runtime["platform"].get("os") == "windows" else 1)
 PY
     then
         return 0
     fi
     "$(python_bin)" "$SCRIPT_DIR/windows-native-runtime-deps.py" verify \
-        --lib-dir "$artifact_dir/lib"
+        --lib-dir "$artifact_dir/lib" \
+        --scan-dir "$artifact_dir/tools"
 }
 
 verify_macos_runtime_paths() {
@@ -201,9 +216,10 @@ with open(manifest_path, encoding="utf-8") as fh:
     manifest = json.load(fh)
 
 libraries = manifest["runtime"]["libraries"]
+tools = list((manifest["runtime"].get("tools") or {}).keys())
 library_names = {os.path.basename(path) for path in libraries}
-for rel_path in libraries:
-    if not rel_path.endswith(".dylib"):
+for rel_path in [*libraries, *tools]:
+    if not (rel_path.endswith(".dylib") or rel_path in tools):
         continue
     path = os.path.join(artifact_dir, rel_path)
     load_output = subprocess.check_output(["otool", "-L", path], text=True)
@@ -224,8 +240,13 @@ for rel_path in libraries:
             if len(fields) > 1 and fields[1] == "@loader_path":
                 has_loader_path_rpath = True
             in_rpath = False
-    if not has_loader_path_rpath:
-        raise SystemExit(f"{rel_path} is missing @loader_path LC_RPATH")
+    expected_rpath = "@loader_path/../lib" if rel_path in tools else "@loader_path"
+    if expected_rpath not in {
+        fields[1]
+        for line in link_output.splitlines()
+        if (fields := line.split()) and fields[:1] == ["path"]
+    }:
+        raise SystemExit(f"{rel_path} is missing {expected_rpath} LC_RPATH")
 PY
 }
 
@@ -261,6 +282,7 @@ with open(manifest_path, encoding="utf-8") as fh:
     manifest = json.load(fh)
 
 libraries = manifest["runtime"]["libraries"]
+tools = list((manifest["runtime"].get("tools") or {}).keys())
 library_names = {os.path.basename(path) for path in libraries}
 artifact_root = os.path.realpath(artifact_dir)
 dynamic_re = re.compile(r"\((NEEDED|RPATH|RUNPATH)\).*\[(.*)\]")
@@ -311,9 +333,9 @@ def verify_ldd_resolution(rel_path: str, needed: list[str]) -> None:
             )
 
 
-for rel_path in libraries:
+for rel_path in [*libraries, *tools]:
     name = os.path.basename(rel_path)
-    if ".so" not in name:
+    if ".so" not in name and rel_path not in tools:
         continue
     needed, search_paths = dynamic_entries(os.path.join(artifact_dir, rel_path))
     packaged_needed = [dep for dep in needed if os.path.basename(dep) in library_names]
@@ -322,9 +344,10 @@ for rel_path in libraries:
             raise SystemExit(f"{rel_path} contains build-directory runtime search path: {entry}")
         if entry.startswith("/"):
             raise SystemExit(f"{rel_path} contains absolute runtime search path: {entry}")
-    if packaged_needed and not any("$ORIGIN" in entry for entry in search_paths):
+    expected_origin = "$ORIGIN/../lib" if rel_path in tools else "$ORIGIN"
+    if packaged_needed and expected_origin not in search_paths:
         joined = ", ".join(packaged_needed)
-        raise SystemExit(f"{rel_path} needs packaged libraries ({joined}) but is missing $ORIGIN RPATH/RUNPATH")
+        raise SystemExit(f"{rel_path} needs packaged libraries ({joined}) but is missing {expected_origin} RPATH/RUNPATH")
     verify_ldd_resolution(rel_path, needed)
 PY
 }

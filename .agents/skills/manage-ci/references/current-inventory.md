@@ -13,7 +13,7 @@ the commands at the end before operational changes.
 | `pr_website.yml` | PR, dispatch | Public website build canary and summary |
 | `pr_cleanup.yml` | PR close via `pull_request_target`, dispatch | Positively matched PR cache/artifact cleanup only; never executes PR code |
 | `pr_auto_assign.yml` | PR lifecycle via `pull_request_target` | PR metadata assignment only; never executes PR code |
-| `ci.yml` | Main push, dispatch | Trusted main CI equivalent of build/test/smoke lanes |
+| `ci.yml` | Main push, dispatch | Trusted main build/test/smoke lanes; composed host/runtime products and no-driver client readiness |
 | `docker.yml` | Dispatch | Manual client Dockerfile validation; does not publish |
 | `docker-precheck.yml` | Reusable call | Shared Docker validation precheck |
 | `smoke.yml` | Reusable call | Artifact-based inference/OpenAI/split smoke |
@@ -31,7 +31,7 @@ the commands at the end before operational changes.
 | `reset-caches.yml` | Confirmed dispatch | Destructive repository cache reset |
 | `stale-prs.yml` | Schedule, dispatch | PR warning/closure maintenance |
 
-`release.yml` is migrating to the contract-v2 three-layer artifact graph:
+`release.yml` uses the contract-v2 three-layer artifact graph:
 
 - host matrix: one dynamic, backend-neutral executable and import report per
   supported OS/architecture;
@@ -40,10 +40,23 @@ the commands at the end before operational changes.
 - product matrix: digest-verified composition of a host plus one runtime while
   retaining existing backend-flavored public archive names as aliases.
 
-Release and packaging consumers must not rebuild either input. Portable bundles
+The host producer attests the binary, writes `host-imports.json`, and publishes
+its checksum. Product consumers verify that immutable input before composition;
+they must not re-stamp or otherwise mutate the host per backend alias. Release
+CPU and backend product consumers also perform a noninteractive JSON client
+readiness smoke from the verified host/runtime inputs before publication; CI
+and packaging consumers must not rebuild either input. Portable bundles
 place runtimes at `mesh-bundle/native-runtimes/<runtime-id>`; Debian/Arch
 packages use `/usr/local/lib/mesh-llm/<version>/native-runtimes`; Homebrew uses
 formula-owned `libexec/native-runtimes`.
+
+`ci.yml` applies the same executable-product rule to trusted main validation:
+Linux and macOS debug artifact producers upload both the backend-neutral host
+and its adjacent runtime; their consumer reruns JSON client readiness from those
+exact bytes. Linux and Windows backend rows build a release host separately,
+package exactly one selected runtime, and require `runtime list` plus no-driver
+client readiness. They never invoke a backend-linked host, inject a CUDA driver
+stub, or skip client startup merely because a hosted runner has no GPU.
 
 Local actions:
 

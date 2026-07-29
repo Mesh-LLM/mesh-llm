@@ -89,9 +89,10 @@ means a footer was present, but signature verification failed.
 just build
 ```
 
-`just build` prepares the pinned upstream `llama.cpp` checkout, applies the
-Mesh-LLM ABI patch queue from `third_party/llama.cpp/patches`, builds the
-patched static ABI libraries, builds the UI, and builds the `mesh-llm` binary.
+`just build` builds a backend-neutral dynamic host, the UI, and one adjacent
+locally packaged native runtime. It uses the same host/runtime boundary as a
+release product. Static llama.cpp compilation is confined to the runtime
+packaging primitive, never the host executable.
 
 The release build graph has three layers: one backend-neutral dynamic host per
 OS/architecture, one manifested native runtime per backend lane, and a composed

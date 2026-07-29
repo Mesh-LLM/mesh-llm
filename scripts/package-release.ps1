@@ -9,7 +9,11 @@ $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
-$releaseBinDir = Join-Path $repoRoot "target\release"
+$releaseBinDir = if ($env:MESH_LLM_RELEASE_BIN_DIR) {
+    $env:MESH_LLM_RELEASE_BIN_DIR
+} else {
+    Join-Path $repoRoot "target\release"
+}
 $nativeRuntimeRoot = if ($env:MESH_LLM_NATIVE_RUNTIME_ROOT) {
     $env:MESH_LLM_NATIVE_RUNTIME_ROOT
 } else {
@@ -226,6 +230,12 @@ function Test-HasValue {
 }
 
 function Assert-AttestationConfig {
+    if ($env:MESH_RELEASE_HOST_PRESTAMPED -eq "1") {
+        if (-not (Test-HasValue $attestationPublicKeyFile)) {
+            throw "MESH_RELEASE_HOST_PRESTAMPED=1 requires MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
+        }
+        return
+    }
     if ((Test-HasValue $attestationSigningKeyFile) -and -not (Test-HasValue $attestationPublicKeyFile)) {
         throw "MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE is required when MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE is set"
     }
@@ -239,6 +249,30 @@ function Invoke-ReleaseAttestationStamp {
     param([string]$BinaryPath)
 
     $inspectJson = $null
+
+    if ($env:MESH_RELEASE_HOST_PRESTAMPED -eq "1") {
+        if (-not (Test-Path $attestationPublicKeyFile) -or (Get-Item $attestationPublicKeyFile).Length -eq 0) {
+            throw "MESH_RELEASE_HOST_PRESTAMPED=1 requires a non-empty MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
+        }
+        Push-Location $repoRoot
+        try {
+            $inspectJson = & cargo run -q -p xtask -- release-attestation inspect `
+                --binary $BinaryPath `
+                --public-key-file $attestationPublicKeyFile `
+                --json
+            if ($LASTEXITCODE -ne 0) {
+                throw "release-attestation inspect failed for pre-stamped $BinaryPath"
+            }
+            $inspectStatus = ($inspectJson | ConvertFrom-Json).status
+            if ($inspectStatus -ne "valid") {
+                throw "pre-stamped release host attestation reported status '$inspectStatus' for $BinaryPath"
+            }
+            Write-Host "Release attestation: verified pre-stamped host"
+        } finally {
+            Pop-Location
+        }
+        return
+    }
 
     if (-not (Test-HasValue $attestationSigningKeyFile)) {
         Write-Host "Release attestation: missing (packaged binary left unstamped)"

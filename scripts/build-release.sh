@@ -143,4 +143,4 @@ echo "Building mesh-llm..."
 stamp_build_version
 (cd "$REPO_ROOT" && cargo build --release --locked -p mesh-llm \
     --no-default-features \
-    --features web-ui,dynamic-native-runtime,gpu-bench-metal)
+    --features web-ui,dynamic-native-runtime)

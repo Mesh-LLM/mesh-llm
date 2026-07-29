@@ -266,37 +266,29 @@ jobs:
             exit 1
           fi
 
-      - name: Ensure ABI cache directory
-        run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
+      - name: Build backend-neutral debug host
+        env:
+          MESH_LLM_SKIP_UI: "1"
+        run: scripts/build-host.sh --profile debug
 
-      - name: Cache patched llama.cpp ABI build
-        id: llama_cache
-        uses: actions/cache@v5
-        with:
-          path: .deps/llama.cpp/build-stage-abi-static
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-abi-cpu-${{ hashFiles('scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
-
-      - name: Prepare patched llama.cpp ABI checkout
-        if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
-        run: scripts/prepare-llama.sh pinned
-
-      - name: Build patched llama.cpp ABI libraries
-        if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
-        run: scripts/build-llama.sh
-
-      - name: Build mesh-llm binary (debug)
-        run: cargo build -p mesh-llm --bin mesh-llm
+      - name: Package CPU native runtime beside debug host
+        run: scripts/package-native-runtime.sh --build --backend cpu --out target/debug/native-runtimes
 
       - name: CLI smoke test
         run: |
           target/debug/mesh-llm --log-format json --version
           target/debug/mesh-llm --log-format json --help | head -5
+          target/debug/mesh-llm --log-format json runtime list
+      - name: Composed debug client readiness smoke
+        run: scripts/ci-client-readiness-smoke.sh target/debug/mesh-llm target/debug/native-runtimes
 
       - name: Upload Linux inference binary
         uses: actions/upload-artifact@v6
         with:
           name: ci-linux-inference-binaries
-          path: target/debug/mesh-llm
+          path: |
+            target/debug/mesh-llm
+            target/debug/native-runtimes/**
           if-no-files-found: error
           retention-days: 1
 
@@ -411,22 +403,36 @@ jobs:
         run: just --shell bash --shell-arg -lc release-build-vulkan
       - name: Build Linux Vulkan binary only
         if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'vulkan' && steps.backend_llama_cache.outputs.cache-hit == 'true' }}
-        run: cargo build --release -p mesh-llm
+        run: |
+          scripts/build-release.sh
+          scripts/package-native-runtime.sh \
+            --backend vulkan \
+            --target x86_64-unknown-linux-gnu \
+            --out dist/native-runtimes
       - name: Linux CUDA CLI smoke test
         if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'cuda' }}
         run: |
-          cuda_stub_runtime="$(mktemp -d)"
-          ln -s /usr/local/cuda/lib64/stubs/libcuda.so "$cuda_stub_runtime/libcuda.so.1"
-          export LD_LIBRARY_PATH="$cuda_stub_runtime:/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH:-}"
+          # This must work without libcuda.so.1 or an injected driver stub. The
+          # CUDA runtime is selected dynamically from the packaged artifact;
+          # the backend-neutral host must remain executable on a CPU-only node.
+          export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
           target/release/mesh-llm --log-format json --version
+          target/release/mesh-llm --log-format json runtime list
+          scripts/ci-client-readiness-smoke.sh target/release/mesh-llm dist/native-runtimes
       - name: Linux ROCm CLI smoke test
         if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'rocm' }}
         run: |
-          export LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH:-}"
+          export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
           target/release/mesh-llm --log-format json --version
+          target/release/mesh-llm --log-format json runtime list
+          scripts/ci-client-readiness-smoke.sh target/release/mesh-llm dist/native-runtimes
       - name: Linux Vulkan CLI smoke test
         if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'vulkan' }}
-        run: target/release/mesh-llm --log-format json --version
+        run: |
+          export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+          target/release/mesh-llm --log-format json --version
+          target/release/mesh-llm --log-format json runtime list
+          scripts/ci-client-readiness-smoke.sh target/release/mesh-llm dist/native-runtimes
       - name: Show sccache stats
         if: ${{ env.RUN_LINUX_BACKEND == 'true' && (always()) }}
         run: |
@@ -844,31 +850,26 @@ jobs:
           [target.x86_64-apple-darwin]
           rustflags = ["-C", "link-arg=-fuse-ld=$lld_prefix/bin/ld64.lld"]
           EOF
-      - name: Ensure ABI cache directory
-        run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
-      - name: Cache patched llama.cpp ABI build
-        id: llama_cache
-        uses: actions/cache@v5
-        with:
-          path: .deps/llama.cpp/build-stage-abi-metal
-          key: ${{ env.CACHE_NAMESPACE }}-github-macos-15-skippy-abi-metal-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
-      - name: Prepare patched llama.cpp ABI checkout
-        if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
-        run: scripts/prepare-llama.sh pinned
-      - name: Build patched llama.cpp ABI libraries
-        if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
-        run: scripts/build-llama.sh
-      - name: Build mesh-llm binary (debug)
-        run: cargo build -p mesh-llm --bin mesh-llm
+      - name: Build backend-neutral debug host
+        env:
+          MESH_LLM_SKIP_UI: "1"
+        run: scripts/build-host.sh --profile debug
+      - name: Package Metal native runtime beside debug host
+        run: scripts/package-native-runtime.sh --build --backend metal --out target/debug/native-runtimes
       - name: CLI smoke test
         run: |
           target/debug/mesh-llm --log-format json --version
           target/debug/mesh-llm --log-format json --help | head -5
+          target/debug/mesh-llm --log-format json runtime list
+      - name: Composed debug client readiness smoke
+        run: scripts/ci-client-readiness-smoke.sh target/debug/mesh-llm target/debug/native-runtimes
       - name: Upload macOS inference binary
         uses: actions/upload-artifact@v6
         with:
           name: ci-macos-inference-binaries
-          path: target/debug/mesh-llm
+          path: |
+            target/debug/mesh-llm
+            target/debug/native-runtimes/**
           if-no-files-found: error
           retention-days: 1
 
@@ -981,19 +982,14 @@ jobs:
         include:
           - name: CPU
             backend: cpu
-            cache_key: windows-cpu
           - name: CUDA
             backend: cuda
-            build_recipe: release-build-cuda-windows
-            build_args: "75"
+            cuda_architectures: "75"
           - name: ROCm
             backend: rocm
-            build_recipe: release-build-rocm-windows
-            build_args: "gfx1100"
+            rocm_architectures: gfx1100
           - name: Vulkan
             backend: vulkan
-            build_recipe: release-build-vulkan-windows
-            build_args: ""
     env:
       RUN_WINDOWS_CPU_FULL: ${{ matrix.backend == 'cpu' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true') }}
       RUN_WINDOWS_NODE_RELEASE: ${{ matrix.backend == 'cpu' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.nodejs_release == 'true') }}
@@ -1027,8 +1023,6 @@ jobs:
         run: python -m unittest scripts.tests.test_windows_native_runtime_deps -v
       - uses: dtolnay/rust-toolchain@stable
         if: ${{ matrix.backend == 'cpu' || env.RUN_WINDOWS_GPU == 'true' }}
-      - uses: taiki-e/install-action@just
-        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
       - uses: mozilla-actions/sccache-action@v0.0.9
         if: ${{ matrix.backend == 'cpu' || env.RUN_WINDOWS_GPU == 'true' }}
       - uses: Swatinem/rust-cache@v2
@@ -1046,19 +1040,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path crates/mesh-llm-ui/dist | Out-Null
           '<html></html>' | Set-Content -Path crates/mesh-llm-ui/dist/index.html -Encoding utf8
-      - name: Ensure ABI cache directory
-        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
-        shell: pwsh
-        run: New-Item -ItemType Directory -Force -Path $env:LLAMA_STAGE_BUILD_DIR | Out-Null
-      - name: Cache patched llama.cpp ABI build
-        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
-        id: llama_cache
-        uses: actions/cache@v5
-        with:
-          path: .deps/llama.cpp/build-stage-abi-${{ matrix.backend }}
-          key: ${{ env.CACHE_NAMESPACE }}-windows-2022-skippy-abi-${{ matrix.backend }}-${{ matrix.build_args }}-${{ matrix.backend == 'cuda' && format('cuda-{0}-Jimver-v0.2.35', env.WINDOWS_CUDA_VERSION) || matrix.backend == 'vulkan' && format('vulkan-{0}-jakoch-v1.5.2', env.WINDOWS_VULKAN_SDK_VERSION) || matrix.backend == 'rocm' && format('rocm-{0}', env.ROCM_HIP_SDK_FILENAME) || 'cpu' }}-${{ hashFiles('scripts/build-windows.ps1', 'scripts/install-windows-sdk.ps1', '.github/actions/setup-windows-rocm-sdk/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
       - name: Install CUDA toolkit
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'cuda' && steps.llama_cache.outputs.cache-hit != 'true' }}
+        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'cuda' }}
         uses: Jimver/cuda-toolkit@v0.2.35
         with:
           cuda: ${{ env.WINDOWS_CUDA_VERSION }}
@@ -1068,7 +1051,7 @@ jobs:
           use-local-cache: true
           log-file-suffix: windows-cuda
       - name: Verify CUDA toolkit
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'cuda' && steps.llama_cache.outputs.cache-hit != 'true' }}
+        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'cuda' }}
         shell: pwsh
         run: |
           if (-not $env:CUDA_PATH -or -not (Test-Path $env:CUDA_PATH)) {
@@ -1082,14 +1065,14 @@ jobs:
             }
           }
       - name: Install Vulkan SDK
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' && steps.llama_cache.outputs.cache-hit != 'true' }}
+        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' }}
         uses: jakoch/install-vulkan-sdk-action@v1.5.2
         with:
           vulkan_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
           cache: true
           stripdown: true
       - name: Verify Vulkan SDK
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' && steps.llama_cache.outputs.cache-hit != 'true' }}
+        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'vulkan' }}
         shell: pwsh
         run: |
           if (-not $env:VULKAN_SDK -or -not (Test-Path $env:VULKAN_SDK)) {
@@ -1105,18 +1088,32 @@ jobs:
             throw "Expected Vulkan import library was not found: $vulkanLib"
           }
       - name: Install ROCm HIP SDK
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'rocm' && steps.llama_cache.outputs.cache-hit != 'true' }}
+        if: ${{ env.RUN_WINDOWS_GPU == 'true' && matrix.backend == 'rocm' }}
         uses: ./.github/actions/setup-windows-rocm-sdk
         with:
           rocm-hip-sdk-filename: ${{ env.ROCM_HIP_SDK_FILENAME }}
-      - name: Build Windows CPU backend
-        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' && steps.llama_cache.outputs.cache-hit != 'true' }}
+      - name: Initialize MSVC for composed product
+        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Build backend-neutral Windows release host
+        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
         shell: pwsh
-        run: just release-build-windows
-      - name: Build Windows CPU binary only
-        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' && steps.llama_cache.outputs.cache-hit == 'true' }}
-        shell: pwsh
-        run: cargo build --release --locked -p mesh-llm
+        run: .\scripts\build-windows.ps1 -BuildProfile release -HostOnly
+      - name: Package Windows native runtime
+        if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
+        shell: bash
+        env:
+          LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
+          LLAMA_STAGE_AMDGPU_TARGETS: ${{ matrix.rocm_architectures }}
+          MESH_LLM_CUDA_TOOLKIT_MAJOR: "12"
+        run: |
+          scripts/package-native-runtime.sh \
+            --build \
+            --backend "${{ matrix.backend }}" \
+            --target x86_64-pc-windows-msvc \
+            --out target/release/native-runtimes
       - name: Check mesh-llm binary on Windows
         if: ${{ matrix.backend == 'cpu' && env.RUN_WINDOWS_CPU_FULL != 'true' }}
         shell: pwsh
@@ -1129,37 +1126,13 @@ jobs:
         if: ${{ env.RUN_WINDOWS_NODE_RELEASE == 'true' }}
         shell: pwsh
         run: cargo build --release --locked -p mesh-llm-nodejs
-      - name: Build Windows GPU backend
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && steps.llama_cache.outputs.cache-hit != 'true' }}
-        shell: pwsh
-        env:
-          MESH_LLM_REQUIRE_SCCACHE: "1"
-        run: |
-          if ("${{ matrix.build_args }}" -ne "") {
-            just ${{ matrix.build_recipe }} "${{ matrix.build_args }}"
-          } else {
-            just ${{ matrix.build_recipe }}
-          }
-      - name: Verify cached Windows GPU ABI build
-        if: ${{ env.RUN_WINDOWS_GPU == 'true' && steps.llama_cache.outputs.cache-hit == 'true' }}
-        shell: pwsh
-        run: |
-          $libs = Get-ChildItem -Path $env:LLAMA_STAGE_BUILD_DIR -Recurse -File -Filter *.lib -ErrorAction SilentlyContinue | Select-Object -First 20
-          if (-not $libs) {
-            throw "No static libraries were found under $env:LLAMA_STAGE_BUILD_DIR."
-          }
-          $libs | ForEach-Object { Write-Host $_.FullName }
-      - name: CLI smoke test
+      - name: Composed Windows CLI and client readiness smoke
         if: ${{ env.RUN_WINDOWS_CPU_FULL == 'true' || env.RUN_WINDOWS_GPU == 'true' }}
         shell: pwsh
         run: |
-          if ("${{ matrix.backend }}" -eq "cpu") {
-            .\target\release\mesh-llm.exe --log-format json --version
-            .\target\release\mesh-llm.exe --log-format json --help | Select-Object -First 5
-          } elseif ("${{ steps.llama_cache.outputs.cache-hit }}" -eq "true") {
-            Write-Host "Skipping Windows ${{ matrix.name }} launch smoke because the cached ABI was verified without relinking."
-          } elseif (-not (Test-Path .\target\release\mesh-llm.exe)) {
-            throw "target\release\mesh-llm.exe was not produced"
-          } else {
-            Write-Host "Skipping Windows ${{ matrix.name }} launch smoke on the hosted runner because GPU drivers are not available."
-          }
+          .\target\release\mesh-llm.exe --log-format json --version
+          .\target\release\mesh-llm.exe --log-format json --help | Select-Object -First 5
+          $env:MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR = "$PWD\target\release\native-runtimes"
+          .\target\release\mesh-llm.exe --log-format json runtime list
+          bash scripts/ci-client-readiness-smoke.sh target/release/mesh-llm.exe target/release/native-runtimes
+          if ($LASTEXITCODE -ne 0) { throw "composed Windows ${{ matrix.name }} client readiness smoke failed" }

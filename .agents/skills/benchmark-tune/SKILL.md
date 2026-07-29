@@ -26,12 +26,13 @@ For performance work, use a release build on the target host:
 just release-build
 ```
 
-On NVIDIA remote hosts, verify that the release binary is actually using CUDA
-before recording performance results. For Jetson/Orin-style aarch64 CUDA hosts,
-prefer the repo's CUDA backend build path for the host, for example
-`scripts/build-linux.sh --backend cuda --cuda-arch 87`, with the host CUDA
-toolkit paths exported as needed. A generic release build that reports CPU
-devices is not valid performance evidence for GPU tune work.
+On NVIDIA remote hosts, verify that the selected CUDA native runtime is actually
+in use before recording performance results. For Jetson/Orin-style aarch64 CUDA
+hosts, build the normal backend-neutral product with a CUDA runtime, for example
+`just build backend=cuda cuda_arch=87`, with the CUDA toolkit paths exported as
+needed. The host itself must remain backend-neutral; a generic CPU runtime is
+not valid performance evidence for GPU tune work. Confirm `mesh-llm runtime
+list` selects the intended CUDA runtime before benchmarking.
 
 If the run is on a remote node over SSH and will take time, use the
 `remote-observable-process` skill. Prefer a TTY/login shell and `tee` logs over

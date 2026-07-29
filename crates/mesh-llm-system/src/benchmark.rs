@@ -1,6 +1,16 @@
 use anyhow::{Context, Result, anyhow, bail};
 pub use mesh_llm_gpu_bench::BenchmarkOutput;
+use mesh_llm_native_runtime::{
+    GPU_BENCHMARK_TOOL_PATH, InstalledNativeRuntime, NativeRuntimeBackendKind, RuntimeSelection,
+    select_native_runtime_from_artifacts,
+};
+use mesh_llm_runtime_install::{
+    CURRENT_MESH_VERSION, current_skippy_abi_version, default_native_runtime_cache,
+    discover_local_native_runtimes, host_runtime_profile,
+};
 use serde::{Deserialize, Serialize};
+#[cfg(any(test, windows))]
+use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -42,7 +52,8 @@ pub struct SavedBenchmark {
 
 pub const BENCHMARK_TIMEOUT: Duration = Duration::from_secs(25);
 
-const BENCHMARK_CHILD_ENV: &str = "MESH_LLM_BENCHMARK_CHILD";
+#[cfg(test)]
+const BENCHMARK_TOOL_TEST_OVERRIDE_ENV: &str = "MESH_LLM_BENCHMARK_TOOL_TEST_OVERRIDE";
 
 fn benchmark_backend_name(backend: mesh_llm_gpu_bench::BenchmarkBackend) -> &'static str {
     match backend {
@@ -67,51 +78,115 @@ fn parse_benchmark_backend(name: &str) -> Option<mesh_llm_gpu_bench::BenchmarkBa
     }
 }
 
-fn benchmark_marker_name(backend: mesh_llm_gpu_bench::BenchmarkBackend) -> String {
-    format!("mesh-llm-benchmark-{}", benchmark_backend_name(backend))
-}
-
-fn parse_benchmark_backend_from_path(
-    binary: &Path,
-) -> Option<mesh_llm_gpu_bench::BenchmarkBackend> {
-    let raw = binary.file_name()?.to_string_lossy();
-    if let Some(name) = raw.strip_prefix("mesh-llm-benchmark-") {
-        return parse_benchmark_backend(name);
-    }
-
-    let raw = binary.to_string_lossy();
-    if let Some(name) = raw.strip_prefix("in-process:") {
-        return parse_benchmark_backend(name);
-    }
-
-    None
-}
-
-fn benchmark_child_path(bin_dir: &Path) -> PathBuf {
-    if let Some(path) = std::env::var_os(BENCHMARK_CHILD_ENV) {
-        return PathBuf::from(path);
-    }
-
-    let mesh_binary = if cfg!(windows) {
-        "mesh-llm.exe"
-    } else {
-        "mesh-llm"
+fn runtime_selection_for_benchmark(
+    backend: mesh_llm_gpu_bench::BenchmarkBackend,
+) -> Result<RuntimeSelection> {
+    let kind = match backend {
+        mesh_llm_gpu_bench::BenchmarkBackend::Metal => NativeRuntimeBackendKind::Metal,
+        mesh_llm_gpu_bench::BenchmarkBackend::Cuda => NativeRuntimeBackendKind::Cuda,
+        mesh_llm_gpu_bench::BenchmarkBackend::Hip => NativeRuntimeBackendKind::Rocm,
+        mesh_llm_gpu_bench::BenchmarkBackend::Intel => {
+            bail!(
+                "Intel GPU benchmarking has no published native-runtime tool; use a supported \
+                 CUDA, ROCm, or Metal runtime instead"
+            )
+        }
     };
-    bin_dir.join(mesh_binary)
+    Ok(RuntimeSelection::Backend {
+        kind,
+        cuda_toolkit_major: None,
+    })
+}
+
+fn runtimes_with_benchmark_tools(
+    runtimes: &[InstalledNativeRuntime],
+) -> Vec<&InstalledNativeRuntime> {
+    runtimes
+        .iter()
+        .filter(|runtime| {
+            runtime
+                .manifest
+                .runtime
+                .tools
+                .contains_key(GPU_BENCHMARK_TOOL_PATH)
+        })
+        .collect()
+}
+
+/// Resolve the selected installed native runtime's manifest-verified benchmark
+/// tool. The neutral host never executes a benchmark binary from its own
+/// directory or an unverified search path.
+fn resolve_runtime_benchmark_tool(
+    backend: mesh_llm_gpu_bench::BenchmarkBackend,
+) -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = env::var_os(BENCHMARK_TOOL_TEST_OVERRIDE_ENV) {
+        return Ok(PathBuf::from(path));
+    }
+
+    let cache = default_native_runtime_cache()?;
+    let installed = discover_local_native_runtimes(&[], &cache)?;
+    let installed_for_version = installed
+        .iter()
+        .filter(|runtime| runtime.mesh_version == CURRENT_MESH_VERSION)
+        .cloned()
+        .collect::<Vec<_>>();
+    let installed_with_tools = runtimes_with_benchmark_tools(&installed_for_version);
+    let artifacts = installed_with_tools
+        .iter()
+        .map(|runtime| runtime.manifest.runtime.clone())
+        .collect::<Vec<_>>();
+    let selection = runtime_selection_for_benchmark(backend)?;
+    let selected = select_native_runtime_from_artifacts(
+        &artifacts,
+        &host_runtime_profile(),
+        CURRENT_MESH_VERSION,
+        Some(&current_skippy_abi_version()),
+        &selection,
+    )
+    .with_context(|| {
+        format!(
+            "no compatible installed {} native runtime with a benchmark tool",
+            benchmark_backend_name(backend)
+        )
+    })?;
+    let runtime = installed_with_tools
+        .into_iter()
+        .find(|runtime| {
+            runtime.native_runtime_id == selected.artifact.id
+                && runtime.manifest.runtime.skippy_abi == selected.artifact.skippy_abi
+        })
+        .context("selected native runtime disappeared while resolving benchmark tool")?;
+    runtime.gpu_benchmark_tool()
 }
 
 fn run_benchmark_subprocess(binary: &Path, timeout: Duration) -> Result<Vec<BenchmarkOutput>> {
-    let backend = parse_benchmark_backend_from_path(binary)
-        .with_context(|| format!("unknown benchmark runner marker {}", binary.display()))?;
-    let backend_name = benchmark_backend_name(backend);
-    let child_path = benchmark_child_path(binary.parent().unwrap_or_else(|| Path::new(".")));
-
-    let mut child = Command::new(&child_path)
-        .args(["gpus", "run-benchmark", "--backend", backend_name])
+    let mut command = Command::new(binary);
+    command
+        .arg("--json")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to start benchmark child {}", child_path.display()))?;
+        .stderr(Stdio::piped());
+
+    #[cfg(windows)]
+    {
+        let runtime_lib = binary
+            .parent()
+            .and_then(Path::parent)
+            .context("native runtime benchmark tool has no runtime root")?
+            .join("lib");
+        let mut path_entries = vec![runtime_lib];
+        if let Some(current_path) = env::var_os("PATH") {
+            path_entries.extend(env::split_paths(&current_path));
+        }
+        command.env("PATH", env::join_paths(path_entries)?);
+    }
+
+    let mut child = command.spawn().with_context(|| {
+        format!(
+            "failed to start runtime benchmark tool {}",
+            binary.display()
+        )
+    })?;
 
     let started = Instant::now();
     while child.try_wait()?.is_none() {
@@ -134,9 +209,12 @@ fn run_benchmark_subprocess(binary: &Path, timeout: Duration) -> Result<Vec<Benc
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if stderr.is_empty() {
-            bail!("benchmark child exited with status {}", output.status);
+            bail!(
+                "runtime benchmark tool exited with status {}",
+                output.status
+            );
         }
-        bail!("benchmark child failed: {stderr}");
+        bail!("runtime benchmark tool failed: {stderr}");
     }
 
     parse_benchmark_output(&output.stdout)
@@ -146,10 +224,8 @@ fn run_benchmark_subprocess(binary: &Path, timeout: Duration) -> Result<Vec<Benc
 pub fn run_backend_by_name(backend: &str) -> Result<Vec<BenchmarkOutput>> {
     let backend = parse_benchmark_backend(backend)
         .with_context(|| format!("unsupported benchmark backend {backend}"))?;
-    mesh_llm_gpu_bench::run_benchmark(
-        mesh_llm_gpu_bench::BenchmarkRunner { backend },
-        BENCHMARK_TIMEOUT,
-    )
+    let tool = resolve_runtime_benchmark_tool(backend)?;
+    run_benchmark_subprocess(&tool, BENCHMARK_TIMEOUT)
 }
 
 /// Normalize `HardwareSurvey.gpu_name` into a per-GPU list of names.
@@ -285,14 +361,14 @@ pub fn try_save_fingerprint(path: &Path, fp: &BenchmarkFingerprint) -> Result<()
 }
 
 /// Determine whether this hardware maps to a benchmark backend.
-pub fn detect_benchmark_binary(hw: &HardwareSurvey, bin_dir: &Path) -> Option<PathBuf> {
+pub fn detect_benchmark_binary(hw: &HardwareSurvey, _bin_dir: &Path) -> Option<PathBuf> {
     let runner = mesh_llm_gpu_bench::runner_for(
         std::env::consts::OS,
         hw.gpu_count,
         hw.gpu_name.as_deref(),
         hw.is_soc,
     )?;
-    Some(bin_dir.join(benchmark_marker_name(runner.backend)))
+    resolve_runtime_benchmark_tool(runner.backend).ok()
 }
 
 /// Parse raw stdout bytes from a benchmark run into a vec of per-device outputs.
@@ -303,7 +379,7 @@ pub fn parse_benchmark_output(stdout: &[u8]) -> Option<Vec<BenchmarkOutput>> {
     mesh_llm_gpu_bench::parse_benchmark_output(stdout)
 }
 
-/// Run an in-process benchmark backend and return per-device outputs.
+/// Run a manifest-verified native-runtime benchmark tool and return per-device outputs.
 pub fn run_benchmark(binary: &Path, timeout: Duration) -> Option<Vec<BenchmarkOutput>> {
     run_benchmark_subprocess(binary, timeout)
         .map_err(|err| tracing::warn!("benchmark failed: {err:#}"))

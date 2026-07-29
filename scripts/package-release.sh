@@ -8,7 +8,7 @@ trap 'rm -rf "$_STAGING_DIR"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-RELEASE_BIN_DIR="$REPO_ROOT/target/release"
+RELEASE_BIN_DIR="${MESH_LLM_RELEASE_BIN_DIR:-$REPO_ROOT/target/release}"
 NATIVE_RUNTIME_ROOT="${MESH_LLM_NATIVE_RUNTIME_ROOT:-$REPO_ROOT/dist/native-runtimes}"
 ATTESTATION_SIGNING_KEY_FILE="${MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE:-}"
 ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
@@ -194,6 +194,13 @@ write_product_manifest() {
 }
 
 validate_attestation_env() {
+    if [[ "${MESH_RELEASE_HOST_PRESTAMPED:-0}" == "1" ]]; then
+        if [[ -z "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
+            echo "MESH_RELEASE_HOST_PRESTAMPED=1 requires MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE" >&2
+            exit 1
+        fi
+        return 0
+    fi
     if [[ -n "$ATTESTATION_SIGNING_KEY_FILE" && -z "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
         echo "MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE is required when MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE is set" >&2
         exit 1
@@ -209,6 +216,27 @@ stamp_bundle_binary() {
     local inspect_json
     local inspect_status
     local py
+
+    if [[ "${MESH_RELEASE_HOST_PRESTAMPED:-0}" == "1" ]]; then
+        if [[ -z "$ATTESTATION_PUBLIC_KEY_FILE" || ! -s "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
+            echo "MESH_RELEASE_HOST_PRESTAMPED=1 requires a non-empty MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE" >&2
+            exit 1
+        fi
+        inspect_json="$(
+            cd "$REPO_ROOT"
+            cargo run -q -p xtask -- release-attestation inspect \
+                --binary "$binary_path" \
+                --public-key-file "$ATTESTATION_PUBLIC_KEY_FILE" \
+                --json
+        )"
+        inspect_status="$(printf '%s' "$inspect_json" | "$(python_bin)" -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+        if [[ "$inspect_status" != "valid" ]]; then
+            echo "pre-stamped release host is not valid: $binary_path ($inspect_status)" >&2
+            exit 1
+        fi
+        echo "Release attestation: verified pre-stamped host"
+        return 0
+    fi
 
     if [[ -z "$ATTESTATION_SIGNING_KEY_FILE" ]]; then
         echo "Release attestation: missing (packaged binary left unstamped)"

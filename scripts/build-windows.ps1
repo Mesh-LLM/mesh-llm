@@ -2,7 +2,9 @@ param(
     [string]$Backend = "",
     [string]$CudaArch = "",
     [string]$RocmArch = "",
-    [string]$BuildProfile = ""
+    [string]$BuildProfile = "",
+    [switch]$DynamicHost,
+    [switch]$HostOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -1001,6 +1003,33 @@ if ((Test-Sccache) -and -not $env:RUSTC_WRAPPER) {
     Write-Host "Using sccache for Rust compilation: $env:RUSTC_WRAPPER"
 }
 
+if ($DynamicHost) {
+    Write-Host "-DynamicHost is retained as a compatibility switch; Windows hosts are always dynamic."
+}
+
+if ($HostOnly) {
+    Invoke-InRepo {
+        if ($env:MESH_LLM_SKIP_UI -ne "1" -and (Test-Path $meshUiDir) -and (Test-UiBuildRequired -UiDirectory $meshUiDir)) {
+            Write-Host "Building mesh-llm UI for the backend-neutral host..."
+            Push-Location $meshUiDir
+            try {
+                if (Test-PnpmInstallRequired -UiDirectory $meshUiDir) {
+                    Invoke-NativeCommand "pnpm" @("install", "--frozen-lockfile")
+                }
+                Invoke-NativeCommand "pnpm" @("run", "build")
+                Set-Content -Path (Join-Path (Join-Path $meshUiDir "dist") ".mesh-llm-ui-build-env") -Value (Get-UiBuildEnvStampContent)
+            } finally {
+                Pop-Location
+            }
+        }
+        Set-BuildVersionStamp
+        $hostArgs = @("build", "--release", "--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime")
+        Invoke-NativeCommand "cargo" $hostArgs
+        Write-Host "Mesh backend-neutral host: target\\release\\mesh-llm.exe"
+    }
+    exit 0
+}
+
 switch ($backendName) {
     "cuda" {
         Ensure-CudaToolchain
@@ -1056,7 +1085,7 @@ Invoke-InRepo {
         "-DGGML_AVX2=ON",
         "-DGGML_AVX512=OFF",
         "-DGGML_BMI2=OFF",
-        "-DBUILD_SHARED_LIBS=$(if ($buildProfile -eq 'release') { 'ON' } else { 'OFF' })",
+        "-DBUILD_SHARED_LIBS=ON",
         "-DLLAMA_CURL=OFF",
         "-DLLAMA_BUILD_EXAMPLES=OFF",
         "-DLLAMA_BUILD_TESTS=OFF",
@@ -1133,21 +1162,21 @@ Invoke-InRepo {
     Show-SccacheStats
     Assert-RequiredSccacheUsage $backendName $sccacheStats
 
-    if ($buildProfile -eq "release") {
-        $env:LLAMA_STAGE_BUILD_DIR = $buildDir
-        if ($CudaArch) {
-            $env:LLAMA_STAGE_CUDA_ARCHITECTURES = $CudaArch
-        }
-        if ($RocmArch) {
-            $env:LLAMA_STAGE_AMDGPU_TARGETS = $RocmArch
-        }
-        Invoke-NativeCommand "bash" @(
-            (Join-Path $scriptDir "package-native-runtime.sh"),
-            "--backend", $backendName,
-            "--target", "x86_64-pc-windows-msvc",
-            "--out", "dist/native-runtimes"
-        )
+    $env:LLAMA_STAGE_BUILD_DIR = $buildDir
+    if ($CudaArch) {
+        $env:LLAMA_STAGE_CUDA_ARCHITECTURES = $CudaArch
     }
+    if ($RocmArch) {
+        $env:LLAMA_STAGE_AMDGPU_TARGETS = $RocmArch
+    }
+    $profileDir = if ($buildProfile -eq "release") { "release" } else { "debug" }
+    $runtimeOut = Join-Path (Join-Path (Join-Path $repoRoot "target") $profileDir) "native-runtimes"
+    Invoke-NativeCommand "bash" @(
+        (Join-Path $scriptDir "package-native-runtime.sh"),
+        "--backend", $backendName,
+        "--target", "x86_64-pc-windows-msvc",
+        "--out", $runtimeOut
+    )
 
     if ($env:MESH_LLM_SKIP_UI -eq "1") {
         Write-Host "Skipping mesh-llm UI build because MESH_LLM_SKIP_UI=1."
@@ -1171,11 +1200,7 @@ Invoke-InRepo {
 
     Write-Host "Building mesh-llm..."
     $env:LLAMA_STAGE_BUILD_DIR = $buildDir
-    $cargoFeatureArgs = if ($buildProfile -eq "release") {
-        @("--features", "dynamic-native-runtime")
-    } else {
-        @()
-    }
+    $cargoFeatureArgs = @("--no-default-features", "--features", "web-ui,dynamic-native-runtime")
     Set-BuildVersionStamp
     switch ($buildProfile) {
         "dev" {

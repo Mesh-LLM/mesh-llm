@@ -22,6 +22,10 @@ def run_bash(command: str, env: dict[str, str]) -> subprocess.CompletedProcess[s
 
 
 class PackageReleaseTests(unittest.TestCase):
+    def test_accepts_explicit_immutable_host_input_directory(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('RELEASE_BIN_DIR="${MESH_LLM_RELEASE_BIN_DIR:-$REPO_ROOT/target/release}"', script)
+        self.assertIn('MESH_RELEASE_HOST_PRESTAMPED=1 requires', script)
     def runtime(
         self,
         root: pathlib.Path,

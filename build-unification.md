@@ -72,7 +72,7 @@ and the maintenance cost to remove.
 
 ### Composed product bundle
 
-```
+```text
 mesh-bundle/
   mesh-llm
   native-runtimes/

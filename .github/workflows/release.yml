@@ -89,7 +89,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build ${{ matrix.name }}
+    name: Build immutable host ${{ matrix.name }}
     needs: metadata
     runs-on: ${{ matrix.os }}
     strategy:
@@ -98,18 +98,10 @@ jobs:
         include:
           - name: macOS aarch64 Metal
             os: macos-15
-            artifact_name: release-macos
-            build_recipe: release-build
-            bundle_recipe: release-bundle
-            backend: metal
+            target: darwin-aarch64
           - name: Linux x86_64 CPU
             os: ubuntu-24.04
-            artifact_name: release-linux
-            build_recipe: release-build
-            bundle_recipe: release-bundle
-            backend: cpu
-    env:
-      LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
+            target: linux-x86_64
     steps:
       - uses: actions/checkout@v5
         with:
@@ -147,7 +139,7 @@ jobs:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
 
-      - name: Build release bundle
+      - name: Build and attest release host
         env:
           MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
@@ -157,25 +149,102 @@ jobs:
         run: |
           printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
-          just --shell bash --shell-arg -c ${{ matrix.build_recipe }}
-          just --shell bash --shell-arg -c ${{ matrix.bundle_recipe }} "$RELEASE_TAG" dist
+          just --shell bash --shell-arg -c release-host-build
+          mkdir -p host-input
+          cp target/release/mesh-llm host-input/mesh-llm
+          cargo run -q -p xtask -- release-attestation stamp \
+            --binary host-input/mesh-llm \
+            --signing-key-file "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
+          cargo run -q -p xtask -- release-attestation inspect \
+            --binary host-input/mesh-llm \
+            --public-key-file "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE" \
+            --json
+          scripts/verify-host-dependencies.py \
+            host-input/mesh-llm \
+            --report host-input/host-imports.json
+          shasum -a 256 host-input/mesh-llm | awk '{print $1 "  mesh-llm"}' > host-input/mesh-llm.sha256
 
-      - name: Upload release bundle
+      - name: Upload immutable host input
+        uses: actions/upload-artifact@v6
+        with:
+          name: host-input-${{ matrix.target }}
+          path: host-input/*
+          if-no-files-found: error
+
+  compose_cpu_products:
+    name: Compose CPU product ${{ matrix.name }}
+    needs: [metadata, build, build_native_runtime]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS aarch64 Metal
+            os: macos-15
+            host_target: darwin-aarch64
+            runtime_artifact: release-native-runtime-darwin-aarch64-metal
+            flavor: metal
+            release_os: Darwin
+            release_arch: aarch64
+            artifact_name: release-macos
+          - name: Linux x86_64 CPU
+            os: ubuntu-24.04
+            host_target: linux-x86_64
+            runtime_artifact: release-native-runtime-linux-x86_64-cpu
+            flavor: cpu
+            release_os: Linux
+            release_arch: x86_64
+            artifact_name: release-linux
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Download immutable host input
+        uses: actions/download-artifact@v7
+        with:
+          name: host-input-${{ matrix.host_target }}
+          path: host-input
+      - name: Download immutable runtime input
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ matrix.runtime_artifact }}
+          path: runtime-input
+      - name: Compose from verified producer inputs
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          MESH_RELEASE_OS: ${{ matrix.release_os }}
+          MESH_RELEASE_ARCH: ${{ matrix.release_arch }}
+          MESH_RELEASE_FLAVOR: ${{ matrix.flavor }}
+          MESH_LLM_RELEASE_BIN_DIR: ${{ github.workspace }}/host-input
+          MESH_LLM_NATIVE_RUNTIME_ROOT: ${{ github.workspace }}/runtime-root
+          MESH_RELEASE_HOST_PRESTAMPED: "1"
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
+          test -s host-input/mesh-llm.sha256
+          (cd host-input && shasum -a 256 -c mesh-llm.sha256)
+          mkdir -p runtime-root
+          mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
+          test "${#runtime_archives[@]}" -eq 1
+          runtime_archive="${runtime_archives[0]}"
+          tar -xzf "$runtime_archive" -C runtime-root
+          mapfile -t runtime_dirs < <(find runtime-root -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#runtime_dirs[@]}" -eq 1
+          scripts/verify-native-runtime-package.sh "${runtime_dirs[0]}"
+          scripts/ci-client-readiness-smoke.sh host-input/mesh-llm runtime-root
+          scripts/package-release.sh "$RELEASE_TAG" dist
+      - name: Upload composed release product
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}
           path: dist/*
           if-no-files-found: error
-
       - name: Upload Linux smoke binary
         if: matrix.artifact_name == 'release-linux'
-        run: |
-          set -euo pipefail
-          tmp_dir="$(mktemp -d)"
-          trap 'rm -rf "$tmp_dir"' EXIT
-          tar -xzf dist/mesh-llm-x86_64-unknown-linux-gnu.tar.gz -C "$tmp_dir"
-          cp "$tmp_dir/mesh-bundle/mesh-llm" dist/mesh-llm
-
+        run: cp host-input/mesh-llm dist/mesh-llm
       - name: Upload Linux smoke binary artifact
         if: matrix.artifact_name == 'release-linux'
         uses: actions/upload-artifact@v6
@@ -185,8 +254,8 @@ jobs:
           if-no-files-found: error
 
   inference_smoke_tests:
-    needs: [metadata, build]
-    if: needs.build.result == 'success'
+    needs: [metadata, compose_cpu_products]
+    if: needs.compose_cpu_products.result == 'success'
     uses: ./.github/workflows/smoke.yml
     with:
       artifact_name: release-linux-inference-binary
@@ -652,7 +721,7 @@ jobs:
           if-no-files-found: error
 
   build_linux_arm64:
-    name: Build Linux ARM64 CPU
+    name: Build immutable host Linux ARM64
     needs: metadata
     runs-on: ubuntu-24.04-arm
     env:
@@ -681,7 +750,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
-      - name: Build ARM64 CPU release bundle
+      - name: Build and attest ARM64 release host
         env:
           MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
@@ -691,8 +760,63 @@ jobs:
         run: |
           printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
-          just --shell bash --shell-arg -c release-build-aarch64
-          just --shell bash --shell-arg -c release-bundle-aarch64 "$RELEASE_TAG" dist
+          just --shell bash --shell-arg -c release-host-build
+          mkdir -p host-input
+          cp target/release/mesh-llm host-input/mesh-llm
+          cargo run -q -p xtask -- release-attestation stamp \
+            --binary host-input/mesh-llm \
+            --signing-key-file "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
+          scripts/verify-host-dependencies.py \
+            host-input/mesh-llm \
+            --report host-input/host-imports.json
+          shasum -a 256 host-input/mesh-llm | awk '{print $1 "  mesh-llm"}' > host-input/mesh-llm.sha256
+      - uses: actions/upload-artifact@v6
+        with:
+          name: host-input-linux-aarch64
+          path: host-input/*
+          if-no-files-found: error
+
+  compose_linux_arm64_cpu:
+    name: Compose Linux ARM64 CPU product
+    needs: [metadata, build_linux_arm64, build_native_runtime]
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v7
+        with:
+          name: host-input-linux-aarch64
+          path: host-input
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-native-runtime-linux-aarch64-cpu
+          path: runtime-input
+      - name: Compose from verified producer inputs
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          MESH_RELEASE_OS: Linux
+          MESH_RELEASE_ARCH: aarch64
+          MESH_RELEASE_FLAVOR: cpu
+          MESH_LLM_RELEASE_BIN_DIR: ${{ github.workspace }}/host-input
+          MESH_LLM_NATIVE_RUNTIME_ROOT: ${{ github.workspace }}/runtime-root
+          MESH_RELEASE_HOST_PRESTAMPED: "1"
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
+          (cd host-input && sha256sum -c mesh-llm.sha256)
+          mkdir -p runtime-root
+          mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
+          test "${#runtime_archives[@]}" -eq 1
+          tar -xzf "${runtime_archives[0]}" -C runtime-root
+          mapfile -t runtime_dirs < <(find runtime-root -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#runtime_dirs[@]}" -eq 1
+          scripts/verify-native-runtime-package.sh "${runtime_dirs[0]}"
+          scripts/ci-client-readiness-smoke.sh host-input/mesh-llm runtime-root
+          scripts/package-release.sh "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
         with:
           name: release-linux-arm64
@@ -701,8 +825,8 @@ jobs:
 
   smoke_linux_arm64_artifact:
     name: Smoke Linux ARM64 artifact
-    needs: [metadata, build_linux_arm64]
-    if: ${{ needs.build_linux_arm64.result == 'success' }}
+    needs: [metadata, compose_linux_arm64_cpu]
+    if: ${{ needs.compose_linux_arm64_cpu.result == 'success' }}
     runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && needs.metadata.outputs.force_hosted_runners != 'true' && '["self-hosted","Linux","ARM64"]' || '["ubuntu-24.04-arm"]') }}
     steps:
       - uses: actions/download-artifact@v7
@@ -739,7 +863,7 @@ jobs:
 
   build_linux_aarch64_cuda:
     name: Build Linux aarch64 CUDA (${{ matrix.cuda_version }})
-    needs: metadata
+    needs: [metadata, build_linux_arm64, build_native_runtime_linux_aarch64_cuda]
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04-arm
     strategy:
@@ -769,23 +893,41 @@ jobs:
       - name: Verify prebuilt backend environment
         run: verify-runner-image public cuda
       - uses: ./.github/actions/configure-sccache-gha
+      - name: Download immutable host input
+        uses: actions/download-artifact@v7
+        with:
+          name: host-input-linux-aarch64
+          path: host-input
+      - name: Download immutable runtime input
+        uses: actions/download-artifact@v7
+        with:
+          name: release-native-runtime-linux-aarch64-cuda-${{ matrix.cuda_version == '12.9.2' && '12' || '13' }}
+          path: runtime-input
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
-      - name: Build aarch64 CUDA release bundle
+      - name: Compose aarch64 CUDA release bundle from producer inputs
         env:
-          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
           RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
+          MESH_LLM_RELEASE_BIN_DIR: ${{ github.workspace }}/host-input
+          MESH_LLM_NATIVE_RUNTIME_ROOT: ${{ github.workspace }}/runtime-root
+          MESH_RELEASE_HOST_PRESTAMPED: "1"
         run: |
-          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
-          just --shell bash --shell-arg -c release-build-aarch64-cuda
-          just --shell bash --shell-arg -c release-bundle-aarch64-cuda "$RELEASE_TAG" dist
+          (cd host-input && sha256sum -c mesh-llm.sha256)
+          mkdir -p runtime-root
+          mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
+          test "${#runtime_archives[@]}" -eq 1
+          tar -xzf "${runtime_archives[0]}" -C runtime-root
+          mapfile -t runtime_dirs < <(find runtime-root -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#runtime_dirs[@]}" -eq 1
+          scripts/verify-native-runtime-package.sh "${runtime_dirs[0]}"
+          scripts/ci-client-readiness-smoke.sh host-input/mesh-llm runtime-root
+          MESH_RELEASE_FLAVOR=cuda scripts/package-release.sh "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
         with:
           name: release-linux-aarch64-cuda-${{ matrix.cuda_version }}
@@ -794,7 +936,7 @@ jobs:
 
   build_linux_cuda:
     name: Build Linux CUDA (${{ matrix.cuda_version }})
-    needs: metadata
+    needs: [metadata, build, build_native_runtime_linux_x86_64_cuda]
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ fromJson(vars.USE_SELF_HOSTED == 'true' && needs.metadata.outputs.force_hosted_runners != 'true' && '["self-hosted","Linux","X64","amd64","gpu-nvidia"]' || '["ubuntu-24.04"]') }}
     strategy:
@@ -828,6 +970,16 @@ jobs:
       - name: Verify prebuilt backend environment
         run: verify-runner-image public cuda
       - uses: ./.github/actions/configure-sccache-gha
+      - name: Download immutable host input
+        uses: actions/download-artifact@v7
+        with:
+          name: host-input-linux-x86_64
+          path: host-input
+      - name: Download immutable runtime input
+        uses: actions/download-artifact@v7
+        with:
+          name: release-native-runtime-linux-x86_64-cuda-${{ matrix.cuda_major }}
+          path: runtime-input
       - name: Cache release CUDA backend build
         uses: actions/cache@v5
         with:
@@ -838,18 +990,26 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
-      - name: Build CUDA release bundle
+      - name: Compose CUDA release bundle from producer inputs
         env:
-          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
           RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
+          MESH_LLM_RELEASE_BIN_DIR: ${{ github.workspace }}/host-input
+          MESH_LLM_NATIVE_RUNTIME_ROOT: ${{ github.workspace }}/runtime-root
+          MESH_RELEASE_HOST_PRESTAMPED: "1"
         run: |
-          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
-          just --shell bash --shell-arg -c release-build-cuda
-          just --shell bash --shell-arg -c release-bundle-cuda "$RELEASE_TAG" dist
+          (cd host-input && sha256sum -c mesh-llm.sha256)
+          mkdir -p runtime-root
+          mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
+          test "${#runtime_archives[@]}" -eq 1
+          tar -xzf "${runtime_archives[0]}" -C runtime-root
+          mapfile -t runtime_dirs < <(find runtime-root -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#runtime_dirs[@]}" -eq 1
+          scripts/verify-native-runtime-package.sh "${runtime_dirs[0]}"
+          scripts/ci-client-readiness-smoke.sh host-input/mesh-llm runtime-root
+          MESH_RELEASE_FLAVOR=cuda scripts/package-release.sh "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
         with:
           name: release-linux-cuda-${{ matrix.cuda_version }}
@@ -860,7 +1020,7 @@ jobs:
 
   build_linux_rocm:
     name: Build Linux ROCm
-    needs: metadata
+    needs: [metadata, build, build_native_runtime_linux_x86_64_rocm]
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
     container:
@@ -882,6 +1042,16 @@ jobs:
       - name: Verify prebuilt backend environment
         run: verify-runner-image public rocm
       - uses: ./.github/actions/configure-sccache-gha
+      - name: Download immutable host input
+        uses: actions/download-artifact@v7
+        with:
+          name: host-input-linux-x86_64
+          path: host-input
+      - name: Download immutable runtime input
+        uses: actions/download-artifact@v7
+        with:
+          name: release-native-runtime-linux-x86_64-rocm
+          path: runtime-input
       - name: Cache release ROCm backend build
         uses: actions/cache@v5
         with:
@@ -892,18 +1062,26 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
-      - name: Build ROCm release bundle
+      - name: Compose ROCm release bundle from producer inputs
         env:
-          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
           RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
+          MESH_LLM_RELEASE_BIN_DIR: ${{ github.workspace }}/host-input
+          MESH_LLM_NATIVE_RUNTIME_ROOT: ${{ github.workspace }}/runtime-root
+          MESH_RELEASE_HOST_PRESTAMPED: "1"
         run: |
-          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
-          just --shell bash --shell-arg -c release-build-rocm
-          just --shell bash --shell-arg -c release-bundle-rocm "$RELEASE_TAG" dist
+          (cd host-input && sha256sum -c mesh-llm.sha256)
+          mkdir -p runtime-root
+          mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
+          test "${#runtime_archives[@]}" -eq 1
+          tar -xzf "${runtime_archives[0]}" -C runtime-root
+          mapfile -t runtime_dirs < <(find runtime-root -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#runtime_dirs[@]}" -eq 1
+          scripts/verify-native-runtime-package.sh "${runtime_dirs[0]}"
+          scripts/ci-client-readiness-smoke.sh host-input/mesh-llm runtime-root
+          MESH_RELEASE_FLAVOR=rocm scripts/package-release.sh "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
         with:
           name: release-linux-rocm
@@ -912,7 +1090,7 @@ jobs:
 
   build_linux_vulkan:
     name: Build Linux Vulkan
-    needs: metadata
+    needs: [metadata, build, build_native_runtime_linux_x86_64_vulkan]
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
     container:
@@ -933,6 +1111,16 @@ jobs:
       - name: Verify prebuilt backend environment
         run: verify-runner-image public vulkan
       - uses: ./.github/actions/configure-sccache-gha
+      - name: Download immutable host input
+        uses: actions/download-artifact@v7
+        with:
+          name: host-input-linux-x86_64
+          path: host-input
+      - name: Download immutable runtime input
+        uses: actions/download-artifact@v7
+        with:
+          name: release-native-runtime-linux-x86_64-vulkan
+          path: runtime-input
       - name: Cache release Vulkan backend build
         uses: actions/cache@v5
         with:
@@ -943,18 +1131,26 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
-      - name: Build Vulkan release bundle
+      - name: Compose Vulkan release bundle from producer inputs
         env:
-          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
           RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
+          MESH_LLM_RELEASE_BIN_DIR: ${{ github.workspace }}/host-input
+          MESH_LLM_NATIVE_RUNTIME_ROOT: ${{ github.workspace }}/runtime-root
+          MESH_RELEASE_HOST_PRESTAMPED: "1"
         run: |
-          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
-          just --shell bash --shell-arg -c release-build-vulkan
-          just --shell bash --shell-arg -c release-bundle-vulkan "$RELEASE_TAG" dist
+          (cd host-input && sha256sum -c mesh-llm.sha256)
+          mkdir -p runtime-root
+          mapfile -t runtime_archives < <(find runtime-input -name '*.tar.gz' -type f -print)
+          test "${#runtime_archives[@]}" -eq 1
+          tar -xzf "${runtime_archives[0]}" -C runtime-root
+          mapfile -t runtime_dirs < <(find runtime-root -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#runtime_dirs[@]}" -eq 1
+          scripts/verify-native-runtime-package.sh "${runtime_dirs[0]}"
+          scripts/ci-client-readiness-smoke.sh host-input/mesh-llm runtime-root
+          MESH_RELEASE_FLAVOR=vulkan scripts/package-release.sh "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
         with:
           name: release-linux-vulkan
@@ -962,7 +1158,7 @@ jobs:
           if-no-files-found: error
 
   build_windows_cpu:
-    name: Build Windows CPU
+    name: Build immutable host Windows x86_64
     needs: metadata
     runs-on: windows-2022
     env:
@@ -982,6 +1178,9 @@ jobs:
             .github/cache-version.txt
             crates/mesh-llm-ui/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
       - uses: taiki-e/install-action@just
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Prepare dispatched release version
@@ -990,7 +1189,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
-      - name: Build Windows CPU release bundle
+      - name: Build and attest Windows release host
         shell: pwsh
         env:
           MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
@@ -1002,17 +1201,23 @@ jobs:
         run: |
           Set-Content -Path $env:MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE -Value $env:RELEASE_ATTESTATION_SIGNING_KEY -NoNewline
           Set-Content -Path $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE -Value $env:RELEASE_ATTESTATION_PUBLIC_KEY -NoNewline
-          just release-build-windows
-          just release-bundle-windows "$env:RELEASE_TAG" dist
+          just release-host-build-windows
+          New-Item -ItemType Directory -Path host-input -Force | Out-Null
+          Copy-Item target\release\mesh-llm.exe host-input\mesh-llm.exe -Force
+          cargo run -q -p xtask -- release-attestation stamp --binary host-input\mesh-llm.exe --signing-key-file $env:MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE
+          cargo run -q -p xtask -- release-attestation inspect --binary host-input\mesh-llm.exe --public-key-file $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE --json
+          python scripts\verify-host-dependencies.py host-input\mesh-llm.exe --report host-input\host-imports.json
+          $hash = (Get-FileHash -Algorithm SHA256 host-input\mesh-llm.exe).Hash.ToLowerInvariant()
+          Set-Content -Path host-input\mesh-llm.exe.sha256 -Value "$hash  mesh-llm.exe" -NoNewline
       - uses: actions/upload-artifact@v6
         with:
-          name: release-windows
-          path: dist/*
+          name: host-input-windows-x86_64
+          path: host-input/*
           if-no-files-found: error
 
   build_windows_gpu:
-    name: Build Windows ${{ matrix.name }}
-    needs: metadata
+    name: Compose Windows ${{ matrix.name }} product
+    needs: [metadata, build_windows_cpu, build_native_runtime_windows_gpu]
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: windows-2022
     env:
@@ -1029,86 +1234,119 @@ jobs:
         include:
           - name: CUDA
             backend: cuda
-            build_recipe: release-build-cuda-windows
-            bundle_recipe: release-bundle-cuda-windows
+            runtime_artifact: release-native-runtime-windows-x86_64-cuda12
             artifact_name: release-windows-cuda
           - name: ROCm
             backend: rocm
-            build_recipe: release-build-rocm-windows
-            bundle_recipe: release-bundle-rocm-windows
+            runtime_artifact: release-native-runtime-windows-x86_64-rocm
             artifact_name: release-windows-rocm
           - name: Vulkan
             backend: vulkan
-            build_recipe: release-build-vulkan-windows
-            bundle_recipe: release-bundle-vulkan-windows
+            runtime_artifact: release-native-runtime-windows-x86_64-vulkan
             artifact_name: release-windows-vulkan
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-python@v6
         with:
-          version: 10
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: |
-            .github/cache-version.txt
-            crates/mesh-llm-ui/pnpm-lock.yaml
+          python-version: '3.x'
       - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@just
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
-      - name: Install CUDA toolkit
-        if: ${{ matrix.backend == 'cuda' }}
-        uses: Jimver/cuda-toolkit@v0.2.35
+      - name: Download immutable host input
+        uses: actions/download-artifact@v7
         with:
-          cuda: ${{ env.WINDOWS_CUDA_VERSION }}
-          method: network
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
-          use-github-cache: true
-          use-local-cache: true
-          log-file-suffix: windows-cuda-release
-      - name: Verify CUDA toolkit
-        if: ${{ matrix.backend == 'cuda' }}
-        shell: pwsh
-        run: |
-          if (-not $env:CUDA_PATH -or -not (Test-Path $env:CUDA_PATH)) {
-            throw "CUDA_PATH was not configured by Jimver/cuda-toolkit."
-          }
-          & nvcc --version
-      - name: Install backend SDK
-        if: ${{ matrix.backend != 'cuda' }}
-        shell: pwsh
-        run: |
-          .\scripts\install-windows-sdk.ps1 `
-            -Backend "${{ matrix.backend }}" `
-            -RocmHipSdkFilename "$env:ROCM_HIP_SDK_FILENAME" `
-            -InstallerCacheDir "$HOME\sdk-installer-cache"
-      - name: Build Windows GPU release bundle
+          name: host-input-windows-x86_64
+          path: host-input
+      - name: Download immutable runtime input
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ matrix.runtime_artifact }}
+          path: runtime-input
+      - name: Compose Windows GPU release bundle from producer inputs
         shell: pwsh
         env:
-          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-          MESH_LLM_REQUIRE_SCCACHE: "1"
-          MESH_LLM_WINDOWS_BUILD_JOBS: ${{ matrix.backend == 'cuda' && '1' || '' }}
-          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
           RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
+          MESH_LLM_RELEASE_BIN_DIR: ${{ github.workspace }}\host-input
+          MESH_LLM_NATIVE_RUNTIME_ROOT: ${{ github.workspace }}\runtime-root
+          MESH_RELEASE_HOST_PRESTAMPED: "1"
         run: |
-          Set-Content -Path $env:MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE -Value $env:RELEASE_ATTESTATION_SIGNING_KEY -NoNewline
           Set-Content -Path $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE -Value $env:RELEASE_ATTESTATION_PUBLIC_KEY -NoNewline
-          just ${{ matrix.build_recipe }}
-          just ${{ matrix.bundle_recipe }} "$env:RELEASE_TAG" dist
+          $expectedHash = (Get-Content host-input\mesh-llm.exe.sha256).Split()[0]
+          $actualHash = (Get-FileHash -Algorithm SHA256 host-input\mesh-llm.exe).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "immutable host checksum mismatch" }
+          $archives = @(Get-ChildItem runtime-input -Recurse -Filter '*.tar.gz' -File)
+          if ($archives.Count -ne 1) { throw "expected exactly one runtime archive, found $($archives.Count)" }
+          New-Item -ItemType Directory -Path runtime-root -Force | Out-Null
+          tar -xzf $archives[0].FullName -C runtime-root
+          $runtimeDirs = @(Get-ChildItem runtime-root -Directory)
+          if ($runtimeDirs.Count -ne 1) { throw "expected exactly one extracted runtime directory, found $($runtimeDirs.Count)" }
+          bash scripts/verify-native-runtime-package.sh $runtimeDirs[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "native runtime verification failed" }
+          bash scripts/ci-client-readiness-smoke.sh host-input/mesh-llm.exe runtime-root
+          if ($LASTEXITCODE -ne 0) { throw "composed client readiness smoke failed" }
+          .\scripts\package-release.ps1 -Version $env:RELEASE_TAG -OutputDir dist -Flavor "${{ matrix.backend }}"
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}
+          path: dist/*
+          if-no-files-found: error
+
+  compose_windows_cpu:
+    name: Compose Windows CPU product
+    needs: [metadata, build_windows_cpu, build_native_runtime_windows_cpu]
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v7
+        with:
+          name: host-input-windows-x86_64
+          path: host-input
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-native-runtime-windows-x86_64-cpu
+          path: runtime-input
+      - name: Compose Windows CPU release bundle from producer inputs
+        shell: pwsh
+        env:
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
+          MESH_LLM_RELEASE_BIN_DIR: ${{ github.workspace }}\host-input
+          MESH_LLM_NATIVE_RUNTIME_ROOT: ${{ github.workspace }}\runtime-root
+          MESH_RELEASE_HOST_PRESTAMPED: "1"
+        run: |
+          Set-Content -Path $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE -Value $env:RELEASE_ATTESTATION_PUBLIC_KEY -NoNewline
+          $expectedHash = (Get-Content host-input\mesh-llm.exe.sha256).Split()[0]
+          $actualHash = (Get-FileHash -Algorithm SHA256 host-input\mesh-llm.exe).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "immutable host checksum mismatch" }
+          $archives = @(Get-ChildItem runtime-input -Recurse -Filter '*.tar.gz' -File)
+          if ($archives.Count -ne 1) { throw "expected exactly one runtime archive, found $($archives.Count)" }
+          New-Item -ItemType Directory -Path runtime-root -Force | Out-Null
+          tar -xzf $archives[0].FullName -C runtime-root
+          $runtimeDirs = @(Get-ChildItem runtime-root -Directory)
+          if ($runtimeDirs.Count -ne 1) { throw "expected exactly one extracted runtime directory, found $($runtimeDirs.Count)" }
+          bash scripts/verify-native-runtime-package.sh $runtimeDirs[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "native runtime verification failed" }
+          bash scripts/ci-client-readiness-smoke.sh host-input/mesh-llm.exe runtime-root
+          if ($LASTEXITCODE -ne 0) { throw "composed client readiness smoke failed" }
+          .\scripts\package-release.ps1 -Version $env:RELEASE_TAG -OutputDir dist -Flavor cpu
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-windows
           path: dist/*
           if-no-files-found: error
 
@@ -1128,6 +1366,10 @@ jobs:
           python-version: '3.x'
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Initialize MSVC for native runtime
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         shell: bash
@@ -1217,9 +1459,8 @@ jobs:
             throw "CUDA_PATH was not configured by Jimver/cuda-toolkit."
           }
           & nvcc --version
-      - name: Initialize MSVC for CUDA
-        if: ${{ matrix.backend == 'cuda' }}
-        uses: ilammy/msvc-dev-cmd@v1
+      - name: Initialize MSVC for native runtime
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: x64
       - name: Install backend SDK
@@ -1261,6 +1502,7 @@ jobs:
     needs:
       - metadata
       - build
+      - compose_cpu_products
       - inference_smoke_tests
       - build_native_sdk_runtime
       - build_native_runtime
@@ -1270,16 +1512,18 @@ jobs:
       - build_native_runtime_linux_x86_64_vulkan
       - build_swift_sdk_artifact
       - build_linux_arm64
+      - compose_linux_arm64_cpu
       - smoke_linux_arm64_artifact
       - build_linux_aarch64_cuda
       - build_linux_cuda
       - build_linux_rocm
       - build_linux_vulkan
       - build_windows_cpu
+      - compose_windows_cpu
       - build_windows_gpu
       - build_native_runtime_windows_cpu
       - build_native_runtime_windows_gpu
-    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && needs.smoke_linux_arm64_artifact.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') }}
+    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.compose_cpu_products.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.compose_linux_arm64_cpu.result == 'success' && needs.smoke_linux_arm64_artifact.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.compose_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5

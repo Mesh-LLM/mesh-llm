@@ -69,12 +69,13 @@
       "properties": {
         "id": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
         },
         "path": {
           "type": "string",
           "minLength": 1,
-          "pattern": "^native-runtimes/(?:(?!\\.{1,2}(?:/|$))[^/\\\\]+)(?:/(?:(?!\\.{1,2}(?:/|$))[^/\\\\]+))*$"
+          "pattern": "^native-runtimes/[A-Za-z0-9][A-Za-z0-9._-]*$"
         },
         "sha256": {
           "$ref": "#/$defs/sha256"
