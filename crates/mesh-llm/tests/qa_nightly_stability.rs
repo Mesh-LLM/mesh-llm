@@ -86,7 +86,7 @@ fn nightly_stability_reusable_workflow_owns_execution() {
         "scripts/qa-nightly-stability.py",
         "Publish run summary",
         "$GITHUB_STEP_SUMMARY",
-        "actions/upload-artifact@v6",
+        "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0",
     ] {
         assert!(
             reusable.contains(expected),
