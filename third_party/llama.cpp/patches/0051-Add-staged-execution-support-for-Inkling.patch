@@ -1,7 +1,7 @@
-From f46720057c729128913a708eb6581be7375fc431 Mon Sep 17 00:00:00 2001
+From de940c16a6bf7999e9a9b164a3716d6d9f6c7468 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 17 Jul 2026 13:47:13 +1000
-Subject: [PATCH 49/60] Add staged execution support for Inkling
+Subject: [PATCH 51/61] Add staged execution support for Inkling
 
 ---
  src/models/inkling.cpp | 30 +++++++++++++++++++++++-------
@@ -9,7 +9,7 @@ Subject: [PATCH 49/60] Add staged execution support for Inkling
  2 files changed, 24 insertions(+), 7 deletions(-)
 
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
-index 6c9c1aef..3d5f8ab5 100644
+index 6c9c1aef8..3d5f8ab56 100644
 --- a/src/models/inkling.cpp
 +++ b/src/models/inkling.cpp
 @@ -196,6 +196,11 @@ std::unique_ptr<llm_graph_context> llama_model_inkling::build_arch_graph(const l
@@ -92,7 +92,7 @@ index 6c9c1aef..3d5f8ab5 100644
      if (inp_out_ids) {
          cur = ggml_get_rows(ctx0, cur, inp_out_ids);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 21db2b77..347d6985 100644
+index 3965e0252..f6ccad78c 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -4187,6 +4187,7 @@ static enum skippy_status skippy_finish_model_open(

@@ -1,14 +1,14 @@
-From d8d24d3fb5c071baec273bfd722532414952535d Mon Sep 17 00:00:00 2001
+From 326edb5713500457c0a82fbb450d84fcf3549cb0 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 17 Jul 2026 20:20:45 +1000
-Subject: [PATCH 54/60] Size recurrent memory for appended MTP layers
+Subject: [PATCH 56/61] Size recurrent memory for appended MTP layers
 
 ---
  src/llama-memory-recurrent.cpp | 9 +++++----
  1 file changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/src/llama-memory-recurrent.cpp b/src/llama-memory-recurrent.cpp
-index ef82eb97..4f1f1df8 100644
+index ef82eb976..4f1f1df8d 100644
 --- a/src/llama-memory-recurrent.cpp
 +++ b/src/llama-memory-recurrent.cpp
 @@ -26,7 +26,8 @@ llama_memory_recurrent::llama_memory_recurrent(

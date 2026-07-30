@@ -1,7 +1,7 @@
-From d94d179b554ff3de781b122b305a22d1a63f1b2d Mon Sep 17 00:00:00 2001
+From 3140a1e0aa272ccaf89d280fa14f293e9234ed08 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 27 Jul 2026 17:19:02 +1000
-Subject: [PATCH] Support Laguna staged execution
+Subject: [PATCH 48/61] Support Laguna staged execution
 
 ---
  src/models/laguna.cpp | 19 ++++++++++++++++---
@@ -9,7 +9,7 @@ Subject: [PATCH] Support Laguna staged execution
  2 files changed, 17 insertions(+), 3 deletions(-)
 
 diff --git a/src/models/laguna.cpp b/src/models/laguna.cpp
-index fb55ec12..7144a389 100644
+index fb55ec12f..7144a389c 100644
 --- a/src/models/laguna.cpp
 +++ b/src/models/laguna.cpp
 @@ -157,7 +157,12 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
@@ -56,10 +56,10 @@ index fb55ec12..7144a389 100644
      cb(cur, "result_norm", -1);
      res->t_embd = cur;
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 47f0a549..da0d97bf 100644
+index 21db2b77d..3965e0252 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
-@@ -4112,6 +4112,7 @@ static enum skippy_status skippy_finish_model_open(
+@@ -4191,6 +4191,7 @@ static enum skippy_status skippy_finish_model_open(
              model->arch != LLM_ARCH_JAIS &&
              model->arch != LLM_ARCH_JAIS2 &&
              model->arch != LLM_ARCH_JAMBA &&

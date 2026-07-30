@@ -1,7 +1,7 @@
-From 06bac0e35ea1d224100e57af5d5ad1cf04495557 Mon Sep 17 00:00:00 2001
+From a7a426fc1ca1c0fd28933bcd2bf49191e5041580 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 17 Jul 2026 15:09:39 +1000
-Subject: [PATCH 52/60] Add Inkling multi-depth MTP sidecars
+Subject: [PATCH 54/61] Add Inkling multi-depth MTP sidecars
 
 ---
  conversion/inkling.py  |  78 ++++++++++++++++-
@@ -12,7 +12,7 @@ Subject: [PATCH 52/60] Add Inkling multi-depth MTP sidecars
  5 files changed, 247 insertions(+), 54 deletions(-)
 
 diff --git a/conversion/inkling.py b/conversion/inkling.py
-index 90ef65c3..07984290 100644
+index 90ef65c3b..079842903 100644
 --- a/conversion/inkling.py
 +++ b/conversion/inkling.py
 @@ -1,5 +1,7 @@
@@ -152,7 +152,7 @@ index 90ef65c3..07984290 100644
  @ModelBase.register("InklingForConditionalGeneration")
  class InklingMmprojModel(MmprojModel):
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index c4e057ae..4b47903d 100644
+index c4e057aee..4b47903d3 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -158,6 +158,12 @@ llama_context::llama_context(
@@ -169,10 +169,10 @@ index c4e057ae..4b47903d 100644
      // before the reserve passes run later in this function. This avoids a later
      // re-reserve when graph nodes change.
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 3621b047..be5cfb88 100644
+index f95591860..4ffe8df0f 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -2115,10 +2115,20 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2131,10 +2131,20 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                      // layer filters, so pick the right one here
                      llama_memory_hybrid::layer_filter_cb filter_attn = nullptr;
                      llama_memory_hybrid::layer_filter_cb filter_recr = nullptr;
@@ -195,7 +195,7 @@ index 3621b047..be5cfb88 100644
                          filter_attn = [&](uint32_t il) {
                              return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
-index 3d5f8ab5..d435a1f5 100644
+index 3d5f8ab56..d435a1f5d 100644
 --- a/src/models/inkling.cpp
 +++ b/src/models/inkling.cpp
 @@ -13,6 +13,9 @@
@@ -492,7 +492,7 @@ index 3d5f8ab5..d435a1f5 100644
      res->t_embd = cur;
  
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 5d221cda..61f9c508 100644
+index 52670efe8..913c4d5ee 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1823,7 +1823,7 @@ struct skippy_mtp_depth_scope {

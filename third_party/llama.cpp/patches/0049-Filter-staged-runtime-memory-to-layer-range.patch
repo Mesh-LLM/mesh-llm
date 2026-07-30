@@ -1,23 +1,22 @@
-From 3a5f43b7fe0e90ac28f0a2856f87c291f5990a29 Mon Sep 17 00:00:00 2001
+From 426444c8c8ee62b6322ac6794ada658df0f077f4 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 28 Jul 2026 14:23:09 +1000
-Subject: [PATCH] Filter staged runtime memory to layer range
+Subject: [PATCH 49/61] Filter staged runtime memory to layer range
 
 Skippy graph execution already filters to the assigned layer range, but
 llama_model::create_memory still allocated cache rows for the complete model.
 Compose the active stage filter with each memory implementation's architecture
 filter so split capacity estimates match the native allocation. Keep MTP
 sidecar contexts on their existing next-token layer filter.
-
 ---
  src/llama-model.cpp | 23 ++++++++++++++++++++++-
  1 file changed, 22 insertions(+), 1 deletion(-)
 
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 10633a51..7ad59b29 100644
+index 442387e6a..b23a7e8d8 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -2042,6 +2042,22 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
+@@ -2047,6 +2047,22 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
      return layers[il].rope_short;
  }
  
@@ -40,7 +39,7 @@ index 10633a51..7ad59b29 100644
  llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
      llama_memory_i * res;
  
-@@ -2102,7 +2118,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2107,7 +2123,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              std::max((uint32_t) 1, cparams.n_seq_max),
                              cparams.n_seq_max,
                              cparams.n_rs_seq,
@@ -49,7 +48,7 @@ index 10633a51..7ad59b29 100644
                  } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen35) {
                      // The main difference between hybrid architectures is the
                      // layer filters, so pick the right one here
-@@ -2127,6 +2143,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2132,6 +2148,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          };
                      }
  
@@ -59,7 +58,7 @@ index 10633a51..7ad59b29 100644
                      if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
                          // Use hybrid-iswa for hybrid models with SWA
                          res = new llama_memory_hybrid_iswa(
-@@ -2204,6 +2223,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2209,6 +2228,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          }
                      }
  
@@ -70,3 +69,4 @@ index 10633a51..7ad59b29 100644
  
 -- 
 2.50.1 (Apple Git-155)
+

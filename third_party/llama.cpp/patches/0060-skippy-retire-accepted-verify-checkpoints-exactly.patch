@@ -1,7 +1,7 @@
-From 1f12cf3984b66dde5c5340d1d54614856fb123af Mon Sep 17 00:00:00 2001
+From 60f5917b3718cc74b2298571b4fac924e9ecf081 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 29 Jul 2026 11:12:07 +1000
-Subject: [PATCH 49/49] skippy: retire accepted verify checkpoints exactly
+Subject: [PATCH 60/61] skippy: retire accepted verify checkpoints exactly
 
 ---
  include/skippy.h                              |  6 +++++
@@ -15,10 +15,10 @@ Subject: [PATCH 49/49] skippy: retire accepted verify checkpoints exactly
  create mode 100644 tests/test-skippy-verify-checkpoint-retirement.cpp
 
 diff --git a/include/skippy.h b/include/skippy.h
-index e9d31f559..44afc6b74 100644
+index cc2382d37..f60e7c2ee 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -524,6 +524,12 @@ LLAMA_API enum skippy_status skippy_trim_session(
+@@ -525,6 +525,12 @@ LLAMA_API enum skippy_status skippy_trim_session(
          uint64_t token_count,
          struct skippy_error ** out_error);
  
@@ -32,7 +32,7 @@ index e9d31f559..44afc6b74 100644
          struct skippy_session * session,
          int32_t layer_start,
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 0145705b2..e89410d03 100644
+index 11f06bf3e..d1e45b44d 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -75,7 +75,7 @@ index 000000000..8793000c1
 +    return true;
 +}
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index f42731cb6..a22f0dde6 100644
+index 9da45701e..cb20422f9 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1,4 +1,5 @@
@@ -84,7 +84,7 @@ index f42731cb6..a22f0dde6 100644
  #include "skippy/devices.h"
  #include "skippy-signals.h"
  
-@@ -6758,6 +6759,26 @@ enum skippy_status skippy_import_kv_page(
+@@ -7089,6 +7090,26 @@ enum skippy_status skippy_import_kv_page(
      return skippy_success(out_error);
  }
  
@@ -112,7 +112,7 @@ index f42731cb6..a22f0dde6 100644
          struct skippy_session * session,
          uint64_t token_count,
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 158ab28df..846d4d954 100644
+index 794c0f047..03cad21d5 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -152,6 +152,7 @@ llama_build(test-recurrent-state-rollback.cpp get-model.cpp)
@@ -156,5 +156,5 @@ index 000000000..d09acccb4
 +    return 0;
 +}
 -- 
-2.54.0
+2.50.1 (Apple Git-155)
 

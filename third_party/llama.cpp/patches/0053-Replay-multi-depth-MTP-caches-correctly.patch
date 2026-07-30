@@ -1,7 +1,7 @@
-From 68ea61226111c9ab95d959d6a3d355c3dada7228 Mon Sep 17 00:00:00 2001
+From 8e80340a6f85a49e53320c79e3d353b7285b84db Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 17 Jul 2026 14:58:19 +1000
-Subject: [PATCH 51/60] Replay multi-depth MTP caches correctly
+Subject: [PATCH 53/61] Replay multi-depth MTP caches correctly
 
 ---
  src/models/step35.cpp |  12 ++-
@@ -9,7 +9,7 @@ Subject: [PATCH 51/60] Replay multi-depth MTP caches correctly
  2 files changed, 189 insertions(+), 49 deletions(-)
 
 diff --git a/src/models/step35.cpp b/src/models/step35.cpp
-index 4df4605b..2d546c20 100644
+index 4df4605bf..2d546c20f 100644
 --- a/src/models/step35.cpp
 +++ b/src/models/step35.cpp
 @@ -544,12 +544,16 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
@@ -34,7 +34,7 @@ index 4df4605b..2d546c20 100644
      ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
              ? layer.nextn.shared_head_norm
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index a918ce0f..5d221cda 100644
+index 1484f4f3b..52670efe8 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1822,6 +1822,14 @@ struct skippy_mtp_depth_scope {
@@ -345,7 +345,7 @@ index a918ce0f..5d221cda 100644
      }
  
      if (out_mtp_draft != nullptr && token_count > 0) {
-@@ -4413,7 +4549,7 @@ static enum skippy_status skippy_finish_model_open(
+@@ -4414,7 +4550,7 @@ static enum skippy_status skippy_finish_model_open(
          }
          if (stage_model->mtp_ctx != nullptr) {
              llama_set_embeddings_nextn(stage_model->ctx, true, false);
@@ -354,7 +354,7 @@ index a918ce0f..5d221cda 100644
          } else {
              fprintf(stderr, "skippy: native MTP sidecar unavailable for this final stage; continuing without drafts\n");
          }
-@@ -4678,7 +4814,7 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+@@ -4679,7 +4815,7 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
  
      target_model->mtp_model = draft_model;
      llama_set_embeddings_nextn(target_model->ctx, true, false);

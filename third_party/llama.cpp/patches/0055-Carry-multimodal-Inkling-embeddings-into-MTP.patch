@@ -1,7 +1,7 @@
-From 5b4896aa14167a09aba5534433c85ca3f49cd089 Mon Sep 17 00:00:00 2001
+From 7412e7ae58b83de1864433828e4a786693e58b60 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 17 Jul 2026 16:04:48 +1000
-Subject: [PATCH 53/60] Carry multimodal Inkling embeddings into MTP
+Subject: [PATCH 55/61] Carry multimodal Inkling embeddings into MTP
 
 ---
  include/skippy.h        |   3 +-
@@ -15,7 +15,7 @@ Subject: [PATCH 53/60] Carry multimodal Inkling embeddings into MTP
  8 files changed, 218 insertions(+), 30 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index e9d31f55..cc2382d3 100644
+index e9d31f559..cc2382d37 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -43,7 +43,8 @@ enum skippy_activation_layout {
@@ -29,7 +29,7 @@ index e9d31f55..cc2382d3 100644
  #define SKIPPY_GLM_DSA_POLICY_PROFILE_NONE     0
  #define SKIPPY_GLM_DSA_POLICY_PROFILE_V1       1
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 0145705b..11f06bf3 100644
+index 0145705b2..11f06bf3e 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -55,6 +55,7 @@ enum skippy_feature {
@@ -41,7 +41,7 @@ index 0145705b..11f06bf3 100644
  
  enum skippy_status {
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 4b47903d..9d528761 100644
+index 4b47903d3..9d528761b 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -4113,7 +4113,10 @@ int32_t llama_encode(
@@ -57,7 +57,7 @@ index 4b47903d..9d528761 100644
          LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
      }
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 42442879..20c121b2 100644
+index 42442879e..20c121b24 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -20,6 +20,8 @@ class llama_batch_allocr;
@@ -70,7 +70,7 @@ index 42442879..20c121b2 100644
  struct llama_memory_i;
  struct llama_memory_context_i;
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 36bf3219..27c5129b 100644
+index 36bf32193..27c5129be 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -26,6 +26,7 @@ static thread_local skippy_activation_tokens g_skippy_activation_tokens;
@@ -134,7 +134,7 @@ index 36bf3219..27c5129b 100644
  
      return res;
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index e74a58a5..6e66f7fe 100644
+index e74a58a56..6e66f7fef 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -78,6 +78,12 @@ struct skippy_activation_glm_dsa_top_k {
@@ -161,7 +161,7 @@ index e74a58a5..6e66f7fe 100644
  // certain models (typically multi-modal) can produce different types of graphs
  enum llm_graph_type {
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
-index d435a1f5..c054f1d9 100644
+index d435a1f5d..c054f1d98 100644
 --- a/src/models/inkling.cpp
 +++ b/src/models/inkling.cpp
 @@ -680,17 +680,25 @@ llama_model_inkling::graph::graph(const llama_model & model, const llm_graph_par
@@ -197,7 +197,7 @@ index d435a1f5..c054f1d9 100644
          cb(cur, "inkling_mtp_input", mtp_il);
          res->add_input(std::move(mtp_inp));
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 61f9c508..c76d3fbb 100644
+index 913c4d5ee..cc50cc501 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -149,8 +149,12 @@ struct skippy_session {
@@ -531,7 +531,7 @@ index 61f9c508..c76d3fbb 100644
  }
  
  void skippy_error_free(struct skippy_error * error) {
-@@ -4939,6 +5074,12 @@ enum skippy_status skippy_session_begin_external_decode(
+@@ -4940,6 +5075,12 @@ enum skippy_status skippy_session_begin_external_decode(
          skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
          return SKIPPY_STATUS_INVALID_ARGUMENT;
      }
@@ -544,7 +544,7 @@ index 61f9c508..c76d3fbb 100644
  
      const skippy_runtime_config & config = session->stage_model->config;
      if (config.filter_tensors_on_load) {
-@@ -4950,6 +5091,7 @@ enum skippy_status skippy_session_begin_external_decode(
+@@ -4951,6 +5092,7 @@ enum skippy_status skippy_session_begin_external_decode(
          filter.include_output = config.include_output;
          skippy_graph_set_filter(filter);
      }
@@ -552,7 +552,7 @@ index 61f9c508..c76d3fbb 100644
  
      return skippy_success(out_error);
  }
-@@ -4961,6 +5103,9 @@ enum skippy_status skippy_session_end_external_decode(
+@@ -4962,6 +5104,9 @@ enum skippy_status skippy_session_end_external_decode(
          skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
          return SKIPPY_STATUS_INVALID_ARGUMENT;
      }

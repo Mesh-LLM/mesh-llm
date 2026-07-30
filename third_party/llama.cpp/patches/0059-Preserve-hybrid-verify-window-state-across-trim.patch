@@ -1,7 +1,7 @@
-From 3de16ed4e7b4dc99758193736d2b4ccc7b311602 Mon Sep 17 00:00:00 2001
+From 57280d642a5806d9464577bfbbc276d5afcab79b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 28 Jul 2026 19:12:14 +1000
-Subject: [PATCH 48/49] Preserve hybrid verify-window state across trim
+Subject: [PATCH 59/61] Preserve hybrid verify-window state across trim
 
 Checkpoint only partial recurrent state, trim hybrid attention directly, and replay the accepted prefix so pipelined speculative windows can recover without copying the full long-context attention cache.
 
@@ -13,7 +13,7 @@ Assisted-by: codex
  1 file changed, 332 insertions(+), 28 deletions(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 21db2b77d..f42731cb6 100644
+index cc50cc501..9da45701e 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -9,6 +9,7 @@
@@ -42,16 +42,16 @@ index 21db2b77d..f42731cb6 100644
  struct skippy_session {
      skippy_model * stage_model = nullptr;
      llama_context * ctx = nullptr;
-@@ -149,6 +161,8 @@ struct skippy_session {
-     bool mtp_has_pending_draft = false;
-     llama_pos mtp_pending_draft_pos = 0;
+@@ -151,6 +163,8 @@ struct skippy_session {
      llama_token mtp_pending_draft_token = -1;
+     bool external_mtp_embeddings_available = false;
+     std::vector<float> external_mtp_embeddings;
 +    bool reset_required = false;
 +    std::vector<skippy_verify_checkpoint> verify_checkpoints;
  };
  
- struct skippy_tensor_meta {
-@@ -246,7 +260,15 @@ static enum skippy_status skippy_success(skippy_error ** out_error) {
+ static thread_local skippy_session * g_skippy_external_decode_session = nullptr;
+@@ -250,7 +264,15 @@ static enum skippy_status skippy_success(skippy_error ** out_error) {
      }
      return SKIPPY_STATUS_OK;
  }
@@ -68,7 +68,7 @@ index 21db2b77d..f42731cb6 100644
  static int32_t skippy_stage_layer_count(const llama_model * model) {
      if (model == nullptr) {
          return 0;
-@@ -1566,6 +1588,76 @@ static bool skippy_has_activation_payload(const skippy_activation_desc * desc, c
+@@ -1590,6 +1612,76 @@ static bool skippy_has_activation_payload(const skippy_activation_desc * desc, c
      return desc != nullptr && desc->payload_bytes > 0 && payload != nullptr;
  }
  
@@ -145,7 +145,7 @@ index 21db2b77d..f42731cb6 100644
  static enum skippy_status skippy_validate_frame_input_sequences(
          skippy_session * session,
          const skippy_activation_desc * input_desc,
-@@ -1763,7 +1855,10 @@ static enum skippy_status skippy_decode_batch(
+@@ -1797,7 +1889,10 @@ static enum skippy_status skippy_decode_batch(
          skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and at least one token are required");
          return SKIPPY_STATUS_INVALID_ARGUMENT;
      }
@@ -157,7 +157,7 @@ index 21db2b77d..f42731cb6 100644
      skippy_graph_filter_scope graph_filter_scope(&session->stage_model->config, glm_dsa_phase_hint);
      const char * phase_log = getenv("SKIPPY_GLM_DSA_LOG_DIRECT_SPARSE_DECISIONS");
      if (phase_log != nullptr && atoi(phase_log) != 0) {
-@@ -4035,6 +4130,169 @@ static enum skippy_status skippy_verify_activation_frame(
+@@ -4353,6 +4448,169 @@ static enum skippy_status skippy_verify_activation_frame(
      return status;
  }
  
@@ -327,7 +327,7 @@ index 21db2b77d..f42731cb6 100644
  extern "C" {
  
  struct skippy_abi_version skippy_abi_version(void) {
-@@ -4801,6 +5059,7 @@ enum skippy_status skippy_session_set_position(
+@@ -5132,6 +5390,7 @@ enum skippy_status skippy_session_set_position(
          session->signal_history.resize(static_cast<size_t>(n_past));
      }
      skippy_mtp_clear_session_state(session);
@@ -335,7 +335,7 @@ index 21db2b77d..f42731cb6 100644
      return skippy_success(out_error);
  }
  
-@@ -4894,6 +5153,8 @@ enum skippy_status skippy_session_reset(
+@@ -5225,6 +5484,8 @@ enum skippy_status skippy_session_reset(
      session->signal_history.clear();
      skippy_clear_chat_sampling(session);
      skippy_mtp_clear_session_state(session);
@@ -344,7 +344,7 @@ index 21db2b77d..f42731cb6 100644
      session->ctx->synchronize();
      return skippy_success(out_error);
  }
-@@ -5221,7 +5482,17 @@ enum skippy_status skippy_verify_tokens(
+@@ -5552,7 +5813,17 @@ enum skippy_status skippy_verify_tokens(
          return SKIPPY_STATUS_INVALID_ARGUMENT;
      }
  
@@ -363,7 +363,7 @@ index 21db2b77d..f42731cb6 100644
      if (status == SKIPPY_STATUS_OK) {
          const int32_t n_tokens = static_cast<int32_t>(token_count);
          for (int32_t i = 0; i < n_tokens; ++i) {
-@@ -5282,7 +5553,8 @@ static enum skippy_status skippy_prefill_chunk_frame_impl(
+@@ -5613,7 +5884,8 @@ static enum skippy_status skippy_prefill_chunk_frame_impl(
          return status;
      }
  
@@ -373,7 +373,7 @@ index 21db2b77d..f42731cb6 100644
          status = skippy_decode_activation_frame(
                  session,
                  input_desc,
-@@ -5930,7 +6202,19 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+@@ -6261,7 +6533,19 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
          }
      }
  
@@ -394,7 +394,7 @@ index 21db2b77d..f42731cb6 100644
          status = session->stage_model->config.include_output ?
                  skippy_verify_activation_frame(session, input_desc, input_payload, token_ids, token_count, out_error) :
                  skippy_decode_activation_frame(
-@@ -6049,6 +6333,7 @@ static void skippy_update_session_state_after_import(
+@@ -6380,6 +6664,7 @@ static void skippy_update_session_state_after_import(
          session->signal_history.resize(static_cast<size_t>(session->n_past));
      }
      skippy_mtp_clear_session_state(session);
@@ -402,7 +402,7 @@ index 21db2b77d..f42731cb6 100644
  }
  
  enum skippy_status skippy_export_state(
-@@ -6467,6 +6752,7 @@ enum skippy_status skippy_import_kv_page(
+@@ -6798,6 +7083,7 @@ enum skippy_status skippy_import_kv_page(
                      desc->token_start + desc->token_count,
                      static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))));
      skippy_mtp_clear_session_state(session);
@@ -410,7 +410,7 @@ index 21db2b77d..f42731cb6 100644
      session->ctx->synchronize();
  
      return skippy_success(out_error);
-@@ -6495,30 +6781,46 @@ enum skippy_status skippy_trim_session(
+@@ -6826,30 +7112,46 @@ enum skippy_status skippy_trim_session(
          skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "runtime memory is unavailable");
          return SKIPPY_STATUS_RUNTIME_ERROR;
      }
@@ -480,7 +480,7 @@ index 21db2b77d..f42731cb6 100644
      }
      session->n_past = static_cast<int32_t>(token_count);
      if (session->token_history.size() > token_count) {
-@@ -6529,6 +6831,7 @@ enum skippy_status skippy_trim_session(
+@@ -6860,6 +7162,7 @@ enum skippy_status skippy_trim_session(
          session->signal_history.resize(static_cast<size_t>(token_count));
      }
      skippy_mtp_clear_session_state(session);
@@ -488,7 +488,7 @@ index 21db2b77d..f42731cb6 100644
      session->ctx->synchronize();
  
      return skippy_success(out_error);
-@@ -6681,6 +6984,7 @@ enum skippy_status skippy_session_restore_prefix(
+@@ -7012,6 +7315,7 @@ enum skippy_status skippy_session_restore_prefix(
      }
      session->signal_history.clear();
      skippy_mtp_clear_session_state(session);
@@ -497,5 +497,5 @@ index 21db2b77d..f42731cb6 100644
      return skippy_success(out_error);
  }
 -- 
-2.54.0
+2.50.1 (Apple Git-155)
 

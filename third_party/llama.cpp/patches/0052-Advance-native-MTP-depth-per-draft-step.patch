@@ -1,14 +1,14 @@
-From 40ed78300dc40dd12586b31017dca33980ea8de7 Mon Sep 17 00:00:00 2001
+From 1d78b6bfc85213cc7bcacfb60c691f7424c4bd64 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 17 Jul 2026 14:46:51 +1000
-Subject: [PATCH 50/60] Advance native MTP depth per draft step
+Subject: [PATCH 52/61] Advance native MTP depth per draft step
 
 ---
  src/skippy.cpp | 37 +++++++++++++++++++++++++++++++++++++
  1 file changed, 37 insertions(+)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 347d6985..a918ce0f 100644
+index f6ccad78c..1484f4f3b 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1792,6 +1792,40 @@ static bool skippy_mtp_available(const skippy_session * session) {

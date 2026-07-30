@@ -1,0 +1,27 @@
+From 8bde3043235f5b795f19dab1e1ae6d08d422979c Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Thu, 30 Jul 2026 16:40:46 +1000
+Subject: [PATCH 61/61] Reject trims after failed verify recovery
+
+---
+ src/skippy.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index cb20422f9..e72a8e82e 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -7118,6 +7118,10 @@ enum skippy_status skippy_trim_session(
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
++    enum skippy_status usable_status = skippy_require_usable_session(session, out_error);
++    if (usable_status != SKIPPY_STATUS_OK) {
++        return usable_status;
++    }
+     if (token_count > static_cast<uint64_t>(std::numeric_limits<int32_t>::max())) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token_count exceeds int32_t range");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+-- 
+2.50.1 (Apple Git-155)
+
