@@ -84,8 +84,7 @@ impl FamilyPolicy {
                 // ctx-derived token budget, while zero means no additional
                 // byte cap. Disabling the cache entirely made every packaged
                 // model silently miss the family default.
-                let max_bytes =
-                    derive_stage_cache_max_bytes(config, package_meta).unwrap_or(0);
+                let max_bytes = derive_stage_cache_max_bytes(config, package_meta).unwrap_or(0);
                 // The family policy's `max_entries` is a generous
                 // upper bound on cache cardinality. The real ceiling
                 // is the unified KV cell pool size: each resident
@@ -877,6 +876,7 @@ mod tests {
         config.model_path = Some("hf://mesh-llm/laguna-layers".to_string());
         let policy = FamilyPolicy {
             activation_wire_dtype: StageWireDType::F16,
+            default_kv_cache_type: None,
             prefix_cache: FamilyPrefixCachePolicy::Auto {
                 payload: FamilyPrefixCachePayload::ResidentKv,
                 min_tokens: 256,
