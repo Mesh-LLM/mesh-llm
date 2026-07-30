@@ -127,6 +127,37 @@ pub(super) fn should_open_upstream_prediction_return(
     native_mtp_enabled || standalone_ngram_pipelining
 }
 
+pub(super) fn open_upstream_prediction_return(request: &EmbeddedStageZeroGeneration<'_>) -> bool {
+    let standalone_ngram_pipelining = !request.native_mtp_enabled
+        && request.speculative.ngram.is_some()
+        && request.draft.is_none()
+        && request.speculative.verify_window.pipeline_depth > 1;
+    if !should_open_upstream_prediction_return(
+        request.native_mtp_enabled,
+        standalone_ngram_pipelining,
+    ) {
+        return false;
+    }
+    let Some(prediction_return) = request.prediction_return.as_ref() else {
+        return false;
+    };
+    match crate::binary_transport::direct_return::open_downstream_prediction_return_stream(
+        request.config,
+        request.ids.request_id,
+        request.ids.session_id,
+        request.wire_dtype,
+    ) {
+        Ok(stream) => {
+            prediction_return.attach_opened_stream(stream);
+            true
+        }
+        Err(error) => {
+            eprintln!("direct prediction return upstream-opened sink unavailable: {error:#}");
+            false
+        }
+    }
+}
+
 pub(super) fn direct_prediction_return_path(
     verify_windows_enabled: bool,
     receiver_registered: bool,

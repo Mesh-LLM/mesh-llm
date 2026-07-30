@@ -35,9 +35,8 @@ use crate::telemetry::now_unix_nanos;
 use lifecycle::{
     DirectPredictionReturnPath, EmbeddedDecodeSummary, PipelinedCompositeWindow, can_seed_pipeline,
     compose_target_predictions, decode_uses_context_sideband, direct_prediction_return_path,
-    mark_epoch_stale, pipelined_window_layout, queued_active_tokens,
-    refill_pipeline_ngram_candidates, should_open_upstream_prediction_return,
-    speculation_after_prefix_restore,
+    mark_epoch_stale, open_upstream_prediction_return, pipelined_window_layout,
+    queued_active_tokens, refill_pipeline_ngram_candidates, speculation_after_prefix_restore,
 };
 use openai_frontend::{OpenAiError, OpenAiResult};
 use serde_json::json;
@@ -62,33 +61,7 @@ impl StageOpenAiBackend {
             .as_ref()
             .ok_or_else(|| OpenAiError::backend("embedded stage 0 has no downstream lane pool"))?;
         let mut lane = lane_pool.checkout(request.ids)?;
-        let mut direct_prediction_return_opened = false;
-        let standalone_ngram_return = !request.native_mtp_enabled
-            && request.speculative.ngram.is_some()
-            && request.draft.is_none()
-            && request.speculative.verify_window.pipeline_depth > 1;
-        if should_open_upstream_prediction_return(
-            request.native_mtp_enabled,
-            standalone_ngram_return,
-        ) && let Some(prediction_return) = request.prediction_return.as_ref()
-        {
-            match crate::binary_transport::direct_return::open_downstream_prediction_return_stream(
-                request.config,
-                request_id,
-                session_id,
-                request.wire_dtype,
-            ) {
-                Ok(stream) => {
-                    prediction_return.attach_opened_stream(stream);
-                    direct_prediction_return_opened = true;
-                }
-                Err(error) => {
-                    eprintln!(
-                        "direct prediction return upstream-opened sink unavailable: {error:#}"
-                    );
-                }
-            }
-        }
+        let direct_prediction_return_opened = open_upstream_prediction_return(&request);
         let mut cache_stats = GenerationCacheStats::default();
 
         let result = (|| {
