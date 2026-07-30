@@ -107,8 +107,10 @@ Local actions:
   permission is derived from the same typed trust decision.
 - `.github/actions/configure-sccache-gha` exports ephemeral Actions cache
   credentials to the baked `sccache`, permits Depot WebDAV only for an explicit
-  trusted call, uses disk-only storage if a future pull-request trust context is
-  ever evaluated on Depot, and resets counters after configuring the server.
+  trusted call, keeps the GitHub Actions remote tier read-only for PR events
+  while retaining a writable job-local disk tier, uses disk-only storage if a
+  future pull-request trust context is ever evaluated on Depot, and resets
+  counters after configuring the server.
 - `.github/actions/capture-sccache-stats` validates and uploads one
   machine-readable sccache evidence artifact per instrumented job or matrix
   row. Evidence is retained for 14 days so cold/warm samples span the configured
@@ -315,10 +317,14 @@ Public-image Rust jobs use the baked `sccache` binary. Trusted calls to
 `SCCACHE_WEBDAV_TOKEN`/`DEPOT_CACHE_TOKEN` in a fail-open `disk,webdav` chain.
 When that permission is false and Depot is detected, the action gives the
 sccache server a credential-free environment and uses job-local disk only.
-GitHub-hosted jobs retain `disk,gha` or explicit disk-only mode. Persistent
-Cargo target and ABI reuse remains owned by `Swatinem/rust-cache` and
-`actions/cache`. Current PR jobs use the normal `mesh-llm` key namespace and
-GitHub's merge-ref scoping; trusted main does not restore PR-written entries.
+GitHub-hosted jobs retain `disk,gha` or explicit disk-only mode. The GHA tier is
+read-only for PR events, including direct sccache-action users, while trusted
+main, release, warmer, and dispatch paths may seed it. Swift restores a
+mode-independent Rust dependency cache that only trusted main pushes save.
+Persistent Cargo target and ABI reuse remains owned by
+`Swatinem/rust-cache` and `actions/cache`. Current PR jobs use the normal
+`mesh-llm` key namespace; native `actions/cache` writes remain merge-ref scoped,
+and trusted main does not restore PR-written entries.
 Raw native ABI caches also include the exact native toolchain epoch used by the
 build stamp. Linux container jobs use the pinned OCI digest, macOS keys include
 the hosted image revision and native-tool fingerprint, and Windows warmer,

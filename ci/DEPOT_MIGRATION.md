@@ -292,9 +292,12 @@ including `actions/cache`, `actions/setup-node`, and third-party cache actions.
 Its namespace is repository-scoped and is not isolated by branch. Therefore:
 
 - current pull-request jobs never run on Depot and may use the normal
-  `mesh-llm` key namespace in GitHub's native cache because GitHub scopes PR
-  writes to the merge ref and trusted main jobs do not restore from that ref.
-  The crate-test target shards deliberately restore the already-seeded
+  `mesh-llm` key namespace in GitHub's native `actions/cache` because GitHub
+  scopes PR writes to the merge ref and trusted main jobs do not restore from
+  that ref. Their sccache GHA remote tier is read-only: PR jobs may consume
+  trusted default-branch entries and write job-local disk, while trusted
+  main/release/warmers publish shared compiler-cache entries. The crate-test
+  target shards deliberately restore the already-seeded
   `main-rust-crate-tests-<shard>` keys with writes disabled;
 - a local sccache disk-only setting protects only that sccache child process;
   it does not remove the Depot token or prevent another cache API consumer
@@ -304,8 +307,9 @@ Its namespace is repository-scoped and is not isolated by branch. Therefore:
 - trusted main/release jobs may explicitly enable the `disk,webdav` chain and
   fall back to job-local disk.
 
-GitHub-hosted jobs retain the existing disk/GitHub Actions cache path. Never
-print a cache token.
+GitHub-hosted jobs retain the existing disk/GitHub Actions cache path. PR
+sccache reads are remote and writes are job-local; native `actions/cache`
+continues to use GitHub's merge-ref isolation. Never print a cache token.
 
 Relevant Depot documentation:
 

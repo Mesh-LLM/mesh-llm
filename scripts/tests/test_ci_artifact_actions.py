@@ -1217,6 +1217,17 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("actions/upload-artifact@", producer)
         self.assertIn("runs-on: macos-15", producer)
         self.assertIn("RUSTC_WRAPPER: sccache", producer)
+        self.assertIn("SCCACHE_GHA_RW_MODE:", producer)
+        self.assertIn(
+            "uses: ./.github/actions/configure-sccache-gha",
+            producer,
+        )
+        self.assertIn("shared-key: swift-sdk", producer)
+        self.assertIn(
+            "save-if: ${{ github.event_name == 'push' "
+            "&& github.ref == 'refs/heads/main' }}",
+            producer,
+        )
         self.assertNotIn("macos_runner:", producer)
         self.assertIn(
             "name: generated-swift-binding-${{ inputs.artifact_name }}",
@@ -1711,6 +1722,16 @@ class CiArtifactActionTests(unittest.TestCase):
                     workflow,
                 )
 
+        builds = (
+            ROOT / ".github" / "workflows" / "pr_builds.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "SCCACHE_GHA_RW_MODE: "
+            "${{ github.event_name == 'pull_request' "
+            "&& 'READ_ONLY' || 'READ_WRITE' }}",
+            builds,
+        )
+
         main = (
             ROOT / ".github" / "workflows" / "ci.yml"
         ).read_text(encoding="utf-8")
@@ -1718,9 +1739,6 @@ class CiArtifactActionTests(unittest.TestCase):
 
         quality = (
             ROOT / ".github" / "workflows" / "pr_quality.yml"
-        ).read_text(encoding="utf-8")
-        builds = (
-            ROOT / ".github" / "workflows" / "pr_builds.yml"
         ).read_text(encoding="utf-8")
         self.assertIn(
             "shared-key: main-rust-crate-tests-${{ matrix.batch.idx }}",

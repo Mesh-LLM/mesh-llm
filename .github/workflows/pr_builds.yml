@@ -21,9 +21,11 @@ concurrency:
 
 env:
   # GitHub scopes pull-request cache writes to refs/pull/<n>/merge while still
-  # allowing read-only reuse of the base branch. Depot cache access remains
-  # disabled for pull_request events because Depot's repository cache is not
-  # branch-isolated.
+  # allowing read-only reuse of the base branch. Keep sccache's per-object
+  # GitHub tier read-only on PRs so concurrent compiler jobs cannot exhaust the
+  # repository upload-rate budget; trusted dispatches remain cache seeders.
+  # Depot cache access remains disabled for pull_request events because Depot's
+  # repository cache is not branch-isolated.
   CACHE_NAMESPACE: mesh-llm
   MODEL_URL: https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf
   MODEL_FILE: SmolLM2-135M-Instruct-Q8_0.gguf
@@ -31,6 +33,7 @@ env:
   CARGO_NET_RETRY: "10"
   CARGO_HTTP_MULTIPLEXING: "false"
   SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
   LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
 
 jobs:

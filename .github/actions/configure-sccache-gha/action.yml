@@ -28,6 +28,13 @@ runs:
             return;
           }
 
+          const eventName = process.env.GITHUB_EVENT_NAME || '';
+          const ghaRemoteMode =
+            eventName === 'pull_request' || eventName === 'pull_request_target'
+              ? 'READ_ONLY'
+              : 'READ_WRITE';
+          core.exportVariable('SCCACHE_GHA_RW_MODE', ghaRemoteMode);
+
           const webdavEndpoint = process.env.SCCACHE_WEBDAV_ENDPOINT || '';
           const webdavToken =
             process.env.SCCACHE_WEBDAV_TOKEN ||
@@ -240,7 +247,7 @@ runs:
               return;
             }
             core.info(
-              'Baked sccache is using job-local disk with a best-effort GitHub Actions cache.',
+              `Baked sccache is using job-local disk with a ${ghaRemoteMode.toLowerCase()} GitHub Actions cache.`,
             );
             return;
           }

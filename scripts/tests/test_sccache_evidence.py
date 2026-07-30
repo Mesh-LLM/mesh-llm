@@ -23,6 +23,7 @@ WORKFLOWS = {
     "main": ROOT / ".github" / "workflows" / "ci.yml",
     "swift-sdk": ROOT / ".github" / "workflows" / "swift-sdk-artifact.yml",
 }
+HF_WORKFLOW = ROOT / ".github" / "workflows" / "hf-download-smoke.yml"
 
 
 def valid_payload(*, compile_requests: int = 12) -> dict[str, object]:
@@ -269,6 +270,47 @@ class SccacheEvidenceTests(unittest.TestCase):
         self.assertNotIn(
             "'SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY', 'ignore'",
             configure,
+        )
+
+    def test_pull_request_remote_sccache_is_read_only(self) -> None:
+        configure = CONFIGURE_ACTION.read_text(encoding="utf-8")
+        builds = WORKFLOWS["pr-builds"].read_text(encoding="utf-8")
+        swift = WORKFLOWS["swift-sdk"].read_text(encoding="utf-8")
+        hf_download = HF_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("eventName === 'pull_request'", configure)
+        self.assertIn("eventName === 'pull_request_target'", configure)
+        self.assertIn(
+            "core.exportVariable('SCCACHE_GHA_RW_MODE', ghaRemoteMode)",
+            configure,
+        )
+        for workflow in (builds, swift, hf_download):
+            with self.subTest(workflow=workflow.splitlines()[0]):
+                self.assertIn("SCCACHE_GHA_RW_MODE:", workflow)
+                self.assertIn("'READ_ONLY'", workflow)
+                self.assertIn("'READ_WRITE'", workflow)
+
+        self.assertIn(
+            "uses: ./.github/actions/configure-sccache-gha",
+            swift,
+        )
+        self.assertNotIn("SCCACHE_WEBDAV_RW_MODE", configure)
+
+    def test_swift_uses_trusted_main_seeded_dependency_cache(self) -> None:
+        swift = WORKFLOWS["swift-sdk"].read_text(encoding="utf-8")
+
+        self.assertIn(
+            "uses: Swatinem/rust-cache@"
+            "e18b497796c12c097a38f9edb9d0641fb99eee32",
+            swift,
+        )
+        self.assertIn("shared-key: swift-sdk", swift)
+        self.assertIn("key: ${{ steps.native_toolchain.outputs.epoch }}", swift)
+        self.assertIn('add-job-id-key: "false"', swift)
+        self.assertIn(
+            "save-if: ${{ github.event_name == 'push' "
+            "&& github.ref == 'refs/heads/main' }}",
+            swift,
         )
 
     def test_instrumented_workflows_use_unique_evidence_artifacts(self) -> None:

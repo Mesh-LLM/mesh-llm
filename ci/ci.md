@@ -468,13 +468,16 @@ the sccache child with a credential-free, job-local disk backend. That isolates
 only sccache: Depot's automatically injected job token and transparent
 GitHub-cache API redirection remain available to other code on a Depot runner.
 Consequently, no untrusted PR code may run on Depot while automatic cache
-injection is enabled. GitHub-hosted jobs retain the existing best-effort
-`disk,gha` path or explicit disk-only mode. Cache read failures degrade to
-misses, cache write failures only warn, and a failed remote probe restarts
-`sccache` with disk-only storage. PR crate-test shards restore the existing
-`main-rust-crate-tests-<shard>` Cargo target caches read-only (`save-if:
-false`), so trusted main owns the cache while PRs avoid recompiling the same
-workspace graph.
+injection is enabled. GitHub-hosted jobs retain the existing `disk,gha` path or
+explicit disk-only mode. Pull-request jobs keep the GHA sccache tier read-only
+and the job-local disk tier writable; trusted main, release, warmer, and
+dispatch paths own remote publication. This avoids repository-wide per-object
+upload throttling while preserving trusted default-branch hits. Cache read
+failures degrade to misses, cache write failures only warn, and a failed remote
+probe restarts `sccache` with disk-only storage. PR crate-test shards restore
+the existing `main-rust-crate-tests-<shard>` Cargo target caches read-only
+(`save-if: false`), so trusted main owns the cache while PRs avoid recompiling
+the same workspace graph.
 
 Native ABI cache keys and llama build stamps share one resolved toolchain epoch.
 Digest-pinned Linux jobs use the immutable runner-image digest. Hosted macOS
@@ -517,9 +520,11 @@ Before enabling public access, restrict that group to
 `depot-canary.yml@refs/heads/main`. The existing `mesh-llm` runner group owns
 the dedicated GPU scale sets and is not the Depot group.
 
-Current GitHub-hosted PR jobs may share the `mesh-llm` key namespace because
-GitHub scopes PR cache writes to the merge ref; trusted main does not restore
-from that ref. Depot's cache is repository-scoped instead, so cache-key
+Current GitHub-hosted PR jobs may share the `mesh-llm` native-cache key
+namespace because GitHub scopes `actions/cache` PR writes to the merge ref;
+trusted main does not restore from that ref. Their sccache GHA remote tier is
+read-only, so trusted main/release/warmers own shared compiler-cache
+publication. Depot's cache is repository-scoped instead, so cache-key
 conventions or a trusted reusable caller are not sufficient protection from
 malicious checked-out PR code. PR events stay hosted while automatic Depot
 Cache is enabled. Runner placement does not alter build action inputs or
@@ -527,7 +532,8 @@ artifact contracts. Credential-bearing Hugging Face, inference, scripted, and
 SDK smoke reusable workflows accept no arbitrary runner label and stay on
 GitHub-hosted runners. PR callers pass no `HF_TOKEN`; only trusted main/release
 invocations receive the optional rate-limit credential. The Swift producer and
-Swift smoke are fixed to the GitHub-hosted `macos-15` image.
+Swift smoke are fixed to the GitHub-hosted `macos-15` image. Swift restores one
+mode-independent Rust dependency cache and only trusted main pushes save it.
 Hardware-qualified GPU execution stays on dedicated runners. See
 [`DEPOT_MIGRATION.md`](DEPOT_MIGRATION.md) for activation prerequisites,
 baseline metrics, target service levels, and the cross-repository plan.
