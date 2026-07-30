@@ -57,6 +57,11 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             '[[ "$EXPECT_CACHE_HIT" == "true" && "$CACHE_HIT" != "true" ]]',
             self.workflow,
         )
+        self.assertIn(
+            "key: depot-runner-canary-v2-exact-${{ matrix.runner }}-probe",
+            self.workflow,
+        )
+        self.assertNotIn("key: depot-runner-canary-v1-", self.workflow)
         self.assertNotIn("echo \"$DEPOT_CACHE_TOKEN\"", self.workflow)
         self.assertNotIn("printenv", self.workflow)
 
