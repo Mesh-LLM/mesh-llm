@@ -4704,151 +4704,151 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_auto_client() != 12117) {
+    if (uniffi_meshllm_ffi_checksum_func_create_auto_client() != 12517) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_auto_node() != 62467) {
+    if (uniffi_meshllm_ffi_checksum_func_create_auto_node() != 33432) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_client() != 14950) {
+    if (uniffi_meshllm_ffi_checksum_func_create_client() != 53219) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_node() != 53847) {
+    if (uniffi_meshllm_ffi_checksum_func_create_node() != 11855) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 41756) {
+    if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 42923) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 53670) {
+    if (uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 11242) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_discover_public_meshes() != 8199) {
+    if (uniffi_meshllm_ffi_checksum_func_discover_public_meshes() != 52961) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex() != 15846) {
+    if (uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex() != 63994) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 5481) {
+    if (uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 25162) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_installed_native_runtimes() != 37725) {
+    if (uniffi_meshllm_ffi_checksum_func_installed_native_runtimes() != 21851) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_prune_native_runtimes() != 29071) {
+    if (uniffi_meshllm_ffi_checksum_func_prune_native_runtimes() != 18336) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 58516) {
+    if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 48639) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_consolehandle_stop() != 39251) {
+    if (uniffi_meshllm_ffi_checksum_method_consolehandle_stop() != 13931) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_consolehandle_url() != 61491) {
+    if (uniffi_meshllm_ffi_checksum_method_consolehandle_url() != 15682) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_cancel() != 32002) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_cancel() != 60947) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_chat() != 2872) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_chat() != 50040) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_models() != 2185) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_models() != 8792) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect() != 33566) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect() != 10889) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_responses() != 1844) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_responses() != 28930) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_start() != 48685) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_start() != 44515) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_status() != 33476) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_status() != 41037) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_stop() != 3388) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_stop() != 1554) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 32259) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 56505) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_chat() != 34892) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_chat() != 37264) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cleanup_models() != 1157) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cleanup_models() != 58526) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_delete_model() != 2627) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_delete_model() != 51823) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_download_model() != 20595) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_download_model() != 26002) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 54117) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 32433) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_installed_models() != 34553) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_installed_models() != 28122) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_load_serving_model() != 31620) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_load_serving_model() != 39783) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status() != 61505) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status() != 29059) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache() != 24829) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache() != 45852) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_recommended_models() != 43281) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_recommended_models() != 28368) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_reconnect() != 60843) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_reconnect() != 64634) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_responses() != 29255) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_responses() != 43033) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_search_models() != 6088) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_search_models() != 26120) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_served_models() != 28188) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_served_models() != 18883) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_serving_status() != 49590) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_serving_status() != 35990) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_set_device_policy() != 8567) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_set_device_policy() != 30969) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_show_model() != 35584) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_show_model() != 41215) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 46124) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 22769) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_console() != 34773) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_console() != 35615) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 48531) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 44385) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 10537) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 24422) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_instance() != 1091) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_instance() != 65198) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model() != 45229) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model() != 48491) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model_by_id() != 9451) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model_by_id() != 21862) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_eventlistener_on_event() != 53401) {
+    if (uniffi_meshllm_ffi_checksum_method_eventlistener_on_event() != 56769) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 40900) {
+    if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 1578) {
         return InitializationResult.apiChecksumMismatch
     }
 

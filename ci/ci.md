@@ -620,10 +620,12 @@ baseline metrics, target service levels, and the cross-repository plan.
   `full`. Producer and smoke are fixed to `macos-15`, and the shared native
   cache includes an explicit macOS/Xcode epoch. Rust compilation is routed
   through sccache, with per-mode/per-attempt statistics retained as CI evidence.
-  Main and tag producers reject tracked-binding drift; dispatched releases copy
-  the producer binding into the prepared tag commit. The Swift consumer cannot
-  invoke Cargo, llama.cpp compilation, native-SDK packaging, or an XCFramework
-  build.
+  PR, main, and tag producers reject tracked-binding drift after compiling the
+  native library, so a stale UniFFI checksum contract fails in the lightweight
+  host-only PR producer instead of waiting for the exhaustive main build.
+  Dispatched releases copy the producer binding into the prepared tag commit.
+  The Swift consumer cannot invoke Cargo, llama.cpp compilation, native-SDK
+  packaging, or an XCFramework build.
 - Linux native-runtime packaging uses `patchelf` to make packaged shared
   libraries relocatable with `$ORIGIN`, then verifies them without
   `LD_LIBRARY_PATH`. Release native-runtime jobs and Rust SDK smoke jobs need

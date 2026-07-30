@@ -1252,6 +1252,20 @@ class CiArtifactActionTests(unittest.TestCase):
             producer,
         )
         self.assertIn(
+            "name: Verify committed Swift binding source is current\n"
+            "        if: ${{ !inputs.prepare_release_version }}",
+            producer,
+        )
+        self.assertNotIn(
+            "!inputs.prepare_release_version && (github.ref ==",
+            producer,
+        )
+        self.assertIn("EVENT_NAME: ${{ github.event_name }}", producer)
+        self.assertIn(
+            "release source preparation requires workflow_dispatch",
+            producer,
+        )
+        self.assertIn(
             "uses: ./.github/actions/capture-sccache-stats",
             producer,
         )

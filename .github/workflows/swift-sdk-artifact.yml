@@ -70,6 +70,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
           UPDATE_RELEASE_MANIFEST: ${{ inputs.update_release_manifest }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           case "$SWIFT_SDK_MODE" in
@@ -83,6 +84,11 @@ jobs:
                   "$UPDATE_RELEASE_MANIFEST" == "true" ) &&
                 -z "$RELEASE_TAG" ]]; then
             echo "release_tag is required for release preparation" >&2
+            exit 1
+          fi
+          if [[ "$PREPARE_RELEASE_VERSION" == "true" &&
+                "$EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "release source preparation requires workflow_dispatch" >&2
             exit 1
           fi
 
@@ -156,8 +162,8 @@ jobs:
         if: ${{ inputs.mode == 'full' }}
         run: sdk/swift/scripts/build-xcframework.sh
 
-      - name: Verify protected Swift binding source is current
-        if: ${{ !inputs.prepare_release_version && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
+      - name: Verify committed Swift binding source is current
+        if: ${{ !inputs.prepare_release_version }}
         run: |
           set -euo pipefail
           generated_binding="sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift"

@@ -121,6 +121,11 @@ Changes to the central PR/main/release workflow callers or to
 caller-owned mode, timeout, artifact, and trust-policy edits from skipping the
 reusable Swift, Kotlin, or Rust SDK contracts they change.
 
+The reusable Swift producer verifies the committed generated UniFFI binding
+after both host-only and full builds for PR, main, and tag callers. Only a
+dispatched release that deliberately prepares a versioned source tree may
+replace the tracked binding before publication.
+
 Local actions:
 
 - `.github/actions/compute-changes` owns path, crate, backend, SDK, UI, website,
