@@ -330,6 +330,8 @@ pub enum StatePayloadKind {
 pub struct StageFaParityArgs {
     #[arg(long)]
     pub model: PathBuf,
+    #[arg(long, default_value = "unsloth/inkling-GGUF:UD-Q2_K_XL")]
+    pub model_id: String,
     #[arg(long, default_value_t = 0)]
     pub layer_start: u32,
     #[arg(long)]

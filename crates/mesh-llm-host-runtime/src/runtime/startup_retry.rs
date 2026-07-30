@@ -8,6 +8,7 @@ fn split_participants_are_still_converging(message: &str) -> bool {
     message.contains("at least two participating nodes")
         || message.contains("at least two stage participants")
         || message.contains("split_capacity_shortfall")
+        || message.contains("canonical coordinator")
         || (message.contains("split topology lock stage")
             && message.contains("matched 0 eligible nodes"))
 }
@@ -51,6 +52,16 @@ mod tests {
     fn missing_locked_participant_is_retryable() {
         assert!(is_retryable_split_start_failure(
             "split topology lock stage 3 selector \"worker\" matched 0 eligible nodes; available: local"
+        ));
+    }
+
+    #[test]
+    fn canonical_coordinator_mismatch_is_retryable() {
+        assert!(is_retryable_split_start_failure(
+            "split topology stage 0 node-a does not match canonical coordinator node-b"
+        ));
+        assert!(is_retryable_split_start_failure(
+            "split topology lock stage 0 must be canonical coordinator node-b"
         ));
     }
 

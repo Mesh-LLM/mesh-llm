@@ -63,8 +63,14 @@ impl StageOpenAiBackend {
             .ok_or_else(|| OpenAiError::backend("embedded stage 0 has no downstream lane pool"))?;
         let mut lane = lane_pool.checkout(request.ids)?;
         let mut direct_prediction_return_opened = false;
-        if should_open_upstream_prediction_return(request.native_mtp_enabled)
-            && let Some(prediction_return) = request.prediction_return.as_ref()
+        let standalone_ngram_return = !request.native_mtp_enabled
+            && request.speculative.ngram.is_some()
+            && request.draft.is_none()
+            && request.speculative.verify_window.pipeline_depth > 1;
+        if should_open_upstream_prediction_return(
+            request.native_mtp_enabled,
+            standalone_ngram_return,
+        ) && let Some(prediction_return) = request.prediction_return.as_ref()
         {
             match crate::binary_transport::direct_return::open_downstream_prediction_return_stream(
                 request.config,
@@ -945,7 +951,7 @@ impl StageOpenAiBackend {
                 && verify_window_scheduler.depth() > 1;
             let mut verify_window_forwarder = None;
             if let Some(direct_return_path) = direct_prediction_return_path(
-                native_mtp_verify_windows_enabled,
+                native_mtp_verify_windows_enabled || pipelined_decode_enabled,
                 request.prediction_return.is_some(),
                 direct_prediction_return_opened,
             )? {

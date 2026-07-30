@@ -205,16 +205,6 @@ pub(super) async fn start_runtime_split_model(
         excluded = ?split_participant_exclusion_labels(&participant_snapshot.excluded),
         "split topology planned; elected coordinator from stage 0"
     );
-    tracing::info!(
-        model_ref,
-        topology_id,
-        run_id,
-        local_node = %spec.node.id().fmt_short(),
-        context_length = planned_topology.context_length,
-        parallel_lanes = planned_topology.slots,
-        "split topology election selected local node as coordinator"
-    );
-
     let ctx_size = planned_topology.context_length;
     let slots = planned_topology.slots;
     let projector_path = spec

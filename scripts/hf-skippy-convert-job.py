@@ -128,6 +128,8 @@ def convert(args: argparse.Namespace, root: Path) -> Path:
         "300",
     )
     run(str(binary), "verify-job", "--manifest", str(manifest), "--json")
+    if not artifact_dir.is_dir():
+        raise FileNotFoundError(f"convert-job did not produce {artifact_dir}")
     shutil.copy2(manifest, artifact_dir / "skippy-convert-manifest.json")
     if status.exists():
         shutil.copy2(status, artifact_dir / "skippy-convert-status.json")

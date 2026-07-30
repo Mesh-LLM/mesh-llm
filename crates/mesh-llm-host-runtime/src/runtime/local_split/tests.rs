@@ -82,7 +82,6 @@ fn canonical_coordinator_is_identical_with_divergent_observer_signals() {
 fn noncanonical_gate_returns_standby_without_invoking_package_planning() {
     let local = SplitParticipant::new(make_id(1), 24_000_000_000, None);
     let coordinator = SplitParticipant::new(make_id(2), 48_000_000_000, None);
-    let mut package_planning_called = false;
 
     let gate = canonical_coordinator_gate(local.node_id, vec![local, coordinator])
         .expect("canonical coordinator gate");
@@ -90,10 +89,10 @@ fn noncanonical_gate_returns_standby_without_invoking_package_planning() {
         CanonicalCoordinatorGate::Standby {
             coordinator: selected,
         } => assert_eq!(selected, coordinator.node_id),
-        CanonicalCoordinatorGate::Coordinator(_) => package_planning_called = true,
+        CanonicalCoordinatorGate::Coordinator(_) => {
+            panic!("local node must not be elected coordinator")
+        }
     }
-
-    assert!(!package_planning_called);
 }
 
 #[test]
@@ -1643,6 +1642,10 @@ fn real_inkling_metadata_plans_family_kv_not_size_tiered() {
 
     let planned =
         split_runtime_kv_bytes_per_token(&identity, &meta, model_ref, None, None).unwrap();
+    let expected_q4 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("q4_0", "q4_0")
+        .unwrap()
+        .kv_cache_bytes_per_token(&meta)
+        .unwrap();
     let size_tiered = {
         let p =
             crate::inference::skippy::KvCachePolicy::for_model_size(identity.source_model_bytes);
@@ -1665,7 +1668,7 @@ fn real_inkling_metadata_plans_family_kv_not_size_tiered() {
         "inkling must resolve a q4_0 family K/V default"
     );
     assert_eq!(
-        planned, size_tiered,
-        "family-aware planning and the large-model policy must agree on Q4_0"
+        planned, expected_q4,
+        "family-aware planning must use the Inkling Q4_0 K/V default"
     );
 }

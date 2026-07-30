@@ -209,10 +209,8 @@ impl StageOpenAiBackend {
             && native_mtp_verify_decision.accepted_proposal_tokens == proposal_tokens.len()
             && committed_positions == consumed_positions
             && !reached_stop;
-        let checkpoint_no_longer_needed = verify_checkpoint_no_longer_needed(
-            native_mtp_verify_decision.commit_count,
-            consumed_positions,
-        );
+        let checkpoint_no_longer_needed =
+            verify_checkpoint_no_longer_needed(committed_positions, consumed_positions);
         if checkpoint_no_longer_needed {
             self.retire_verify_window(
                 request,

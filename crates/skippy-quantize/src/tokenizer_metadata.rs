@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::gguf_writer::GgufKv;
 
 const TOKEN_TYPE_NORMAL: i32 = 1;
-const TOKEN_TYPE_UNUSED: i32 = 2;
+const TOKEN_TYPE_UNUSED: i32 = 5;
 const TOKEN_TYPE_CONTROL: i32 = 3;
 
 pub(crate) fn push_tokenizer_metadata(

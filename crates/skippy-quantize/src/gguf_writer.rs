@@ -457,14 +457,24 @@ fn inkling_w13_tensor_sources(
     tensor_name_map: TensorNameMap,
     output_type: Option<ConvertOutputType>,
 ) -> Result<Vec<TensorSource>> {
-    let TensorNameMap::HfToGgufWithMtp { layer_start } = tensor_name_map else {
-        anyhow::bail!("Inkling MTP conversion requires an MTP-aware tensor name map");
+    let layer = if let Some(depth) = inkling_mtp_depth(tensor.name())? {
+        let TensorNameMap::HfToGgufWithMtp { layer_start } = tensor_name_map else {
+            anyhow::bail!("Inkling MTP conversion requires an MTP-aware tensor name map");
+        };
+        layer_start
+            .checked_add(depth)
+            .context("Inkling MTP layer id overflow")?
+    } else {
+        ensure!(
+            matches!(
+                tensor_name_map,
+                TensorNameMap::HfToGguf | TensorNameMap::HfToGgufWithMtp { .. }
+            ),
+            "Inkling fused w13 conversion requires an HF tensor name map"
+        );
+        hf_layer_id(tensor.name())?
+            .with_context(|| format!("missing Inkling layer id in {}", tensor.name()))?
     };
-    let depth = inkling_mtp_depth(tensor.name())?
-        .with_context(|| format!("missing Inkling MTP depth in {}", tensor.name()))?;
-    let layer = layer_start
-        .checked_add(depth)
-        .context("Inkling MTP layer id overflow")?;
     ensure!(
         tensor.shape().len() == 2,
         "Inkling MTP fused w13 tensor {} must be rank 2, got {:?}",

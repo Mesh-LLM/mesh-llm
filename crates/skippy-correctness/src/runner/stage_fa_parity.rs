@@ -89,7 +89,7 @@ fn decode_boundary(
         filter_tensors_on_load: true,
     };
     let selection = select_layer_package_parts(&PackageStageRequest {
-        model_id: "unsloth/inkling-GGUF:UD-Q2_K_XL".to_string(),
+        model_id: args.model_id.clone(),
         topology_id: "stage-fa-parity".to_string(),
         package_ref: args.model.display().to_string(),
         stage_id: "stage-0".to_string(),

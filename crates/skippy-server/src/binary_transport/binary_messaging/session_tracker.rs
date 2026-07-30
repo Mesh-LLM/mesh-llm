@@ -44,8 +44,15 @@ pub(super) fn release_tracked_connection_sessions(
     if orphaned.is_empty() {
         return;
     }
-    let Ok(mut runtime) = runtime.lock() else {
-        return;
+    let mut runtime = match runtime.lock() {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            eprintln!(
+                "failed to reclaim {} orphaned binary stage session(s): runtime lock poisoned",
+                orphaned.len()
+            );
+            return;
+        }
     };
     for session_key in orphaned {
         match runtime.drop_session_timed(&session_key) {

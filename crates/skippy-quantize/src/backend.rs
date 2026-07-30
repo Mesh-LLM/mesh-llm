@@ -170,7 +170,7 @@ fn skippy_abi_reason(
         return "no Skippy native runtime library was loaded for ABI probing".to_string();
     }
     if feature_mask.is_none() {
-        return "loaded Skippy runtime does not expose skippy_abi_features".to_string();
+        return "loaded Skippy runtime does not expose abi_features".to_string();
     }
     if gguf_slice_write {
         return "loaded Skippy ABI exposes GGUF slice writing and the linked llama symbols can be used for GGUF quantization, but not HF checkpoint conversion".to_string();

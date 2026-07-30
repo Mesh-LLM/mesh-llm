@@ -894,10 +894,11 @@ impl RuntimeState {
         let layer_end = i32::try_from(self.model_layer_end())?;
         let session = self.session(session_id)?;
         session.import_state_for_token_count(layer_start, layer_end, bytes, token_count)?;
-        self.session_token_counts
-            .entry(session_id.to_string())
-            .and_modify(|current| *current = (*current).max(token_count))
-            .or_insert(token_count);
+        record_restored_session_token_count(
+            &mut self.session_token_counts,
+            session_id,
+            token_count,
+        );
         Ok(())
     }
 
@@ -925,10 +926,11 @@ impl RuntimeState {
         let layer_end = i32::try_from(self.model_layer_end())?;
         let session = self.session(session_id)?;
         session.import_full_state_for_token_count(layer_start, layer_end, bytes, token_count)?;
-        self.session_token_counts
-            .entry(session_id.to_string())
-            .and_modify(|current| *current = (*current).max(token_count))
-            .or_insert(token_count);
+        record_restored_session_token_count(
+            &mut self.session_token_counts,
+            session_id,
+            token_count,
+        );
         Ok(())
     }
 
@@ -1395,7 +1397,7 @@ mod tests {
     };
 
     #[test]
-    fn recurrent_prefix_restore_moves_tracked_position_backwards() {
+    fn prefix_restore_moves_tracked_position_backwards() {
         let mut token_counts = std::collections::BTreeMap::from([("lane-a".to_string(), 3_535)]);
 
         record_restored_session_token_count(&mut token_counts, "lane-a", 3_530);

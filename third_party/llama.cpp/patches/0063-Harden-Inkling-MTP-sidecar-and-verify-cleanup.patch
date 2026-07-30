@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mesh-llm maintainers <maintainers@mesh-llm.local>
+Date: Thu, 30 Jul 2026 15:10:00 +0000
+Subject: [PATCH] Harden Inkling MTP sidecar and verify cleanup
+
+Keep MTP embedding overrides aligned when llama.cpp splits a decode batch,
+invalidate partial sidecar state after decode failure, and reject empty
+activation prefixes during verify recovery. Also clear the external-decode
+session pointer during teardown and advance the RPC patch version for the
+added GGML operation.
+---
+ ggml/include/ggml-rpc.h |  2 +-
+ src/llama-graph.cpp     | 14 ++++++++++----
+ src/llama-graph.h       |  1 +
+ src/skippy.cpp          | 24 +++++++++++++++++++++---
+ 4 files changed, 33 insertions(+), 8 deletions(-)
+
+diff --git a/ggml/include/ggml-rpc.h b/ggml/include/ggml-rpc.h
+index 086dddd96..2d103664f 100644
+--- a/ggml/include/ggml-rpc.h
++++ b/ggml/include/ggml-rpc.h
+@@ -8,7 +8,7 @@ extern "C" {
+ 
+ #define RPC_PROTO_MAJOR_VERSION    4
+ #define RPC_PROTO_MINOR_VERSION    0
+-#define RPC_PROTO_PATCH_VERSION    4
++#define RPC_PROTO_PATCH_VERSION    5
+ 
+ #ifdef  __cplusplus
+ static_assert(GGML_OP_COUNT == 108, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 27c5129be..2d1cff2a3 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -178,9 +178,14 @@ void llm_graph_input_embd_h::set_input(const llama_ubatch * ubatch) {
+         GGML_ASSERT(n_embd == embd->ne[0]);
+         const float * values = ubatch->embd;
+         if (mtp_embeddings.values != nullptr) {
+-            GGML_ASSERT(mtp_embeddings.token_count == ubatch->n_tokens);
+             GGML_ASSERT(mtp_embeddings.n_embd == n_embd);
+-            values = mtp_embeddings.values;
++            GGML_ASSERT(ubatch->pos != nullptr);
++            const llama_pos token_offset = ubatch->pos[0] - mtp_embeddings.pos_start;
++            GGML_ASSERT(token_offset >= 0);
++            GGML_ASSERT(
++                    static_cast<uint64_t>(token_offset) + ubatch->n_tokens <=
++                    mtp_embeddings.token_count);
++            values = mtp_embeddings.values + static_cast<size_t>(token_offset)*n_embd;
+         }
+ 
+         ggml_backend_tensor_set(embd, values, 0, n_tokens*n_embd*ggml_element_size(embd));
+@@ -2656,7 +2661,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+         ggml_tensor * fa_mask = kq_mask;
+         if (fold_kq_b_into_mask) {
+             ggml_tensor * bias = ggml_cont(ctx0, kq_b);
+-            if (kq_mask->ne[1] != bias->ne[1]) {
++            GGML_ASSERT(kq_mask->ne[1] >= bias->ne[1]);
++            if (kq_mask->ne[1] > bias->ne[1]) {
+                 // the FA mask rows are padded; pad the bias with zeros to match
+                 bias = ggml_pad(ctx0, bias, 0, (int)(kq_mask->ne[1] - bias->ne[1]), 0, 0);
+             }
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index 6e66f7fef..a02f65b26 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -82,6 +82,7 @@ struct skippy_activation_mtp_embeddings {
+     const float * values = nullptr;
+     uint32_t token_count = 0;
+     uint32_t n_embd = 0;
++    llama_pos pos_start = 0;
+ };
+ 
+ void skippy_graph_set_filter(const skippy_graph_filter & filter);
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 26226b55d..2e5e6e8f3 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -2986,9 +2986,13 @@ static bool skippy_mtp_shares_target_memory(
+ }
+ 
+ struct skippy_mtp_embeddings_scope {
+-    skippy_mtp_embeddings_scope(const float * values, uint32_t token_count, uint32_t n_embd) {
++    skippy_mtp_embeddings_scope(
++            const float * values,
++            uint32_t token_count,
++            uint32_t n_embd,
++            llama_pos pos_start) {
+         if (values != nullptr) {
+-            skippy_graph_set_mtp_embeddings({ values, token_count, n_embd });
++            skippy_graph_set_mtp_embeddings({ values, token_count, n_embd, pos_start });
+             enabled = true;
+         }
+     }
+@@ -3128,7 +3132,8 @@ static enum skippy_status skippy_mtp_sync_target_inputs(
+         skippy_mtp_embeddings_scope mtp_embeddings_scope(
+                 mtp_embeddings,
+                 static_cast<uint32_t>(n_decode),
+-                static_cast<uint32_t>(n_embd));
++                static_cast<uint32_t>(n_embd),
++                token_start + static_cast<llama_pos>(first_index));
+         for (uint32_t depth = 0; depth < sync_depth_count; ++depth) {
+             if (chain_heads) {
+                 if (llama_memory_t memory = mtp_ctx->get_memory()) {
+@@ -3141,6 +3146,9 @@ static enum skippy_status skippy_mtp_sync_target_inputs(
+                 skippy_graph_filter_scope graph_filter_scope(&session->stage_model->config);
+                 rc = llama_decode(mtp_ctx, batch);
+             }
++            if (rc != 0) {
++                session->mtp_prefix_valid = false;
++            }
+             if (rc != 0 || !chain_heads || depth + 1 == sync_depth_count) {
+                 break;
+             }
+@@ -4600,6 +4608,13 @@ static enum skippy_status skippy_restore_verify_prefix(
+                 session,
+                 *checkpoint,
+                 accepted_count);
++        if (input_payload.empty()) {
++            return skippy_fail_verify_restore(
++                    session,
++                    SKIPPY_STATUS_RUNTIME_ERROR,
++                    "verify-window checkpoint has an invalid activation prefix payload",
++                    out_error);
++        }
+         input_desc.token_count = static_cast<uint32_t>(accepted_count);
+         input_desc.payload_bytes = input_payload.size();
+         status = skippy_decode_activation_frame(
+@@ -5513,6 +5528,9 @@ enum skippy_status skippy_session_free(
+         struct skippy_session * session,
+         struct skippy_error ** out_error) {
+     if (session != nullptr) {
++        if (g_skippy_external_decode_session == session) {
++            g_skippy_external_decode_session = nullptr;
++        }
+         if (session->ctx != nullptr) {
+             if (session->preserve_prefix_on_free && !session->borrowed_sequence && session->stage_model != nullptr) {
+                 session->ctx->synchronize();
+-- 
+2.50.1
+

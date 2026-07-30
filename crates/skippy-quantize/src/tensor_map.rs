@@ -90,7 +90,8 @@ pub(crate) fn is_shared_mtp_context_tensor(name: &str) -> bool {
 }
 
 pub(crate) fn is_inkling_fused_w13(name: &str) -> bool {
-    name.starts_with("model.mtp.layers.") && name.ends_with(".mlp.w13_dn.weight")
+    (name.starts_with("model.layers.") || name.starts_with("model.mtp.layers."))
+        && name.ends_with(".mlp.w13_dn.weight")
 }
 
 pub(crate) fn inkling_mtp_depth(name: &str) -> Result<Option<u32>> {

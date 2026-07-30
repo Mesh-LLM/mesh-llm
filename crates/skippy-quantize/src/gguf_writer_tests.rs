@@ -345,6 +345,40 @@ fn writes_inkling_mtp_streaming_transforms() {
 }
 
 #[test]
+fn writes_inkling_trunk_fused_w13_streaming_transforms() {
+    let root = unique_temp_dir();
+    fs::create_dir_all(&root).unwrap();
+    let w13 = (1_u32..=8)
+        .flat_map(|value| (value as f32).to_le_bytes())
+        .collect::<Vec<_>>();
+    write_safetensor(
+        &root.join("model.safetensors"),
+        &[("model.layers.3.mlp.w13_dn.weight", "F32", &[4, 2], &w13)],
+    );
+    let output = root.join("inkling-trunk.gguf");
+
+    write_raw_safetensors_gguf(
+        &root,
+        &output,
+        RawGgufWriteOptions {
+            buffer_size: 9,
+            metadata: None,
+            tensor_name_map: TensorNameMap::HfToGguf,
+            split: None,
+            output_type: Some(ConvertOutputType::Bf16),
+            tensor_selection: TensorSelection::All,
+        },
+    )
+    .unwrap();
+
+    let parsed = parse_test_gguf(&fs::read(&output).unwrap());
+    assert_eq!(parsed.tensor_count, 2);
+    assert_eq!(parsed.tensor("blk.3.ffn_gate.weight").dims, vec![2, 2]);
+    assert_eq!(parsed.tensor("blk.3.ffn_up.weight").dims, vec![2, 2]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn validates_qwen_dense_native_conversion_fixture() {
     let root = unique_temp_dir();
     fs::create_dir_all(&root).unwrap();

@@ -120,8 +120,11 @@ pub(super) enum DirectPredictionReturnPath {
     ReverseFallback,
 }
 
-pub(super) fn should_open_upstream_prediction_return(native_mtp_enabled: bool) -> bool {
-    native_mtp_enabled
+pub(super) fn should_open_upstream_prediction_return(
+    native_mtp_enabled: bool,
+    standalone_ngram_pipelining: bool,
+) -> bool {
+    native_mtp_enabled || standalone_ngram_pipelining
 }
 
 pub(super) fn direct_prediction_return_path(
@@ -509,9 +512,10 @@ mod tests {
     }
 
     #[test]
-    fn pure_ngram_skips_the_blocking_upstream_return_open() {
-        assert!(!should_open_upstream_prediction_return(false));
-        assert!(should_open_upstream_prediction_return(true));
+    fn direct_return_opens_for_native_mtp_or_pipelined_ngram() {
+        assert!(!should_open_upstream_prediction_return(false, false));
+        assert!(should_open_upstream_prediction_return(true, false));
+        assert!(should_open_upstream_prediction_return(false, true));
     }
 
     #[test]
