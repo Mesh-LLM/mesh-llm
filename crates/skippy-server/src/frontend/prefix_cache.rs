@@ -719,7 +719,12 @@ impl StageOpenAiBackend {
             else {
                 continue;
             };
-            if restore.restored_tokens < checkpoint_tokens.len() {
+            if exact_replay_restore_is_partial(restore.restored_tokens, checkpoint_tokens.len()) {
+                // This trial activated the same request session on every stage.
+                // Retire it before trying the next-shorter replay checkpoint;
+                // otherwise the next local restore collides with the trial
+                // session and fails with `session ... already exists`.
+                self.drop_embedded_split_restore(request, session_key, downstream);
                 continue;
             }
             let replay = replay_tokens[..replay_len].to_vec();
@@ -1193,6 +1198,10 @@ impl StageOpenAiBackend {
     }
 }
 
+fn exact_replay_restore_is_partial(restored_tokens: usize, checkpoint_tokens: usize) -> bool {
+    restored_tokens < checkpoint_tokens
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1231,5 +1240,11 @@ mod tests {
         assert_eq!(q8.interstage_activation_bytes_avoided_estimate, 1_311_744);
         assert_eq!(f32.stage0_activation_bytes_avoided, 5_242_880);
         assert_eq!(f32.interstage_activation_bytes_avoided_estimate, 5_242_880);
+    }
+
+    #[test]
+    fn exact_replay_rejects_a_shorter_restored_checkpoint() {
+        assert!(exact_replay_restore_is_partial(44_466, 44_467));
+        assert!(!exact_replay_restore_is_partial(44_467, 44_467));
     }
 }
