@@ -189,7 +189,9 @@ flowchart TD
   smokes consume the staged runtime instead of compiling a private replacement.
   The Swift XCFramework is also built by the same typed producer used by PR and
   release: main requests exhaustive `full` mode and its smoke only verifies and
-  consumes that immutable artifact.
+  consumes that immutable artifact. Main and release give the seven-target
+  full producer a 180-minute cold-start ceiling; PR host-only validation keeps
+  its shorter iteration budget.
 - Main builds immutable Linux, macOS, and Windows release hosts independently
   from their CPU, Metal, CUDA, ROCm, and Vulkan runtimes. Composition-only jobs
   verify and combine those exact producer inputs. Each Linux GPU backend has

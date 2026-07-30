@@ -487,6 +487,7 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertIn("mode: full", producer)
         self.assertIn("artifact_name: ci-swift-sdk-input", producer)
+        self.assertIn("timeout_minutes: 180", producer)
         self.assertNotIn("macos_runner:", producer)
         self.assertNotIn("macos_cpu_artifact", producer)
         self.assertNotIn("macos_unit_tests", producer)

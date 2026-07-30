@@ -94,6 +94,12 @@ or manual dispatch. Every composed backend product requires `runtime list`
 plus no-driver client readiness; hosted GPU rows neither inject a driver stub
 nor skip startup because no device is present.
 
+The exhaustive Swift producer has a 180-minute main/release cold-start budget
+because it serially builds seven Apple target ABIs. PR host-only calls retain
+their shorter budget. Exact native ABI and compiler caches remain responsible
+for reducing the warm path; the timeout is only the reliability ceiling for an
+unseeded cache.
+
 `pr_builds.yml` uses the same split producer/composer shape for Linux CPU/GPU
 and macOS Metal products while retaining debug-profile hosts for lightweight
 PR iteration. Windows broad-Rust validation stays at lightweight Cargo checks;

@@ -726,7 +726,7 @@ jobs:
       update_release_manifest: ${{ github.event_name == 'workflow_dispatch' }}
       require_tracked_console: ${{ github.event_name != 'workflow_dispatch' }}
       retention_days: 90
-      timeout_minutes: 90
+      timeout_minutes: 180
 
   build_linux_arm64:
     name: Build immutable host Linux ARM64

@@ -723,7 +723,7 @@ jobs:
       mode: full
       artifact_name: ci-swift-sdk-input
       retention_days: 1
-      timeout_minutes: 90
+      timeout_minutes: 180
 
   swift_sdk_smoke:
     needs: [changes, macos_cpu_artifact, swift_sdk_input]
