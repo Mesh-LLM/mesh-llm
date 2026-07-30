@@ -244,13 +244,16 @@ esac
 
 USE_SCCACHE="${LLAMA_STAGE_USE_SCCACHE:-${SKIPPY_USE_SCCACHE:-1}}"
 if [[ "$USE_SCCACHE" != "0" && -n "$SCCACHE_BIN" ]] &&
-   ! "$SCCACHE_BIN" --start-server >/dev/null 2>&1; then
-  if [[ "${MESH_LLM_REQUIRE_SCCACHE:-0}" == "1" ]]; then
-    echo "sccache failed to start and MESH_LLM_REQUIRE_SCCACHE=1" >&2
-    exit 1
+   ! "$SCCACHE_BIN" --show-stats >/dev/null 2>&1; then
+  if ! "$SCCACHE_BIN" --start-server >/dev/null 2>&1 ||
+     ! "$SCCACHE_BIN" --show-stats >/dev/null 2>&1; then
+    if [[ "${MESH_LLM_REQUIRE_SCCACHE:-0}" == "1" ]]; then
+      echo "sccache is unavailable and MESH_LLM_REQUIRE_SCCACHE=1" >&2
+      exit 1
+    fi
+    echo "sccache is unavailable; llama.cpp build will run without compiler caching" >&2
+    USE_SCCACHE=0
   fi
-  echo "sccache failed to start; llama.cpp build will run without compiler caching" >&2
-  USE_SCCACHE=0
 fi
 
 if [[ "$USE_SCCACHE" != "0" && -n "$SCCACHE_BIN" ]]; then

@@ -60,6 +60,11 @@ class StaticAbiArtifactTests(unittest.TestCase):
         self.assertIn("@LLAMA_WORKDIR@", build_script)
         self.assertIn("-ffile-prefix-map=", build_script)
         self.assertIn("MESH_LLM_REQUIRE_SCCACHE=1", build_script)
+        self.assertIn('"$SCCACHE_BIN" --show-stats', build_script)
+        self.assertLess(
+            build_script.index('"$SCCACHE_BIN" --show-stats'),
+            build_script.index('"$SCCACHE_BIN" --start-server'),
+        )
         for archive in (
             "libllama-common-base.a",
             "libggml.a",
