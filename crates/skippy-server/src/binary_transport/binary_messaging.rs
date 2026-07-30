@@ -34,8 +34,11 @@ use skippy_protocol::binary::{WireMessageKind, read_stage_message, send_ready};
 
 pub(in crate::binary_transport) mod async_forwarder;
 mod connection;
+mod control_messages;
+mod message_receive;
 mod prefill_recording;
 pub(in crate::binary_transport) mod reply;
+mod session_lifecycle;
 mod session_tracker;
 mod summary;
 mod telemetry;

@@ -47,8 +47,9 @@ pub(crate) fn run_validate_mtp_attach(args: ValidateMtpAttachArgs) -> Result<()>
         skippy_ffi::native_runtime_loaded(),
         "validate-mtp-attach requires a statically linked standalone build or a loaded native runtime"
     );
-    let native_mtp_multimodal_feature =
-        skippy_ffi::abi_features() & skippy_ffi::FEATURE_INKLING_MTP_MM != 0;
+    let abi_features = skippy_ffi::try_abi_features()
+        .context("loaded native runtime does not expose Skippy ABI feature probing")?;
+    let native_mtp_multimodal_feature = abi_features & skippy_ffi::FEATURE_INKLING_MTP_MM != 0;
     ensure!(
         native_mtp_multimodal_feature,
         "native runtime does not advertise Inkling multimodal MTP support"

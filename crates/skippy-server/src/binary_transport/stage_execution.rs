@@ -117,7 +117,15 @@ pub(in crate::binary_transport) fn take_ready_downstream(
 }
 
 fn complete_downstream_ready(stream: &mut TcpStream, timeout: Duration) -> Result<()> {
-    send_client_ready_hello_if_enabled(stream).context("send downstream client ready hello")?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .context("set downstream ready write timeout")?;
+    let hello_result =
+        send_client_ready_hello_if_enabled(stream).context("send downstream client ready hello");
+    stream
+        .set_write_timeout(None)
+        .context("clear downstream ready write timeout")?;
+    hello_result?;
     stream
         .set_read_timeout(Some(timeout))
         .context("set downstream ready timeout")?;

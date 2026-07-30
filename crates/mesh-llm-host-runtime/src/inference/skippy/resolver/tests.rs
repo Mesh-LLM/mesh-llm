@@ -784,6 +784,33 @@ cache_type_v = "q8_0"
 }
 
 #[test]
+fn explicit_global_inkling_kv_override_beats_family_default() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.model_fit]
+cache_type_k = "q8_0"
+cache_type_v = "q8_0"
+
+[[models]]
+model = "meshllm/inkling-UD-Q2_K_XL-layers"
+"#,
+    );
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
+        model_path: Path::new("/models/inkling.gguf"),
+        model_bytes: 316 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .unwrap();
+
+    assert_eq!(resolved.model_fit.cache_type_k, "q8_0");
+    assert_eq!(resolved.model_fit.cache_type_v, "q8_0");
+}
+
+#[test]
 fn family_policy_wires_prefix_cache_by_default_for_supported_models() {
     let model_file = temp_model_file();
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {

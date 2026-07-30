@@ -616,7 +616,7 @@ fn split_startup_error_messages_include_specific_blocker_tokens() {
 #[test]
 fn stage_source_prepare_timeout_scales_with_assigned_package_bytes() {
     let package = skippy::SkippyPackageIdentity {
-        source_model_bytes: 321_400_000_000,
+        source_model_bytes: 975_000_000_000,
         layer_count: 66,
         ..package(66)
     };
@@ -642,7 +642,7 @@ fn stage_source_prepare_timeout_scales_with_assigned_package_bytes() {
 
     assert!(small_timeout > MIN_STAGE_SOURCE_PREPARE_TIMEOUT);
     assert!(large_timeout > small_timeout);
-    assert!(large_timeout <= MAX_STAGE_SOURCE_PREPARE_TIMEOUT);
+    assert!(large_timeout > Duration::from_secs(6 * 60 * 60));
 }
 
 #[test]

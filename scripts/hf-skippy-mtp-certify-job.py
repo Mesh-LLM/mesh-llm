@@ -7,12 +7,20 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 import shutil
+import socket
 import subprocess
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+
+PROJECTOR_DOWNLOAD_TIMEOUT_SECONDS = 60
+PROJECTOR_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024 * 1024
+PROJECTOR_DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+TRUSTED_PROJECTOR_HOST_SUFFIXES = ("huggingface.co", "hf.co", "xethub.hf.co")
 
 
 def run(*command: str, cwd: Path | None = None) -> None:
@@ -73,19 +81,72 @@ def require_gguf_magic(path: Path) -> Path:
     return path
 
 
+def validate_projector_url(url: str) -> urllib.parse.ParseResult:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https":
+        raise RuntimeError(f"unsupported projector URL scheme: {parsed.scheme!r}")
+    hostname = parsed.hostname
+    if hostname is None or parsed.username is not None or parsed.password is not None:
+        raise RuntimeError("projector URL must contain a trusted HTTPS host without credentials")
+    hostname = hostname.rstrip(".").lower()
+    if not any(
+        hostname == suffix or hostname.endswith(f".{suffix}")
+        for suffix in TRUSTED_PROJECTOR_HOST_SUFFIXES
+    ):
+        raise RuntimeError(f"untrusted projector URL host: {hostname!r}")
+    if parsed.port not in (None, 443):
+        raise RuntimeError(f"unsupported projector URL port: {parsed.port}")
+    addresses = socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)
+    if not addresses:
+        raise RuntimeError(f"projector URL host did not resolve: {hostname!r}")
+    for address in addresses:
+        resolved = ipaddress.ip_address(address[4][0])
+        if not resolved.is_global:
+            raise RuntimeError(
+                f"projector URL host resolved to a non-public address: {hostname!r}"
+            )
+    return parsed
+
+
+class TrustedProjectorRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        validate_projector_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def copy_projector_response(response, output) -> None:  # noqa: ANN001
+    content_length = response.headers.get("Content-Length")
+    if content_length is not None and int(content_length) > PROJECTOR_DOWNLOAD_MAX_BYTES:
+        raise RuntimeError("projector download exceeds the maximum supported size")
+    copied = 0
+    while chunk := response.read(PROJECTOR_DOWNLOAD_CHUNK_BYTES):
+        copied += len(chunk)
+        if copied > PROJECTOR_DOWNLOAD_MAX_BYTES:
+            raise RuntimeError("projector download exceeds the maximum supported size")
+        output.write(chunk)
+
+
 def projector_path(args: argparse.Namespace) -> Path:
     if not args.projector_url:
         return require_gguf_magic(Path(args.projector))
-    scheme = urllib.parse.urlparse(args.projector_url).scheme
-    if scheme not in ("http", "https"):
-        raise RuntimeError(f"unsupported projector URL scheme: {scheme!r}")
+    parsed = validate_projector_url(args.projector_url)
     target = Path(args.projector_local_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(f"{target.suffix}.part")
-    print(f"+ download {args.projector_url} -> {target}", flush=True)
-    with urllib.request.urlopen(args.projector_url) as response, temporary.open("wb") as output:
-        shutil.copyfileobj(response, output, length=8 * 1024 * 1024)
-    temporary.replace(target)
+    redacted_url = urllib.parse.urlunparse(parsed._replace(query="", fragment=""))
+    print(f"+ download {redacted_url} -> {target}", flush=True)
+    opener = urllib.request.build_opener(TrustedProjectorRedirectHandler())
+    try:
+        with opener.open(
+            args.projector_url,
+            timeout=PROJECTOR_DOWNLOAD_TIMEOUT_SECONDS,
+        ) as response, temporary.open("wb") as output:
+            copy_projector_response(response, output)
+        require_gguf_magic(temporary)
+        temporary.replace(target)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
     return require_gguf_magic(target)
 
 

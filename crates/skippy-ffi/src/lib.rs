@@ -1,6 +1,6 @@
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 34;
+pub const ABI_VERSION_PATCH: u32 = 35;
 pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
 pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
@@ -1183,15 +1183,28 @@ pub use dynamic::*;
 /// Returns the skippy ABI feature bitmask.
 /// Requires the native runtime to be loaded first (checked by caller).
 pub fn skippy_abi_features() -> u64 {
-    let fns = dynamic::skippy_abi_features_optional()
-        .expect("skippy_abi_features not available in loaded runtime");
-    unsafe { fns() }
+    try_abi_features().expect("skippy_abi_features not available in loaded runtime")
+}
+
+/// Returns the Skippy ABI feature bitmask when the loaded dynamic runtime
+/// exports feature probing.
+#[cfg(feature = "dynamic-runtime")]
+pub fn try_abi_features() -> Option<u64> {
+    dynamic::skippy_abi_features_optional().map(|features| unsafe { features() })
 }
 
 /// Returns the active Skippy ABI feature bitmask through a safe Rust wrapper.
 #[cfg(feature = "dynamic-runtime")]
 pub fn abi_features() -> u64 {
     skippy_abi_features()
+}
+
+/// Returns the statically linked Skippy ABI feature bitmask.
+#[cfg(not(feature = "dynamic-runtime"))]
+pub fn try_abi_features() -> Option<u64> {
+    // SAFETY: the statically linked ABI exposes this nullary query with no
+    // caller-owned pointers or lifetime requirements.
+    Some(unsafe { skippy_abi_features() })
 }
 
 /// Returns the statically linked Skippy ABI feature bitmask.

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use skippy_protocol::MAX_VERIFY_WINDOW_PIPELINE_DEPTH;
 
 mod artifact_io;
 
@@ -1018,14 +1019,21 @@ fn validate_window_policy(
             "use positive window sizes",
         );
     }
-    if window.pipeline_depth == Some(0) {
+    if window.pipeline_depth.is_some_and(|depth| {
+        depth == 0
+            || usize::try_from(depth)
+                .map(|depth| depth > MAX_VERIFY_WINDOW_PIPELINE_DEPTH)
+                .unwrap_or(true)
+    }) {
         report.error(
             "invalid_window_policy_pipeline_depth",
             format!(
-                "speculative strategy {name} window_policy.pipeline_depth must be greater than zero"
+                "speculative strategy {name} window_policy.pipeline_depth must be between 1 and {MAX_VERIFY_WINDOW_PIPELINE_DEPTH}"
             ),
             Some("model-package.json".to_string()),
-            "set pipeline_depth to a positive in-flight verification-window capacity",
+            format!(
+                "set pipeline_depth to an in-flight verification-window capacity no greater than {MAX_VERIFY_WINDOW_PIPELINE_DEPTH}"
+            ),
         );
     }
     if window.min_window > window.max_window {
@@ -2161,6 +2169,54 @@ mod tests {
         assert!(!report.valid);
         assert_issue(&report, "invalid_window_policy_pipeline_depth");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn preflight_enforces_verify_window_pipeline_depth_maximum() {
+        for (depth, expected_valid) in [
+            (MAX_VERIFY_WINDOW_PIPELINE_DEPTH, true),
+            (MAX_VERIFY_WINDOW_PIPELINE_DEPTH + 1, false),
+        ] {
+            let dir = unique_test_dir(&format!("window-pipeline-depth-{depth}"));
+            let package = write_package_fixture(&dir, true);
+            write_generation_to_manifest(
+                &package,
+                serde_json::json!({
+                    "speculative_decoding": {
+                        "default": "ngram-suffix",
+                        "proposers": {
+                            "suffix": {
+                                "type": "ngram-suffix",
+                                "ngram_min": 5,
+                                "ngram_max": 32,
+                                "max_proposal_tokens": 48,
+                                "history_scope": "request"
+                            }
+                        },
+                        "strategies": {
+                            "ngram-suffix": {
+                                "type": "ngram-suffix",
+                                "proposer": "suffix",
+                                "window_policy": {
+                                    "default": "fixed",
+                                    "initial_window": 32,
+                                    "min_window": 1,
+                                    "max_window": 32,
+                                    "pipeline_depth": depth
+                                }
+                            }
+                        }
+                    }
+                }),
+            );
+
+            let report = preflight_package(&package, &PackagePreflightOptions::default());
+            assert_eq!(report.valid, expected_valid, "pipeline depth {depth}");
+            if !expected_valid {
+                assert_issue(&report, "invalid_window_policy_pipeline_depth");
+            }
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     fn assert_issue(report: &PackagePreflightReport, code: &str) {

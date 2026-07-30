@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub(super) const MIN_STAGE_SOURCE_PREPARE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-pub(super) const MAX_STAGE_SOURCE_PREPARE_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const STAGE_SOURCE_PREPARE_ALLOWANCE: Duration = Duration::from_secs(10 * 60);
 const STAGE_SOURCE_MIN_BYTES_PER_SEC: u64 = 16 * 1024 * 1024;
 
@@ -345,10 +344,7 @@ pub(super) fn stage_source_prepare_timeout(
     let transfer_secs = estimated_stage_bytes.div_ceil(STAGE_SOURCE_MIN_BYTES_PER_SEC);
     Duration::from_secs(transfer_secs)
         .saturating_add(STAGE_SOURCE_PREPARE_ALLOWANCE)
-        .clamp(
-            MIN_STAGE_SOURCE_PREPARE_TIMEOUT,
-            MAX_STAGE_SOURCE_PREPARE_TIMEOUT,
-        )
+        .max(MIN_STAGE_SOURCE_PREPARE_TIMEOUT)
 }
 
 pub(super) fn split_runtime_stage_load_request(

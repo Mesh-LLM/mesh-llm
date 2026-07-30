@@ -246,6 +246,12 @@ fn resolve_cache_type_k(
         return explicit.to_string();
     }
     if let Some(family_default) = family_policy.default_kv_cache_type {
+        if let Some(explicit) = context
+            .global_model_fit
+            .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref()))
+        {
+            return explicit.to_string();
+        }
         return family_default.to_string();
     }
     resolve_field_string(
@@ -276,6 +282,12 @@ fn resolve_cache_type_v(
         return explicit.to_string();
     }
     if let Some(family_default) = family_policy.default_kv_cache_type {
+        if let Some(explicit) = context
+            .global_model_fit
+            .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref()))
+        {
+            return explicit.to_string();
+        }
         return family_default.to_string();
     }
     resolve_field_string(
