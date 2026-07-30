@@ -269,6 +269,34 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("if: ${{ !cancelled()", publish)
         self.assertNotIn("always()", publish)
 
+    def test_prereleases_never_dispatch_downstream_publication(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        metadata = job_block(
+            workflow,
+            "metadata",
+            "build",
+        )
+        dispatch = job_block(
+            workflow,
+            "dispatch_packaging_release",
+            "publish_crates_preflight",
+        )
+
+        self.assertIn('if [[ "$version" == *-* ]]', metadata)
+        self.assertIn("prerelease=true", metadata)
+        self.assertIn(
+            "needs.metadata.outputs.prerelease != 'true'",
+            dispatch,
+        )
+        self.assertIn(
+            "needs.metadata.outputs.skip_gpu_bundles != 'true'",
+            dispatch,
+        )
+        self.assertIn("dry_run: false", dispatch)
+        self.assertIn("publish_images: true", dispatch)
+        self.assertIn("publish_release_assets: true", dispatch)
+        self.assertIn("publish_npm: true", dispatch)
+
     def test_release_assets_and_manual_tags_are_immutable(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         publish = job_block(

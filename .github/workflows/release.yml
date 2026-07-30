@@ -1733,7 +1733,7 @@ jobs:
   dispatch_packaging_release:
     name: Dispatch package and image publishing
     needs: [metadata, publish]
-    if: ${{ needs.publish.result == 'success' && needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+    if: ${{ needs.publish.result == 'success' && needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read

@@ -205,6 +205,9 @@ flowchart TD
   manifest-bound, checksummed archive. Release publication requires all five
   artifacts, and `mesh-packaging` consumes those exact release assets instead
   of compiling addon source again.
+- Release publication dispatches downstream package/image/npm promotion only
+  for stable versions. Prereleases retain the complete immutable GitHub Release
+  artifact graph for validation but never invoke `mesh-packaging`.
 - `.github/actions/prepare-host-input`,
   `.github/actions/prepare-windows-host-input`,
   `.github/actions/prepare-native-runtime-input`,
@@ -324,8 +327,10 @@ flowchart TD
   re-stamping them. The Windows host input includes a checksum-protected
   producer-built attestation verifier so Windows composers do not compile
   workspace code. Product consumers never rebuild a missing producer. It
-  dispatches the completed release to `Mesh-LLM/mesh-packaging`,
-  which owns package, GHCR, and npm publication.
+  dispatches a completed stable release with the full GPU matrix to
+  `Mesh-LLM/mesh-packaging`, which owns package, GHCR, and npm publication.
+  Prereleases publish immutable GitHub Release inputs but never dispatch
+  downstream publication.
 - `fly-deploy-console.yml` is a manual (`workflow_dispatch`) deploy of the
   `mesh-llm-console` Fly app. It builds the image on Fly's remote builders from
   `fly/Dockerfile` and authenticates with the app-scoped `FLY_API_TOKEN` repo

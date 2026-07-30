@@ -31,7 +31,7 @@ the commands at the end before operational changes.
 | `windows-warm-caches.yml` | Main path push, dispatch | Trusted Windows ABI cache warming |
 | `website-pages.yml` | Main website path push, dispatch | Public website Pages build/deploy |
 | `fly-deploy-console.yml` | Dispatch | `fly-console` environment deployment |
-| `release.yml` | `v*` tag, dispatch | Release builds, attestations, publishing, downstream package/image/npm dispatch |
+| `release.yml` | `v*` tag, dispatch | Release builds, attestations, publishing, stable-only downstream package/image/npm dispatch |
 | `reset-caches.yml` | Confirmed dispatch | Destructive repository cache reset |
 | `stale-prs.yml` | Schedule, dispatch | PR warning/closure maintenance |
 
@@ -61,6 +61,12 @@ GitHub-hosted platform, packs and fresh-installs the SDK, verifies
 manifest and SHA-256 sidecar. The release publisher requires all five producers
 and attaches those exact artifacts; downstream packaging verifies and assembles
 them without recompiling native source.
+
+Only a successful, complete stable release dispatches downstream package,
+image, and npm publication. Prereleases publish their immutable GitHub Release
+inputs but never invoke `mesh-packaging`; this provides a safe artifact
+validation boundary without exposing prerelease inputs to production
+promotion.
 
 The Windows host input also carries the checksum-protected `xtask` executable
 that performed producer-side attestation. Windows product composers invoke that

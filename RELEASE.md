@@ -8,13 +8,14 @@ Releases are normally cut by running the **Release** workflow
 dispatched workflow bumps versions, generates and patches the SwiftPM
 manifest, packages SDK console assets, creates and pushes the release tag,
 builds all platform bundles, and publishes the GitHub release. After a complete
-non-canary release succeeds, it dispatches `Mesh-LLM/mesh-packaging` to
-package the verified release archives, publish the native package release
-assets, publish the supported GHCR image matrix, and assemble and publish the
-Node SDK to npm. Dispatch inputs include
-`skip_gpu_bundles` and `canary` (dry-run: build and smoke everything without
-publishing). Releases that intentionally skip GPU bundles do not dispatch the
-full packaging matrix.
+stable, non-canary release with the full GPU matrix succeeds, it dispatches
+`Mesh-LLM/mesh-packaging` to package the verified release archives, publish the
+native package release assets, publish the supported GHCR image matrix, and
+assemble and publish the Node SDK to npm. Prereleases publish their immutable
+GitHub Release inputs without invoking downstream publication. Dispatch inputs
+include `skip_gpu_bundles` and `canary` (dry-run: build and smoke everything
+without publishing). Releases that intentionally skip GPU bundles do not
+dispatch the full packaging matrix.
 
 The sections below document the underlying steps. They matter when releasing
 manually via a tag push, debugging the workflow, or validating bundles
@@ -216,10 +217,11 @@ Verify:
 
 Push a `v*` tag to run `.github/workflows/release.yml`. The upstream release
 workflow owns release archive production, but it does not publish OCI images.
-`Mesh-LLM/mesh-packaging` is the canonical package, GHCR, and npm producer and starts only
-after the GitHub release and its complete archive set have published
-successfully. The upstream `docker.yml` workflow performs Dockerfile validation
-only and is not a distribution channel.
+`Mesh-LLM/mesh-packaging` is the canonical package, GHCR, and npm producer. It
+starts only after a stable GitHub release and its complete CPU/GPU archive set
+have published successfully. Prereleases never dispatch it. The upstream
+`docker.yml` workflow performs Dockerfile validation only and is not a
+distribution channel.
 
 On non-prerelease tags, the release workflow also publishes the Rust SDK crate
 chain to crates.io in dependency order:
