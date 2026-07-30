@@ -18,6 +18,76 @@ use serde_json::Value;
 /// then by confidence.  A proposal without arguments (e.g. from a fast
 /// worker that only got tool names in the system prompt) should lose to
 /// one that has actual arguments.
+/// Pick the tool proposal that the most workers actually back.
+///
+/// Agreeing on a tool *name* is not the same as agreeing on its
+/// *arguments*. Recorded traces from 9 open-weight models (see
+/// `evals/moa-openrouter/agentic.jsonl`) show all 9 workers choosing the
+/// same tool while emitting up to 6 distinct argument sets — including one
+/// worker hallucinating a `rust_project/` path prefix no other worker
+/// used. Every OpenAI-shape tool call is normalized to a fixed 0.9
+/// confidence by `extract_text_from_response`, so the confidence-only
+/// tiebreak in [`best_tool_proposal`] was free to return that outlier.
+///
+/// Group proposals by canonically-compared arguments and let the largest
+/// cluster win. `serde_json::Value` object equality is key-order
+/// independent, so `{"path":".","pattern":"x"}` and
+/// `{"pattern":"x","path":"."}` cluster together.
+///
+/// A no-arguments cluster never outvotes a real-arguments cluster — a
+/// majority emitting bare calls shouldn't suppress the workers that
+/// actually filled the schema in. Within the winning cluster, and for
+/// ties, we defer to [`best_tool_proposal`] so behavior is unchanged
+/// when every worker disagrees.
+fn best_tool_proposal_by_consensus<'a>(proposals: &[&'a WorkerOutput]) -> &'a WorkerOutput {
+    match decisive_argument_cluster(proposals) {
+        Some(group) => best_tool_proposal(&group),
+        // No decisive cluster (all argument-free, or an exact tie): fall back
+        // to the old confidence/has-args ordering.
+        None => best_tool_proposal(proposals),
+    }
+}
+
+/// Group proposals by canonical arguments and return the strictly-largest
+/// group, or `None` when there is no clear winner.
+///
+/// `None` means "these proposals do not agree on arguments": either every
+/// proposal was argument-free, or the top two clusters are the same size. A
+/// tie is the case that matters — with two workers proposing two different
+/// argument sets, any pick is arbitrary, so callers should prefer waiting for
+/// more workers over guessing.
+fn decisive_argument_cluster<'a>(proposals: &[&'a WorkerOutput]) -> Option<Vec<&'a WorkerOutput>> {
+    let mut clusters: std::collections::BTreeMap<String, Vec<&'a WorkerOutput>> =
+        std::collections::BTreeMap::new();
+    for p in proposals {
+        // Canonical key: serialized Value. serde_json's default Map is a
+        // BTreeMap, so serialization is key-sorted and deterministic, which
+        // makes `{"a":1,"b":2}` and `{"b":2,"a":1}` cluster together.
+        let key = match p.tool_arguments.as_ref() {
+            Some(args) if args != &Value::Object(Default::default()) => {
+                serde_json::to_string(args).unwrap_or_default()
+            }
+            _ => String::new(), // no/empty arguments
+        };
+        clusters.entry(key).or_default().push(p);
+    }
+
+    // Only clusters with real arguments can win: a majority emitting bare
+    // calls must not suppress the workers that actually filled the schema in.
+    let mut sized: Vec<(usize, Vec<&'a WorkerOutput>)> = clusters
+        .into_iter()
+        .filter(|(key, _)| !key.is_empty())
+        .map(|(_, group)| (group.len(), group))
+        .collect();
+    sized.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
+
+    match sized.as_slice() {
+        [] => None,
+        [(_, only)] => Some(only.clone()),
+        [(first_n, first), (second_n, _), ..] => (first_n > second_n).then(|| first.clone()),
+    }
+}
+
 fn best_tool_proposal<'a>(proposals: &[&'a WorkerOutput]) -> &'a WorkerOutput {
     proposals
         .iter()
@@ -112,7 +182,7 @@ pub fn arbitrate(outputs: &[WorkerOutput], has_tools: bool) -> Decision {
             let unanimous = tool_names.iter().all(|n| *n == first);
 
             if unanimous {
-                let best = best_tool_proposal(&tool_proposals);
+                let best = best_tool_proposal_by_consensus(&tool_proposals);
                 return Decision::ToolCall {
                     name: first.to_string(),
                     arguments: best
@@ -165,6 +235,26 @@ pub fn arbitrate(outputs: &[WorkerOutput], has_tools: bool) -> Decision {
         if best.confidence < 0.5 && !critiques.is_empty() {
             return Decision::NeedsReducer {
                 reason: "low confidence answer with critique".into(),
+            };
+        }
+
+        // Diverging answers are synthesized, not picked.
+        //
+        // Returning `best.payload` verbatim was close to arbitrary: models
+        // rarely emit our `kind:/confidence:` envelope, so `normalize`
+        // defaults them all to `confidence: 0.5` and `max_by` just returns
+        // the first maximum — i.e. whichever worker happened to finish
+        // first. That discarded every other worker's contribution while
+        // still paying to run them.
+        //
+        // This is the pattern Together's MoA is built on and benchmarks
+        // well with: fan out, then have an aggregator read all responses
+        // and write one. We only take that path when the answers actually
+        // disagree — when they agree, the existing consensus/early-exit
+        // paths are cheaper and already correct.
+        if answers.len() >= 2 && largest_agreeing_cluster(&answers).is_none() {
+            return Decision::NeedsReducer {
+                reason: format!("{} workers answered with no agreement", answers.len()),
             };
         }
 
@@ -303,11 +393,37 @@ pub fn try_early_decision(
             let first = tool_names[0];
             let unanimous = tool_names.iter().all(|n| *n == first);
             if unanimous {
-                let best = best_tool_proposal(&tool_proposals);
+                // Agreeing on the tool *name* is not agreeing on the call.
+                //
+                // Early exit runs on whichever workers have arrived so far, so
+                // the first two responders can be two fast small models that
+                // picked the same tool with different arguments. Committing
+                // then means shipping one of two arbitrary argument sets and
+                // aborting the workers that would have broken the tie —
+                // recorded traces show 9 workers agreeing on `search` while
+                // emitting 6 distinct patterns.
+                //
+                // With no decisive argument cluster, keep waiting: either a
+                // later worker tips the balance, or `strong_patience` /
+                // `first_answer_grace` lapses and full arbitration decides
+                // with everything in hand.
+                let Some(cluster) = decisive_argument_cluster(&tool_proposals) else {
+                    tracing::info!(
+                        "moa: {} workers agree on tool '{}' but arguments are tied — \
+                         waiting for {} more rather than guessing",
+                        tool_proposals.len(),
+                        first,
+                        remaining,
+                    );
+                    return None;
+                };
+                let best = best_tool_proposal(&cluster);
                 tracing::info!(
-                    "moa: early exit — {} workers agree on tool '{}', {} still pending",
+                    "moa: early exit — {} workers agree on tool '{}' ({} share arguments), \
+                     {} still pending",
                     tool_proposals.len(),
                     first,
+                    cluster.len(),
                     remaining,
                 );
                 return Some(Decision::ToolCall {
@@ -554,8 +670,14 @@ fn largest_agreeing_cluster<'a>(answers: &[&'a WorkerOutput]) -> Option<(usize, 
 
 fn single_output_decision(output: &WorkerOutput, has_tools: bool) -> Decision {
     if output.kind == OutputKind::Answer && !is_usable_answer(output) {
+        // Two distinct unusable shapes reach here, and the reason string is
+        // surfaced to the reducer as context, so keep them apart.
         return Decision::NeedsReducer {
-            reason: "single worker returned silent reply sentinel".into(),
+            reason: if output.truncated {
+                "single worker answer truncated at token limit".into()
+            } else {
+                "single worker returned silent reply sentinel".to_string()
+            },
         };
     }
 
@@ -580,14 +702,26 @@ fn single_output_decision(output: &WorkerOutput, has_tools: bool) -> Decision {
     }
 }
 
+/// Is this output an answer we can return to the caller verbatim?
+///
+/// Excludes truncated answers. A response the backend cut off at the token
+/// limit is a half-finished sentence: it must not win the confidence pick,
+/// must not anchor consensus, and must not be shipped as-is.
+///
+/// Truncated answers are *not* dropped from the turn, though — they stay in
+/// `outputs` and so are still packed into the reducer's context by
+/// `pack_for_reducer_selected`, which labels them as incomplete. Partial text
+/// is usable material for synthesis; it just can't be the final answer.
 fn is_usable_answer(output: &WorkerOutput) -> bool {
     output.kind == OutputKind::Answer
+        && !output.truncated
         && !crate::normalize::is_silent_reply_sentinel(&output.payload)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn make_output(kind: OutputKind, confidence: f32, payload: &str) -> WorkerOutput {
         WorkerOutput {
@@ -599,6 +733,7 @@ mod tests {
             model: "test".to_string(),
             role: WorkerRole::Generalist,
             elapsed_ms: 0,
+            truncated: false,
         }
     }
 
@@ -612,6 +747,7 @@ mod tests {
             model: "test".to_string(),
             role: WorkerRole::Generalist,
             elapsed_ms: 0,
+            truncated: false,
         }
     }
 
@@ -917,6 +1053,7 @@ mod tests {
             model: "fast-model".into(),
             role: crate::worker::WorkerRole::Fast,
             elapsed_ms: 100,
+            truncated: false,
         };
         let with_args = WorkerOutput {
             kind: OutputKind::ToolProposal,
@@ -927,11 +1064,238 @@ mod tests {
             model: "strong-model".into(),
             role: crate::worker::WorkerRole::Strong,
             elapsed_ms: 3000,
+            truncated: false,
         };
         let proposals = vec![&without_args, &with_args];
         let best = best_tool_proposal(&proposals);
         assert_eq!(best.model, "strong-model");
         assert!(best.tool_arguments.is_some());
+    }
+
+    // ── Argument consensus ───────────────────────────────────────────
+    //
+    // Recorded traces (`evals/moa-openrouter/agentic.jsonl`): 9 open-weight
+    // models unanimously call the same tool while emitting up to 6 distinct
+    // argument sets. Every OpenAI-shape tool call is normalized to a fixed
+    // 0.9 confidence, so a confidence-only tiebreak cannot tell a majority
+    // argument set from a lone outlier.
+
+    fn tool_from(model: &str, tool: &str, args: Value) -> WorkerOutput {
+        WorkerOutput {
+            kind: OutputKind::ToolProposal,
+            // The fixed confidence every native tool call gets.
+            confidence: 0.9,
+            tool_name: Some(tool.to_string()),
+            tool_arguments: Some(args),
+            payload: format!("calling {tool}"),
+            model: model.to_string(),
+            role: WorkerRole::Generalist,
+            elapsed_ms: 0,
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn majority_arguments_beat_a_lone_outlier() {
+        // The real `explore_error_handling` step-0 shape: 8 workers agree on
+        // `{"path": "src"}`, mistral-small hallucinates a `rust_project/`
+        // prefix. Equal confidence, so only cluster size can separate them.
+        let a = tool_from("qwen3-8b", "list_dir", json!({"path": "src"}));
+        let b = tool_from("ministral-8b", "list_dir", json!({"path": "src"}));
+        let outlier = tool_from(
+            "mistral-small",
+            "list_dir",
+            json!({"path": "rust_project/src"}),
+        );
+
+        // Outlier first, so a "first maximum wins" tiebreak would pick it.
+        let proposals = vec![&outlier, &a, &b];
+        let best = best_tool_proposal_by_consensus(&proposals);
+        assert_eq!(
+            best.tool_arguments,
+            Some(json!({"path": "src"})),
+            "the argument set two workers proposed must win over the singleton"
+        );
+    }
+
+    #[test]
+    fn argument_clustering_ignores_key_order() {
+        // Recorded workers emit the same call with keys in different orders
+        // (`{"pattern":..,"path":..}` vs `{"path":..,"pattern":..}`). Those
+        // must cluster together, otherwise a real majority looks like a tie.
+        let a = tool_from(
+            "qwen3-8b",
+            "search",
+            json!({"pattern": "MeshError::Timeout", "path": "."}),
+        );
+        let b = tool_from(
+            "minimax",
+            "search",
+            json!({"path": ".", "pattern": "MeshError::Timeout"}),
+        );
+        let other = tool_from(
+            "qwen3-14b",
+            "search",
+            json!({"path": ".", "pattern": "\\bMeshError::Timeout\\b"}),
+        );
+
+        let proposals = vec![&other, &a, &b];
+        let cluster = decisive_argument_cluster(&proposals)
+            .expect("two key-order variants of the same call are a decisive majority");
+        assert_eq!(cluster.len(), 2);
+    }
+
+    #[test]
+    fn tied_argument_clusters_are_not_decisive() {
+        // Two workers, two different argument sets. Any pick is arbitrary, so
+        // `try_early_decision` must keep waiting rather than commit.
+        let a = tool_from("qwen3-8b", "search", json!({"pattern": "a"}));
+        let b = tool_from("qwen3-14b", "search", json!({"pattern": "b"}));
+        let proposals = vec![&a, &b];
+        assert!(
+            decisive_argument_cluster(&proposals).is_none(),
+            "a 1-1 split on arguments is not a decision"
+        );
+    }
+
+    #[test]
+    fn argument_free_proposals_never_outvote_real_arguments() {
+        // Two bare calls and one with real arguments: the filled-in call wins
+        // despite being outnumbered, because an empty object carries no
+        // information the caller can act on.
+        let bare_a = tool_from("a", "read_file", json!({}));
+        let bare_b = tool_from("b", "read_file", json!({}));
+        let real = tool_from("c", "read_file", json!({"path": "src/error.rs"}));
+        let proposals = vec![&bare_a, &bare_b, &real];
+        let best = best_tool_proposal_by_consensus(&proposals);
+        assert_eq!(best.tool_arguments, Some(json!({"path": "src/error.rs"})));
+    }
+
+    #[test]
+    fn early_exit_waits_when_tool_arguments_are_tied() {
+        // Two fast workers agree on the tool name but not the arguments, with
+        // more workers still pending. Committing here would ship a coin-flip
+        // and abort the workers that would have broken the tie.
+        let a = tool_from("fast-a", "search", json!({"pattern": "a"}));
+        let b = tool_from("fast-b", "search", json!({"pattern": "b"}));
+        let decision = try_early_decision(&[a, b], 9, 2, true, StrongGate::Off);
+        assert!(
+            decision.is_none(),
+            "tied arguments must not produce an early exit; got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn early_exit_fires_when_arguments_agree() {
+        // Same shape, but the two arrivals agree on arguments — that is a real
+        // consensus and should still short-circuit.
+        let a = tool_from("fast-a", "search", json!({"pattern": "x"}));
+        let b = tool_from("fast-b", "search", json!({"pattern": "x"}));
+        match try_early_decision(&[a, b], 9, 2, true, StrongGate::Off) {
+            Some(Decision::ToolCall { name, arguments }) => {
+                assert_eq!(name, "search");
+                assert_eq!(arguments, json!({"pattern": "x"}));
+            }
+            other => panic!("expected an early ToolCall decision, got {other:?}"),
+        }
+    }
+
+    // ── Truncation ───────────────────────────────────────────────────
+    //
+    // 39/140 recorded responses came back `finish_reason == "length"`, and 24
+    // of those carry partial text. Such an answer parses as normal prose at
+    // the default 0.5 confidence, so before truncation was tracked it could
+    // win the pick and be returned verbatim as a half-finished sentence.
+
+    #[test]
+    fn truncated_answer_is_not_returned_verbatim() {
+        let mut cut_off = make_output(
+            OutputKind::Answer,
+            0.9, // higher than the complete answer, so confidence alone would pick it
+            "**Island Magic: My Unforgettable Journey Through the Heart of",
+        );
+        cut_off.truncated = true;
+        let complete = make_output(OutputKind::Answer, 0.5, "Hawaii is worth visiting.");
+
+        match arbitrate(&[cut_off, complete], false) {
+            Decision::Answer(text) => assert_eq!(
+                text, "Hawaii is worth visiting.",
+                "a truncated answer must not win even with higher confidence"
+            ),
+            other => panic!("expected the complete answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sole_truncated_answer_goes_to_synthesis() {
+        // Nothing complete to fall back on: escalate rather than ship a
+        // dangling sentence.
+        let mut cut_off = make_output(OutputKind::Answer, 0.9, "The first step is to");
+        cut_off.truncated = true;
+
+        match arbitrate(&[cut_off], false) {
+            Decision::NeedsReducer { reason } => assert!(
+                reason.contains("truncated"),
+                "reason should name truncation so the reducer gets useful context; got {reason:?}"
+            ),
+            other => panic!("expected NeedsReducer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncated_answers_do_not_anchor_consensus() {
+        // Two truncated workers agreeing is not consensus — they agree on a
+        // prefix, and neither finished its thought.
+        let mut a = make_output(OutputKind::Answer, 0.9, "The capital of Japan is");
+        a.truncated = true;
+        let mut b = make_output(OutputKind::Answer, 0.9, "The capital of Japan is");
+        b.truncated = true;
+
+        assert!(
+            matches!(
+                try_early_decision(&[a, b], 4, 2, false, StrongGate::Off),
+                None | Some(Decision::NeedsReducer { .. })
+            ),
+            "truncated agreement must not short-circuit the turn"
+        );
+    }
+
+    // ── Synthesis on disagreement ────────────────────────────────────
+
+    #[test]
+    fn diverging_answers_go_to_synthesis_rather_than_an_arbitrary_pick() {
+        // Models rarely emit our confidence envelope, so `normalize` defaults
+        // everything to 0.5 and `max_by` returns whichever worker happened to
+        // land first. Picking there discards every other worker's output while
+        // still having paid to run them.
+        let a = make_output(OutputKind::Answer, 0.5, "Use ripgrep for this search task");
+        let b = make_output(OutputKind::Answer, 0.5, "Postgres indexes are B-trees");
+        let c = make_output(
+            OutputKind::Answer,
+            0.5,
+            "Kubernetes schedules pods on nodes",
+        );
+
+        match arbitrate(&[a, b, c], false) {
+            Decision::NeedsReducer { reason } => assert!(
+                reason.contains("no agreement"),
+                "reason should explain the escalation; got {reason:?}"
+            ),
+            other => panic!("three unrelated answers should be synthesized, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn agreeing_answers_still_short_circuit_without_the_reducer() {
+        // Synthesis is for disagreement. When workers agree, the cheap path
+        // must stay cheap — otherwise every turn pays for an extra inference.
+        let a = make_output(OutputKind::Answer, 0.5, "The capital of Japan is Tokyo");
+        let b = make_output(OutputKind::Answer, 0.5, "The capital of Japan is Tokyo");
+
+        assert!(
+            matches!(arbitrate(&[a, b], false), Decision::Answer(_)),
+            "agreeing answers must not be sent to the reducer"
+        );
     }
 
     #[test]
@@ -945,6 +1309,7 @@ mod tests {
             model: "model-a".into(),
             role: crate::worker::WorkerRole::Specialist,
             elapsed_ms: 2000,
+            truncated: false,
         };
         let b = WorkerOutput {
             kind: OutputKind::ToolProposal,
@@ -955,6 +1320,7 @@ mod tests {
             model: "model-b".into(),
             role: crate::worker::WorkerRole::Strong,
             elapsed_ms: 3000,
+            truncated: false,
         };
         let proposals = vec![&a, &b];
         let best = best_tool_proposal(&proposals);

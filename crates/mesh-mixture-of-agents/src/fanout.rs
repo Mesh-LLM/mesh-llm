@@ -9,6 +9,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::backend::BackendReply;
 use crate::enforce_tool_call_contract;
 use crate::worker::WorkerRole;
 use crate::{WorkerSummary, arbiter, normalize};
@@ -47,8 +48,16 @@ pub(crate) struct DispatchedWorker {
     pub role: WorkerRole,
 }
 
+/// What a spawned worker task yields: `(model, role, reply, elapsed_ms)`.
+///
+/// The reply carries [`BackendReply::truncated`] alongside the text so the
+/// arbiter can tell a complete answer from one the backend cut off at the
+/// token limit. Flattening this to a bare `String` is what previously let
+/// a half-finished sentence compete as a normal answer.
+pub(crate) type WorkerTaskResult = (String, WorkerRole, Result<BackendReply, String>, u64);
+
 pub(crate) async fn gather_workers_incremental(
-    join_set: &mut tokio::task::JoinSet<(String, WorkerRole, Result<String, String>, u64)>,
+    join_set: &mut tokio::task::JoinSet<WorkerTaskResult>,
     dispatched: &[DispatchedWorker],
     has_tools: bool,
     allowed_tools: &[String],
@@ -182,22 +191,32 @@ pub(crate) async fn gather_workers_incremental(
         };
 
         match join_result {
-            Ok((model, role, Ok(text), elapsed)) => {
+            Ok((model, role, Ok(reply), elapsed)) => {
                 total_finished += 1;
                 if role == WorkerRole::Strong {
                     strong_finished = true;
                 }
                 let mut normalized =
-                    normalize::normalize_worker_output(&text, &model, role, elapsed);
+                    normalize::normalize_worker_output(&reply.text, &model, role, elapsed);
+                // Truncation is a transport fact the text can't carry: a
+                // response cut off at the token limit looks like a normal
+                // answer to the parser. Stamp it so the arbiter can keep it
+                // out of consensus and out of verbatim responses.
+                normalized.truncated = reply.truncated;
                 enforce_tool_call_contract(&mut normalized, allowed_tools, tools, &model);
                 tracing::info!(
-                    "moa: worker {} ({}) → {:?} conf={:.2} ({}ms, {} chars)",
+                    "moa: worker {} ({}) → {:?} conf={:.2} ({}ms, {} chars{})",
                     model,
                     role.label(),
                     normalized.kind,
                     normalized.confidence,
                     elapsed,
-                    text.len(),
+                    reply.text.len(),
+                    if normalized.truncated {
+                        ", TRUNCATED"
+                    } else {
+                        ""
+                    },
                 );
                 summaries.push(WorkerSummary {
                     model: model.clone(),
@@ -347,7 +366,7 @@ fn grace_tool_decision(outputs: &[WorkerOutput]) -> arbiter::Decision {
 /// those are reconciled by [`reconcile_dispatched`] using the dispatch
 /// list.
 async fn drain_after_early_exit(
-    join_set: &mut tokio::task::JoinSet<(String, WorkerRole, Result<String, String>, u64)>,
+    join_set: &mut tokio::task::JoinSet<WorkerTaskResult>,
     summaries: &mut Vec<WorkerSummary>,
 ) {
     join_set.abort_all();
@@ -417,12 +436,33 @@ mod tests {
         .to_string()
     }
 
+    /// Spawn a worker that yields complete (non-truncated) text. Truncation
+    /// behavior has its own helper below so existing tests keep asserting
+    /// the same thing they always did.
     fn spawn_worker(
-        join_set: &mut tokio::task::JoinSet<(String, WorkerRole, Result<String, String>, u64)>,
+        join_set: &mut tokio::task::JoinSet<WorkerTaskResult>,
         model: &str,
         role: WorkerRole,
         delay_ms: u64,
         result: Result<String, String>,
+    ) -> DispatchedWorker {
+        spawn_worker_reply(
+            join_set,
+            model,
+            role,
+            delay_ms,
+            result.map(BackendReply::complete),
+        )
+    }
+
+    /// Spawn a worker yielding a full [`BackendReply`], so a test can set
+    /// `truncated`.
+    fn spawn_worker_reply(
+        join_set: &mut tokio::task::JoinSet<WorkerTaskResult>,
+        model: &str,
+        role: WorkerRole,
+        delay_ms: u64,
+        result: Result<BackendReply, String>,
     ) -> DispatchedWorker {
         let model_owned = model.to_string();
         let result_clone = result.clone();

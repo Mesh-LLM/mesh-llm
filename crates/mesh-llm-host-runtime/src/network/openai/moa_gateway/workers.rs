@@ -14,7 +14,36 @@ use mesh_mixture_of_agents as moa;
 /// [`extract_enable_thinking_override`]. When no preference is
 /// expressed, MoA picks for them: off (always `Some(false)`).
 pub(super) fn effective_enable_thinking_for_moa(body: &serde_json::Value) -> Option<bool> {
-    extract_enable_thinking_override(body).or(Some(false))
+    // Always off. Not a default — a policy.
+    //
+    // Reasoning is actively harmful inside MoA fan-out, and recorded traces
+    // from 9 open-weight models make the failure mode concrete
+    // (`evals/moa-openrouter/`):
+    //
+    // * Workers run on a short budget (the fast worker gets 256 tokens).
+    //   With thinking on, qwen3-32b spent 408 reasoning tokens against a
+    //   384-token cap and returned `finish_reason=length` with
+    //   `content: null` — 1620 characters of reasoning and no answer. The
+    //   worker contributed nothing but still cost a full inference.
+    // * Across a recorded corpus, 15/140 responses came back truncated at
+    //   the limit, concentrated in exactly the reasoning-capable models.
+    // * The reducer synthesizes from worker answers; reasoning prose is bad
+    //   candidate input regardless of budget.
+    //
+    // The previous shape honoured a caller's `reasoning_effort` /
+    // `enable_thinking` override. That escape hatch only let callers ask for
+    // the broken configuration, so it is gone: MoA decides this, not the
+    // caller. Callers who want a reasoning model's thinking output should
+    // address that model directly instead of going through `model=mesh`.
+    //
+    // We still parse the caller's preference so an ignored override is
+    // visible in logs rather than silently dropped.
+    if extract_enable_thinking_override(body) == Some(true) {
+        tracing::info!(
+            "moa: caller asked for reasoning, ignoring — MoA workers always run with thinking off"
+        );
+    }
+    Some(false)
 }
 
 /// Pull the caller's "disable / enable thinking" preference out of an
@@ -758,14 +787,30 @@ mod tests {
     }
 
     #[test]
-    fn effective_lets_caller_explicitly_enable_thinking() {
-        // Escape hatch: a caller who really wants reasoning on MoA can
-        // ask for it via any of the recognised knobs.
-        let body = serde_json::json!({
-            "reasoning_effort": "low",
-            "model": "mesh",
-        });
-        assert_eq!(effective_enable_thinking_for_moa(&body), Some(true));
+    fn effective_ignores_caller_request_to_enable_thinking() {
+        // There is deliberately no escape hatch. Thinking-on is a broken
+        // configuration for MoA fan-out: recorded traces show reasoning
+        // models spending their entire worker budget inside `<think>` and
+        // returning `finish_reason=length` with null content, contributing
+        // nothing while still costing a full inference.
+        //
+        // The override is parsed (and logged) but never honoured, so a
+        // caller asking for reasoning gets a working turn instead of a pool
+        // of empty workers. Reasoning output should be requested from a
+        // model directly, not through `model=mesh`.
+        for body in [
+            serde_json::json!({"reasoning_effort": "low", "model": "mesh"}),
+            serde_json::json!({"reasoning_effort": "high", "model": "mesh"}),
+            serde_json::json!({"enable_thinking": true, "model": "mesh"}),
+            serde_json::json!({"reasoning": {"enabled": true}, "model": "mesh"}),
+            serde_json::json!({"chat_template_kwargs": {"enable_thinking": true}}),
+        ] {
+            assert_eq!(
+                effective_enable_thinking_for_moa(&body),
+                Some(false),
+                "MoA must force thinking off regardless of caller knobs: {body}"
+            );
+        }
     }
 
     #[test]

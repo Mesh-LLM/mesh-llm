@@ -263,12 +263,29 @@ pub fn pack_for_reducer_selected(
 ) -> (Vec<Value>, Option<Value>) {
     let user_text = session.last_user_text();
 
+    // Synthesis framing.
+    //
+    // The wording below is adapted from Together's MoA aggregator prompt —
+    // the one their AlpacaEval 2.0 / MT-Bench numbers were produced with.
+    // Two parts carry the weight: telling the model to *synthesize* rather
+    // than relay, and warning it that some inputs may be wrong. Without the
+    // second clause a reducer tends to average its inputs, including the
+    // confidently-wrong ones.
+    //
+    // What we keep that Together does not: the per-worker attribution, the
+    // structured tool proposals below, and a length bound on each payload.
+    // Their `inject_references_to_messages` concatenates unbounded
+    // references into one system prompt, which is why their own code has an
+    // "Input + output is longer than max_position_id" branch.
     let mut system_parts = vec![
         augmented_system_prompt_for_mode(session, has_tools),
         String::new(),
         format!("Multiple models analyzed this request and disagreed. Reason: {reason}"),
-        "Review their outputs below and produce ONE final response — either a direct answer \
-         or a tool call. Be concise."
+        "You have been provided with their responses below. Synthesize them into ONE \
+         final response — either a direct answer or a tool call. Critically evaluate \
+         what they say: some of it may be biased or incorrect, and agreement between \
+         workers is not proof of correctness. Do not simply copy the longest or most \
+         confident response; produce the most accurate reply to the request. Be concise."
             .to_string(),
     ];
 
@@ -283,6 +300,14 @@ pub fn pack_for_reducer_selected(
             output.payload.clone()
         };
         system_parts.push(payload);
+        // Truncated inputs are labelled so the reducer treats them as partial
+        // material rather than copying a dangling sentence as a finished
+        // answer. `is_usable_answer` already bars them from winning verbatim;
+        // this is what lets them still contribute here.
+        if output.truncated {
+            system_parts
+                .push("  → NOTE: cut off at the token limit — incomplete, do not copy".to_string());
+        }
         if let Some(ref tool) = output.tool_name {
             system_parts.push(format!("  → Proposed tool: {tool}"));
             if let Some(ref args) = output.tool_arguments {
@@ -1266,6 +1291,7 @@ keep this";
             model: model.to_string(),
             role: WorkerRole::Strong,
             elapsed_ms: 0,
+            truncated: false,
         }
     }
 

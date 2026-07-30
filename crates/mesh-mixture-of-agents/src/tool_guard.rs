@@ -76,6 +76,7 @@ mod tests {
             model: "alpha".into(),
             role: WorkerRole::Strong,
             elapsed_ms: 0,
+            truncated: false,
         }
     }
 
@@ -164,6 +165,7 @@ mod tests {
             model: "beta".into(),
             role: WorkerRole::Fast,
             elapsed_ms: 0,
+            truncated: false,
         };
         enforce_tool_call_contract(&mut out, &["read_file".into()], None, "beta");
         assert_eq!(out.kind, OutputKind::Answer);

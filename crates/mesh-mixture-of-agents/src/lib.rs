@@ -243,7 +243,33 @@ async fn handle_query(
 ) -> TurnResult {
     let assignments = worker::assign_roles(&config.models);
     let grace_mode = grace_mode_for_turn(session, has_tools);
-    let query_uses_tools = forced_tool.is_some() || matches!(grace_mode, GraceMode::Tool);
+
+    // If the caller gave us tools, the workers get tools. Full stop.
+    //
+    // This used to be `matches!(grace_mode, GraceMode::Tool)`, which routed
+    // the decision through `looks_like_tool_intent` — a keyword match against
+    // the user's text ("read ", "search ", "file", "directory", ...). Two
+    // separate concerns were riding on one flag: whether tools are *available*
+    // and whether the chat-only answer grace applies.
+    //
+    // Recorded agentic traces show how badly that misfires
+    // (`evals/moa-openrouter/agentic.jsonl`). "The test suite is failing. Find
+    // out which test fails and why" matches no phrase, so every worker was
+    // dispatched without tool schemas — while the same prompt, given tools,
+    // produced 53 tool calls across 9 models. Same for "Is this project's test
+    // suite passing?" (32) and "Find every place MeshError::Timeout is
+    // constructed in this repo." (20). Five of ten recorded tool scenarios had
+    // tools silently withheld.
+    //
+    // Worse, this flag is also passed to the arbiter as its `has_tools`, so a
+    // pool that unanimously proposed a tool fell through to the answer path and
+    // leaked the proposal's payload text — an agent harness received the prose
+    // "calling search" instead of a `search` tool call.
+    //
+    // Tool availability is now the caller's declaration. `grace_mode` keeps
+    // using the heuristic, which is where a guess is actually appropriate: it
+    // only tunes how long we wait before shipping a partial answer.
+    let query_uses_tools = forced_tool.is_some() || has_tools;
     let selected_tool_names = if let Some(tool) = forced_tool {
         vec![tool.name.clone()]
     } else if query_uses_tools {
@@ -1316,6 +1342,7 @@ mod response_builder_tests {
             model: model.to_string(),
             role: WorkerRole::Fast,
             elapsed_ms: 1,
+            truncated: false,
         }
     }
 
@@ -1370,6 +1397,7 @@ mod response_builder_tests {
             model: "reducer".to_string(),
             role: WorkerRole::Reducer,
             elapsed_ms: 1,
+            truncated: false,
         }
     }
 

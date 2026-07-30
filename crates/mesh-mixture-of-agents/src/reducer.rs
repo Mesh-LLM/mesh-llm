@@ -127,7 +127,11 @@ pub(crate) async fn hedged_reducer_call(
                 SamplingParams::reducer().with_thinking(enable_thinking),
             )
             .await;
-            (name, result)
+            // The reducer's output *is* the final response, so there is no
+            // later arbitration step that could act on truncation. Keep the
+            // text; the 2048-token reducer budget is well clear of the
+            // worker budget where truncation actually bites.
+            (name, result.map(|reply| reply.text))
         });
     };
 
