@@ -8,7 +8,7 @@ Certification process lives in `docs/FAMILY_CERTIFY.md`. Payload measurements
 and topology constraints are summarized here so this file stays the only
 customer-facing source of truth.
 
-Last updated: 2026-07-28.
+Last updated: 2026-07-31.
 
 ## Context Capacity Contract
 
@@ -55,6 +55,7 @@ correctness smoke or from GGUF metadata alone.
 | LFM2 | Supported | `meshllm/lfm2-350m-parity-q4_k_m-gguf:q4_k_m` | `layer_end=16`, `splits=5,10`, activation width `1024` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..16` sticky for normal decode. | Use `KvRecurrent` for exact prefix cache restore; native sequence remap cache smoke passed. |
 | Jamba | Supported | `bartowski/ai21labs_AI21-Jamba2-3B-GGUF:Q4_K_M` | `layer_end=28`, `splits=9,18`, activation width `2560` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..28` sticky for normal decode. | Use `KvRecurrent` for exact prefix cache restore; middle-stage recurrent-only slices are valid. |
 | Kimi Linear | Supported | `bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF:IQ2_XXS` | `layer_end=27`, `splits=9,18`, activation width `2304` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent KDA ranges `0..3`, `4..7`, `8..11`, `12..15`, `16..19`, `20..23`, and `24..26` sticky for normal decode. | Use `KvRecurrent`; sparse K-only MLA KV pages plus recurrent state are required for exact prefix restore. |
+| Laguna S 2.1 | Supported for the pinned Q4_K_M package | `meshllm/laguna-s-2.1-Q4_K_M-layers@0c467ad441ee94cb5a76f626294d963c4048507d` | `layer_end=48`, activation width `3072`; observed CUDA plan `0..25 / 25..39 / 39..48` | `f16`; q8 untested | package-default suffix N-gram depth 2 | Keep the hybrid recurrent/attention state on its owning stage; use direct inter-stage paths. | Use one lane with Q4_0 K/V for the reviewed 131,072-token allocation. A 128,080-token cold prompt completed twice; 44,416-token exact-prefix restore passed, while the 128K repeats ran with zero cached tokens. Structured OpenAI tool call and tool-result turns passed. |
 | Mamba | Supported | `mradermacher/mamba-130m-hf-GGUF:Q4_K_M` | `layer_end=24`, `splits=8,16`, activation width `768` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..24` sticky for normal decode. | Use `KvRecurrent`; cache restore can have zero native KV bytes. |
 | Mamba2 | Supported | `mradermacher/mamba-2.8b-hf-GGUF:Q4_K_M` | `layer_end=64`, `splits=21,42`, activation width `2560` | `f16`; q8 validated | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..64` sticky for normal decode. | Use `KvRecurrent`; full-state mobility is rejected as too large. |
 | RWKV6 | Supported | `latestissue/rwkv-6-finch-1b6-gguf:Q4_K` | `layer_end=24`, `splits=8,16`, activation width `2048` | `f16`; q8 rejected | `baseline,ngram,ngram-adaptive` | Keep recurrent range `0..24` sticky for normal decode. | Use `KvRecurrent`; cache restore can have zero native KV bytes. |
@@ -105,7 +106,6 @@ smoke, reviewed topology records, and family-specific policy notes are updated.
 
 ```text
 Gemma text
-Laguna S 2.1 Q4_K_M (pinned package-backed M5 two-stage single-step and three-stage chain parity, plus ordinary M5 Metal 0..36 + Australian Vast CUDA 36..48 Mesh serving with a 44,460-token prompt; suffix N-gram depth 2 is published as the package default, with a fresh live no-override confirmation still pending; broader family certification remains pending)
 ```
 
 ## Exceptions
