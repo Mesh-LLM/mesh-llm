@@ -8,6 +8,9 @@ inputs:
   build_dir:
     description: Repository-relative Windows native ABI build directory.
     required: true
+  toolchain_epoch:
+    description: Exact hosted Windows image/toolchain identity shared with the build stamp.
+    required: true
   architecture_set:
     description: Canonical backend architecture set; CUDA and ROCm require a non-empty value.
     required: false
@@ -42,11 +45,12 @@ runs:
       env:
         INPUT_BACKEND: ${{ inputs.backend }}
         INPUT_BUILD_DIR: ${{ inputs.build_dir }}
+        INPUT_TOOLCHAIN_EPOCH: ${{ inputs.toolchain_epoch }}
         INPUT_ARCHITECTURE_SET: ${{ inputs.architecture_set }}
         INPUT_CUDA_TOOLCHAIN_VERSION: ${{ inputs.cuda_toolchain_version }}
         INPUT_VULKAN_TOOLCHAIN_VERSION: ${{ inputs.vulkan_toolchain_version }}
         INPUT_ROCM_TOOLCHAIN_VERSION: ${{ inputs.rocm_toolchain_version }}
-        CACHE_INPUT_HASH: ${{ hashFiles('.github/actions/restore-windows-abi-cache/action.yml', '.github/actions/prepare-native-runtime-input/action.yml', '.github/actions/setup-windows-rocm-sdk/action.yml', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
+        CACHE_INPUT_HASH: ${{ hashFiles('.github/actions/restore-windows-abi-cache/action.yml', '.github/actions/resolve-native-toolchain-epoch/action.yml', '.github/actions/prepare-native-runtime-input/action.yml', '.github/actions/setup-windows-rocm-sdk/action.yml', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       run: |
         $ErrorActionPreference = "Stop"
 
@@ -77,6 +81,18 @@ runs:
         $backend = "$env:INPUT_BACKEND".Trim().ToLowerInvariant()
         if ($backend -notin @("cpu", "cuda", "rocm", "vulkan")) {
           throw "unsupported Windows ABI cache backend: $backend"
+        }
+        $toolchainEpoch = Normalize-KeySegment `
+          -Value "$env:INPUT_TOOLCHAIN_EPOCH" `
+          -Name "toolchain_epoch"
+        $buildStampEpoch = Normalize-KeySegment `
+          -Value "$env:MESH_LLM_LLAMA_TOOLCHAIN_EPOCH" `
+          -Name "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH"
+        if ($toolchainEpoch -ne $buildStampEpoch) {
+          throw (
+            "toolchain_epoch must match MESH_LLM_LLAMA_TOOLCHAIN_EPOCH: " +
+            "$toolchainEpoch != $buildStampEpoch"
+          )
         }
 
         $buildDir = "$env:INPUT_BUILD_DIR".Trim()
@@ -176,7 +192,7 @@ runs:
         }
 
         New-Item -ItemType Directory -Force -Path $resolvedBuildDir | Out-Null
-        $cacheKey = "mesh-llm-windows-2022-skippy-abi-$backend-$architectureSet-$toolchain-$inputHash"
+        $cacheKey = "mesh-llm-windows-2022-skippy-abi-$backend-$architectureSet-$toolchain-$toolchainEpoch-$inputHash"
         @(
           "build-dir=$resolvedBuildDir"
           "cache-key=$cacheKey"

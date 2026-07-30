@@ -24,7 +24,6 @@ env:
   CARGO_HTTP_MULTIPLEXING: "false"
   SCCACHE_GHA_ENABLED: "true"
   LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
-  MESH_LLM_LLAMA_TOOLCHAIN_EPOCH: mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
 
 permissions:
   contents: read
@@ -291,6 +290,10 @@ jobs:
 
       - name: Verify prebuilt CI environment
         run: verify-runner-image public
+      - name: Resolve CPU native toolchain epoch
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
@@ -416,6 +419,10 @@ jobs:
           persist-credentials: false
       - name: Verify prebuilt CI environment
         run: verify-runner-image public
+      - name: Resolve static ABI toolchain epoch
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
@@ -490,6 +497,10 @@ jobs:
 
       - name: Verify prebuilt CI environment
         run: verify-runner-image public
+      - name: Resolve static ABI toolchain epoch
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
@@ -843,6 +854,10 @@ jobs:
           persist-credentials: false
       - name: Install native runtime dependencies
         run: brew install cmake ninja jq
+      - name: Resolve macOS native toolchain epoch
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          include_tool_versions: "true"
       - name: Prepare Metal native runtime
         uses: ./.github/actions/prepare-native-runtime-input
         with:
@@ -924,6 +939,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install unit-test dependencies
         run: brew install cmake ninja jq lld
+      - name: Resolve macOS native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          include_tool_versions: "true"
       - name: Configure macOS Rust linker
         run: |
           mkdir -p .cargo
@@ -942,10 +962,12 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-abi-static-metal-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-abi-static-metal-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
       - name: Prepare patched llama.cpp ABI checkout
-        if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/prepare-llama.sh pinned
+      - name: Verify cached patched llama.cpp ABI libraries
+        if: ${{ steps.llama_cache.outputs.cache-hit == 'true' }}
+        run: scripts/build-llama.sh --require-existing
       - name: Build patched llama.cpp ABI libraries
         if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/build-llama.sh
@@ -994,6 +1016,10 @@ jobs:
           persist-credentials: false
       - name: Verify prebuilt backend environment
         run: verify-runner-image public cuda
+      - name: Resolve CUDA native toolchain epoch
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: mesh-llm-cuda-runner-sha256-c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
@@ -1089,6 +1115,10 @@ jobs:
           persist-credentials: false
       - name: Verify prebuilt backend environment
         run: verify-runner-image public rocm
+      - name: Resolve ROCm native toolchain epoch
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: mesh-llm-cuda-runner-sha256-0e13e5d2d2c121df265ff6c69be81e468989e09f81d6b7ff049b110cc0bb0d2b
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
@@ -1182,6 +1212,10 @@ jobs:
           persist-credentials: false
       - name: Verify prebuilt backend environment
         run: verify-runner-image public vulkan
+      - name: Resolve Vulkan native toolchain epoch
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: mesh-llm-cuda-runner-sha256-ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
@@ -1329,11 +1363,15 @@ jobs:
           prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
           shared-key: windows-runtime-${{ matrix.backend }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Resolve Windows native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore exact Windows GPU ABI cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: ${{ matrix.backend }}
           build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
           architecture_set: ${{ matrix.cuda_architectures || matrix.rocm_architectures || '' }}
           cuda_toolchain_version: ${{ env.WINDOWS_CUDA_VERSION }}
           vulkan_toolchain_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
@@ -1471,11 +1509,15 @@ jobs:
           prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
           shared-key: windows-runtime-cpu
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Resolve Windows native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore exact Windows CPU ABI cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: cpu
           build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
       - name: Initialize MSVC for CPU runtime
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:

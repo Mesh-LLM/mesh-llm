@@ -467,6 +467,7 @@ class CiArtifactActionTests(unittest.TestCase):
         for action_input in (
             "backend:",
             "build_dir:",
+            "toolchain_epoch:",
             "architecture_set:",
             "cuda_toolchain_version:",
             "vulkan_toolchain_version:",
@@ -506,6 +507,7 @@ class CiArtifactActionTests(unittest.TestCase):
         expected_hash = (
             "${{ hashFiles("
             "'.github/actions/restore-windows-abi-cache/action.yml', "
+            "'.github/actions/resolve-native-toolchain-epoch/action.yml', "
             "'.github/actions/prepare-native-runtime-input/action.yml', "
             "'.github/actions/setup-windows-rocm-sdk/action.yml', "
             "'scripts/build-llama.sh', 'scripts/prepare-llama.sh', "
@@ -517,7 +519,11 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn(expected_hash, action)
         self.assertIn(
             '"mesh-llm-windows-2022-skippy-abi-'
-            '$backend-$architectureSet-$toolchain-$inputHash"',
+            '$backend-$architectureSet-$toolchain-$toolchainEpoch-$inputHash"',
+            action,
+        )
+        self.assertIn(
+            "toolchain_epoch must match MESH_LLM_LLAMA_TOOLCHAIN_EPOCH",
             action,
         )
         self.assertIn(
@@ -534,6 +540,62 @@ class CiArtifactActionTests(unittest.TestCase):
             "value: ${{ steps.restore.outputs.cache-primary-key }}",
             action,
         )
+
+    def test_native_toolchain_epoch_is_exact_and_shared_with_build_stamp(
+        self,
+    ) -> None:
+        resolver = self.read_action("resolve-native-toolchain-epoch")
+        pr_workflow = (
+            ROOT / ".github" / "workflows" / "pr_builds.yml"
+        ).read_text(encoding="utf-8")
+        main_workflow = (
+            ROOT / ".github" / "workflows" / "ci.yml"
+        ).read_text(encoding="utf-8")
+        release_workflow = (
+            ROOT / ".github" / "workflows" / "release.yml"
+        ).read_text(encoding="utf-8")
+        warmer = (
+            ROOT / ".github" / "workflows" / "windows-warm-caches.yml"
+        ).read_text(encoding="utf-8")
+
+        for contract in (
+            'image_os="${ImageOS:-}"',
+            'image_version="${ImageVersion:-}"',
+            'INPUT_PINNED_EPOCH: ${{ inputs.pinned_epoch }}',
+            'echo "epoch=$epoch" >> "$GITHUB_OUTPUT"',
+            'echo "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH=$epoch" >> "$GITHUB_ENV"',
+            "xcodebuild -version",
+            "cmake --version",
+            "ninja --version",
+        ):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, resolver)
+
+        for workflow in (
+            pr_workflow,
+            main_workflow,
+            release_workflow,
+            warmer,
+        ):
+            self.assertIn(
+                "uses: ./.github/actions/resolve-native-toolchain-epoch",
+                workflow,
+            )
+        for workflow in (pr_workflow, main_workflow):
+            global_env = workflow.split("\npermissions:", maxsplit=1)[0]
+            self.assertNotIn("MESH_LLM_LLAMA_TOOLCHAIN_EPOCH:", global_env)
+
+        for workflow in (pr_workflow, main_workflow, release_workflow):
+            for cache_block in re.findall(
+                r"uses: actions/cache@[^\n]+\n"
+                r"(?:[ \t]+[^\n]*\n){1,8}",
+                workflow,
+            ):
+                if "LLAMA_STAGE_BUILD_DIR" in cache_block:
+                    self.assertIn(
+                        "native_toolchain.outputs.epoch",
+                        cache_block,
+                    )
 
     def test_push_routing_diffs_the_complete_event_range(self) -> None:
         action = self.read_action("compute-changes")
@@ -574,10 +636,26 @@ class CiArtifactActionTests(unittest.TestCase):
         for local_action in (
             "capture-sccache-stats",
             "configure-sccache-gha",
+            "resolve-native-toolchain-epoch",
             "select-ci-runners",
         ):
             with self.subTest(local_action=local_action):
                 self.assertIn(local_action, routing)
+
+        epoch_resolver = "resolve-native-toolchain-epoch"
+        for route_start, route_end in (
+            ("BACKEND_INPUTS=", "WINDOWS_CPU_BUILD_REQUIRED="),
+            ("WINDOWS_CPU_INPUTS=", "# SDK smokes are consumer tests"),
+            ("DIRECT_SDK_INPUTS=", "# Inference artifacts are needed"),
+        ):
+            with self.subTest(route=route_start):
+                route = action[
+                    action.index(route_start) : action.index(
+                        route_end,
+                        action.index(route_start),
+                    )
+                ]
+                self.assertIn(epoch_resolver, route)
 
     def test_justfile_release_primitives_route_backend_builds(self) -> None:
         action = self.read_action("compute-changes")
@@ -749,8 +827,20 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("CACHE_NAMESPACE: mesh-llm", producer)
         self.assertIn(
             "inputs.backend, inputs.target, "
-            "env.MESH_LLM_LLAMA_TOOLCHAIN_EPOCH, hashFiles(",
+            "steps.native_toolchain.outputs.epoch, hashFiles(",
             producer,
+        )
+        self.assertIn(
+            "uses: ./.github/actions/resolve-native-toolchain-epoch",
+            producer,
+        )
+        self.assertIn(
+            "uses: ./.github/actions/resolve-native-toolchain-epoch",
+            native_sdk_producer,
+        )
+        self.assertIn(
+            'include_tool_versions: "true"',
+            native_sdk_producer,
         )
         self.assertIn("path: static-abi-artifact-output", producer)
         self.assertNotIn(
@@ -763,12 +853,20 @@ class CiArtifactActionTests(unittest.TestCase):
             producer,
         )
         epoch = (
-            "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH: "
             "mesh-llm-cuda-runner-sha256-"
             "8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d"
         )
         for consumer in (native_sdk_producer, pr_workflow, main_workflow):
             self.assertIn(epoch, consumer)
+        for workflow in (pr_workflow, main_workflow):
+            self.assertNotIn(
+                f"env:\n  MESH_LLM_LLAMA_TOOLCHAIN_EPOCH: {epoch}",
+                workflow,
+            )
+            self.assertIn(
+                "uses: ./.github/actions/resolve-native-toolchain-epoch",
+                workflow,
+            )
         self.assertIn(
             "uses: ./.github/actions/prepare-static-abi-input",
             producer,
@@ -1177,6 +1275,23 @@ class CiArtifactActionTests(unittest.TestCase):
             '"$SWIFT_TRACKED_BINDING"',
             consumer_script,
         )
+        self.assertIn(
+            '[[ -L "$SWIFT_GENERATED_DIR" ]]',
+            consumer_script,
+        )
+        self.assertIn(
+            '[[ -e "$SWIFT_GENERATED_DIR" '
+            '&& ! -d "$SWIFT_GENERATED_DIR" ]]',
+            consumer_script,
+        )
+        mkdir_index = consumer_script.index(
+            'mkdir -p "$SWIFT_GENERATED_DIR"',
+        )
+        move_index = consumer_script.index(
+            'mv "$SWIFT_EXTRACT_DIR/MeshLLMFFI.xcframework" '
+            '"$SWIFT_XCFRAMEWORK"',
+        )
+        self.assertLess(mkdir_index, move_index)
         self.assertIn("safe-extract-(tar|zip)", routing)
         self.assertIn("verify-swift-xcframework", routing)
         self.assertIn(
@@ -1199,15 +1314,16 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn(
             "format('mesh-llm-swift-sdk-{0}-{1}-{2}-{3}', "
             "runner.os, runner.arch, "
-            "env.SWIFT_NATIVE_XCODE_CACHE_EPOCH, hashFiles(",
+            "steps.native_toolchain.outputs.epoch, hashFiles(",
             producer,
         )
         self.assertNotIn("runner.arch, inputs.mode, hashFiles(", producer)
         self.assertIn(
-            "SWIFT_NATIVE_XCODE_CACHE_EPOCH: "
-            "macos-15-arm64-xcode-default-v1",
+            "uses: ./.github/actions/resolve-native-toolchain-epoch",
             producer,
         )
+        self.assertIn('include_tool_versions: "true"', producer)
+        self.assertNotIn("SWIFT_NATIVE_XCODE_CACHE_EPOCH", producer)
         self.assertIn("trusted main full build", producer)
         self.assertNotIn("build-stage-abi-host-metal", producer)
         self.assertIn(

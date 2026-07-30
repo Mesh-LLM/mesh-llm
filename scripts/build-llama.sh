@@ -100,13 +100,19 @@ required_static_archives_exist() {
      -f "$LLAMA_BUILD_DIR/ggml/src/ggml-cpu/libggml-cpu.a" ]]
 }
 
-dynamic_library_names() {
+dynamic_library_name_groups() {
   case "$(uname -s)" in
     Darwin)
       printf '%s\n' libllama.dylib libllama-common.dylib libmtmd.dylib
       ;;
     MINGW*|MSYS*|CYGWIN*)
-      printf '%s\n' llama.dll llama-common.dll mtmd.dll
+      # CMake's MinGW generator normally prefixes these DLLs with "lib";
+      # retain the unprefixed MSVC-compatible spelling as an accepted
+      # alternative because both are valid runtime package inputs.
+      printf '%s\n' \
+        'libllama.dll|llama.dll' \
+        'libllama-common.dll|llama-common.dll' \
+        'libmtmd.dll|mtmd.dll'
       ;;
     *)
       printf '%s\n' libllama.so libllama-common.so libmtmd.so
@@ -115,11 +121,17 @@ dynamic_library_names() {
 }
 
 required_dynamic_libraries_exist() {
-  local name found
-  while IFS= read -r name; do
-    found="$(find "$LLAMA_BUILD_DIR" -name "$name" -print -quit)"
+  local candidates name found
+  local -a names
+  while IFS= read -r candidates; do
+    IFS='|' read -r -a names <<< "$candidates"
+    found=""
+    for name in "${names[@]}"; do
+      found="$(find "$LLAMA_BUILD_DIR" -name "$name" -print -quit)"
+      [[ -z "$found" ]] || break
+    done
     [[ -n "$found" && -e "$found" ]] || return 1
-  done < <(dynamic_library_names)
+  done < <(dynamic_library_name_groups)
 }
 
 required_outputs_exist() {

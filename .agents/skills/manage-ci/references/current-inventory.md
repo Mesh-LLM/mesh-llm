@@ -129,14 +129,20 @@ Local actions:
   archive containing only the path-normalized static link closure and portable
   OpenMP metadata. The reusable workflow caches that archive, not the local
   CMake build graph; crate tests and native SDK producers consume it.
+- `.github/actions/resolve-native-toolchain-epoch` exports one cache-safe
+  identity to both native build stamps and cache keys. Digest-pinned Linux
+  containers use their immutable image digest; hosted macOS and Windows jobs
+  use the exact runner image revision, with compiler/CMake/Ninja versions added
+  where hosted or Depot Linux/macOS toolchains are not otherwise pinned.
 - `.github/actions/compose-product-input` verifies producer inputs, creates one
   product-v2 tree without compiling, and runs CLI/client readiness.
 - `.github/actions/restore-smoke-inputs` owns producer artifact staging and
   model restoration for smoke consumers.
 - `.github/actions/restore-windows-abi-cache` owns the exact Windows CPU,
   CUDA, ROCm, and Vulkan ABI cache identity shared by the trusted warmer and
-  PR/main/release runtime producers. Architecture sets and toolchain versions
-  are compatibility boundaries; the action never uses restore prefixes.
+  PR/main/release runtime producers. The hosted-image epoch, architecture sets,
+  and toolchain versions are compatibility boundaries; the action requires the
+  key epoch to equal the build-stamp epoch and never uses restore prefixes.
 - `.github/actions/setup-windows-rocm-sdk` owns reusable Windows ROCm setup.
 
 Routing and test-planning scripts:
@@ -313,6 +319,11 @@ GitHub-hosted jobs retain `disk,gha` or explicit disk-only mode. Persistent
 Cargo target and ABI reuse remains owned by `Swatinem/rust-cache` and
 `actions/cache`. Current PR jobs use the normal `mesh-llm` key namespace and
 GitHub's merge-ref scoping; trusted main does not restore PR-written entries.
+Raw native ABI caches also include the exact native toolchain epoch used by the
+build stamp. Linux container jobs use the pinned OCI digest, macOS keys include
+the hosted image revision and native-tool fingerprint, and Windows warmer,
+PR, main, and release jobs share the same hosted image revision. A reported
+cache hit is verified against the current build contract before reuse.
 A future Depot PR entrypoint must instead use keys that trusted main/release
 jobs never restore because Depot cache entries are repository-scoped. Key
 separation alone is not a security boundary while the job receives Depot cache

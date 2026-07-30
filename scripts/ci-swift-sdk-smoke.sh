@@ -32,7 +32,14 @@ SWIFT_EXTRACT_DIR="$(mktemp -d)"
 trap 'rm -rf "$SWIFT_EXTRACT_DIR"' EXIT
 scripts/safe-extract-zip.py "$SWIFT_INPUT_ARCHIVE" "$SWIFT_EXTRACT_DIR"
 
-SWIFT_XCFRAMEWORK="sdk/swift/Generated/MeshLLMFFI.xcframework"
+SWIFT_GENERATED_DIR="sdk/swift/Generated"
+if [[ -L "$SWIFT_GENERATED_DIR" ]] \
+    || [[ -e "$SWIFT_GENERATED_DIR" && ! -d "$SWIFT_GENERATED_DIR" ]]; then
+    echo "Swift generated artifact directory is unsafe: $SWIFT_GENERATED_DIR" >&2
+    exit 1
+fi
+mkdir -p "$SWIFT_GENERATED_DIR"
+SWIFT_XCFRAMEWORK="$SWIFT_GENERATED_DIR/MeshLLMFFI.xcframework"
 if [[ ! -d "$SWIFT_EXTRACT_DIR/MeshLLMFFI.xcframework" ]]; then
     echo "verified Swift SDK input did not restore MeshLLMFFI.xcframework" >&2
     exit 1

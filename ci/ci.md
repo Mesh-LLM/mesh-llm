@@ -476,6 +476,14 @@ misses, cache write failures only warn, and a failed remote probe restarts
 false`), so trusted main owns the cache while PRs avoid recompiling the same
 workspace graph.
 
+Native ABI cache keys and llama build stamps share one resolved toolchain epoch.
+Digest-pinned Linux jobs use the immutable runner-image digest. Hosted macOS
+keys include the exact image revision plus Xcode/Clang/CMake/Ninja fingerprint;
+Windows warmer, PR, main, and release jobs use the exact hosted image revision
+alongside backend SDK and architecture inputs. Cache-hit paths validate the
+stored build stamp and required link closure instead of trusting the cache API
+result alone.
+
 ## Depot rollout
 
 Every current `pull_request` job selects GitHub-hosted runners, regardless of

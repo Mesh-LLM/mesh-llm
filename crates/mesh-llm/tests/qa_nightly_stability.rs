@@ -66,7 +66,6 @@ fn nightly_stability_wrapper_calls_reusable_workflow() {
         "agent_smokes:",
         "skip_streaming:",
         "timeout:",
-        "runs_on:",
         "output_dir:",
     ] {
         assert!(
@@ -74,6 +73,10 @@ fn nightly_stability_wrapper_calls_reusable_workflow() {
             "wrapper should expose {expected:?}; workflow was:\n{wrapper}"
         );
     }
+    assert!(
+        !wrapper.contains("runs_on:"),
+        "wrapper must not allow caller-selected runner labels"
+    );
 }
 
 #[test]
@@ -82,7 +85,7 @@ fn nightly_stability_reusable_workflow_owns_execution() {
         .expect("reusable nightly stability workflow should be readable");
     for expected in [
         "workflow_call:",
-        "runs-on: ${{ fromJson(inputs.runs_on) }}",
+        "runs-on: ubuntu-24.04",
         "scripts/qa-nightly-stability.py",
         "Publish run summary",
         "$GITHUB_STEP_SUMMARY",
@@ -93,6 +96,10 @@ fn nightly_stability_reusable_workflow_owns_execution() {
             "reusable workflow should contain {expected:?}; workflow was:\n{reusable}"
         );
     }
+    assert!(
+        !reusable.contains("inputs.runs_on"),
+        "reusable workflow must own its GitHub-hosted runner selection"
+    );
 }
 
 #[test]

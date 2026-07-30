@@ -15,6 +15,7 @@ on:
       - 'scripts/windows-native-runtime-deps.py'
       - '.github/cache-version.txt'
       - '.github/actions/prepare-native-runtime-input/action.yml'
+      - '.github/actions/resolve-native-toolchain-epoch/action.yml'
       - '.github/actions/setup-windows-rocm-sdk/action.yml'
       - '.github/actions/restore-windows-abi-cache/action.yml'
       - '.github/workflows/ci.yml'
@@ -58,12 +59,16 @@ jobs:
         with:
           python-version: '3.x'
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - name: Resolve Windows native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore Windows CPU ABI cache
         id: llama_cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: cpu
           build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
       - name: Initialize MSVC for CPU runtime
         if: steps.llama_cache.outputs.cache-hit != 'true'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
@@ -80,14 +85,33 @@ jobs:
         shell: pwsh
         run: |
           $stamp = Join-Path $env:LLAMA_STAGE_BUILD_DIR ".mesh-llm-build-stamp"
-          if (-not (Test-Path $stamp -PathType Leaf)) {
-            throw "Canonical build stamp was not found: $stamp"
+          python scripts/verify-static-abi-build-stamp.py `
+            $stamp `
+            --backend cpu `
+            --link-mode dynamic `
+            --stamp-version 3 `
+            --toolchain-epoch $env:MESH_LLM_LLAMA_TOOLCHAIN_EPOCH
+          $requiredLibraries = @{
+            llama = @("llama.dll", "libllama.dll")
+            common = @("llama-common.dll", "libllama-common.dll")
+            mtmd = @("mtmd.dll", "libmtmd.dll")
           }
-          $libraries = Get-ChildItem -Path $env:LLAMA_STAGE_BUILD_DIR -Recurse -File -Filter *.dll -ErrorAction SilentlyContinue | Select-Object -First 20
-          if (-not $libraries) {
-            throw "No dynamic runtime libraries were found under $env:LLAMA_STAGE_BUILD_DIR."
+          foreach ($entry in $requiredLibraries.GetEnumerator()) {
+            $library = Get-ChildItem `
+              -Path $env:LLAMA_STAGE_BUILD_DIR `
+              -Recurse `
+              -File `
+              -ErrorAction SilentlyContinue |
+              Where-Object { $entry.Value -contains $_.Name } |
+              Select-Object -First 1
+            if (-not $library) {
+              throw (
+                "Windows CPU ABI cache is missing $($entry.Key): " +
+                "$($entry.Value -join ', ')"
+              )
+            }
+            Write-Host $library.FullName
           }
-          $libraries | ForEach-Object { Write-Host $_.FullName }
       - name: Save Windows CPU ABI cache
         if: steps.llama_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
@@ -122,12 +146,16 @@ jobs:
         with:
           python-version: '3.x'
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - name: Resolve Windows native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore Windows GPU ABI cache
         id: llama_cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: ${{ matrix.backend }}
           build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
           architecture_set: ${{ matrix.build_args }}
           cuda_toolchain_version: ${{ env.WINDOWS_CUDA_VERSION }}
           vulkan_toolchain_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
@@ -201,16 +229,37 @@ jobs:
           output_dir: cache-runtime-input/${{ matrix.backend }}
       - name: Verify Windows GPU ABI cache
         shell: pwsh
+        env:
+          CACHE_BACKEND: ${{ matrix.backend }}
         run: |
           $stamp = Join-Path $env:LLAMA_STAGE_BUILD_DIR ".mesh-llm-build-stamp"
-          if (-not (Test-Path $stamp -PathType Leaf)) {
-            throw "Canonical build stamp was not found: $stamp"
+          python scripts/verify-static-abi-build-stamp.py `
+            $stamp `
+            --backend $env:CACHE_BACKEND `
+            --link-mode dynamic `
+            --stamp-version 3 `
+            --toolchain-epoch $env:MESH_LLM_LLAMA_TOOLCHAIN_EPOCH
+          $requiredLibraries = @{
+            llama = @("llama.dll", "libllama.dll")
+            common = @("llama-common.dll", "libllama-common.dll")
+            mtmd = @("mtmd.dll", "libmtmd.dll")
           }
-          $libraries = Get-ChildItem -Path $env:LLAMA_STAGE_BUILD_DIR -Recurse -File -Filter *.dll -ErrorAction SilentlyContinue | Select-Object -First 20
-          if (-not $libraries) {
-            throw "No dynamic runtime libraries were found under $env:LLAMA_STAGE_BUILD_DIR."
+          foreach ($entry in $requiredLibraries.GetEnumerator()) {
+            $library = Get-ChildItem `
+              -Path $env:LLAMA_STAGE_BUILD_DIR `
+              -Recurse `
+              -File `
+              -ErrorAction SilentlyContinue |
+              Where-Object { $entry.Value -contains $_.Name } |
+              Select-Object -First 1
+            if (-not $library) {
+              throw (
+                "Windows $env:CACHE_BACKEND ABI cache is missing " +
+                "$($entry.Key): $($entry.Value -join ', ')"
+              )
+            }
+            Write-Host $library.FullName
           }
-          $libraries | ForEach-Object { Write-Host $_.FullName }
       - name: Save Windows GPU ABI cache
         if: steps.llama_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0

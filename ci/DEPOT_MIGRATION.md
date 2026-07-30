@@ -209,9 +209,14 @@ Activation prerequisites:
    `Mesh-LLM/mesh-llm/.github/workflows/depot-canary.yml@refs/heads/main`.
 4. Only after both restrictions are saved, enable public repositories for the
    `Default` group. Depot-managed ephemeral runners register in that group.
-5. Dispatch `depot-canary.yml` from `refs/heads/main` twice. Verify all four
-   Intel runner sizes, both ARM runner sizes, their reported architectures,
-   and a cold-to-warm cache hit without printing credentials.
+5. Dispatch `depot-canary.yml` from `refs/heads/main` once with
+   `expect_cache_hit=false`, then again with `expect_cache_hit=true`. The
+   workflow fails closed unless Depot injects its WebDAV endpoint,
+   authentication, and runner-image identity. It compiles a deterministic
+   no-checkout probe through sccache and rejects WebDAV read/write errors; the
+   warm pass requires both sccache and Actions cache hits. Verify all four Intel
+   runner sizes, both ARM runner sizes, and their reported architectures
+   without printing credentials.
 6. Dispatch the canary from a feature ref, prove that it cannot acquire a
    Depot runner, and cancel that exact queued run.
 7. Add exact default-branch workflow refs only as their phase starts. Reusable

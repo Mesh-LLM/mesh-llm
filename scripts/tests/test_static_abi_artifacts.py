@@ -87,6 +87,9 @@ class StaticAbiArtifactTests(unittest.TestCase):
 
         self.assertIn('found="$(find ', function)
         self.assertIn('[[ -n "$found" && -e "$found" ]] || return 1', function)
+        self.assertIn("libllama.dll|llama.dll", build_script)
+        self.assertIn("libllama-common.dll|llama-common.dll", build_script)
+        self.assertIn("libmtmd.dll|mtmd.dll", build_script)
         self.assertNotIn("| grep -q", function)
 
     def write_artifact(

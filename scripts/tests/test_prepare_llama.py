@@ -19,7 +19,7 @@ class PrepareLlamaTests(unittest.TestCase):
         self, cwd: Path, *args: str, capture_output: bool = False
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["git", *args],
+            ["git", "-c", "commit.gpgsign=false", *args],
             cwd=cwd,
             check=True,
             text=True,
@@ -118,6 +118,81 @@ class PrepareLlamaTests(unittest.TestCase):
                 check=False,
             )
             self.assertNotEqual(partial_clone.returncode, 0)
+
+    def test_patch_application_has_deterministic_commit_identity(self) -> None:
+        """Equivalent clean preparations produce one reusable patched SHA."""
+        with tempfile.TemporaryDirectory(prefix="mesh-llm-prepare-identity-") as temp_dir:
+            root = Path(temp_dir)
+            upstream = root / "upstream"
+            author = root / "author"
+            patch_dir = root / "patches"
+            pin_file = root / "upstream.txt"
+
+            self.run_git(root, "init", "--initial-branch=master", str(upstream))
+            self.run_git(upstream, "config", "user.name", "Patch Author")
+            self.run_git(upstream, "config", "user.email", "author@example.com")
+            (upstream / "sample.txt").write_text("base\n", encoding="utf-8")
+            self.run_git(upstream, "add", "sample.txt")
+            self.run_git(upstream, "commit", "-m", "base")
+            pin_file.write_text(
+                f"{self.run_git(upstream, 'rev-parse', 'HEAD', capture_output=True).stdout.strip()}\n",
+                encoding="utf-8",
+            )
+
+            self.run_git(root, "clone", str(upstream), str(author))
+            self.run_git(author, "config", "user.name", "Patch Author")
+            self.run_git(author, "config", "user.email", "author@example.com")
+            (author / "sample.txt").write_text("patched\n", encoding="utf-8")
+            self.run_git(author, "commit", "-am", "local patch")
+            patch_dir.mkdir()
+            patch = self.run_git(
+                author, "format-patch", "-1", "--stdout", capture_output=True
+            ).stdout
+            (patch_dir / "0001-local.patch").write_text(patch, encoding="utf-8")
+
+            patched_shas = []
+            for index, (committer_date, timezone) in enumerate(
+                (
+                    ("2001-01-01T00:00:00Z", "UTC"),
+                    ("2031-01-01T00:00:00Z", "America/Toronto"),
+                )
+            ):
+                workdir = root / f"workdir-{index}"
+                env = os.environ | {
+                    "GIT_AUTHOR_EMAIL": f"author-{index}@example.com",
+                    "GIT_AUTHOR_NAME": f"Ambient Author {index}",
+                    "GIT_COMMITTER_DATE": committer_date,
+                    "GIT_COMMITTER_EMAIL": f"committer-{index}@example.com",
+                    "GIT_COMMITTER_NAME": f"Ambient Committer {index}",
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "commit.gpgsign",
+                    "GIT_CONFIG_VALUE_0": "true",
+                    "TZ": timezone,
+                    "LLAMA_UPSTREAM_URL": f"file://{upstream}",
+                    "LLAMA_WORKDIR": str(workdir),
+                    "LLAMA_PIN_FILE": str(pin_file),
+                    "LLAMA_PATCH_DIR": str(patch_dir),
+                    "LLAMA_GIT_MAX_ATTEMPTS": "1",
+                }
+                subprocess.run(
+                    [str(PREPARE_LLAMA), "pinned"],
+                    cwd=ROOT,
+                    check=True,
+                    env=env,
+                )
+                patched_shas.append(
+                    (workdir / ".mesh-llm-patched-sha")
+                    .read_text(encoding="utf-8")
+                    .strip()
+                )
+                self.assertEqual(
+                    (workdir / ".mesh-llm-prepare-schema")
+                    .read_text(encoding="utf-8")
+                    .strip(),
+                    "2",
+                )
+
+            self.assertEqual(patched_shas[0], patched_shas[1])
 
 
 if __name__ == "__main__":

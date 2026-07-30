@@ -40,6 +40,23 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
             self.workflow,
         )
         self.assertIn("${DEPOT_CACHE_TOKEN:-}", self.workflow)
+        self.assertIn("${SCCACHE_WEBDAV_TOKEN:-}", self.workflow)
+        self.assertIn("${SCCACHE_WEBDAV_ENDPOINT:-}", self.workflow)
+        self.assertIn("Depot Cache authentication was not injected", self.workflow)
+        self.assertIn("Depot runner image identity was not injected", self.workflow)
+        self.assertIn('"$ImageOS" "$ImageVersion"', self.workflow)
+        self.assertIn("mozilla-actions/sccache-action@", self.workflow)
+        self.assertIn("sccache cc", self.workflow)
+        self.assertIn(
+            "sccache did not select the Depot WebDAV backend",
+            self.workflow,
+        )
+        self.assertIn("expected a warm Depot sccache hit", self.workflow)
+        self.assertIn("expect_cache_hit:", self.workflow)
+        self.assertIn(
+            '[[ "$EXPECT_CACHE_HIT" == "true" && "$CACHE_HIT" != "true" ]]',
+            self.workflow,
+        )
         self.assertNotIn("echo \"$DEPOT_CACHE_TOKEN\"", self.workflow)
         self.assertNotIn("printenv", self.workflow)
 

@@ -60,8 +60,39 @@ function Prepare-Llama {
         Invoke-NativeCommand "git" @("clean", "-fdx", "-e", "build/")
 
         $patches = Get-ChildItem -Path $patchDir -Filter "*.patch" | Sort-Object Name
-        foreach ($patch in $patches) {
-            Invoke-NativeCommand "git" @("am", "--3way", $patch.FullName)
+        $gitIdentityVariables = @(
+            "GIT_AUTHOR_DATE",
+            "GIT_AUTHOR_EMAIL",
+            "GIT_AUTHOR_NAME",
+            "GIT_COMMITTER_DATE",
+            "GIT_COMMITTER_EMAIL",
+            "GIT_COMMITTER_NAME"
+        )
+        $savedGitIdentity = @{}
+        foreach ($variable in $gitIdentityVariables) {
+            if (Test-Path "Env:$variable") {
+                $savedGitIdentity[$variable] = (Get-Item "Env:$variable").Value
+            }
+            Remove-Item "Env:$variable" -ErrorAction SilentlyContinue
+        }
+        try {
+            foreach ($patch in $patches) {
+                Invoke-NativeCommand "git" @(
+                    "am",
+                    "--3way",
+                    "--committer-date-is-author-date",
+                    "--no-gpg-sign",
+                    "--no-verify",
+                    $patch.FullName
+                )
+            }
+        } finally {
+            foreach ($variable in $gitIdentityVariables) {
+                Remove-Item "Env:$variable" -ErrorAction SilentlyContinue
+            }
+            foreach ($entry in $savedGitIdentity.GetEnumerator()) {
+                Set-Item "Env:$($entry.Key)" $entry.Value
+            }
         }
 
         $patchedSha = (& git rev-parse HEAD).Trim()

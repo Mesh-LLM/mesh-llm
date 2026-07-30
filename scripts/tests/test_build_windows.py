@@ -80,6 +80,43 @@ class BuildWindowsScriptTests(unittest.TestCase):
                     ),
                     2,
                 )
+                self.assertEqual(
+                    workflow.count(
+                        "name: Resolve Windows native toolchain epoch",
+                    ),
+                    2,
+                )
+                self.assertEqual(
+                    workflow.count(
+                        "toolchain_epoch: "
+                        "${{ steps.native_toolchain.outputs.epoch }}",
+                    ),
+                    2,
+                )
+
+        warmer = WINDOWS_WARM_CACHES.read_text(encoding="utf-8")
+        self.assertIn(
+            "'.github/actions/resolve-native-toolchain-epoch/action.yml'",
+            warmer,
+        )
+        self.assertEqual(
+            warmer.count("scripts/verify-static-abi-build-stamp.py"),
+            2,
+        )
+        self.assertEqual(
+            warmer.count(
+                "--toolchain-epoch "
+                "$env:MESH_LLM_LLAMA_TOOLCHAIN_EPOCH",
+            ),
+            2,
+        )
+        for library_group in (
+            '@("llama.dll", "libllama.dll")',
+            '@("llama-common.dll", "libllama-common.dll")',
+            '@("mtmd.dll", "libmtmd.dll")',
+        ):
+            with self.subTest(library_group=library_group):
+                self.assertEqual(warmer.count(library_group), 2)
 
     def test_windows_abi_caches_live_outside_the_llama_worktree(self) -> None:
         workflows = {

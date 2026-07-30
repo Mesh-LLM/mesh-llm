@@ -407,6 +407,10 @@ jobs:
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: brew install cmake ninja lld
+      - name: Resolve hosted native toolchain epoch
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          include_tool_versions: "true"
 
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
@@ -442,9 +446,11 @@ jobs:
           - cuda_version: '12.9.2'
             cuda_major: '12'
             runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
           - cuda_version: '13.1.2'
             cuda_major: '13'
             runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
     container:
       image: ${{ matrix.runner_image }}
       credentials:
@@ -463,6 +469,10 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public cuda
+      - name: Resolve CUDA native toolchain epoch
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: ${{ matrix.toolchain_epoch }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
@@ -498,11 +508,13 @@ jobs:
           - cuda_version: '12.9.2'
             cuda_major: '12'
             runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
             cuda_architectures: '75;80;86;87;89;90'
             cuda_architectures_cache: '75_80_86_87_89_90'
           - cuda_version: '13.1.2'
             cuda_major: '13'
             runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
             cuda_architectures: '75;80;86;87;89;90;100;103;120;121'
             cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'
     container:
@@ -525,6 +537,11 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public cuda
+      - name: Resolve CUDA native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: ${{ matrix.toolchain_epoch }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
@@ -532,7 +549,7 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-cuda${{ matrix.cuda_major }}-${{ matrix.cuda_version }}-dynamic-${{ matrix.cuda_architectures_cache }}-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-cuda${{ matrix.cuda_major }}-${{ matrix.cuda_version }}-dynamic-${{ matrix.cuda_architectures_cache }}-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', '.github/actions/prepare-native-runtime-input/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -577,6 +594,11 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public rocm
+      - name: Resolve ROCm native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: mesh-llm-cuda-runner-sha256-0e13e5d2d2c121df265ff6c69be81e468989e09f81d6b7ff049b110cc0bb0d2b
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
@@ -584,7 +606,7 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-rocm7.0-dynamic-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-rocm7.0-dynamic-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', '.github/actions/prepare-native-runtime-input/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -628,6 +650,11 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
         run: verify-runner-image public vulkan
+      - name: Resolve Vulkan native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: mesh-llm-cuda-runner-sha256-ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
@@ -635,7 +662,7 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-vulkan-dynamic-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-vulkan-dynamic-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', '.github/actions/prepare-native-runtime-input/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -1327,11 +1354,15 @@ jobs:
           python-version: '3.x'
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - name: Resolve Windows native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore exact Windows CPU ABI cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: cpu
           build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
       - name: Initialize MSVC for native runtime
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
@@ -1398,11 +1429,15 @@ jobs:
           python-version: '3.x'
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - name: Resolve Windows native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore exact Windows GPU ABI cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: ${{ matrix.backend }}
           build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
           architecture_set: ${{ matrix.cuda_architectures || matrix.rocm_architectures || '' }}
           cuda_toolchain_version: ${{ env.WINDOWS_CUDA_VERSION }}
           vulkan_toolchain_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
