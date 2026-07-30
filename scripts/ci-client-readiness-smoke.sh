@@ -46,7 +46,11 @@ shutdown_client_unix() {
     local shutdown_timed_out="$STATE_DIR/shutdown-timed-out"
 
     rm -f "$shutdown_done" "$shutdown_timed_out"
-    kill -INT "$pid" 2>/dev/null || true
+    # This client is an asynchronous child of a noninteractive shell. POSIX
+    # shells may start such children with SIGINT ignored, so SIGINT is not a
+    # reliable graceful-shutdown probe here. SIGTERM is handled by mesh-llm's
+    # normal shutdown path and is the platform-appropriate CI service signal.
+    kill -TERM "$pid" 2>/dev/null || true
     (
         for ((attempt = 0; attempt < SHUTDOWN_MAX_WAIT; attempt++)); do
             sleep 1
@@ -54,9 +58,7 @@ shutdown_client_unix() {
         done
         if [[ ! -e "$shutdown_done" ]] && kill -0 "$pid" 2>/dev/null; then
             : >"$shutdown_timed_out"
-            kill -TERM "$pid" 2>/dev/null || true
-            sleep 1
-            [[ -e "$shutdown_done" ]] || kill -KILL "$pid" 2>/dev/null || true
+            kill -KILL "$pid" 2>/dev/null || true
         fi
     ) </dev/null >/dev/null 2>&1 &
     deadline_pid=$!
@@ -71,11 +73,11 @@ shutdown_client_unix() {
     wait "$deadline_pid" 2>/dev/null || true
 
     if [[ -e "$shutdown_timed_out" ]]; then
-        echo "client did not stop cleanly after SIGINT within ${SHUTDOWN_MAX_WAIT}s" >&2
+        echo "client did not stop cleanly after SIGTERM within ${SHUTDOWN_MAX_WAIT}s" >&2
         return 1
     fi
     if [[ "$child_status" -ne 0 ]]; then
-        echo "client exited non-cleanly after SIGINT: $child_status" >&2
+        echo "client exited non-cleanly after SIGTERM: $child_status" >&2
         return 1
     fi
     return 0

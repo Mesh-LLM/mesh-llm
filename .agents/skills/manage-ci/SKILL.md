@@ -303,6 +303,11 @@ update the skill resources in the same change.
   image. CUDA/ROCm/Vulkan device absence is not a skip condition for
   `--version`, runtime discovery/listing, or client startup. Hardware-qualified
   serving tests are additional coverage.
+- The hermetic readiness smoke starts its client as a noninteractive background
+  service. Use bounded SIGTERM shutdown on Unix and CTRL_BREAK_EVENT on Windows;
+  do not use Unix SIGINT for this service probe because asynchronous
+  noninteractive shell children may inherit it as ignored. Keep interactive
+  Ctrl-C behavior covered by runtime and console tests instead.
 - Namespace cache keys and include every compatibility boundary that can make
   reuse unsafe: OS, architecture, backend/toolchain, relevant lockfiles,
   `.github/cache-version.txt`, and build inputs. Do not broaden restore keys

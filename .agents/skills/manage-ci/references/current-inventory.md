@@ -48,7 +48,9 @@ The host producer attests the binary, writes `host-imports.json`, and publishes
 its checksum. Product consumers verify that immutable input before composition;
 they must not re-stamp or otherwise mutate the host per backend alias. Release
 CPU and backend product consumers also perform a noninteractive JSON client
-readiness smoke from the verified host/runtime inputs before publication; CI
+readiness smoke from the verified host/runtime inputs before publication. The
+background client must exit cleanly after bounded SIGTERM on Unix or
+CTRL_BREAK_EVENT on Windows; interactive Ctrl-C coverage remains separate. CI
 and packaging consumers must not rebuild either input. Portable bundles
 place runtimes at `mesh-bundle/native-runtimes/<runtime-id>`; Debian/Arch
 packages use `/usr/local/lib/mesh-llm/<version>/native-runtimes`; Homebrew uses

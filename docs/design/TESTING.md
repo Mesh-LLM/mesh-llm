@@ -521,7 +521,9 @@ just build
   `./target/debug/mesh-llm --log-format json runtime list`; CI also starts the
   composed client noninteractively, observes either the JSON `Client ready`
   message or the structured `passive_mode`/`status=ready`/`role=client` event,
-  and requires a clean SIGINT shutdown.
+  and requires bounded graceful SIGTERM shutdown on Unix or CTRL_BREAK_EVENT
+  on Windows. Interactive Ctrl-C/SIGINT behavior is tested separately because
+  noninteractive background shell children may inherit SIGINT as ignored.
 
 ## Mesh Identity
 
@@ -1186,7 +1188,8 @@ Required evidence:
 - A product with an incompatible MeshLLM version or Skippy ABI is rejected
   before loading.
 - `client --auto --log-format json --no-console` starts without a native
-  runtime or GPU driver, emits a real ready event, and stops cleanly on SIGINT.
+  runtime or GPU driver, emits a real ready event, and the noninteractive
+  service probe stops cleanly on SIGTERM (Unix) or CTRL_BREAK_EVENT (Windows).
 
 Run the command-surface smoke on every product platform without device
 passthrough. Separately qualify backend loading and a minimal operation on

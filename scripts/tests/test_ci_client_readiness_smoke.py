@@ -23,7 +23,8 @@ with open(marker, "w", encoding="utf-8") as fh:
     fh.write(f"start:{{os.getpid()}}\\n")
 
 def stop(signum, frame):
-    del signum, frame
+    del frame
+    signal_name = signal.Signals(signum).name
 {handler}
 
 signal.signal(signal.SIGINT, stop)
@@ -83,7 +84,7 @@ class CiClientReadinessSmokeTests(unittest.TestCase):
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)
 
-    def test_clean_sigint_shutdown_succeeds_and_reaps_runtime(self):
+    def test_clean_sigterm_shutdown_succeeds_and_reaps_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             runtime = root / "mesh-llm"
@@ -91,7 +92,7 @@ class CiClientReadinessSmokeTests(unittest.TestCase):
                 runtime,
                 """\
                 with open(marker, "a", encoding="utf-8") as fh:
-                    fh.write(f"signal:{os.getpid()}\\n")
+                    fh.write(f"signal:{signal_name}:{os.getpid()}\\n")
                 raise SystemExit(0)
                 """,
             )
@@ -101,10 +102,14 @@ class CiClientReadinessSmokeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             marker = root / "events"
             pids = [
-                int(line.split(":")[1])
+                int(line.rsplit(":", 1)[1])
                 for line in marker.read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(pids, [pids[0], pids[0]])
+            self.assertIn(
+                f"signal:SIGTERM:{pids[0]}",
+                marker.read_text(encoding="utf-8").splitlines(),
+            )
             self.assert_process_absent(marker)
             self.assertEqual(list((root / "state").iterdir()), [])
 
@@ -118,7 +123,7 @@ class CiClientReadinessSmokeTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(
-                "client did not stop cleanly after SIGINT within 1s", result.stderr
+                "client did not stop cleanly after SIGTERM within 1s", result.stderr
             )
             self.assert_process_absent(root / "events")
             self.assertEqual(list((root / "state").iterdir()), [])
