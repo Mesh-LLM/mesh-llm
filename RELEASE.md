@@ -145,17 +145,41 @@ git add Package.swift sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift
 git commit -m "v0.X.Y: prepare Swift package artifact"
 ```
 
-The release workflow rebuilds `MeshLLMFFI.xcframework.zip`, verifies the macOS
-framework layout, runs a zipped-artifact SwiftPM consumer smoke, and checks that
-the tagged `Package.swift` already points at the exact release URL and checksum.
-If `Package.swift` still contains placeholders on a tag push, or if the
-checksum does not match the artifact built in release CI, the release fails
-before publishing.
+The release workflow invokes the shared typed Swift SDK producer in exhaustive
+`full` mode to build `MeshLLMFFI.xcframework.zip`. That same producer is used
+in `host-only` mode for PR iteration and `full` mode on main. It verifies the
+exact platform and architecture slices plus the macOS framework layout, runs a
+zipped-artifact SwiftPM consumer smoke, and checks that the tagged
+`Package.swift` already points at the exact release URL and checksum. The
+producer also uploads the generated `mesh_ffi.swift` as a separate immutable
+companion artifact. Main and tag builds fail when that generated binding drifts
+from the tracked source. If `Package.swift` still contains placeholders on a
+tag push, if the generated binding is stale, or if the checksum does not match
+the artifact built in release CI, the release fails before publishing.
+Producer and smoke use the pinned `macos-15` image and an explicit native/Xcode
+cache epoch. Downstream Swift smoke consumes both verified producer artifacts
+and never compiles an XCFramework replacement.
+
+Native SDK release archives use the same typed `native-sdk-artifact.yml`
+producer as PR and main Kotlin validation. Callers select an explicit target,
+backend, Cargo profile, and bounded runner size; they cannot provide a runner
+label or Depot-cache permission. Each Linux release invocation first nests the
+shared `static-abi-artifact.yml` producer on the matching native architecture,
+then restores its checksummed/stamped CPU ABI into the normal native-SDK
+`--build` path so only the Rust FFI compilation remains. Both reusable
+producers derive architecture-specific hosted/Depot placement and cache
+authority from the protected workflow's repository/event/ref policy. Release
+enables native runtime crate staging on the same verified archive path. The
+producer keeps each
+`release-native-sdk-<platform>-<backend>` artifact flat with exactly one
+archive, its checksum sidecar, and its target-specific `.crate`, preserving the
+published asset names while Kotlin smoke remains a no-build consumer.
 
 For `workflow_dispatch` releases, the release workflow computes the SwiftPM
-checksum from the XCFramework artifact it just built, patches `Package.swift`
-in the workflow workspace, and creates the requested release tag at a
-manifest-only commit before publishing.
+checksum from the XCFramework artifact it just built, carries both the patched
+`Package.swift` and the producer's exact generated `mesh_ffi.swift` into the
+release workspace, and creates the requested release tag at that prepared
+source commit before publishing.
 
 The current GitHub Actions release workflow publishes macOS aarch64, Linux
 x86_64 CPU, Linux ARM64 CPU, Linux ARM64 CUDA, Linux CUDA, Linux CUDA

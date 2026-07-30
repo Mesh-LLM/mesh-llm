@@ -36,10 +36,6 @@ on:
       smoke_script:
         required: true
         type: string
-      runs_on:
-        required: false
-        default: '"ubuntu-24.04"'
-        type: string
       timeout_minutes:
         required: false
         default: 20
@@ -52,16 +48,22 @@ env:
   MODEL_URL: ${{ inputs.model_url }}
   MODEL_FILE: ${{ inputs.model_file }}
 
+permissions:
+  contents: read
+
 jobs:
   scripted_binary_smoke:
     name: Scripted Binary Smoke
-    runs-on: ${{ fromJson(inputs.runs_on) }}
+    # Model credentials stay on an isolated GitHub-hosted runner.
+    runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.timeout_minutes }}
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Install smoke dependencies
         run: sudo apt-get update && sudo apt-get install -y curl jq lsof

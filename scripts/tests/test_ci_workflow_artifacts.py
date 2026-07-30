@@ -199,23 +199,32 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         crate_tests = job_section(self.workflow, "rust_crate_tests")
         grouped_tests = job_section(self.workflow, "linux_test_groups")
 
-        self.assertIn("run: scripts/build-llama.sh", producer)
-        self.assertIn("name: ci-linux-static-abi-input", producer)
-        self.assertIn("mesh-llm-static-abi.tar.gz", producer)
+        self.assertIn(
+            "uses: ./.github/workflows/static-abi-artifact.yml",
+            producer,
+        )
+        self.assertIn("artifact_name: ci-linux-static-abi-input", producer)
+        self.assertIn("runner_size: '8'", producer)
+        self.assertNotIn("runs_on:", producer)
+        self.assertNotIn("allow_depot_remote_cache:", producer)
+        self.assertIn(
+            "needs.changes.outputs.sdk_smoke_required == 'true'",
+            producer,
+        )
         for consumer in (crate_tests, grouped_tests):
             with self.subTest(consumer=consumer.splitlines()[0].strip()):
                 self.assertIn("linux_static_abi_input", consumer)
                 self.assertIn("name: ci-linux-static-abi-input", consumer)
                 self.assertIn("Restore immutable static ABI input", consumer)
+                self.assertIn("scripts/restore-static-abi-input.sh", consumer)
+                self.assertNotIn("tar -xzf", consumer)
                 self.assertNotIn("run: scripts/build-llama.sh", consumer)
                 self.assertNotIn("Cache patched llama.cpp ABI build", consumer)
 
     def test_macos_host_and_runtime_are_independent_producers(self) -> None:
         route = (
-            "if: ${{ (github.event_name == 'workflow_dispatch' || "
-            "needs.changes.outputs.rust == 'true' || "
-            "needs.changes.outputs.ui == 'true' || "
-            "needs.changes.outputs.benchmarks == 'true') && "
+            "if: ${{ needs.changes.outputs."
+            "macos_inference_artifact_required == 'true' && "
             "needs.changes.outputs.docs_only != 'true' }}"
         )
         host = job_section(self.workflow, "macos_host_input")
@@ -411,19 +420,85 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("prepare-native-runtime-input", checks)
         self.assertNotIn("compose-product-input", checks)
 
-    def test_swift_smoke_uses_composed_macos_product(self) -> None:
-        swift = job_section(self.workflow, "swift_sdk_smoke")
+    def test_kotlin_smoke_reuses_parallel_release_native_sdk_input(self) -> None:
+        producer = job_section(self.workflow, "kotlin_sdk_input")
+        consumer = job_section(self.workflow, "kotlin_sdk_smoke")
 
         self.assertIn(
-            "needs: [changes, macos_cpu_artifact, macos_unit_tests]",
+            "needs: [changes, linux_static_abi_input]",
+            producer,
+        )
+        self.assertNotIn("linux_cpu_artifact", producer)
+        self.assertIn(
+            "needs.linux_static_abi_input.result == 'success'",
+            producer,
+        )
+        self.assertIn(
+            "needs.changes.outputs.sdk_smoke_required == 'true'",
+            producer,
+        )
+        self.assertIn(
+            "uses: ./.github/workflows/native-sdk-artifact.yml",
+            producer,
+        )
+        self.assertIn("profile: release", producer)
+        self.assertIn(
+            "artifact_name: ci-kotlin-native-sdk-input",
+            producer,
+        )
+        self.assertIn(
+            "static_abi_artifact_name: ci-linux-static-abi-input",
+            producer,
+        )
+        self.assertIn("runner_size: '8'", producer)
+        self.assertNotIn("runs_on:", producer)
+        self.assertNotIn("allow_depot_remote_cache:", producer)
+
+        self.assertIn(
+            "needs: [changes, linux_cpu_artifact, kotlin_sdk_input]",
+            consumer,
+        )
+        self.assertIn(
+            "needs.kotlin_sdk_input.result == 'success'",
+            consumer,
+        )
+        self.assertIn(
+            "kotlin_artifact_name: ci-kotlin-native-sdk-input",
+            consumer,
+        )
+        self.assertIn("kotlin_artifact_profile: release", consumer)
+        self.assertIn(
+            "uses: ./.github/workflows/sdk-smoke.yml",
+            consumer,
+        )
+
+    def test_swift_smoke_uses_composed_macos_product(self) -> None:
+        producer = job_section(self.workflow, "swift_sdk_input")
+        swift = job_section(self.workflow, "swift_sdk_smoke")
+
+        self.assertIn("needs: changes", producer)
+        self.assertIn(
+            "uses: ./.github/workflows/swift-sdk-artifact.yml",
+            producer,
+        )
+        self.assertIn("mode: full", producer)
+        self.assertIn("artifact_name: ci-swift-sdk-input", producer)
+        self.assertNotIn("macos_runner:", producer)
+        self.assertNotIn("macos_cpu_artifact", producer)
+        self.assertNotIn("macos_unit_tests", producer)
+
+        self.assertIn(
+            "needs: [changes, macos_cpu_artifact, swift_sdk_input]",
             swift,
         )
-        self.assertIn("!cancelled()", swift)
         self.assertNotIn("always()", swift)
         self.assertIn("needs.macos_cpu_artifact.result == 'success'", swift)
-        self.assertIn("needs.macos_unit_tests.result == 'success'", swift)
-        self.assertIn("needs.macos_unit_tests.result == 'skipped'", swift)
+        self.assertIn("needs.swift_sdk_input.result == 'success'", swift)
+        self.assertNotIn("macos_unit_tests", swift)
         self.assertIn("artifact_name: ci-macos-inference-binaries", swift)
+        self.assertIn("swift_artifact_name: ci-swift-sdk-input", swift)
+        self.assertIn("swift_artifact_mode: full", swift)
+        self.assertNotIn("macos_runner:", swift)
         self.assertIn("staged_binary_path: target/release/mesh-llm", swift)
 
     def test_main_runner_policy_is_selected_once(self) -> None:

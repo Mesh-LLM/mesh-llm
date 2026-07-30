@@ -32,6 +32,7 @@ env:
   CARGO_HTTP_MULTIPLEXING: "false"
   SCCACHE_GHA_ENABLED: "true"
   LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
+  MESH_LLM_LLAMA_TOOLCHAIN_EPOCH: mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
 
 jobs:
   changes:
@@ -70,10 +71,12 @@ jobs:
       runner_4: ${{ steps.runners.outputs.runner_4 }}
       runner_8: ${{ steps.runners.outputs.runner_8 }}
       runner_16: ${{ steps.runners.outputs.runner_16 }}
+      required_jobs_json: ${{ steps.plan.outputs.required_jobs_json }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Select trusted Linux runners
         id: runners
         uses: ./.github/actions/select-ci-runners
@@ -118,6 +121,38 @@ jobs:
           event_name: ${{ github.event_name }}
           base_sha: ${{ github.event.pull_request.base.sha || '' }}
           head_sha: ${{ github.event.pull_request.head.sha || '' }}
+      - name: Plan required PR Builds jobs
+        id: plan
+        env:
+          PR_BUILD_PLAN_INPUT: >-
+            {
+              "event_name": "${{ github.event_name }}",
+              "all_rust": ${{ steps.compute.outputs.all_rust == 'true' && 'true' || 'false' }},
+              "backend_changed": ${{ steps.compute.outputs.backend_changed == 'true' && 'true' || 'false' }},
+              "benchmarks": ${{ steps.filter.outputs.benchmarks == 'true' && 'true' || 'false' }},
+              "docs_only": ${{ steps.compute.outputs.docs_only == 'true' && 'true' || 'false' }},
+              "inference_artifact_required": ${{ steps.compute.outputs.inference_artifact_required == 'true' && 'true' || 'false' }},
+              "linux_test_groups_nonempty": ${{ steps.compute.outputs.linux_test_groups_json != '[]' && 'true' || 'false' }},
+              "live_agent_enabled": ${{ (vars.MESH_AGENT_BASE_URL != '' || vars.MESH_OPENCODE_BASE_URL != '') && 'true' || 'false' }},
+              "runner_contract_required": ${{ steps.compute.outputs.runner_contract_required == 'true' && 'true' || 'false' }},
+              "sdk_smoke_required": ${{ steps.compute.outputs.sdk_smoke_required == 'true' && 'true' || 'false' }},
+              "test_batches_nonempty": ${{ steps.compute.outputs.test_batches_json != '[]' && 'true' || 'false' }},
+              "windows_cpu_required": ${{ steps.compute.outputs.windows_cpu_build_required == 'true' && 'true' || 'false' }},
+              "windows_gpu_required": ${{ steps.compute.outputs.windows_gpu_build_required == 'true' && 'true' || 'false' }},
+              "affected_crates": ${{ steps.compute.outputs.affected_crates || '[]' }}
+            }
+        run: |
+          set -euo pipefail
+          required_jobs_json="$(
+            python3 scripts/plan-pr-build-jobs.py <<<"$PR_BUILD_PLAN_INPUT"
+          )"
+          echo "required_jobs_json=$required_jobs_json" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## PR Builds execution plan"
+            echo
+            jq -r '.[] | "- `\(.)`"' <<<"$required_jobs_json"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Compute UI dist cache key
         id: ui_key
         run: |
@@ -126,7 +161,7 @@ jobs:
 
   public_runner_image_contract:
     needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.runner_contract_required == 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'public_runner_image_contract') }}
     name: Runner image / GitHub-hosted public
     runs-on: ${{ needs.changes.outputs.runner_4 }}
     container:
@@ -150,7 +185,7 @@ jobs:
 
   linux_host_input:
     needs: changes
-    if: ${{ (needs.changes.outputs.linux_inference_artifact_required == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_host_input') }}
     name: Linux immutable host
     runs-on: ${{ needs.changes.outputs.runner_8 }}
     container:
@@ -167,6 +202,8 @@ jobs:
       RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Verify prebuilt CI environment
         run: verify-runner-image public
@@ -250,7 +287,7 @@ jobs:
 
   linux_cpu_runtime_input:
     needs: changes
-    if: ${{ needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_cpu_runtime_input') }}
     name: Linux CPU runtime
     runs-on: ${{ needs.changes.outputs.runner_8 }}
     container:
@@ -299,7 +336,7 @@ jobs:
 
   linux_cpu_artifact:
     needs: [changes, linux_host_input, linux_cpu_runtime_input]
-    if: ${{ needs.linux_host_input.result == 'success' && needs.linux_cpu_runtime_input.result == 'success' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_cpu_artifact') }}
     name: Linux CPU product
     runs-on: ${{ needs.changes.outputs.runner_4 }}
     container:
@@ -345,7 +382,7 @@ jobs:
 
   linux_cuda_runtime_input:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_cuda_runtime_input') }}
     name: Linux CUDA slim runtime
     runs-on: ${{ needs.changes.outputs.runner_8 }}
     container:
@@ -395,7 +432,7 @@ jobs:
 
   linux_cuda_product:
     needs: [changes, linux_host_input, linux_cuda_runtime_input]
-    if: ${{ needs.linux_host_input.result == 'success' && needs.linux_cuda_runtime_input.result == 'success' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_cuda_product') }}
     name: Linux CUDA slim
     runs-on: ${{ needs.changes.outputs.runner_4 }}
     container:
@@ -441,7 +478,7 @@ jobs:
 
   linux_rocm_runtime_input:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_rocm_runtime_input') }}
     name: Linux ROCm slim runtime
     runs-on: ${{ needs.changes.outputs.runner_8 }}
     container:
@@ -490,7 +527,7 @@ jobs:
 
   linux_rocm_product:
     needs: [changes, linux_host_input, linux_rocm_runtime_input]
-    if: ${{ needs.linux_host_input.result == 'success' && needs.linux_rocm_runtime_input.result == 'success' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_rocm_product') }}
     name: Linux ROCm slim
     runs-on: ${{ needs.changes.outputs.runner_4 }}
     container:
@@ -536,7 +573,7 @@ jobs:
 
   linux_vulkan_runtime_input:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_vulkan_runtime_input') }}
     name: Linux Vulkan runtime
     runs-on: ${{ needs.changes.outputs.runner_8 }}
     container:
@@ -591,7 +628,7 @@ jobs:
 
   linux_vulkan_product:
     needs: [changes, linux_host_input, linux_vulkan_runtime_input]
-    if: ${{ needs.linux_host_input.result == 'success' && needs.linux_vulkan_runtime_input.result == 'success' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_vulkan_product') }}
     name: Linux Vulkan
     runs-on: ${{ needs.changes.outputs.runner_4 }}
     container:
@@ -637,62 +674,22 @@ jobs:
 
   linux_static_abi_input:
     needs: changes
-    if: ${{ needs.changes.outputs.docs_only != 'true' && (needs.changes.outputs.test_batches_json != '[]' || needs.changes.outputs.linux_test_groups_json != '[]') }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_static_abi_input') }}
     name: Linux static ABI input
-    runs-on: ${{ needs.changes.outputs.runner_8 }}
     permissions:
       contents: read
       packages: read
-    container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    defaults:
-      run:
-        shell: bash
-    env:
-      LLAMA_STAGE_BACKEND: cpu
-      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
-      MESH_LLM_REQUIRE_SCCACHE: "1"
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          persist-credentials: false
-      - name: Verify prebuilt CI environment
-        run: verify-runner-image public
-      - uses: ./.github/actions/configure-sccache-gha
-        with:
-          allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
-      - name: Cache patched llama.cpp ABI build
-        id: static_abi_cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: .deps/llama.cpp/build-stage-abi-static
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-abi-cpu-${{ hashFiles('scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
-      - name: Prepare patched llama.cpp ABI checkout
-        if: ${{ steps.static_abi_cache.outputs.cache-hit != 'true' }}
-        run: scripts/prepare-llama.sh pinned
-      - name: Build patched llama.cpp ABI libraries
-        if: ${{ steps.static_abi_cache.outputs.cache-hit != 'true' }}
-        run: scripts/build-llama.sh
-      - name: Archive immutable static ABI input
-        run: |
-          test -d "$LLAMA_STAGE_BUILD_DIR"
-          tar -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")" \
-            -czf "$RUNNER_TEMP/mesh-llm-static-abi.tar.gz" \
-            "$(basename "$LLAMA_STAGE_BUILD_DIR")"
-      - name: Upload immutable static ABI input
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: pr-linux-static-abi-input
-          path: ${{ runner.temp }}/mesh-llm-static-abi.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+    uses: ./.github/workflows/static-abi-artifact.yml
+    with:
+      backend: cpu
+      target: x86_64-unknown-linux-gnu
+      artifact_name: pr-linux-static-abi-input
+      runner_size: '8'
+      retention_days: 1
 
   rust_crate_tests:
     needs: [changes, linux_static_abi_input]
-    if: ${{ needs.linux_static_abi_input.result == 'success' && needs.changes.outputs.test_batches_json != '[]' && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'rust_crate_tests') }}
     name: Rust crate tests (${{ matrix.batch.idx }})
     runs-on: ${{ needs.changes.outputs.runner_8 }}
     permissions:
@@ -732,7 +729,8 @@ jobs:
           workspaces: . -> target
           cache-bin: "false"
           prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
-          shared-key: pr-rust-crate-tests-${{ matrix.batch.idx }}
+          # Read the already-seeded main shard without allowing PR writes.
+          shared-key: main-rust-crate-tests-${{ matrix.batch.idx }}
           save-if: "false"
       - name: Prepare UI placeholder
         run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
@@ -745,11 +743,7 @@ jobs:
           name: pr-linux-static-abi-input
           path: ${{ runner.temp }}/static-abi-input
       - name: Restore immutable static ABI input
-        run: |
-          mkdir -p "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
-          tar -xzf "$RUNNER_TEMP/static-abi-input/mesh-llm-static-abi.tar.gz" \
-            -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
-          test -d "$LLAMA_STAGE_BUILD_DIR"
+        run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
       - name: Run crate tests
         env:
           TEST_CRATES: ${{ toJson(matrix.batch.crates) }}
@@ -768,7 +762,7 @@ jobs:
 
   linux_test_groups:
     needs: [changes, linux_static_abi_input]
-    if: ${{ needs.linux_static_abi_input.result == 'success' && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.linux_test_groups_json != '[]' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_test_groups') }}
     name: Linux tests (${{ matrix.group }})
     runs-on: ${{ needs.changes.outputs.runner_8 }}
     container:
@@ -793,6 +787,8 @@ jobs:
       RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Verify prebuilt CI environment
         run: verify-runner-image public
@@ -823,11 +819,7 @@ jobs:
           name: pr-linux-static-abi-input
           path: ${{ runner.temp }}/static-abi-input
       - name: Restore immutable static ABI input
-        run: |
-          mkdir -p "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
-          tar -xzf "$RUNNER_TEMP/static-abi-input/mesh-llm-static-abi.tar.gz" \
-            -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
-          test -d "$LLAMA_STAGE_BUILD_DIR"
+        run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
 
       - name: Restore Skippy smoke model cache
         if: ${{ matrix.group == 'skippy-smoke' }}
@@ -849,8 +841,6 @@ jobs:
         if: ${{ matrix.group == 'skippy-smoke' }}
         timeout-minutes: 45
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
           MODEL_DIR: ${{ runner.temp }}/skippy-ci-smoke-models
         run: scripts/skippy-ci-smoke.sh
@@ -870,11 +860,13 @@ jobs:
 
   linux_public_mesh_admission:
     needs: [changes, linux_cpu_artifact]
-    if: ${{ github.event_name == 'workflow_dispatch' && needs.linux_cpu_artifact.result == 'success' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'linux_public_mesh_admission') }}
     name: Linux public-mesh admission
     runs-on: ${{ needs.changes.outputs.runner_4 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - name: Install client-auto smoke dependencies
         run: sudo apt-get update && sudo apt-get install -y curl jq python3
       - uses: ./.github/actions/restore-smoke-inputs
@@ -887,30 +879,24 @@ jobs:
 
   hf_download_smoke:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact')) && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'hf_download_smoke') }}
     name: HuggingFace download smoke
     uses: ./.github/workflows/hf-download-smoke.yml
     with:
-      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
       timeout_minutes: 15
-    secrets:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   inference_smoke_tests:
     needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'openai-frontend') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact')) && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'inference_smoke_tests') }}
     uses: ./.github/workflows/smoke.yml
     with:
       artifact_name: ci-linux-inference-binaries
       mesh_binary_target: target/debug/mesh-llm
       cache_key_prefix: ''
-      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
-    secrets:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   agent_live_smokes:
     needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && (vars.MESH_AGENT_BASE_URL != '' || vars.MESH_OPENCODE_BASE_URL != '') && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'openai-frontend') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client')) && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'agent_live_smokes') }}
     runs-on: ${{ needs.changes.outputs.runner_4 }}
     timeout-minutes: 45
     env:
@@ -927,6 +913,8 @@ jobs:
       # Keep live-agent smoke on an explicit Node version so CI does not depend
       # on GitHub-hosted image defaults.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
@@ -956,7 +944,7 @@ jobs:
 
   two_node_client_serving_smoke:
     needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'openai-frontend') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client')) && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'two_node_client_serving_smoke') }}
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       artifact_name: ci-linux-inference-binaries
@@ -964,14 +952,11 @@ jobs:
       staged_binary_path: target/debug/mesh-llm
       model_cache_scope: two-node-smoke-model
       smoke_script: scripts/ci-two-node-client-serving-smoke.sh
-      runs_on: ${{ toJson(needs.changes.outputs.runner_4) }}
       timeout_minutes: 20
-    secrets:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   two_node_split_smoke:
     needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact')) && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'two_node_split_smoke') }}
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       artifact_name: ci-linux-inference-binaries
@@ -979,14 +964,11 @@ jobs:
       staged_binary_path: target/debug/mesh-llm
       model_cache_scope: two-node-split-smoke-model
       smoke_script: scripts/ci-two-node-split-smoke.sh
-      runs_on: ${{ toJson(needs.changes.outputs.runner_4) }}
       timeout_minutes: 25
-    secrets:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   rust_sdk_smoke:
     needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'rust_sdk_smoke') }}
     uses: ./.github/workflows/sdk-smoke.yml
     with:
       sdk_kind: rust
@@ -994,27 +976,56 @@ jobs:
       artifact_path: ci-artifacts/linux
       staged_binary_path: target/debug/mesh-llm
       model_cache_scope: sdk-smoke-model
-      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
-    secrets:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  kotlin_sdk_input:
+    name: Kotlin native SDK input
+    needs: [changes, linux_static_abi_input]
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'kotlin_sdk_input') }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/native-sdk-artifact.yml
+    with:
+      backend: cpu
+      target: x86_64-unknown-linux-gnu
+      profile: debug
+      artifact_name: pr-kotlin-native-sdk-input
+      static_abi_artifact_name: pr-linux-static-abi-input
+      static_abi_artifact_path: native-sdk-static-abi-input
+      runner_size: '8'
+      retention_days: 1
 
   kotlin_sdk_smoke:
-    needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    needs: [changes, linux_cpu_artifact, kotlin_sdk_input]
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'kotlin_sdk_smoke') }}
     uses: ./.github/workflows/sdk-smoke.yml
     with:
       sdk_kind: kotlin
       artifact_name: ci-linux-inference-binaries
       artifact_path: ci-artifacts/linux
       staged_binary_path: target/debug/mesh-llm
+      kotlin_artifact_name: pr-kotlin-native-sdk-input
+      kotlin_artifact_target: x86_64-unknown-linux-gnu
+      kotlin_artifact_backend: cpu
+      kotlin_artifact_profile: debug
       model_cache_scope: sdk-smoke-model
-      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
-    secrets:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  swift_sdk_input:
+    name: Swift SDK host input
+    needs: changes
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'swift_sdk_input') }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/swift-sdk-artifact.yml
+    with:
+      mode: host-only
+      artifact_name: pr-swift-sdk-input
+      retention_days: 1
+      timeout_minutes: 45
 
   macos_host_input:
     needs: changes
-    if: ${{ needs.changes.outputs.macos_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'macos_host_input') }}
     name: macOS immutable host
     runs-on: macos-15
     steps:
@@ -1024,7 +1035,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.ui == 'true' }}
         with:
-          version: latest
+          version: 10
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.ui == 'true' }}
         with:
@@ -1088,7 +1099,7 @@ jobs:
 
   macos_metal_runtime_input:
     needs: changes
-    if: ${{ needs.changes.outputs.macos_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'macos_metal_runtime_input') }}
     name: macOS Metal runtime
     runs-on: macos-15
     env:
@@ -1125,7 +1136,7 @@ jobs:
 
   macos_cpu_artifact:
     needs: [changes, macos_host_input, macos_metal_runtime_input]
-    if: ${{ needs.macos_host_input.result == 'success' && needs.macos_metal_runtime_input.result == 'success' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'macos_cpu_artifact') }}
     name: macOS CPU product
     runs-on: macos-15
     steps:
@@ -1159,23 +1170,22 @@ jobs:
           retention-days: 1
 
   swift_sdk_smoke:
-    needs: [changes, macos_cpu_artifact, macos_unit_tests]
-    if: ${{ !cancelled() && needs.macos_cpu_artifact.result == 'success' && (needs.macos_unit_tests.result == 'success' || needs.macos_unit_tests.result == 'skipped') && needs.changes.outputs.macos_inference_artifact_required == 'true' && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    needs: [changes, macos_cpu_artifact, swift_sdk_input]
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'swift_sdk_smoke') }}
     uses: ./.github/workflows/sdk-smoke.yml
     with:
       sdk_kind: swift
       artifact_name: ci-macos-inference-binaries
       artifact_path: ci-artifacts/macos
       staged_binary_path: target/debug/mesh-llm
+      swift_artifact_name: pr-swift-sdk-input
+      swift_artifact_mode: host-only
       model_cache_scope: sdk-smoke-model
-      runs_on: '"macos-15"'
-      timeout_minutes: 40
-    secrets:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      timeout_minutes: 25
 
   macos_unit_tests:
     needs: changes
-    if: ${{ needs.changes.outputs.docs_only != 'true' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-host-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm')) }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'macos_unit_tests') }}
     name: macOS unit tests
     runs-on: macos-15
     env:
@@ -1241,7 +1251,7 @@ jobs:
 
   windows_checks:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || needs.changes.outputs.windows_cpu == 'true' || needs.changes.outputs.windows_gpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'windows_checks') }}
     name: Windows lightweight checks
     runs-on: windows-2022
     env:
@@ -1276,7 +1286,7 @@ jobs:
 
   windows_host_input:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true' || needs.changes.outputs.windows_gpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'windows_host_input') }}
     name: Windows immutable debug host
     runs-on: windows-2022
     env:
@@ -1318,7 +1328,7 @@ jobs:
 
   windows_cpu_runtime_input:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'windows_cpu_runtime_input') }}
     name: Windows CPU runtime input
     runs-on: windows-2022
     env:
@@ -1369,7 +1379,7 @@ jobs:
 
   windows_gpu_runtime_inputs:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_gpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'windows_gpu_runtime_inputs') }}
     name: Windows ${{ matrix.name }} runtime input
     runs-on: windows-2022
     strategy:
@@ -1490,7 +1500,7 @@ jobs:
 
   windows_cpu_product:
     needs: [changes, windows_host_input, windows_cpu_runtime_input]
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'windows_cpu_product') }}
     name: Windows CPU
     runs-on: windows-2022
     steps:
@@ -1530,7 +1540,7 @@ jobs:
 
   windows_gpu_products:
     needs: [changes, windows_host_input, windows_gpu_runtime_inputs]
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_gpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ contains(fromJson(needs.changes.outputs.required_jobs_json), 'windows_gpu_products') }}
     name: Windows ${{ matrix.name }}
     runs-on: windows-2022
     strategy:
@@ -1577,3 +1587,125 @@ jobs:
           path: ${{ steps.compose.outputs.archive_path }}
           if-no-files-found: error
           retention-days: 1
+
+  summary:
+    name: PR Builds Summary
+    needs:
+      - changes
+      - public_runner_image_contract
+      - linux_host_input
+      - linux_cpu_runtime_input
+      - linux_cpu_artifact
+      - linux_cuda_runtime_input
+      - linux_cuda_product
+      - linux_rocm_runtime_input
+      - linux_rocm_product
+      - linux_vulkan_runtime_input
+      - linux_vulkan_product
+      - linux_static_abi_input
+      - rust_crate_tests
+      - linux_test_groups
+      - linux_public_mesh_admission
+      - hf_download_smoke
+      - inference_smoke_tests
+      - agent_live_smokes
+      - two_node_client_serving_smoke
+      - two_node_split_smoke
+      - rust_sdk_smoke
+      - kotlin_sdk_input
+      - kotlin_sdk_smoke
+      - swift_sdk_input
+      - macos_host_input
+      - macos_metal_runtime_input
+      - macos_cpu_artifact
+      - swift_sdk_smoke
+      - macos_unit_tests
+      - windows_checks
+      - windows_host_input
+      - windows_cpu_runtime_input
+      - windows_gpu_runtime_inputs
+      - windows_cpu_product
+      - windows_gpu_products
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - name: Check PR Builds gate
+        env:
+          NEEDS_RESULTS: ${{ toJson(needs) }}
+          REQUIRED_JOBS: ${{ needs.changes.outputs.required_jobs_json }}
+        run: |
+          set -euo pipefail
+
+          if ! jq -e '
+            type == "array"
+            and all(.[]; type == "string" and length > 0)
+            and (length == (unique | length))
+          ' <<<"$REQUIRED_JOBS" >/dev/null; then
+            echo "ERROR: required_jobs_json is not a unique JSON string array." >&2
+            exit 1
+          fi
+
+          if ! jq -e --argjson required "$REQUIRED_JOBS" '
+            . as $needs
+            | all(
+                $required[];
+                . as $job
+                | $needs
+                | has($job)
+              )
+          ' <<<"$NEEDS_RESULTS" >/dev/null; then
+            echo "ERROR: required_jobs_json names a job outside the summary needs graph." >&2
+            exit 1
+          fi
+
+          {
+            echo "## PR Builds"
+            echo
+            echo "| Job | Required | Result |"
+            echo "| --- | --- | --- |"
+            jq -r --argjson required "$REQUIRED_JOBS" '
+              to_entries
+              | sort_by(.key)[]
+              | . as $entry
+              | (
+                  if $entry.key == "changes"
+                    or ($required | index($entry.key)) != null
+                  then "yes"
+                  else "no"
+                  end
+                ) as $is_required
+              | "| \($entry.key) | \($is_required) | \($entry.value.result) |"
+            ' <<<"$NEEDS_RESULTS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if ! jq -e --argjson required "$REQUIRED_JOBS" '
+            def accepted:
+              . as $entry
+              | $entry.value.result == "success"
+                or (
+                  $entry.key != "changes"
+                  and $entry.value.result == "skipped"
+                  and ($required | index($entry.key)) == null
+                );
+
+            all(to_entries[]; accepted)
+          ' <<<"$NEEDS_RESULTS" >/dev/null; then
+            echo "ERROR: A required PR Builds job did not succeed, or an unplanned job failed." >&2
+            jq -r --argjson required "$REQUIRED_JOBS" '
+              def accepted:
+                . as $entry
+                | $entry.value.result == "success"
+                  or (
+                    $entry.key != "changes"
+                    and $entry.value.result == "skipped"
+                    and ($required | index($entry.key)) == null
+                  );
+
+              to_entries[]
+              | select(accepted | not)
+              | "  \(.key)=\(.value.result)"
+            ' <<<"$NEEDS_RESULTS" >&2
+            exit 1
+          fi

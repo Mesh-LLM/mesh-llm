@@ -9,7 +9,7 @@ the commands at the end before operational changes.
 | Workflow | Trigger | Ownership |
 | --- | --- | --- |
 | `pr_quality.yml` | PR, main push, dispatch | Formatting, affected-crate Clippy, UI quality, CLI/docs synchronization, quality summary |
-| `pr_builds.yml` | PR, dispatch | Cross-platform build/test matrices, native backends, artifact producers, integration/smoke consumers |
+| `pr_builds.yml` | PR, dispatch | Cross-platform build/test matrices, native backends, artifact producers, integration/smoke consumers, stable aggregate summary |
 | `pr_website.yml` | PR, dispatch | Public website build canary and summary |
 | `pr_cleanup.yml` | PR close via `pull_request_target`, dispatch | Positively matched PR cache/artifact cleanup only; never executes PR code |
 | `pr_auto_assign.yml` | PR lifecycle via `pull_request_target` | PR metadata assignment only; never executes PR code |
@@ -18,7 +18,10 @@ the commands at the end before operational changes.
 | `docker-precheck.yml` | Reusable call | Shared Docker validation precheck |
 | `smoke.yml` | Reusable call | Artifact-based inference/OpenAI/split smoke |
 | `scripted-binary-smoke.yml` | Reusable call | Artifact-based scripted/two-node smoke |
-| `sdk-smoke.yml` | Reusable call | Native, Kotlin, and Swift SDK smoke |
+| `sdk-smoke.yml` | Reusable call | Artifact-based Rust, Kotlin, and Swift SDK smoke |
+| `native-sdk-artifact.yml` | Reusable call | Typed target/backend/profile native SDK producer with protected runner/cache policy |
+| `static-abi-artifact.yml` | Reusable call | Typed target/backend static llama ABI producer with protected runner/cache policy |
+| `swift-sdk-artifact.yml` | Reusable call | Typed host-only/full Swift XCFramework producer |
 | `hf-download-smoke.yml` | Reusable call | Hugging Face download smoke |
 | `nightly-stability.yml` | Schedule, dispatch | Nightly operator entry point |
 | `nightly-stability-run.yml` | Reusable call | Stability probes and evidence |
@@ -60,14 +63,21 @@ CPU or Metal runtimes, then upload complete product-v2 trees from
 composition-only jobs. Linux CUDA, ROCm, and Vulkan each use an independent
 runtime producer plus a thin composer that downloads the same immutable Linux
 host; no backend waits on a matrix-wide fan-in. SDK consumers reuse the
-producer's adjacent runtime and fail if CI would silently rebuild it. Windows
-likewise builds one immutable
-release-profile host, independent CPU/CUDA/ROCm/Vulkan runtime inputs, and
-composition-only products. Broad main Rust changes exercise the Windows CPU
-product; Windows GPU products remain limited to GPU/backend inputs or manual
-dispatch. Every composed backend product requires `runtime list` plus
-no-driver client readiness; hosted GPU rows neither inject a driver stub nor
-skip startup because no device is present.
+producer's adjacent runtime and fail if CI would silently rebuild it. Kotlin
+additionally downloads the verified native SDK runtime built by
+`native-sdk-artifact.yml` after that producer restores the shared
+`linux_static_abi_input`; it runs in parallel with the Linux product (debug on
+PR, release on main). Release nests one `static-abi-artifact.yml` producer per
+Linux native target through the same native-SDK workflow. Swift downloads an
+immutable XCFramework and exact generated `mesh_ffi.swift` from the shared
+`swift-sdk-artifact.yml` producer: PR uses `host-only`, while main and release
+use exhaustive `full` mode, all on `macos-15`. Windows likewise builds one
+immutable release-profile host, independent CPU/CUDA/ROCm/Vulkan runtime
+inputs, and composition-only products. Broad main Rust changes exercise the
+Windows CPU product; Windows GPU products remain limited to GPU/backend inputs
+or manual dispatch. Every composed backend product requires `runtime list`
+plus no-driver client readiness; hosted GPU rows neither inject a driver stub
+nor skip startup because no device is present.
 
 `pr_builds.yml` uses the same split producer/composer shape for Linux CPU/GPU
 and macOS Metal products while retaining debug-profile hosts for lightweight
@@ -75,6 +85,15 @@ PR iteration. Windows broad-Rust validation stays at lightweight Cargo checks;
 the debug host plus CPU or GPU runtime/product graph runs only for its
 platform/backend input or manual dispatch. Unsupported macOS CUDA, ROCm, and
 Vulkan combinations are omitted rather than emitted as no-op jobs.
+`scripts/plan-pr-build-jobs.py` converts the central change signals into one
+ordered `required_jobs_json` list. Every conditional PR Builds job routes on
+membership in that list and retains normal dependency-success behavior through
+`needs`. Its static `PR Builds Summary` job directly needs every other
+top-level job and consumes the same plan. It accepts a skipped result only for
+an unplanned job and rejects required skips, failures, cancellations, unknown
+results, duplicate plan entries, and required IDs outside its needs graph,
+making that one non-matrix check the workflow's stable branch-protection
+target.
 
 Local actions:
 
@@ -101,6 +120,15 @@ Local actions:
   verification, checksum, and verifier artifact.
 - `.github/actions/prepare-native-runtime-input` owns runtime build/package
   invocation and the release-grade artifact verifier.
+- `.github/actions/prepare-native-sdk-input` owns the native SDK
+  prepare-llama/build-llama/mesh-llm-ffi/package chain, verifies the exact
+  target/backend/profile manifest, and stages a flat immutable upload. Release
+  mode adds the native runtime crate through the same path.
+- `.github/actions/prepare-static-abi-input` owns the shared Linux static llama
+  ABI build/stamp validation and emits a checksummed, target-described ABI v3
+  archive containing only the path-normalized static link closure and portable
+  OpenMP metadata. The reusable workflow caches that archive, not the local
+  CMake build graph; crate tests and native SDK producers consume it.
 - `.github/actions/compose-product-input` verifies producer inputs, creates one
   product-v2 tree without compiling, and runs CLI/client readiness.
 - `.github/actions/restore-smoke-inputs` owns producer artifact staging and
@@ -114,6 +142,9 @@ Local actions:
 Routing and test-planning scripts:
 
 - `scripts/affected-crates.sh` computes affected crates and reverse dependents.
+- `scripts/plan-pr-build-jobs.py` maps PR change signals to the single ordered
+  top-level job plan consumed by both conditional PR Builds jobs and its stable
+  summary gate.
 - `scripts/plan-clippy-batches.sh` owns weighted Clippy sharding and retains a
   checked workspace-member list for fail-open/all-rust planning.
 - `scripts/plan-test-batches.sh` owns weighted crate-test sharding. It derives
@@ -131,7 +162,7 @@ GitHub-hosted labels currently used:
 
 - Linux AMD64: `ubuntu-24.04`
 - Linux ARM64: `ubuntu-24.04-arm`
-- macOS: `macos-15` and legacy `macos-latest`
+- macOS: pinned `macos-15`
 - Windows: `windows-2022`
 
 Depot labels referenced behind the rollout gate:
@@ -148,17 +179,46 @@ use `DEPOT_RUNNERS_ENABLED`; a trusted
 main-ref manual dispatch can set `use_depot=true`. Hardware-qualified GPU
 execution is not part of the gate.
 
+The default-branch-selected `native-sdk-artifact.yml` and
+`static-abi-artifact.yml` workflows do not accept a runner label or Depot-cache
+permission from callers. Each first runs a fixed `ubuntu-24.04` policy job,
+validates `runner_size` as `default`, `4`, `8`, or `16`, maps the declared
+target to the checked-in AMD64/ARM64 hosted and Depot labels, and grants both
+the Depot runner and WebDAV cache only for exact
+`Mesh-LLM/mesh-llm` `push`/`workflow_dispatch` calls on
+`refs/heads/main` when `DEPOT_RUNNERS_ENABLED == 'true'` or when the immutable
+main-dispatch event payload has `use_depot == 'true'`. Pull requests,
+`pull_request_target`, tags, feature refs, external repositories, macOS, and a
+disabled gate without that authorized canary resolve to a GitHub-hosted runner
+with Depot cache permission false. The event-owned manual canary is evaluated
+only under the same exact repository/main/dispatch guard and is not a
+reusable-workflow input.
+
 The Depot dashboard reports the `Mesh-LLM` GitHub connection active, and
 GitHub lists both `depot-managed-runners` and `depot-code-access` installations
 for all organization repositories. GitHub's organization settings show the
 Depot-managed `Default` group currently allows all workflows but excludes
 public repositories, while the separate `mesh-llm` group owns the two dedicated
-GPU scale sets. Before a canary, restrict `Default` to this repository and exact
-default-branch workflow refs, then enable public-repository access.
+GPU scale sets. Before a canary, protect `main` with an enforceable
+review/status gate, restrict `Default` to this repository and exact
+default-branch workflow refs, then enable public-repository access. The
+`mesh-llm` GPU group also permits all workflows in a public repository and must
+be restricted to protected runner-owning entry points before it is considered a
+trusted-only pool.
 
 The checked-out local selector is not the security boundary because PRs can
 modify workflow and local-action files. The Depot runner group must use
 `restricted_to_workflows=true` and exact default-branch selected-workflow refs.
+The initial selected set includes `native-sdk-artifact.yml@refs/heads/main` and
+`static-abi-artifact.yml@refs/heads/main` because those reusable workflows
+directly allocate eligible Linux runners; a caller-only `ci.yml` entry is not
+sufficient.
+Credential-bearing `hf-download-smoke.yml`, `smoke.yml`,
+`scripted-binary-smoke.yml`, and `sdk-smoke.yml` are deliberately excluded and
+fixed to bounded GitHub-hosted labels. `swift-sdk-artifact.yml` is fixed to
+GitHub-hosted `macos-15`. No reusable workflow passes caller-provided
+runner JSON directly to `runs-on`. PR callers pass no `HF_TOKEN`; trusted
+main/release callers may pass it only on the fixed hosted smoke lanes.
 Automatic Depot Cache still grants repository-scoped cache authority to the
 whole job, so even a trusted reusable caller cannot safely execute untrusted PR
 code while that injection is enabled. PRs remain GitHub-hosted.
@@ -196,6 +256,23 @@ as `ghcr.io/mesh-llm/mesh-llm-cuda-runner`. The source repository owns:
 
 Production consumers must use the multi-architecture manifest digest. Tags are
 discovery inputs and are mutable absent separately verified registry controls.
+
+Draft runner-images PR
+[`#9`](https://github.com/Mesh-LLM/mesh-llm-runner-images/pull/9) changes the
+publication control plane without changing those production digests. PRs route
+affected families plus a mandatory public CPU AMD64 contract, use BuildKit
+cache read-only, and cannot stage or promote. Main pushes stage verified
+candidate digests; weekly or explicit manual runs promote a retained cohort.
+The reusable family workflow independently derives trusted runner/cache
+authority, verifies the requested MeshLLM source revision, uses content-digest
+immutable tags, and feeds one serial `latest` cohort reconciliation. Deleted
+files are included in affected-family routing.
+
+Its exhaustive Dockerfile-change PR
+[run 30504335079](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30504335079)
+completed all 20 platform rows in 6m 22s wall / 1h 13m 07s aggregate with no
+Depot jobs and no PR cache export. Treat that as validation-path evidence, not
+as proof of the trusted stage/promotion path.
 
 The public repository and its GHCR package have independent visibility. Until
 anonymous pull of the package succeeds, GitHub-hosted container jobs must grant
@@ -273,7 +350,6 @@ All GitHub Actions variables are strings.
 | `MESH_NIGHTLY_STABILITY_ATTEMPTS` | Attempts per model; fallback `5` |
 | `MESH_NIGHTLY_STABILITY_AGENT_SMOKES` | Optional agent CLI smoke list |
 | `MESH_NIGHTLY_STABILITY_TIMEOUT` | Per-probe seconds; fallback `180` |
-| `MESH_NIGHTLY_STABILITY_RUNS_ON` | JSON runner label string/array; fallback `"ubuntu-24.04"` |
 
 ## Secret names referenced by workflows
 

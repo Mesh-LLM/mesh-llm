@@ -92,7 +92,7 @@ Artifact contracts:
 | Host input | executable, `.sha256`, `host-imports.json`; release adds attestation | immutable after checksum |
 | Runtime input | runtime directory, archive, archive checksum, `manifest.json` | immutable after verification |
 | Product input | host, host imports, `product-manifest.json`, one `native-runtimes/<id>` | composer never compiles |
-| Static ABI test input | one tarred CPU llama ABI build keyed by patch queue and build recipe | one producer per workflow; test rows only restore |
+| Static ABI input | checksummed, target-described CPU llama link closure keyed by patch queue, pinned build-image epoch, and recipe | one producer per target; tests and native SDK rows verify and restore without fallback builds |
 
 PR artifacts are unstamped, retained for one day, and cannot be promoted into a
 release. Main and release exercise the same actions; release adds version
@@ -112,9 +112,9 @@ PRs optimize for the earliest reliable signal:
   for manual, benchmark, and backend-affecting runs;
 - fan that one exact host artifact into the CPU and every selected backend
   runtime row;
-- build or restore the static CPU llama ABI once, archive it, and fan those
-  exact bytes into every crate-test and grouped-test row instead of compiling
-  the same C++ graph concurrently;
+- build or restore the static CPU llama ABI once per target, archive it, and fan
+  those exact bytes into every crate-test, grouped-test, and native-SDK row
+  instead of compiling the same C++ graph concurrently;
 - run runner-image contract checks only when their workflow, cache version, or
   cache integration changes;
 - make SDK smokes consume the staged product runtime and reject hidden rebuilds;
@@ -157,7 +157,7 @@ Depot runners are selected with a single label such as
 | measured high-parallelism runtime builds | `depot-ubuntu-24.04-16` | compare wall time, peak disk, and cost before adopting |
 | hardware-qualified CUDA tests | dedicated GPU runner | requires a real device |
 
-The current runner selector has one effective repository gate:
+The current top-level runner selector has one effective repository gate:
 
 - `DEPOT_RUNNERS_ENABLED=true` enables eligible trusted `main` push and
   `main`-ref dispatch jobs. Tag pushes and every other ref remain hosted.
@@ -171,6 +171,23 @@ never authority to run feature-branch code on Depot. The selector emits one
 typed cache permission from the same decision, so a caller cannot select a
 hosted runner while independently enabling Depot WebDAV.
 
+Runner-owning reusable workflows require an additional boundary. A PR can call
+the main-pinned `native-sdk-artifact.yml` or `static-abi-artifact.yml` while the
+called workflow checks out PR contents, so neither workflow accepts
+caller-provided `runs_on` or `allow_depot_remote_cache` inputs. A fixed
+`ubuntu-24.04` policy job validates a bounded size enum (`default`, `4`, `8`,
+`16`), maps the requested target architecture to checked-in labels, and emits
+both the build runner and cache permission. Depot is selected only when the
+caller context is the exact `Mesh-LLM/mesh-llm` repository, a `push` or
+`workflow_dispatch` on `refs/heads/main`, and
+`DEPOT_RUNNERS_ENABLED == 'true'`. Every PR event, tag, feature ref, external
+repository, macOS target, or disabled gate without the authorized canary
+receives a GitHub-hosted label and cache permission false. For the pre-variable
+canary, the protected workflow may also read `use_depot == 'true'` from the
+immutable `workflow_dispatch` event payload, but only the same exact
+repository/main/dispatch guards can authorize it; no reusable-workflow input
+can grant that authority.
+
 This selector is defense in depth, not the primary security boundary. The
 current pull-request workflows and repository-local actions are evaluated from
 PR-controlled code, so a pull request can modify or bypass the selector itself.
@@ -180,20 +197,28 @@ the current PR workflow safe for Depot.
 Activation prerequisites:
 
 1. The Depot GitHub Apps remain connected to `Mesh-LLM`.
-2. While public-repository access is still disabled, change GitHub's
+2. Protect `main` with an enforceable review/ruleset gate for runner-owning
+   workflow changes. The current repository ruleset prevents deletion,
+   non-fast-forward updates, and non-linear history, but does not require a
+   pull request, review, or successful CI check. An exact-main workflow
+   allowlist is not a durable privilege boundary while an unreviewed direct
+   push can replace that workflow.
+3. While public-repository access is still disabled, change GitHub's
    organization `Default` runner group to selected repository
    `Mesh-LLM/mesh-llm` and selected workflow
    `Mesh-LLM/mesh-llm/.github/workflows/depot-canary.yml@refs/heads/main`.
-3. Only after both restrictions are saved, enable public repositories for the
+4. Only after both restrictions are saved, enable public repositories for the
    `Default` group. Depot-managed ephemeral runners register in that group.
-4. Dispatch `depot-canary.yml` from `refs/heads/main` twice. Verify all four
+5. Dispatch `depot-canary.yml` from `refs/heads/main` twice. Verify all four
    Intel runner sizes, both ARM runner sizes, their reported architectures,
    and a cold-to-warm cache hit without printing credentials.
-5. Dispatch the canary from a feature ref, prove that it cannot acquire a
+6. Dispatch the canary from a feature ref, prove that it cannot acquire a
    Depot runner, and cancel that exact queued run.
-6. Add exact default-branch workflow refs only as their phase starts. Reusable
-   workflows whose jobs run on Depot must be listed separately.
-7. Set `DEPOT_RUNNERS_ENABLED=true` only after comparable trusted canaries meet
+7. Add exact default-branch workflow refs only as their phase starts. Reusable
+   workflows whose jobs run on Depot must be listed separately, must derive
+   runner placement from immutable caller context inside the protected
+   workflow, and must never pass a caller-provided label to `runs-on`.
+8. Set `DEPOT_RUNNERS_ENABLED=true` only after comparable trusted canaries meet
    the rollout targets.
 
 The initial main allowlist is:
@@ -201,11 +226,24 @@ The initial main allowlist is:
 ```text
 Mesh-LLM/mesh-llm/.github/workflows/ci.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/pr_quality.yml@refs/heads/main
-Mesh-LLM/mesh-llm/.github/workflows/hf-download-smoke.yml@refs/heads/main
-Mesh-LLM/mesh-llm/.github/workflows/smoke.yml@refs/heads/main
-Mesh-LLM/mesh-llm/.github/workflows/scripted-binary-smoke.yml@refs/heads/main
-Mesh-LLM/mesh-llm/.github/workflows/sdk-smoke.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/native-sdk-artifact.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/static-abi-artifact.yml@refs/heads/main
 ```
+
+`hf-download-smoke.yml`, `smoke.yml`, `scripted-binary-smoke.yml`, and
+`sdk-smoke.yml` may receive model credentials from trusted callers and
+intentionally allocate only bounded GitHub-hosted labels. They are not selected
+for the Depot group. The Swift SDK producer is likewise fixed to
+GitHub-hosted `macos-15` instead of accepting a runner input. This keeps a pull
+request from invoking a
+default-branch reusable workflow with a privileged Depot or dedicated-runner
+label.
+
+Pull-request callers do not pass `HF_TOKEN` to these workflows at all; public
+fixtures and merge-ref-scoped model caches provide the PR signal without
+exposing a repository secret to checked-out PR code. Trusted main and release
+callers may pass the optional token for rate-limit resilience, but those
+credential-bearing invocations remain GitHub-hosted.
 
 Add `pr_builds.yml@refs/heads/main` only for its trusted manual benchmark and
 `release.yml@refs/heads/main` only for the non-publishing release phase. Never
@@ -239,7 +277,10 @@ inspection found:
 The current `Default` state safely prevents Depot from serving this public
 repository, so a canary will queue until the ordered restriction changes above
 are made. The GPU group is separate from Depot and its all-workflows policy
-must also be reviewed before treating those devices as a trusted-only pool.
+must also be restricted to protected workflow entry points before treating
+those devices as a trusted-only pool; a public repository with an
+all-workflows runner group otherwise allows PR-controlled workflow definitions
+to request those persistent runners directly.
 
 Depot redirects every GitHub Actions cache API consumer on its runners,
 including `actions/cache`, `actions/setup-node`, and third-party cache actions.
@@ -247,7 +288,9 @@ Its namespace is repository-scoped and is not isolated by branch. Therefore:
 
 - current pull-request jobs never run on Depot and may use the normal
   `mesh-llm` key namespace in GitHub's native cache because GitHub scopes PR
-  writes to the merge ref and trusted main jobs do not restore from that ref;
+  writes to the merge ref and trusted main jobs do not restore from that ref.
+  The crate-test target shards deliberately restore the already-seeded
+  `main-rust-crate-tests-<shard>` keys with writes disabled;
 - a local sccache disk-only setting protects only that sccache child process;
   it does not remove the Depot token or prevent another cache API consumer
   from reading or poisoning the repository cache;
@@ -275,7 +318,17 @@ Relevant Depot documentation:
 ### `Mesh-LLM/mesh-llm-runner-images`
 
 Runner images own stable tools and backend SDKs, not commit-specific products.
-The next image revision should:
+The first migration phase is implemented in draft
+[`mesh-llm-runner-images#9`](https://github.com/Mesh-LLM/mesh-llm-runner-images/pull/9):
+PRs route only affected image families plus the mandatory public CPU AMD64
+contract, never export BuildKit cache, and never stage or promote registry
+content. Trusted main pushes stage candidates; weekly or explicit manual runs
+promote a retained candidate cohort. The reusable family workflow independently
+derives its runner/cache authority, verifies the source revision, identifies
+candidate content by digest, and serially reconciles the complete `latest`
+cohort. Deleted files participate in routing.
+
+The subsequent role-isolation revision should:
 
 1. build the UI once in a Node-capable producer and upload it before any
    Node-free host role starts; `public-rust-host` consumes those prepared UI
@@ -313,6 +366,17 @@ ROCm 7.2 AMD64 image in an 18m 03s `Build and push architecture image by
 digest` step. This demonstrates duplicate test/publish image construction; it
 does not measure image size, cold-pull time, or cache effectiveness.
 
+The hardened build-once PR graph is measured by
+[runner-images run 30504335079](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30504335079).
+Because the PR changed the Dockerfile, the affected-family planner correctly
+selected all 20 platform rows. All 22 allocated jobs stayed GitHub-hosted,
+completed in 6m 22s wall and 1h 13m 07s aggregate, and emitted no real cache
+export phase. Compared with the first build-once run's 22m 57s wall and
+2h 52m 59s aggregate, that is a 72.3% wall reduction and 57.7% aggregate
+reduction. The slowest self-hosted ROCm 7.2 row fell from 22m 20s to 5m 48s.
+This validates read-only PR cache and change routing; trusted registry
+stage/promotion remains to be canaried separately.
+
 No retained audit evidence currently substantiates the previously cited
 1.53 GB/1.92 GB compressed sizes or backend cold-initialization medians, so
 those values are not migration baselines. The following are provisional design
@@ -330,21 +394,52 @@ token to PR code.
 
 ### `Mesh-LLM/mesh-packaging`
 
-Packaging already consumes product-v2 and must not rebuild the CLI/runtime.
-After the MeshLLM graph is stable:
+Packaging already consumes product-v2 native products and must not rebuild the
+CLI/runtime. Its current OCI publication path is not build-once: `runtime-image`
+tests a `runtime-qa` cache-only build, while `publish-images` later rebuilds the
+`runtime` target from mutable base tags. The published bytes are therefore not
+guaranteed to be the bytes that passed QA. A filtered manual native run also
+enables every npm lane and Homebrew regardless of the native filters. In
+[run 30390907268](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30390907268),
+the selected CPU package/image each took less than a minute, but the unintended
+macOS and Windows addon builds extended the workflow to 22m 53s. The historical
+11-row full run
+[30327805587](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30327805587)
+took 30m 36s and retained 3.09 GB of Actions artifacts: 1.46 GB of verified
+products plus 1.63 GB of native packages.
 
-1. replace the global native-package matrix barrier with a reusable per-row
-   package → QA → image → QA pipeline;
-2. publish a canonical release artifact index from MeshLLM containing source
+There is no successful current product-v2 full baseline yet. Run
+[30460399813](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30460399813)
+correctly failed closed because v0.74.0 predates that schema. After the MeshLLM
+graph produces a complete product-v2 release:
+
+1. add typed `validate_npm` and `validate_homebrew` dispatch inputs so a
+   filtered native canary runs only the requested rows; publication still
+   requires the complete release validation set;
+2. replace provider-name/source-build blacklists with positive runner-class
+   and artifact-consumer contracts;
+3. publish a canonical release artifact index from MeshLLM containing source
    SHA, product/host/runtime/addon assets, schemas, and digests;
-3. publish Node addon producer artifacts from MeshLLM so packaging assembles
+4. publish Node addon producer artifacts from MeshLLM so packaging assembles
    npm instead of rebuilding five targets;
-4. build each runtime image once at an immutable staging digest, test it, then
-   promote that digest;
-5. route CPU-only packaging rows to Depot after the main repository canary.
+5. resolve every OCI base to a digest, build the final image once at an
+   immutable staging reference, test that exact digest, and promote versioned
+   and moving tags with registry manifest operations. An identical existing
+   version tag is a no-op; a mismatch fails closed;
+6. replace the global native-package matrix barrier with a reusable per-row
+   product restore → package → package QA → image → image QA pipeline;
+7. key BuildKit scope by base digest, product digest, architecture, distro,
+   Dockerfile inputs, and cache schema. PR canaries are restore-only; trusted
+   main/release may write. Re-verify every restored product;
+8. establish one filtered product-v2 canary, one full non-publishing main run,
+   and one full release rehearsal before publication;
+9. route eligible CPU-only Linux/ARM, Windows assembly, and compatible macOS
+   rows to Depot only after the main repository canary and runner-group trust
+   gates pass.
 
-The first product-v2 release candidate is the compatibility baseline for that
-work; older v0.74 assets predate the contract.
+The first successful product-v2 full run becomes the compatibility and timing
+baseline. Record per-row queue, download, package, QA, image, cache, artifact,
+and promotion timings plus the release-index and base-image digests.
 
 ## Measurement and rollout gates
 
@@ -367,19 +462,25 @@ python3 scripts/collect-ci-metrics.py \
 
 Rollout sequence:
 
-1. restrict the `Default` runner group to the repository and only
+1. require pull requests and review for changes to `main`, with runner-owning
+   workflow changes covered by the enforceable repository ruleset;
+2. restrict the persistent `mesh-llm` GPU runner group to protected workflow
+   entry points before scheduling untrusted public-repository workflows on
+   those devices;
+3. restrict the Depot-backed `Default` runner group to the repository and only
    `depot-canary.yml@refs/heads/main`, then enable public-repository access;
-2. run the allowed-main and denied-feature-ref canaries;
-3. compare `-4`, `-8`, and `-16` using Depot CPU/memory/disk utilization data;
-4. allowlist main CI plus every directly invoked reusable workflow, then
-   canary routing, quality, and the Linux product graph from `main`;
-5. collect five comparable green main canaries;
-6. set `DEPOT_RUNNERS_ENABLED=true` for trusted main jobs after those canaries
+4. run the allowed-main and denied-feature-ref canaries;
+5. compare `-4`, `-8`, and `-16` using Depot CPU/memory/disk utilization data;
+6. allowlist main CI plus only the hardened reusable producers that directly
+   allocate Depot runners, then canary routing, quality, and the Linux product
+   graph from `main`; keep credential-bearing smoke workflows GitHub-hosted;
+7. collect five comparable green main canaries;
+8. set `DEPOT_RUNNERS_ENABLED=true` for trusted main jobs after those canaries
    meet the targets;
-7. allowlist `release.yml@refs/heads/main` and exercise the non-publishing,
+9. allowlist `release.yml@refs/heads/main` and exercise the non-publishing,
    non-secret runtime/composition producers. Tag-push publishing remains hosted;
-8. keep all PR-event code hosted while automatic Depot Cache is enabled;
-9. migrate packaging only after product-v2 and addon contracts are stable.
+10. keep all PR-event code hosted while automatic Depot Cache is enabled;
+11. migrate packaging only after product-v2 and addon contracts are stable.
 
 Rollback for the currently implemented trusted lanes is one
 repository-variable change:

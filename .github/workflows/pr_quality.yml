@@ -55,6 +55,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Select trusted Linux runners
         id: runners
         uses: ./.github/actions/select-ci-runners
@@ -77,6 +78,8 @@ jobs:
     runs-on: ${{ needs.changes.outputs.runner_4 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
         continue-on-error: true
         with:
@@ -110,6 +113,8 @@ jobs:
     runs-on: ${{ needs.changes.outputs.runner_4 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
         with:
           components: rustfmt
@@ -138,6 +143,8 @@ jobs:
       RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - name: Verify prebuilt CI environment
         run: verify-runner-image public
       - uses: ./.github/actions/configure-sccache-gha
@@ -184,6 +191,8 @@ jobs:
         working-directory: crates/mesh-llm-ui
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10

@@ -3,10 +3,6 @@ name: Reusable HuggingFace Download Smoke Tests
 on:
   workflow_call:
     inputs:
-      runs_on:
-        required: false
-        default: '"ubuntu-24.04"'
-        type: string
       timeout_minutes:
         required: false
         default: 20
@@ -18,16 +14,23 @@ on:
 env:
   CACHE_NAMESPACE: mesh-llm
 
+permissions:
+  contents: read
+
 jobs:
   hf_download_smoke:
     name: HuggingFace download smoke
-    runs-on: ${{ fromJson(inputs.runs_on) }}
+    # This credential-bearing reusable workflow is intentionally ineligible for
+    # Depot and self-hosted runner groups.
+    runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.timeout_minutes }}
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"

@@ -27,10 +27,6 @@ on:
         required: false
         default: "180"
         type: string
-      runs_on:
-        required: false
-        default: '"ubuntu-24.04"'
-        type: string
       output_dir:
         required: false
         default: nightly-artifacts/stability/latest
@@ -42,7 +38,9 @@ permissions:
 jobs:
   stability:
     name: Run stability harness
-    runs-on: ${{ fromJson(inputs.runs_on) }}
+    # This reusable workflow checks out caller content, so it never accepts a
+    # caller-selected label for a privileged runner group.
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       MESH_STABILITY_BASE_URL: ${{ inputs.base_url }}
@@ -58,6 +56,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Preflight configuration
         id: preflight

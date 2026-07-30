@@ -16,10 +16,6 @@ on:
         required: false
         default: ''
         type: string
-      runs_on:
-        required: false
-        default: '"ubuntu-24.04"'
-        type: string
     secrets:
       HF_TOKEN:
         required: false
@@ -29,15 +25,21 @@ env:
   MODEL_URL: https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf
   MODEL_FILE: SmolLM2-135M-Instruct-Q8_0.gguf
 
+permissions:
+  contents: read
+
 jobs:
   smoke_tests:
     name: Skippy Inference Smoke Tests
-    runs-on: ${{ fromJson(inputs.runs_on) }}
+    # Model credentials stay on an isolated GitHub-hosted runner.
+    runs-on: ubuntu-24.04
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Prepare dispatched release version
         if: inputs.release_tag != ''

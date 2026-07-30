@@ -1,0 +1,332 @@
+name: Reusable Native SDK Artifact
+
+on:
+  workflow_call:
+    inputs:
+      backend:
+        description: Native SDK backend.
+        required: true
+        type: string
+      target:
+        description: Rust target triple.
+        required: true
+        type: string
+      profile:
+        description: Cargo profile (debug or release).
+        required: true
+        type: string
+      artifact_name:
+        description: Immutable GitHub artifact name.
+        required: true
+        type: string
+      static_abi_artifact_name:
+        description: Optional immutable static ABI artifact name to restore.
+        required: false
+        default: ''
+        type: string
+      static_abi_artifact_path:
+        description: Directory used to download the optional static ABI input.
+        required: false
+        default: native-sdk-static-abi-input
+        type: string
+      produce_static_abi:
+        description: Produce a matching Linux static ABI before native SDK packaging.
+        required: false
+        default: false
+        type: boolean
+      runner_size:
+        description: Eligible Linux runner size (default, 4, 8, or 16).
+        required: false
+        default: '8'
+        type: string
+      include_runtime_crate:
+        description: Include the release native runtime crate in the flat artifact.
+        required: false
+        default: false
+        type: boolean
+      release_tag:
+        description: Optional release tag applied before packaging.
+        required: false
+        default: ''
+        type: string
+      prepare_release_version:
+        description: Prepare checked-out sources for release_tag before building.
+        required: false
+        default: false
+        type: boolean
+      retention_days:
+        description: Artifact retention in days.
+        required: false
+        default: 1
+        type: number
+      timeout_minutes:
+        description: Producer timeout in minutes.
+        required: false
+        default: 60
+        type: number
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  runner_policy:
+    name: Select protected native SDK runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: none
+    outputs:
+      runner: ${{ steps.policy.outputs.runner }}
+      allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+    steps:
+      - name: Derive protected runner policy
+        id: policy
+        shell: bash
+        env:
+          POLICY_REPOSITORY: ${{ github.repository }}
+          POLICY_REF: ${{ github.ref }}
+          POLICY_EVENT_NAME: ${{ github.event_name }}
+          POLICY_DEPOT_ENABLED: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          POLICY_MANUAL_USE_DEPOT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.use_depot == 'true' }}
+          POLICY_TARGET: ${{ inputs.target }}
+          POLICY_RUNNER_SIZE: ${{ inputs.runner_size }}
+        run: |
+          set -euo pipefail
+
+          case "$POLICY_RUNNER_SIZE" in
+            default|4|8|16) ;;
+            *)
+              echo "runner_size must be one of: default, 4, 8, 16" >&2
+              exit 1
+              ;;
+          esac
+
+          case "$POLICY_TARGET" in
+            x86_64-unknown-linux-gnu)
+              hosted_runner=ubuntu-24.04
+              depot_runner=depot-ubuntu-24.04
+              ;;
+            aarch64-unknown-linux-gnu)
+              hosted_runner=ubuntu-24.04-arm
+              depot_runner=depot-ubuntu-24.04-arm
+              ;;
+            aarch64-apple-darwin)
+              hosted_runner=macos-15
+              depot_runner=
+              ;;
+            *)
+              echo "unsupported native SDK producer target: $POLICY_TARGET" >&2
+              exit 1
+              ;;
+          esac
+
+          allow_depot_remote_cache=false
+          runner=$hosted_runner
+          if [[ "$POLICY_REPOSITORY" == "Mesh-LLM/mesh-llm" &&
+                "$POLICY_REF" == "refs/heads/main" &&
+                ( "$POLICY_EVENT_NAME" == "push" ||
+                  "$POLICY_EVENT_NAME" == "workflow_dispatch" ) &&
+                ( "$POLICY_DEPOT_ENABLED" == "true" ||
+                  ( "$POLICY_EVENT_NAME" == "workflow_dispatch" &&
+                    "$POLICY_MANUAL_USE_DEPOT" == "true" ) ) &&
+                -n "$depot_runner" ]]; then
+            suffix=
+            if [[ "$POLICY_RUNNER_SIZE" != "default" ]]; then
+              suffix="-$POLICY_RUNNER_SIZE"
+            fi
+            runner="${depot_runner}${suffix}"
+            allow_depot_remote_cache=true
+          fi
+
+          {
+            echo "runner=$runner"
+            echo "allow_depot_remote_cache=$allow_depot_remote_cache"
+          } >> "$GITHUB_OUTPUT"
+
+  produce_linux_static_abi:
+    needs: runner_policy
+    if: ${{ inputs.produce_static_abi && endsWith(inputs.target, '-unknown-linux-gnu') }}
+    name: Produce matching static ABI
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/static-abi-artifact.yml
+    with:
+      backend: ${{ inputs.backend }}
+      target: ${{ inputs.target }}
+      artifact_name: ${{ inputs.static_abi_artifact_name }}
+      runner_size: ${{ inputs.runner_size }}
+      retention_days: ${{ inputs.retention_days }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+
+  linux_native_sdk_artifact:
+    needs: [runner_policy, produce_linux_static_abi]
+    if: ${{ !cancelled() && needs.runner_policy.result == 'success' && endsWith(inputs.target, '-unknown-linux-gnu') && (needs.produce_linux_static_abi.result == 'success' || (needs.produce_linux_static_abi.result == 'skipped' && !inputs.produce_static_abi)) }}
+    name: Native SDK input (${{ inputs.target }}, ${{ inputs.backend }})
+    runs-on: ${{ needs.runner_policy.outputs.runner }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
+      MESH_LLM_LLAMA_TOOLCHAIN_EPOCH: mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Validate release preparation inputs
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
+          PRODUCE_STATIC_ABI: ${{ inputs.produce_static_abi }}
+          STATIC_ABI_ARTIFACT_NAME: ${{ inputs.static_abi_artifact_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$PREPARE_RELEASE_VERSION" == "true" && -z "$RELEASE_TAG" ]]; then
+            echo "release_tag is required for release preparation" >&2
+            exit 1
+          fi
+          if [[ "$PRODUCE_STATIC_ABI" == "true" &&
+                -z "$STATIC_ABI_ARTIFACT_NAME" ]]; then
+            echo "static_abi_artifact_name is required when producing an ABI" >&2
+            exit 1
+          fi
+
+      - name: Verify prebuilt native SDK environment
+        run: verify-runner-image public
+
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+
+      - name: Prepare patched llama.cpp checkout for ABI reuse
+        if: ${{ inputs.static_abi_artifact_name != '' }}
+        run: scripts/prepare-llama.sh pinned
+
+      - name: Download immutable static ABI input
+        if: ${{ inputs.static_abi_artifact_name != '' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ inputs.static_abi_artifact_name }}
+          path: ${{ inputs.static_abi_artifact_path }}
+
+      - name: Restore immutable static ABI input
+        if: ${{ inputs.static_abi_artifact_name != '' }}
+        env:
+          STATIC_ABI_ARTIFACT_PATH: ${{ inputs.static_abi_artifact_path }}
+          STATIC_ABI_TARGET: ${{ inputs.target }}
+          STATIC_ABI_BACKEND: ${{ inputs.backend }}
+        run: |
+          scripts/restore-static-abi-input.sh \
+            "$STATIC_ABI_ARTIFACT_PATH" \
+            "$LLAMA_STAGE_BUILD_DIR" \
+            "$STATIC_ABI_TARGET" \
+            "$STATIC_ABI_BACKEND"
+
+      - name: Prepare dispatched release version
+        if: ${{ inputs.prepare_release_version }}
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+
+      - name: Prepare immutable native SDK input
+        id: native-sdk
+        uses: ./.github/actions/prepare-native-sdk-input
+        with:
+          backend: ${{ inputs.backend }}
+          target: ${{ inputs.target }}
+          profile: ${{ inputs.profile }}
+          include_runtime_crate: ${{ inputs.include_runtime_crate }}
+          require_prebuilt_static_abi: ${{ inputs.static_abi_artifact_name != '' }}
+
+      - name: Capture native SDK sccache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-native-sdk-${{ inputs.target }}-${{ inputs.backend }}-${{ inputs.profile }}-${{ github.run_attempt }}
+
+      - name: Upload immutable native SDK input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ steps.native-sdk.outputs.upload_path }}
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+  macos_native_sdk_artifact:
+    needs: runner_policy
+    if: ${{ needs.runner_policy.result == 'success' && endsWith(inputs.target, '-apple-darwin') }}
+    name: Native SDK input (${{ inputs.target }}, ${{ inputs.backend }})
+    runs-on: ${{ needs.runner_policy.outputs.runner }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Validate release preparation inputs
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
+        run: |
+          set -euo pipefail
+          if [[ "$PREPARE_RELEASE_VERSION" == "true" && -z "$RELEASE_TAG" ]]; then
+            echo "release_tag is required for release preparation" >&2
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+
+      - name: Install macOS native SDK dependencies
+        run: brew install cmake ninja lld
+
+      - name: Prepare dispatched release version
+        if: ${{ inputs.prepare_release_version }}
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+
+      - name: Prepare immutable native SDK input
+        id: native-sdk
+        uses: ./.github/actions/prepare-native-sdk-input
+        with:
+          backend: ${{ inputs.backend }}
+          target: ${{ inputs.target }}
+          profile: ${{ inputs.profile }}
+          include_runtime_crate: ${{ inputs.include_runtime_crate }}
+
+      - name: Capture native SDK sccache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-native-sdk-${{ inputs.target }}-${{ inputs.backend }}-${{ inputs.profile }}-${{ github.run_attempt }}
+
+      - name: Upload immutable native SDK input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ steps.native-sdk.outputs.upload_path }}
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}

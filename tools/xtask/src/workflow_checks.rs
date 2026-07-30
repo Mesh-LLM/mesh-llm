@@ -13,6 +13,12 @@ pub(crate) fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<
     let release = fs::read_to_string(repo_root.join("RELEASE.md"))?;
     let justfile = fs::read_to_string(repo_root.join("Justfile"))?;
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
+    let native_sdk_artifact_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/native-sdk-artifact.yml"))?;
+    let static_abi_artifact_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/static-abi-artifact.yml"))?;
+    let swift_sdk_artifact_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/swift-sdk-artifact.yml"))?;
     let ci_workflow = fs::read_to_string(repo_root.join(".github/workflows/ci.yml"))?;
     let pr_builds_workflow = fs::read_to_string(repo_root.join(".github/workflows/pr_builds.yml"))?;
     let pr_quality_workflow =
@@ -396,18 +402,159 @@ pub(crate) fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<
         &prepare_native_runtime_action,
         &compose_product_action,
     )?;
-    check_release_dispatch_version_preparation(&release_workflow)?;
+    for (workflow, context) in [
+        (&ci_workflow, "main shared static ABI producer"),
+        (&pr_builds_workflow, "PR shared static ABI producer"),
+    ] {
+        ensure_contains(
+            workflow,
+            "uses: ./.github/workflows/static-abi-artifact.yml",
+            context,
+        )?;
+        ensure_contains(
+            workflow,
+            "scripts/restore-static-abi-input.sh",
+            &format!("{context} consumer restore"),
+        )?;
+        let static_abi_caller = workflow_job_section(workflow, "linux_static_abi_input")
+            .ok_or_else(|| format!("{context}: missing `linux_static_abi_input` job"))?;
+        ensure_contains(
+            static_abi_caller,
+            "runner_size: '8'",
+            &format!("{context} bounded runner size"),
+        )?;
+        ensure_not_contains(
+            static_abi_caller,
+            "runs_on:",
+            &format!("{context} must not supply a runner label"),
+        )?;
+        ensure_not_contains(
+            static_abi_caller,
+            "allow_depot_remote_cache:",
+            &format!("{context} must not supply Depot cache authority"),
+        )?;
+
+        let native_sdk_caller = workflow_job_section(workflow, "kotlin_sdk_input")
+            .ok_or_else(|| format!("{context}: missing `kotlin_sdk_input` job"))?;
+        ensure_contains(
+            native_sdk_caller,
+            "runner_size: '8'",
+            &format!("{context} native SDK bounded runner size"),
+        )?;
+        ensure_not_contains(
+            native_sdk_caller,
+            "runs_on:",
+            &format!("{context} native SDK must not supply a runner label"),
+        )?;
+        ensure_not_contains(
+            native_sdk_caller,
+            "allow_depot_remote_cache:",
+            &format!("{context} native SDK must not supply Depot cache authority"),
+        )?;
+    }
+    check_protected_reusable_runner_policy(
+        &native_sdk_artifact_workflow,
+        "native SDK reusable workflow",
+    )?;
+    check_protected_reusable_runner_policy(
+        &static_abi_artifact_workflow,
+        "static ABI reusable workflow",
+    )?;
+    ensure_contains(
+        &native_sdk_artifact_workflow,
+        "uses: ./.github/workflows/static-abi-artifact.yml",
+        "native SDK nested release static ABI producer",
+    )?;
+    ensure_contains(
+        &native_sdk_artifact_workflow,
+        "scripts/restore-static-abi-input.sh",
+        "native SDK static ABI consumer restore",
+    )?;
+    ensure_contains(
+        &static_abi_artifact_workflow,
+        "CACHE_NAMESPACE: mesh-llm",
+        "static ABI reusable cache namespace",
+    )?;
+    check_release_dispatch_version_preparation(
+        &release_workflow,
+        &native_sdk_artifact_workflow,
+        &swift_sdk_artifact_workflow,
+    )?;
     check_release_container_contracts(&release_workflow, &configure_sccache_action)?;
     check_ci_crate_test_coverage(&ci_workflow, &pr_builds_workflow, &compute_changes_action)?;
 
     Ok(())
 }
 
-fn check_release_dispatch_version_preparation(release_workflow: &str) -> DynResult<()> {
+fn check_protected_reusable_runner_policy(workflow: &str, context: &str) -> DynResult<()> {
+    for (required, contract) in [
+        ("runner_size:", "bounded runner-size input"),
+        ("default: '8'", "bounded runner-size default"),
+        ("runner_policy:", "protected runner policy job"),
+        ("runs-on: ubuntu-24.04", "fixed hosted policy runner"),
+        (
+            "POLICY_REPOSITORY: ${{ github.repository }}",
+            "immutable repository context",
+        ),
+        ("POLICY_REF: ${{ github.ref }}", "immutable ref context"),
+        (
+            "POLICY_EVENT_NAME: ${{ github.event_name }}",
+            "immutable event context",
+        ),
+        (
+            "POLICY_DEPOT_ENABLED: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
+            "repository Depot gate",
+        ),
+        (
+            "POLICY_MANUAL_USE_DEPOT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.use_depot == 'true' }}",
+            "immutable main-dispatch canary flag",
+        ),
+        (
+            r#"POLICY_REPOSITORY" == "Mesh-LLM/mesh-llm""#,
+            "exact repository guard",
+        ),
+        (
+            r#"POLICY_REF" == "refs/heads/main""#,
+            "exact main-ref guard",
+        ),
+        (
+            r#"POLICY_MANUAL_USE_DEPOT" == "true""#,
+            "main-dispatch canary decision",
+        ),
+        ("default|4|8|16", "bounded runner-size validation"),
+        ("depot-ubuntu-24.04", "allowlisted Depot AMD64 label"),
+        ("depot-ubuntu-24.04-arm", "allowlisted Depot ARM64 label"),
+        (
+            "runs-on: ${{ needs.runner_policy.outputs.runner }}",
+            "derived producer runner",
+        ),
+        (
+            "allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}",
+            "derived Depot cache authority",
+        ),
+    ] {
+        ensure_contains(workflow, required, &format!("{context} {contract}"))?;
+    }
+    for (forbidden, contract) in [
+        ("inputs.runs_on", "caller-controlled runner label"),
+        (
+            "inputs.allow_depot_remote_cache",
+            "caller-controlled Depot cache authority",
+        ),
+        ("fromJson(inputs.runs_on)", "caller-controlled runner JSON"),
+    ] {
+        ensure_not_contains(workflow, forbidden, &format!("{context} {contract}"))?;
+    }
+    Ok(())
+}
+
+fn check_release_dispatch_version_preparation(
+    release_workflow: &str,
+    native_sdk_artifact_workflow: &str,
+    swift_sdk_artifact_workflow: &str,
+) -> DynResult<()> {
     const DISPATCH_RELEASE_JOBS: &[&str] = &[
         "build",
-        "build_native_sdk_runtime",
-        "build_swift_sdk_artifact",
         "build_linux_arm64",
         "compose_linux_aarch64_cuda",
         "compose_linux_cuda",
@@ -438,6 +585,103 @@ fn check_release_dispatch_version_preparation(release_workflow: &str) -> DynResu
             &format!("release workflow `{job_name}` dispatch version command"),
         )?;
     }
+
+    let native_sdk_caller = workflow_job_section(release_workflow, "build_native_sdk_runtime")
+        .ok_or("release workflow: missing `build_native_sdk_runtime` job")?;
+    for (required, context) in [
+        (
+            "uses: ./.github/workflows/native-sdk-artifact.yml",
+            "release native SDK shared producer call",
+        ),
+        ("profile: release", "release native SDK producer profile"),
+        (
+            "artifact_name: release-native-sdk-${{ matrix.artifact_suffix }}",
+            "release native SDK artifact name",
+        ),
+        (
+            "include_runtime_crate: true",
+            "release native SDK runtime crate staging",
+        ),
+        (
+            "static_abi_artifact_name: ci-release-native-sdk-static-abi-${{ matrix.artifact_suffix }}",
+            "release native SDK static ABI artifact",
+        ),
+        (
+            "produce_static_abi: ${{ endsWith(matrix.target, '-unknown-linux-gnu') }}",
+            "release native SDK per-target static ABI producer",
+        ),
+        ("runner_size: '8'", "release native SDK bounded runner size"),
+        (
+            "release_tag: ${{ needs.metadata.outputs.tag }}",
+            "release native SDK producer tag input",
+        ),
+        (
+            "prepare_release_version: ${{ github.event_name == 'workflow_dispatch' }}",
+            "release native SDK dispatch version input",
+        ),
+    ] {
+        ensure_contains(native_sdk_caller, required, context)?;
+    }
+    ensure_not_contains(
+        native_sdk_caller,
+        "runs_on:",
+        "release native SDK must not supply a runner label",
+    )?;
+    ensure_not_contains(
+        native_sdk_caller,
+        "allow_depot_remote_cache:",
+        "release native SDK must not supply Depot cache authority",
+    )?;
+    ensure_contains(
+        native_sdk_artifact_workflow,
+        REQUIRED_STEP,
+        "shared native SDK producer dispatch version step",
+    )?;
+    ensure_contains(
+        native_sdk_artifact_workflow,
+        "if: ${{ inputs.prepare_release_version }}",
+        "shared native SDK producer dispatch version condition",
+    )?;
+    ensure_contains(
+        native_sdk_artifact_workflow,
+        REQUIRED_COMMAND,
+        "shared native SDK producer dispatch version command",
+    )?;
+
+    let swift_caller = workflow_job_section(release_workflow, "build_swift_sdk_artifact")
+        .ok_or("release workflow: missing `build_swift_sdk_artifact` job")?;
+    for (required, context) in [
+        (
+            "uses: ./.github/workflows/swift-sdk-artifact.yml",
+            "release Swift shared producer call",
+        ),
+        ("mode: full", "release Swift exhaustive producer mode"),
+        (
+            "release_tag: ${{ needs.metadata.outputs.tag }}",
+            "release Swift producer tag input",
+        ),
+        (
+            "prepare_release_version: ${{ github.event_name == 'workflow_dispatch' }}",
+            "release Swift dispatch version input",
+        ),
+    ] {
+        ensure_contains(swift_caller, required, context)?;
+    }
+    ensure_contains(
+        swift_sdk_artifact_workflow,
+        REQUIRED_STEP,
+        "shared Swift producer dispatch version step",
+    )?;
+    ensure_contains(
+        swift_sdk_artifact_workflow,
+        "if: ${{ inputs.prepare_release_version }}",
+        "shared Swift producer dispatch version condition",
+    )?;
+    ensure_contains(
+        swift_sdk_artifact_workflow,
+        REQUIRED_COMMAND,
+        "shared Swift producer dispatch version command",
+    )?;
 
     Ok(())
 }

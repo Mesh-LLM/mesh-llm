@@ -118,7 +118,11 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
 
         self.assertIn("runs-on: ${{ matrix.os }}", host)
         self.assertIn("RELEASE_ATTESTATION_SIGNING_KEY", host)
-        for producer in (sdk_runtime, native_runtime):
+        self.assertIn("runner_size: '8'", sdk_runtime)
+        self.assertNotIn("runs_on:", sdk_runtime)
+        self.assertNotIn("allow_depot_remote_cache:", sdk_runtime)
+        self.assertNotIn("needs.metadata.outputs.runner", sdk_runtime)
+        for producer in (native_runtime,):
             self.assertIn(
                 "matrix.target == 'x86_64-unknown-linux-gnu'",
                 producer,
@@ -178,9 +182,59 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             "inference_smoke_tests",
             "build_native_sdk_runtime",
         )
+        self.assertNotIn("runs_on:", inference)
+        smoke = (
+            ROOT / ".github" / "workflows" / "smoke.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("runs-on: ubuntu-24.04", smoke)
+
+    def test_swift_release_reuses_full_typed_producer(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        reusable = (
+            ROOT / ".github" / "workflows" / "swift-sdk-artifact.yml"
+        ).read_text(encoding="utf-8")
+        producer = job_block(
+            workflow,
+            "build_swift_sdk_artifact",
+            "build_linux_arm64",
+        )
+
         self.assertIn(
-            "runs_on: ${{ toJson(needs.metadata.outputs.runner_8) }}",
-            inference,
+            "uses: ./.github/workflows/swift-sdk-artifact.yml",
+            producer,
+        )
+        self.assertIn("mode: full", producer)
+        self.assertIn("artifact_name: release-swift-sdk", producer)
+        self.assertNotIn("macos_runner:", producer)
+        self.assertIn(
+            "release_tag: ${{ needs.metadata.outputs.tag }}",
+            producer,
+        )
+        self.assertIn(
+            "prepare_release_version: "
+            "${{ github.event_name == 'workflow_dispatch' }}",
+            producer,
+        )
+        self.assertNotIn("build-xcframework.sh", producer)
+        self.assertNotIn("cargo ", producer)
+        self.assertIn("name: swift-package-manifest", reusable)
+        self.assertIn(
+            "name: generated-swift-binding-${{ inputs.artifact_name }}",
+            reusable,
+        )
+        self.assertIn("name: ${{ inputs.artifact_name }}", reusable)
+        publish = job_block(
+            workflow,
+            "publish",
+            "dispatch_packaging_release",
+        )
+        self.assertIn(
+            "name: generated-swift-binding-release-swift-sdk",
+            publish,
+        )
+        self.assertIn(
+            'install -m 0644 "$generated_binding" "$tracked_binding"',
+            publish,
         )
 
     def test_release_permissions_are_least_privilege(self) -> None:
@@ -287,26 +341,76 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
 
     def test_native_sdk_assets_are_staged_flat_for_publishing(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-        producer = job_block(
+        reusable = (
+            ROOT / ".github" / "workflows" / "native-sdk-artifact.yml"
+        ).read_text(encoding="utf-8")
+        producer_action = (
+            ROOT / ".github" / "actions"
+            / "prepare-native-sdk-input" / "action.yml"
+        ).read_text(encoding="utf-8")
+        caller = job_block(
             workflow,
             "build_native_sdk_runtime",
             "build_native_runtime",
         )
-        upload = producer[producer.index("- name: Upload native SDK runtime") :]
         publish = job_block(
             workflow,
             "publish",
             "dispatch_packaging_release",
         )
 
-        self.assertIn("- name: Stage flat native SDK release assets", producer)
+        self.assertIn(
+            "uses: ./.github/workflows/native-sdk-artifact.yml",
+            caller,
+        )
+        self.assertIn("profile: release", caller)
+        self.assertIn("include_runtime_crate: true", caller)
+        self.assertIn(
+            "static_abi_artifact_name: "
+            "ci-release-native-sdk-static-abi-${{ matrix.artifact_suffix }}",
+            caller,
+        )
+        self.assertIn(
+            "produce_static_abi: "
+            "${{ endsWith(matrix.target, '-unknown-linux-gnu') }}",
+            caller,
+        )
+        self.assertIn(
+            "artifact_name: "
+            "release-native-sdk-${{ matrix.artifact_suffix }}",
+            caller,
+        )
+        self.assertIn("runner_size: '8'", caller)
+        self.assertNotIn("runs_on:", caller)
+        self.assertNotIn("allow_depot_remote_cache:", caller)
+        self.assertNotIn("scripts/package-native-sdk.sh", caller)
+        self.assertIn(
+            "uses: ./.github/actions/prepare-native-sdk-input",
+            reusable,
+        )
+        self.assertIn(
+            "uses: ./.github/workflows/static-abi-artifact.yml",
+            reusable,
+        )
+        self.assertIn(
+            "scripts/restore-static-abi-input.sh",
+            reusable,
+        )
+        self.assertIn("name: ${{ inputs.artifact_name }}", reusable)
+        self.assertIn(
+            "path: ${{ steps.native-sdk.outputs.upload_path }}",
+            reusable,
+        )
+        self.assertIn(
+            "scripts/package-native-sdk-crate.sh",
+            producer_action,
+        )
         self.assertIn(
             "native SDK release asset basename collision",
-            producer,
+            producer_action,
         )
-        self.assertIn("path: release-native-sdk-assets/*", upload)
-        self.assertNotIn("dist/native-sdk/", upload)
-        self.assertNotIn("dist/native-sdk-crates/", upload)
+        self.assertIn('upload_sources=("$archive_path" "$checksum_path")', producer_action)
+        self.assertIn('upload_sources+=("${runtime_crates[0]}")', producer_action)
         self.assertIn("files: release-artifacts/*", publish)
 
     def test_windows_host_publishes_prebuilt_attestation_verifier(self) -> None:

@@ -19,6 +19,38 @@ on:
       staged_binary_path:
         required: true
         type: string
+      swift_artifact_name:
+        required: false
+        default: ''
+        type: string
+      swift_artifact_path:
+        required: false
+        default: sdk-artifacts/swift
+        type: string
+      swift_artifact_mode:
+        required: false
+        default: ''
+        type: string
+      kotlin_artifact_name:
+        required: false
+        default: ''
+        type: string
+      kotlin_artifact_path:
+        required: false
+        default: sdk-artifacts/kotlin
+        type: string
+      kotlin_artifact_target:
+        required: false
+        default: ''
+        type: string
+      kotlin_artifact_backend:
+        required: false
+        default: ''
+        type: string
+      kotlin_artifact_profile:
+        required: false
+        default: ''
+        type: string
       model_url:
         required: false
         default: https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf
@@ -33,9 +65,6 @@ on:
       cache_key_prefix:
         required: false
         default: ''
-        type: string
-      runs_on:
-        required: true
         type: string
       timeout_minutes:
         required: false
@@ -52,13 +81,106 @@ env:
 jobs:
   sdk_smoke:
     name: ${{ inputs.sdk_kind }} SDK Smoke
-    runs-on: ${{ fromJson(inputs.runs_on) }}
+    # Swift stays on the same pinned Apple toolchain boundary as its producer.
+    # Kotlin maps its validated artifact architecture to a bounded hosted
+    # runner; every other Linux SDK smoke stays on hosted x86 Ubuntu.
+    runs-on: ${{ inputs.sdk_kind == 'swift' && 'macos-15' || inputs.sdk_kind == 'kotlin' && inputs.kotlin_artifact_target == 'aarch64-unknown-linux-gnu' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Validate bounded SDK smoke inputs
+        shell: bash
+        env:
+          SDK_KIND: ${{ inputs.sdk_kind }}
+        run: |
+          set -euo pipefail
+          case "$SDK_KIND" in
+            rust|kotlin|swift) ;;
+            *)
+              echo "unsupported SDK smoke kind: $SDK_KIND" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Validate Swift SDK producer contract
+        if: ${{ inputs.sdk_kind == 'swift' }}
+        env:
+          SWIFT_ARTIFACT_NAME: ${{ inputs.swift_artifact_name }}
+          SWIFT_ARTIFACT_MODE: ${{ inputs.swift_artifact_mode }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SWIFT_ARTIFACT_NAME" ]]; then
+            echo "swift_artifact_name is required for Swift SDK smoke" >&2
+            exit 1
+          fi
+          case "$SWIFT_ARTIFACT_MODE" in
+            host-only|full) ;;
+            *)
+              echo "unsupported Swift SDK artifact mode: $SWIFT_ARTIFACT_MODE" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Download immutable Swift SDK input
+        if: ${{ inputs.sdk_kind == 'swift' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ inputs.swift_artifact_name }}
+          path: ${{ inputs.swift_artifact_path }}
+
+      - name: Download immutable generated Swift binding
+        if: ${{ inputs.sdk_kind == 'swift' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: generated-swift-binding-${{ inputs.swift_artifact_name }}
+          path: sdk-artifacts/swift-generated-binding
+
+      - name: Validate Kotlin SDK producer contract
+        if: ${{ inputs.sdk_kind == 'kotlin' }}
+        env:
+          KOTLIN_ARTIFACT_NAME: ${{ inputs.kotlin_artifact_name }}
+          KOTLIN_ARTIFACT_TARGET: ${{ inputs.kotlin_artifact_target }}
+          KOTLIN_ARTIFACT_BACKEND: ${{ inputs.kotlin_artifact_backend }}
+          KOTLIN_ARTIFACT_PROFILE: ${{ inputs.kotlin_artifact_profile }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$KOTLIN_ARTIFACT_NAME" ]]; then
+            echo "kotlin_artifact_name is required for Kotlin SDK smoke" >&2
+            exit 1
+          fi
+          case "$KOTLIN_ARTIFACT_TARGET" in
+            x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu) ;;
+            *)
+              echo "unsupported Kotlin native SDK target: $KOTLIN_ARTIFACT_TARGET" >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$KOTLIN_ARTIFACT_BACKEND" != "cpu" ]]; then
+            echo "Kotlin smoke requires the CPU native SDK input" >&2
+            exit 1
+          fi
+          case "$KOTLIN_ARTIFACT_PROFILE" in
+            debug|release) ;;
+            *)
+              echo "unsupported Kotlin native SDK profile: $KOTLIN_ARTIFACT_PROFILE" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Download immutable Kotlin native SDK input
+        if: ${{ inputs.sdk_kind == 'kotlin' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ inputs.kotlin_artifact_name }}
+          path: ${{ inputs.kotlin_artifact_path }}
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         if: ${{ inputs.sdk_kind == 'rust' }}
@@ -82,32 +204,40 @@ jobs:
           cache-dependency-path: crates/mesh-llm-ui/pnpm-lock.yaml
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+        if: ${{ inputs.sdk_kind == 'rust' }}
 
       - name: Install Linux SDK dependencies
-        if: ${{ runner.os == 'Linux' }}
+        if: ${{ runner.os == 'Linux' && inputs.sdk_kind == 'rust' }}
         run: sudo apt-get update && sudo apt-get install -y build-essential libdbus-1-dev curl jq lsof lld patchelf
 
-      - name: Install macOS SDK dependencies
-        if: ${{ runner.os == 'macOS' }}
-        # `lld` is required because the Swift smoke job's transitive
-        # cargo build (via `sdk/swift/scripts/generate-swift-bindings.sh`
-        # in a temp dir) ends up invoking `cc` with
-        # `-fuse-ld=/opt/homebrew/bin/ld64.lld`. Apple clang accepts
-        # that flag only when the binary actually exists on disk;
-        # without `lld` installed the link step fails with
-        # `clang: error: invalid linker name in argument`. The macOS
-        # host and unit-test jobs install `lld` for the same
-        # reason. Install it here too so the Swift smoke lane matches.
-        run: brew install jq lld
-
       - name: Configure Linux Rust linker
-        if: ${{ runner.os == 'Linux' }}
+        if: ${{ runner.os == 'Linux' && inputs.sdk_kind == 'rust' }}
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml <<'EOF'
           [target.x86_64-unknown-linux-gnu]
           rustflags = ["-C", "link-arg=-fuse-ld=lld"]
           EOF
+
+      - name: Verify Kotlin smoke runtime utilities
+        if: ${{ runner.os == 'Linux' && inputs.sdk_kind == 'kotlin' }}
+        run: |
+          set -euo pipefail
+          for utility in \
+            bash \
+            curl \
+            ldd \
+            pgrep \
+            python3 \
+            readelf \
+            sort \
+            tail \
+            xargs; do
+            command -v "$utility" >/dev/null || {
+              echo "missing Kotlin smoke runtime utility: $utility" >&2
+              exit 1
+            }
+          done
 
       - uses: ./.github/actions/restore-smoke-inputs
         with:
@@ -127,8 +257,28 @@ jobs:
 
       - name: Kotlin SDK smoke test
         if: ${{ inputs.sdk_kind == 'kotlin' }}
-        run: scripts/ci-kotlin-sdk-smoke.sh "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "$HOME/.models/${{ inputs.model_file }}"
+        run: |
+          scripts/ci-kotlin-sdk-smoke.sh \
+            "${{ inputs.staged_binary_path }}" \
+            "${{ inputs.artifact_path }}" \
+            "$HOME/.models/${{ inputs.model_file }}" \
+            "${{ inputs.kotlin_artifact_path }}" \
+            "${{ inputs.kotlin_artifact_target }}" \
+            "${{ inputs.kotlin_artifact_backend }}" \
+            "${{ inputs.kotlin_artifact_profile }}"
 
       - name: Swift SDK smoke test
         if: ${{ inputs.sdk_kind == 'swift' }}
-        run: scripts/ci-swift-sdk-smoke.sh "${{ inputs.staged_binary_path }}" "$(dirname "${{ inputs.staged_binary_path }}")" "$HOME/.models/${{ inputs.model_file }}"
+        env:
+          STAGED_BINARY_PATH: ${{ inputs.staged_binary_path }}
+          SWIFT_INPUT_ARCHIVE: ${{ format('{0}/MeshLLMFFI.xcframework.zip', inputs.swift_artifact_path) }}
+          SWIFT_INPUT_BINDING: sdk-artifacts/swift-generated-binding/mesh_ffi.swift
+          SWIFT_INPUT_MODE: ${{ inputs.swift_artifact_mode }}
+        run: |
+          scripts/ci-swift-sdk-smoke.sh \
+            "$STAGED_BINARY_PATH" \
+            "$(dirname "$STAGED_BINARY_PATH")" \
+            "$HOME/.models/${{ inputs.model_file }}" \
+            "$SWIFT_INPUT_ARCHIVE" \
+            "$SWIFT_INPUT_MODE" \
+            "$SWIFT_INPUT_BINDING"

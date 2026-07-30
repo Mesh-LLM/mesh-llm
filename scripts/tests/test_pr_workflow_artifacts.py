@@ -20,6 +20,14 @@ def job_section(
     return workflow[start:end]
 
 
+def planned_condition(job_name: str) -> str:
+    return (
+        "if: ${{ contains("
+        "fromJson(needs.changes.outputs.required_jobs_json), "
+        f"'{job_name}') }}}}"
+    )
+
+
 class PrWorkflowArtifactTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -78,6 +86,11 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             "macos_host_input",
             "macos_metal_runtime_input",
         )
+        cls.swift_input = job_section(
+            cls.workflow,
+            "swift_sdk_input",
+            "macos_host_input",
+        )
         cls.macos_runtime = job_section(
             cls.workflow,
             "macos_metal_runtime_input",
@@ -116,14 +129,11 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         cls.windows_gpu_products = job_section(
             cls.workflow,
             "windows_gpu_products",
+            "summary",
         )
 
     def test_host_profile_covers_every_backend_product_route(self) -> None:
-        self.assertIn(
-            "needs.changes.outputs.linux_inference_artifact_required == 'true' "
-            "|| needs.changes.outputs.benchmarks == 'true'",
-            self.host,
-        )
+        self.assertIn(planned_condition("linux_host_input"), self.host)
         self.assertIn(
             "needs.changes.outputs.backend_changed == 'true' "
             "|| needs.changes.outputs.benchmarks == 'true'",
@@ -131,20 +141,17 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertIn("&& 'release' || 'debug'", self.host)
 
-        for runtime in self.backend_runtimes.values():
+        for backend, runtime in self.backend_runtimes.items():
             self.assertIn(
-                "github.event_name == 'workflow_dispatch' "
-                "|| needs.changes.outputs.backend_changed == 'true' "
-                "|| needs.changes.outputs.benchmarks == 'true'",
+                planned_condition(f"linux_{backend}_runtime_input"),
                 runtime,
             )
 
     def test_cpu_runtime_only_runs_for_cpu_product_consumers(self) -> None:
-        condition = (
-            "if: ${{ needs.changes.outputs.linux_inference_artifact_required "
-            "== 'true' && needs.changes.outputs.docs_only != 'true' }}"
+        self.assertIn(
+            planned_condition("linux_cpu_runtime_input"),
+            self.cpu_runtime,
         )
-        self.assertIn(condition, self.cpu_runtime)
         self.assertNotIn("benchmarks", self.cpu_runtime)
 
     def test_cpu_product_uses_matching_immutable_inputs(self) -> None:
@@ -226,8 +233,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
                     product,
                 )
                 self.assertIn(
-                    "needs.linux_host_input.result == 'success' "
-                    f"&& needs.linux_{backend}_runtime_input.result == 'success'",
+                    planned_condition(f"linux_{backend}_product"),
                     product,
                 )
                 self.assertIn(
@@ -275,7 +281,10 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             "hf_download_smoke",
         )
 
-        self.assertIn("github.event_name == 'workflow_dispatch'", admission)
+        self.assertIn(
+            planned_condition("linux_public_mesh_admission"),
+            admission,
+        )
         self.assertNotIn("linux_client_auto_boot:", self.workflow)
         self.assertIn("scripts/ci-client-auto-test.sh", admission)
         self.assertIn("uses: ./.github/actions/restore-smoke-inputs", admission)
@@ -332,27 +341,39 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             "linux_public_mesh_admission",
         )
 
-        self.assertIn("run: scripts/build-llama.sh", producer)
-        self.assertIn("name: pr-linux-static-abi-input", producer)
-        self.assertIn("mesh-llm-static-abi.tar.gz", producer)
+        self.assertIn(
+            "uses: ./.github/workflows/static-abi-artifact.yml",
+            producer,
+        )
+        self.assertIn("artifact_name: pr-linux-static-abi-input", producer)
+        self.assertIn("runner_size: '8'", producer)
+        self.assertNotIn("runs_on:", producer)
+        self.assertNotIn("allow_depot_remote_cache:", producer)
+        self.assertIn(
+            planned_condition("linux_static_abi_input"),
+            producer,
+        )
         for consumer in (crate_tests, grouped_tests):
             with self.subTest(consumer=consumer.splitlines()[0].strip()):
                 self.assertIn("linux_static_abi_input", consumer)
                 self.assertIn("name: pr-linux-static-abi-input", consumer)
                 self.assertIn("Restore immutable static ABI input", consumer)
+                self.assertIn("scripts/restore-static-abi-input.sh", consumer)
+                self.assertNotIn("tar -xzf", consumer)
                 self.assertNotIn("run: scripts/build-llama.sh", consumer)
                 self.assertNotIn("Cache patched llama.cpp ABI build", consumer)
 
     def test_macos_producers_keep_the_existing_product_route(self) -> None:
-        route = (
-            "if: ${{ needs.changes.outputs.macos_inference_artifact_required "
-            "== 'true' && needs.changes.outputs.docs_only != 'true' }}"
-        )
-
         self.assertIn("needs: changes", self.macos_host)
-        self.assertIn(route, self.macos_host)
+        self.assertIn(
+            planned_condition("macos_host_input"),
+            self.macos_host,
+        )
         self.assertIn("needs: changes", self.macos_runtime)
-        self.assertIn(route, self.macos_runtime)
+        self.assertIn(
+            planned_condition("macos_metal_runtime_input"),
+            self.macos_runtime,
+        )
 
     def test_macos_host_and_runtime_are_independent_producers(self) -> None:
         self.assertIn(
@@ -389,8 +410,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             self.macos_product,
         )
         self.assertIn(
-            "needs.macos_host_input.result == 'success' "
-            "&& needs.macos_metal_runtime_input.result == 'success'",
+            planned_condition("macos_cpu_artifact"),
             self.macos_product,
         )
         self.assertIn("name: pr-macos-host-input", self.macos_product)
@@ -422,6 +442,62 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("brew install", self.macos_product)
         self.assertNotIn("Swatinem/rust-cache", self.macos_product)
 
+    def test_kotlin_smoke_reuses_parallel_debug_native_sdk_input(self) -> None:
+        producer = job_section(
+            self.workflow,
+            "kotlin_sdk_input",
+            "kotlin_sdk_smoke",
+        )
+        consumer = job_section(
+            self.workflow,
+            "kotlin_sdk_smoke",
+            "swift_sdk_input",
+        )
+
+        self.assertIn(
+            "needs: [changes, linux_static_abi_input]",
+            producer,
+        )
+        self.assertNotIn("linux_cpu_artifact", producer)
+        self.assertIn(
+            planned_condition("kotlin_sdk_input"),
+            producer,
+        )
+        self.assertIn(
+            "uses: ./.github/workflows/native-sdk-artifact.yml",
+            producer,
+        )
+        self.assertIn("profile: debug", producer)
+        self.assertIn(
+            "artifact_name: pr-kotlin-native-sdk-input",
+            producer,
+        )
+        self.assertIn(
+            "static_abi_artifact_name: pr-linux-static-abi-input",
+            producer,
+        )
+        self.assertIn("runner_size: '8'", producer)
+        self.assertNotIn("runs_on:", producer)
+        self.assertNotIn("allow_depot_remote_cache:", producer)
+
+        self.assertIn(
+            "needs: [changes, linux_cpu_artifact, kotlin_sdk_input]",
+            consumer,
+        )
+        self.assertIn(
+            planned_condition("kotlin_sdk_smoke"),
+            consumer,
+        )
+        self.assertIn(
+            "kotlin_artifact_name: pr-kotlin-native-sdk-input",
+            consumer,
+        )
+        self.assertIn("kotlin_artifact_profile: debug", consumer)
+        self.assertIn(
+            "uses: ./.github/workflows/sdk-smoke.yml",
+            consumer,
+        )
+
     def test_macos_swift_gate_and_supported_targets_are_preserved(self) -> None:
         swift = job_section(
             self.workflow,
@@ -434,16 +510,32 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             "windows_checks",
         )
 
+        self.assertIn("needs: changes", self.swift_input)
         self.assertIn(
-            "needs: [changes, macos_cpu_artifact, macos_unit_tests]",
+            "uses: ./.github/workflows/swift-sdk-artifact.yml",
+            self.swift_input,
+        )
+        self.assertIn("mode: host-only", self.swift_input)
+        self.assertIn("artifact_name: pr-swift-sdk-input", self.swift_input)
+        self.assertNotIn("macos_runner:", self.swift_input)
+        self.assertIn(
+            planned_condition("swift_sdk_input"),
+            self.swift_input,
+        )
+        self.assertNotIn("macos_cpu_artifact", self.swift_input)
+        self.assertNotIn("macos_unit_tests", self.swift_input)
+
+        self.assertIn(
+            "needs: [changes, macos_cpu_artifact, swift_sdk_input]",
             swift,
         )
-        self.assertIn("!cancelled()", swift)
         self.assertNotIn("always()", swift)
-        self.assertIn("needs.macos_cpu_artifact.result == 'success'", swift)
-        self.assertIn("needs.macos_unit_tests.result == 'success'", swift)
-        self.assertIn("needs.macos_unit_tests.result == 'skipped'", swift)
+        self.assertIn(planned_condition("swift_sdk_smoke"), swift)
+        self.assertNotIn("macos_unit_tests", swift)
         self.assertIn("artifact_name: ci-macos-inference-binaries", swift)
+        self.assertIn("swift_artifact_name: pr-swift-sdk-input", swift)
+        self.assertIn("swift_artifact_mode: host-only", swift)
+        self.assertNotIn("macos_runner:", swift)
         self.assertIn("needs: changes", unit_tests)
         self.assertNotIn("macos_cpu_artifact", unit_tests)
         self.assertIn(
@@ -475,7 +567,10 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("Skip unsupported macOS GPU backend", self.workflow)
 
     def test_windows_pr_keeps_broad_rust_signals_lightweight(self) -> None:
-        self.assertIn("needs.changes.outputs.all_rust == 'true'", self.windows_checks)
+        self.assertIn(
+            planned_condition("windows_checks"),
+            self.windows_checks,
+        )
         self.assertIn("name: Windows lightweight checks", self.windows_checks)
         self.assertIn("cargo check --locked -p mesh-llm --bin mesh-llm", self.windows_checks)
         self.assertNotIn("prepare-windows-host-input", self.windows_checks)
@@ -501,11 +596,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("compose-product-input", self.windows_host)
 
         self.assertIn(
-            "needs.changes.outputs.windows_cpu == 'true'",
-            self.windows_cpu_runtime,
-        )
-        self.assertNotIn(
-            "needs.changes.outputs.windows_gpu == 'true'",
+            planned_condition("windows_cpu_runtime_input"),
             self.windows_cpu_runtime,
         )
         self.assertIn(
@@ -521,11 +612,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("compose-product-input", self.windows_cpu_runtime)
 
         self.assertIn(
-            "needs.changes.outputs.windows_gpu == 'true'",
-            self.windows_gpu_runtimes,
-        )
-        self.assertNotIn(
-            "needs.changes.outputs.windows_cpu == 'true'",
+            planned_condition("windows_gpu_runtime_inputs"),
             self.windows_gpu_runtimes,
         )
         for backend in ("cuda", "rocm", "vulkan"):

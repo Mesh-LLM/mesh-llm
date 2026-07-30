@@ -376,6 +376,41 @@ node --test sdk/node/test/*.test.js
 Run serving smoke examples with a real model:
 
 ```bash
-scripts/ci-swift-sdk-smoke.sh <mesh-llm> <bin-dir> <model.gguf>
-scripts/ci-kotlin-sdk-smoke.sh <mesh-llm> <bin-dir> <model.gguf>
+scripts/ci-swift-sdk-smoke.sh \
+  <mesh-llm> \
+  <bin-dir> \
+  <model.gguf> \
+  <MeshLLMFFI.xcframework.zip> \
+  <host-only|full> \
+  <generated-mesh_ffi.swift>
+scripts/ci-kotlin-sdk-smoke.sh \
+  <mesh-llm> \
+  <bin-dir> \
+  <model.gguf> \
+  <native-sdk-input-dir> \
+  <target> \
+  <backend> \
+  <debug|release>
 ```
+
+The Swift smoke consumes a previously produced XCFramework ZIP and the exact
+generated `mesh_ffi.swift` companion artifact; it does not compile
+`mesh-llm-ffi` or llama.cpp. CI creates both immutable inputs through the
+shared `swift-sdk-artifact.yml` producer (`host-only` on PRs and `full` on
+main/release). The producer and smoke are pinned to `macos-15`; the native
+llama.cpp cache carries an explicit macOS/Xcode epoch that must be bumped when
+that toolchain boundary changes. Protected main and tag builds fail if the
+generated binding differs from the tracked source.
+
+The Kotlin smoke similarly consumes a previously produced, checksummed native
+SDK archive. CI creates that immutable input through the shared
+`native-sdk-artifact.yml` producer with an explicit target, backend, and Cargo
+profile. PR validation uses `debug`; main and release use `release`. Kotlin
+native-SDK production restores the checksummed `static-abi-artifact.yml` input
+for its target, then keeps `package-native-sdk.sh --build` as a stamp check and
+Rust FFI build instead of recompiling llama.cpp. Both reusable producers accept
+only a bounded runner size and derive the architecture-specific hosted/Depot
+label and cache permission internally; callers cannot supply runner labels or
+Depot-cache authority. Kotlin smoke verifies and
+safely extracts the final package, and does not prepare or compile llama.cpp,
+build `mesh-llm-ffi`, or package a replacement.

@@ -24,6 +24,7 @@ env:
   CARGO_HTTP_MULTIPLEXING: "false"
   SCCACHE_GHA_ENABLED: "true"
   LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
+  MESH_LLM_LLAMA_TOOLCHAIN_EPOCH: mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
 
 permissions:
   contents: read
@@ -58,6 +59,7 @@ jobs:
       runner_contract_required: ${{ steps.compute.outputs.runner_contract_required }}
       ui_dist_cache_key: ${{ steps.ui_key.outputs.ui_dist_cache_key }}
       linux_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.compute.outputs.inference_artifact_required == 'true' }}
+      macos_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.compute.outputs.inference_artifact_required == 'true' || steps.filter.outputs.benchmarks == 'true' }}
       depot_enabled: ${{ steps.runners.outputs.depot_enabled }}
       allow_depot_remote_cache: ${{ steps.runners.outputs.allow_depot_remote_cache }}
       runner: ${{ steps.runners.outputs.runner }}
@@ -368,58 +370,18 @@ jobs:
 
   linux_static_abi_input:
     needs: changes
-    if: ${{ needs.changes.outputs.docs_only != 'true' && (needs.changes.outputs.test_batches_json != '[]' || needs.changes.outputs.linux_test_groups_json != '[]') }}
+    if: ${{ needs.changes.outputs.docs_only != 'true' && (needs.changes.outputs.test_batches_json != '[]' || needs.changes.outputs.linux_test_groups_json != '[]' || needs.changes.outputs.sdk_smoke_required == 'true') }}
     name: Linux static ABI input
-    runs-on: ${{ needs.changes.outputs.runner_8 }}
     permissions:
       contents: read
       packages: read
-    container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    defaults:
-      run:
-        shell: bash
-    env:
-      LLAMA_STAGE_BACKEND: cpu
-      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
-      MESH_LLM_REQUIRE_SCCACHE: "1"
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          persist-credentials: false
-      - name: Verify prebuilt CI environment
-        run: verify-runner-image public
-      - uses: ./.github/actions/configure-sccache-gha
-        with:
-          allow_depot_remote_cache: ${{ needs.changes.outputs.allow_depot_remote_cache }}
-      - name: Cache patched llama.cpp ABI build
-        id: static_abi_cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: .deps/llama.cpp/build-stage-abi-static
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-abi-cpu-${{ hashFiles('scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
-      - name: Prepare patched llama.cpp ABI checkout
-        if: ${{ steps.static_abi_cache.outputs.cache-hit != 'true' }}
-        run: scripts/prepare-llama.sh pinned
-      - name: Build patched llama.cpp ABI libraries
-        if: ${{ steps.static_abi_cache.outputs.cache-hit != 'true' }}
-        run: scripts/build-llama.sh
-      - name: Archive immutable static ABI input
-        run: |
-          test -d "$LLAMA_STAGE_BUILD_DIR"
-          tar -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")" \
-            -czf "$RUNNER_TEMP/mesh-llm-static-abi.tar.gz" \
-            "$(basename "$LLAMA_STAGE_BUILD_DIR")"
-      - name: Upload immutable static ABI input
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: ci-linux-static-abi-input
-          path: ${{ runner.temp }}/mesh-llm-static-abi.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+    uses: ./.github/workflows/static-abi-artifact.yml
+    with:
+      backend: cpu
+      target: x86_64-unknown-linux-gnu
+      artifact_name: ci-linux-static-abi-input
+      runner_size: '8'
+      retention_days: 1
 
   rust_crate_tests:
     needs: [changes, linux_static_abi_input]
@@ -476,11 +438,7 @@ jobs:
           name: ci-linux-static-abi-input
           path: ${{ runner.temp }}/static-abi-input
       - name: Restore immutable static ABI input
-        run: |
-          mkdir -p "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
-          tar -xzf "$RUNNER_TEMP/static-abi-input/mesh-llm-static-abi.tar.gz" \
-            -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
-          test -d "$LLAMA_STAGE_BUILD_DIR"
+        run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
       - name: Run crate tests
         env:
           TEST_CRATES: ${{ toJson(matrix.batch.crates) }}
@@ -559,11 +517,7 @@ jobs:
           name: ci-linux-static-abi-input
           path: ${{ runner.temp }}/static-abi-input
       - name: Restore immutable static ABI input
-        run: |
-          mkdir -p "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
-          tar -xzf "$RUNNER_TEMP/static-abi-input/mesh-llm-static-abi.tar.gz" \
-            -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")"
-          test -d "$LLAMA_STAGE_BUILD_DIR"
+        run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
 
       - name: Restore Skippy smoke model cache
         if: ${{ matrix.group == 'skippy-smoke' }}
@@ -612,7 +566,6 @@ jobs:
       contents: read
     uses: ./.github/workflows/hf-download-smoke.yml
     with:
-      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
       timeout_minutes: 15
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -627,7 +580,6 @@ jobs:
       artifact_name: ci-linux-inference-binaries
       mesh_binary_target: target/release/mesh-llm
       cache_key_prefix: ''
-      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
@@ -693,7 +645,6 @@ jobs:
       staged_binary_path: target/release/mesh-llm
       model_cache_scope: two-node-smoke-model
       smoke_script: scripts/ci-two-node-client-serving-smoke.sh
-      runs_on: ${{ toJson(needs.changes.outputs.runner_4) }}
       timeout_minutes: 20
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -710,13 +661,30 @@ jobs:
       artifact_path: ci-artifacts/linux
       staged_binary_path: target/release/mesh-llm
       model_cache_scope: sdk-smoke-model
-      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
+  kotlin_sdk_input:
+    name: Kotlin native SDK input
+    needs: [changes, linux_static_abi_input]
+    if: ${{ needs.linux_static_abi_input.result == 'success' && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/native-sdk-artifact.yml
+    with:
+      backend: cpu
+      target: x86_64-unknown-linux-gnu
+      profile: release
+      artifact_name: ci-kotlin-native-sdk-input
+      static_abi_artifact_name: ci-linux-static-abi-input
+      static_abi_artifact_path: native-sdk-static-abi-input
+      runner_size: '8'
+      retention_days: 1
+
   kotlin_sdk_smoke:
-    needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    needs: [changes, linux_cpu_artifact, kotlin_sdk_input]
+    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.kotlin_sdk_input.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
     permissions:
       contents: read
     uses: ./.github/workflows/sdk-smoke.yml
@@ -725,14 +693,30 @@ jobs:
       artifact_name: ci-linux-inference-binaries
       artifact_path: ci-artifacts/linux
       staged_binary_path: target/release/mesh-llm
+      kotlin_artifact_name: ci-kotlin-native-sdk-input
+      kotlin_artifact_target: x86_64-unknown-linux-gnu
+      kotlin_artifact_backend: cpu
+      kotlin_artifact_profile: release
       model_cache_scope: sdk-smoke-model
-      runs_on: ${{ toJson(needs.changes.outputs.runner_8) }}
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
+  swift_sdk_input:
+    name: Swift SDK full input
+    needs: changes
+    if: ${{ needs.changes.outputs.macos_inference_artifact_required == 'true' && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/swift-sdk-artifact.yml
+    with:
+      mode: full
+      artifact_name: ci-swift-sdk-input
+      retention_days: 1
+      timeout_minutes: 90
+
   swift_sdk_smoke:
-    needs: [changes, macos_cpu_artifact, macos_unit_tests]
-    if: ${{ !cancelled() && needs.macos_cpu_artifact.result == 'success' && (needs.macos_unit_tests.result == 'success' || needs.macos_unit_tests.result == 'skipped') && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
+    needs: [changes, macos_cpu_artifact, swift_sdk_input]
+    if: ${{ needs.macos_cpu_artifact.result == 'success' && needs.swift_sdk_input.result == 'success' && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
     permissions:
       contents: read
     uses: ./.github/workflows/sdk-smoke.yml
@@ -741,17 +725,18 @@ jobs:
       artifact_name: ci-macos-inference-binaries
       artifact_path: ci-artifacts/macos
       staged_binary_path: target/release/mesh-llm
+      swift_artifact_name: ci-swift-sdk-input
+      swift_artifact_mode: full
       model_cache_scope: sdk-smoke-model
-      runs_on: '"macos-latest"'
-      timeout_minutes: 40
+      timeout_minutes: 30
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   macos_host_input:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ needs.changes.outputs.macos_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
     name: macOS immutable release host
-    runs-on: macos-latest
+    runs-on: macos-15
     permissions:
       contents: read
     env:
@@ -763,7 +748,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.ui == 'true' }}
         with:
-          version: latest
+          version: 10
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.ui == 'true' }}
         with:
@@ -844,9 +829,9 @@ jobs:
 
   macos_metal_runtime_input:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ needs.changes.outputs.macos_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
     name: macOS Metal runtime
-    runs-on: macos-latest
+    runs-on: macos-15
     permissions:
       contents: read
     env:
@@ -878,7 +863,7 @@ jobs:
     needs: [changes, macos_host_input, macos_metal_runtime_input]
     if: ${{ needs.macos_host_input.result == 'success' && needs.macos_metal_runtime_input.result == 'success' }}
     name: macOS Metal release product
-    runs-on: macos-latest
+    runs-on: macos-15
     permissions:
       contents: read
     steps:
@@ -916,7 +901,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-host-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm')) }}
     name: macOS unit tests
-    runs-on: macos-latest
+    runs-on: macos-15
     permissions:
       contents: read
     env:

@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import tarfile
@@ -15,6 +16,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_VERIFIER = ROOT / "scripts" / "verify-native-runtime-package.sh"
 SDK_VERIFIER = ROOT / "scripts" / "verify-native-sdk-package.sh"
+SDK_RESTORE = ROOT / "scripts" / "restore-native-sdk-input.sh"
 
 
 def bash_executable() -> str:
@@ -32,6 +34,19 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def native_architecture() -> str:
+    machine = platform.machine().lower()
+    if machine in {"amd64", "x86_64"}:
+        return "x86_64"
+    if machine in {"aarch64", "arm64"}:
+        return "aarch64"
+    raise unittest.SkipTest(f"unsupported native test architecture: {machine}")
+
+
+def native_linux_target() -> str:
+    return f"{native_architecture()}-unknown-linux-gnu"
+
+
 class NativeArtifactVerifierTests(unittest.TestCase):
     def run_verifier(
         self,
@@ -45,6 +60,31 @@ class NativeArtifactVerifierTests(unittest.TestCase):
                 verifier.as_posix(),
                 *options,
                 artifact.as_posix(),
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def run_sdk_restore(
+        self,
+        download_dir: Path,
+        extract_dir: Path,
+        *,
+        target: str | None = None,
+        backend: str = "cpu",
+        profile: str = "debug",
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                bash_executable(),
+                SDK_RESTORE.as_posix(),
+                download_dir.as_posix(),
+                extract_dir.as_posix(),
+                target or native_linux_target(),
+                backend,
+                profile,
             ],
             cwd=ROOT,
             check=False,
@@ -85,7 +125,8 @@ class NativeArtifactVerifierTests(unittest.TestCase):
         return artifact, manifest
 
     def write_sdk_artifact(self, root: Path) -> tuple[Path, dict]:
-        artifact = root / "meshllm-native-linux-x86_64-cpu"
+        architecture = native_architecture()
+        artifact = root / f"meshllm-native-linux-{architecture}-cpu"
         library = artifact / "lib" / "libmesh_llm_ffi.so"
         uniffi_library = artifact / "lib" / "libmesh_llm_uniffi.so"
         library.parent.mkdir(parents=True)
@@ -97,12 +138,13 @@ class NativeArtifactVerifierTests(unittest.TestCase):
             "native_runtime_id": artifact.name,
             "sdk_version": "0.75.0",
             "mesh_version": "0.75.0",
-            "target_triple": "x86_64-unknown-linux-gnu",
-            "platform": "linux-x86_64",
+            "target_triple": native_linux_target(),
+            "platform": f"linux-{architecture}",
             "os": "linux",
-            "arch": "x86_64",
+            "arch": architecture,
             "backend": "cpu",
             "flavor": "cpu",
+            "cargo_profile": "debug",
             "library": "lib/libmesh_llm_ffi.so",
             "library_paths": ["lib/libmesh_llm_ffi.so"],
             "uniffi_library": "lib/libmesh_llm_uniffi.so",
@@ -389,7 +431,8 @@ class NativeArtifactVerifierTests(unittest.TestCase):
                 mutate(manifest)
                 if name == "flavor":
                     renamed = artifact.with_name(
-                        "meshllm-native-linux-x86_64-made-up",
+                        "meshllm-native-linux-"
+                        f"{native_architecture()}-made-up",
                     )
                     artifact.rename(renamed)
                     artifact = renamed
@@ -404,6 +447,104 @@ class NativeArtifactVerifierTests(unittest.TestCase):
                     "unsupported" if name != "flavor" else "flavor",
                     result.stderr,
                 )
+
+    def test_native_sdk_restore_verifies_exact_typed_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "source"
+            download_dir = root / "download"
+            source_dir.mkdir()
+            download_dir.mkdir()
+            artifact, _ = self.write_sdk_artifact(source_dir)
+            archive = download_dir / f"{artifact.name}.tar.gz"
+            self.archive_artifact(artifact, archive)
+
+            result = self.run_sdk_restore(
+                download_dir,
+                root / "extracted",
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stdout + result.stderr,
+            )
+            restored = Path(result.stdout.strip())
+            self.assertEqual(restored.name, artifact.name)
+            self.assertTrue((restored / "manifest.json").is_file())
+
+    def test_native_sdk_restore_rejects_runner_architecture_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "source"
+            download_dir = root / "download"
+            source_dir.mkdir()
+            download_dir.mkdir()
+            artifact, _ = self.write_sdk_artifact(source_dir)
+            archive = download_dir / f"{artifact.name}.tar.gz"
+            self.archive_artifact(artifact, archive)
+            other_arch = (
+                "aarch64"
+                if native_architecture() == "x86_64"
+                else "x86_64"
+            )
+
+            result = self.run_sdk_restore(
+                download_dir,
+                root / "extracted",
+                target=f"{other_arch}-unknown-linux-gnu",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("target/runner architecture mismatch", result.stderr)
+
+    def test_native_sdk_restore_rejects_manifest_contract_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "source"
+            download_dir = root / "download"
+            source_dir.mkdir()
+            download_dir.mkdir()
+            artifact, _ = self.write_sdk_artifact(source_dir)
+            archive = download_dir / f"{artifact.name}.tar.gz"
+            self.archive_artifact(artifact, archive)
+
+            result = self.run_sdk_restore(
+                download_dir,
+                root / "extracted",
+                profile="release",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("cargo_profile mismatch", result.stderr)
+
+    def test_native_sdk_restore_rejects_extra_upload_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "source"
+            download_dir = root / "download"
+            source_dir.mkdir()
+            download_dir.mkdir()
+            artifact, _ = self.write_sdk_artifact(source_dir)
+            archive = download_dir / f"{artifact.name}.tar.gz"
+            self.archive_artifact(artifact, archive)
+            (download_dir / "unexpected.txt").write_text(
+                "unexpected",
+                encoding="utf-8",
+            )
+
+            result = self.run_sdk_restore(
+                download_dir,
+                root / "extracted",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "exactly one archive and checksum",
+                result.stderr,
+            )
 
     def test_sdk_manifest_omits_runner_local_build_directory(self) -> None:
         packager = (

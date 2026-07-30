@@ -5,12 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BUILD=0
+REQUIRE_PREBUILT_LLAMA=0
 OUT_DIR="$REPO_ROOT/dist/native-sdk"
 BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-cpu}}"
 TARGET_TRIPLE="${MESH_NATIVE_SDK_TARGET:-}"
 PROFILE="${MESH_NATIVE_SDK_PROFILE:-release}"
 LLAMA_WORKDIR="${LLAMA_WORKDIR:-$REPO_ROOT/.deps/llama.cpp}"
-LLAMA_BUILD_ROOT="${MESH_LLM_LLAMA_BUILD_ROOT:-$REPO_ROOT/.deps/llama-build}"
 
 usage() {
     cat >&2 <<'EOF'
@@ -20,6 +20,9 @@ Package a backend-flavoured MeshLLM native SDK runtime artifact.
 
 Options:
   --build             Build patched llama.cpp and mesh-llm-ffi before packaging.
+  --require-prebuilt-llama
+                      With --build, verify and reuse the existing llama.cpp ABI
+                      instead of rebuilding it.
   --backend NAME      cpu, metal, cuda, rocm, hip, or vulkan.
   --target TRIPLE     Rust target triple. Defaults to the host target.
   --profile PROFILE   Cargo profile to package: release or debug. Defaults to release.
@@ -40,6 +43,10 @@ while [[ "$#" -gt 0 ]]; do
     case "$1" in
         --build)
             BUILD=1
+            shift
+            ;;
+        --require-prebuilt-llama)
+            REQUIRE_PREBUILT_LLAMA=1
             shift
             ;;
         --backend)
@@ -85,6 +92,11 @@ case "$PROFILE" in
         exit 1
         ;;
 esac
+
+if [[ "$REQUIRE_PREBUILT_LLAMA" == "1" && "$BUILD" != "1" ]]; then
+    echo "--require-prebuilt-llama requires --build" >&2
+    exit 1
+fi
 
 host_os() {
     case "$(uname -s)" in
@@ -239,17 +251,26 @@ fi
 
 if [[ "$BUILD" == "1" ]]; then
     "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
+    llama_build_dir="$LLAMA_STAGE_BUILD_DIR"
+    build_args=()
+    if [[ "$REQUIRE_PREBUILT_LLAMA" == "1" ]]; then
+        build_args+=(--require-existing)
+    fi
     LLAMA_STAGE_BACKEND="$(build_backend)" \
-        LLAMA_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
-        LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
-        "$SCRIPT_DIR/build-llama.sh"
+        LLAMA_BUILD_DIR="$llama_build_dir" \
+        LLAMA_STAGE_BUILD_DIR="$llama_build_dir" \
+        "$SCRIPT_DIR/build-llama.sh" "${build_args[@]}"
 
-    cargo_args=(build -p mesh-llm-ffi --no-default-features --features host,embedded-runtime)
+    cargo_args=(build -p mesh-llm-ffi --no-default-features --features "host,embedded-runtime")
     if [[ "$PROFILE" == "release" ]]; then
         cargo_args+=(--release)
     fi
     if [[ "$TARGET_TRIPLE" != "$(default_target_triple)" ]]; then
         cargo_args+=(--target "$TARGET_TRIPLE")
+    fi
+    if [[ "$REQUIRE_PREBUILT_LLAMA" == "1" ]]; then
+        export SKIPPY_LLAMA_AUTO_BUILD=0
+        export MESH_LLM_AUTO_BUILD_LLAMA=0
     fi
     LLAMA_STAGE_BACKEND="$(build_backend)" \
         LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \

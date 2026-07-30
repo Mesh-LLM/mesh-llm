@@ -216,8 +216,11 @@ The scheduled/manual wrapper calls the reusable `nightly-stability-run.yml`
 workflow so maintainers can reuse the same harness execution from other
 workflows or lab jobs. The job summary includes the timing snapshot from
 `summary.md`, so day-over-day drift can be checked without opening JSONL
-artifacts. It is intentionally evidence-producing and non-required: failed
-nightlies should guide stabilization work, not block unrelated pull requests.
+artifacts. The reusable workflow is fixed to GitHub-hosted Ubuntu; it never
+accepts caller-provided runner labels because it checks out the caller's
+repository content. It is intentionally evidence-producing and non-required:
+failed nightlies should guide stabilization work, not block unrelated pull
+requests.
 
 ### 0f. KV/tool-loop stability certification
 

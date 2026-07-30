@@ -306,6 +306,66 @@ class CiArtifactActionTests(unittest.TestCase):
                 for line in output.read_text(encoding="utf-8").splitlines()
             )
 
+    def run_reusable_runner_policy(
+        self,
+        workflow_name: str,
+        *,
+        repository: str,
+        event_name: str,
+        ref: str,
+        depot_enabled: str,
+        target: str,
+        runner_size: str,
+        manual_use_depot: str = "false",
+    ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+        workflow = (
+            ROOT / ".github" / "workflows" / workflow_name
+        ).read_text(encoding="utf-8")
+        policy = workflow.split(
+            "      - name: Derive protected runner policy\n",
+            maxsplit=1,
+        )[1]
+        run_block = policy.split("        run: |\n", maxsplit=1)[1]
+        script_lines: list[str] = []
+        for line in run_block.splitlines():
+            if line.startswith("          "):
+                script_lines.append(line[10:])
+            elif not line:
+                script_lines.append("")
+            else:
+                break
+        script = "\n".join(script_lines)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "github-output"
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "GITHUB_OUTPUT": str(output),
+                    "POLICY_REPOSITORY": repository,
+                    "POLICY_REF": ref,
+                    "POLICY_EVENT_NAME": event_name,
+                    "POLICY_DEPOT_ENABLED": depot_enabled,
+                    "POLICY_MANUAL_USE_DEPOT": manual_use_depot,
+                    "POLICY_TARGET": target,
+                    "POLICY_RUNNER_SIZE": runner_size,
+                },
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            outputs = {}
+            if output.exists():
+                outputs = dict(
+                    line.split("=", maxsplit=1)
+                    for line in output.read_text(
+                        encoding="utf-8",
+                    ).splitlines()
+                )
+            return result, outputs
+
     def test_host_action_uses_canonical_dynamic_host_builder(self) -> None:
         action = self.read_action("prepare-host-input")
 
@@ -570,6 +630,590 @@ class CiArtifactActionTests(unittest.TestCase):
         for script in sorted(direct_calls):
             with self.subTest(script=script):
                 self.assertRegex(script, direct_sdk_pattern)
+
+    def test_native_sdk_build_is_a_shared_immutable_producer(self) -> None:
+        producer = (
+            ROOT / ".github" / "workflows" / "native-sdk-artifact.yml"
+        ).read_text(encoding="utf-8")
+        producer_action = self.read_action("prepare-native-sdk-input")
+        consumer_workflow = (
+            ROOT / ".github" / "workflows" / "sdk-smoke.yml"
+        ).read_text(encoding="utf-8")
+        consumer_script = (
+            ROOT / "scripts" / "ci-kotlin-sdk-smoke.sh"
+        ).read_text(encoding="utf-8")
+        restore_script = (
+            ROOT / "scripts" / "restore-native-sdk-input.sh"
+        ).read_text(encoding="utf-8")
+        routing = self.read_action("compute-changes")
+
+        self.assertIn(
+            "uses: ./.github/actions/prepare-native-sdk-input",
+            producer,
+        )
+        self.assertIn(
+            "uses: ./.github/workflows/static-abi-artifact.yml",
+            producer,
+        )
+        self.assertIn(
+            "scripts/restore-static-abi-input.sh",
+            producer,
+        )
+        self.assertIn(
+            "LLAMA_STAGE_BUILD_DIR: "
+            ".deps/llama.cpp/build-stage-abi-static",
+            producer,
+        )
+        self.assertIn("persist-credentials: false", producer)
+        self.assertIn("actions/upload-artifact@", producer)
+        self.assertIn("inputs.include_runtime_crate", producer)
+        self.assertIn("RUSTC_WRAPPER: sccache", producer)
+        self.assertEqual(
+            producer.count(
+                "uses: ./.github/actions/capture-sccache-stats",
+            ),
+            2,
+        )
+        self.assertIn(
+            "sccache-native-sdk-${{ inputs.target }}-"
+            "${{ inputs.backend }}-${{ inputs.profile }}-"
+            "${{ github.run_attempt }}",
+            producer,
+        )
+        self.assertIn(
+            "require_prebuilt_static_abi: "
+            "${{ inputs.static_abi_artifact_name != '' }}",
+            producer,
+        )
+        self.assertIn("scripts/package-native-sdk.sh", producer_action)
+        self.assertIn("--build", producer_action)
+        self.assertIn("--require-prebuilt-llama", producer_action)
+        self.assertIn(
+            "scripts/verify-native-sdk-package.sh",
+            producer_action,
+        )
+        self.assertIn(
+            "scripts/package-native-sdk-crate.sh",
+            producer_action,
+        )
+        self.assertIn(
+            "native SDK release asset basename collision",
+            producer_action,
+        )
+
+        self.assertIn(
+            "name: ${{ inputs.kotlin_artifact_name }}",
+            consumer_workflow,
+        )
+        self.assertIn(
+            "actions/download-artifact@"
+            "37930b1c2abaa49bbe596cd826c3c89aef350131",
+            consumer_workflow,
+        )
+        self.assertIn(
+            "scripts/restore-native-sdk-input.sh",
+            consumer_script,
+        )
+        for forbidden in (
+            "cargo ",
+            "prepare-llama.sh",
+            "build-llama.sh",
+            "package-native-sdk.sh",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, consumer_script)
+        self.assertIn("scripts/safe-extract-tar.py", restore_script)
+        self.assertIn("prepare-native-sdk-input", routing)
+        self.assertIn("native-sdk-artifact", routing)
+        self.assertIn("restore-native-sdk-input", routing)
+
+    def test_static_abi_artifact_is_typed_and_safely_reused(self) -> None:
+        producer = (
+            ROOT / ".github" / "workflows" / "static-abi-artifact.yml"
+        ).read_text(encoding="utf-8")
+        producer_action = self.read_action("prepare-static-abi-input")
+        restore_script = (
+            ROOT / "scripts" / "restore-static-abi-input.sh"
+        ).read_text(encoding="utf-8")
+        native_sdk_producer = (
+            ROOT / ".github" / "workflows" / "native-sdk-artifact.yml"
+        ).read_text(encoding="utf-8")
+        pr_workflow = (
+            ROOT / ".github" / "workflows" / "pr_builds.yml"
+        ).read_text(encoding="utf-8")
+        main_workflow = (
+            ROOT / ".github" / "workflows" / "ci.yml"
+        ).read_text(encoding="utf-8")
+        routing = self.read_action("compute-changes")
+
+        self.assertIn("CACHE_NAMESPACE: mesh-llm", producer)
+        self.assertIn(
+            "inputs.backend, inputs.target, "
+            "env.MESH_LLM_LLAMA_TOOLCHAIN_EPOCH, hashFiles(",
+            producer,
+        )
+        self.assertIn("path: static-abi-artifact-output", producer)
+        self.assertNotIn(
+            "path: .deps/llama.cpp/build-stage-abi-static",
+            producer,
+        )
+        self.assertIn(
+            "mesh-llm-cuda-runner-sha256-"
+            "8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d",
+            producer,
+        )
+        epoch = (
+            "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH: "
+            "mesh-llm-cuda-runner-sha256-"
+            "8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d"
+        )
+        for consumer in (native_sdk_producer, pr_workflow, main_workflow):
+            self.assertIn(epoch, consumer)
+        self.assertIn(
+            "uses: ./.github/actions/prepare-static-abi-input",
+            producer,
+        )
+        prepare_index = producer.index(
+            "name: Prepare patched llama.cpp checkout",
+        )
+        cache_index = producer.index(
+            "name: Cache portable static ABI input",
+        )
+        self.assertLess(prepare_index, cache_index)
+        for cache_input in (
+            "scripts/prepare-llama.sh",
+            "scripts/restore-static-abi-input.sh",
+            "scripts/safe-extract-tar.py",
+            "scripts/verify-checksum-sidecar.py",
+            "scripts/verify-static-abi-build-stamp.py",
+            ".github/actions/prepare-static-abi-input/action.yml",
+        ):
+            self.assertIn(cache_input, producer)
+        self.assertIn("name: ${{ inputs.artifact_name }}", producer)
+        self.assertIn(
+            "scripts/restore-static-abi-input.sh",
+            producer,
+        )
+        self.assertIn(
+            "artifact_name: sccache-static-abi-"
+            "${{ inputs.target }}-${{ inputs.backend }}-"
+            "${{ github.run_attempt }}",
+            producer,
+        )
+        self.assertIn("target/runner architecture mismatch", producer_action)
+        self.assertIn("verify-static-abi-build-stamp.py", producer_action)
+        self.assertIn("--patched-sha", producer_action)
+        self.assertIn("Portable MeshLLM static ABI link metadata", producer_action)
+        self.assertIn("retained producer-local path", producer_action)
+        self.assertNotIn(
+            'tar -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")"',
+            producer_action,
+        )
+        for archive in (
+            "libllama-common-base.a",
+            "libggml.a",
+            "libggml-base.a",
+            "libggml-cpu.a",
+        ):
+            self.assertIn(archive, producer_action)
+        self.assertIn(
+            ".mesh-llm-static-abi-input.json",
+            producer_action,
+        )
+        self.assertIn("verify-checksum-sidecar.py", producer_action)
+
+        self.assertIn("scripts/safe-extract-tar.py", restore_script)
+        self.assertIn("mesh-llm-static-abi-v3", restore_script)
+        self.assertIn("toolchain_epoch", restore_script)
+        self.assertIn("verify-checksum-sidecar.py", restore_script)
+        self.assertIn("verify-static-abi-build-stamp.py", restore_script)
+        self.assertIn("target/runner architecture mismatch", restore_script)
+        self.assertNotIn("tar -x", restore_script)
+        self.assertIn("prepare-static-abi-input", routing)
+        self.assertIn("restore-static-abi-input", routing)
+        self.assertIn("static-abi-artifact", routing)
+
+    def test_protected_reusable_producers_own_runner_and_cache_policy(
+        self,
+    ) -> None:
+        workflow_names = (
+            "native-sdk-artifact.yml",
+            "static-abi-artifact.yml",
+        )
+        for workflow_name in workflow_names:
+            workflow = (
+                ROOT / ".github" / "workflows" / workflow_name
+            ).read_text(encoding="utf-8")
+            inputs = workflow[: workflow.index("\njobs:\n")]
+            with self.subTest(workflow=workflow_name):
+                self.assertIn("runner_size:", inputs)
+                self.assertIn("default: '8'", inputs)
+                self.assertNotIn("runs_on:", inputs)
+                self.assertNotIn("allow_depot_remote_cache:", inputs)
+                self.assertNotIn("inputs.runs_on", workflow)
+                self.assertNotIn(
+                    "inputs.allow_depot_remote_cache",
+                    workflow,
+                )
+                self.assertIn(
+                    "runs-on: ${{ needs.runner_policy.outputs.runner }}",
+                    workflow,
+                )
+                self.assertIn(
+                    "allow_depot_remote_cache: "
+                    "${{ needs.runner_policy.outputs."
+                    "allow_depot_remote_cache }}",
+                    workflow,
+                )
+                self.assertIn(
+                    'POLICY_REPOSITORY" == "Mesh-LLM/mesh-llm"',
+                    workflow,
+                )
+                self.assertIn(
+                    'POLICY_REF" == "refs/heads/main"',
+                    workflow,
+                )
+                self.assertIn(
+                    'POLICY_EVENT_NAME" == "push"',
+                    workflow,
+                )
+                self.assertIn(
+                    'POLICY_EVENT_NAME" == "workflow_dispatch"',
+                    workflow,
+                )
+                self.assertIn(
+                    "POLICY_DEPOT_ENABLED: "
+                    "${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
+                    workflow,
+                )
+                self.assertIn(
+                    "POLICY_MANUAL_USE_DEPOT: "
+                    "${{ github.event_name == 'workflow_dispatch' "
+                    "&& github.event.inputs.use_depot == 'true' }}",
+                    workflow,
+                )
+                self.assertIn("default|4|8|16", workflow)
+                self.assertIn("depot-ubuntu-24.04-arm", workflow)
+
+    def test_protected_reusable_runner_policy_is_fail_closed(self) -> None:
+        hosted_cases = (
+            (
+                "pull_request",
+                "refs/pull/12/merge",
+                "Mesh-LLM/mesh-llm",
+            ),
+            (
+                "pull_request_target",
+                "refs/heads/main",
+                "Mesh-LLM/mesh-llm",
+            ),
+            (
+                "push",
+                "refs/tags/v1.2.3",
+                "Mesh-LLM/mesh-llm",
+            ),
+            (
+                "workflow_dispatch",
+                "refs/heads/feature",
+                "Mesh-LLM/mesh-llm",
+            ),
+            (
+                "push",
+                "refs/heads/main",
+                "attacker/mesh-llm",
+            ),
+        )
+        for workflow_name in (
+            "native-sdk-artifact.yml",
+            "static-abi-artifact.yml",
+        ):
+            for event_name, ref, repository in hosted_cases:
+                with self.subTest(
+                    workflow=workflow_name,
+                    event_name=event_name,
+                    ref=ref,
+                    repository=repository,
+                ):
+                    result, outputs = self.run_reusable_runner_policy(
+                        workflow_name,
+                        repository=repository,
+                        event_name=event_name,
+                        ref=ref,
+                        depot_enabled="true",
+                        target="x86_64-unknown-linux-gnu",
+                        runner_size="16",
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(outputs["runner"], "ubuntu-24.04")
+                    self.assertEqual(
+                        outputs["allow_depot_remote_cache"],
+                        "false",
+                    )
+
+            trusted_cases = (
+                (
+                    "x86_64-unknown-linux-gnu",
+                    "8",
+                    "depot-ubuntu-24.04-8",
+                ),
+                (
+                    "aarch64-unknown-linux-gnu",
+                    "4",
+                    "depot-ubuntu-24.04-arm-4",
+                ),
+                (
+                    "x86_64-unknown-linux-gnu",
+                    "default",
+                    "depot-ubuntu-24.04",
+                ),
+            )
+            for target, size, expected_runner in trusted_cases:
+                with self.subTest(
+                    workflow=workflow_name,
+                    target=target,
+                    size=size,
+                ):
+                    result, outputs = self.run_reusable_runner_policy(
+                        workflow_name,
+                        repository="Mesh-LLM/mesh-llm",
+                        event_name="push",
+                        ref="refs/heads/main",
+                        depot_enabled="true",
+                        target=target,
+                        runner_size=size,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(outputs["runner"], expected_runner)
+                    self.assertEqual(
+                        outputs["allow_depot_remote_cache"],
+                        "true",
+                    )
+
+            result, outputs = self.run_reusable_runner_policy(
+                workflow_name,
+                repository="Mesh-LLM/mesh-llm",
+                event_name="push",
+                ref="refs/heads/main",
+                depot_enabled="false",
+                target="aarch64-unknown-linux-gnu",
+                runner_size="8",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(outputs["runner"], "ubuntu-24.04-arm")
+            self.assertEqual(
+                outputs["allow_depot_remote_cache"],
+                "false",
+            )
+
+            result, outputs = self.run_reusable_runner_policy(
+                workflow_name,
+                repository="Mesh-LLM/mesh-llm",
+                event_name="push",
+                ref="refs/heads/main",
+                depot_enabled="true",
+                target="x86_64-unknown-linux-gnu",
+                runner_size="unbounded",
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "runner_size must be one of",
+                result.stderr,
+            )
+            self.assertEqual(outputs, {})
+
+            result, outputs = self.run_reusable_runner_policy(
+                workflow_name,
+                repository="Mesh-LLM/mesh-llm",
+                event_name="workflow_dispatch",
+                ref="refs/heads/main",
+                depot_enabled="false",
+                manual_use_depot="true",
+                target="x86_64-unknown-linux-gnu",
+                runner_size="8",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                outputs["runner"],
+                "depot-ubuntu-24.04-8",
+            )
+            self.assertEqual(
+                outputs["allow_depot_remote_cache"],
+                "true",
+            )
+
+            for event_name, ref, manual_use_depot in (
+                ("workflow_dispatch", "refs/heads/main", "false"),
+                ("workflow_dispatch", "refs/heads/feature", "true"),
+                ("pull_request", "refs/pull/12/merge", "true"),
+                ("push", "refs/heads/main", "true"),
+            ):
+                with self.subTest(
+                    workflow=workflow_name,
+                    event_name=event_name,
+                    ref=ref,
+                    manual_use_depot=manual_use_depot,
+                ):
+                    result, outputs = self.run_reusable_runner_policy(
+                        workflow_name,
+                        repository="Mesh-LLM/mesh-llm",
+                        event_name=event_name,
+                        ref=ref,
+                        depot_enabled="false",
+                        manual_use_depot=manual_use_depot,
+                        target="x86_64-unknown-linux-gnu",
+                        runner_size="8",
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(outputs["runner"], "ubuntu-24.04")
+                    self.assertEqual(
+                        outputs["allow_depot_remote_cache"],
+                        "false",
+                    )
+
+        result, outputs = self.run_reusable_runner_policy(
+            "native-sdk-artifact.yml",
+            repository="Mesh-LLM/mesh-llm",
+            event_name="push",
+            ref="refs/heads/main",
+            depot_enabled="true",
+            target="aarch64-apple-darwin",
+            runner_size="8",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(outputs["runner"], "macos-15")
+        self.assertEqual(
+            outputs["allow_depot_remote_cache"],
+            "false",
+        )
+
+    def test_swift_sdk_build_is_a_shared_immutable_producer(self) -> None:
+        producer = (
+            ROOT / ".github" / "workflows" / "swift-sdk-artifact.yml"
+        ).read_text(encoding="utf-8")
+        consumer_workflow = (
+            ROOT / ".github" / "workflows" / "sdk-smoke.yml"
+        ).read_text(encoding="utf-8")
+        consumer_script = (
+            ROOT / "scripts" / "ci-swift-sdk-smoke.sh"
+        ).read_text(encoding="utf-8")
+        routing = self.read_action("compute-changes")
+
+        self.assertIn("type: string", producer)
+        self.assertIn("host-only|full", producer)
+        self.assertIn(
+            "sdk/swift/scripts/build-host-macos-xcframework.sh",
+            producer,
+        )
+        self.assertIn("sdk/swift/scripts/build-xcframework.sh", producer)
+        self.assertIn(
+            "scripts/verify-swift-release-artifact.sh",
+            producer,
+        )
+        self.assertIn(
+            "scripts/verify-swift-xcframework.py",
+            (
+                ROOT / "scripts" / "verify-swift-release-artifact.sh"
+            ).read_text(encoding="utf-8"),
+        )
+        self.assertIn("persist-credentials: false", producer)
+        self.assertIn("actions/upload-artifact@", producer)
+        self.assertIn("runs-on: macos-15", producer)
+        self.assertIn("RUSTC_WRAPPER: sccache", producer)
+        self.assertNotIn("macos_runner:", producer)
+        self.assertIn(
+            "name: generated-swift-binding-${{ inputs.artifact_name }}",
+            producer,
+        )
+        self.assertIn(
+            "git diff --exit-code -- \"$generated_binding\"",
+            producer,
+        )
+        self.assertIn(
+            "uses: ./.github/actions/capture-sccache-stats",
+            producer,
+        )
+        self.assertIn("if: ${{ !cancelled() }}", producer)
+        self.assertIn(
+            "artifact_name: sccache-swift-sdk-"
+            "${{ inputs.mode }}-${{ github.run_attempt }}",
+            producer,
+        )
+
+        self.assertIn(
+            "name: ${{ inputs.swift_artifact_name }}",
+            consumer_workflow,
+        )
+        self.assertIn(
+            "name: generated-swift-binding-"
+            "${{ inputs.swift_artifact_name }}",
+            consumer_workflow,
+        )
+        self.assertIn(
+            "actions/download-artifact@"
+            "37930b1c2abaa49bbe596cd826c3c89aef350131",
+            consumer_workflow,
+        )
+        self.assertIn("persist-credentials: false", consumer_workflow)
+        self.assertIn(
+            "if: ${{ inputs.sdk_kind == 'rust' }}",
+            consumer_workflow,
+        )
+
+        for forbidden in (
+            "cargo ",
+            "build-llama.sh",
+            "package-native-sdk.sh",
+            "build-xcframework.sh",
+            "build-host-macos-xcframework.sh",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, consumer_script)
+        self.assertIn(
+            'scripts/safe-extract-zip.py "$SWIFT_INPUT_ARCHIVE"',
+            consumer_script,
+        )
+        self.assertIn(
+            'install -m 0644 "$SWIFT_INPUT_BINDING" '
+            '"$SWIFT_TRACKED_BINDING"',
+            consumer_script,
+        )
+        self.assertIn("safe-extract-(tar|zip)", routing)
+        self.assertIn("verify-swift-xcframework", routing)
+        self.assertIn(
+            "(native-sdk-artifact|sdk-smoke|static-abi-artifact|"
+            "swift-sdk-artifact)",
+            routing,
+        )
+
+    def test_swift_sdk_cache_is_mode_independent_and_target_specific(
+        self,
+    ) -> None:
+        producer = (
+            ROOT / ".github" / "workflows" / "swift-sdk-artifact.yml"
+        ).read_text(encoding="utf-8")
+        host_builder = (
+            ROOT / "sdk" / "swift" / "scripts"
+            / "build-host-macos-xcframework.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "format('mesh-llm-swift-sdk-{0}-{1}-{2}-{3}', "
+            "runner.os, runner.arch, "
+            "env.SWIFT_NATIVE_XCODE_CACHE_EPOCH, hashFiles(",
+            producer,
+        )
+        self.assertNotIn("runner.arch, inputs.mode, hashFiles(", producer)
+        self.assertIn(
+            "SWIFT_NATIVE_XCODE_CACHE_EPOCH: "
+            "macos-15-arm64-xcode-default-v1",
+            producer,
+        )
+        self.assertIn("trusted main full build", producer)
+        self.assertNotIn("build-stage-abi-host-metal", producer)
+        self.assertIn(
+            ".deps/llama-build/build-stage-abi-$RUST_TARGET-metal",
+            host_builder,
+        )
 
     def test_runtime_action_never_builds_the_host(self) -> None:
         action = self.read_action("prepare-native-runtime-input")
@@ -962,6 +1606,14 @@ class CiArtifactActionTests(unittest.TestCase):
         builds = (
             ROOT / ".github" / "workflows" / "pr_builds.yml"
         ).read_text(encoding="utf-8")
+        self.assertIn(
+            "shared-key: main-rust-crate-tests-${{ matrix.batch.idx }}",
+            builds,
+        )
+        self.assertIn(
+            "shared-key: main-rust-crate-tests-${{ matrix.batch.idx }}",
+            main,
+        )
         self.assertIn(
             "allow_depot_remote_cache: "
             "${{ needs.changes.outputs.allow_depot_remote_cache }}",

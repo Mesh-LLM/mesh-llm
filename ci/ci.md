@@ -91,6 +91,8 @@ flowchart TD
             MacHost["macos_host_input\none immutable neutral host"]
             MacRuntime["macos_metal_runtime_input\none Metal runtime"]
             MacCPU["macos_cpu_artifact\ncompose host + Metal runtime\n→ ci-macos-inference-binaries"]
+            KotlinInput["kotlin_sdk_input\ndebug native SDK producer"]
+            SwiftInput["swift_sdk_input\nhost-only XCFramework producer"]
             MacTests["macos_unit_tests"]
         end
 
@@ -98,7 +100,7 @@ flowchart TD
             Restore["restore-smoke-inputs action\ndownload artifact · stage binary · restore model"]
             Inference["smoke.yml\nLinux inference + OpenAI + split serving"]
             Scripted["scripted-binary-smoke.yml\ntwo-node client/serving"]
-            SDKSmoke["sdk-smoke.yml\nnative · Kotlin · Swift"]
+            SDKSmoke["sdk-smoke.yml\nRust · Kotlin · Swift"]
         end
     end
 
@@ -109,12 +111,16 @@ flowchart TD
     LinuxCPU --> LinuxProduct
     Affected --> LinuxTests
     TestBins --> StaticABI
+    SDK --> StaticABI
     StaticABI --> RustCrateTests
     StaticABI --> LinuxTests
+    StaticABI --> KotlinInput
     InferenceArtifact --> MacHost
     InferenceArtifact --> MacRuntime
     MacHost --> MacCPU
     MacRuntime --> MacCPU
+    SDK --> KotlinInput
+    SDK --> SwiftInput
     Affected --> MacTests
     Backend --> LinuxCUDARuntime
     Backend --> LinuxROCmRuntime
@@ -139,6 +145,8 @@ flowchart TD
     Restore --> Inference
     Restore --> Scripted
     Restore --> SDKSmoke
+    KotlinInput -- "artifact: pr-kotlin-native-sdk-input" --> SDKSmoke
+    SwiftInput -- "artifact: pr-swift-sdk-input" --> SDKSmoke
     SDK --> SDKSmoke
 
     subgraph Cleanup["pr_cleanup.yml · PR Cache Cleanup"]
@@ -179,6 +187,9 @@ flowchart TD
   runtime. The Linux host and CPU runtime build independently, then a
   composition-only job uploads product-v2 for every downstream smoke. SDK
   smokes consume the staged runtime instead of compiling a private replacement.
+  The Swift XCFramework is also built by the same typed producer used by PR and
+  release: main requests exhaustive `full` mode and its smoke only verifies and
+  consumes that immutable artifact.
 - Main builds immutable Linux, macOS, and Windows release hosts independently
   from their CPU, Metal, CUDA, ROCm, and Vulkan runtimes. Composition-only jobs
   verify and combine those exact producer inputs. Each Linux GPU backend has
@@ -190,12 +201,15 @@ flowchart TD
   qualification.
 - `.github/actions/prepare-host-input`,
   `.github/actions/prepare-windows-host-input`,
-  `.github/actions/prepare-native-runtime-input`, and
+  `.github/actions/prepare-native-runtime-input`,
+  `.github/actions/prepare-native-sdk-input`,
+  `.github/actions/prepare-static-abi-input`, and
   `.github/actions/compose-product-input` are the shared PR/main/release
   primitives. The composer never compiles either producer input.
-- Linux crate-test and grouped-test matrices restore one tarred static CPU
-  llama ABI from `linux_static_abi_input`; individual rows never rebuild the
-  same patch queue concurrently.
+- Linux crate-test and grouped-test matrices plus the Kotlin native-SDK producer
+  restore one checksummed, target-described static CPU llama ABI from
+  `linux_static_abi_input`; individual consumers never rebuild or raw-extract
+  the same patch queue concurrently.
 
 ### Current PR Builds contract
 
@@ -235,7 +249,28 @@ flowchart TD
   immutable host without a matrix-wide fan-in barrier. Windows follows the
   same graph: one debug neutral host, independent CPU/CUDA/ROCm/Vulkan runtime
   inputs, and composition-only products. Unsupported macOS CUDA, ROCm, and
-  Vulkan rows are omitted.
+  Vulkan rows are omitted. The PR Swift `host-only` XCFramework producer starts
+  directly from change routing, in parallel with the macOS product and unit
+  tests; Swift smoke waits only for the macOS product and XCFramework inputs.
+  `sdk_smoke_required` makes the shared static CPU ABI producer eligible; the PR
+  Kotlin debug native-SDK producer restores that immutable ABI, validates its
+  complete link closure, pinned build-image epoch, and build stamp through the
+  verification-only `--require-prebuilt-llama` path, and compiles only the Rust
+  FFI while the Linux product proceeds independently. Both build-script and
+  Cargo auto-build fallbacks are disabled for that reuse path. Kotlin smoke
+  waits only for the product and native-SDK inputs and performs no native
+  compilation.
+- **PR Builds Summary** is the stable, non-matrix branch-protection check for
+  this workflow. `changes` runs `scripts/plan-pr-build-jobs.py` once and exports
+  `required_jobs_json`; every conditional top-level job uses membership in
+  that plan as its route, while normal `needs` success semantics keep consumers
+  behind their producers. The summary directly depends on every other
+  top-level job and consumes the same plan. A skipped job is accepted only when
+  the planner did not require it, so a required producer or dependency chain
+  cannot disappear behind propagated skips. Any failure, cancellation, unknown
+  result, duplicate plan entry, or required ID outside the summary graph fails
+  the gate. The job uses `if: ${{ !cancelled() }}` so ordinary upstream
+  failures are still summarized without using `always()`.
 - Product readiness starts a local mDNS client and never depends on the mutable
   public mesh. The public `client --auto` admission probe is manual-only, so an
   external peer outage cannot block a pull request or release.
@@ -330,16 +365,34 @@ role-isolated topology. The planned split has these prerequisites:
   contract even for Node-free images;
 - `self-hosted-*` runner/device overlays are added and verified last.
 
-Runner-image publication will follow one immutable chain:
+The first runner-image migration phase in draft
+[`mesh-llm-runner-images#9`](https://github.com/Mesh-LLM/mesh-llm-runner-images/pull/9)
+implements one immutable chain:
 `build once -> stage digest -> verify that exact digest -> promote digest`.
-Manifest assembly and human-facing tags consume verified digests and must not
-rebuild an architecture image. The latest measured compatibility-image
+PRs build only affected families plus the mandatory public CPU AMD64 contract,
+use BuildKit caches read-only, and cannot stage or promote. Main pushes stage
+candidate digests; weekly and explicit manual runs promote a complete retained
+cohort. The reusable stage workflow derives its own trusted runner/cache policy,
+source revisions are verified, content-digest tags identify immutable
+candidates, and one serial reconciliation updates the `latest` cohort.
+Manifest assembly and human-facing tags consume verified digests and do not
+rebuild an architecture image. The pre-migration compatibility-image
 [run 30248081255](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30248081255)
 took 39m 15s across 55 jobs; its slowest test build step was 14m 25s and a
 later second public ROCm 7.2 AMD64 publication build took 18m 03s. That run
 demonstrates duplicate construction, but it did not retain authoritative
 compressed-size or controlled cold-pull evidence. Role-size and pull-time
 thresholds remain proposed rollout gates until measured.
+
+The replacement PR
+[run 30504335079](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30504335079)
+exercised all 20 platform rows because the Dockerfile changed. Its 22 allocated
+jobs remained GitHub-hosted and completed in 6m 22s wall / 1h 13m 07s
+aggregate, versus 22m 57s / 2h 52m 59s for the first build-once run. The
+slowest self-hosted ROCm 7.2 row fell from 22m 20s to 5m 48s, and logs contained
+no actual cache-export phase. This is PR-validation evidence only; registry
+staging, cohort promotion, compressed-size, and controlled cold-pull gates
+still require trusted runs.
 
 Production workflows and Flux resources must pin the multi-architecture OCI
 digest, using `ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:<digest>`. Timestamp,
@@ -418,7 +471,10 @@ Consequently, no untrusted PR code may run on Depot while automatic cache
 injection is enabled. GitHub-hosted jobs retain the existing best-effort
 `disk,gha` path or explicit disk-only mode. Cache read failures degrade to
 misses, cache write failures only warn, and a failed remote probe restarts
-`sccache` with disk-only storage.
+`sccache` with disk-only storage. PR crate-test shards restore the existing
+`main-rust-crate-tests-<shard>` Cargo target caches read-only (`save-if:
+false`), so trusted main owns the cache while PRs avoid recompiling the same
+workspace graph.
 
 ## Depot rollout
 
@@ -430,8 +486,23 @@ because PR workflow and local-action files are themselves PR-controlled.
 Trusted main/release jobs use `DEPOT_RUNNERS_ENABLED`, and a trusted main-ref
 manual dispatch can use `use_depot=true` for a bounded canary. The selector
 requires `refs/heads/main`; tag pushes and feature refs fall back to hosted
-runners. It emits both Intel and ARM64 labels from the same trust decision, so
-release CPU producers, composers, and smokes do not bypass the policy.
+runners. It emits both Intel and ARM64 labels from the same trust decision for
+eligible producers and composers.
+
+The selected `native-sdk-artifact.yml` and `static-abi-artifact.yml` reusable
+workflows own a stricter policy because a caller can pin the protected workflow
+while still asking it to check out caller-controlled contents. They accept only
+a bounded `runner_size` (`default`, `4`, `8`, or `16`), then a fixed
+GitHub-hosted policy job derives the build label and Depot-cache permission
+from the exact repository, event, `refs/heads/main`, repository gate, and
+target architecture. Callers cannot provide `runs-on` or independently enable
+Depot WebDAV. PR and `pull_request_target` events, tags, feature refs, external
+repositories, macOS targets, and a disabled gate without the authorized canary
+always select the architecture-matching GitHub-hosted runner with cache
+permission false. The event-owned `use_depot` canary may enable Depot only for
+an exact `Mesh-LLM/mesh-llm` main-ref `workflow_dispatch`; it is read from the
+immutable event payload and is not a reusable-workflow input.
+
 Depot-managed runners register in the organization `Default` runner group.
 Before enabling public access, restrict that group to
 `Mesh-LLM/mesh-llm` and exact default-branch workflow refs, beginning with
@@ -444,8 +515,12 @@ from that ref. Depot's cache is repository-scoped instead, so cache-key
 conventions or a trusted reusable caller are not sufficient protection from
 malicious checked-out PR code. PR events stay hosted while automatic Depot
 Cache is enabled. Runner placement does not alter build action inputs or
-artifact contracts. Hardware-qualified GPU execution stays on dedicated
-runners. See
+artifact contracts. Credential-bearing Hugging Face, inference, scripted, and
+SDK smoke reusable workflows accept no arbitrary runner label and stay on
+GitHub-hosted runners. PR callers pass no `HF_TOKEN`; only trusted main/release
+invocations receive the optional rate-limit credential. The Swift producer and
+Swift smoke are fixed to the GitHub-hosted `macos-15` image.
+Hardware-qualified GPU execution stays on dedicated runners. See
 [`DEPOT_MIGRATION.md`](DEPOT_MIGRATION.md) for activation prerequisites,
 baseline metrics, target service levels, and the cross-repository plan.
 
@@ -478,13 +553,40 @@ baseline metrics, target service levels, and the cross-repository plan.
   directory via `MESH_HF_DOWNLOAD_TEST_CACHE_DIR`.
 - Shared model caches are restored in PRs and saved only from trusted `main`
   runs.
-- Linux CPU artifacts feed inference, two-node, native SDK, and Kotlin SDK
-  smokes. macOS CPU artifacts feed Swift SDK smokes.
+- Linux CPU artifacts feed inference, two-node, and SDK smokes. Kotlin also
+  restores the verified native SDK archive built by `native-sdk-artifact.yml`
+  from an explicit target/backend/profile contract. That producer starts
+  from the `sdk_smoke_required` static-ABI input and runs in parallel with the
+  Linux product; PR uses a debug package, while main and release use release
+  packages. Release creates one matching static ABI per Linux target through
+  `static-abi-artifact.yml` before invoking the same native-SDK action.
+  Both protected producers derive runner placement and Depot-cache authority
+  internally from a bounded runner-size and target-architecture contract;
+  callers cannot inject runner labels. The ABI v3 manifest covers the complete
+  static link closure and a pinned build-image/toolchain epoch. Its cached and
+  uploaded payload is a minimal path-normalized link bundle rather than a
+  producer-local CMake build tree, and the producer retains target/backend
+  sccache evidence on both cache hits and misses. Native SDK
+  packaging invokes `build-llama.sh --require-existing` with both build.rs
+  auto-build switches disabled, so a missing or stale restored archive fails
+  instead of silently compiling llama.cpp again.
+  Kotlin smoke verifies and extracts the immutable package without Cargo,
+  llama.cpp preparation/builds, or native-SDK packaging. macOS CPU artifacts
+  feed Swift SDK smokes. Swift additionally restores the verified XCFramework
+  and exact generated `mesh_ffi.swift` companion artifact built by
+  `swift-sdk-artifact.yml`; PR uses `host-only`, while main and release use
+  `full`. Producer and smoke are fixed to `macos-15`, and the shared native
+  cache includes an explicit macOS/Xcode epoch. Rust compilation is routed
+  through sccache, with per-mode/per-attempt statistics retained as CI evidence.
+  Main and tag producers reject tracked-binding drift; dispatched releases copy
+  the producer binding into the prepared tag commit. The Swift consumer cannot
+  invoke Cargo, llama.cpp compilation, native-SDK packaging, or an XCFramework
+  build.
 - Linux native-runtime packaging uses `patchelf` to make packaged shared
   libraries relocatable with `$ORIGIN`, then verifies them without
-  `LD_LIBRARY_PATH`. Release native-runtime jobs and Linux SDK smoke jobs need
-  `patchelf` because SDK smoke prepares native runtime packages through
-  `scripts/ci-prepare-native-runtime.sh`.
+  `LD_LIBRARY_PATH`. Release native-runtime jobs and Rust SDK smoke jobs need
+  `patchelf`; Kotlin and Swift smokes reuse the runtime adjacent to their
+  composed product without rebuilding it.
 - Artifact-consuming smokes are additionally gated on the matching CPU producer
   being eligible, so backend-only or cleanup-only PRs skip those jobs natively
   instead of attempting to download an artifact that was never uploaded.

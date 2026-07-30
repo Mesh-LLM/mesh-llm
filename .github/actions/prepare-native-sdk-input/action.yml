@@ -1,0 +1,221 @@
+name: Prepare native SDK input
+description: Build, package, verify, and stage one immutable MeshLLM native SDK input.
+
+inputs:
+  backend:
+    description: Native SDK backend.
+    required: true
+  target:
+    description: Rust target triple.
+    required: true
+  profile:
+    description: Cargo profile (debug or release).
+    required: true
+  output_dir:
+    description: New relative directory that receives the native SDK package.
+    required: false
+    default: native-sdk-output
+  include_runtime_crate:
+    description: Include the generated native runtime crate in the flat upload.
+    required: false
+    default: "false"
+  require_prebuilt_static_abi:
+    description: Fail instead of rebuilding the restored static llama ABI.
+    required: false
+    default: "false"
+
+outputs:
+  archive_path:
+    description: Absolute path to the verified native SDK archive.
+    value: ${{ steps.prepare.outputs.archive_path }}
+  checksum_path:
+    description: Absolute path to the archive checksum sidecar.
+    value: ${{ steps.prepare.outputs.checksum_path }}
+  artifact_dir:
+    description: Absolute path to the verified extracted native SDK directory.
+    value: ${{ steps.prepare.outputs.artifact_dir }}
+  upload_path:
+    description: Flat glob containing the exact immutable upload payload.
+    value: ${{ steps.prepare.outputs.upload_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build and stage immutable native SDK input
+      id: prepare
+      shell: bash
+      env:
+        INPUT_BACKEND: ${{ inputs.backend }}
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
+        INPUT_INCLUDE_RUNTIME_CRATE: ${{ inputs.include_runtime_crate }}
+        INPUT_REQUIRE_PREBUILT_STATIC_ABI: ${{ inputs.require_prebuilt_static_abi }}
+      run: |
+        set -euo pipefail
+
+        case "$INPUT_BACKEND" in
+          cpu|metal|cuda|cuda-blackwell|rocm|hip|vulkan) ;;
+          *)
+            echo "unsupported native SDK backend: $INPUT_BACKEND" >&2
+            exit 1
+            ;;
+        esac
+        case "$INPUT_TARGET" in
+          aarch64-apple-darwin)
+            expected_os="Darwin"
+            expected_arch="aarch64"
+            ;;
+          x86_64-unknown-linux-gnu)
+            expected_os="Linux"
+            expected_arch="x86_64"
+            ;;
+          aarch64-unknown-linux-gnu)
+            expected_os="Linux"
+            expected_arch="aarch64"
+            ;;
+          *)
+            echo "unsupported native SDK producer target: $INPUT_TARGET" >&2
+            exit 1
+            ;;
+        esac
+        case "$(uname -m)" in
+          x86_64|amd64) runner_arch="x86_64" ;;
+          aarch64|arm64) runner_arch="aarch64" ;;
+          *) runner_arch="$(uname -m)" ;;
+        esac
+        if [[ "$(uname -s)" != "$expected_os" ||
+              "$runner_arch" != "$expected_arch" ]]; then
+          echo "native SDK target/runner mismatch: $INPUT_TARGET on $(uname -s)/$runner_arch" >&2
+          exit 1
+        fi
+        case "$INPUT_PROFILE" in
+          debug|release) ;;
+          *)
+            echo "unsupported native SDK Cargo profile: $INPUT_PROFILE" >&2
+            exit 1
+            ;;
+        esac
+        case "$INPUT_INCLUDE_RUNTIME_CRATE" in
+          true|false) ;;
+          *)
+            echo "include_runtime_crate must be true or false" >&2
+            exit 1
+            ;;
+        esac
+        case "$INPUT_REQUIRE_PREBUILT_STATIC_ABI" in
+          true|false) ;;
+          *)
+            echo "require_prebuilt_static_abi must be true or false" >&2
+            exit 1
+            ;;
+        esac
+        if [[ "$INPUT_OUTPUT_DIR" == /* ||
+              "$INPUT_OUTPUT_DIR" == "." ||
+              "$INPUT_OUTPUT_DIR" == *".."* ||
+              ! "$INPUT_OUTPUT_DIR" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
+          echo "output_dir must be a safe relative path: $INPUT_OUTPUT_DIR" >&2
+          exit 1
+        fi
+        if [[ -e "$INPUT_OUTPUT_DIR" ]]; then
+          echo "native SDK output directory already exists: $INPUT_OUTPUT_DIR" >&2
+          exit 1
+        fi
+
+        package_args=(
+          --build
+          --backend "$INPUT_BACKEND"
+          --target "$INPUT_TARGET"
+          --profile "$INPUT_PROFILE"
+          --out "$INPUT_OUTPUT_DIR"
+        )
+        if [[ "$INPUT_REQUIRE_PREBUILT_STATIC_ABI" == "true" ]]; then
+          package_args+=(--require-prebuilt-llama)
+        fi
+        scripts/package-native-sdk.sh "${package_args[@]}"
+
+        shopt -s nullglob
+        archives=("$INPUT_OUTPUT_DIR"/*.tar.gz)
+        checksums=("$INPUT_OUTPUT_DIR"/*.tar.gz.sha256)
+        artifact_manifests=("$INPUT_OUTPUT_DIR"/meshllm-native-*/manifest.json)
+        if [[ "${#archives[@]}" -ne 1 ||
+              "${#checksums[@]}" -ne 1 ||
+              "${#artifact_manifests[@]}" -ne 1 ]]; then
+          echo "expected one native SDK archive, checksum, and artifact directory" >&2
+          exit 1
+        fi
+
+        archive_path="${archives[0]}"
+        checksum_path="${checksums[0]}"
+        artifact_dir="$(dirname "${artifact_manifests[0]}")"
+        if [[ "$checksum_path" != "$archive_path.sha256" ]]; then
+          echo "native SDK checksum sidecar does not match archive" >&2
+          exit 1
+        fi
+
+        scripts/verify-native-sdk-package.sh "$archive_path"
+        scripts/verify-native-sdk-package.sh "$artifact_dir"
+        python3 - \
+          "$artifact_dir/manifest.json" \
+          "$INPUT_TARGET" \
+          "$INPUT_BACKEND" \
+          "$INPUT_PROFILE" <<'PY'
+        import json
+        import sys
+
+        manifest_path, target, backend, profile = sys.argv[1:]
+        with open(manifest_path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        expected = {
+            "target_triple": target,
+            "backend": backend,
+            "cargo_profile": profile,
+        }
+        for field, value in expected.items():
+            if manifest.get(field) != value:
+                raise SystemExit(
+                    f"native SDK manifest {field} mismatch: "
+                    f"expected {value!r}, got {manifest.get(field)!r}"
+                )
+        PY
+
+        upload_dir="$INPUT_OUTPUT_DIR-upload"
+        if [[ -e "$upload_dir" ]]; then
+          echo "native SDK upload directory already exists: $upload_dir" >&2
+          exit 1
+        fi
+        mkdir -p "$upload_dir"
+
+        upload_sources=("$archive_path" "$checksum_path")
+        if [[ "$INPUT_INCLUDE_RUNTIME_CRATE" == "true" ]]; then
+          crate_output="$INPUT_OUTPUT_DIR-crates"
+          scripts/package-native-sdk-crate.sh \
+            --out "$crate_output" \
+            "$artifact_dir"
+          runtime_crates=("$crate_output"/*/target/package/*.crate)
+          if [[ "${#runtime_crates[@]}" -ne 1 ]]; then
+            echo "expected one native SDK runtime crate" >&2
+            exit 1
+          fi
+          upload_sources+=("${runtime_crates[0]}")
+        fi
+
+        for source in "${upload_sources[@]}"; do
+          destination="$upload_dir/$(basename "$source")"
+          if [[ -e "$destination" ]]; then
+            echo "native SDK release asset basename collision: $destination" >&2
+            exit 1
+          fi
+          cp -p "$source" "$destination"
+        done
+
+        output_root="$(cd "$INPUT_OUTPUT_DIR" && pwd)"
+        upload_root="$(cd "$upload_dir" && pwd)"
+        artifact_name="$(basename "$artifact_dir")"
+        archive_name="$(basename "$archive_path")"
+        {
+          echo "archive_path=$output_root/$archive_name"
+          echo "checksum_path=$output_root/$archive_name.sha256"
+          echo "artifact_dir=$output_root/$artifact_name"
+          echo "upload_path=$upload_root/*"
+        } >> "$GITHUB_OUTPUT"

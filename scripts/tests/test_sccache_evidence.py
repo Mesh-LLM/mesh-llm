@@ -21,6 +21,7 @@ WORKFLOWS = {
     "pr-builds": ROOT / ".github" / "workflows" / "pr_builds.yml",
     "pr-quality": ROOT / ".github" / "workflows" / "pr_quality.yml",
     "main": ROOT / ".github" / "workflows" / "ci.yml",
+    "swift-sdk": ROOT / ".github" / "workflows" / "swift-sdk-artifact.yml",
 }
 
 
@@ -56,6 +57,7 @@ class SccacheEvidenceTests(unittest.TestCase):
         payload: dict[str, object],
         *,
         artifact_name: str = "sccache-test-1",
+        sccache_error: str = "",
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -64,9 +66,14 @@ class SccacheEvidenceTests(unittest.TestCase):
         fake_sccache.write_text(
             "#!/bin/sh\n"
             "if [ \"$#\" -eq 1 ] && [ \"$1\" = \"--show-stats\" ]; then\n"
-            "  printf '%s\\n' 'Compile requests                     12'\n"
+            "  printf '%s\\n' "
+            "'Cache location: https://human-stats-secret.example/private'\n"
             "elif [ \"$#\" -eq 3 ] && [ \"$1\" = \"--show-stats\" ] "
             "&& [ \"$2\" = \"--stats-format\" ] && [ \"$3\" = \"json\" ]; then\n"
+            "  if [ -n \"$FAKE_SCCACHE_ERROR\" ]; then\n"
+            "    printf '%s\\n' \"$FAKE_SCCACHE_ERROR\" >&2\n"
+            "    exit 23\n"
+            "  fi\n"
             "  printf '%s\\n' \"$FAKE_SCCACHE_JSON\"\n"
             "else\n"
             "  exit 2\n"
@@ -93,6 +100,7 @@ class SccacheEvidenceTests(unittest.TestCase):
                 **os.environ,
                 "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
                 "FAKE_SCCACHE_JSON": json.dumps(payload),
+                "FAKE_SCCACHE_ERROR": sccache_error,
             },
             check=False,
             capture_output=True,
@@ -100,19 +108,103 @@ class SccacheEvidenceTests(unittest.TestCase):
         )
         return result, stats_file, github_output
 
-    def test_capture_emits_human_stats_and_machine_readable_counters(self) -> None:
+    def test_capture_writes_only_sanitized_machine_readable_counters(self) -> None:
         payload = valid_payload()
         result, stats_file, github_output = self.run_capture(payload)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Human-readable sccache statistics", result.stdout)
-        self.assertIn("Compile requests                     12", result.stdout)
-        self.assertEqual(json.loads(stats_file.read_text()), payload)
+        self.assertNotIn("Human-readable sccache statistics", result.stdout)
+        self.assertNotIn("human-stats-secret", result.stdout)
+        self.assertEqual(
+            json.loads(stats_file.read_text()),
+            {
+                "schema": "mesh-llm.sccache-stats",
+                "schema_version": 1,
+                "stats": {
+                    "compile_requests": 12,
+                    "requests_executed": 10,
+                    "compilations": 4,
+                    "cache_writes": 3,
+                    "cache_read_errors": 0,
+                    "cache_write_errors": 0,
+                    "cache_hits": {"counts": {"total": 6}},
+                    "cache_misses": {"counts": {"total": 4}},
+                    "cache_errors": {"counts": {"total": 0}},
+                },
+            },
+        )
         outputs = github_output.read_text(encoding="utf-8")
         self.assertIn("compile_requests=12", outputs)
         self.assertIn("requests_executed=10", outputs)
         self.assertIn("cache_hits=6", outputs)
         self.assertIn("cache_misses=4", outputs)
+
+    def test_raw_secrets_urls_and_paths_cannot_reach_logs_or_evidence(self) -> None:
+        payload = valid_payload()
+        stats = payload["stats"]
+        self.assertIsInstance(stats, dict)
+        cache_hits = stats["cache_hits"]
+        self.assertIsInstance(cache_hits, dict)
+        cache_hits["counts"] = {
+            "/Users/private/cache/path?token=count-key-secret": 6,
+        }
+        stats["not_cached"] = {
+            "/home/runner/private-source": 1,
+            "https://stats-secret.example/cache": 2,
+        }
+        payload.update(
+            {
+                "cache_location": (
+                    "WebDAV: https://cache-user:location-secret@cache.example"
+                ),
+                "basedirs": ["/home/runner/work/private-repository"],
+                "version": "raw-version-secret",
+                "url": "https://payload-secret.example/cache",
+                "absolute_path": "/Users/private/sccache",
+            },
+        )
+
+        result, stats_file, github_output = self.run_capture(payload)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        evidence = json.loads(stats_file.read_text(encoding="utf-8"))
+        self.assertEqual(evidence["stats"]["cache_hits"], {"counts": {"total": 6}})
+        exposed_surface = "\n".join(
+            (
+                result.stdout,
+                result.stderr,
+                stats_file.read_text(encoding="utf-8"),
+                github_output.read_text(encoding="utf-8"),
+            ),
+        )
+        for forbidden in (
+            "human-stats-secret",
+            "count-key-secret",
+            "private-source",
+            "stats-secret",
+            "cache_location",
+            "basedirs",
+            "location-secret",
+            "raw-version-secret",
+            "payload-secret",
+            "/Users/private",
+            "/home/runner/work/private-repository",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, exposed_surface)
+
+    def test_sccache_error_output_cannot_leak_into_the_job_log(self) -> None:
+        secret = "https://cache-user:stderr-secret@cache.example/private"
+        result, stats_file, _ = self.run_capture(
+            valid_payload(),
+            sccache_error=secret,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(stats_file.exists())
+        self.assertNotIn(secret, result.stdout)
+        self.assertNotIn(secret, result.stderr)
+        self.assertIn("exit code 23", result.stderr)
 
     def test_zero_compile_requests_warns_but_remains_valid_evidence(self) -> None:
         result, stats_file, _ = self.run_capture(
@@ -195,6 +287,9 @@ class SccacheEvidenceTests(unittest.TestCase):
                 "sccache-main-linux-cpu-runtime-${{ github.run_attempt }}",
                 "sccache-main-rust-crate-tests-${{ matrix.batch.idx }}-${{ github.run_attempt }}",
                 "sccache-main-linux-tests-${{ matrix.group }}-${{ github.run_attempt }}",
+            ),
+            "swift-sdk": (
+                "sccache-swift-sdk-${{ inputs.mode }}-${{ github.run_attempt }}",
             ),
         }
 

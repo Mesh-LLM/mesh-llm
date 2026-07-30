@@ -37,7 +37,7 @@ rustup target add "$RUST_TARGET" 2>/dev/null || true
 
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
 export LLAMA_STAGE_BACKEND="${LLAMA_STAGE_BACKEND:-metal}"
-export LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-$REPO_ROOT/.deps/llama.cpp/build-stage-abi-metal}"
+export LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-$REPO_ROOT/.deps/llama-build/build-stage-abi-$RUST_TARGET-metal}"
 
 echo "Preparing embedded llama.cpp ABI libraries..."
 "$REPO_ROOT/scripts/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"

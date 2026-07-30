@@ -318,14 +318,15 @@ jobs:
       mesh_binary_target: target/release/mesh-llm
       cache_key_prefix: release-
       release_tag: ${{ needs.metadata.outputs.tag }}
-      runs_on: ${{ toJson(needs.metadata.outputs.runner_8) }}
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   build_native_sdk_runtime:
     name: Build native SDK runtime ${{ matrix.name }}
     needs: metadata
-    runs-on: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && needs.metadata.outputs.runner_8 || matrix.target == 'aarch64-unknown-linux-gnu' && needs.metadata.outputs.runner_arm_8 || matrix.os }}
+    permissions:
+      contents: read
+      packages: read
     strategy:
       fail-fast: false
       matrix:
@@ -345,85 +346,21 @@ jobs:
             backend: cpu
             target: aarch64-unknown-linux-gnu
             artifact_suffix: linux-aarch64-cpu
-    env:
-      LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
-      MESH_NATIVE_SDK_TARGET: ${{ matrix.target }}
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
-
-      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
-      - uses: ./.github/actions/configure-sccache-gha
-        with:
-          allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
-
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl lld
-
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: brew install cmake ninja lld
-
-      - name: Prepare dispatched release version
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-        run: scripts/release-version.sh "$RELEASE_TAG"
-
-      - name: Package native SDK runtime
-        run: |
-          scripts/package-native-sdk.sh \
-            --build \
-            --backend "${{ matrix.backend }}" \
-            --target "${{ matrix.target }}" \
-            --out dist/native-sdk
-
-      - name: Verify native SDK runtime artifact
-        run: scripts/verify-native-sdk-package.sh dist/native-sdk/*.tar.gz
-
-      - name: Package native SDK runtime crate
-        run: scripts/package-native-sdk-crate.sh --out dist/native-sdk-crates dist/native-sdk/*.tar.gz
-
-      - name: Stage flat native SDK release assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          runtime_archives=(dist/native-sdk/*.tar.gz)
-          runtime_checksums=(dist/native-sdk/*.sha256)
-          runtime_crates=(dist/native-sdk-crates/*/target/package/*.crate)
-          if [[ "${#runtime_archives[@]}" -ne 1 ||
-                "${#runtime_checksums[@]}" -ne 1 ||
-                "${#runtime_crates[@]}" -ne 1 ]]; then
-            echo "expected one native SDK archive, checksum, and crate" >&2
-            exit 1
-          fi
-
-          staging_dir="release-native-sdk-assets"
-          rm -rf "$staging_dir"
-          mkdir -p "$staging_dir"
-          for source in \
-            "${runtime_archives[@]}" \
-            "${runtime_checksums[@]}" \
-            "${runtime_crates[@]}"; do
-            destination="$staging_dir/$(basename "$source")"
-            if [[ -e "$destination" ]]; then
-              echo "native SDK release asset basename collision: $destination" >&2
-              exit 1
-            fi
-            cp -p "$source" "$destination"
-          done
-
-      - name: Upload native SDK runtime
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: release-native-sdk-${{ matrix.artifact_suffix }}
-          path: release-native-sdk-assets/*
-          if-no-files-found: error
+    uses: ./.github/workflows/native-sdk-artifact.yml
+    with:
+      backend: ${{ matrix.backend }}
+      target: ${{ matrix.target }}
+      profile: release
+      artifact_name: release-native-sdk-${{ matrix.artifact_suffix }}
+      static_abi_artifact_name: ci-release-native-sdk-static-abi-${{ matrix.artifact_suffix }}
+      static_abi_artifact_path: native-sdk-static-abi-input
+      produce_static_abi: ${{ endsWith(matrix.target, '-unknown-linux-gnu') }}
+      runner_size: '8'
+      include_runtime_crate: true
+      release_tag: ${{ needs.metadata.outputs.tag }}
+      prepare_release_version: ${{ github.event_name == 'workflow_dispatch' }}
+      retention_days: 90
+      timeout_minutes: 90
 
   build_native_runtime:
     name: Build native runtime ${{ matrix.name }}
@@ -722,85 +659,18 @@ jobs:
   build_swift_sdk_artifact:
     name: Build Swift SDK XCFramework
     needs: metadata
-    runs-on: macos-15
-    env:
-      LLAMA_STAGE_BACKEND: metal
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          persist-credentials: false
-
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-        with:
-          version: 10
-
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: |
-            .github/cache-version.txt
-            crates/mesh-llm-ui/pnpm-lock.yaml
-
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
-
-      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
-
-      - name: Install macOS dependencies
-        run: brew install cmake ninja lld
-
-      - name: Prepare dispatched release version
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-        run: scripts/release-version.sh "$RELEASE_TAG"
-
-      - name: Prepare Swift console resources
-        run: |
-          scripts/package-sdk-console-assets.sh --sdk swift
-          scripts/verify-sdk-console-assets.sh --sdk swift
-
-      - name: Verify tagged Swift console resources
-        if: github.event_name != 'workflow_dispatch'
-        run: git ls-files --error-unmatch sdk/swift/Sources/MeshLLM/Resources/Console/index.html
-
-      - name: Build SwiftPM binary artifact
-        run: |
-          sdk/swift/scripts/build-xcframework.sh
-          mkdir -p dist
-          rm -f dist/MeshLLMFFI.xcframework.zip
-          ditto -c -k --sequesterRsrc --keepParent \
-            sdk/swift/Generated/MeshLLMFFI.xcframework \
-            dist/MeshLLMFFI.xcframework.zip
-
-      - name: Prepare SwiftPM manifest for dispatched release
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          scripts/update-swift-package-manifest.sh \
-            "${{ needs.metadata.outputs.tag }}" \
-            dist/MeshLLMFFI.xcframework.zip
-
-      - name: Verify SwiftPM binary artifact
-        run: |
-          scripts/verify-swift-release-artifact.sh dist/MeshLLMFFI.xcframework.zip
-          scripts/verify-swift-package-manifest.sh \
-            "${{ needs.metadata.outputs.tag }}" \
-            dist/MeshLLMFFI.xcframework.zip
-
-      - name: Upload generated SwiftPM manifest
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: swift-package-manifest
-          path: Package.swift
-          if-no-files-found: error
-
-      - name: Upload SwiftPM binary artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: release-swift-sdk
-          path: dist/MeshLLMFFI.xcframework.zip
-          if-no-files-found: error
+    permissions:
+      contents: read
+    uses: ./.github/workflows/swift-sdk-artifact.yml
+    with:
+      mode: full
+      artifact_name: release-swift-sdk
+      release_tag: ${{ needs.metadata.outputs.tag }}
+      prepare_release_version: ${{ github.event_name == 'workflow_dispatch' }}
+      update_release_manifest: ${{ github.event_name == 'workflow_dispatch' }}
+      require_tracked_console: ${{ github.event_name != 'workflow_dispatch' }}
+      retention_days: 90
+      timeout_minutes: 90
 
   build_linux_arm64:
     name: Build immutable host Linux ARM64
@@ -1729,6 +1599,13 @@ jobs:
           name: swift-package-manifest
           path: generated-swift-manifest
 
+      - name: Download generated Swift binding
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: generated-swift-binding-release-swift-sdk
+          path: generated-swift-binding
+
       - name: Prepare dispatched release tag
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -1741,6 +1618,14 @@ jobs:
           fi
           scripts/release-version.sh "$RELEASE_TAG"
           cp generated-swift-manifest/Package.swift Package.swift
+          generated_binding="generated-swift-binding/mesh_ffi.swift"
+          tracked_binding="sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift"
+          if [[ ! -f "$generated_binding" || -L "$generated_binding" ]]; then
+            echo "generated Swift binding artifact is missing or unsafe: $generated_binding" >&2
+            exit 1
+          fi
+          install -m 0644 "$generated_binding" "$tracked_binding"
+          cmp "$generated_binding" "$tracked_binding"
           scripts/package-sdk-console-assets.sh --sdk all
           scripts/verify-sdk-console-assets.sh --sdk all
           git config user.name "github-actions[bot]"
