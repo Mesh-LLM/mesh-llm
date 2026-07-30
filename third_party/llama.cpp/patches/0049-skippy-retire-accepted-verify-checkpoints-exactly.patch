@@ -1,0 +1,160 @@
+From 1f12cf3984b66dde5c5340d1d54614856fb123af Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Wed, 29 Jul 2026 11:12:07 +1000
+Subject: [PATCH 49/49] skippy: retire accepted verify checkpoints exactly
+
+---
+ include/skippy.h                              |  6 +++++
+ include/skippy/common.h                       |  2 +-
+ src/skippy-verify-checkpoint.h                | 24 +++++++++++++++++
+ src/skippy.cpp                                | 21 +++++++++++++++
+ tests/CMakeLists.txt                          |  1 +
+ ...st-skippy-verify-checkpoint-retirement.cpp | 26 +++++++++++++++++++
+ 6 files changed, 79 insertions(+), 1 deletion(-)
+ create mode 100644 src/skippy-verify-checkpoint.h
+ create mode 100644 tests/test-skippy-verify-checkpoint-retirement.cpp
+
+diff --git a/include/skippy.h b/include/skippy.h
+index e9d31f559..44afc6b74 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -524,6 +524,12 @@ LLAMA_API enum skippy_status skippy_trim_session(
+         uint64_t token_count,
+         struct skippy_error ** out_error);
+ 
++LLAMA_API enum skippy_status skippy_retire_verify_checkpoint(
++        struct skippy_session * session,
++        uint64_t token_start,
++        uint64_t token_count,
++        struct skippy_error ** out_error);
++
+ LLAMA_API enum skippy_status skippy_export_kv_page(
+         struct skippy_session * session,
+         int32_t layer_start,
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 0145705b2..e89410d03 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -26,7 +26,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 33
++#define SKIPPY_ABI_VERSION_PATCH 34
+ 
+ enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
+diff --git a/src/skippy-verify-checkpoint.h b/src/skippy-verify-checkpoint.h
+new file mode 100644
+index 000000000..8793000c1
+--- /dev/null
++++ b/src/skippy-verify-checkpoint.h
+@@ -0,0 +1,24 @@
++#pragma once
++
++#include <algorithm>
++#include <cstdint>
++#include <vector>
++
++template<typename T>
++bool skippy_retire_verify_checkpoint_exact(
++        std::vector<T> & checkpoints,
++        uint64_t token_start,
++        uint64_t token_count) {
++    const auto it = std::find_if(
++            checkpoints.begin(), checkpoints.end(),
++            [token_start, token_count](const T & checkpoint) {
++                return checkpoint.valid &&
++                       static_cast<uint64_t>(checkpoint.token_start) == token_start &&
++                       checkpoint.token_count == token_count;
++            });
++    if (it == checkpoints.end()) {
++        return false;
++    }
++    checkpoints.erase(it);
++    return true;
++}
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index f42731cb6..a22f0dde6 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -1,4 +1,5 @@
+ #include "skippy.h"
++#include "skippy-verify-checkpoint.h"
+ #include "skippy/devices.h"
+ #include "skippy-signals.h"
+ 
+@@ -6758,6 +6759,26 @@ enum skippy_status skippy_import_kv_page(
+     return skippy_success(out_error);
+ }
+ 
++enum skippy_status skippy_retire_verify_checkpoint(
++        skippy_session * session,
++        uint64_t token_start,
++        uint64_t token_count,
++        skippy_error ** out_error) {
++    if (session == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is null");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (!skippy_memory_needs_verify_checkpoint(session->ctx->get_memory())) {
++        return skippy_success(out_error);
++    }
++    if (!skippy_retire_verify_checkpoint_exact(
++                session->verify_checkpoints, token_start, token_count)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "verify-window checkpoint was not found");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    return skippy_success(out_error);
++}
++
+ enum skippy_status skippy_trim_session(
+         struct skippy_session * session,
+         uint64_t token_count,
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 158ab28df..846d4d954 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -152,6 +152,7 @@ llama_build(test-recurrent-state-rollback.cpp get-model.cpp)
+ 
+ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     llama_build_and_test(test-skippy-kv-page-export.cpp)
++    llama_build_and_test(test-skippy-verify-checkpoint-retirement.cpp)
+     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+     llama_build_and_test(test-sampling.cpp)
+     llama_build_and_test(test-reasoning-budget.cpp)
+diff --git a/tests/test-skippy-verify-checkpoint-retirement.cpp b/tests/test-skippy-verify-checkpoint-retirement.cpp
+new file mode 100644
+index 000000000..d09acccb4
+--- /dev/null
++++ b/tests/test-skippy-verify-checkpoint-retirement.cpp
+@@ -0,0 +1,26 @@
++#include "../src/skippy-verify-checkpoint.h"
++
++#include <cstddef>
++#include <vector>
++
++struct checkpoint {
++    bool valid;
++    int token_start;
++    size_t token_count;
++};
++
++int main() {
++    std::vector<checkpoint> checkpoints;
++    for (int window = 0; window < 129; ++window) {
++        checkpoints.push_back({true, window * 4, 4});
++        if (!skippy_retire_verify_checkpoint_exact(checkpoints, window * 4, 4)) return 1;
++        if (!checkpoints.empty()) return 2;
++    }
++
++    checkpoints = {{true, 10, 4}, {true, 14, 4}, {true, 18, 4}};
++    if (!skippy_retire_verify_checkpoint_exact(checkpoints, 14, 4)) return 3;
++    if (checkpoints.size() != 2 || checkpoints[0].token_start != 10 || checkpoints[1].token_start != 18) return 4;
++    if (skippy_retire_verify_checkpoint_exact(checkpoints, 14, 4)) return 5;
++    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
++    return 0;
++}
+-- 
+2.54.0
+

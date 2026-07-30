@@ -15,7 +15,7 @@ mesh/openai-frontend; diagnostic and benchmark clients may connect directly to
 the first stage.
 
 The full request/reply path is tip-to-tip: token IDs enter at the driver-facing
-tip, and activations flow through the stage chain. Stage protocol generation 3
+tip, and activations flow through the stage chain. Stage protocol generation 4
 is a compatibility-breaking contract: prediction-bearing replies return
 directly from the final/readout tip to the driver-facing stage instead of being
 relayed back through intermediate stages. Middle-out is the prefill optimization
@@ -80,10 +80,11 @@ unload or replan.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-3 stage protocol.
-  Stage compatibility requires `stage-generation-3`; direct prediction return is
-  part of that generation's contract, so older chained-reply peers are rejected
-  during split planning instead of being mixed into a generation-3 topology.
+- `serve-binary` participates in the breaking generation-4 stage protocol.
+  Stage compatibility requires `stage-generation-4`; direct prediction return and
+  exact verify-checkpoint retirement are part of that generation's contract, so
+  older peers are rejected during split planning instead of being mixed into a
+  generation-4 topology.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the

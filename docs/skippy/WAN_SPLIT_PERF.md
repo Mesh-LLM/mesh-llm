@@ -155,7 +155,7 @@ The smoking gun is `window_shrinks 0`: the adaptive policy never narrowed the
 window under a sustained reject storm, so it kept proposing deep, kept
 rejecting, and kept paying the 3× round-trip recovery.
 
-Stage-state v10 deletes that recovery path. Decode and verify messages carry an
+Stage-state v11 removes that recovery path. Decode and verify messages carry an
 authoritative absolute position, while non-overlapping continuation chunks make
 the fully accepted path advance monotonically without rewinding. Only a real
 divergence trims an invalid target suffix locally. No checkpoint, restore ACK,

@@ -7,10 +7,11 @@ use crate::binary_transport::{
     AsyncForwarder, BinaryStageExecutionOptions, forwarded_stage_message,
     forwarded_stage_message_timed, run_binary_stage_message, write_stage_message_conditioned,
 };
+use crate::frontend::embedded_execution::VerifyRetirement;
 use crate::frontend::request::wire_sampling_config;
 use crate::frontend::speculative::{
     OpenAiSpeculativeStats, classify_verify_window, propose_configured_ngram_tokens,
-    verify_inputs_for_proposals,
+    verify_checkpoint_no_longer_needed, verify_inputs_for_proposals,
 };
 use crate::frontend::util::{
     ms_to_us, openai_backend_error, openai_io_error, saturating_u32, token_is_eog_with_runtime,
@@ -949,7 +950,7 @@ impl StageOpenAiBackend {
                 direct_prediction_return_opened,
             )? {
                 // The final stage first consumes the upstream-opened sink, then
-                // falls back to opening the v10 direct-return stream back to the
+                // falls back to opening the v11 direct-return stream back to the
                 // registered stage-0 receiver. A transient failure opening the
                 // preferred sink must not fail an otherwise healthy request.
                 verify_window_scheduler.mark_direct_prediction_return(matches!(
@@ -1257,6 +1258,24 @@ impl StageOpenAiBackend {
                         let fully_accepted_window = !native_mtp_verify_decision.rejected
                             && native_mtp_verify_decision.accepted_proposal_tokens
                                 == window.proposal_tokens.len();
+                        let checkpoint_no_longer_needed = verify_checkpoint_no_longer_needed(
+                            native_mtp_verify_decision.commit_count,
+                            window.input_tokens.len(),
+                        );
+                        if checkpoint_no_longer_needed {
+                            self.retire_verify_window(
+                                &request,
+                                downstream,
+                                verify_window_forwarder.as_mut(),
+                                &session_key,
+                                VerifyRetirement {
+                                    request_id,
+                                    session_id,
+                                    token_start: window.window.base_position,
+                                    token_count: window.input_tokens.len(),
+                                },
+                            )?;
+                        }
                         let pipeline_continues = fully_accepted_window;
                         let accepted_candidate_tokens =
                             native_mtp_verify_decision.accepted_proposal_tokens;
@@ -1573,6 +1592,24 @@ impl StageOpenAiBackend {
                             request.max_tokens as usize,
                             |token| token_is_eog_with_runtime(&self.runtime, token),
                         )?;
+                        let checkpoint_no_longer_needed = verify_checkpoint_no_longer_needed(
+                            decision.commit_count,
+                            verify_inputs.len(),
+                        );
+                        if checkpoint_no_longer_needed {
+                            self.retire_verify_window(
+                                &request,
+                                downstream,
+                                None,
+                                &session_key,
+                                VerifyRetirement {
+                                    request_id,
+                                    session_id,
+                                    token_start: prefill_token_count + decoded_tokens,
+                                    token_count: verify_inputs.len(),
+                                },
+                            )?;
+                        }
                         speculative_stats.observe_verify_decision(
                             decision,
                             &mut adaptive_window,

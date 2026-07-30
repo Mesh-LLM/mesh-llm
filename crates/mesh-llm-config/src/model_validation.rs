@@ -9,6 +9,8 @@ use crate::model::{
     SkippyConfig, SpeculativeConfig, StringOrStringList, merge_hardware, merge_model_fit,
     merge_multimodal, merge_throughput,
 };
+use skippy_protocol::MAX_VERIFY_WINDOW_PIPELINE_DEPTH;
+
 use crate::validation_support::{
     looks_like_model_identifier, validate_allowed, validate_bool_or_auto, validate_hf_pair,
     validate_model_identifier, validate_non_empty, validate_non_negative_f64,
@@ -630,7 +632,7 @@ fn validate_verify_window_controls(
         config.verify_window_pipeline_depth,
         &format!("{base_path}.verify_window_pipeline_depth"),
         1,
-        1_024,
+        u32::try_from(MAX_VERIFY_WINDOW_PIPELINE_DEPTH).expect("verify depth limit fits u32"),
     )
 }
 
@@ -959,6 +961,34 @@ strategy = "mystery-oracle"
         validate_config(&config)
             .expect("package strategy names are validated after package resolution");
         assert!(validate_config_diagnostics(&config).is_empty());
+    }
+
+    #[test]
+    fn verify_window_pipeline_depth_matches_native_retention_bound() {
+        let accepted: MeshConfig = toml::from_str(
+            r#"
+[defaults.speculative]
+verify_window_pipeline_depth = 64
+"#,
+        )
+        .expect("bounded depth should parse");
+        validate_config(&accepted).expect("native retention boundary should validate");
+
+        let rejected: MeshConfig = toml::from_str(
+            r#"
+[defaults.speculative]
+verify_window_pipeline_depth = 65
+"#,
+        )
+        .expect("out-of-range depth should parse before validation");
+        let diagnostics = validate_config_diagnostics(&rejected);
+        let text = legacy_validation_error_text(&diagnostics);
+
+        assert!(text.contains("verify_window_pipeline_depth"));
+        assert!(
+            text.contains("between 1 and 64"),
+            "unexpected diagnostic: {text}"
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::frontend::generation::stage_reply_timeout;
 use crate::frontend::util::ms_to_us;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::openai_io_error;
+use crate::frontend::wire_messages::retire_verify_window_message;
 use crate::telemetry::now_unix_nanos;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
@@ -38,6 +39,13 @@ const DIRECT_RETURN_FALLBACK_POLL: Duration = Duration::from_millis(10);
 // normal WAN verify traversal while remaining shorter than the HTTP client's
 // request timeout.
 
+pub(super) struct VerifyRetirement {
+    pub(super) request_id: u64,
+    pub(super) session_id: u64,
+    pub(super) token_start: usize,
+    pub(super) token_count: usize,
+}
+
 pub(super) struct DispatchedEmbeddedStage {
     started: Instant,
     stats: StageReplyStats,
@@ -48,6 +56,56 @@ pub(super) struct DispatchedEmbeddedStage {
 }
 
 impl StageOpenAiBackend {
+    pub(super) fn retire_verify_window(
+        &self,
+        request: &EmbeddedStageZeroGeneration<'_>,
+        downstream: &mut TcpStream,
+        async_forwarder: Option<&mut AsyncForwarder>,
+        session_key: &str,
+        retirement: VerifyRetirement,
+    ) -> OpenAiResult<()> {
+        {
+            let mut runtime = self.runtime.lock().map_err(|_| {
+                OpenAiError::backend("runtime lock poisoned during verify retirement")
+            })?;
+            runtime
+                .retire_verify_checkpoint(
+                    session_key,
+                    retirement.token_start as u64,
+                    retirement.token_count as u64,
+                )
+                .map_err(openai_backend_error)?;
+        }
+        let message = retire_verify_window_message(
+            request.wire_dtype,
+            retirement.request_id,
+            retirement.session_id,
+            retirement.token_start,
+            retirement.token_count,
+        )?;
+        if let Some(forwarder) = async_forwarder {
+            forwarder
+                .send_tracked(
+                    message,
+                    request.wire_dtype,
+                    request.downstream_wire_condition,
+                    self.openai_attrs(request.ids),
+                )
+                .map_err(openai_backend_error)?
+                .finish()
+                .map_err(openai_backend_error)?;
+        } else {
+            write_stage_message_conditioned(
+                downstream,
+                &message,
+                request.wire_dtype,
+                request.downstream_wire_condition,
+            )
+            .map_err(openai_io_error)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn execute_embedded_stage_message(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,

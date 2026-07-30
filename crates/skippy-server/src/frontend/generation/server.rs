@@ -313,7 +313,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         || args.speculative.ngram.is_some();
     if speculative_windows_enabled && model_requires_recurrent_state(&args.config) {
         bail!(
-            "stage-state v10 positional speculation requires attention-only model stages; recurrent-state speculation is unsupported"
+            "stage-state v11 positional speculation requires attention-only model stages; recurrent-state speculation is unsupported"
         );
     }
     if args.config.stage_index != 0 || args.config.layer_start != 0 {

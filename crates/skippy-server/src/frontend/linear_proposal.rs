@@ -643,6 +643,8 @@ impl StageOpenAiBackend {
         let repair = finish_linear_proposal_after_repair(callback_error, || {
             self.trim_branch_suffix_or_retire(
                 params.session_id,
+                params.base_position,
+                verify_inputs.len(),
                 canonical_position,
                 position_after_verification,
             )
@@ -666,10 +668,18 @@ impl StageOpenAiBackend {
     fn trim_branch_suffix_or_retire(
         &self,
         session_id: &str,
+        checkpoint_start: u64,
+        checkpoint_count: usize,
         canonical_position: u64,
         position_after_verification: u64,
     ) -> OpenAiResult<LinearProposalRepairTiming> {
         if canonical_position >= position_after_verification {
+            let mut runtime = self.runtime.lock().map_err(|_| {
+                OpenAiError::backend("runtime lock poisoned during verify retirement")
+            })?;
+            runtime
+                .retire_verify_checkpoint(session_id, checkpoint_start, checkpoint_count as u64)
+                .map_err(openai_backend_error)?;
             return Ok(LinearProposalRepairTiming::default());
         }
 

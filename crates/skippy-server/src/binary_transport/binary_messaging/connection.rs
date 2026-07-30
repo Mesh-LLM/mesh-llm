@@ -5,6 +5,7 @@ use super::reply::{
     configure_prediction_return_stream, normalize_downstream_prefix_restore_reply,
     reply_window_for_message,
 };
+use super::session_tracker::{ConnectionSessionTracker, release_tracked_connection_sessions};
 use super::summary::BinaryMessageObservation;
 use super::summary::BinaryRequestSummary;
 use super::telemetry::UpstreamReplyWriteSpan;
@@ -151,50 +152,6 @@ pub(super) fn handle_binary_connection(
     result
 }
 
-/// Drops any runtime sessions this connection created but never stopped
-/// gracefully, returning their execution lanes to the pool.
-fn release_tracked_connection_sessions(
-    config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
-    telemetry: &Telemetry,
-    session_tracker: &mut ConnectionSessionTracker,
-) {
-    let orphaned = session_tracker.drain();
-    if orphaned.is_empty() {
-        return;
-    }
-    let Ok(mut runtime) = runtime.lock() else {
-        return;
-    };
-    for session_key in orphaned {
-        match runtime.drop_session_timed(&session_key) {
-            Ok(drop_stats) => {
-                let mut attrs = crate::telemetry::lifecycle_attrs(config);
-                attrs.insert("llama_stage.session_key".to_string(), json!(session_key));
-                attrs.insert(
-                    "llama_stage.session_reset".to_string(),
-                    json!(drop_stats.reset_session),
-                );
-                attrs.insert(
-                    "llama_stage.lane_discarded".to_string(),
-                    json!(drop_stats.lane_discarded),
-                );
-                insert_runtime_session_stats(
-                    &mut attrs,
-                    "llama_stage.runtime_sessions_after",
-                    &drop_stats.stats_after,
-                );
-                telemetry.emit("stage.binary_session_orphan_reclaimed", attrs);
-            }
-            Err(error) => {
-                eprintln!(
-                    "failed to reclaim orphaned binary stage session {session_key}: {error:#}"
-                );
-            }
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn handle_binary_connection_messages(
     config: &StageConfig,
@@ -266,7 +223,7 @@ fn handle_binary_connection_messages(
         session_tracker.touch(&session_key);
         if message.kind == WireMessageKind::VerifyWindow && !positional_speculation_supported {
             bail!(
-                "stage-state v10 positional speculation requires an attention-only stage; {} contains recurrent state",
+                "stage-state v11 positional speculation requires an attention-only stage; {} contains recurrent state",
                 config.stage_id
             );
         }
@@ -400,6 +357,34 @@ fn handle_binary_connection_messages(
             prediction_return_streams.remove(&(message.request_id, message.session_id));
             prediction_return_sinks.remove(message.request_id, message.session_id);
             send_reply_ack_with_stats(&mut *upstream, stop_stats).context("send stop ACK")?;
+            continue;
+        }
+
+        if message.kind.is_verify_retirement() {
+            if let Some(forwarder) = async_forwarder.as_mut() {
+                forwarder
+                    .flush()
+                    .context("flush async forwards before verify retirement")?;
+            }
+            let token_start = u64::try_from(message.pos_start)
+                .context("verify retirement position must be non-negative")?;
+            let token_count = u64::try_from(message.token_count)
+                .context("verify retirement count must be non-negative")?;
+            {
+                let mut runtime = runtime.lock().expect("runtime lock poisoned");
+                runtime
+                    .retire_verify_checkpoint(&session_key, token_start, token_count)
+                    .context("retire binary stage verify checkpoint")?;
+            }
+            if let Some(downstream) = downstream.as_mut() {
+                write_stage_message_conditioned(
+                    &mut *downstream,
+                    &message,
+                    wire_dtype,
+                    downstream_wire_condition,
+                )
+                .context("forward verify retirement")?;
+            }
             continue;
         }
 

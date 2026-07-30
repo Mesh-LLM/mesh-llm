@@ -3,6 +3,8 @@ use std::net::TcpStream;
 use openai_frontend::{OpenAiError, OpenAiResult};
 use skippy_protocol::binary::{StageNativeMtpDraft, WireReplyKind};
 
+use crate::frontend::embedded_execution::VerifyRetirement;
+
 use super::super::{
     AdaptiveVerifyWindow, BufferedCompositeProposal, CompositeProposalProvider,
     EmbeddedStageZeroGeneration, HistoryNgramProposer, NativeMtpDecodeCounters,
@@ -10,7 +12,7 @@ use super::super::{
     NgramSidecarController, PendingNativeMtpDraft, PhaseTimer, StageOpenAiBackend, TokenControl,
     VerifyWindowMessageArgs, VerifyWindowScheduler, WireSamplingConfig,
     classify_native_mtp_verify_window, embedded_verify_window_message, ms_to_us,
-    token_is_eog_with_runtime,
+    token_is_eog_with_runtime, verify_checkpoint_no_longer_needed,
 };
 
 /// Control signal returned after processing a batched native MTP verify step.
@@ -207,6 +209,24 @@ impl StageOpenAiBackend {
             && native_mtp_verify_decision.accepted_proposal_tokens == proposal_tokens.len()
             && committed_positions == consumed_positions
             && !reached_stop;
+        let checkpoint_no_longer_needed = verify_checkpoint_no_longer_needed(
+            native_mtp_verify_decision.commit_count,
+            consumed_positions,
+        );
+        if checkpoint_no_longer_needed {
+            self.retire_verify_window(
+                request,
+                downstream,
+                None,
+                session_key,
+                VerifyRetirement {
+                    request_id,
+                    session_id,
+                    token_start: window.base_position,
+                    token_count: verify_inputs.len(),
+                },
+            )?;
+        }
         let decision_rejected_native_mtp_prefix = proposal_buffer.as_ref().is_some_and(|buffer| {
             buffer.native_mtp_prefix_rejected_after(
                 native_mtp_verify_decision.accepted_proposal_tokens,

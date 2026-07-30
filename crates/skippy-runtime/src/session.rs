@@ -82,6 +82,20 @@ impl StageSession {
         ensure_ok(status, error)
     }
 
+    /// Retires the exact recovery checkpoint for a fully accepted verify window.
+    pub fn retire_verify_checkpoint(&mut self, token_start: u64, token_count: u64) -> Result<()> {
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_retire_verify_checkpoint(
+                self.raw,
+                token_start,
+                token_count,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)
+    }
+
     pub fn trim_session(&mut self, token_count: u64) -> Result<()> {
         let mut error = ptr::null_mut();
         let status = unsafe { skippy_ffi::skippy_trim_session(self.raw, token_count, &mut error) };
@@ -316,6 +330,10 @@ impl StageSession {
         Ok(window.into())
     }
 
+    /// Verifies a speculative window and advances the session.
+    ///
+    /// Call [`Self::retire_verify_checkpoint`] when the complete window is accepted,
+    /// or [`Self::trim_session`] when any suffix is rejected.
     pub fn verify_tokens(&mut self, token_ids: &[i32]) -> Result<Vec<i32>> {
         if token_ids.is_empty() {
             return Ok(Vec::new());

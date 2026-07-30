@@ -594,6 +594,9 @@ impl StageSession {
         self.verify_tokens_frame_sampled(token_ids, None, input, output_capacity, 0)
     }
 
+    /// Verifies a frame-backed speculative window.
+    ///
+    /// Retire the exact checkpoint after full acceptance, or trim after rejection.
     pub fn verify_tokens_frame_sampled(
         &mut self,
         token_ids: &[i32],

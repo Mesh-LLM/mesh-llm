@@ -5,9 +5,9 @@ use super::{
     invalid_data,
 };
 
-// v11 adds the Inkling MTP embedding sideband, which changes activation payload length.
-// Stage peers must be upgraded together so an older reader rejects the header before it can
-// leave the additional sideband bytes in the stream.
+// v11 adds the Inkling MTP embedding sideband and makes the coordinator the sole owner of
+// verify-window acceptance, removing redundant tail-stage acceptance/correction fields. Stage
+// peers must be upgraded together so older readers reject the changed payload contract.
 pub const STAGE_STATE_VERSION: i32 = 11;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_PREDICTED_TOKENS: usize = 262_144;
@@ -57,6 +57,7 @@ pub enum WireMessageKind {
     DecodeReadout = 8,
     DecodeLightCtx = 9,
     VerifyWindow = 21,
+    RetireVerifyWindow = 22,
     StateExport = 13,
     ConfigureGeneration = 14,
     ProbePrefill = 15,
@@ -94,6 +95,10 @@ impl WireMessageKind {
 
     pub fn is_session_control(self) -> bool {
         matches!(self, Self::TrimSession)
+    }
+
+    pub fn is_verify_retirement(self) -> bool {
+        matches!(self, Self::RetireVerifyWindow)
     }
 
     pub fn is_generation_control(self) -> bool {
@@ -141,6 +146,7 @@ impl TryFrom<i32> for WireMessageKind {
             19 => Ok(Self::TrimSession),
             20 => Ok(Self::PredictionReturnOpen),
             21 => Ok(Self::VerifyWindow),
+            22 => Ok(Self::RetireVerifyWindow),
             _ => Err(invalid_data("unknown stage message kind")),
         }
     }
@@ -322,6 +328,7 @@ impl StageStateHeader {
             kind,
             WireMessageKind::StateImport | WireMessageKind::StateExport
         ) || kind.is_session_control()
+            || kind.is_verify_retirement()
             || kind.is_generation_control()
         {
             return true;
@@ -400,7 +407,7 @@ pub struct StageWireMessage {
 impl StageWireMessage {
     /// The committed session position that must exist before this message runs.
     ///
-    /// Stage-state v10 makes this absolute position authoritative: a worker whose
+    /// Stage-state v11 makes this absolute position authoritative: a worker whose
     /// speculative KV is ahead must rewind locally before executing the message.
     pub fn authoritative_session_position(&self) -> Option<u64> {
         if !matches!(
@@ -704,6 +711,7 @@ fn expected_phase(kind: WireMessageKind) -> WireStagePhase {
             WireMessageKind::StateImport | WireMessageKind::StateExport
         )
         || kind.is_session_control()
+        || kind.is_verify_retirement()
         || kind.is_generation_control()
         || kind.is_prefix_cache_control()
     {

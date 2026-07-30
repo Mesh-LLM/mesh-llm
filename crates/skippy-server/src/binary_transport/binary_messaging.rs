@@ -36,6 +36,7 @@ pub(in crate::binary_transport) mod async_forwarder;
 mod connection;
 mod prefill_recording;
 pub(in crate::binary_transport) mod reply;
+mod session_tracker;
 mod summary;
 mod telemetry;
 

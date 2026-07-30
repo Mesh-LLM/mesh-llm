@@ -595,6 +595,7 @@ pub(crate) fn run_binary_stage_message(
         | WireMessageKind::StateExport
         | WireMessageKind::ConfigureGeneration
         | WireMessageKind::TrimSession
+        | WireMessageKind::RetireVerifyWindow
         | WireMessageKind::ProbePrefill
         | WireMessageKind::RestorePrefill
         | WireMessageKind::TryRestorePrefill

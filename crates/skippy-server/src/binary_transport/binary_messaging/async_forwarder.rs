@@ -193,7 +193,82 @@ impl AsyncForwardReceipt {
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
+
+    use skippy_protocol::binary::{StageStateHeader, WireMessageKind, read_stage_message};
+
     use super::*;
+    use crate::binary_transport::stage_execution::prefix_cache_test_config;
+    use crate::telemetry::TelemetryLevel;
+
+    fn message(kind: WireMessageKind, pos_start: i32) -> StageWireMessage {
+        StageWireMessage {
+            kind,
+            pos_start,
+            token_count: if kind == WireMessageKind::RetireVerifyWindow {
+                4
+            } else {
+                0
+            },
+            state: StageStateHeader::new(kind, WireActivationDType::F32),
+            request_id: 1,
+            session_id: 2,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn retirement_receipt_orders_all_prior_verify_writes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = TcpStream::connect(address).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let telemetry = Telemetry::new(None, 1, prefix_cache_test_config(), TelemetryLevel::Off);
+        let mut forwarder = AsyncForwarder::new(&client, telemetry, 3).unwrap();
+        let condition = WireCondition::new(0.0, None).unwrap();
+
+        forwarder
+            .send(
+                message(WireMessageKind::VerifyWindow, 10),
+                WireActivationDType::F32,
+                condition,
+                BTreeMap::new(),
+            )
+            .unwrap();
+        forwarder
+            .send(
+                message(WireMessageKind::VerifyWindow, 14),
+                WireActivationDType::F32,
+                condition,
+                BTreeMap::new(),
+            )
+            .unwrap();
+        forwarder
+            .send_tracked(
+                message(WireMessageKind::RetireVerifyWindow, 10),
+                WireActivationDType::F32,
+                condition,
+                BTreeMap::new(),
+            )
+            .unwrap()
+            .finish()
+            .unwrap();
+
+        let first = read_stage_message(&mut server, 1).unwrap();
+        let second = read_stage_message(&mut server, 1).unwrap();
+        let retire = read_stage_message(&mut server, 1).unwrap();
+        assert_eq!(first.kind, WireMessageKind::VerifyWindow);
+        assert_eq!(first.pos_start, 10);
+        assert_eq!(second.kind, WireMessageKind::VerifyWindow);
+        assert_eq!(second.pos_start, 14);
+        assert_eq!(retire.kind, WireMessageKind::RetireVerifyWindow);
+        assert_eq!(retire.pos_start, 10);
+    }
 
     #[test]
     fn forward_receipt_has_a_terminal_wait_bound() {

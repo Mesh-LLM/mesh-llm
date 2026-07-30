@@ -1,6 +1,6 @@
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 33;
+pub const ABI_VERSION_PATCH: u32 = 34;
 pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
 pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
@@ -856,6 +856,7 @@ mod dynamic {
         skippy_session_last_token_signal(session: *mut Session, out_signal: *mut TokenSignal, out_error: *mut *mut Error) -> Status;
         skippy_session_signal_window(session: *mut Session, window_tokens: u32, out_window: *mut GenerationSignalWindow, out_error: *mut *mut Error) -> Status;
         skippy_trim_session(session: *mut Session, token_count: u64, out_error: *mut *mut Error) -> Status;
+        skippy_retire_verify_checkpoint(session: *mut Session, token_start: u64, token_count: u64, out_error: *mut *mut Error) -> Status;
         skippy_export_state(session: *mut Session, layer_start: i32, layer_end: i32, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
         skippy_import_state(session: *mut Session, layer_start: i32, layer_end: i32, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
         skippy_export_full_state(session: *mut Session, layer_start: i32, layer_end: i32, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
@@ -1549,6 +1550,13 @@ unsafe extern "C" {
 
     pub fn skippy_trim_session(
         session: *mut Session,
+        token_count: u64,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_retire_verify_checkpoint(
+        session: *mut Session,
+        token_start: u64,
         token_count: u64,
         out_error: *mut *mut Error,
     ) -> Status;

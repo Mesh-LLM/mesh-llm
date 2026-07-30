@@ -512,6 +512,16 @@ impl RuntimeState {
         ))
     }
 
+    pub fn retire_verify_checkpoint(
+        &mut self,
+        session_id: &str,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<()> {
+        self.active_session(session_id)?
+            .retire_verify_checkpoint(token_start, token_count)
+    }
+
     pub fn trim_session(&mut self, session_id: &str, token_count: u64) -> Result<()> {
         let session = self.session(session_id)?;
         session.trim_session(token_count)?;

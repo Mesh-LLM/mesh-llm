@@ -627,6 +627,33 @@ mod tests {
     }
 
     #[test]
+    fn verify_retirement_round_trips_exact_identity() {
+        let kind = WireMessageKind::RetireVerifyWindow;
+        let message = StageWireMessage {
+            kind,
+            pos_start: 128,
+            token_count: 8,
+            state: StageStateHeader::new(kind, WireActivationDType::F32),
+            request_id: 23,
+            session_id: 29,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message, WireActivationDType::F32).unwrap();
+        let decoded = read_stage_message(Cursor::new(bytes), 2048).unwrap();
+
+        assert_eq!(decoded.kind, kind);
+        assert_eq!(decoded.pos_start, 128);
+        assert_eq!(decoded.token_count, 8);
+        assert!(decoded.state.matches_kind(kind));
+    }
+
+    #[test]
     fn session_control_messages_are_fixed_header_only() {
         let kind = WireMessageKind::TrimSession;
         let message = StageWireMessage {

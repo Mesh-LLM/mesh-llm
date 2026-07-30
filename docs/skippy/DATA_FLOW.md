@@ -40,11 +40,11 @@ activation links and then crossed three reply links before stage 0 could emit
 the token. On a topology with a fixed 10 ms delay per inter-stage hop, the reply
 chain alone makes the hot path six hops, or about 60 ms before compute.
 
-## Generation 3 Direct Prediction Return
+## Generation 4 Direct Prediction Return and Verify Retirement
 
-Stage protocol generation 3 is a compatibility-breaking change. A peer is stage
-compatible only when it advertises the `skippy-stage` major version for
-generation 3 plus `stage-generation-3`. Prediction-bearing messages return
+Stage protocol generation 4 is a compatibility-breaking change. A peer is stage
+compatible only when it advertises both `skippy-stage/2` and
+`stage-generation-4`. Prediction-bearing messages return
 directly from the final/readout stage to the driver-facing stage. Intermediate stages
 continue to forward activations and may handle cold-path control acknowledgments,
 but they are not part of the decode-token prediction return path.

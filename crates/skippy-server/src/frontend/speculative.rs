@@ -4,6 +4,7 @@ use openai_frontend::OpenAiResult;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::json;
+use skippy_protocol::MAX_VERIFY_WINDOW_PIPELINE_DEPTH;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -166,8 +167,11 @@ impl SpeculativeDecodeConfig {
         if self.verify_window.min_tokens == 0
             || self.verify_window.min_tokens > self.verify_window.max_tokens
             || self.verify_window.pipeline_depth == 0
+            || self.verify_window.pipeline_depth > MAX_VERIFY_WINDOW_PIPELINE_DEPTH
         {
-            bail!("verify window requires 0 < min_tokens <= max_tokens and pipeline_depth > 0");
+            bail!(
+                "verify window requires 0 < min_tokens <= max_tokens and 0 < pipeline_depth <= {MAX_VERIFY_WINDOW_PIPELINE_DEPTH}"
+            );
         }
         Ok(())
     }
@@ -216,6 +220,31 @@ mod standalone_speculative_config_tests {
                 .to_string()
                 .contains("requires native MTP and an extension policy")
         );
+    }
+
+    #[test]
+    fn verify_window_depth_is_bounded_by_native_checkpoint_retention() {
+        let mut config = SpeculativeDecodeConfig::default();
+        config.verify_window.pipeline_depth = MAX_VERIFY_WINDOW_PIPELINE_DEPTH;
+        config
+            .validate()
+            .expect("native retention boundary should be accepted");
+
+        config.verify_window.pipeline_depth = MAX_VERIFY_WINDOW_PIPELINE_DEPTH + 1;
+        let error = config
+            .validate()
+            .expect_err("depth above native retention must fail");
+
+        assert!(error.to_string().contains(&format!(
+            "pipeline_depth <= {MAX_VERIFY_WINDOW_PIPELINE_DEPTH}"
+        )));
+    }
+
+    #[test]
+    fn checkpoint_retires_only_when_no_verified_suffix_remains() {
+        assert!(verify_checkpoint_no_longer_needed(4, 4));
+        assert!(verify_checkpoint_no_longer_needed(5, 4));
+        assert!(!verify_checkpoint_no_longer_needed(3, 4));
     }
 
     #[test]
@@ -934,6 +963,13 @@ where
         accepted_before_reject,
         commit_count,
     })
+}
+
+pub(super) fn verify_checkpoint_no_longer_needed(
+    committed_positions: usize,
+    consumed_positions: usize,
+) -> bool {
+    committed_positions >= consumed_positions
 }
 
 pub(super) fn nonzero_min(current: usize, candidate: usize) -> usize {
