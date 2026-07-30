@@ -1264,24 +1264,6 @@ impl StageOpenAiBackend {
                         let fully_accepted_window = !native_mtp_verify_decision.rejected
                             && native_mtp_verify_decision.accepted_proposal_tokens
                                 == window.proposal_tokens.len();
-                        let checkpoint_no_longer_needed = verify_checkpoint_no_longer_needed(
-                            native_mtp_verify_decision.commit_count,
-                            window.input_tokens.len(),
-                        );
-                        if checkpoint_no_longer_needed {
-                            self.retire_verify_window(
-                                &request,
-                                downstream,
-                                verify_window_forwarder.as_mut(),
-                                &session_key,
-                                VerifyRetirement {
-                                    request_id,
-                                    session_id,
-                                    token_start: window.window.base_position,
-                                    token_count: window.input_tokens.len(),
-                                },
-                            )?;
-                        }
                         let pipeline_continues = fully_accepted_window;
                         let accepted_candidate_tokens =
                             native_mtp_verify_decision.accepted_proposal_tokens;
@@ -1381,6 +1363,23 @@ impl StageOpenAiBackend {
                             fully_accepted_window,
                             later_active_window || undispatched_candidates,
                         );
+                        if verify_checkpoint_no_longer_needed(
+                            commit_count,
+                            window.input_tokens.len(),
+                        ) {
+                            self.retire_verify_window(
+                                &request,
+                                downstream,
+                                verify_window_forwarder.as_mut(),
+                                &session_key,
+                                VerifyRetirement {
+                                    request_id,
+                                    session_id,
+                                    token_start: window.window.base_position,
+                                    token_count: window.input_tokens.len(),
+                                },
+                            )?;
+                        }
                         for token in target_predictions.iter().copied().take(commit_count) {
                             current = token;
                             decoded_tokens += 1;

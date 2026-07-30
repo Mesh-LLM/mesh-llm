@@ -371,10 +371,25 @@ fn writes_inkling_trunk_fused_w13_streaming_transforms() {
     )
     .unwrap();
 
-    let parsed = parse_test_gguf(&fs::read(&output).unwrap());
+    let bytes = fs::read(&output).unwrap();
+    let parsed = parse_test_gguf(&bytes);
     assert_eq!(parsed.tensor_count, 2);
-    assert_eq!(parsed.tensor("blk.3.ffn_gate.weight").dims, vec![2, 2]);
-    assert_eq!(parsed.tensor("blk.3.ffn_up.weight").dims, vec![2, 2]);
+    let gate = parsed.tensor("blk.3.ffn_gate.weight");
+    let up = parsed.tensor("blk.3.ffn_up.weight");
+    assert_eq!(gate.dims, vec![2, 2]);
+    assert_eq!(up.dims, vec![2, 2]);
+    assert_eq!(gate.ggml_type, GGML_TYPE_BF16);
+    assert_eq!(up.ggml_type, GGML_TYPE_BF16);
+    let gate_expected = [0x80, 0x3f, 0x00, 0x40, 0xa0, 0x40, 0xc0, 0x40];
+    let up_expected = [0x40, 0x40, 0x80, 0x40, 0xe0, 0x40, 0x00, 0x41];
+    assert_eq!(
+        &bytes[gate.absolute_offset..gate.absolute_offset + gate_expected.len()],
+        gate_expected
+    );
+    assert_eq!(
+        &bytes[up.absolute_offset..up.absolute_offset + up_expected.len()],
+        up_expected
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
