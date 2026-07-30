@@ -24,6 +24,9 @@ WORKFLOWS = {
     "swift-sdk": ROOT / ".github" / "workflows" / "swift-sdk-artifact.yml",
 }
 HF_WORKFLOW = ROOT / ".github" / "workflows" / "hf-download-smoke.yml"
+NATIVE_SDK_WORKFLOW = (
+    ROOT / ".github" / "workflows" / "native-sdk-artifact.yml"
+)
 
 
 def valid_payload(*, compile_requests: int = 12) -> dict[str, object]:
@@ -254,7 +257,7 @@ class SccacheEvidenceTests(unittest.TestCase):
         configure = CONFIGURE_ACTION.read_text(encoding="utf-8")
 
         self.assertIn("['--zero-stats']", configure)
-        self.assertEqual(configure.count("await resetStatistics("), 6)
+        self.assertEqual(configure.count("await resetStatistics("), 7)
 
     def test_remote_multilevel_writes_finish_before_ephemeral_job_exit(self) -> None:
         configure = CONFIGURE_ACTION.read_text(encoding="utf-8")
@@ -272,7 +275,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             configure,
         )
 
-    def test_pull_request_remote_sccache_is_read_only(self) -> None:
+    def test_pull_request_sccache_is_disk_only(self) -> None:
         configure = CONFIGURE_ACTION.read_text(encoding="utf-8")
         builds = WORKFLOWS["pr-builds"].read_text(encoding="utf-8")
         swift = WORKFLOWS["swift-sdk"].read_text(encoding="utf-8")
@@ -282,6 +285,12 @@ class SccacheEvidenceTests(unittest.TestCase):
         self.assertIn("eventName === 'pull_request_target'", configure)
         self.assertIn(
             "core.exportVariable('SCCACHE_GHA_RW_MODE', ghaRemoteMode)",
+            configure,
+        )
+        self.assertIn("if (ghaRemoteMode === 'READ_ONLY')", configure)
+        self.assertIn(
+            "Pull-request trust context detected; using baked sccache "
+            "with job-local disk only.",
             configure,
         )
         for workflow in (builds, swift, hf_download):
@@ -294,7 +303,43 @@ class SccacheEvidenceTests(unittest.TestCase):
             "uses: ./.github/actions/configure-sccache-gha",
             swift,
         )
+        self.assertGreaterEqual(
+            builds.count("uses: ./.github/actions/configure-sccache-gha"),
+            11,
+        )
+        self.assertIn(
+            "uses: ./.github/actions/configure-sccache-gha",
+            hf_download,
+        )
         self.assertNotIn("SCCACHE_WEBDAV_RW_MODE", configure)
+
+    def test_pull_request_direct_sccache_users_are_reconfigured(self) -> None:
+        workflows = (
+            WORKFLOWS["pr-builds"],
+            WORKFLOWS["swift-sdk"],
+            HF_WORKFLOW,
+            NATIVE_SDK_WORKFLOW,
+        )
+
+        for path in workflows:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            direct_users = [
+                index
+                for index, line in enumerate(lines)
+                if "uses: mozilla-actions/sccache-action@" in line
+            ]
+            self.assertTrue(direct_users, path)
+            for index in direct_users:
+                with self.subTest(workflow=path.name, line=index + 1):
+                    next_step = next(
+                        line.strip()
+                        for line in lines[index + 1 :]
+                        if line.strip()
+                    )
+                    self.assertEqual(
+                        next_step,
+                        "- uses: ./.github/actions/configure-sccache-gha",
+                    )
 
     def test_swift_uses_trusted_main_seeded_dependency_cache(self) -> None:
         swift = WORKFLOWS["swift-sdk"].read_text(encoding="utf-8")

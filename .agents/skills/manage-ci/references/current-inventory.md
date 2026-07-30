@@ -107,10 +107,11 @@ Local actions:
   permission is derived from the same typed trust decision.
 - `.github/actions/configure-sccache-gha` exports ephemeral Actions cache
   credentials to the baked `sccache`, permits Depot WebDAV only for an explicit
-  trusted call, keeps the GitHub Actions remote tier read-only for PR events
-  while retaining a writable job-local disk tier, uses disk-only storage if a
-  future pull-request trust context is ever evaluated on Depot, and resets
-  counters after configuring the server.
+  trusted call, uses writable job-local disk only for PR events because the
+  pinned sccache makes a mixed chain wholly read-only and records rejected
+  writes after misses, uses disk-only
+  storage if a future pull-request trust context is ever evaluated on Depot,
+  and resets counters after configuring the server.
 - `.github/actions/capture-sccache-stats` validates and uploads one
   machine-readable sccache evidence artifact per instrumented job or matrix
   row. Evidence is retained for 14 days so cold/warm samples span the configured
@@ -317,9 +318,10 @@ Public-image Rust jobs use the baked `sccache` binary. Trusted calls to
 `SCCACHE_WEBDAV_TOKEN`/`DEPOT_CACHE_TOKEN` in a fail-open `disk,webdav` chain.
 When that permission is false and Depot is detected, the action gives the
 sccache server a credential-free environment and uses job-local disk only.
-GitHub-hosted jobs retain `disk,gha` or explicit disk-only mode. The GHA tier is
-read-only for PR events, including direct sccache-action users, while trusted
-main, release, warmer, and dispatch paths may seed it. Swift restores a
+GitHub-hosted trusted jobs retain `disk,gha` or explicit disk-only mode. PR
+events use job-local disk only, including direct sccache-action users routed
+through the configure action, while trusted main, release, warmer, and dispatch
+paths may seed the GHA tier. Swift restores a
 mode-independent Rust dependency cache that only trusted main pushes save.
 Persistent Cargo target and ABI reuse remains owned by
 `Swatinem/rust-cache` and `actions/cache`. Current PR jobs use the normal

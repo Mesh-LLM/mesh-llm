@@ -468,13 +468,14 @@ the sccache child with a credential-free, job-local disk backend. That isolates
 only sccache: Depot's automatically injected job token and transparent
 GitHub-cache API redirection remain available to other code on a Depot runner.
 Consequently, no untrusted PR code may run on Depot while automatic cache
-injection is enabled. GitHub-hosted jobs retain the existing `disk,gha` path or
-explicit disk-only mode. Pull-request jobs keep the GHA sccache tier read-only
-and the job-local disk tier writable; trusted main, release, warmer, and
+injection is enabled. GitHub-hosted trusted jobs retain the existing `disk,gha`
+path or explicit disk-only mode. Pull-request jobs use writable job-local disk
+only; the pinned sccache otherwise makes the mixed chain wholly read-only and
+records every miss as a rejected write. Trusted main, release, warmer, and
 dispatch paths own remote publication. This avoids repository-wide per-object
-upload throttling while preserving trusted default-branch hits. Cache read
-failures degrade to misses, cache write failures only warn, and a failed remote
-probe restarts `sccache` with disk-only storage. PR crate-test shards restore
+upload throttling and misleading PR write errors. Cache read failures degrade
+to misses, cache write failures only warn, and a failed remote probe restarts
+`sccache` with disk-only storage. PR crate-test shards restore
 the existing `main-rust-crate-tests-<shard>` Cargo target caches read-only
 (`save-if: false`), so trusted main owns the cache while PRs avoid recompiling
 the same workspace graph.
@@ -522,8 +523,8 @@ the dedicated GPU scale sets and is not the Depot group.
 
 Current GitHub-hosted PR jobs may share the `mesh-llm` native-cache key
 namespace because GitHub scopes `actions/cache` PR writes to the merge ref;
-trusted main does not restore from that ref. Their sccache GHA remote tier is
-read-only, so trusted main/release/warmers own shared compiler-cache
+trusted main does not restore from that ref. Their sccache backend is job-local
+disk only, so trusted main/release/warmers own shared compiler-cache
 publication. Depot's cache is repository-scoped instead, so cache-key
 conventions or a trusted reusable caller are not sufficient protection from
 malicious checked-out PR code. PR events stay hosted while automatic Depot

@@ -314,12 +314,14 @@ update the skill resources in the same change.
 - GitHub-hosted PR jobs may share the normal key namespace with main because
   GitHub scopes PR writes to the merge ref and trusted main does not restore
   them. Do not assume that isolation applies to another cache provider.
-- Keep the GitHub Actions sccache remote tier read-only for `pull_request` and
-  `pull_request_target` events. PR jobs may read trusted default-branch entries
-  and write their job-local disk tier, but only trusted main, release,
-  scheduled warmer, or explicitly authorized dispatch paths may publish shared
-  sccache entries. Apply the same event-derived mode to direct
-  `mozilla-actions/sccache-action` users and to
+- Keep sccache disk-only for `pull_request` and `pull_request_target` events.
+  The pinned sccache treats a mixed `disk,gha` chain as wholly read-only when
+  the GHA tier is read-only, so every miss records a rejected cache write and
+  cannot populate L0. PR jobs therefore use a writable job-local disk tier plus
+  bulk Rust and exact native `actions/cache` restores. Only trusted main,
+  release, scheduled warmer, or explicitly authorized dispatch paths may
+  publish shared sccache entries. Apply the same event-derived policy to direct
+  `mozilla-actions/sccache-action` users through
   `.github/actions/configure-sccache-gha`; do not let a reusable workflow
   silently restore read-write PR publication.
 - Depot's GitHub cache namespace is repository-scoped and has no branch
