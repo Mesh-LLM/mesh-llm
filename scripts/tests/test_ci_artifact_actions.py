@@ -1765,7 +1765,7 @@ class CiArtifactActionTests(unittest.TestCase):
         main = (
             ROOT / ".github" / "workflows" / "ci.yml"
         ).read_text(encoding="utf-8")
-        self.assertNotIn('SCCACHE_GHA_ENABLED: "false"', main)
+        self.assertEqual(main.count('SCCACHE_GHA_ENABLED: "false"'), 1)
 
         quality = (
             ROOT / ".github" / "workflows" / "pr_quality.yml"

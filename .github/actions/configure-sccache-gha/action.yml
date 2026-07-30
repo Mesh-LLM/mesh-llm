@@ -179,15 +179,17 @@ runs:
 
           // Honor an explicit job-level opt-out of the GitHub Actions cache
           // backend. Long-running lanes (CUDA/ROCm/Vulkan release builds that
-          // exceed the ephemeral Actions cache token lifetime) set
-          // SCCACHE_GHA_ENABLED=false. Keep those lanes disk-only: an sccache
-          // server started after the token expires probes the gha tier at
-          // startup, and that storage read fails permanently (HTTP 400),
-          // aborting the build before any fail-open policy applies. Clearing the
-          // cache URL/token for the server process as well prevents any
-          // residual gha configuration from re-enabling the remote tier. Do
-          // not clear them job-wide: later actions/cache consumers still need
-          // their credentials.
+          // exceed the ephemeral Actions cache token lifetime) and high-fanout
+          // GitHub-hosted compiler shards set SCCACHE_GHA_ENABLED=false. For
+          // long-running lanes, an sccache server started after the token
+          // expires probes the gha tier at startup and that storage read fails
+          // permanently (HTTP 400), aborting the build before any fail-open
+          // policy applies. High-fanout shards avoid a repository-wide storm of
+          // duplicate per-object writes while their bulk target caches retain
+          // persistent reuse. Clearing the cache URL/token for the server
+          // process also prevents residual gha configuration from re-enabling
+          // the remote tier. Do not clear them job-wide: later actions/cache
+          // consumers still need their credentials.
           if ((process.env.SCCACHE_GHA_ENABLED || '').toLowerCase() === 'false') {
             core.info(
               'SCCACHE_GHA_ENABLED=false is set; using baked sccache with disk-only cache.',

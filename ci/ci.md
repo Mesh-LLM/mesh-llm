@@ -505,7 +505,12 @@ to misses, cache write failures only warn, and a failed remote probe restarts
 `sccache` with disk-only storage. PR crate-test shards restore
 the existing `main-rust-crate-tests-<shard>` Cargo target caches read-only
 (`save-if: false`), so trusted main owns the cache while PRs avoid recompiling
-the same workspace graph.
+the same workspace graph. GitHub-hosted main crate-test shards also use
+writable job-local sccache because four concurrent remote per-object writers
+caused 94% of cold-control GHA write errors; their distinct bulk Cargo target
+caches own persistent reuse. Other trusted producers and grouped tests retain
+remote sccache. An explicitly authorized Depot call selects `disk,webdav`
+before this GHA-only opt-out.
 
 Native ABI cache keys and llama build stamps share one resolved toolchain epoch.
 Digest-pinned Linux jobs use the immutable runner-image digest. Hosted macOS

@@ -225,6 +225,22 @@ class CiWorkflowArtifactTests(unittest.TestCase):
                 self.assertNotIn("run: scripts/build-llama.sh", consumer)
                 self.assertNotIn("Cache patched llama.cpp ABI build", consumer)
 
+    def test_main_crate_shards_avoid_shared_gha_write_contention(self) -> None:
+        crate_tests = job_section(self.workflow, "rust_crate_tests")
+        grouped_tests = job_section(self.workflow, "linux_test_groups")
+
+        self.assertIn('SCCACHE_GHA_ENABLED: "false"', crate_tests)
+        self.assertIn(
+            "shared-key: main-rust-crate-tests-${{ matrix.batch.idx }}",
+            crate_tests,
+        )
+        self.assertIn("uses: ./.github/actions/configure-sccache-gha", crate_tests)
+        self.assertNotIn('SCCACHE_GHA_ENABLED: "false"', grouped_tests)
+        self.assertEqual(
+            self.workflow.count('SCCACHE_GHA_ENABLED: "false"'),
+            1,
+        )
+
     def test_macos_host_and_runtime_are_independent_producers(self) -> None:
         route = (
             "if: ${{ needs.changes.outputs."

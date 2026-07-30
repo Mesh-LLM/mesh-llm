@@ -412,6 +412,11 @@ jobs:
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
       MESH_LLM_SKIP_UI: "1"
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+      # Four concurrent crate shards caused 94% of cold-main GHA compiler-cache
+      # write errors. Their per-shard Cargo target caches own persistent reuse;
+      # keep sccache writable and job-local on GitHub-hosted runners instead.
+      # Authorized Depot jobs still select disk,webdav before this GHA opt-out.
+      SCCACHE_GHA_ENABLED: "false"
       RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
