@@ -227,7 +227,10 @@ flowchart TD
   afterward, then performs a lookup-only restore with the same path and key to
   prove the current cache version exists. A cache-service reservation warning
   therefore cannot leave the warmer green without publishing a reusable ABI
-  input.
+  input. The restore action exports the normalized absolute cache path used by
+  the save action, and publication-action changes participate in the exact key,
+  preventing an incompatible opaque cache version from blocking its
+  replacement under the same key.
 
 ### Current PR Builds contract
 

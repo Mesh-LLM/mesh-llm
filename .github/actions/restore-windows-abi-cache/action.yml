@@ -35,6 +35,9 @@ outputs:
   cache-primary-key:
     description: Exact primary key used for restore and a later cache save.
     value: ${{ steps.restore.outputs.cache-primary-key }}
+  cache-path:
+    description: Validated absolute build path shared by restore and save.
+    value: ${{ steps.identity.outputs.build-dir }}
 
 runs:
   using: composite
@@ -50,7 +53,7 @@ runs:
         INPUT_CUDA_TOOLCHAIN_VERSION: ${{ inputs.cuda_toolchain_version }}
         INPUT_VULKAN_TOOLCHAIN_VERSION: ${{ inputs.vulkan_toolchain_version }}
         INPUT_ROCM_TOOLCHAIN_VERSION: ${{ inputs.rocm_toolchain_version }}
-        CACHE_INPUT_HASH: ${{ hashFiles('.github/actions/restore-windows-abi-cache/action.yml', '.github/actions/resolve-native-toolchain-epoch/action.yml', '.github/actions/prepare-native-runtime-input/action.yml', '.github/actions/setup-windows-rocm-sdk/action.yml', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
+        CACHE_INPUT_HASH: ${{ hashFiles('.github/actions/restore-windows-abi-cache/action.yml', '.github/actions/save-and-verify-actions-cache/action.yml', '.github/actions/resolve-native-toolchain-epoch/action.yml', '.github/actions/prepare-native-runtime-input/action.yml', '.github/actions/setup-windows-rocm-sdk/action.yml', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
       run: |
         $ErrorActionPreference = "Stop"
 

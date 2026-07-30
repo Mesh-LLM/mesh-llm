@@ -166,7 +166,9 @@ Local actions:
   CUDA, ROCm, and Vulkan ABI cache identity shared by the trusted warmer and
   PR/main/release runtime producers. The hosted-image epoch, architecture sets,
   and toolchain versions are compatibility boundaries; the action requires the
-  key epoch to equal the build-stamp epoch and never uses restore prefixes.
+  key epoch to equal the build-stamp epoch, includes the publication action in
+  the key hash, exports one validated absolute path for both restore and save,
+  and never uses restore prefixes.
 - `.github/actions/save-and-verify-actions-cache` snapshots existing exact
   key/ref cache entries before saving a trusted miss, then requires a new,
   non-empty entry to appear and performs a lookup-only restore with the same

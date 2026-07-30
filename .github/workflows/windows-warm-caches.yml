@@ -117,7 +117,7 @@ jobs:
         if: steps.llama_cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/save-and-verify-actions-cache
         with:
-          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          path: ${{ steps.llama_cache.outputs.cache-path }}
           cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
           cache-ref: ${{ github.ref }}
           cache-label: Windows CPU ABI
@@ -267,7 +267,7 @@ jobs:
         if: steps.llama_cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/save-and-verify-actions-cache
         with:
-          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          path: ${{ steps.llama_cache.outputs.cache-path }}
           cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
           cache-ref: ${{ github.ref }}
           cache-label: Windows ${{ matrix.name }} ABI

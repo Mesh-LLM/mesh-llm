@@ -142,6 +142,16 @@ class BuildWindowsScriptTests(unittest.TestCase):
             2,
         )
         self.assertEqual(
+            warmer.count(
+                "path: ${{ steps.llama_cache.outputs.cache-path }}",
+            ),
+            2,
+        )
+        self.assertNotIn(
+            "path: ${{ env.LLAMA_STAGE_BUILD_DIR }}",
+            warmer,
+        )
+        self.assertEqual(
             warmer.count("cache-ref: ${{ github.ref }}"),
             2,
         )

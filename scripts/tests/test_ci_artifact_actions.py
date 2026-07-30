@@ -448,6 +448,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "prepare-windows-host-input",
             "prepare-native-runtime-input",
             "compose-product-input",
+            "save-and-verify-actions-cache",
             "package-native-runtime",
             "verify-native-runtime-package",
             "verify-checksum-sidecar",
@@ -507,6 +508,7 @@ class CiArtifactActionTests(unittest.TestCase):
         expected_hash = (
             "${{ hashFiles("
             "'.github/actions/restore-windows-abi-cache/action.yml', "
+            "'.github/actions/save-and-verify-actions-cache/action.yml', "
             "'.github/actions/resolve-native-toolchain-epoch/action.yml', "
             "'.github/actions/prepare-native-runtime-input/action.yml', "
             "'.github/actions/setup-windows-rocm-sdk/action.yml', "
@@ -538,6 +540,10 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertIn(
             "value: ${{ steps.restore.outputs.cache-primary-key }}",
+            action,
+        )
+        self.assertIn(
+            "value: ${{ steps.identity.outputs.build-dir }}",
             action,
         )
 
