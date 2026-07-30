@@ -13,6 +13,13 @@ RELEASE_WORKFLOW: Final = ROOT / ".github" / "workflows" / "release.yml"
 WINDOWS_WARM_CACHES: Final = (
     ROOT / ".github" / "workflows" / "windows-warm-caches.yml"
 )
+CACHE_SAVE_VERIFIER: Final = (
+    ROOT
+    / ".github"
+    / "actions"
+    / "save-and-verify-actions-cache"
+    / "action.yml"
+)
 
 
 class BuildWindowsScriptTests(unittest.TestCase):
@@ -117,6 +124,52 @@ class BuildWindowsScriptTests(unittest.TestCase):
         ):
             with self.subTest(library_group=library_group):
                 self.assertEqual(warmer.count(library_group), 2)
+        self.assertEqual(
+            warmer.count("Save and verify Windows "),
+            2,
+        )
+        self.assertEqual(
+            warmer.count(
+                "uses: ./.github/actions/save-and-verify-actions-cache",
+            ),
+            2,
+        )
+        self.assertEqual(
+            warmer.count(
+                "cache-key: "
+                "${{ steps.llama_cache.outputs.cache-primary-key }}",
+            ),
+            2,
+        )
+        self.assertEqual(
+            warmer.count("cache-ref: ${{ github.ref }}"),
+            2,
+        )
+        verifier = CACHE_SAVE_VERIFIER.read_text(encoding="utf-8")
+        self.assertEqual(
+            verifier.count("Snapshot existing exact cache entries"),
+            1,
+        )
+        self.assertIn("!existingIds.has(String(candidate.id))", verifier)
+        self.assertIn("candidate.size_in_bytes > 0", verifier)
+        self.assertIn("name: Verify current cache version lookup", verifier)
+        self.assertIn("lookup-only: true", verifier)
+        self.assertIn("fail-on-cache-miss: true", verifier)
+        self.assertEqual(
+            verifier.count(
+                "uses: actions/cache/restore@"
+                "caa296126883cff596d87d8935842f9db880ef25",
+            ),
+            1,
+        )
+        self.assertEqual(
+            verifier.count("attempt <= 12"),
+            1,
+        )
+        self.assertIn(
+            "'.github/actions/save-and-verify-actions-cache/action.yml'",
+            warmer,
+        )
 
     def test_windows_abi_caches_live_outside_the_llama_worktree(self) -> None:
         workflows = {

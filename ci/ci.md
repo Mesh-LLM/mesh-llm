@@ -216,6 +216,13 @@ flowchart TD
   restore one checksummed, target-described static CPU llama ABI from
   `linux_static_abi_input`; individual consumers never rebuild or raw-extract
   the same patch queue concurrently.
+- Trusted Windows cache misses are saved through
+  `.github/actions/save-and-verify-actions-cache`. It snapshots existing exact
+  key/ref records before the upload and requires a new non-empty cache record
+  afterward, then performs a lookup-only restore with the same path and key to
+  prove the current cache version exists. A cache-service reservation warning
+  therefore cannot leave the warmer green without publishing a reusable ABI
+  input.
 
 ### Current PR Builds contract
 

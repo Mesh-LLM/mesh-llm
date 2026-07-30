@@ -18,6 +18,7 @@ on:
       - '.github/actions/resolve-native-toolchain-epoch/action.yml'
       - '.github/actions/setup-windows-rocm-sdk/action.yml'
       - '.github/actions/restore-windows-abi-cache/action.yml'
+      - '.github/actions/save-and-verify-actions-cache/action.yml'
       - '.github/workflows/ci.yml'
       - '.github/workflows/pr_builds.yml'
       - '.github/workflows/windows-warm-caches.yml'
@@ -112,12 +113,14 @@ jobs:
             }
             Write-Host $library.FullName
           }
-      - name: Save Windows CPU ABI cache
+      - name: Save and verify Windows CPU ABI cache
         if: steps.llama_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: ./.github/actions/save-and-verify-actions-cache
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+          cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+          cache-ref: ${{ github.ref }}
+          cache-label: Windows CPU ABI
 
   warm_windows_gpu:
     name: Warm Windows ${{ matrix.name }} ABI cache
@@ -260,12 +263,14 @@ jobs:
             }
             Write-Host $library.FullName
           }
-      - name: Save Windows GPU ABI cache
+      - name: Save and verify Windows GPU ABI cache
         if: steps.llama_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: ./.github/actions/save-and-verify-actions-cache
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+          cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+          cache-ref: ${{ github.ref }}
+          cache-label: Windows ${{ matrix.name }} ABI
 
   prune_windows_abi_caches:
     name: Prune old Windows ABI caches
