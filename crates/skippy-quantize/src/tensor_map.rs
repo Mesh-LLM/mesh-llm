@@ -121,17 +121,16 @@ fn normalize_inkling_mtp_source_name(name: &str, layer_start: u32) -> Result<Opt
     let depth = depth
         .parse::<u32>()
         .map_err(|err| anyhow!("malformed Inkling MTP depth in {name}: {err}"))?;
+    let layer = layer_start
+        .checked_add(depth)
+        .ok_or_else(|| anyhow!("Inkling MTP layer id overflow for {name}"))?;
     let suffix = match suffix {
         "embed_norm.weight" => "enorm.weight",
         "hidden_norm.weight" => "hnorm.weight",
         "input_proj.weight" => "eh_proj.weight",
         value => value.strip_prefix("transformer_block.").unwrap_or(value),
     };
-    Ok(Some(format!(
-        "model.layers.{}.{}",
-        layer_start + depth,
-        suffix
-    )))
+    Ok(Some(format!("model.layers.{layer}.{suffix}")))
 }
 
 fn map_mtp_source_tensor(name: &str) -> Result<Option<String>> {
@@ -531,5 +530,16 @@ mod tests {
         assert!(is_inkling_fused_w13(
             "model.mtp.layers.0.transformer_block.mlp.w13_dn.weight"
         ));
+    }
+
+    #[test]
+    fn rejects_inkling_mtp_layer_overflow() {
+        let error = TensorNameMap::HfToGgufWithMtp {
+            layer_start: u32::MAX,
+        }
+        .map_tensor_name("model.mtp.layers.1.embed_norm.weight")
+        .unwrap_err();
+
+        assert!(error.to_string().contains("MTP layer id overflow"));
     }
 }

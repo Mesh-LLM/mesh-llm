@@ -17,6 +17,10 @@ const SPLIT_MEMBERSHIP_SETTLE_DWELL: Duration = Duration::from_secs(8);
 /// Even an immediately stable two-node quorum gets a bounded discovery window.
 const SPLIT_FIRST_QUORUM_OBSERVATION: Duration = Duration::from_secs(8);
 
+fn membership_settle_timeout(requested: Duration) -> Duration {
+    requested.max(SPLIT_FIRST_QUORUM_OBSERVATION.max(SPLIT_MEMBERSHIP_SETTLE_DWELL))
+}
+
 type SplitMembershipSignature = Vec<(String, u64)>;
 
 #[derive(Debug, Default)]
@@ -82,7 +86,7 @@ impl<'a> SplitMembershipWait<'a> {
             node,
             model_name,
             model_ref,
-            deadline: tokio::time::Instant::now() + timeout,
+            deadline: tokio::time::Instant::now() + membership_settle_timeout(timeout),
             barrier: SplitMembershipSettleBarrier::default(),
             last_logged_signature: Vec::new(),
         }
@@ -321,6 +325,18 @@ mod tests {
         assert!(!barrier.observe(&participants, start));
         assert!(!barrier.observe(&participants, start + Duration::from_secs(7)));
         assert!(barrier.observe(&participants, start + Duration::from_secs(8)));
+    }
+
+    #[test]
+    fn short_caller_timeout_still_allows_the_settle_barrier() {
+        assert_eq!(
+            membership_settle_timeout(Duration::from_secs(1)),
+            Duration::from_secs(8)
+        );
+        assert_eq!(
+            membership_settle_timeout(Duration::from_secs(30)),
+            Duration::from_secs(30)
+        );
     }
 
     #[test]
