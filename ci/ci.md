@@ -257,6 +257,10 @@ flowchart TD
   public website docs/example update under `website/src/docs/pages/` or
   `website/src/_includes/`, with `website/src/docs/pages/CLI.md` as the primary
   command reference.
+- Changes to `compute-changes` or the central PR/main/release workflow callers
+  fail open to the SDK producer and smoke graph. Caller-owned mode, timeout,
+  artifact, and trust-policy edits therefore cannot skip the reusable SDK
+  contracts they modify.
 - `pr_builds.yml` is named **PR Builds** and owns PR target jobs plus integration
   and smoke validation. Linux and macOS CPU artifact jobs upload the binaries
   that downstream smoke jobs consume before long validation groups finish.

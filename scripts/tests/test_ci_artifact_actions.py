@@ -694,6 +694,14 @@ class CiArtifactActionTests(unittest.TestCase):
             ".github/actions/restore-smoke-inputs/action.yml",
             direct_sdk_pattern,
         )
+        for contract_path in (
+            ".github/actions/compute-changes/action.yml",
+            ".github/workflows/ci.yml",
+            ".github/workflows/pr_builds.yml",
+            ".github/workflows/release.yml",
+        ):
+            with self.subTest(contract_path=contract_path):
+                self.assertRegex(contract_path, direct_sdk_pattern)
         smoke_scripts = (
             ROOT / "scripts" / "ci-rust-sdk-smoke.sh",
             ROOT / "scripts" / "ci-kotlin-sdk-smoke.sh",
@@ -1311,11 +1319,13 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertLess(mkdir_index, move_index)
         self.assertIn("safe-extract-(tar|zip)", routing)
         self.assertIn("verify-swift-xcframework", routing)
-        self.assertIn(
-            "(native-sdk-artifact|sdk-smoke|static-abi-artifact|"
-            "swift-sdk-artifact)",
-            routing,
-        )
+        for workflow in (
+            "native-sdk-artifact",
+            "sdk-smoke",
+            "static-abi-artifact",
+            "swift-sdk-artifact",
+        ):
+            self.assertIn(workflow, routing)
 
     def test_swift_sdk_cache_is_mode_independent_and_target_specific(
         self,

@@ -116,6 +116,11 @@ results, duplicate plan entries, and required IDs outside its needs graph,
 making that one non-matrix check the workflow's stable branch-protection
 target.
 
+Changes to the central PR/main/release workflow callers or to
+`compute-changes` itself fail open to the SDK producer/smoke graph. This keeps
+caller-owned mode, timeout, artifact, and trust-policy edits from skipping the
+reusable Swift, Kotlin, or Rust SDK contracts they change.
+
 Local actions:
 
 - `.github/actions/compute-changes` owns path, crate, backend, SDK, UI, website,
