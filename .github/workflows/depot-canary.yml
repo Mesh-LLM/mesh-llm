@@ -18,6 +18,10 @@ concurrency:
 jobs:
   runner:
     name: ${{ matrix.runner }}
+    if: >-
+      github.repository == 'Mesh-LLM/mesh-llm' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       matrix:
