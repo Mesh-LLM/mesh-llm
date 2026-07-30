@@ -365,9 +365,15 @@ impl StageOpenAiBackend {
             // The generation error may be the downstream peer disappearing.
             // A graceful Stop/ACK exchange would then turn the bounded decode
             // failure into an unbounded teardown wait. Retire the suspect lane
-            // immediately; replacement uses its own bounded handshake.
+            // immediately; replacement uses its own bounded handshake. Drop
+            // the old stream before opening its replacement so the remote
+            // connection handler can reclaim the request's execution session
+            // before the replacement admits another request on a one-lane
+            // stage.
             self.drop_embedded_runtime_session(request, session_key);
-            lane_pool.replace_lane(lane.id);
+            let lane_id = lane.id;
+            drop(lane);
+            lane_pool.replace_lane(lane_id);
             return Ok(());
         }
 
@@ -397,7 +403,10 @@ impl StageOpenAiBackend {
         let stop_result = stop_result.map_err(openai_io_error);
         match &stop_result {
             Ok(_) => lane_pool.return_lane(lane),
-            Err(_) => lane_pool.replace_lane(lane_id),
+            Err(_) => {
+                drop(lane);
+                lane_pool.replace_lane(lane_id);
+            }
         }
         stop_result?;
         Ok(())
