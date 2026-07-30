@@ -22,6 +22,7 @@ the commands at the end before operational changes.
 | `native-sdk-artifact.yml` | Reusable call | Typed target/backend/profile native SDK producer with protected runner/cache policy |
 | `static-abi-artifact.yml` | Reusable call | Typed target/backend static llama ABI producer with protected runner/cache policy |
 | `swift-sdk-artifact.yml` | Reusable call | Typed host-only/full Swift XCFramework producer |
+| `node-sdk-addon-artifact.yml` | Reusable call | Five-target Node native-addon producer with fresh-install smoke, manifest, and checksum |
 | `hf-download-smoke.yml` | Reusable call | Hugging Face download smoke |
 | `nightly-stability.yml` | Schedule, dispatch | Nightly operator entry point |
 | `nightly-stability-run.yml` | Reusable call | Stability probes and evidence |
@@ -52,6 +53,14 @@ and packaging consumers must not rebuild either input. Portable bundles
 place runtimes at `mesh-bundle/native-runtimes/<runtime-id>`; Debian/Arch
 packages use `/usr/local/lib/mesh-llm/<version>/native-runtimes`; Homebrew uses
 formula-owned `libexec/native-runtimes`.
+
+Release also fans out `node-sdk-addon-artifact.yml` across Darwin ARM64/x64,
+Linux ARM64/x64, and Windows x64. Each producer compiles once on its matching
+GitHub-hosted platform, packs and fresh-installs the SDK, verifies
+`currentMeshVersion()`, and emits a versioned addon archive with a strict
+manifest and SHA-256 sidecar. The release publisher requires all five producers
+and attaches those exact artifacts; downstream packaging verifies and assembles
+them without recompiling native source.
 
 The Windows host input also carries the checksum-protected `xtask` executable
 that performed producer-side attestation. Windows product composers invoke that

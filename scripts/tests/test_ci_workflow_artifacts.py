@@ -7,6 +7,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+NODE_ADDON_WORKFLOW = (
+    ROOT / ".github" / "workflows" / "node-sdk-addon-artifact.yml"
+)
 
 
 def job_section(workflow: str, job_name: str) -> str:
@@ -527,6 +531,82 @@ class CiWorkflowArtifactTests(unittest.TestCase):
 
         self.assertNotIn("target/debug/mesh-llm", linux_consumers)
         self.assertIn("target/release/mesh-llm", linux_consumers)
+
+
+class ReleaseNodeAddonArtifactTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        cls.producer = NODE_ADDON_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_release_uses_one_reusable_producer_for_all_node_targets(
+        self,
+    ) -> None:
+        producer = job_section(self.release, "build_node_sdk_addon")
+
+        self.assertIn(
+            "uses: ./.github/workflows/node-sdk-addon-artifact.yml",
+            producer,
+        )
+        self.assertIn(
+            "artifact_name: release-node-sdk-addon-${{ matrix.target }}",
+            producer,
+        )
+        for target in (
+            "darwin-arm64",
+            "darwin-x64",
+            "linux-arm64",
+            "linux-x64",
+            "win32-x64",
+        ):
+            with self.subTest(target=target):
+                self.assertEqual(producer.count(f"target: {target}"), 1)
+        self.assertNotIn("npm run build:native", producer)
+        self.assertNotIn("actions/upload-artifact", producer)
+
+    def test_node_addon_producer_is_non_publishing_and_checksummed(
+        self,
+    ) -> None:
+        self.assertIn("on:\n  workflow_call:", self.producer)
+        self.assertIn(
+            "mesh-llm-node-sdk-addon-$expected_version-$NODE_SDK_TARGET.tar.gz",
+            self.producer,
+        )
+        self.assertIn(
+            '"schema": "mesh-llm-node-sdk-addon-v1"',
+            self.producer,
+        )
+        self.assertIn("currentMeshVersion()", self.producer)
+        self.assertIn("npm pack", self.producer)
+        self.assertIn("$output_root/$archive.sha256", self.producer)
+        self.assertIn(
+            "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:",
+            self.producer,
+        )
+        self.assertIn(
+            "darwin-arm64|darwin-x64|linux-arm64|linux-x64|win32-x64",
+            job_section(self.producer, "validate_inputs"),
+        )
+        for job_name in ("linux_addon", "macos_addon", "windows_addon"):
+            with self.subTest(job=job_name):
+                self.assertIn(
+                    "needs: validate_inputs",
+                    job_section(self.producer, job_name),
+                )
+        self.assertNotIn("softprops/action-gh-release", self.producer)
+        self.assertNotIn("npm publish", self.producer)
+        self.assertNotIn("contents: write", self.producer)
+
+    def test_release_publish_requires_and_uploads_node_addons(self) -> None:
+        publish = job_section(self.release, "publish")
+
+        self.assertIn("- build_node_sdk_addon", publish)
+        self.assertIn(
+            "needs.build_node_sdk_addon.result == 'success'",
+            publish,
+        )
+        self.assertIn("pattern: release-*", publish)
+        self.assertIn("files: release-artifacts/*", publish)
 
 
 if __name__ == "__main__":

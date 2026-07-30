@@ -199,6 +199,12 @@ flowchart TD
   host. Each product requires `--version`, `runtime list`, and client readiness
   without a driver stub. GPU availability remains separate hardware
   qualification.
+- Release builds Node native addons through one typed reusable producer fanned
+  out across Darwin ARM64/x64, Linux ARM64/x64, and Windows x64. Every lane
+  performs a fresh npm install and native version smoke before emitting a
+  manifest-bound, checksummed archive. Release publication requires all five
+  artifacts, and `mesh-packaging` consumes those exact release assets instead
+  of compiling addon source again.
 - `.github/actions/prepare-host-input`,
   `.github/actions/prepare-windows-host-input`,
   `.github/actions/prepare-native-runtime-input`,
