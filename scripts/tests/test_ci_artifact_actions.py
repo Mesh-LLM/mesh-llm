@@ -777,6 +777,14 @@ class CiArtifactActionTests(unittest.TestCase):
             "${{ inputs.static_abi_artifact_name != '' }}",
             producer,
         )
+        linux_start = producer.index("  linux_native_sdk_artifact:")
+        linux_end = producer.index("  macos_native_sdk_artifact:")
+        linux_producer = producer[linux_start:linux_end]
+        self.assertIn("name: Trust checkout directory", linux_producer)
+        self.assertLess(
+            linux_producer.index("name: Trust checkout directory"),
+            linux_producer.index("name: Prepare dispatched release version"),
+        )
         self.assertIn("scripts/package-native-sdk.sh", producer_action)
         self.assertIn("--build", producer_action)
         self.assertIn("--require-prebuilt-llama", producer_action)
