@@ -9,6 +9,7 @@ use crate::models::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FamilyPolicy {
     pub(crate) activation_wire_dtype: StageWireDType,
+    pub(crate) default_kv_cache_type: Option<&'static str>,
     pub(crate) prefix_cache: FamilyPrefixCachePolicy,
 }
 
@@ -58,7 +59,14 @@ impl FamilyPolicy {
                 min_tokens,
                 max_entries,
             } => {
-                let max_bytes = derive_stage_cache_max_bytes(config)?;
+                // Layer-package configs can be resolved before their GGUF
+                // parts are materialized, so there may be no scannable model
+                // metadata here yet. Keep the certified family cache enabled
+                // in that case: the resident cache still enforces its
+                // ctx-derived token budget, while zero means no additional
+                // byte cap. Disabling the cache entirely made every packaged
+                // model silently miss the family default.
+                let max_bytes = derive_stage_cache_max_bytes(config).unwrap_or(0);
                 // The family policy's `max_entries` is a generous
                 // upper bound on cache cardinality. The real ceiling
                 // is the unified KV cell pool size: each resident
@@ -135,6 +143,18 @@ pub(crate) fn family_policy_for_stage_config(config: &StageConfig) -> FamilyPoli
     .unwrap_or_else(|| family_policy_for_model_id(&config.model_id))
 }
 
+/// Family policy derived from already-scanned GGUF metadata.
+///
+/// Split topology planning uses this so it applies the same family K/V
+/// defaults that stage loading will apply, instead of re-deriving a
+/// size-tiered guess that can badly under-estimate the KV budget.
+pub(crate) fn family_policy_for_compact_meta(
+    meta: &GgufCompactMeta,
+    model_id: Option<&str>,
+) -> FamilyPolicy {
+    family_policy_for_gguf_meta(meta, model_id)
+}
+
 pub(crate) fn family_policy_for_model_path(
     path: impl AsRef<Path>,
     model_id: Option<&str>,
@@ -159,10 +179,14 @@ fn family_policy_for_gguf_meta(meta: &GgufCompactMeta, model_id: Option<&str>) -
 }
 
 fn family_policy_for_capability(capability: &FamilyCapabilityRecord) -> FamilyPolicy {
-    family_policy_for_normalized_family_id(
+    let mut policy = family_policy_for_normalized_family_id(
         capability.family_id.as_str(),
         wire_dtype_from_capability(capability.default_wire_dtype),
-    )
+    );
+    if capability.family_id == "inkling" {
+        policy.default_kv_cache_type = Some("q4_0");
+    }
+    policy
 }
 
 fn family_policy_for_model_id(model_id: &str) -> FamilyPolicy {
@@ -239,6 +263,7 @@ fn family_policy_for_normalized_family_id(
 fn resident_kv_policy(activation_wire_dtype: StageWireDType) -> FamilyPolicy {
     FamilyPolicy {
         activation_wire_dtype,
+        default_kv_cache_type: None,
         prefix_cache: FamilyPrefixCachePolicy::Auto {
             payload: FamilyPrefixCachePayload::ResidentKv,
             min_tokens: 256,
@@ -276,6 +301,7 @@ fn resident_kv_policy(activation_wire_dtype: StageWireDType) -> FamilyPolicy {
 fn kv_recurrent_policy(activation_wire_dtype: StageWireDType) -> FamilyPolicy {
     FamilyPolicy {
         activation_wire_dtype,
+        default_kv_cache_type: None,
         prefix_cache: FamilyPrefixCachePolicy::Auto {
             payload: FamilyPrefixCachePayload::KvRecurrent,
             min_tokens: 256,
@@ -304,6 +330,7 @@ fn disabled_family_policy(
 ) -> FamilyPolicy {
     FamilyPolicy {
         activation_wire_dtype,
+        default_kv_cache_type: None,
         prefix_cache: FamilyPrefixCachePolicy::Disabled { reason },
     }
 }
@@ -621,7 +648,7 @@ mod tests {
                 }
                 "qwen3next" | "falcon_h1" | "jamba" | "lfm2" | "mamba" | "mamba2" | "rwkv6"
                 | "rwkv7" | "granite_hybrid" | "qwen35" | "qwen35moe" | "plamo2" | "nemotron_h"
-                | "nemotron_h_moe" | "lfm2moe" | "kimi_linear" => assert_eq!(
+                | "nemotron_h_moe" | "lfm2moe" | "kimi_linear" | "inkling" => assert_eq!(
                     policy.prefix_cache,
                     FamilyPrefixCachePolicy::Auto {
                         payload: FamilyPrefixCachePayload::KvRecurrent,

@@ -1,0 +1,567 @@
+From 5b4896aa14167a09aba5534433c85ca3f49cd089 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 17 Jul 2026 16:04:48 +1000
+Subject: [PATCH 53/60] Carry multimodal Inkling embeddings into MTP
+
+---
+ include/skippy.h        |   3 +-
+ include/skippy/common.h |   1 +
+ src/llama-context.cpp   |   5 +-
+ src/llama-context.h     |   2 +
+ src/llama-graph.cpp     |  25 +++++-
+ src/llama-graph.h       |   9 ++
+ src/models/inkling.cpp  |  20 +++--
+ src/skippy.cpp          | 183 +++++++++++++++++++++++++++++++++++-----
+ 8 files changed, 218 insertions(+), 30 deletions(-)
+
+diff --git a/include/skippy.h b/include/skippy.h
+index e9d31f55..cc2382d3 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -43,7 +43,8 @@ enum skippy_activation_layout {
+ 
+ #define SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST   (UINT64_C(1) << 0)
+ #define SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP   (UINT64_C(1) << 1)
+-#define SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K   (UINT64_C(1) << 3)
++#define SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD (UINT64_C(1) << 2)
++#define SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K     (UINT64_C(1) << 3)
+ 
+ #define SKIPPY_GLM_DSA_POLICY_PROFILE_NONE     0
+ #define SKIPPY_GLM_DSA_POLICY_PROFILE_V1       1
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 0145705b..11f06bf3 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -55,6 +55,7 @@ enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_EVENTS         = 1 << 24,
+     SKIPPY_FEATURE_NATIVE_MTP_N1          = 1 << 25,
+     SKIPPY_FEATURE_NGRAM_CACHE_DRAFT      = 1 << 26,
++    SKIPPY_FEATURE_INKLING_MTP_MM         = 1 << 27,
+ };
+ 
+ enum skippy_status {
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 4b47903d..9d528761 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -4113,7 +4113,10 @@ int32_t llama_encode(
+ int32_t llama_decode(
+         llama_context * ctx,
+           llama_batch   batch) {
+-    const int ret = ctx->decode(batch);
++    int ret = ctx->decode(batch);
++    if (ret == 0) {
++        ret = skippy_external_decode_observe(ctx, batch);
++    }
+     if (ret != 0 && ret != 1) {
+         LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
+     }
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 42442879..20c121b2 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -20,6 +20,8 @@ class llama_batch_allocr;
+ class llama_io_read_i;
+ class llama_io_write_i;
+ 
++int skippy_external_decode_observe(llama_context * ctx, const llama_batch & batch);
++
+ // "memory" as in abstract memory for the context
+ struct llama_memory_i;
+ struct llama_memory_context_i;
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 36bf3219..27c5129b 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -26,6 +26,7 @@ static thread_local skippy_activation_tokens g_skippy_activation_tokens;
+ static thread_local skippy_activation_rwkv7_v_first g_skippy_rwkv7_v_first;
+ static thread_local skippy_activation_gemma3n_altup g_skippy_gemma3n_altup;
+ static thread_local skippy_activation_glm_dsa_top_k g_skippy_glm_dsa_top_k;
++static thread_local skippy_activation_mtp_embeddings g_skippy_mtp_embeddings;
+ 
+ void skippy_graph_set_filter(const skippy_graph_filter & filter) {
+     g_skippy_graph_filter = filter;
+@@ -87,6 +88,18 @@ const skippy_activation_glm_dsa_top_k & skippy_graph_get_glm_dsa_top_k() {
+     return g_skippy_glm_dsa_top_k;
+ }
+ 
++void skippy_graph_set_mtp_embeddings(const skippy_activation_mtp_embeddings & values) {
++    g_skippy_mtp_embeddings = values;
++}
++
++void skippy_graph_clear_mtp_embeddings() {
++    g_skippy_mtp_embeddings = {};
++}
++
++const skippy_activation_mtp_embeddings & skippy_graph_get_mtp_embeddings() {
++    return g_skippy_mtp_embeddings;
++}
++
+ // dedup helpers
+ 
+ static ggml_tensor * build_attn_inp_kq_mask(
+@@ -156,15 +169,21 @@ bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
+ 
+ void llm_graph_input_embd_h::set_input(const llama_ubatch * ubatch) {
+     const int64_t n_tokens = ubatch->n_tokens;
++    const skippy_activation_mtp_embeddings & mtp_embeddings = skippy_graph_get_mtp_embeddings();
+ 
+     if (ubatch->token) {
+         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
+     } else {
+-        // note: mtmd embedding input goes through here
+         GGML_ASSERT(ubatch->embd);
+         GGML_ASSERT(n_embd == embd->ne[0]);
++        const float * values = ubatch->embd;
++        if (mtp_embeddings.values != nullptr) {
++            GGML_ASSERT(mtp_embeddings.token_count == ubatch->n_tokens);
++            GGML_ASSERT(mtp_embeddings.n_embd == n_embd);
++            values = mtp_embeddings.values;
++        }
+ 
+-        ggml_backend_tensor_set(embd, ubatch->embd, 0, n_tokens*n_embd*ggml_element_size(h));
++        ggml_backend_tensor_set(embd, values, 0, n_tokens*n_embd*ggml_element_size(embd));
+     }
+ 
+     // TODO: extend llama_ubatch to differentiate between token embeddings and hidden states
+@@ -181,7 +200,7 @@ bool llm_graph_input_embd_h::can_reuse(const llm_graph_params & params) {
+     bool res = true;
+ 
+     res &= (!params.ubatch.token) || (tokens && tokens->buffer && tokens->ne[0] == params.ubatch.n_tokens);
+-    res &= (!params.ubatch.embd)  || (embd   && embd->buffer   && embd->ne[1] == params.ubatch.n_tokens);
++    res &= (params.ubatch.token)  || (embd   && embd->buffer   && embd->ne[1] == params.ubatch.n_tokens);
+     res &= (!params.ubatch.embd)  || (h      && h->buffer      && h->ne[1] == params.ubatch.n_tokens);
+ 
+     return res;
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index e74a58a5..6e66f7fe 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -78,6 +78,12 @@ struct skippy_activation_glm_dsa_top_k {
+     llama_pos pos_start = 0;
+ };
+ 
++struct skippy_activation_mtp_embeddings {
++    const float * values = nullptr;
++    uint32_t token_count = 0;
++    uint32_t n_embd = 0;
++};
++
+ void skippy_graph_set_filter(const skippy_graph_filter & filter);
+ void skippy_graph_clear_filter();
+ const skippy_graph_filter & skippy_graph_get_filter();
+@@ -93,6 +99,9 @@ const skippy_activation_gemma3n_altup & skippy_graph_get_gemma3n_altup();
+ void skippy_graph_set_glm_dsa_top_k(const skippy_activation_glm_dsa_top_k & values);
+ void skippy_graph_clear_glm_dsa_top_k();
+ const skippy_activation_glm_dsa_top_k & skippy_graph_get_glm_dsa_top_k();
++void skippy_graph_set_mtp_embeddings(const skippy_activation_mtp_embeddings & values);
++void skippy_graph_clear_mtp_embeddings();
++const skippy_activation_mtp_embeddings & skippy_graph_get_mtp_embeddings();
+ 
+ // certain models (typically multi-modal) can produce different types of graphs
+ enum llm_graph_type {
+diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
+index d435a1f5..c054f1d9 100644
+--- a/src/models/inkling.cpp
++++ b/src/models/inkling.cpp
+@@ -680,17 +680,25 @@ llama_model_inkling::graph::graph(const llama_model & model, const llm_graph_par
+         GGML_ASSERT(layer.nextn.eh_proj && layer.nextn.enorm && layer.nextn.hnorm);
+         GGML_ASSERT(shared_model->tok_embd && shared_model->tok_norm && shared_model->output);
+ 
+-        auto mtp_inp = std::make_unique<llm_graph_input_embd>(hparams.n_embd);
++        auto mtp_inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
+         mtp_inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+         ggml_set_input(mtp_inp->tokens);
+         mtp_inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
+         ggml_set_input(mtp_inp->embd);
+-        ggml_set_name(mtp_inp->embd, "inkling_mtp_h_input");
+-
+-        ggml_tensor * tok_embd = ggml_get_rows(ctx0, shared_model->tok_embd, mtp_inp->tokens);
+-        tok_embd = build_norm(tok_embd, shared_model->tok_norm, nullptr, LLM_NORM_RMS, -1);
++        ggml_set_name(mtp_inp->embd, "inkling_mtp_embd_input");
++        mtp_inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
++        ggml_set_input(mtp_inp->h);
++        ggml_set_name(mtp_inp->h, "inkling_mtp_h_input");
++
++        ggml_tensor * tok_embd = nullptr;
++        if (ubatch.token) {
++            tok_embd = ggml_get_rows(ctx0, shared_model->tok_embd, mtp_inp->tokens);
++            tok_embd = build_norm(tok_embd, shared_model->tok_norm, nullptr, LLM_NORM_RMS, -1);
++        } else {
++            tok_embd = mtp_inp->embd;
++        }
+         tok_embd = build_norm(tok_embd, layer.nextn.enorm, nullptr, LLM_NORM_RMS, mtp_il);
+-        ggml_tensor * hidden = build_norm(mtp_inp->embd, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, mtp_il);
++        ggml_tensor * hidden = build_norm(mtp_inp->h, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, mtp_il);
+         cur = build_lora_mm(layer.nextn.eh_proj, ggml_concat(ctx0, hidden, tok_embd, 0));
+         cb(cur, "inkling_mtp_input", mtp_il);
+         res->add_input(std::move(mtp_inp));
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 61f9c508..c76d3fbb 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -149,8 +149,12 @@ struct skippy_session {
+     bool mtp_has_pending_draft = false;
+     llama_pos mtp_pending_draft_pos = 0;
+     llama_token mtp_pending_draft_token = -1;
++    bool external_mtp_embeddings_available = false;
++    std::vector<float> external_mtp_embeddings;
+ };
+ 
++static thread_local skippy_session * g_skippy_external_decode_session = nullptr;
++
+ struct skippy_tensor_meta {
+     std::string name;
+     int32_t layer_index = -1;
+@@ -1287,6 +1291,7 @@ static bool skippy_is_gemma3n_activation_model(const skippy_session * session) {
+     return session->stage_model->model->arch == LLM_ARCH_GEMMA3N;
+ }
+ 
++
+ static bool skippy_is_glm_dsa_activation_model(const skippy_session * session) {
+     if (session == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr) {
+         return false;
+@@ -1405,6 +1410,14 @@ static bool skippy_glm_dsa_stage_starts_in_consumer_group(const skippy_session *
+     return skippy_glm_dsa_layer_starts_consumer_group(session, session->stage_model->config.layer_start);
+ }
+ 
++static bool skippy_is_inkling_activation_model(const skippy_session * session) {
++    if (session == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr) {
++        return false;
++    }
++    return session->stage_model->model->arch == LLM_ARCH_INKLING;
++}
++
++
+ static size_t skippy_activation_hidden_bytes(const skippy_session * session, size_t token_count) {
+     if (session == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr) {
+         return 0;
+@@ -1530,6 +1543,14 @@ static uint64_t skippy_output_activation_flags(
+         skippy_glm_dsa_layer_starts_consumer_group(session, session->stage_model->config.layer_end)) {
+         return SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K;
+     }
++    if (skippy_emits_activation_frame(session) && skippy_is_inkling_activation_model(session)) {
++        if (input_desc != nullptr && (input_desc->flags & SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD) != 0) {
++            return SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD;
++        }
++        if (session->stage_model->config.layer_start == 0 && session->external_mtp_embeddings_available) {
++            return SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD;
++        }
++    }
+     if (!skippy_emits_activation_frame(session) || !skippy_is_rwkv7_activation_model(session)) {
+         return 0;
+     }
+@@ -1559,6 +1580,9 @@ static size_t skippy_activation_payload_bytes(
+     if ((flags & SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST) != 0) {
+         payload_bytes += hidden_bytes;
+     }
++    if ((flags & SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD) != 0) {
++        payload_bytes += hidden_bytes;
++    }
+     return payload_bytes;
+ }
+ 
+@@ -1609,6 +1633,7 @@ static enum skippy_status skippy_validate_frame_input_sequences(
+     const uint64_t supported_flags =
+             SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST |
+             SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP |
++            SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD |
+             SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K;
+     if ((input_desc->flags & ~supported_flags) != 0) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "activation frame has unsupported sideband flags");
+@@ -1649,6 +1674,15 @@ static enum skippy_status skippy_validate_frame_input_sequences(
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "non-first RWKV7 runtime slices require v_first activation sideband");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
++    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD) != 0 && !skippy_is_inkling_activation_model(session)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "Inkling MTP embedding sideband is only valid for Inkling stages");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD) != 0 &&
++        (input_desc->flags & (SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP | SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST)) != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "Inkling MTP embedding sideband cannot be combined with other activation sidebands");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
+ 
+     const size_t hidden_bytes = skippy_activation_hidden_bytes(session, expected_token_count);
+     if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+@@ -2855,13 +2889,33 @@ static bool skippy_mtp_shares_target_memory(
+     return llama_get_model(mtp_ctx)->arch != LLM_ARCH_INKLING;
+ }
+ 
+-static enum skippy_status skippy_mtp_sync_target_tokens(
++struct skippy_mtp_embeddings_scope {
++    skippy_mtp_embeddings_scope(const float * values, uint32_t token_count, uint32_t n_embd) {
++        if (values != nullptr) {
++            skippy_graph_set_mtp_embeddings({ values, token_count, n_embd });
++            enabled = true;
++        }
++    }
++
++    ~skippy_mtp_embeddings_scope() {
++        if (enabled) {
++            skippy_graph_clear_mtp_embeddings();
++        }
++    }
++
++    bool enabled = false;
++};
++
++static enum skippy_status skippy_mtp_sync_target_inputs(
+         skippy_session * session,
+         const llama_token * token_ids,
++        const float * input_embeddings,
+         size_t token_count,
+         llama_pos token_start,
+         struct skippy_error ** out_error) {
+-    if (!skippy_mtp_available(session) || token_ids == nullptr || token_count == 0) {
++    if (!skippy_mtp_available(session) ||
++            (token_ids == nullptr && input_embeddings == nullptr) ||
++            token_count == 0) {
+         return skippy_success(out_error);
+     }
+     if (token_count > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+@@ -2911,7 +2965,7 @@ static enum skippy_status skippy_mtp_sync_target_tokens(
+         if (session->mtp_pending_draft_pos >= token_start &&
+                 session->mtp_pending_draft_pos < token_end) {
+             const size_t draft_index = static_cast<size_t>(session->mtp_pending_draft_pos - token_start);
+-            if (token_ids[draft_index] == session->mtp_pending_draft_token) {
++            if (token_ids != nullptr && token_ids[draft_index] == session->mtp_pending_draft_token) {
+                 session->mtp_next_pos = std::max(session->mtp_next_pos, session->mtp_pending_draft_pos + 1);
+             } else {
+                 if (llama_memory_t memory = mtp_ctx->get_memory()) {
+@@ -2935,17 +2989,21 @@ static enum skippy_status skippy_mtp_sync_target_tokens(
+     const int32_t n_decode = static_cast<int32_t>(token_count - first_index);
+     if (!mtp_shares_target_memory && n_decode > 0) {
+         llama_batch batch = llama_batch_init(n_decode, n_embd, 1);
+-        batch.token = static_cast<llama_token *>(std::malloc(sizeof(llama_token)*static_cast<size_t>(n_decode)));
+-        if (batch.token == nullptr) {
+-            llama_batch_free(batch);
+-            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to allocate MTP token batch");
+-            return SKIPPY_STATUS_RUNTIME_ERROR;
++        if (token_ids != nullptr) {
++            batch.token = static_cast<llama_token *>(std::malloc(sizeof(llama_token)*static_cast<size_t>(n_decode)));
++            if (batch.token == nullptr) {
++                llama_batch_free(batch);
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to allocate MTP token batch");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
+         }
+         batch.n_tokens = n_decode;
+ 
+         for (int32_t out_i = 0; out_i < n_decode; ++out_i) {
+             const size_t src_i = first_index + static_cast<size_t>(out_i);
+-            batch.token[out_i] = token_ids[src_i];
++            if (batch.token != nullptr) {
++                batch.token[out_i] = token_ids[src_i];
++            }
+             batch.pos[out_i] = token_start + static_cast<llama_pos>(src_i);
+             batch.n_seq_id[out_i] = 1;
+             batch.seq_id[out_i][0] = session->seq_id;
+@@ -2969,6 +3027,12 @@ static enum skippy_status skippy_mtp_sync_target_tokens(
+ 
+         int32_t rc = 0;
+         const uint32_t sync_depth_count = chain_heads ? mtp_depth_scope.depth_count : 1;
++        const float * mtp_embeddings = input_embeddings != nullptr ?
++                input_embeddings + first_index*static_cast<size_t>(n_embd) : nullptr;
++        skippy_mtp_embeddings_scope mtp_embeddings_scope(
++                mtp_embeddings,
++                static_cast<uint32_t>(n_decode),
++                static_cast<uint32_t>(n_embd));
+         for (uint32_t depth = 0; depth < sync_depth_count; ++depth) {
+             if (chain_heads) {
+                 if (llama_memory_t memory = mtp_ctx->get_memory()) {
+@@ -3001,14 +3065,19 @@ static enum skippy_status skippy_mtp_sync_target_tokens(
+                 break;
+             }
+ 
++            if (batch.token == nullptr) {
++                continue;
++            }
+             for (int32_t out_i = 0; out_i + 1 < n_decode; ++out_i) {
+                 batch.token[out_i] = batch.token[out_i + 1];
+             }
+             batch.token[n_decode - 1] = skippy_greedy_sample_context(
+                     llama_get_model(mtp_ctx), mtp_ctx, -1);
+         }
+-        std::free(batch.token);
+-        batch.token = nullptr;
++        if (batch.token != nullptr) {
++            std::free(batch.token);
++            batch.token = nullptr;
++        }
+         llama_batch_free(batch);
+         if (rc != 0) {
+             skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed for MTP sidecar sync");
+@@ -3030,6 +3099,41 @@ static enum skippy_status skippy_mtp_sync_target_tokens(
+     return skippy_success(out_error);
+ }
+ 
++int skippy_external_decode_observe(llama_context * ctx, const llama_batch & batch) {
++    skippy_session * session = g_skippy_external_decode_session;
++    if (session == nullptr || ctx != session->ctx || batch.n_tokens <= 0 ||
++            session->stage_model == nullptr || session->stage_model->model == nullptr ||
++            session->stage_model->model->arch != LLM_ARCH_INKLING) {
++        return 0;
++    }
++    session->external_mtp_embeddings_available = batch.embd != nullptr;
++    if (batch.embd != nullptr) {
++        const size_t value_count = static_cast<size_t>(batch.n_tokens)*
++                static_cast<size_t>(llama_model_n_embd(session->stage_model->model));
++        session->external_mtp_embeddings.assign(batch.embd, batch.embd + value_count);
++    } else {
++        session->external_mtp_embeddings.clear();
++    }
++
++    const llama_pos token_start = batch.pos != nullptr ? batch.pos[0] : session->n_past;
++    skippy_error * error = nullptr;
++    const skippy_status status = skippy_mtp_sync_target_inputs(
++            session,
++            batch.token,
++            batch.embd,
++            static_cast<size_t>(batch.n_tokens),
++            token_start,
++            &error);
++    if (status == SKIPPY_STATUS_OK) {
++        return 0;
++    }
++
++    fprintf(stderr, "skippy: external Inkling MTP sync failed: %s\n",
++            error != nullptr && error->message != nullptr ? error->message : "unknown error");
++    skippy_error_free(error);
++    return -1;
++}
++
+ static void skippy_record_tokens(
+         skippy_session * session,
+         const llama_token * token_ids,
+@@ -3082,7 +3186,7 @@ static enum skippy_status skippy_decode_tokens(
+         };
+         enum skippy_status status = skippy_decode_batch(session, batch, 1, glm_dsa_phase_hint, out_error);
+         if (status == SKIPPY_STATUS_OK) {
+-            status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, pos, out_error);
++            status = skippy_mtp_sync_target_inputs(session, token_ids, nullptr, token_count, pos, out_error);
+         }
+         if (status == SKIPPY_STATUS_OK) {
+             skippy_record_tokens(session, token_ids, token_count);
+@@ -3104,7 +3208,7 @@ static enum skippy_status skippy_decode_tokens(
+     enum skippy_status status = skippy_decode_batch(session, batch, token_count, glm_dsa_phase_hint, out_error);
+     llama_batch_free(batch);
+     if (status == SKIPPY_STATUS_OK) {
+-        status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, token_start, out_error);
++        status = skippy_mtp_sync_target_inputs(session, token_ids, nullptr, token_count, token_start, out_error);
+     }
+     if (status == SKIPPY_STATUS_OK) {
+         skippy_record_tokens(session, token_ids, token_count);
+@@ -3150,7 +3254,7 @@ static enum skippy_status skippy_verify_token_batch(
+             out_error);
+     llama_batch_free(batch);
+     if (status == SKIPPY_STATUS_OK) {
+-        status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, token_start, out_error);
++        status = skippy_mtp_sync_target_inputs(session, token_ids, nullptr, token_count, token_start, out_error);
+     }
+     if (status == SKIPPY_STATUS_OK) {
+         skippy_record_tokens(session, token_ids, token_count);
+@@ -4010,6 +4114,28 @@ static enum skippy_status skippy_copy_output_activation_frame(
+     if (output_desc != nullptr) {
+         output_desc->payload_bytes = actual_payload_bytes;
+     }
++    if ((output_flags & SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD) != 0) {
++        uint8_t * sideband_output = static_cast<uint8_t *>(output_payload) + hidden_bytes;
++        const skippy_runtime_config & config = session->stage_model->config;
++        if (config.layer_start == 0) {
++            if (session->external_mtp_embeddings.size()*sizeof(float) < hidden_bytes) {
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "Inkling MTP input embedding sideband was not available");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++            std::memcpy(sideband_output, session->external_mtp_embeddings.data(), hidden_bytes);
++        } else {
++            if (input_desc == nullptr ||
++                input_payload == nullptr ||
++                (input_desc->flags & SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD) == 0 ||
++                input_desc->payload_bytes < hidden_bytes * 2) {
++                skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "Inkling downstream slice cannot forward a missing MTP input embedding sideband");
++                return SKIPPY_STATUS_INVALID_ARGUMENT;
++            }
++            std::memcpy(sideband_output, static_cast<const uint8_t *>(input_payload) + hidden_bytes, hidden_bytes);
++        }
++        session->external_mtp_embeddings_available = false;
++        session->external_mtp_embeddings.clear();
++    }
+     return skippy_success(out_error);
+ }
+ 
+@@ -4129,8 +4255,12 @@ static enum skippy_status skippy_decode_activation_frame(
+             token_count,
+             glm_dsa_phase_hint,
+             out_error);
+-    if (status == SKIPPY_STATUS_OK && token_ids != nullptr) {
+-        status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, token_start, out_error);
++    const float * mtp_input_embeddings =
++            (input_desc->flags & SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD) != 0 ?
++            reinterpret_cast<const float *>(static_cast<const uint8_t *>(input_payload) + hidden_bytes) : nullptr;
++    if (status == SKIPPY_STATUS_OK && (token_ids != nullptr || mtp_input_embeddings != nullptr)) {
++        status = skippy_mtp_sync_target_inputs(
++                session, token_ids, mtp_input_embeddings, token_count, token_start, out_error);
+     }
+     if (status == SKIPPY_STATUS_OK && token_ids != nullptr) {
+         skippy_record_tokens(session, token_ids, token_count);
+@@ -4213,8 +4343,12 @@ static enum skippy_status skippy_verify_activation_frame(
+     if (!alias_input_payload) {
+         llama_batch_free(batch);
+     }
+-    if (status == SKIPPY_STATUS_OK && token_ids != nullptr) {
+-        status = skippy_mtp_sync_target_tokens(session, token_ids, token_count, token_start, out_error);
++    const float * mtp_input_embeddings =
++            (input_desc->flags & SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD) != 0 ?
++            reinterpret_cast<const float *>(static_cast<const uint8_t *>(input_payload) + hidden_bytes) : nullptr;
++    if (status == SKIPPY_STATUS_OK && (token_ids != nullptr || mtp_input_embeddings != nullptr)) {
++        status = skippy_mtp_sync_target_inputs(
++                session, token_ids, mtp_input_embeddings, token_count, token_start, out_error);
+     }
+     return status;
+ }
+@@ -4251,7 +4385,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_RUNTIME_EVENTS |
+            SKIPPY_FEATURE_BACKEND_DEVICES |
+            SKIPPY_FEATURE_NATIVE_MTP_N1 |
+-           SKIPPY_FEATURE_NGRAM_CACHE_DRAFT;
++           SKIPPY_FEATURE_NGRAM_CACHE_DRAFT |
++           SKIPPY_FEATURE_INKLING_MTP_MM;
+ }
+ 
+ void skippy_error_free(struct skippy_error * error) {
+@@ -4939,6 +5074,12 @@ enum skippy_status skippy_session_begin_external_decode(
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
++    if (g_skippy_external_decode_session != nullptr && g_skippy_external_decode_session != session) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "another external decode session is already active on this thread");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    session->external_mtp_embeddings_available = false;
++    session->external_mtp_embeddings.clear();
+ 
+     const skippy_runtime_config & config = session->stage_model->config;
+     if (config.filter_tensors_on_load) {
+@@ -4950,6 +5091,7 @@ enum skippy_status skippy_session_begin_external_decode(
+         filter.include_output = config.include_output;
+         skippy_graph_set_filter(filter);
+     }
++    g_skippy_external_decode_session = session;
+ 
+     return skippy_success(out_error);
+ }
+@@ -4961,6 +5103,9 @@ enum skippy_status skippy_session_end_external_decode(
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
++    if (g_skippy_external_decode_session == session) {
++        g_skippy_external_decode_session = nullptr;
++    }
+     skippy_graph_clear_filter();
+     return skippy_success(out_error);
+ }
+-- 
+2.50.1 (Apple Git-155)
+

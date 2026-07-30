@@ -12,6 +12,7 @@ use crate::frontend::generation::EmbeddedStageExecution;
 use crate::frontend::generation::EmbeddedStageZeroGeneration;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::generation::stage_reply_timeout;
 use crate::frontend::util::ms_to_us;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::openai_io_error;
@@ -36,7 +37,6 @@ const DIRECT_RETURN_FALLBACK_POLL: Duration = Duration::from_millis(10);
 // a generation permit indefinitely. This is deliberately much larger than a
 // normal WAN verify traversal while remaining shorter than the HTTP client's
 // request timeout.
-const DIRECT_RETURN_FALLBACK_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) struct DispatchedEmbeddedStage {
     started: Instant,
@@ -296,7 +296,7 @@ fn receive_direct_prediction_return(
         OpenAiError::backend("direct prediction return was required but is not configured")
     })?;
     prediction_return
-        .recv_expected_timeout(expected_reply, DIRECT_RETURN_FALLBACK_TIMEOUT)
+        .recv_expected_timeout(expected_reply, stage_reply_timeout())
         .map_err(openai_backend_error)?
         .ok_or_else(|| {
             OpenAiError::backend(format!(
@@ -340,6 +340,7 @@ fn poll_direct_or_downstream_reply(
 ) -> OpenAiResult<StageReply> {
     let mut timeout_restore = DirectReturnFallbackTimeout::install(downstream)?;
     let started = Instant::now();
+    let reply_timeout = stage_reply_timeout();
     let result = loop {
         if let Some(reply) = prediction_return
             .try_recv_one_of(expected_replies)
@@ -353,13 +354,13 @@ fn poll_direct_or_downstream_reply(
             // while decoding the complete frame turns an ordinary partial
             // arrival into EWOULDBLOCK. Once downstream wins the race, give
             // the frame the remainder of the bounded fallback deadline.
-            let remaining = DIRECT_RETURN_FALLBACK_TIMEOUT.saturating_sub(started.elapsed());
+            let remaining = reply_timeout.saturating_sub(started.elapsed());
             downstream
                 .set_read_timeout(Some(remaining.max(DIRECT_RETURN_FALLBACK_POLL)))
                 .map_err(openai_io_error)?;
             break receive_downstream_stage_reply_one_of(downstream, expected_replies);
         }
-        if started.elapsed() >= DIRECT_RETURN_FALLBACK_TIMEOUT {
+        if started.elapsed() >= reply_timeout {
             break Err(OpenAiError::backend(format!(
                 "timed out waiting for one of {expected_replies:?} from direct return or downstream"
             )));

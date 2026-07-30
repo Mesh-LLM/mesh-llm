@@ -19,6 +19,7 @@ pub enum CommandKind {
     StateHandoff(StateHandoffArgs),
     NativeMtpOpenAiAb(Box<NativeMtpOpenAiAbArgs>),
     GlmDsaStage0Trace(Box<GlmDsaStage0TraceArgs>),
+    StageFaParity(StageFaParityArgs),
 }
 
 #[derive(Args, Clone)]
@@ -323,4 +324,26 @@ pub enum StatePayloadKind {
     FullState,
     RecurrentOnly,
     KvRecurrent,
+}
+
+#[derive(Args)]
+pub struct StageFaParityArgs {
+    #[arg(long)]
+    pub model: PathBuf,
+    #[arg(long, default_value_t = 0)]
+    pub layer_start: u32,
+    #[arg(long)]
+    pub layer_end: u32,
+    #[arg(long, default_value_t = 2048)]
+    pub ctx_size: u32,
+    #[arg(long, default_value_t = 99)]
+    pub n_gpu_layers: i32,
+    #[arg(long, default_value = "Hello")]
+    pub prompt: String,
+    #[arg(long, default_value_t = 5e-3)]
+    pub max_abs: f32,
+    #[arg(long)]
+    pub enabled_output: Option<PathBuf>,
+    #[arg(long)]
+    pub disabled_output: Option<PathBuf>,
 }

@@ -5,6 +5,7 @@ mod persistent_lanes;
 mod queue;
 mod server;
 mod streaming;
+mod timeouts;
 mod types;
 
 pub use cache_hints::{CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS};
@@ -26,4 +27,5 @@ pub(in crate::frontend) use parsing::*;
 pub(in crate::frontend) use persistent_lanes::*;
 pub(in crate::frontend) use queue::*;
 pub(in crate::frontend) use streaming::*;
+pub(in crate::frontend) use timeouts::*;
 pub(in crate::frontend) use types::*;

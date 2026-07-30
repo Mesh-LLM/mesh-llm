@@ -38,6 +38,7 @@ pub enum LlamaFileType {
     MostlyMxfp4Moe = 38,
     MostlyNvfp4 = 39,
     MostlyQ1_0 = 40,
+    MostlyQ2_0 = 41,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

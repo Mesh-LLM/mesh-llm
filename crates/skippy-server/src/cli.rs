@@ -133,6 +133,11 @@ pub struct ServeBinaryArgs {
     pub openai_draft_n_gpu_layers: Option<i32>,
     #[arg(
         long,
+        help = "Native MTP sidecar GGUF to attach to the stage-0 model. Unlike --openai-draft-model-path this is not opened as a standalone draft model; its MTP heads are attached to the served model."
+    )]
+    pub openai_native_mtp_draft_model_path: Option<PathBuf>,
+    #[arg(
+        long,
         help = "JSON file containing the complete resolved speculative decode plan."
     )]
     pub openai_speculative_config: Option<PathBuf>,

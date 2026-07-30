@@ -12,19 +12,23 @@ mod command_reports;
 mod direct_convert;
 mod direct_quantize;
 mod float_convert;
+mod gguf_metadata;
 mod gguf_template;
 mod gguf_writer;
 mod hf_checkpoint;
 mod imatrix;
+mod inkling_metadata;
 mod llama_load;
 mod locking;
 mod manifest;
 mod memory_budget;
+mod mtp_attach;
 mod native_convert;
 mod native_quantize;
 mod output;
 mod plan_convert;
 mod preflight;
+mod projector_validate;
 mod quantize;
 mod records;
 mod residency;
@@ -56,6 +60,7 @@ use memory_budget::{
     MemoryBudgetPlanInput, MemoryPolicy, MemorySize, effective_stream_buffer_bytes,
     native_convert_stream_working_set_bytes, print_memory_budget_plan,
 };
+use mtp_attach::{ValidateMtpAttachArgs, run_validate_mtp_attach};
 use native_convert::{build_native_convert_command, run_native_convert};
 use native_quantize::{build_native_quantize_command, run_native_quantize};
 use output::{
@@ -64,6 +69,7 @@ use output::{
 };
 use plan_convert::{PlanConvertArgs, run_plan_convert};
 use preflight::run_job_preflight;
+use projector_validate::{ValidateProjectorArgs, run_validate_projector};
 use records::{WindowRunRecordInput, unix_timestamp_ms, write_window_record};
 use residency::remove_dir_if_exists;
 use splits::{
@@ -109,6 +115,8 @@ enum Command {
     RunQuantWindow(RunQuantWindowArgs),
     VerifyJob(VerifyJobArgs),
     ValidateLlamaLoad(ValidateLlamaLoadArgs),
+    ValidateMtpAttach(ValidateMtpAttachArgs),
+    ValidateProjector(ValidateProjectorArgs),
     ValidateTensorTypes(ValidateTensorTypesArgs),
     ValidateSplits(ValidateSplitsArgs),
 }
@@ -510,6 +518,8 @@ fn main() -> Result<()> {
             args.json,
         ),
         Command::ValidateLlamaLoad(args) => run_validate_llama_load(args),
+        Command::ValidateMtpAttach(args) => run_validate_mtp_attach(args),
+        Command::ValidateProjector(args) => run_validate_projector(args),
         Command::ValidateTensorTypes(args) => validate_tensor_types_command(&args.file, args.json),
         Command::ValidateSplits(args) => validate_splits_command(
             &args.root,

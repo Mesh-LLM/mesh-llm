@@ -220,8 +220,26 @@ impl Node {
         tokio::spawn(async move {
             node.dispatch_streams(conn_for_dispatch, remote).await;
         });
-        if let Some(existing) = existing {
-            existing.close(0u32.into(), b"direct-path-replaced");
+        if let Some(existing) = existing.filter(|existing| existing.stable_id() != conn.stable_id())
+        {
+            record_draining_replaced_connection(remote, Some(&existing), &conn);
+            Self::spawn_replaced_connection_drain(remote, existing);
         }
     }
+}
+
+fn record_draining_replaced_connection(
+    remote: EndpointId,
+    existing: Option<&Connection>,
+    replacement: &Connection,
+) {
+    let Some(existing) = existing else {
+        return;
+    };
+    tracing::debug!(
+        peer = %remote.fmt_short(),
+        replaced_stable_id = existing.stable_id(),
+        replacement_stable_id = replacement.stable_id(),
+        "Direct path connection replaced; allowing existing streams to drain"
+    );
 }

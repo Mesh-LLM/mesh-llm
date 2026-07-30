@@ -19,21 +19,29 @@ impl TensorNameMap {
 
 fn map_hf_to_gguf(name: &str, mtp_layer_start: Option<u32>) -> Result<String> {
     if let Some(layer_start) = mtp_layer_start
+        && let Some(normalized) = normalize_inkling_mtp_source_name(name, layer_start)?
+    {
+        return map_hf_to_gguf(&normalized, mtp_layer_start);
+    }
+    if let Some(layer_start) = mtp_layer_start
         && let Some(normalized) = normalize_qwen_mtp_source_name(name, layer_start)?
     {
         return map_hf_to_gguf(&normalized, mtp_layer_start);
     }
-    if name == "model.embed_tokens.weight" {
+    if matches!(name, "model.embed_tokens.weight" | "model.llm.embed.weight") {
         return Ok("token_embd.weight".to_string());
     }
     if name == "embed_tokens.weight" {
         return Ok("token_embd.weight".to_string());
     }
-    if name == "lm_head.weight" {
+    if matches!(name, "lm_head.weight" | "model.llm.unembed.weight") {
         return Ok("output.weight".to_string());
     }
-    if name == "model.norm.weight" {
+    if matches!(name, "model.norm.weight" | "model.llm.norm.weight") {
         return Ok("output_norm.weight".to_string());
+    }
+    if name == "model.llm.embed_norm.weight" {
+        return Ok("token_embd_norm.weight".to_string());
     }
     if name == "norm.weight" {
         return Ok("output_norm.weight".to_string());
@@ -48,7 +56,8 @@ fn map_hf_to_gguf(name: &str, mtp_layer_start: Option<u32>) -> Result<String> {
 }
 
 pub(crate) fn is_mtp_source_tensor(name: &str) -> bool {
-    is_qwen_mtp_source_tensor(name)
+    is_inkling_mtp_source_tensor(name)
+        || is_qwen_mtp_source_tensor(name)
         || map_mtp_source_tensor(name).is_ok_and(|mapped| mapped.is_some())
 }
 
@@ -73,7 +82,55 @@ pub(crate) fn is_shared_mtp_context_tensor(name: &str) -> bool {
             | "model.norm.weight"
             | "norm.weight"
             | "lm_head.weight"
+            | "model.llm.embed.weight"
+            | "model.llm.embed_norm.weight"
+            | "model.llm.norm.weight"
+            | "model.llm.unembed.weight"
     )
+}
+
+pub(crate) fn is_inkling_fused_w13(name: &str) -> bool {
+    name.starts_with("model.mtp.layers.") && name.ends_with(".mlp.w13_dn.weight")
+}
+
+pub(crate) fn inkling_mtp_depth(name: &str) -> Result<Option<u32>> {
+    let Some(rest) = name.strip_prefix("model.mtp.layers.") else {
+        return Ok(None);
+    };
+    let Some((depth, _)) = rest.split_once('.') else {
+        bail!("malformed Inkling MTP tensor name {name}");
+    };
+    depth
+        .parse::<u32>()
+        .map(Some)
+        .map_err(|err| anyhow!("malformed Inkling MTP depth in {name}: {err}"))
+}
+
+fn is_inkling_mtp_source_tensor(name: &str) -> bool {
+    name.starts_with("model.mtp.layers.")
+}
+
+fn normalize_inkling_mtp_source_name(name: &str, layer_start: u32) -> Result<Option<String>> {
+    let Some(rest) = name.strip_prefix("model.mtp.layers.") else {
+        return Ok(None);
+    };
+    let Some((depth, suffix)) = rest.split_once('.') else {
+        bail!("malformed Inkling MTP tensor name {name}");
+    };
+    let depth = depth
+        .parse::<u32>()
+        .map_err(|err| anyhow!("malformed Inkling MTP depth in {name}: {err}"))?;
+    let suffix = match suffix {
+        "embed_norm.weight" => "enorm.weight",
+        "hidden_norm.weight" => "hnorm.weight",
+        "input_proj.weight" => "eh_proj.weight",
+        value => value.strip_prefix("transformer_block.").unwrap_or(value),
+    };
+    Ok(Some(format!(
+        "model.layers.{}.{}",
+        layer_start + depth,
+        suffix
+    )))
 }
 
 fn map_mtp_source_tensor(name: &str) -> Result<Option<String>> {
@@ -182,6 +239,29 @@ impl<'a> HfLayerTensor<'a> {
             "self_attn.kv_a_proj_with_mqa.weight" => Ok(format!("blk.{bid}.attn_kv_a_mqa.weight")),
             "self_attn.kv_b_proj.weight" => Ok(format!("blk.{bid}.attn_kv_b.weight")),
             "self_attn.kv_a_layernorm.weight" => Ok(format!("blk.{bid}.attn_kv_a_norm.weight")),
+            "attn_norm.weight" => Ok(format!("blk.{bid}.attn_norm.weight")),
+            "attn.wq_du.weight" => Ok(format!("blk.{bid}.attn_q.weight")),
+            "attn.wk_dv.weight" => Ok(format!("blk.{bid}.attn_k.weight")),
+            "attn.wv_dv.weight" => Ok(format!("blk.{bid}.attn_v.weight")),
+            "attn.wr_du.weight" => Ok(format!("blk.{bid}.attn_r.weight")),
+            "attn.wo_ud.weight" => Ok(format!("blk.{bid}.attn_output.weight")),
+            "attn.q_norm.weight" => Ok(format!("blk.{bid}.attn_q_norm.weight")),
+            "attn.k_norm.weight" => Ok(format!("blk.{bid}.attn_k_norm.weight")),
+            "attn.rel_logits_proj.proj" | "attn.rel_logits_proj.weight" => {
+                Ok(format!("blk.{bid}.attn_rel_proj.weight"))
+            }
+            "attn.k_sconv.weight" => Ok(format!("blk.{bid}.shortconv_k.weight")),
+            "attn.v_sconv.weight" => Ok(format!("blk.{bid}.shortconv_v.weight")),
+            "attn_sconv.weight" => Ok(format!("blk.{bid}.shortconv_attn.weight")),
+            "mlp_sconv.weight" => Ok(format!("blk.{bid}.shortconv_mlp.weight")),
+            "mlp_norm.weight" => Ok(format!("blk.{bid}.ffn_norm.weight")),
+            "mlp.w2_md.weight" => Ok(format!("blk.{bid}.ffn_down.weight")),
+            "mlp.global_scale" | "mlp.global_scale.weight" => {
+                Ok(format!("blk.{bid}.ffn_gscale.weight"))
+            }
+            "mlp.w13_dn.weight" => {
+                bail!("Inkling fused w13 tensor requires streaming deinterleave")
+            }
             "self_attn.indexer.k_norm.weight" => Ok(format!("blk.{bid}.indexer.k_norm.weight")),
             "self_attn.indexer.k_norm.bias" => Ok(format!("blk.{bid}.indexer.k_norm.bias")),
             "self_attn.indexer.weights_proj.weight" => Ok(format!("blk.{bid}.indexer.proj.weight")),
@@ -408,5 +488,47 @@ mod tests {
                 .unwrap(),
             "blk.33.attn_q.weight"
         );
+    }
+
+    #[test]
+    fn recognizes_and_maps_inkling_mtp_tensors() {
+        let map = TensorNameMap::HfToGgufWithMtp { layer_start: 66 };
+        for (source, expected) in [
+            (
+                "model.mtp.layers.0.embed_norm.weight",
+                "blk.66.nextn.enorm.weight",
+            ),
+            (
+                "model.mtp.layers.1.hidden_norm.weight",
+                "blk.67.nextn.hnorm.weight",
+            ),
+            (
+                "model.mtp.layers.2.input_proj.weight",
+                "blk.68.nextn.eh_proj.weight",
+            ),
+            (
+                "model.mtp.layers.3.transformer_block.attn.wq_du.weight",
+                "blk.69.attn_q.weight",
+            ),
+            (
+                "model.mtp.layers.4.transformer_block.attn.rel_logits_proj.proj",
+                "blk.70.attn_rel_proj.weight",
+            ),
+            (
+                "model.mtp.layers.7.transformer_block.mlp.global_scale",
+                "blk.73.ffn_gscale.weight",
+            ),
+        ] {
+            assert!(is_mtp_source_tensor(source));
+            assert_eq!(map.map_tensor_name(source).unwrap(), expected);
+        }
+        assert_eq!(
+            map.map_tensor_name("model.llm.embed_norm.weight").unwrap(),
+            "token_embd_norm.weight"
+        );
+        assert!(is_shared_mtp_context_tensor("model.llm.unembed.weight"));
+        assert!(is_inkling_fused_w13(
+            "model.mtp.layers.0.transformer_block.mlp.w13_dn.weight"
+        ));
     }
 }

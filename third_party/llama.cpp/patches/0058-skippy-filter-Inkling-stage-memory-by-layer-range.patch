@@ -1,0 +1,72 @@
+From 7be339fb9da027c7ecd15a7d5eb9e2e56313d312 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 24 Jul 2026 19:02:35 +1000
+Subject: [PATCH 58/60] skippy: filter Inkling stage memory by layer range
+
+Assisted-by: goose
+---
+ src/llama-model.cpp | 11 +++++++++--
+ src/skippy.cpp      |  4 ++--
+ 2 files changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index be5cfb88..527b52b8 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -6,6 +6,7 @@
+ #include "llama-impl.h"
+ #include "llama-mmap.h"
+ #include "llama-cparams.h"
++#include "llama-graph.h"
+ #include "llama-model-loader.h"
+ 
+ #include "llama-kv-cache.h"
+@@ -2126,8 +2127,14 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                             filter_attn = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                             filter_recr = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                         } else {
+-                            filter_attn = [&](uint32_t il) { return il < hparams.n_layer(); };
+-                            filter_recr = [&](uint32_t il) { return il < hparams.n_layer(); };
++                            const skippy_graph_filter stage_filter = skippy_graph_get_filter();
++                            filter_attn = [&, stage_filter](uint32_t il) {
++                                return il < hparams.n_layer() &&
++                                    (!stage_filter.enabled ||
++                                     (il >= static_cast<uint32_t>(stage_filter.layer_start) &&
++                                      il < static_cast<uint32_t>(stage_filter.layer_end)));
++                            };
++                            filter_recr = filter_attn;
+                         }
+                     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
+                         filter_attn = [&](uint32_t il) {
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 886efbcc..46f8fad6 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -4512,6 +4512,7 @@ static enum skippy_status skippy_restore_verify_prefix(
+                 0,
+                 accepted_count,
+                 false,
++                SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
+                 out_error);
+     } else if (accepted_count > 0) {
+         status = skippy_decode_tokens(
+@@ -4519,6 +4520,7 @@ static enum skippy_status skippy_restore_verify_prefix(
+                 checkpoint->token_ids.data(),
+                 accepted_count,
+                 false,
++                SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
+                 out_error);
+     }
+     if (status == SKIPPY_STATUS_OK) {
+@@ -7060,8 +7062,6 @@ enum skippy_status skippy_trim_session(
+             skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime memory type is not supported for trim");
+             return SKIPPY_STATUS_UNSUPPORTED;
+         }
+-    }
+-        }
+     }
+     session->n_past = static_cast<int32_t>(token_count);
+     if (session->token_history.size() > token_count) {
+-- 
+2.50.1 (Apple Git-155)
+

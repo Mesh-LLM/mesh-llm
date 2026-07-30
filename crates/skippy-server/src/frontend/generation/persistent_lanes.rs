@@ -55,7 +55,6 @@ pub(in crate::frontend) struct PrefillTransportEstimate {
 /// installed on the persistent lane.
 pub(in crate::frontend) const LANE_READY_READ_TIMEOUT: Duration = Duration::from_secs(20);
 pub(in crate::frontend) const LANE_STEADY_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-pub(in crate::frontend) const LANE_STEADY_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl PersistentStageLanePool {
     const PREFILL_TRANSPORT_EWMA_ALPHA: f64 = 0.25;
@@ -310,7 +309,7 @@ impl PersistentStageLanePool {
         connect_timeout: Duration,
         ready_timeout: Duration,
     ) -> Result<TcpStream> {
-        let mut stream = connect_binary_downstream(&self.config, connect_timeout.as_secs().max(1))?
+        let mut stream = connect_binary_downstream(&self.config, connect_timeout)?
             .ok_or_else(|| anyhow!("embedded stage0 has no downstream"))?;
         let local_addr = stream.local_addr().ok();
         let peer_addr = stream.peer_addr().ok();
@@ -333,11 +332,12 @@ impl PersistentStageLanePool {
 pub(in crate::frontend) fn configure_persistent_lane_io_deadlines(
     stream: &TcpStream,
 ) -> Result<()> {
+    let timeout = super::stage_reply_timeout();
     stream
-        .set_read_timeout(Some(LANE_STEADY_IO_TIMEOUT))
+        .set_read_timeout(Some(timeout))
         .context("set persistent downstream lane read timeout")?;
     stream
-        .set_write_timeout(Some(LANE_STEADY_IO_TIMEOUT))
+        .set_write_timeout(Some(timeout))
         .context("set persistent downstream lane write timeout")
 }
 

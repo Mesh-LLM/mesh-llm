@@ -16,6 +16,7 @@ fn multimodal_final_prefill_message_requests_downstream_prediction() {
             prompt_token_count: 17,
             pos_start: 0,
             token_count: 17,
+            tokens: vec![3; 17],
             positions: Vec::new(),
             sampling: Some(sampling.clone()),
             final_chunk: true,
@@ -27,6 +28,7 @@ fn multimodal_final_prefill_message_requests_downstream_prediction() {
     assert!(message.kind.requires_predicted_reply());
     assert_eq!(message.token_count, 17);
     assert_eq!(message.state.current_token, LLAMA_TOKEN_NULL);
+    assert_eq!(message.tokens, vec![3; 17]);
     assert_eq!(message.sampling, Some(sampling));
 }
 

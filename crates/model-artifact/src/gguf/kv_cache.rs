@@ -153,9 +153,24 @@ fn cache_bytes_per_token(
     vector_length: u32,
     cache_type: GgufKvCacheType,
 ) -> Option<u64> {
-    let kv_heads = u64::from(meta.kv_cache_head_count()?);
     let vector_length = u64::from((vector_length > 0).then_some(vector_length)?);
     let layers = u64::from((meta.layer_count > 0).then_some(meta.layer_count)?);
+    // Models with per-layer KV head counts (e.g. inkling's hybrid attention)
+    // price each layer by its own head count rather than a single global one.
+    // GLM-DSA keeps its absorbed-MLA special case via kv_cache_head_count.
+    if meta.architecture != "glm-dsa"
+        && meta.kv_head_counts.len() == layers as usize
+        && meta.kv_head_counts.iter().all(|head_count| *head_count > 0)
+    {
+        return meta
+            .kv_head_counts
+            .iter()
+            .try_fold(0u64, |total, head_count| {
+                let elements = u64::from(*head_count).checked_mul(vector_length)?;
+                total.checked_add(cache_type.bytes_for_elements(elements)?)
+            });
+    }
+    let kv_heads = u64::from(meta.kv_cache_head_count()?);
     let elements_per_layer = kv_heads.checked_mul(vector_length)?;
     cache_type
         .bytes_for_elements(elements_per_layer)?

@@ -2070,5 +2070,28 @@
       "split_constraints": [],
       "sidebands": []
     }
+  },
+  {
+    "model_id": "meshllm/inkling-UD-Q2_K_XL-layers",
+    "source_repo": "meshllm/inkling-UD-Q2_K_XL-layers",
+    "source_revision": "9b4b91a7ddd978dd7a01679bc977f6e53777f2c7",
+    "distribution_id": "inkling-UD-Q2_K_XL-layers",
+    "selector": "Q2_K_XL",
+    "capability": {
+      "family_id": "inkling",
+      "layer_count": 66,
+      "activation_width": 6144,
+      "default_wire_dtype": "f32",
+      "q8_wire_validation": "rejected",
+      "exact_state_mobility": "rejected_too_large",
+      "recurrent_ranges": [
+        {
+          "start": 0,
+          "end": 66
+        }
+      ],
+      "split_constraints": [],
+      "sidebands": []
+    }
   }
 ]

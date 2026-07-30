@@ -3,7 +3,7 @@ use tokio_stream::StreamExt;
 
 use ::model_package::jobs::HfJobsClient;
 use ::model_package::permissions;
-use ::model_package::prepare::{self, DiscoveredQuant, PrepareParams};
+use ::model_package::prepare::{self, DiscoveredQuant, PrepareJob, PrepareParams};
 use ::model_package::script;
 use serde_json::json;
 
@@ -16,6 +16,7 @@ pub struct ModelPrepareArgs<'a> {
     pub flavor: &'a str,
     pub timeout: &'a str,
     pub mesh_llm_ref: &'a str,
+    pub experimental: bool,
     pub dry_run: bool,
     pub confirm: bool,
     pub follow: bool,
@@ -37,6 +38,7 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
         flavor,
         timeout,
         mesh_llm_ref,
+        experimental,
         dry_run,
         confirm,
         follow,
@@ -95,7 +97,13 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
     // If no quant specified, list available quants and exit.
     // This path doesn't need HF_TOKEN — works for public repos.
     if source_quant.is_none() {
-        return run_list_quants(&hf_client, source_repo, json).await;
+        return run_list_quants(
+            &hf_client,
+            source_repo,
+            source_model_ref.revision.as_deref(),
+            json,
+        )
+        .await;
     }
 
     let submitting = confirm && !dry_run;
@@ -116,12 +124,14 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
     eprintln!("🔍 Resolving source...");
     let params = PrepareParams {
         source_repo: source_repo.to_string(),
+        source_revision: source_model_ref.revision.clone(),
         quant: source_quant.map(|s| s.to_string()),
         target: target.map(|s| s.to_string()),
         model_id: model_id.map(|s| s.to_string()),
         flavor: flavor.to_string(),
         timeout_seconds,
         mesh_llm_ref: mesh_llm_ref.to_string(),
+        experimental,
         hf_token: jobs_client
             .as_ref()
             .map(|client| client.token().to_string()),
@@ -129,58 +139,7 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
 
     let job = prepare::resolve(&hf_client, params, &perms).await?;
 
-    // Print resolved info.
-    let shard_info = model_ref::split_gguf_shard_info(&job.source_file);
-    let shard_str = if let Some(shard) = shard_info {
-        format!(" ({} shards)", shard.total)
-    } else {
-        String::new()
-    };
-
-    eprintln!("   Repo:   {}", job.source_repo);
-    eprintln!("   File:   {}{}", job.source_file, shard_str);
-    eprintln!();
-    eprintln!(
-        "🔑 Permissions: {} ({})",
-        perms.username,
-        if perms.is_meshllm_member {
-            "meshllm org member"
-        } else {
-            "not in meshllm org"
-        }
-    );
-    eprintln!("   Target:  {}", job.target_repo);
-    eprintln!(
-        "   Catalog: meshllm/catalog ({})",
-        if job.catalog_create_pr {
-            "will open PR"
-        } else {
-            "direct commit"
-        }
-    );
-    eprintln!();
-    eprintln!(
-        "📋 Job: {}, timeout {}, mesh-llm@{}",
-        job.spec.flavor,
-        format_timeout(job.spec.timeout_seconds),
-        job.spec
-            .environment
-            .get("MESH_LLM_REF")
-            .map(|s| s.as_str())
-            .unwrap_or("main")
-    );
-    eprintln!(
-        "   Hardware: {} {} ({})",
-        job.job_plan.pretty_name,
-        hardware_label(job.job_plan.cpu.as_deref(), job.job_plan.ram.as_deref()),
-        job.job_plan.selection_reason
-    );
-    eprintln!(
-        "   Pricing:  ${:.6}/{}, max {}",
-        job.job_plan.unit_cost_usd,
-        job.job_plan.unit_label,
-        format_cost(job.job_plan.max_cost_usd)
-    );
+    print_prepare_job(&job, &perms);
 
     if !submitting {
         let redacted = redacted_spec(&job.spec);
@@ -191,9 +150,12 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
                     "dryRun": true,
                     "confirmRequired": true,
                     "sourceRepo": job.source_repo,
+                    "sourceRevision": job.source_revision,
                     "sourceFile": job.source_file,
+                    "projectors": job.projectors,
                     "targetRepo": job.target_repo,
                     "modelId": job.model_id,
+                    "experimental": job.experimental,
                     "jobPlan": job.job_plan,
                     "spec": redacted,
                 }))?
@@ -232,9 +194,12 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
                 "jobUrl": job_url,
                 "namespace": job.namespace,
                 "sourceRepo": job.source_repo,
+                "sourceRevision": job.source_revision,
                 "sourceFile": job.source_file,
+                "projectors": job.projectors,
                 "targetRepo": job.target_repo,
                 "modelId": job.model_id,
+                "experimental": job.experimental,
                 "jobPlan": job.job_plan,
             }))?
         );
@@ -251,19 +216,89 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
     Ok(())
 }
 
+fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
+    let shard_info = model_ref::split_gguf_shard_info(&job.source_file);
+    let shard_str = if let Some(shard) = shard_info {
+        format!(" ({} shards)", shard.total)
+    } else {
+        String::new()
+    };
+
+    eprintln!("   Repo:   {}", job.source_repo);
+    eprintln!("   Commit: {}", job.source_revision);
+    eprintln!("   File:   {}{}", job.source_file, shard_str);
+    for projector in &job.projectors {
+        eprintln!("   MMProj: {}", projector.path);
+    }
+    eprintln!();
+    eprintln!(
+        "🔑 Permissions: {} ({})",
+        perms.username,
+        if perms.is_meshllm_member {
+            "meshllm org member"
+        } else {
+            "not in meshllm org"
+        }
+    );
+    eprintln!("   Target:  {}", job.target_repo);
+    eprintln!(
+        "   Release: {}",
+        if job.experimental {
+            "experimental (public, not cataloged until HF PR merge)"
+        } else {
+            "stable"
+        }
+    );
+    eprintln!(
+        "   Catalog: meshllm/catalog ({})",
+        if job.catalog_create_pr {
+            "will open PR"
+        } else {
+            "direct commit"
+        }
+    );
+    eprintln!();
+    eprintln!(
+        "📋 Job: {}, timeout {}, mesh-llm@{}",
+        job.spec.flavor,
+        format_timeout(job.spec.timeout_seconds),
+        job.spec
+            .environment
+            .get("MESH_LLM_REF")
+            .map(|s| s.as_str())
+            .unwrap_or("main")
+    );
+    eprintln!(
+        "   Hardware: {} {} ({})",
+        job.job_plan.pretty_name,
+        hardware_label(job.job_plan.cpu.as_deref(), job.job_plan.ram.as_deref()),
+        job.job_plan.selection_reason
+    );
+    eprintln!(
+        "   Pricing:  ${:.6}/{}, max {}",
+        job.job_plan.unit_cost_usd,
+        job.job_plan.unit_label,
+        format_cost(job.job_plan.max_cost_usd)
+    );
+}
+
 async fn run_list_quants(
     client: &hf_hub::HFClient,
     source_repo: &str,
+    source_revision: Option<&str>,
     json_output: bool,
 ) -> Result<()> {
-    let quants = prepare::list_quants(client, source_repo).await?;
+    let inventory = prepare::list_inventory(client, source_repo, source_revision).await?;
+    let quants = inventory.quants;
 
     if json_output {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "sourceRepo": source_repo,
+                "sourceRevision": source_revision,
                 "quants": quants,
+                "projectors": inventory.projectors,
             }))?
         );
         return Ok(());

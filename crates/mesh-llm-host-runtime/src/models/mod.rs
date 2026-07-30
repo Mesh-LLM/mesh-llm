@@ -25,7 +25,7 @@ use hf_hub::{HFClient, HFClientBuilder, HFClientSync};
 
 pub use capabilities::{
     CapabilityLevel, ModelCapabilities, RuntimeMediaCapabilityEvidence,
-    runtime_verified_model_capabilities,
+    runtime_media_capability_evidence, runtime_verified_model_capabilities,
 };
 pub use download_transfer::DownloadTransferStats;
 pub(crate) use external_inference::append_external_inference_models;

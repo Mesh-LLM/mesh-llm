@@ -503,9 +503,7 @@ impl ServingController for EmbeddedServingController {
             let capabilities = models::runtime_verified_model_capabilities(
                 &model_id,
                 &model_path,
-                models::RuntimeMediaCapabilityEvidence {
-                    vision_projector_loaded: false,
-                },
+                models::RuntimeMediaCapabilityEvidence::default(),
             );
 
             let mut state = self.inner.lock().await;

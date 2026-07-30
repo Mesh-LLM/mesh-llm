@@ -5,6 +5,7 @@ use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
 use crate::gguf_writer::GgufKv;
+use crate::inkling_metadata;
 use crate::tokenizer_metadata::push_tokenizer_metadata;
 
 #[derive(Debug, Clone, Copy)]
@@ -24,6 +25,9 @@ pub(crate) fn metadata_from_hf_config(source: &Path, tensor_count: usize) -> Res
 
 pub(crate) fn mtp_layer_start_from_hf_config(source: &Path) -> Result<Option<u32>> {
     let config = read_hf_config(source)?;
+    if inkling_metadata::is_inkling_config(&config) {
+        return inkling_metadata::mtp_layer_start(&config);
+    }
     let Some(nextn_layers) = optional_u32(&config, "num_nextn_predict_layers")
         .or_else(|| optional_u32(&config, "mtp_num_hidden_layers"))
     else {
@@ -41,6 +45,9 @@ pub(crate) fn metadata_from_hf_config_with_options(
     options: MetadataOptions,
 ) -> Result<Vec<GgufKv>> {
     let config = read_hf_config(source)?;
+    if inkling_metadata::is_inkling_config(&config) {
+        return inkling_metadata::metadata(source, tensor_count, &config, options.include_mtp);
+    }
     let arch = architecture_name(&config)?;
     let mut metadata = vec![
         GgufKv::string("general.architecture", arch),
@@ -1137,6 +1144,75 @@ mod tests {
             );
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn builds_inkling_multi_depth_mtp_metadata() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("config.json"),
+            r#"{
+              "model_type": "inkling_mm_model",
+              "eos_token_id": 200006,
+              "text_config": {
+                "model_max_length": 1048576,
+                "hidden_size": 6144,
+                "num_hidden_layers": 66,
+                "vocab_size": 201024,
+                "num_attention_heads": 64,
+                "num_key_value_heads": 8,
+                "head_dim": 128,
+                "d_rel": 16,
+                "rel_extent": 1024,
+                "log_scaling_n_floor": 128000,
+                "log_scaling_alpha": 0.1,
+                "rms_norm_eps": 1e-6,
+                "local_layer_ids": [0, 1, 2, 3, 4],
+                "dense_mlp_idx": 2,
+                "sconv_kernel_size": 4,
+                "unpadded_vocab_size": 200058,
+                "logits_mup_width_multiplier": 24.0,
+                "swa_num_key_value_heads": 16,
+                "sliding_window_size": 512,
+                "n_routed_experts": 256,
+                "num_experts_per_tok": 6,
+                "n_shared_experts": 2,
+                "dense_intermediate_size": 24576,
+                "intermediate_size": 3072,
+                "route_scale": 8.0,
+                "norm_after_topk": true,
+                "shared_expert_sink": true,
+                "use_sconv": true,
+                "use_embed_norm": true,
+                "use_gate_bias": true,
+                "use_global_scale": true,
+                "gate_activation": "sigmoid"
+              },
+              "mtp_config": {
+                "num_nextn_predict_layers": 8,
+                "chain_hidden_post_norm": false,
+                "local_layer_ids": [0, 2, 4, 5, 6, 7]
+              }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(mtp_layer_start_from_hf_config(&root).unwrap(), Some(66));
+        let metadata = metadata_from_hf_config(&root, 25).unwrap();
+        assert!(metadata.iter().any(|kv| {
+            matches!(kv, GgufKv::U32 { key, value } if key == "inkling.block_count" && *value == 74)
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(kv, GgufKv::U32 { key, value } if key == "inkling.nextn_predict_layers" && *value == 8)
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(kv, GgufKv::ArrayU32 { key, value } if key == "inkling.attention.head_count_kv" && value.len() == 74 && value[66] == 16 && value[67] == 8)
+        }));
+        assert!(metadata.iter().any(|kv| {
+            matches!(kv, GgufKv::ArrayBool { key, value } if key == "inkling.attention.sliding_window_pattern" && value.len() == 74 && value[66] && !value[67])
+        }));
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn unique_temp_dir() -> PathBuf {

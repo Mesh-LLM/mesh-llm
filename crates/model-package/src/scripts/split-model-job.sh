@@ -6,8 +6,11 @@ set -euo pipefail
 #
 # Environment variables (set by mesh-llm model-package job spec):
 #   SOURCE_REPO, SOURCE_FILE, SOURCE_QUANT, TARGET_REPO, MODEL_ID, SOURCE_REVISION
+#   SOURCE_PROJECTOR_FILES — optional newline-delimited repo-relative mmproj GGUFs
+#   SOURCE_PIPELINE_TAG — source model pipeline tag for the published model card
 #   MESH_LLM_REF — git ref to build from (default: main)
 #   CATALOG_CREATE_PR — "true" to open a PR for catalog updates (non-org members)
+#   PACKAGE_EXPERIMENTAL — "true" to label the public package as not runtime-certified
 #   HF_TOKEN — injected as a secret by HF Jobs
 #
 # Volumes:
@@ -287,6 +290,34 @@ else
     WRITE_PACKAGE_IDENTITY_ARGS=()
     echo "  Source mount: not available; falling back to Hugging Face cache download"
 fi
+WRITE_PACKAGE_PROJECTOR_ARGS=()
+while IFS= read -r PROJECTOR_FILE; do
+    if [ -z "$PROJECTOR_FILE" ]; then
+        continue
+    fi
+    MOUNTED_PROJECTOR_PATH="/source/${PROJECTOR_FILE}"
+    if [ -f "$MOUNTED_PROJECTOR_PATH" ]; then
+        PROJECTOR_PATH="$MOUNTED_PROJECTOR_PATH"
+    else
+        echo "  Projector mount missing; downloading ${PROJECTOR_FILE} at ${SOURCE_REVISION}"
+        PROJECTOR_PATH="$("$VENV_DIR/bin/python3" - "$PROJECTOR_FILE" <<'PYTHON'
+from huggingface_hub import hf_hub_download
+import os
+import sys
+
+print(hf_hub_download(
+    repo_id=os.environ["SOURCE_REPO"],
+    filename=sys.argv[1],
+    revision=os.environ["SOURCE_REVISION"],
+    cache_dir=os.environ["HF_HUB_CACHE"],
+    token=os.environ.get("HF_TOKEN"),
+))
+PYTHON
+)"
+    fi
+    echo "  Projector: $PROJECTOR_PATH"
+    WRITE_PACKAGE_PROJECTOR_ARGS+=(--projector "$PROJECTOR_PATH")
+done <<< "${SOURCE_PROJECTOR_FILES:-}"
 echo "  Hugging Face cache: $HF_HUB_CACHE"
 echo "  Package workspace: $PACKAGE_DIR"
 echo "  Temporary workspace: $TMPDIR"
@@ -309,6 +340,7 @@ set +e
 time "$SLICER" write-package "$WRITE_PACKAGE_INPUT" \
     --out-dir "$PACKAGE_DIR" \
     --after-artifact-command "$ARTIFACT_UPLOAD_HOOK" \
+    "${WRITE_PACKAGE_PROJECTOR_ARGS[@]}" \
     "${WRITE_PACKAGE_IDENTITY_ARGS[@]}"
 WRITE_PACKAGE_STATUS=$?
 set -e
@@ -522,6 +554,20 @@ source_revision = os.environ.get("SOURCE_REVISION", "main")
 target_repo = os.environ["TARGET_REPO"]
 model_id = os.environ.get("MODEL_ID", manifest.get("model_id", target_repo))
 mesh_llm_ref = os.environ.get("MESH_LLM_REF", "main")
+source_pipeline_tag = os.environ.get("SOURCE_PIPELINE_TAG", "text-generation").strip()
+if not source_pipeline_tag:
+    source_pipeline_tag = "text-generation"
+experimental = os.environ.get("PACKAGE_EXPERIMENTAL", "false").lower() == "true"
+experimental_tag = "- experimental\n" if experimental else ""
+experimental_warning = (
+    "> [!WARNING]\n"
+    "> **Experimental package:** artifact integrity may be validated, but runtime, "
+    "split-correctness, and multimodal certification are still pending. This package "
+    "is not discoverable through `meshllm/catalog@main` until its Hugging Face catalog "
+    "PR is reviewed and merged.\n\n"
+    if experimental
+    else ""
+)
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -652,7 +698,7 @@ readme = f"""---
 library_name: mesh-llm
 base_model:
 - {yaml_quote(source_repo)}
-pipeline_tag: text-generation
+pipeline_tag: {yaml_quote(source_pipeline_tag)}
 tags:
 - gguf
 - mesh-llm
@@ -661,7 +707,7 @@ tags:
 - distributed-inference
 - local-inference
 - openai-compatible
----
+{experimental_tag}---
 
 <div align="center">
   <a href="https://www.meshllm.cloud">
@@ -681,7 +727,7 @@ tags:
   </p>
 </div>
 
-GGUF layer package for running **{display_name}** across a local Mesh LLM cluster.
+{experimental_warning}GGUF layer package for running **{display_name}** across a local Mesh LLM cluster.
 
 This package is derived from [{source_repo}](https://huggingface.co/{source_repo}) and keeps the original GGUF distribution split into per-layer artifacts for distributed inference.
 

@@ -1,4 +1,4 @@
-use super::{MAX_SPLIT_RTT_MS, Node, PeerInfo, StageTransportBridgeLabel};
+use super::{Node, PeerInfo, StageTransportBridgeLabel};
 use crate::mesh::node::LocalRequestMetricsSampler;
 use crate::mesh::stage_proto::{
     stage_control_request_to_proto, stage_control_response_from_proto,
@@ -129,14 +129,20 @@ impl SplitStagePathSnapshot {
         }
     }
 
-    pub(crate) const fn stage_path_rejection(self) -> Option<SplitStagePathRejection> {
+    pub(crate) fn stage_path_rejection(self) -> Option<SplitStagePathRejection> {
         match self.kind {
             SplitStagePathKind::Direct => match self.rtt_ms {
-                Some(rtt_ms) if rtt_ms <= MAX_SPLIT_RTT_MS => None,
+                Some(rtt_ms) if rtt_ms <= super::max_split_rtt_ms() => None,
                 Some(_) => Some(SplitStagePathRejection::StagePathTooSlow),
                 None => Some(SplitStagePathRejection::MissingStagePath),
             },
-            SplitStagePathKind::Relay => Some(SplitStagePathRejection::StagePathRelayOnly),
+            SplitStagePathKind::Relay => {
+                if super::split_allow_relay_paths() {
+                    None
+                } else {
+                    Some(SplitStagePathRejection::StagePathRelayOnly)
+                }
+            }
             SplitStagePathKind::Unknown => Some(SplitStagePathRejection::MissingStagePath),
         }
     }
@@ -915,6 +921,9 @@ impl Node {
             self.record_stage_topology(stage_topology_from_load(self.endpoint.id(), load))
                 .await;
         }
+        // Load/Prepare can take minutes on large stages; use the same
+        // per-request budget remote control uses instead of the short default.
+        let timeout = Self::stage_control_request_timeout(&request);
         let control_tx = self.stage_control_tx.lock().await.clone();
         let Some(tx) = control_tx else {
             anyhow::bail!("stage control is not available");
@@ -925,9 +934,7 @@ impl Node {
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
-        let response =
-            wait_local_stage_control_response(resp_rx, LOCAL_STAGE_CONTROL_RESPONSE_TIMEOUT)
-                .await?;
+        let response = wait_local_stage_control_response(resp_rx, timeout).await?;
         match &response {
             crate::inference::skippy::StageControlResponse::Ready(ready) => {
                 self.record_stage_status(Some(self.endpoint.id()), ready.status.clone())

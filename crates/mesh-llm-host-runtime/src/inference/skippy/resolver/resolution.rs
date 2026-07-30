@@ -30,13 +30,12 @@ pub(crate) fn resolve_skippy_config(
     validate_supported_hardware_controls(&context)?;
 
     let kv_policy = KvCachePolicy::for_model_size(context.request.model_bytes);
-
-    let model_fit = resolve_model_fit_config(&context, kv_policy)?;
     let hardware = resolve_hardware_config(&context)?;
     let family_policy = family_policy_for_model_path(
         &hardware.resolved_model_path,
         Some(context.request.model_id),
     );
+    let model_fit = resolve_model_fit_config(&context, kv_policy, &family_policy)?;
     let throughput = resolve_throughput_config(&context);
     let skippy = resolve_execution_config(&context, family_policy.activation_wire_dtype);
     let speculative = resolve_speculative_config(
@@ -153,6 +152,7 @@ fn validate_supported_hardware_controls(context: &ResolverContext<'_>) -> Result
 fn resolve_model_fit_config(
     context: &ResolverContext<'_>,
     kv_policy: KvCachePolicy,
+    family_policy: &super::super::family_policy::FamilyPolicy,
 ) -> Result<ResolvedModelFitConfig> {
     let kv = resolve_kv_defaults(context, kv_policy);
     let throughput = resolve_throughput_defaults(context);
@@ -188,8 +188,8 @@ fn resolve_model_fit_config(
             .and_then(|defaults| defaults.ubatch),
         BUILTIN_UBATCH,
     );
-    let cache_type_k = resolve_cache_type_k(context, &kv, kv_policy);
-    let cache_type_v = resolve_cache_type_v(context, &kv, kv_policy);
+    let cache_type_k = resolve_cache_type_k(context, &kv, kv_policy, family_policy);
+    let cache_type_v = resolve_cache_type_v(context, &kv, kv_policy, family_policy);
     let kv_offload = resolve_kv_offload(context, &kv);
     let flash_attention = context
         .model_fit
@@ -237,11 +237,19 @@ fn resolve_cache_type_k(
     context: &ResolverContext<'_>,
     kv: &KvDefaults,
     kv_policy: KvCachePolicy,
+    family_policy: &super::super::family_policy::FamilyPolicy,
 ) -> String {
+    if let Some(explicit) = context
+        .model_fit
+        .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref()))
+    {
+        return explicit.to_string();
+    }
+    if let Some(family_default) = family_policy.default_kv_cache_type {
+        return family_default.to_string();
+    }
     resolve_field_string(
-        context
-            .model_fit
-            .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref())),
+        None,
         kv.model_macro
             .as_ref()
             .and_then(|defaults| defaults.cache_type_k.as_deref()),
@@ -259,11 +267,19 @@ fn resolve_cache_type_v(
     context: &ResolverContext<'_>,
     kv: &KvDefaults,
     kv_policy: KvCachePolicy,
+    family_policy: &super::super::family_policy::FamilyPolicy,
 ) -> String {
+    if let Some(explicit) = context
+        .model_fit
+        .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref()))
+    {
+        return explicit.to_string();
+    }
+    if let Some(family_default) = family_policy.default_kv_cache_type {
+        return family_default.to_string();
+    }
     resolve_field_string(
-        context
-            .model_fit
-            .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref())),
+        None,
         kv.model_macro
             .as_ref()
             .and_then(|defaults| defaults.cache_type_v.as_deref()),

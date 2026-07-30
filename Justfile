@@ -266,11 +266,15 @@ skippy-quantize-release-build:
 # llama.cpp quantization ABI linked into the executable.
 [unix]
 skippy-quantize-standalone-build backend="cpu":
-    LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static just with-lld cargo build -p skippy-quantize
+    scripts/prepare-llama.sh pinned
+    LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static scripts/build-llama.sh
+    LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static just with-lld cargo build -p skippy-quantize --no-default-features
 
 [unix]
 skippy-quantize-standalone-release-build backend="cpu":
-    LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static just with-lld cargo build --release --locked -p skippy-quantize
+    scripts/prepare-llama.sh pinned
+    LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static scripts/build-llama.sh
+    LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static just with-lld cargo build --release --locked -p skippy-quantize --no-default-features
 
 # Generate a reproducible benchmark corpus for skippy bench tooling.
 bench-corpus tier="smoke" *ARGS="":

@@ -129,7 +129,7 @@ fn skippy_abi_capabilities(skippy_runtime_libraries: &[PathBuf]) -> SkippyAbiCap
     let load_error = load_skippy_runtime_for_probe(skippy_runtime_libraries);
     let runtime_loaded = skippy_ffi::native_runtime_loaded();
     let feature_mask = if runtime_loaded {
-        std::panic::catch_unwind(skippy_ffi::skippy_abi_features).ok()
+        std::panic::catch_unwind(skippy_ffi::abi_features).ok()
     } else {
         None
     };

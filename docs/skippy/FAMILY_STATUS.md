@@ -10,6 +10,17 @@ customer-facing source of truth.
 
 Last updated: 2026-05-07.
 
+## Context Capacity Contract
+
+The parity-sized family certification lanes do not establish a production
+context window. A reviewed context claim requires a separate staged-serving
+capacity result at `min(native_context, 131072)` tokens. For models with native
+context of at least 131,072, the minimum evidence is a 131,072-token allocation,
+a request reporting at least 120,000 prompt tokens, and a successful
+continuation. The support record must name the tested artifact, KV cache types,
+lane count, and stage plan. Do not infer native-context support from a small
+correctness smoke or from GGUF metadata alone.
+
 ## Customer Support Matrix
 
 | Family | Support Level | Recommended Artifact | Stage Plan | Wire | Speculative | Topology Constraint | Other Required Policy |

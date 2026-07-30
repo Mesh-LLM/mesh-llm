@@ -232,11 +232,8 @@ fn persistent_lane_steady_state_io_is_bounded() {
 
     configure_persistent_lane_io_deadlines(&client).unwrap();
 
-    assert_eq!(client.read_timeout().unwrap(), Some(LANE_STEADY_IO_TIMEOUT));
-    assert_eq!(
-        client.write_timeout().unwrap(),
-        Some(LANE_STEADY_IO_TIMEOUT)
-    );
+    assert_eq!(client.read_timeout().unwrap(), Some(stage_reply_timeout()));
+    assert_eq!(client.write_timeout().unwrap(), Some(stage_reply_timeout()));
     drop(peer);
 }
 

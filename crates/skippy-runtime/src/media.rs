@@ -385,6 +385,20 @@ impl StageModel {
                     "multimodal chunk {index} has {chunk_tokens} tokens, exceeding n_batch {n_batch}; increase n_batch for staged media prefill"
                 ));
             }
+            let chunk_token_ids = if chunk_type == skippy_ffi::MtmdInputChunkType::Text {
+                let mut text_token_count = 0usize;
+                let text_tokens = unsafe {
+                    skippy_ffi::mtmd_input_chunk_get_tokens_text(chunk, &mut text_token_count)
+                };
+                if text_tokens.is_null() || text_token_count != chunk_tokens {
+                    return Err(anyhow!(
+                        "multimodal text chunk {index} token view did not match its declared token count"
+                    ));
+                }
+                unsafe { std::slice::from_raw_parts(text_tokens, text_token_count) }.to_vec()
+            } else {
+                Vec::new()
+            };
             let chunk_positions = if use_mrope {
                 let chunk_positions = match chunk_type {
                     skippy_ffi::MtmdInputChunkType::Image => {
@@ -481,6 +495,7 @@ impl StageModel {
             output_payload.extend_from_slice(&frame.payload);
             chunk_frames.push(MediaPrefillChunkFrame {
                 token_count: chunk_tokens,
+                tokens: chunk_token_ids,
                 positions: chunk_positions,
                 output: frame,
             });

@@ -441,6 +441,7 @@ async fn make_test_node_with_requirements(
             std::sync::atomic::AtomicBool::new(false),
         )),
         vram_bytes: 64 * 1024 * 1024 * 1024,
+        local_runtime_capacity_bytes: 64 * 1024 * 1024 * 1024,
         peer_change_tx,
         peer_change_rx,
         inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),

@@ -740,6 +740,7 @@ impl StageOpenAiBackend {
                         prompt_token_count: prefill.token_count,
                         pos_start: prefill_pos_start,
                         token_count: chunk.token_count,
+                        tokens: chunk.tokens.clone(),
                         positions: chunk.positions.clone(),
                         sampling: is_final_chunk.then_some(wire_sampling.clone()).flatten(),
                         final_chunk: is_final_chunk,

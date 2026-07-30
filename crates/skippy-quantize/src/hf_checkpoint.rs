@@ -334,6 +334,11 @@ fn discover_safetensors(source: &Path) -> Result<Vec<PathBuf>> {
     );
     let mut indexed = discover_indexed_safetensors(source)?;
     if !indexed.is_empty() {
+        let mtp_sidecar = source.join("mtp.safetensors");
+        if mtp_sidecar.is_file() && !indexed.contains(&mtp_sidecar) {
+            indexed.push(mtp_sidecar);
+            indexed.sort();
+        }
         return Ok(indexed);
     }
     indexed = fs::read_dir(source)
@@ -601,6 +606,36 @@ mod tests {
 
         assert_eq!(plan.safetensor_count, 2);
         assert_eq!(plan.source_windows.len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn includes_unindexed_mtp_sidecar_with_indexed_checkpoint() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        write_safetensor(
+            &root.join("shard-a.safetensors"),
+            &[("a.weight", "F32", &[1], &[1, 2, 3, 4])],
+        );
+        write_safetensor(
+            &root.join("mtp.safetensors"),
+            &[("model.mtp.layers.0.weight", "F32", &[1], &[5, 6, 7, 8])],
+        );
+        fs::write(
+            root.join("model.safetensors.index.json"),
+            r#"{"metadata":{},"weight_map":{"a.weight":"shard-a.safetensors"}}"#,
+        )
+        .unwrap();
+
+        let files = discover_safetensors(&root).unwrap();
+
+        assert_eq!(
+            files,
+            vec![
+                root.join("mtp.safetensors"),
+                root.join("shard-a.safetensors")
+            ]
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

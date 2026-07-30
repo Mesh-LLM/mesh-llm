@@ -10,8 +10,9 @@ readme = "README.md"
 publish = false
 
 [features]
-default = []
+default = ["dynamic-skippy-runtime"]
 dynamic-llama-quant = ["llama-quant-ffi/dynamic-runtime"]
+dynamic-skippy-runtime = ["skippy-ffi/dynamic-runtime", "skippy-runtime/dynamic-native-runtime"]
 
 [dependencies]
 anyhow.workspace = true
@@ -20,7 +21,8 @@ libc = "0.2"
 llama-quant-ffi = { path = "../llama-quant-ffi" }
 serde.workspace = true
 serde_json.workspace = true
-skippy-ffi = { path = "../skippy-ffi" }
+skippy-ffi = { path = "../skippy-ffi", default-features = false }
+skippy-runtime = { path = "../skippy-runtime", default-features = false }
 
 [dev-dependencies]
 regex-lite = "0.1"

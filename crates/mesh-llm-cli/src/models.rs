@@ -39,6 +39,9 @@ pub enum ModelsCommand {
         /// Branch or tag of mesh-llm to build in the job.
         #[arg(long, default_value = "main")]
         mesh_llm_ref: String,
+        /// Publish a public package marked experimental and open an unmerged HF catalog PR.
+        #[arg(long)]
+        experimental: bool,
         /// Explicitly keep this as a dry run. This is the default unless --confirm is set.
         #[arg(long)]
         dry_run: bool,

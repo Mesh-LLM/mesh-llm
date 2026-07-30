@@ -355,7 +355,7 @@ fn abi_features_bitmask() -> Option<u64> {
     }
     #[cfg(not(feature = "dynamic-native-runtime"))]
     {
-        Some(unsafe { skippy_ffi::skippy_abi_features() })
+        Some(skippy_ffi::abi_features())
     }
 }
 

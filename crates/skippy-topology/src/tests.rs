@@ -950,6 +950,20 @@ fn infers_known_family_capabilities_from_model_identity() {
             .family_id,
         "qwen3next"
     );
+    let inkling =
+        infer_family_capability("meshllm/inkling-UD-Q2_K_XL-layers", 66, 6144).expect("inkling");
+    assert_eq!(inkling.family_id, "inkling");
+    assert_eq!(inkling.default_wire_dtype, WireDType::F32);
+    assert_eq!(inkling.q8_wire_validation, WireValidation::Rejected);
+    assert_eq!(
+        inkling.exact_state_mobility,
+        ExactStateMobility::RejectedTooLarge
+    );
+    assert_eq!(
+        inkling.recurrent_ranges,
+        vec![LayerRange { start: 0, end: 66 }]
+    );
+
     let rwkv6 =
         infer_family_capability("latestissue/rwkv-6-finch-1b6-gguf:Q4_K", 24, 2048).expect("rwkv6");
     assert_eq!(rwkv6.family_id, "rwkv6");

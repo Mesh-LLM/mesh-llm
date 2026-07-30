@@ -430,6 +430,26 @@ mod tests {
     }
 
     #[test]
+    fn depth_nine_keeps_the_first_window_restorable() {
+        let mut scheduler = VerifyWindowScheduler::new(VerifyWindowPipelineConfig { depth: 9 });
+        let windows: Vec<_> = (0..9)
+            .map(|step| scheduler.open(10 + step, step).unwrap())
+            .collect();
+
+        assert_eq!(scheduler.in_flight_len(), 9);
+        assert!(scheduler.open(19, 9).is_err());
+        assert_eq!(scheduler.stats().max_in_flight, 9);
+
+        // The first window must still be completable after the ninth opens.
+        // Native checkpoint retention has to cover every in-flight window, so
+        // a partially accepted first window stays restorable.
+        for window in windows {
+            assert_eq!(scheduler.complete_next(window.id).unwrap(), window);
+        }
+        assert_eq!(scheduler.in_flight_len(), 0);
+    }
+
+    #[test]
     fn discards_stale_windows_after_divergence() {
         let config = VerifyWindowPipelineConfig { depth: 3 };
         let mut scheduler = VerifyWindowScheduler::new(config);

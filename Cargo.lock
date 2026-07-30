@@ -7438,6 +7438,7 @@ dependencies = [
  "serde",
  "serde_json",
  "skippy-ffi",
+ "skippy-runtime",
 ]
 
 [[package]]

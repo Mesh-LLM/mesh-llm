@@ -9,10 +9,7 @@ use crate::models;
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::time::Duration;
 
-const SPLIT_PARTICIPANT_POLL_INTERVAL: Duration = Duration::from_millis(500);
-const SPLIT_PARTICIPANT_STABLE_FOR: Duration = Duration::from_secs(2);
 pub(super) const SPLIT_DEFAULT_MIN_PARTICIPANTS: usize = 2;
 
 /// Try to extract GGUF architecture metadata from a layer package's shared
@@ -67,18 +64,50 @@ pub(super) async fn split_runtime_compact_meta(
 pub(super) fn split_runtime_kv_bytes_per_token(
     package: &skippy::SkippyPackageIdentity,
     compact_meta: &models::gguf::GgufCompactMeta,
+    model_ref: &str,
     cache_type_k_override: Option<&str>,
     cache_type_v_override: Option<&str>,
 ) -> Result<u64> {
-    let split_kv_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes);
-    let kv_cache_quant = split_kv_cache_quant(
-        &split_kv_policy,
+    let kv_cache_quant = split_effective_kv_cache_quant(
+        package,
+        compact_meta,
+        model_ref,
         cache_type_k_override,
         cache_type_v_override,
     );
     kv_cache_quant
         .kv_cache_bytes_per_token(compact_meta)
         .context("split topology planning requires KV cache byte metadata")
+}
+
+/// Resolve the K/V cache types that split stages will actually load with.
+///
+/// Stage loading applies the family default (for example Inkling's Q4_0 K/V)
+/// ahead of the size-tiered `KvCachePolicy`. Planning must resolve K/V the same
+/// way, or it budgets for a cheaper cache than the stages allocate and
+/// over-packs the topology into an out-of-memory load.
+pub(super) fn split_effective_kv_cache_quant(
+    package: &skippy::SkippyPackageIdentity,
+    compact_meta: &models::gguf::GgufCompactMeta,
+    model_ref: &str,
+    cache_type_k_override: Option<&str>,
+    cache_type_v_override: Option<&str>,
+) -> models::gguf::GgufKvCacheQuant {
+    let size_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes);
+    let family_default =
+        skippy::family_policy_for_compact_meta(compact_meta, Some(model_ref)).default_kv_cache_type;
+
+    // Explicit user overrides win, then the family default, then model size.
+    let effective_k = cache_type_k_override
+        .or(family_default)
+        .unwrap_or(size_policy.cache_type_k());
+    let effective_v = cache_type_v_override
+        .or(family_default)
+        .unwrap_or(size_policy.cache_type_v());
+
+    models::gguf::GgufKvCacheQuant::from_llama_args(effective_k, effective_v).unwrap_or_else(|| {
+        split_kv_cache_quant(&size_policy, cache_type_k_override, cache_type_v_override)
+    })
 }
 pub(super) async fn resolve_split_runtime_package(
     model_path: &Path,
@@ -309,101 +338,6 @@ pub(super) fn package_ref_has_independent_prepare_source(package_ref: &str) -> b
     skippy_runtime::package::is_hf_package_ref(package_ref)
 }
 
-pub(super) async fn wait_for_split_participants(
-    node: &mesh::Node,
-    model_name: &str,
-    model_ref: &str,
-    package: &skippy::SkippyPackageIdentity,
-    local_vram_override: Option<u64>,
-    timeout: Duration,
-) -> Result<SplitParticipantSnapshot> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut best: Vec<SplitParticipant> = Vec::new();
-    let mut best_excluded: Vec<SplitParticipantExclusion> = Vec::new();
-    let mut last_signature: SplitParticipantSignature = Vec::new();
-    let mut stable_since = tokio::time::Instant::now();
-    loop {
-        let snapshot =
-            collect_split_participants(node, model_name, model_ref, package, local_vram_override)
-                .await;
-        let signature = split_participant_signature(&snapshot.participants);
-        let now = tokio::time::Instant::now();
-        split_participant_signature_changed(
-            model_ref,
-            &snapshot,
-            &signature,
-            &mut last_signature,
-            &mut stable_since,
-            now,
-        );
-        record_best_split_participants(&snapshot, &mut best, &mut best_excluded);
-
-        let stable_for = now.saturating_duration_since(stable_since);
-        if split_participants_ready(&snapshot, stable_for) {
-            tracing::info!(
-                model_ref,
-                stable_for_ms = stable_for.as_millis(),
-                participants = ?split_participant_labels(&snapshot.participants),
-                "split topology participant set accepted"
-            );
-            return Ok(snapshot);
-        }
-
-        if now >= deadline {
-            ensure_split_participant_timeout_has_quorum(model_ref, &best, &best_excluded)?;
-            tracing::warn!(
-                model_ref,
-                participants = ?split_participant_labels(&best),
-                excluded = ?split_participant_exclusion_labels(&best_excluded),
-                "split topology participant wait timed out; using best observed set"
-            );
-            return Ok(best_split_participant_snapshot(best, best_excluded));
-        }
-
-        tokio::time::sleep(SPLIT_PARTICIPANT_POLL_INTERVAL).await;
-    }
-}
-
-pub(super) fn split_participant_signature_changed(
-    model_ref: &str,
-    snapshot: &SplitParticipantSnapshot,
-    signature: &SplitParticipantSignature,
-    last_signature: &mut SplitParticipantSignature,
-    stable_since: &mut tokio::time::Instant,
-    now: tokio::time::Instant,
-) {
-    if signature == last_signature {
-        return;
-    }
-    *stable_since = now;
-    *last_signature = signature.clone();
-    tracing::info!(
-        model_ref,
-        included = ?split_participant_labels(&snapshot.participants),
-        excluded = ?split_participant_exclusion_labels(&snapshot.excluded),
-        "split topology participant set changed"
-    );
-}
-
-pub(super) fn record_best_split_participants(
-    snapshot: &SplitParticipantSnapshot,
-    best: &mut Vec<SplitParticipant>,
-    best_excluded: &mut Vec<SplitParticipantExclusion>,
-) {
-    if snapshot.participants.len() >= best.len() {
-        *best = snapshot.participants.clone();
-        *best_excluded = snapshot.excluded.clone();
-    }
-}
-
-pub(super) fn split_participants_ready(
-    snapshot: &SplitParticipantSnapshot,
-    stable_for: Duration,
-) -> bool {
-    snapshot.participants.len() >= SPLIT_DEFAULT_MIN_PARTICIPANTS
-        && stable_for >= SPLIT_PARTICIPANT_STABLE_FOR
-}
-
 pub(super) fn ensure_split_participant_timeout_has_quorum(
     model_ref: &str,
     best: &[SplitParticipant],
@@ -508,10 +442,43 @@ pub(super) fn blocker_reason_rank(reason: &str) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-pub(super) fn best_split_participant_snapshot(
-    participants: Vec<SplitParticipant>,
-    excluded: Vec<SplitParticipantExclusion>,
+pub(super) async fn collect_split_participant_membership(
+    node: &mesh::Node,
+    model_name: &str,
+    model_ref: &str,
 ) -> SplitParticipantSnapshot {
+    let mut participants = vec![SplitParticipant::new(
+        node.id(),
+        node.vram_bytes(),
+        Some(node.first_joined_mesh_ts().await.unwrap_or(0)),
+    )];
+    let mut excluded = Vec::new();
+    for peer in node.peers().await {
+        if let Some(reason) = split_peer_preflight_exclusion_reason(&peer, model_name, model_ref) {
+            excluded.push(SplitParticipantExclusion {
+                node_id: peer.id,
+                reason,
+            });
+            continue;
+        }
+        if let Some(reason) =
+            split_peer_stage_path_exclusion_reason(node.split_stage_path_snapshot(peer.id).await)
+        {
+            excluded.push(SplitParticipantExclusion {
+                node_id: peer.id,
+                reason,
+            });
+            continue;
+        }
+        participants.push(SplitParticipant::new(
+            peer.id,
+            peer.vram_bytes,
+            peer.first_joined_mesh_ts,
+        ));
+    }
+    sort_split_participants(&mut participants);
+    excluded.sort_by_key(|exclusion| exclusion.node_id.to_string());
+    excluded.dedup_by_key(|exclusion| exclusion.node_id);
     SplitParticipantSnapshot {
         participants,
         excluded,
@@ -578,14 +545,18 @@ pub(super) async fn collect_split_participants(
             }
         }
     }
-    participants.sort_by_key(|participant| participant.node_id.to_string());
-    participants.dedup_by_key(|participant| participant.node_id);
+    sort_split_participants(&mut participants);
     excluded.sort_by_key(|exclusion| exclusion.node_id.to_string());
     excluded.dedup_by_key(|exclusion| exclusion.node_id);
     SplitParticipantSnapshot {
         participants,
         excluded,
     }
+}
+
+fn sort_split_participants(participants: &mut Vec<SplitParticipant>) {
+    participants.sort_by_key(|participant| participant.node_id.to_string());
+    participants.dedup_by_key(|participant| participant.node_id);
 }
 
 pub(super) fn split_peer_preflight_exclusion_reason(

@@ -1,0 +1,46 @@
+From d8d24d3fb5c071baec273bfd722532414952535d Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 17 Jul 2026 20:20:45 +1000
+Subject: [PATCH 54/60] Size recurrent memory for appended MTP layers
+
+---
+ src/llama-memory-recurrent.cpp | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/src/llama-memory-recurrent.cpp b/src/llama-memory-recurrent.cpp
+index ef82eb97..4f1f1df8 100644
+--- a/src/llama-memory-recurrent.cpp
++++ b/src/llama-memory-recurrent.cpp
+@@ -26,7 +26,8 @@ llama_memory_recurrent::llama_memory_recurrent(
+                  uint32_t   n_seq_max,
+                  uint32_t   n_rs_seq,
+     const layer_filter_cb & filter) : hparams(model.hparams), n_seq_max(n_seq_max) {
+-    const int32_t n_layer = hparams.n_layer();
++    // MTP layers append recurrent state beyond the trunk layer count.
++    const int32_t n_layer = hparams.n_layer_all;
+ 
+     head = 0;
+     size = mem_size;
+@@ -865,7 +866,7 @@ void llama_memory_recurrent::state_write_meta(llama_io_write_i & io, const std::
+ 
+ void llama_memory_recurrent::state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const {
+     const uint32_t s_trans = 0;
+-    const uint32_t n_layer = hparams.n_layer();
++    const uint32_t n_layer = hparams.n_layer_all;
+ 
+     io.write(&s_trans, sizeof(s_trans));
+     io.write(&n_layer, sizeof(n_layer));
+@@ -1049,8 +1050,8 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
+     io.read(&s_trans, sizeof(s_trans));
+     io.read(&n_layer, sizeof(n_layer));
+ 
+-    if (n_layer != hparams.n_layer()) {
+-        LLAMA_LOG_ERROR("%s: mismatched layer count (%u instead of %u)\n", __func__, n_layer, hparams.n_layer());
++    if (n_layer != hparams.n_layer_all) {
++        LLAMA_LOG_ERROR("%s: mismatched layer count (%u instead of %u)\n", __func__, n_layer, hparams.n_layer_all);
+         return false;
+     }
+     if (cell_count > size) {
+-- 
+2.50.1 (Apple Git-155)
+

@@ -10,8 +10,7 @@ use crate::mesh::stage_proto::{
 };
 use crate::mesh::stage_transport::{
     ARTIFACT_TRANSFER_BUFFER_BYTES, ARTIFACT_TRANSFER_INVALID_OFFSET_ERROR,
-    ARTIFACT_TRANSFER_OPEN_TIMEOUT, ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT,
-    LOCAL_STAGE_CONTROL_RESPONSE_TIMEOUT, StageTopologyInstance,
+    ARTIFACT_TRANSFER_OPEN_TIMEOUT, ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT, StageTopologyInstance,
     artifact_transfer_allowed_by_topology, wait_local_stage_control_response,
     write_artifact_transfer_response,
 };
@@ -143,6 +142,10 @@ impl Node {
         &self,
         request: crate::inference::skippy::StageControlRequest,
     ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
+        // Load/Prepare can take minutes on large stages; use the same
+        // per-request budget the remote sender uses instead of the short
+        // local default, otherwise the executing node rejects its own load.
+        let timeout = Self::stage_control_request_timeout(&request);
         let control_tx = self.stage_control_tx.lock().await.clone();
         match control_tx {
             Some(tx) => {
@@ -152,8 +155,7 @@ impl Node {
                     resp: resp_tx,
                 })
                 .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
-                wait_local_stage_control_response(resp_rx, LOCAL_STAGE_CONTROL_RESPONSE_TIMEOUT)
-                    .await
+                wait_local_stage_control_response(resp_rx, timeout).await
             }
             None => Ok(stage_control_unavailable_response(request)),
         }

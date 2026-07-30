@@ -443,6 +443,10 @@ mesh-llm models package unsloth/Qwen3-8B-GGUF:Q4_K_M --confirm --follow
 mesh-llm models package --status <JOB_ID>
 ```
 
+Pass `--experimental` to publish a public package marked experimental: the
+package README carries an experimental warning and the Hugging Face catalog PR
+is opened but left unmerged until the package is certified.
+
 Use `--help` for the full planning, status, logs, cancel, and publishing
 options.
 

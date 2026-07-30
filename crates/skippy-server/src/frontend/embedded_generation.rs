@@ -35,7 +35,8 @@ use lifecycle::{
     DirectPredictionReturnPath, EmbeddedDecodeSummary, PipelinedCompositeWindow, can_seed_pipeline,
     compose_target_predictions, decode_uses_context_sideband, direct_prediction_return_path,
     mark_epoch_stale, pipelined_window_layout, queued_active_tokens,
-    refill_pipeline_ngram_candidates,
+    refill_pipeline_ngram_candidates, should_open_upstream_prediction_return,
+    speculation_after_prefix_restore,
 };
 use openai_frontend::{OpenAiError, OpenAiResult};
 use serde_json::json;
@@ -61,7 +62,9 @@ impl StageOpenAiBackend {
             .ok_or_else(|| OpenAiError::backend("embedded stage 0 has no downstream lane pool"))?;
         let mut lane = lane_pool.checkout(request.ids)?;
         let mut direct_prediction_return_opened = false;
-        if let Some(prediction_return) = request.prediction_return.as_ref() {
+        if should_open_upstream_prediction_return(request.native_mtp_enabled)
+            && let Some(prediction_return) = request.prediction_return.as_ref()
+        {
             match crate::binary_transport::direct_return::open_downstream_prediction_return_stream(
                 request.config,
                 request_id,
@@ -711,7 +714,19 @@ impl StageOpenAiBackend {
             )?;
             let mut fused_reached_stop = false;
             let mut native_mtp = NativeMtpVerifier::default();
-            let native_mtp_options = NativeMtpDecodeOptions::from_config(request.speculative);
+            let effective_speculative =
+                speculation_after_prefix_restore(request.speculative, prefill_chain_cache_restored);
+            if request.speculative.ngram.is_some() && effective_speculative.ngram.is_none() {
+                let mut attrs = self.openai_attrs(request.ids);
+                attrs.insert(
+                    "llama_stage.spec.bypass_reason".to_string(),
+                    json!("distributed_prefix_restored"),
+                );
+                self.telemetry
+                    .emit("stage.openai_speculation_bypass", attrs);
+            }
+            let effective_speculative = effective_speculative.as_ref();
+            let native_mtp_options = NativeMtpDecodeOptions::from_config(effective_speculative);
             let mut native_mtp_counters = NativeMtpDecodeCounters::default();
             let mut native_mtp_reject_cooldown_remaining = 0usize;
             let mut native_mtp_suppress_cooldown_drafts_remaining = 0usize;
@@ -859,7 +874,8 @@ impl StageOpenAiBackend {
                     }
                 }
             }
-            let mut cached_ngram_proposer = HistoryNgramProposer::from_config(request.speculative)?;
+            let mut cached_ngram_proposer =
+                HistoryNgramProposer::from_config(effective_speculative)?;
             let max_speculative_window = request.speculative_window.max(1);
             let mut adaptive_window = if request.adaptive_speculative_window {
                 max_speculative_window.min(4)
@@ -871,7 +887,7 @@ impl StageOpenAiBackend {
                 adaptive_window_final: adaptive_window,
                 adaptive_window_max: max_speculative_window,
                 adaptive_window_min: if request.draft.is_some()
-                    || request.speculative.ngram.is_some()
+                    || effective_speculative.ngram.is_some()
                 {
                     adaptive_window
                 } else {
@@ -910,7 +926,7 @@ impl StageOpenAiBackend {
                 _ => None,
             };
             let mut verify_window_scheduler = VerifyWindowScheduler::new(
-                VerifyWindowPipelineConfig::new(request.speculative.verify_window.pipeline_depth),
+                VerifyWindowPipelineConfig::new(effective_speculative.verify_window.pipeline_depth),
             );
             let composite_sidecar_enabled =
                 native_mtp_options.ngram_hybrid && draft_guard.is_none();
@@ -919,7 +935,7 @@ impl StageOpenAiBackend {
             // stays composite-only, so standalone drafting still falls back to the
             // serial block at depth 1.
             let standalone_ngram_pipelining = !request.native_mtp_enabled
-                && request.speculative.ngram.is_some()
+                && effective_speculative.ngram.is_some()
                 && draft_guard.is_none();
             let native_mtp_verify_windows_enabled =
                 (request.native_mtp_enabled || composite_sidecar_enabled) && draft_guard.is_none();
@@ -1451,7 +1467,7 @@ impl StageOpenAiBackend {
                     }
                 }
                 if draft_guard.is_some()
-                    || (request.speculative.ngram.is_some() && !pipelined_decode_enabled)
+                    || (effective_speculative.ngram.is_some() && !pipelined_decode_enabled)
                 {
                     let remaining = (request.max_tokens as usize).saturating_sub(decoded_tokens);
                     if remaining == 0 {
@@ -1472,9 +1488,9 @@ impl StageOpenAiBackend {
                             proposal_source = "draft-model";
                         }
                     }
-                    if draft_tokens.is_empty() && request.speculative.ngram.is_some() {
+                    if draft_tokens.is_empty() && effective_speculative.ngram.is_some() {
                         let proposal = propose_configured_ngram_tokens(
-                            request.speculative,
+                            effective_speculative,
                             &mut cached_ngram_proposer,
                             &context_tokens,
                             proposal_limit.min(request.ngram_max),

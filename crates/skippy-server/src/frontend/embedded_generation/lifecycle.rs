@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{borrow::Cow, collections::VecDeque};
 
 use openai_frontend::{OpenAiError, OpenAiResult};
 use serde_json::json;
@@ -13,9 +13,27 @@ use crate::frontend::{
         EmbeddedStageZeroGeneration, GenerationCacheStats, LocalGeneration, PersistentStageLane,
         PersistentStageLanePool, PhaseTimer, StageOpenAiBackend, TokenControl,
     },
-    speculative::OpenAiSpeculativeStats,
+    speculative::{OpenAiSpeculativeStats, SpeculativeDecodeConfig},
     util::openai_io_error,
 };
+
+/// Keeps the configured speculative plan unless a distributed prefix restore
+/// has already populated every stage's session. Pure N-gram verification after
+/// that restore currently races the restored session lifecycle, so only the
+/// history-based N-gram pieces are suppressed for this request.
+pub(super) fn speculation_after_prefix_restore(
+    config: &SpeculativeDecodeConfig,
+    prefix_restored: bool,
+) -> Cow<'_, SpeculativeDecodeConfig> {
+    if !prefix_restored || config.ngram.is_none() {
+        return Cow::Borrowed(config);
+    }
+
+    let mut safe = config.clone();
+    safe.ngram = None;
+    safe.extension = None;
+    Cow::Owned(safe)
+}
 
 pub(super) struct PipelinedCompositeWindow {
     pub(super) epoch: u64,
@@ -100,6 +118,10 @@ pub(super) fn compose_target_predictions(
 pub(super) enum DirectPredictionReturnPath {
     UpstreamOpened,
     ReverseFallback,
+}
+
+pub(super) fn should_open_upstream_prediction_return(native_mtp_enabled: bool) -> bool {
+    native_mtp_enabled
 }
 
 pub(super) fn direct_prediction_return_path(
@@ -433,7 +455,45 @@ pub(super) fn decode_uses_context_sideband(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontend::NativeMtpHybridProposal;
+    use crate::frontend::{
+        NativeMtpHybridProposal,
+        speculative::{NgramProposalConfig, NgramProposerKind},
+    };
+
+    fn ngram_config() -> SpeculativeDecodeConfig {
+        SpeculativeDecodeConfig {
+            requested_strategy: "ngram".to_string(),
+            effective_strategy: "ngram-suffix".to_string(),
+            ngram: Some(NgramProposalConfig {
+                kind: NgramProposerKind::Suffix,
+                min_ngram: 2,
+                max_ngram: 16,
+                max_proposal_tokens: 4,
+            }),
+            ..SpeculativeDecodeConfig::default()
+        }
+    }
+
+    #[test]
+    fn restored_prefix_bypasses_history_ngram_for_that_request() {
+        let config = ngram_config();
+
+        let effective = speculation_after_prefix_restore(&config, true);
+
+        assert!(matches!(effective, Cow::Owned(_)));
+        assert!(effective.ngram.is_none());
+        assert!(config.ngram.is_some());
+    }
+
+    #[test]
+    fn cache_miss_preserves_configured_ngram() {
+        let config = ngram_config();
+
+        let effective = speculation_after_prefix_restore(&config, false);
+
+        assert!(matches!(effective, Cow::Borrowed(_)));
+        assert!(effective.ngram.is_some());
+    }
 
     #[test]
     fn direct_return_falls_back_only_with_a_registered_receiver() {
@@ -446,6 +506,12 @@ mod tests {
             direct_prediction_return_path(false, false, false).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn pure_ngram_skips_the_blocking_upstream_return_open() {
+        assert!(!should_open_upstream_prediction_return(false));
+        assert!(should_open_upstream_prediction_return(true));
     }
 
     #[test]

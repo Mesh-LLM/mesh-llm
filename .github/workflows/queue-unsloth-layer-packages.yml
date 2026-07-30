@@ -31,7 +31,7 @@ on:
         required: false
         default: "main"
       quant_preference:
-        description: "Comma-separated 4-bit quant preference"
+        description: "Comma-separated quant preference"
         required: false
         default: "UD-Q4_K_XL,UD-Q4_K_M,Q4_K_XL,Q4_K_M"
       split_candidate_vram_gib:

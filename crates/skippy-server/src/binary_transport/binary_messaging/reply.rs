@@ -9,6 +9,7 @@ use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::StageReplyWindow;
 use skippy_protocol::binary::WireActivationDType;
+use skippy_protocol::binary::WireMessageKind;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
 use skippy_protocol::binary::send_reply_message;
@@ -96,6 +97,29 @@ pub(super) fn reply_window_for_message(
     }
 }
 
+/// Normalizes a downstream `TryRestorePrefill` reply before its stats are
+/// merged upstream. A stage without cache integration returns neutral stats;
+/// after an upstream stage restored successfully, that neutral response means
+/// the chain is incomplete and must be reported as a miss.
+pub(super) fn normalize_downstream_prefix_restore_reply(
+    kind: WireMessageKind,
+    stats: &mut StageReplyStats,
+) -> bool {
+    if kind != WireMessageKind::TryRestorePrefill {
+        return false;
+    }
+    let missed =
+        stats.kv_lookup_misses > 0 || stats.kv_lookup_errors > 0 || stats.kv_lookup_hits == 0;
+    if missed
+        && stats.kv_lookup_hits == 0
+        && stats.kv_lookup_misses == 0
+        && stats.kv_lookup_errors == 0
+    {
+        stats.kv_lookup_misses = 1;
+    }
+    missed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +148,35 @@ mod tests {
         let reply = reply_window_for_message(&message);
 
         assert_eq!(reply.window_id, 42);
+    }
+
+    #[test]
+    fn neutral_terminal_restore_reply_becomes_a_chain_miss() {
+        let mut stats = StageReplyStats::default();
+
+        let missed = normalize_downstream_prefix_restore_reply(
+            WireMessageKind::TryRestorePrefill,
+            &mut stats,
+        );
+
+        assert!(missed);
+        assert_eq!(stats.kv_lookup_misses, 1);
+    }
+
+    #[test]
+    fn downstream_restore_hit_remains_a_hit() {
+        let mut stats = StageReplyStats {
+            kv_lookup_hits: 1,
+            ..StageReplyStats::default()
+        };
+
+        let missed = normalize_downstream_prefix_restore_reply(
+            WireMessageKind::TryRestorePrefill,
+            &mut stats,
+        );
+
+        assert!(!missed);
+        assert_eq!(stats.kv_lookup_hits, 1);
+        assert_eq!(stats.kv_lookup_misses, 0);
     }
 }

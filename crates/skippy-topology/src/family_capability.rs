@@ -126,6 +126,11 @@ pub const STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS: &[StageRuntimeFamilyExpectati
         recurrent_or_hybrid: false,
     },
     StageRuntimeFamilyExpectation {
+        llama_architecture: "inkling",
+        family_id: "inkling",
+        recurrent_or_hybrid: true,
+    },
+    StageRuntimeFamilyExpectation {
         llama_architecture: "internlm2",
         family_id: "internlm2",
         recurrent_or_hybrid: false,
@@ -753,6 +758,23 @@ pub fn qwen35_series_capability(
     }
 }
 
+pub fn inkling_capability(layer_count: u32, activation_width: u32) -> FamilyCapabilityRecord {
+    FamilyCapabilityRecord {
+        family_id: "inkling".to_string(),
+        layer_count,
+        activation_width,
+        default_wire_dtype: WireDType::F32,
+        q8_wire_validation: WireValidation::Rejected,
+        exact_state_mobility: ExactStateMobility::RejectedTooLarge,
+        recurrent_ranges: vec![LayerRange {
+            start: 0,
+            end: layer_count,
+        }],
+        split_constraints: Vec::new(),
+        sidebands: Vec::new(),
+    }
+}
+
 pub fn qwen3next_capability(
     layer_count: u32,
     activation_width: u32,
@@ -1112,6 +1134,9 @@ fn infer_recurrent_capability(
     layer_count: u32,
     activation_width: u32,
 ) -> Option<FamilyCapabilityRecord> {
+    if compact.contains("inkling") {
+        return Some(inkling_capability(layer_count, activation_width));
+    }
     if compact.contains("kimilinear") {
         return Some(kimi_linear_capability(layer_count, activation_width));
     }

@@ -524,6 +524,18 @@
       "notes": "HunyuanOCR split multimodal serving passed with ggml-org/HunyuanOCR-GGUF:Q8_0 plus mmproj-HunyuanOCR-Q8_0.gguf using the shared Hunyuan-Dense/VL graph filter and the media activation position sideband; default f16 activation wire is the support target"
     },
     {
+      "llama_model": "inkling",
+      "family": "inkling",
+      "status": "package_or_remote_only",
+      "repo": "unsloth/inkling-GGUF",
+      "include": [
+        "UD-Q2_K_XL/*.gguf",
+        "mmproj-BF16.gguf"
+      ],
+      "recurrent": "all",
+      "notes": "975B multimodal hybrid attention with per-layer short convolution; Q2 layer-package target; certify text, image, audio, two-stage and multi-stage serving with KvRecurrent before promotion"
+    },
+    {
       "llama_model": "internlm2",
       "family": "internlm2",
       "status": "certified",

@@ -11,8 +11,8 @@ use std::{
 };
 
 use super::stage_execution::{
-    consume_optional_client_ready_hello, prepare_binary_stage_connection,
-    take_warm_or_connect_downstream, warm_downstream_preconnect_enabled,
+    consume_optional_client_ready_hello, prepare_binary_stage_connection, take_ready_downstream,
+    warm_downstream_preconnect_enabled,
 };
 use super::{
     decode_batcher::DecodeFrameBatcher,
@@ -162,7 +162,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                 speculative: openai_options.speculative.clone(),
                 native_mtp_enabled: native_mtp_enabled
                     && openai_options.speculative.native_mtp.enabled,
-                native_mtp_draft_model_path: None,
+                native_mtp_draft_model_path: openai_options.native_mtp_draft_model_path,
                 native_mtp_max_tokens: openai_options.native_mtp_max_tokens,
                 native_mtp_min_tokens: openai_options.native_mtp_min_tokens,
                 activation_width,
@@ -243,7 +243,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                     }
                     return prediction_return_sinks.insert_opened_sink(first_message, upstream);
                 }
-                let downstream = take_warm_or_connect_downstream(
+                let downstream = take_ready_downstream(
                     &config,
                     &warm_downstream,
                     downstream_connect_timeout_secs,

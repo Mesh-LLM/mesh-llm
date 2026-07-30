@@ -2,7 +2,10 @@ use super::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub(crate) struct NodeHardwareSnapshot {
+    /// Accelerator-resident capacity advertised for mesh stage placement.
     pub(crate) vram_bytes: u64,
+    /// Broader local fit budget, which may include CPU offload memory.
+    pub(crate) local_runtime_capacity_bytes: u64,
     pub(crate) gpu_name: Option<String>,
     pub(crate) hostname: Option<String>,
     pub(crate) is_soc: Option<bool>,
@@ -30,6 +33,10 @@ pub(crate) struct AcceptedMeshStream {
 
 pub(crate) const MAX_CONTROL_STREAM_WORK_PER_CONNECTION: usize = 32;
 const MESH_STREAM_TYPE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Grace period for a replaced peer connection to finish in-flight streams
+/// before it is explicitly closed.
+const REPLACED_CONNECTION_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub(crate) fn control_stream_semaphore() -> Arc<tokio::sync::Semaphore> {
     Arc::new(tokio::sync::Semaphore::new(
@@ -695,8 +702,36 @@ impl Node {
                 remote.fmt_short()
             ));
         }
-        state.connections.insert(remote, conn.clone());
+        let replaced = state.connections.insert(remote, conn.clone());
+        drop(state);
+        if let Some(replaced) = replaced
+            && replaced.stable_id() != conn.stable_id()
+        {
+            Self::spawn_replaced_connection_drain(remote, replaced);
+        }
         (was_dead, admitted)
+    }
+
+    /// Retire a connection that a newer one just replaced.
+    ///
+    /// Existing streams get a bounded grace period to finish, then the
+    /// connection is explicitly closed. Without the terminal close a replaced
+    /// connection is preserved indefinitely; without the grace period in-flight
+    /// requests are cut off mid-stream.
+    pub(super) fn spawn_replaced_connection_drain(remote: EndpointId, replaced: Connection) {
+        tokio::spawn(async move {
+            tracing::debug!(
+                peer = %remote.fmt_short(),
+                drain_ms = REPLACED_CONNECTION_DRAIN_GRACE.as_millis(),
+                "draining replaced peer connection"
+            );
+            tokio::select! {
+                _ = replaced.closed() => {}
+                _ = tokio::time::sleep(REPLACED_CONNECTION_DRAIN_GRACE) => {
+                    replaced.close(0u32.into(), b"connection-replaced");
+                }
+            }
+        });
     }
 
     pub(crate) fn spawn_reconnect_gossip(&self, conn: Connection, remote: EndpointId) {

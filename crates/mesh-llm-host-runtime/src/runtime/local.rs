@@ -517,7 +517,7 @@ pub(super) async fn start_runtime_local_model(
     let my_vram = spec
         .capacity_budget_bytes
         .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
-        .unwrap_or_else(|| spec.node.vram_bytes());
+        .unwrap_or_else(|| spec.node.local_runtime_capacity_bytes());
 
     // For split/layer-package models, compute the local share of model weights
     // and the layer fraction so the context planner budgets correctly.
@@ -618,9 +618,14 @@ async fn start_runtime_skippy_model(
     let capabilities = models::runtime_verified_model_capabilities(
         &model_name,
         spec.model_path,
-        models::RuntimeMediaCapabilityEvidence {
-            vision_projector_loaded: resolved.hardware.projector_path.is_some(),
-        },
+        models::runtime_media_capability_evidence(
+            resolved
+                .hardware
+                .projector_path
+                .as_deref()
+                .map(PathBuf::from),
+        )
+        .await,
     );
     let embedded_openai = resolved.to_embedded_openai_args(0, false)?;
     let mut options = resolved
@@ -704,9 +709,14 @@ async fn start_runtime_layer_package_model(
     let capabilities = models::runtime_verified_model_capabilities(
         &model_name,
         spec.model_path,
-        models::RuntimeMediaCapabilityEvidence {
-            vision_projector_loaded: resolved.hardware.projector_path.is_some(),
-        },
+        models::runtime_media_capability_evidence(
+            resolved
+                .hardware
+                .projector_path
+                .as_deref()
+                .map(PathBuf::from),
+        )
+        .await,
     );
     let activation_width = skippy_stage_activation_width(package.activation_width, &model_name)?;
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());

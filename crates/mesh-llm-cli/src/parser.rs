@@ -98,7 +98,8 @@ pub fn assert_mesh_requirements_docs_examples_parse() {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{Cli, Command};
+    use crate::models::ModelsCommand;
     use clap::Parser;
 
     #[test]
@@ -137,5 +138,30 @@ mod tests {
             cli.split_topology_lock,
             Some(std::path::PathBuf::from("topology.json"))
         );
+    }
+
+    #[test]
+    fn models_package_parses_experimental_publication() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "models",
+            "package",
+            "unsloth/inkling-GGUF:UD-Q2_K_XL",
+            "--experimental",
+            "--dry-run",
+        ]);
+
+        match cli.command.expect("models command expected") {
+            Command::Models {
+                command:
+                    ModelsCommand::Package {
+                        source_repo: Some(source_repo),
+                        experimental: true,
+                        dry_run: true,
+                        ..
+                    },
+            } => assert_eq!(source_repo, "unsloth/inkling-GGUF:UD-Q2_K_XL"),
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

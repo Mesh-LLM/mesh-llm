@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::gguf_writer::GgufKv;
 
 const TOKEN_TYPE_NORMAL: i32 = 1;
+const TOKEN_TYPE_UNUSED: i32 = 2;
 const TOKEN_TYPE_CONTROL: i32 = 3;
 
 pub(crate) fn push_tokenizer_metadata(
@@ -64,7 +65,7 @@ struct BpeVocabMetadata {
     added_tokens: BTreeMap<String, u32>,
 }
 
-fn read_byte_level_bpe(tokenizer: &Value, _config: &Value) -> Result<BpeVocabMetadata> {
+fn read_byte_level_bpe(tokenizer: &Value, config: &Value) -> Result<BpeVocabMetadata> {
     let model = tokenizer
         .get("model")
         .and_then(Value::as_object)
@@ -86,7 +87,16 @@ fn read_byte_level_bpe(tokenizer: &Value, _config: &Value) -> Result<BpeVocabMet
         .and_then(Value::as_object)
         .context("tokenizer.json model missing object field vocab")?;
     let added_tokens = collect_added_tokens(tokenizer);
-    let vocab_size = tokenizer_vocab_size(raw_vocab, &added_tokens)?;
+    let tokenizer_vocab_size = tokenizer_vocab_size(raw_vocab, &added_tokens)?;
+    let inkling_unpadded_vocab = inkling_text_u32(config, "unpadded_vocab_size")
+        .and_then(|value| usize::try_from(value).ok());
+    let vocab_size = inkling_text_u32(config, "vocab_size")
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(tokenizer_vocab_size);
+    ensure!(
+        vocab_size >= tokenizer_vocab_size,
+        "configured vocab_size {vocab_size} is smaller than tokenizer vocab size {tokenizer_vocab_size}"
+    );
     let mut tokens = vec![String::new(); vocab_size];
     let mut token_types = vec![TOKEN_TYPE_NORMAL; vocab_size];
     let mut scores = vec![0.0_f32; vocab_size];
@@ -112,6 +122,21 @@ fn read_byte_level_bpe(tokenizer: &Value, _config: &Value) -> Result<BpeVocabMet
         scores[index] = -1000.0;
         if added.special {
             token_types[index] = TOKEN_TYPE_CONTROL;
+        }
+    }
+
+    if let Some(unpadded_vocab) = inkling_unpadded_vocab {
+        ensure!(
+            unpadded_vocab <= vocab_size,
+            "Inkling unpadded_vocab_size exceeds vocab_size"
+        );
+        for index in unpadded_vocab..vocab_size {
+            ensure!(
+                tokens[index].is_empty(),
+                "real token found at/above Inkling unpadded_vocab_size: {index}"
+            );
+            tokens[index] = format!("[PAD{index}]");
+            token_types[index] = TOKEN_TYPE_UNUSED;
         }
     }
 
@@ -238,6 +263,9 @@ fn tokenizer_pre(config: &Value) -> Result<&'static str> {
     if model_type.starts_with("qwen2") || model_type.starts_with("qwen3") {
         return Ok("qwen2");
     }
+    if model_type == "inkling_mm_model" {
+        return Ok("inkling");
+    }
     if matches!(model_type, "llama" | "mistral") {
         return Ok("llama-bpe");
     }
@@ -256,6 +284,19 @@ fn push_special_token_ids(
         .get("model_type")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    if model_type == "inkling_mm_model" {
+        let mut eos = config
+            .get("eos_token_id")
+            .and_then(u32_value)
+            .unwrap_or(200006);
+        if eos < 199998 {
+            eos = 200006;
+        }
+        metadata.push(GgufKv::u32("tokenizer.ggml.eos_token_id", eos));
+        metadata.push(GgufKv::u32("tokenizer.ggml.bos_token_id", eos));
+        metadata.push(GgufKv::bool("tokenizer.ggml.add_bos_token", false));
+        return;
+    }
     if model_type.starts_with("glm") {
         push_added_token_id(
             metadata,
@@ -295,6 +336,13 @@ fn push_special_token_ids(
     }
     push_tokenizer_bool(metadata, tokenizer_config, "add_bos_token");
     push_tokenizer_bool(metadata, tokenizer_config, "add_eos_token");
+}
+
+fn inkling_text_u32(config: &Value, key: &str) -> Option<u32> {
+    if config.get("model_type").and_then(Value::as_str) != Some("inkling_mm_model") {
+        return None;
+    }
+    config.get("text_config")?.get(key).and_then(u32_value)
 }
 
 fn push_added_token_id(
@@ -468,6 +516,40 @@ mod tests {
 
         assert_eq!(metadata.tokens.len(), 3);
         assert_eq!(metadata.tokens[2], "<|endoftext|>");
+    }
+
+    #[test]
+    fn fills_inkling_padded_vocab_as_unused_tokens() {
+        let tokenizer: Value = serde_json::from_str(
+            r#"{
+              "model": {
+                "type": "BPE",
+                "vocab": {"a": 0, "b": 1, "<|end|>": 2},
+                "merges": ["a b"]
+              },
+              "decoder": {"type": "ByteLevel"},
+              "added_tokens": [
+                {"id": 2, "content": "<|end|>", "special": true}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let config: Value = serde_json::from_str(
+            r#"{
+              "model_type": "inkling_mm_model",
+              "eos_token_id": 2,
+              "text_config": {"vocab_size": 6, "unpadded_vocab_size": 3}
+            }"#,
+        )
+        .unwrap();
+
+        let metadata = read_byte_level_bpe(&tokenizer, &config).unwrap();
+
+        assert_eq!(metadata.tokens.len(), 6);
+        assert_eq!(metadata.tokens[3], "[PAD3]");
+        assert_eq!(metadata.token_types[2], TOKEN_TYPE_CONTROL);
+        assert_eq!(metadata.token_types[3], TOKEN_TYPE_UNUSED);
+        assert_eq!(tokenizer_pre(&config).unwrap(), "inkling");
     }
 
     #[test]

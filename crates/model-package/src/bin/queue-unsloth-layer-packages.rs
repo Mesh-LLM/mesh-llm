@@ -9,7 +9,7 @@ use hf_hub::{
     repository::{AddSource, ModelInfo},
 };
 use model_package::jobs::{CpuJobPlan, HfJobsClient, JobInfo, JobSpec, JobStage, JobVolume};
-use model_package::prepare::{self, DiscoveredQuant};
+use model_package::prepare::{self, DiscoveredProjector, DiscoveredQuant};
 use model_package::script;
 use serde::Serialize;
 use serde_json::Value;
@@ -54,7 +54,10 @@ struct RankedModel {
 #[derive(Debug, Clone)]
 struct Candidate {
     model: RankedModel,
+    source_revision: String,
+    source_pipeline_tag: String,
     quant: DiscoveredQuant,
+    projectors: Vec<DiscoveredProjector>,
     target_repo: String,
     model_layer_repos: Vec<String>,
     model_id: String,
@@ -88,7 +91,9 @@ struct QueueMarker<'a> {
     schema_version: u32,
     queued_at: String,
     source_repo: &'a str,
+    source_revision: &'a str,
     source_file: &'a str,
+    source_projectors: &'a [DiscoveredProjector],
     quant: &'a str,
     target_repo: &'a str,
     model_id: &'a str,
@@ -103,7 +108,9 @@ struct QueueFailureMarker<'a> {
     schema_version: u32,
     failed_at: String,
     source_repo: &'a str,
+    source_revision: &'a str,
     source_file: &'a str,
+    source_projectors: &'a [DiscoveredProjector],
     quant: &'a str,
     target_repo: &'a str,
     model_id: &'a str,
@@ -155,10 +162,7 @@ async fn main() -> Result<()> {
         ranked.len(),
         args.author
     );
-    println!(
-        "Preferred 4-bit quants: {}",
-        args.quant_preference.join(", ")
-    );
+    println!("Preferred quants: {}", args.quant_preference.join(", "));
     println!(
         "Split candidates: selected quant requires more than {} with 10% runtime headroom.",
         prepare::format_size(args.split_candidate_vram_bytes)
@@ -249,11 +253,12 @@ async fn main() -> Result<()> {
             QueueStatus::Missing | QueueStatus::StaleQueued => {}
         }
 
+        let source_total_bytes = candidate_source_total_bytes(&candidate);
         let job_plan = model_package::jobs::plan_cpu_job_from_hardware(
             &hardware,
             &args.flavor,
             args.timeout_seconds,
-            candidate.quant.total_bytes,
+            source_total_bytes,
         )?;
         total_max_cost_usd += job_plan.max_cost_usd;
 
@@ -268,10 +273,8 @@ async fn main() -> Result<()> {
             candidate.model_id,
             candidate.target_repo,
             candidate.quant.name,
-            prepare::format_size(candidate.quant.total_bytes),
-            prepare::format_size(estimated_bucket_workspace_bytes(
-                candidate.quant.total_bytes
-            )),
+            prepare::format_size(source_total_bytes),
+            prepare::format_size(estimated_bucket_workspace_bytes(source_total_bytes)),
             shard_label(candidate.quant.shard_count),
             rank_label(&candidate.model),
             candidate.family,
@@ -684,17 +687,28 @@ async fn build_candidate(
         eprintln!("skip {}: {reason}", model.repo_id);
         return Ok(None);
     }
-
-    let quants = match prepare::list_quants(client, &model.repo_id).await {
-        Ok(quants) => quants,
-        Err(err) => {
-            eprintln!(
-                "skip {}: failed to list GGUF quants: {err:#}",
-                model.repo_id
-            );
-            return Ok(None);
-        }
+    let Some(source_revision) = source_info.sha.clone() else {
+        eprintln!(
+            "skip {}: source repo info has no immutable commit SHA",
+            model.repo_id
+        );
+        return Ok(None);
     };
+    let source_pipeline_tag =
+        model_pipeline_tag(&source_info).expect("compatible model must have a pipeline tag");
+
+    let inventory =
+        match prepare::list_inventory(client, &model.repo_id, Some(&source_revision)).await {
+            Ok(inventory) => inventory,
+            Err(err) => {
+                eprintln!(
+                    "skip {}: failed to list GGUF quants: {err:#}",
+                    model.repo_id
+                );
+                return Ok(None);
+            }
+        };
+    let quants = inventory.quants;
 
     let Some(quant) = select_preferred_quant(&quants, &args.quant_preference) else {
         let available = quants
@@ -703,7 +717,7 @@ async fn build_candidate(
             .collect::<Vec<_>>()
             .join(", ");
         eprintln!(
-            "skip {}: no preferred 4-bit quant ({}); available: {}",
+            "skip {}: no preferred quant ({}); available: {}",
             model.repo_id,
             args.quant_preference.join(", "),
             if available.is_empty() {
@@ -737,7 +751,10 @@ async fn build_candidate(
 
     Ok(Some(Candidate {
         model,
+        source_revision,
+        source_pipeline_tag,
         quant,
+        projectors: inventory.projectors,
         target_repo,
         model_layer_repos,
         model_id,
@@ -770,6 +787,15 @@ fn select_preferred_quant(
             .find(|quant| quant.name.eq_ignore_ascii_case(preferred))
             .cloned()
     })
+}
+
+fn candidate_source_total_bytes(candidate: &Candidate) -> u64 {
+    candidate
+        .projectors
+        .iter()
+        .fold(candidate.quant.total_bytes, |total, projector| {
+            total.saturating_add(projector.total_bytes)
+        })
 }
 
 async fn candidate_status(
@@ -841,12 +867,15 @@ fn model_split_compatibility(info: &ModelInfo) -> SplitCompatibility {
             "missing text-generation pipeline_tag".to_string(),
         );
     };
-    if pipeline_tag.eq_ignore_ascii_case("text-generation") {
+    if pipeline_tag.eq_ignore_ascii_case("text-generation")
+        || (pipeline_tag.eq_ignore_ascii_case("image-text-to-text")
+            && info.id.to_ascii_lowercase().contains("inkling"))
+    {
         return SplitCompatibility::Compatible;
     }
 
     SplitCompatibility::Incompatible(format!(
-        "unsupported pipeline_tag '{pipeline_tag}'; layer packages currently require text-generation"
+        "unsupported pipeline_tag '{pipeline_tag}'; automated layer packages currently require text-generation or a supported multimodal family"
     ))
 }
 
@@ -988,7 +1017,9 @@ async fn write_queue_marker(client: &HFClient, candidate: &Candidate, args: &Arg
         schema_version: 1,
         queued_at: Utc::now().to_rfc3339(),
         source_repo: &candidate.model.repo_id,
+        source_revision: &candidate.source_revision,
         source_file: &candidate.quant.first_file,
+        source_projectors: &candidate.projectors,
         quant: &candidate.quant.name,
         target_repo: &candidate.target_repo,
         model_id: &candidate.model_id,
@@ -1019,7 +1050,9 @@ async fn write_queue_failure_marker(
         schema_version: 1,
         failed_at: Utc::now().to_rfc3339(),
         source_repo: &submitted.candidate.model.repo_id,
+        source_revision: &submitted.candidate.source_revision,
         source_file: &submitted.candidate.quant.first_file,
+        source_projectors: &submitted.candidate.projectors,
         quant: &submitted.candidate.quant.name,
         target_repo: &submitted.candidate.target_repo,
         model_id: &submitted.candidate.model_id,
@@ -1064,17 +1097,41 @@ fn job_spec_with_token(
     hf_token: &str,
     job_plan: &CpuJobPlan,
 ) -> Result<JobSpec> {
+    let projector_bytes = candidate
+        .projectors
+        .iter()
+        .try_fold(0u64, |total, projector| {
+            total.checked_add(projector.total_bytes)
+        })
+        .context("source GGUF and projector sizes overflowed u64")?;
+    let source_total_bytes = candidate
+        .quant
+        .total_bytes
+        .checked_add(projector_bytes)
+        .context("source GGUF and projector sizes overflowed u64")?;
     let mut environment = HashMap::new();
     environment.insert("SOURCE_REPO".into(), candidate.model.repo_id.clone());
     environment.insert("SOURCE_FILE".into(), candidate.quant.first_file.clone());
     environment.insert("SOURCE_QUANT".into(), candidate.quant.name.clone());
-    environment.insert(
-        "SOURCE_TOTAL_BYTES".into(),
-        candidate.quant.total_bytes.to_string(),
-    );
+    environment.insert("SOURCE_TOTAL_BYTES".into(), source_total_bytes.to_string());
     environment.insert("TARGET_REPO".into(), candidate.target_repo.clone());
     environment.insert("MODEL_ID".into(), candidate.model_id.clone());
-    environment.insert("SOURCE_REVISION".into(), "main".into());
+    environment.insert("SOURCE_REVISION".into(), candidate.source_revision.clone());
+    environment.insert(
+        "SOURCE_PIPELINE_TAG".into(),
+        candidate.source_pipeline_tag.clone(),
+    );
+    if !candidate.projectors.is_empty() {
+        environment.insert(
+            "SOURCE_PROJECTOR_FILES".into(),
+            candidate
+                .projectors
+                .iter()
+                .map(|projector| projector.path.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
     environment.insert("MESH_LLM_REF".into(), args.mesh_llm_ref.clone());
     environment.insert(
         "CATALOG_CREATE_PR".into(),
@@ -1098,12 +1155,14 @@ fn job_spec_with_token(
                 source: "meshllm/layer-split-output".into(),
                 mount_path: "/bucket".into(),
                 read_only: None,
+                revision: None,
             },
             JobVolume {
                 volume_type: "model".into(),
                 source: candidate.model.repo_id.clone(),
                 mount_path: "/source".into(),
                 read_only: Some(true),
+                revision: Some(candidate.source_revision.clone()),
             },
         ],
     })
@@ -1316,7 +1375,7 @@ mod tests {
     use hf_hub::repository::ModelInfo;
 
     use super::{
-        Args, Candidate, DiscoveredQuant, RankedModel, SplitCompatibility,
+        Args, Candidate, DiscoveredProjector, DiscoveredQuant, RankedModel, SplitCompatibility,
         estimated_bucket_workspace_bytes, job_spec_with_token, json_layer_package_repo,
         model_family_key, model_layer_repos, model_split_compatibility,
     };
@@ -1357,6 +1416,20 @@ mod tests {
             "id": "unsloth/Qwen-AgentWorld-35B-A3B-GGUF",
             "pipeline_tag": "text-generation",
             "tags": ["gguf", "qwen", "text-generation"]
+        }));
+
+        assert_eq!(
+            model_split_compatibility(&info),
+            SplitCompatibility::Compatible
+        );
+    }
+
+    #[test]
+    fn split_compatibility_accepts_inkling_multimodal_pipeline() {
+        let info = model_info(serde_json::json!({
+            "id": "unsloth/inkling-GGUF",
+            "pipeline_tag": "image-text-to-text",
+            "tags": ["gguf", "multimodal"]
         }));
 
         assert_eq!(
@@ -1421,12 +1494,18 @@ mod tests {
                 recent_rank: None,
                 popular_rank: None,
             },
+            source_revision: "0123456789abcdef".to_string(),
+            source_pipeline_tag: "text-generation".to_string(),
             quant: DiscoveredQuant {
                 name: "UD-Q4_K_XL".to_string(),
                 shard_count: 10,
                 total_bytes: 401,
                 first_file: "UD-Q4_K_XL/GLM-5-UD-Q4_K_XL-00001-of-00010.gguf".to_string(),
             },
+            projectors: vec![DiscoveredProjector {
+                path: "mmproj-BF16.gguf".to_string(),
+                total_bytes: 183,
+            }],
             target_repo: "meshllm/GLM-5-UD-Q4_K_XL-layers".to_string(),
             model_layer_repos: vec!["meshllm/GLM-5-UD-Q4_K_XL-layers".to_string()],
             model_id: "unsloth/GLM-5-GGUF:UD-Q4_K_XL".to_string(),
@@ -1480,13 +1559,27 @@ mod tests {
             spec.environment
                 .get("SOURCE_TOTAL_BYTES")
                 .map(String::as_str),
-            Some("401")
+            Some("584")
+        );
+        assert_eq!(
+            spec.environment.get("SOURCE_REVISION").map(String::as_str),
+            Some("0123456789abcdef")
+        );
+        assert_eq!(
+            spec.environment
+                .get("SOURCE_PROJECTOR_FILES")
+                .map(String::as_str),
+            Some("mmproj-BF16.gguf")
         );
         assert_eq!(spec.volumes.len(), 2);
         assert_eq!(spec.volumes[0].volume_type, "bucket");
         assert_eq!(spec.volumes[0].mount_path, "/bucket");
         assert_eq!(spec.volumes[1].volume_type, "model");
         assert_eq!(spec.volumes[1].source, candidate.model.repo_id);
+        assert_eq!(
+            spec.volumes[1].revision.as_deref(),
+            Some("0123456789abcdef")
+        );
         assert_eq!(spec.volumes[1].mount_path, "/source");
         assert_eq!(spec.volumes[1].read_only, Some(true));
     }

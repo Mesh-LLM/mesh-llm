@@ -1,4 +1,6 @@
 use crate::frontend::EmbeddedOpenAiRequestDefaults;
+use crate::frontend::EmbeddedReasoningBudget;
+use crate::frontend::EmbeddedReasoningEnabled;
 use crate::frontend::EmbeddedReasoningFormat;
 use base64::Engine;
 use openai_frontend::ChatCompletionRequest;
@@ -285,9 +287,30 @@ pub(super) fn chat_template_options(
     )?;
     Ok(ChatTemplateOptions {
         reasoning_format: Some(chat_reasoning_format(defaults.reasoning_format)),
-        enable_thinking: reasoning.enable_thinking,
+        enable_thinking: reasoning
+            .enable_thinking
+            .or_else(|| default_reasoning_enabled(defaults.reasoning_enabled))
+            .or_else(|| default_reasoning_budget_enabled(defaults.reasoning_budget)),
         ..ChatTemplateOptions::default()
     })
+}
+
+fn default_reasoning_enabled(value: Option<EmbeddedReasoningEnabled>) -> Option<bool> {
+    match value {
+        Some(EmbeddedReasoningEnabled::Disabled) => Some(false),
+        Some(EmbeddedReasoningEnabled::Enabled) => Some(true),
+        Some(EmbeddedReasoningEnabled::Auto) | None => None,
+    }
+}
+
+fn default_reasoning_budget_enabled(value: Option<EmbeddedReasoningBudget>) -> Option<bool> {
+    match value {
+        Some(EmbeddedReasoningBudget::Tokens(0)) => Some(false),
+        Some(EmbeddedReasoningBudget::Tokens(_)) | Some(EmbeddedReasoningBudget::Effort(_)) => {
+            Some(true)
+        }
+        Some(EmbeddedReasoningBudget::Auto) | None => None,
+    }
 }
 
 fn chat_reasoning_format(value: Option<EmbeddedReasoningFormat>) -> ChatReasoningFormat {

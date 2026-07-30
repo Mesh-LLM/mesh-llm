@@ -1,0 +1,81 @@
+From 40ed78300dc40dd12586b31017dca33980ea8de7 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 17 Jul 2026 14:46:51 +1000
+Subject: [PATCH 50/60] Advance native MTP depth per draft step
+
+---
+ src/skippy.cpp | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 347d6985..a918ce0f 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -1792,6 +1792,40 @@ static bool skippy_mtp_available(const skippy_session * session) {
+            session->stage_model->config.include_output;
+ }
+ 
++static constexpr int32_t skippy_mtp_depth_for_step(size_t draft_step, uint32_t depth_count) {
++    return depth_count > 0 ? static_cast<int32_t>(draft_step % depth_count) : 0;
++}
++
++static_assert(skippy_mtp_depth_for_step(0, 8) == 0);
++static_assert(skippy_mtp_depth_for_step(7, 8) == 7);
++static_assert(skippy_mtp_depth_for_step(8, 8) == 0);
++static_assert(skippy_mtp_depth_for_step(5, 1) == 0);
++static_assert(skippy_mtp_depth_for_step(5, 0) == 0);
++
++struct skippy_mtp_depth_scope {
++    explicit skippy_mtp_depth_scope(llama_context * ctx)
++        : ctx(ctx), depth_count(ctx != nullptr ? llama_get_model(ctx)->hparams.n_layer_nextn : 0) {
++        if (ctx != nullptr) {
++            llama_set_nextn_layer_offset(ctx, 0);
++        }
++    }
++
++    ~skippy_mtp_depth_scope() {
++        if (ctx != nullptr) {
++            llama_set_nextn_layer_offset(ctx, 0);
++        }
++    }
++
++    void select(size_t draft_step) const {
++        if (ctx != nullptr && depth_count > 0) {
++            llama_set_nextn_layer_offset(ctx, skippy_mtp_depth_for_step(draft_step, depth_count));
++        }
++    }
++
++    llama_context * ctx;
++    uint32_t depth_count;
++};
++
+ static bool skippy_env_enabled(const char * name) {
+     const char * value = std::getenv(name);
+     if (value == nullptr || value[0] == '\0') {
+@@ -2812,6 +2846,7 @@ static enum skippy_status skippy_mtp_sync_target_tokens(
+     }
+ 
+     llama_context * mtp_ctx = session->stage_model->mtp_ctx;
++    skippy_mtp_depth_scope mtp_depth_scope(mtp_ctx);
+     const bool mtp_shares_target_memory = llama_get_ctx_other(mtp_ctx) == session->ctx;
+     const int32_t n_embd = llama_model_n_embd(session->stage_model->model);
+     const size_t row_bytes = static_cast<size_t>(n_embd)*sizeof(float);
+@@ -3587,6 +3622,7 @@ static enum skippy_status skippy_mtp_propose_next(
+     }
+ 
+     llama_context * mtp_ctx = session->stage_model->mtp_ctx;
++    skippy_mtp_depth_scope mtp_depth_scope(mtp_ctx);
+     const bool mtp_shares_target_memory = llama_get_ctx_other(mtp_ctx) == session->ctx;
+     const int32_t n_embd = llama_model_n_embd(session->stage_model->model);
+     if (session->mtp_pending_h.size() != static_cast<size_t>(n_embd)) {
+@@ -3606,6 +3642,7 @@ static enum skippy_status skippy_mtp_propose_next(
+     std::vector<float> proposal_h = session->mtp_pending_h;
+     int32_t token_count = 0;
+     for (size_t i = 0; i < draft_limit; ++i) {
++        mtp_depth_scope.select(i);
+         llama_batch batch = {
+             /*n_tokens =*/ 1,
+             /*token    =*/ &token,
+-- 
+2.50.1 (Apple Git-155)
+

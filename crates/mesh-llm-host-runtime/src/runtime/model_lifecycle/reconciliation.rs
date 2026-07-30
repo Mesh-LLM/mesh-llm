@@ -66,7 +66,7 @@ pub(crate) async fn reconcile_model_targets_once(ctx: ReconcileModelTargetsConte
     }
 
     let target_lookup = console_state.model_target_lookup().await;
-    let local_vram_bytes = node.vram_bytes();
+    let local_vram_bytes = node.local_runtime_capacity_bytes();
     let targets = target_lookup
         .targets
         .into_iter()

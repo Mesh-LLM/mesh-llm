@@ -233,6 +233,7 @@ pub struct MediaPrefill {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaPrefillChunkFrame {
     pub token_count: usize,
+    pub tokens: Vec<i32>,
     pub positions: Vec<i32>,
     pub output: ActivationFrame,
 }

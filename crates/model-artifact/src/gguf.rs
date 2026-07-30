@@ -198,6 +198,29 @@ fn read_gguf_value_as_u32(f: &mut std::fs::File, typ: GgufType) -> std::io::Resu
     }
 }
 
+fn read_gguf_value_as_u32_list(
+    f: &mut std::fs::File,
+    typ: GgufType,
+) -> std::io::Result<Option<Vec<u32>>> {
+    if typ != GgufType::Array {
+        return Ok(read_gguf_value_as_u32(f, typ)?.map(|value| vec![value]));
+    }
+
+    let elem_type = GgufType::from_u32(read_u32(f)?)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "bad array type"))?;
+    let count = read_bounded_len(f, MAX_GGUF_ARRAY_ELEMENTS, "array")?;
+    let mut values = Vec::with_capacity(count);
+    let mut supported = true;
+    for _ in 0..count {
+        match read_gguf_value_as_u32(f, elem_type)? {
+            Some(value) if supported => values.push(value),
+            Some(_) => {}
+            None => supported = false,
+        }
+    }
+    Ok(supported.then_some(values))
+}
+
 fn read_gguf_value_as_f32(f: &mut std::fs::File, typ: GgufType) -> std::io::Result<Option<f32>> {
     match typ {
         GgufType::Float32 => {
@@ -210,6 +233,15 @@ fn read_gguf_value_as_f32(f: &mut std::fs::File, typ: GgufType) -> std::io::Resu
             Ok(None)
         }
     }
+}
+
+fn read_gguf_value_as_bool(f: &mut std::fs::File, typ: GgufType) -> std::io::Result<Option<bool>> {
+    if typ == GgufType::Bool {
+        let mut value = [0u8; 1];
+        f.read_exact(&mut value)?;
+        return Ok(Some(value[0] != 0));
+    }
+    Ok(read_gguf_value_as_u32(f, typ)?.map(|value| value != 0))
 }
 
 fn read_gguf_value_as_string_opt(
@@ -234,6 +266,7 @@ pub struct GgufCompactMeta {
     pub embedding_size: u32,
     pub head_count: u32,
     pub kv_head_count: u32,
+    pub kv_head_counts: Vec<u32>,
     pub layer_count: u32,
     pub feed_forward_length: u32,
     pub key_length: u32,
@@ -247,10 +280,20 @@ pub struct GgufCompactMeta {
     pub nextn_predict_layers: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GgufProjectorMeta {
+    pub has_vision_encoder: Option<bool>,
+    pub has_audio_encoder: Option<bool>,
+}
+
 impl GgufCompactMeta {
     pub fn effective_kv_head_count(&self) -> Option<u32> {
         if self.kv_head_count > 0 {
             Some(self.kv_head_count)
+        } else if let Some(kv_head_count) = self.kv_head_counts.iter().copied().max()
+            && kv_head_count > 0
+        {
+            Some(kv_head_count)
         } else if self.head_count > 0 {
             Some(self.head_count)
         } else {
@@ -348,8 +391,12 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
                 meta.head_count = v;
             }
         } else if key.ends_with(".attention.head_count_kv") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.kv_head_count = v;
+            if let Ok(Some(values)) = read_gguf_value_as_u32_list(&mut f, vtype) {
+                if values.len() == 1 {
+                    meta.kv_head_count = values[0];
+                } else {
+                    meta.kv_head_counts = values;
+                }
             }
         } else if key.ends_with(".block_count") {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
@@ -416,6 +463,28 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
         meta.value_length = value_length;
     }
 
+    Some(meta)
+}
+
+/// Scan the modality flags stored in a multimodal projector GGUF.
+pub fn scan_gguf_projector_meta(path: &Path) -> Option<GgufProjectorMeta> {
+    let GgufHeader {
+        file: mut f, n_kv, ..
+    } = open_gguf_header(path)?;
+    let mut meta = GgufProjectorMeta::default();
+    for _ in 0..n_kv {
+        let key = read_gguf_string(&mut f).ok()?;
+        let value_type = GgufType::from_u32(read_u32(&mut f).ok()?)?;
+        match key.as_str() {
+            "clip.has_vision_encoder" => {
+                meta.has_vision_encoder = read_gguf_value_as_bool(&mut f, value_type).ok()?;
+            }
+            "clip.has_audio_encoder" => {
+                meta.has_audio_encoder = read_gguf_value_as_bool(&mut f, value_type).ok()?;
+            }
+            _ => skip_gguf_value(&mut f, value_type).ok()?,
+        }
+    }
     Some(meta)
 }
 
@@ -634,6 +703,21 @@ mod tests {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
 
+    fn push_bool_kv(bytes: &mut Vec<u8>, key: &str, value: bool) {
+        push_gguf_string(bytes, key);
+        bytes.extend_from_slice(&(GgufType::Bool as u32).to_le_bytes());
+        bytes.push(u8::from(value));
+    }
+
+    fn push_u32_array_kv(bytes: &mut Vec<u8>, key: &str, values: &[u32]) {
+        push_gguf_string(bytes, key);
+        bytes.extend_from_slice(&(GgufType::Array as u32).to_le_bytes());
+        push_array_header(bytes, GgufType::Uint32, values.len() as u64);
+        for value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+
     fn push_tensor_info(bytes: &mut Vec<u8>, name: &str, offset: u64) {
         push_gguf_string(bytes, name);
         bytes.extend_from_slice(&1u32.to_le_bytes());
@@ -747,6 +831,61 @@ mod tests {
         let path = write_bytes("model-artifact-gguf-kv-lora-rank", &bytes);
         let meta = scan_gguf_compact_meta(&path).expect("should parse GGUF");
         assert_eq!(meta.kv_lora_rank, 512);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_compact_meta_prices_per_layer_kv_head_counts() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&7i64.to_le_bytes());
+        push_gguf_string(&mut bytes, "general.architecture");
+        bytes.extend_from_slice(&(GgufType::String as u32).to_le_bytes());
+        push_gguf_string(&mut bytes, "inkling");
+        push_u32_kv(&mut bytes, "inkling.embedding_length", 6144);
+        push_u32_kv(&mut bytes, "inkling.attention.head_count", 64);
+        let kv_head_counts = (0..66)
+            .map(|layer| if layer % 6 == 5 { 8 } else { 16 })
+            .collect::<Vec<_>>();
+        push_u32_array_kv(
+            &mut bytes,
+            "inkling.attention.head_count_kv",
+            &kv_head_counts,
+        );
+        push_u32_kv(&mut bytes, "inkling.block_count", 66);
+        push_u32_kv(&mut bytes, "inkling.attention.key_length", 128);
+        push_u32_kv(&mut bytes, "inkling.attention.value_length", 128);
+
+        let path = write_bytes("model-artifact-gguf-inkling-kv-head-counts", &bytes);
+        let meta = scan_gguf_compact_meta(&path).expect("should parse GGUF");
+        assert_eq!(meta.kv_head_count, 0);
+        assert_eq!(meta.kv_head_counts, kv_head_counts);
+        assert_eq!(meta.effective_kv_head_count(), Some(16));
+        assert_eq!(meta.k_cache_bytes_per_token_f16(), Some(247_808));
+        assert_eq!(meta.v_cache_bytes_per_token_f16(), Some(247_808));
+        assert_eq!(meta.kv_cache_bytes_per_token_f16(), Some(495_616));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_projector_meta_preserves_vision_and_audio_flags() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&3i64.to_le_bytes());
+        push_gguf_string(&mut bytes, "general.architecture");
+        bytes.extend_from_slice(&(GgufType::String as u32).to_le_bytes());
+        push_gguf_string(&mut bytes, "clip");
+        push_bool_kv(&mut bytes, "clip.has_vision_encoder", true);
+        push_bool_kv(&mut bytes, "clip.has_audio_encoder", true);
+
+        let path = write_bytes("model-artifact-gguf-inkling-projector", &bytes);
+        let meta = scan_gguf_projector_meta(&path).expect("should parse projector GGUF");
+        assert_eq!(meta.has_vision_encoder, Some(true));
+        assert_eq!(meta.has_audio_encoder, Some(true));
         let _ = std::fs::remove_file(path);
     }
 

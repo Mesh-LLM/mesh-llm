@@ -113,6 +113,20 @@ pub enum TopologyPlanError {
 }
 
 pub fn plan_topology(input: &TopologyPlanningInput) -> Result<TopologyPlan, TopologyPlanError> {
+    plan_topology_with_required_stage0(input, None)
+}
+
+pub fn plan_topology_with_stage0(
+    input: &TopologyPlanningInput,
+    stage0_node_id: &str,
+) -> Result<TopologyPlan, TopologyPlanError> {
+    plan_topology_with_required_stage0(input, Some(stage0_node_id))
+}
+
+fn plan_topology_with_required_stage0(
+    input: &TopologyPlanningInput,
+    required_stage0_node_id: Option<&str>,
+) -> Result<TopologyPlan, TopologyPlanError> {
     validate_input(input)?;
 
     let minimum_context = minimum_valid_context(input.native_context_length);
@@ -137,6 +151,9 @@ pub fn plan_topology(input: &TopologyPlanningInput) -> Result<TopologyPlan, Topo
                     else {
                         return;
                     };
+                    if !candidate_has_required_stage0(&candidate, required_stage0_node_id) {
+                        return;
+                    }
                     if best_for_count
                         .as_ref()
                         .is_none_or(|current| candidate_better_for_same_shape(&candidate, current))
@@ -415,6 +432,19 @@ fn latency_aware_planning(_input: &TopologyPlanningInput, nodes: &[UsableNode]) 
     nodes
         .iter()
         .any(|node| node.stage_transfer_latency_ms.is_some())
+}
+
+fn candidate_has_required_stage0(
+    candidate: &CandidatePlan,
+    required_stage0_node_id: Option<&str>,
+) -> bool {
+    required_stage0_node_id.is_none_or(|required| {
+        candidate
+            .plan
+            .stages
+            .first()
+            .is_some_and(|stage| stage.node_id == required)
+    })
 }
 
 fn candidate_better_for_same_shape(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {

@@ -368,9 +368,11 @@ fn metadata_u32(metadata: &[GgufKv], key: &str) -> Option<u32> {
 impl GgufKv {
     fn key(&self) -> &str {
         match self {
-            Self::ArrayF32 { key, .. }
+            Self::ArrayBool { key, .. }
+            | Self::ArrayF32 { key, .. }
             | Self::ArrayI32 { key, .. }
             | Self::ArrayString { key, .. }
+            | Self::ArrayU32 { key, .. }
             | Self::Bool { key, .. }
             | Self::F32 { key, .. }
             | Self::I32 { key, .. }
@@ -385,6 +387,13 @@ impl GgufKv {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TensorTransform {
     Identity,
+    /// Deinterleave alternating rows of a fused SwiGLU tensor (Inkling MTP
+    /// fused w13): parity 0 keeps even rows (gate), parity 1 keeps odd rows
+    /// (up).
+    AlternatingRows {
+        parity: u64,
+        row_elements: u64,
+    },
     GlmDsaKvB {
         split: GlmDsaKvBSplitConfig,
         part: GlmDsaKvBPart,

@@ -129,7 +129,11 @@ mod tests {
 
     #[test]
     fn embedded_script_writes_rich_model_card() {
-        assert!(EMBEDDED_SCRIPT.contains("pipeline_tag: text-generation"));
+        assert!(EMBEDDED_SCRIPT.contains("SOURCE_PIPELINE_TAG"));
+        assert!(EMBEDDED_SCRIPT.contains("PACKAGE_EXPERIMENTAL"));
+        assert!(EMBEDDED_SCRIPT.contains("pipeline_tag: {yaml_quote(source_pipeline_tag)}"));
+        assert!(EMBEDDED_SCRIPT.contains("- experimental"));
+        assert!(EMBEDDED_SCRIPT.contains("Experimental package:"));
         assert!(EMBEDDED_SCRIPT.contains("- openai-compatible"));
         assert!(EMBEDDED_SCRIPT.contains("## Model Overview"));
         assert!(EMBEDDED_SCRIPT.contains("## Highlights"));
@@ -198,6 +202,12 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains(r#"MOUNTED_SOURCE_PATH="/source/${SOURCE_FILE}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"WRITE_PACKAGE_INPUT="$MOUNTED_SOURCE_PATH""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"--source-file "$SOURCE_FILE""#));
+        assert!(EMBEDDED_SCRIPT.contains("SOURCE_PROJECTOR_FILES"));
+        assert!(
+            EMBEDDED_SCRIPT
+                .contains(r#"WRITE_PACKAGE_PROJECTOR_ARGS+=(--projector "$PROJECTOR_PATH")"#)
+        );
+        assert!(EMBEDDED_SCRIPT.contains(r#""${WRITE_PACKAGE_PROJECTOR_ARGS[@]}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"time "$SLICER" write-package "$WRITE_PACKAGE_INPUT""#));
         assert!(!EMBEDDED_SCRIPT.contains(r#"time $SLICER write-package "$SOURCE_PATH""#));
     }

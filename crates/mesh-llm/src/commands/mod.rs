@@ -164,6 +164,7 @@ async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {
             flavor,
             timeout,
             mesh_llm_ref,
+            experimental: false,
             dry_run: *dry_run,
             confirm: *confirm,
             follow: *follow,

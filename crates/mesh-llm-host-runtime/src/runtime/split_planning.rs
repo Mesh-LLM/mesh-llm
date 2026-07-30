@@ -2,7 +2,7 @@ use crate::inference::skippy;
 use anyhow::{Context, Result};
 use skippy_coordinator::topology::{
     LockedTopologyStage, TopologyNode, TopologyPlanningInput, TopologyStagePlan,
-    minimum_valid_context, plan_locked_topology, plan_topology,
+    minimum_valid_context, plan_locked_topology, plan_topology, plan_topology_with_stage0,
 };
 use std::collections::HashMap;
 
@@ -100,14 +100,28 @@ pub(super) struct PlannedRuntimeSliceTopology {
 pub(super) fn plan_split_topology(input: SplitTopologyPlanInput) -> Result<SplitTopologyPlan> {
     let plan =
         plan_topology(&topology_planning_input(input)).context("plan skippy split topology")?;
+    Ok(split_topology_plan(plan))
+}
 
-    Ok(SplitTopologyPlan {
+fn plan_split_topology_with_stage0(
+    input: SplitTopologyPlanInput,
+    required_stage0: iroh::EndpointId,
+) -> Result<SplitTopologyPlan> {
+    let input = topology_planning_input(input);
+    let required_stage0 = required_stage0.to_string();
+    let plan = plan_topology_with_stage0(&input, &required_stage0)
+        .context("plan skippy split topology with canonical stage 0")?;
+    Ok(split_topology_plan(plan))
+}
+
+fn split_topology_plan(plan: skippy_coordinator::topology::TopologyPlan) -> SplitTopologyPlan {
+    SplitTopologyPlan {
         context_length: plan.context_length,
         parallel_lanes: plan.parallel_lanes,
         estimated_decode_network_ms_per_token: plan.estimated_decode_network_ms_per_token,
         decode_tpot_target_met: plan.decode_tpot_target_met,
         stages: plan.stages,
-    })
+    }
 }
 
 fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInput {
@@ -164,6 +178,26 @@ pub(super) fn plan_runtime_slice_topology_with_resources(
     excluded: &[SplitParticipantExclusion],
     resources: SplitTopologyResourceInputs,
 ) -> Result<PlannedRuntimeSliceTopology> {
+    plan_runtime_slice_topology_with_resources_and_stage0(
+        topology_id,
+        model_ref,
+        package,
+        participants,
+        excluded,
+        resources,
+        None,
+    )
+}
+
+pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
+    topology_id: &str,
+    model_ref: &str,
+    package: &skippy::SkippyPackageIdentity,
+    participants: &[SplitParticipant],
+    excluded: &[SplitParticipantExclusion],
+    resources: SplitTopologyResourceInputs,
+    required_stage0: Option<iroh::EndpointId>,
+) -> Result<PlannedRuntimeSliceTopology> {
     tracing::info!(
         topology_id,
         model_ref,
@@ -176,13 +210,16 @@ pub(super) fn plan_runtime_slice_topology_with_resources(
     let participant_by_id = participant_index_by_id(participants);
     let plan_input = runtime_slice_plan_input(package, participants, resources);
     let plan = plan_runtime_slice_topology_result(
-        topology_id,
-        model_ref,
-        package,
-        participants,
-        excluded,
-        resources,
+        SplitPlanAttempt {
+            topology_id,
+            model_ref,
+            package,
+            participants,
+            excluded,
+            resources,
+        },
         plan_input,
+        required_stage0,
     )?;
 
     let mut stages = map_runtime_slice_stages(plan.stages, &participant_by_id)?;
@@ -255,32 +292,41 @@ pub(super) fn plan_locked_runtime_slice_topology_with_resources(
     })
 }
 
-fn plan_runtime_slice_topology_result(
-    topology_id: &str,
-    model_ref: &str,
-    package: &skippy::SkippyPackageIdentity,
-    participants: &[SplitParticipant],
-    excluded: &[SplitParticipantExclusion],
+struct SplitPlanAttempt<'a> {
+    topology_id: &'a str,
+    model_ref: &'a str,
+    package: &'a skippy::SkippyPackageIdentity,
+    participants: &'a [SplitParticipant],
+    excluded: &'a [SplitParticipantExclusion],
     resources: SplitTopologyResourceInputs,
+}
+
+fn plan_runtime_slice_topology_result(
+    attempt: SplitPlanAttempt<'_>,
     plan_input: SplitTopologyPlanInput,
+    required_stage0: Option<iroh::EndpointId>,
 ) -> Result<SplitTopologyPlan> {
-    match plan_split_topology(plan_input) {
+    let result = match required_stage0 {
+        Some(node_id) => plan_split_topology_with_stage0(plan_input, node_id),
+        None => plan_split_topology(plan_input),
+    };
+    match result {
         Ok(plan) => Ok(plan),
         Err(err) => {
             let reason = split_topology_failure_reason(
-                model_ref,
-                package,
-                participants,
-                excluded,
-                resources,
+                attempt.model_ref,
+                attempt.package,
+                attempt.participants,
+                attempt.excluded,
+                attempt.resources,
             );
             tracing::warn!(
-                topology_id,
-                model_ref,
+                topology_id = attempt.topology_id,
+                model_ref = attempt.model_ref,
                 error = %err,
                 reason = %reason,
-                participants = ?split_participant_labels(participants),
-                excluded = ?split_participant_exclusion_labels(excluded),
+                participants = ?split_participant_labels(attempt.participants),
+                excluded = ?split_participant_exclusion_labels(attempt.excluded),
                 "failed to plan resource-aware split runtime topology"
             );
             Err(err.context(reason))

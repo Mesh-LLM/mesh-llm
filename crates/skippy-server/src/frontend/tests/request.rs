@@ -152,7 +152,7 @@ fn request_defaults_fill_omitted_chat_fields_only() {
     assert_eq!(sampling.penalty_last_n, 64);
     assert_eq!(sampling.logit_bias.len(), 2);
     let template_options = chat_template_options(&request, &test_request_defaults()).unwrap();
-    assert_eq!(template_options.enable_thinking, None);
+    assert_eq!(template_options.enable_thinking, Some(true));
     assert_eq!(
         template_options.reasoning_format,
         Some(ChatReasoningFormat::Hidden)
@@ -343,6 +343,68 @@ fn chat_template_options_default_to_hidden_reasoning_parser() {
 
     assert_eq!(options.enable_thinking, None);
     assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Hidden));
+}
+
+#[test]
+fn request_default_reasoning_enabled_controls_chat_template() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}]
+    }))
+    .unwrap();
+
+    for (configured, expected) in [
+        (EmbeddedReasoningEnabled::Disabled, Some(false)),
+        (EmbeddedReasoningEnabled::Enabled, Some(true)),
+        (EmbeddedReasoningEnabled::Auto, None),
+    ] {
+        let defaults = EmbeddedOpenAiRequestDefaults {
+            reasoning_enabled: Some(configured),
+            ..EmbeddedOpenAiRequestDefaults::default()
+        };
+        let options = chat_template_options(&request, &defaults).expect("template options");
+        assert_eq!(options.enable_thinking, expected);
+    }
+}
+
+#[test]
+fn explicit_request_reasoning_overrides_configured_default() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning": {"enabled": true}
+    }))
+    .unwrap();
+    let defaults = EmbeddedOpenAiRequestDefaults {
+        reasoning_enabled: Some(EmbeddedReasoningEnabled::Disabled),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+
+    let options = chat_template_options(&request, &defaults).expect("template options");
+
+    assert_eq!(options.enable_thinking, Some(true));
+}
+
+#[test]
+fn request_default_reasoning_budget_controls_chat_template() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}]
+    }))
+    .unwrap();
+
+    for (configured, expected) in [
+        (EmbeddedReasoningBudget::Tokens(0), Some(false)),
+        (EmbeddedReasoningBudget::Tokens(256), Some(true)),
+        (EmbeddedReasoningBudget::Auto, None),
+    ] {
+        let defaults = EmbeddedOpenAiRequestDefaults {
+            reasoning_budget: Some(configured),
+            ..EmbeddedOpenAiRequestDefaults::default()
+        };
+        let options = chat_template_options(&request, &defaults).expect("template options");
+        assert_eq!(options.enable_thinking, expected);
+    }
 }
 
 #[test]

@@ -715,6 +715,75 @@ fn family_policy_beats_builtin_wire_dtype_when_config_is_unset() {
 }
 
 #[test]
+fn inkling_family_defaults_to_f32_wire_and_q4_kv() {
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &MeshConfig::default(),
+        model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
+        model_path: Path::new("/models/inkling.gguf"),
+        model_bytes: 316 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .unwrap();
+
+    assert_eq!(resolved.skippy.activation_wire_dtype, StageWireDType::F32);
+    assert_eq!(resolved.model_fit.cache_type_k, "q4_0");
+    assert_eq!(resolved.model_fit.cache_type_v, "q4_0");
+}
+
+#[test]
+fn inkling_family_kv_default_beats_generic_saver_macro() {
+    let mesh_config = parse_config(
+        r#"
+[[models]]
+model = "meshllm/inkling-UD-Q2_K_XL-layers"
+
+[models.model_fit]
+kv_cache_policy = "saver"
+"#,
+    );
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
+        model_path: Path::new("/models/inkling.gguf"),
+        model_bytes: 316 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .unwrap();
+
+    assert_eq!(resolved.model_fit.cache_type_k, "q4_0");
+    assert_eq!(resolved.model_fit.cache_type_v, "q4_0");
+}
+
+#[test]
+fn explicit_inkling_kv_override_beats_family_default() {
+    let mesh_config = parse_config(
+        r#"
+[[models]]
+model = "meshllm/inkling-UD-Q2_K_XL-layers"
+cache_type_k = "q8_0"
+cache_type_v = "q8_0"
+"#,
+    );
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
+        model_path: Path::new("/models/inkling.gguf"),
+        model_bytes: 316 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .unwrap();
+
+    assert_eq!(resolved.model_fit.cache_type_k, "q8_0");
+    assert_eq!(resolved.model_fit.cache_type_v, "q8_0");
+}
+
+#[test]
 fn family_policy_wires_prefix_cache_by_default_for_supported_models() {
     let model_file = temp_model_file();
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
@@ -870,6 +939,43 @@ fn layer_package_translation_does_not_treat_hf_ref_as_direct_gguf() {
 
     assert_eq!(options.config.load_mode, LoadMode::LayerPackage);
     assert_eq!(options.config.model_path.as_deref(), Some(package_ref));
+    let kv_cache = options
+        .config
+        .kv_cache
+        .expect("packaged supported family should retain its cache policy");
+    assert_eq!(kv_cache.mode, StageKvCacheMode::LookupRecord);
+    assert_eq!(kv_cache.payload, StageKvCachePayload::ResidentKv);
+    assert_eq!(kv_cache.max_bytes, 0);
+}
+
+#[test]
+fn inkling_layer_package_retains_recurrent_cache_policy_before_materialization() {
+    let config = MeshConfig::default();
+    let package_ref = "hf://meshllm/inkling-UD-Q2_K_XL-layers";
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &config,
+        model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
+        model_path: Path::new(package_ref),
+        model_bytes: 316 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("Inkling package config should resolve");
+
+    let stage = resolved
+        .to_stage_config(Some(fake_hf_package_identity(66)), LoadMode::LayerPackage)
+        .expect("Inkling package stage config should build");
+    let kv_cache = stage
+        .kv_cache
+        .expect("Inkling package should retain its recurrent cache policy");
+
+    assert_eq!(kv_cache.mode, StageKvCacheMode::LookupRecord);
+    assert_eq!(kv_cache.payload, StageKvCachePayload::KvRecurrent);
+    assert!(kv_cache.max_entries > 0);
+    assert!(kv_cache.max_entries <= 16);
+    assert_eq!(kv_cache.max_bytes, 0);
+    assert_eq!(kv_cache.min_tokens, 256);
 }
 
 #[test]

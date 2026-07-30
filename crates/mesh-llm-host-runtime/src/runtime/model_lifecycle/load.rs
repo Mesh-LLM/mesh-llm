@@ -49,7 +49,7 @@ pub(crate) async fn run_auto_load_runtime_model(
         &instance_id,
         &runtime_model_name,
         None,
-        ctx.node.vram_bytes(),
+        ctx.node.local_runtime_capacity_bytes(),
         model_bytes,
     )?;
     add_serving_assignment(ctx.node, ctx.primary_model_name, &runtime_model_name).await;

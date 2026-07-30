@@ -851,8 +851,14 @@ impl Node {
         RoutingTable { hosts, mesh_id }
     }
 
+    /// Accelerator-resident capacity used for mesh stage placement.
     pub fn vram_bytes(&self) -> u64 {
         self.vram_bytes
+    }
+
+    /// Local model-fit budget, including supported CPU offload memory.
+    pub fn local_runtime_capacity_bytes(&self) -> u64 {
+        self.local_runtime_capacity_bytes
     }
 
     pub async fn peers(&self) -> Vec<PeerInfo> {

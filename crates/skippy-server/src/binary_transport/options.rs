@@ -45,6 +45,7 @@ pub struct EmbeddedOpenAiStageOptions {
     pub speculative_window: usize,
     pub adaptive_speculative_window: bool,
     pub draft_n_gpu_layers: Option<i32>,
+    pub native_mtp_draft_model_path: Option<PathBuf>,
     pub native_mtp_max_tokens: usize,
     pub native_mtp_min_tokens: usize,
     pub speculative: SpeculativeDecodeConfig,
@@ -99,6 +100,7 @@ impl BinaryStageOptions {
                 speculative_window: args.openai_speculative_window,
                 adaptive_speculative_window: args.openai_adaptive_speculative_window,
                 draft_n_gpu_layers: args.openai_draft_n_gpu_layers,
+                native_mtp_draft_model_path: args.openai_native_mtp_draft_model_path,
                 native_mtp_max_tokens: 3,
                 native_mtp_min_tokens: 0,
                 speculative: openai_speculative,
@@ -254,6 +256,47 @@ mod tests {
 
         assert!(options.native_mtp_enabled);
         assert_eq!(openai.speculative, expected);
+    }
+
+    #[test]
+    fn native_mtp_sidecar_path_reaches_the_embedded_stage() {
+        let dir = tempfile::tempdir().expect("create temp directory");
+        let stage_path = dir.path().join("stage.json");
+        let sidecar_path = dir.path().join("sidecar-mtp.gguf");
+        fs::write(
+            &stage_path,
+            serde_json::to_vec(&stage_config()).expect("serialize stage config"),
+        )
+        .expect("write stage config");
+        fs::write(&sidecar_path, b"gguf-stub").expect("write sidecar stub");
+
+        let cli = Cli::try_parse_from([
+            "skippy-server",
+            "serve-binary",
+            "--config",
+            stage_path.to_str().expect("UTF-8 stage path"),
+            "--activation-width",
+            "2048",
+            "--openai-bind-addr",
+            "127.0.0.1:9337",
+            "--openai-native-mtp-draft-model-path",
+            sidecar_path.to_str().expect("UTF-8 sidecar path"),
+        ])
+        .expect("parse binary stage CLI");
+        let Command::ServeBinary(args) = cli.command else {
+            panic!("expected serve-binary command");
+        };
+
+        let options = BinaryStageOptions::from_cli_args(args).expect("resolve binary stage");
+        let openai = options.openai.expect("embedded OpenAI configuration");
+
+        // The sidecar attaches MTP heads to the served model; it must not be
+        // opened as a standalone draft model.
+        assert_eq!(
+            openai.native_mtp_draft_model_path.as_deref(),
+            Some(sidecar_path.as_path())
+        );
+        assert_eq!(openai.draft_model_path, None);
     }
 
     #[test]

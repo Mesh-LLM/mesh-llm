@@ -40,6 +40,7 @@ pub enum JobKind {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum QuantType {
     Q1_0,
+    Q2_0,
     Q2K,
     Q2KS,
     Q3K,
@@ -127,6 +128,7 @@ impl FromStr for QuantType {
         let normalized = normalize_type_name(raw);
         let quant = match normalized.as_str() {
             "Q10" => Self::Q1_0,
+            "Q20" => Self::Q2_0,
             "Q2K" => Self::Q2K,
             "Q2KS" => Self::Q2KS,
             "Q3K" => Self::Q3K,
@@ -173,6 +175,7 @@ impl FromStr for QuantType {
 impl QuantType {
     pub const ALL: &'static [Self] = &[
         Self::Q1_0,
+        Self::Q2_0,
         Self::Q2K,
         Self::Q2KS,
         Self::Q3K,
@@ -215,6 +218,7 @@ impl QuantType {
     pub fn as_llama_name(self) -> &'static str {
         match self {
             Self::Q1_0 => "Q1_0",
+            Self::Q2_0 => "Q2_0",
             Self::Q2K => "Q2_K",
             Self::Q2KS => "Q2_K_S",
             Self::Q3K => "Q3_K",
@@ -291,6 +295,7 @@ impl QuantType {
             37 => Some(Self::TQ2_0),
             38 => Some(Self::Mxfp4Moe),
             40 => Some(Self::Q1_0),
+            41 => Some(Self::Q2_0),
             _ => None,
         }
     }
@@ -298,6 +303,7 @@ impl QuantType {
     pub fn as_llama_file_type(self) -> llama_quant_ffi::LlamaFileType {
         match self {
             Self::Q1_0 => llama_quant_ffi::LlamaFileType::MostlyQ1_0,
+            Self::Q2_0 => llama_quant_ffi::LlamaFileType::MostlyQ2_0,
             Self::Q2K => llama_quant_ffi::LlamaFileType::MostlyQ2K,
             Self::Q2KS => llama_quant_ffi::LlamaFileType::MostlyQ2KS,
             Self::Q3K | Self::Q3KM => llama_quant_ffi::LlamaFileType::MostlyQ3KM,
@@ -735,7 +741,9 @@ mod tests {
     }
 
     fn pinned_llama_quant_option_names() -> Vec<String> {
-        const UNSUPPORTED_FFI_QUANT_MODES: &[&str] = &["Q2_0"];
+        // Q2_0 gained FFI support with the Inkling Q2 work; no llama-quantize
+        // modes are currently unsupported by the local catalog.
+        const UNSUPPORTED_FFI_QUANT_MODES: &[&str] = &[];
         let quantize_cpp = repo_root().join(".deps/llama.cpp/tools/quantize/quantize.cpp");
         let source = fs::read_to_string(&quantize_cpp)
             .unwrap_or_else(|err| panic!("read {}: {err}", quantize_cpp.display()));

@@ -14,7 +14,7 @@ use super::stage_execution::connect_binary_downstream;
 
 const WARM_DOWNSTREAM_RETRY_SLEEP: Duration = Duration::from_millis(500);
 const WARM_DOWNSTREAM_SLOT_POLL: Duration = Duration::from_millis(50);
-const WARM_DOWNSTREAM_CONNECT_TIMEOUT_SECS: u64 = 2;
+const WARM_DOWNSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) fn spawn_downstream_preconnector(
     config: StageConfig,
@@ -40,7 +40,7 @@ fn run_downstream_preconnector(
             thread::sleep(WARM_DOWNSTREAM_SLOT_POLL);
             continue;
         }
-        match connect_binary_downstream(&config, WARM_DOWNSTREAM_CONNECT_TIMEOUT_SECS) {
+        match connect_binary_downstream(&config, WARM_DOWNSTREAM_CONNECT_TIMEOUT) {
             Ok(Some(stream)) => {
                 eprintln!(
                     "downstream warm preconnect ready: stage_id={} local={:?} remote={:?}",

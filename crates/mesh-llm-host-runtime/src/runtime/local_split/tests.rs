@@ -37,6 +37,66 @@ fn runtime_local_targets_keep_duplicate_same_model_ports() {
 }
 
 #[test]
+fn canonical_coordinator_is_identical_with_divergent_observer_signals() {
+    let capacities = [
+        (1, 24_000_000_000),
+        (2, 48_000_000_000),
+        (3, 48_000_000_000),
+    ];
+    let observer_a = capacities
+        .into_iter()
+        .map(|(seed, capacity)| {
+            SplitParticipant::new(make_id(seed), capacity, None).with_package_signals(
+                SplitParticipantPackageSignal {
+                    cached_slice_bytes: u64::from(seed) * 10_000,
+                    missing_artifact_bytes: u64::from(4 - seed) * 20_000,
+                    availability_score: u32::from(seed),
+                },
+                Some(u32::from(seed) * 40),
+                true,
+            )
+        })
+        .collect::<Vec<_>>();
+    let observer_b = capacities
+        .into_iter()
+        .rev()
+        .map(|(seed, capacity)| {
+            SplitParticipant::new(make_id(seed), capacity, None).with_package_signals(
+                SplitParticipantPackageSignal {
+                    cached_slice_bytes: u64::from(4 - seed) * 100_000,
+                    missing_artifact_bytes: u64::from(seed) * 50_000,
+                    availability_score: u32::from(4 - seed),
+                },
+                Some(u32::from(4 - seed)),
+                false,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let expected = [make_id(2), make_id(3)].into_iter().min().unwrap();
+    assert_eq!(canonical_split_coordinator(&observer_a), Some(expected));
+    assert_eq!(canonical_split_coordinator(&observer_b), Some(expected));
+}
+
+#[test]
+fn noncanonical_gate_returns_standby_without_invoking_package_planning() {
+    let local = SplitParticipant::new(make_id(1), 24_000_000_000, None);
+    let coordinator = SplitParticipant::new(make_id(2), 48_000_000_000, None);
+    let mut package_planning_called = false;
+
+    let gate = canonical_coordinator_gate(local.node_id, vec![local, coordinator])
+        .expect("canonical coordinator gate");
+    match gate {
+        CanonicalCoordinatorGate::Standby {
+            coordinator: selected,
+        } => assert_eq!(selected, coordinator.node_id),
+        CanonicalCoordinatorGate::Coordinator(_) => package_planning_called = true,
+    }
+
+    assert!(!package_planning_called);
+}
+
+#[test]
 fn split_topology_planner_uses_all_eligible_participants() {
     let participants = vec![
         SplitParticipant::new(make_id(1), 16_000_000_000, None),
@@ -65,6 +125,57 @@ fn split_topology_planner_uses_all_eligible_participants() {
     );
     assert_eq!(stages.first().unwrap().layer_start, 0);
     assert_eq!(stages.last().unwrap().layer_end, 40);
+}
+
+#[test]
+fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
+    let canonical = SplitParticipant::new(make_id(1), 48_000_000_000, None).with_package_signals(
+        SplitParticipantPackageSignal {
+            cached_slice_bytes: 0,
+            missing_artifact_bytes: 40_000_000,
+            availability_score: 0,
+        },
+        Some(200),
+        true,
+    );
+    let fast_a = SplitParticipant::new(make_id(2), 32_000_000_000, None).with_package_signals(
+        SplitParticipantPackageSignal {
+            cached_slice_bytes: 40_000_000,
+            missing_artifact_bytes: 0,
+            availability_score: 40,
+        },
+        Some(1),
+        true,
+    );
+    let fast_b = SplitParticipant::new(make_id(3), 32_000_000_000, None).with_package_signals(
+        SplitParticipantPackageSignal {
+            cached_slice_bytes: 40_000_000,
+            missing_artifact_bytes: 0,
+            availability_score: 40,
+        },
+        Some(1),
+        true,
+    );
+    let participants = [canonical, fast_a, fast_b];
+    let package = package(40);
+
+    let planned = plan_runtime_slice_topology_with_resources_and_stage0(
+        "topology-test",
+        "test-model",
+        &package,
+        &participants,
+        &[],
+        SplitTopologyResourceInputs {
+            native_context_length: 65_536,
+            kv_bytes_per_token: 64 * 1024,
+            ctx_size_override: Some(65_536),
+            parallel_override: Some(1),
+        },
+        Some(canonical.node_id),
+    )
+    .expect("canonical stage-zero topology");
+
+    assert_eq!(planned.stages.first().unwrap().node_id, canonical.node_id);
 }
 
 #[test]
@@ -503,6 +614,38 @@ fn split_startup_error_messages_include_specific_blocker_tokens() {
 }
 
 #[test]
+fn stage_source_prepare_timeout_scales_with_assigned_package_bytes() {
+    let package = skippy::SkippyPackageIdentity {
+        source_model_bytes: 321_400_000_000,
+        layer_count: 66,
+        ..package(66)
+    };
+    let small_stage = RuntimeSliceStagePlan {
+        stage_id: "stage-2".to_string(),
+        stage_index: 2,
+        node_id: make_id(2),
+        layer_start: 59,
+        layer_end: 66,
+        parameter_bytes: 0,
+    };
+    let large_stage = RuntimeSliceStagePlan {
+        stage_id: "stage-0".to_string(),
+        stage_index: 0,
+        node_id: make_id(1),
+        layer_start: 0,
+        layer_end: 39,
+        parameter_bytes: 0,
+    };
+
+    let small_timeout = stage_source_prepare_timeout(&package, &small_stage);
+    let large_timeout = stage_source_prepare_timeout(&package, &large_stage);
+
+    assert!(small_timeout > MIN_STAGE_SOURCE_PREPARE_TIMEOUT);
+    assert!(large_timeout > small_timeout);
+    assert!(large_timeout <= MAX_STAGE_SOURCE_PREPARE_TIMEOUT);
+}
+
+#[test]
 fn startup_runtime_plan_auto_splits_when_model_exceeds_local_capacity() {
     assert_eq!(
         startup_runtime_plan(false, 3_000_000_000, 4_800_000_000),
@@ -745,7 +888,7 @@ fn split_participant_signature_includes_vram_for_stability() {
 }
 
 #[test]
-fn split_participant_signature_includes_package_signals_for_stability() {
+fn split_participant_signature_includes_package_signals_for_claim_identity() {
     let node_id = make_id(9);
     let first = vec![SplitParticipant::new(node_id, 24_000_000_000, None)];
     let second = vec![
@@ -1423,4 +1566,106 @@ fn split_topology_minimum_rejects_single_stage_split_candidate() {
         stage(2, 1, 20, 40)
     ]));
     assert!(!split_stages_meet_minimum(&[stage(1, 0, 0, 40)]));
+}
+
+#[test]
+fn split_planning_uses_family_kv_defaults_for_inkling() {
+    let mut meta = crate::models::gguf::GgufCompactMeta {
+        architecture: "inkling".to_string(),
+        context_length: 65_536,
+        embedding_size: 4096,
+        head_count: 32,
+        kv_head_count: 8,
+        layer_count: 66,
+        key_length: 128,
+        value_length: 128,
+        ..Default::default()
+    };
+    meta.kv_head_counts = vec![8; 66];
+
+    // Inkling's reviewed family default keeps both planning and stage loading
+    // on quantized Q4_0 K/V rather than silently expanding to F16.
+    let mut identity = package(66);
+    identity.source_model_bytes = 318 * 1024 * 1024 * 1024;
+
+    let planned =
+        split_runtime_kv_bytes_per_token(&identity, &meta, "tml/inkling-q2", None, None).unwrap();
+    let expected_q4 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("q4_0", "q4_0")
+        .unwrap()
+        .kv_cache_bytes_per_token(&meta)
+        .unwrap();
+    assert_eq!(planned, expected_q4);
+
+    // Explicit user overrides still win over the family default.
+    let overridden = split_runtime_kv_bytes_per_token(
+        &identity,
+        &meta,
+        "tml/inkling-q2",
+        Some("f16"),
+        Some("f16"),
+    )
+    .unwrap();
+    assert!(overridden > planned);
+}
+
+/// Validates the finding-#1 fix against a real Inkling layer package.
+///
+/// Set `INKLING_METADATA_GGUF` to a package's `shared/metadata.gguf` to run it;
+/// skipped otherwise so CI stays hermetic.
+#[test]
+fn real_inkling_metadata_plans_family_kv_not_size_tiered() {
+    let Ok(path) = std::env::var("INKLING_METADATA_GGUF") else {
+        eprintln!("skip: INKLING_METADATA_GGUF not set");
+        return;
+    };
+    let meta = crate::models::gguf::scan_gguf_compact_meta(std::path::Path::new(&path))
+        .expect("scan real inkling metadata gguf");
+    eprintln!(
+        "REAL META arch={} layers={} embed={} kv_heads={} k_len={} v_len={} ctx={}",
+        meta.architecture,
+        meta.layer_count,
+        meta.embedding_size,
+        meta.kv_head_count,
+        meta.key_length,
+        meta.value_length,
+        meta.context_length
+    );
+
+    let model_ref = "unsloth/inkling-GGUF:UD-Q2_K_XL";
+    let policy = crate::inference::skippy::family_policy_for_compact_meta(&meta, Some(model_ref));
+    eprintln!(
+        "FAMILY default_kv_cache_type={:?}",
+        policy.default_kv_cache_type
+    );
+
+    let mut identity = package(meta.layer_count);
+    identity.source_model_bytes = 318 * 1024 * 1024 * 1024;
+
+    let planned =
+        split_runtime_kv_bytes_per_token(&identity, &meta, model_ref, None, None).unwrap();
+    let size_tiered = {
+        let p =
+            crate::inference::skippy::KvCachePolicy::for_model_size(identity.source_model_bytes);
+        split_kv_cache_quant(&p, None, None)
+            .kv_cache_bytes_per_token(&meta)
+            .unwrap()
+    };
+    let ctx = u64::from(meta.context_length.max(1));
+    eprintln!(
+        "KV/token planned={planned} size_tiered={size_tiered} ratio={:.2}x | @ctx{ctx}: planned={:.1}GiB size_tiered={:.1}GiB under_budget={:.1}GiB",
+        planned as f64 / size_tiered.max(1) as f64,
+        (planned * ctx) as f64 / (1024.0 * 1024.0 * 1024.0),
+        (size_tiered * ctx) as f64 / (1024.0 * 1024.0 * 1024.0),
+        ((planned - size_tiered.min(planned)) * ctx) as f64 / (1024.0 * 1024.0 * 1024.0),
+    );
+
+    assert_eq!(
+        policy.default_kv_cache_type,
+        Some("q4_0"),
+        "inkling must resolve a q4_0 family K/V default"
+    );
+    assert_eq!(
+        planned, size_tiered,
+        "family-aware planning and the large-model policy must agree on Q4_0"
+    );
 }

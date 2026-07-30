@@ -22,11 +22,13 @@ mod release_attestation;
 mod run_auto;
 mod runtime_registry;
 mod serving_surface;
+mod split_participant_settle;
 mod split_planning;
 mod split_topology_lock;
 mod startup_handles;
 mod startup_identity;
 mod startup_models;
+mod startup_retry;
 mod status;
 pub(crate) mod survey;
 #[cfg(test)]

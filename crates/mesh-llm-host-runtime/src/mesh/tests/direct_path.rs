@@ -96,6 +96,56 @@ fn direct_path_reverse_dial_keeps_existing_connection_when_gossip_fails() -> any
 }
 
 #[test]
+fn direct_path_reverse_dial_keeps_replaced_connection_open_for_inflight_streams()
+-> anyhow::Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?
+        .block_on(async {
+            let node = make_test_node(super::super::NodeRole::Worker).await?;
+            let remote = make_test_node(super::super::NodeRole::Worker).await?;
+            remote.start_accepting();
+
+            let existing =
+                connect_mesh(&node.endpoint, remote.endpoint_addr_for_advertisement()).await?;
+            let existing_id = existing.stable_id();
+            {
+                let mut state = node.state.lock().await;
+                state.connections.insert(remote.id(), existing.clone());
+                state
+                    .peers
+                    .insert(remote.id(), super::make_test_peer_info(remote.id()));
+            }
+
+            let replacement =
+                connect_mesh(&node.endpoint, remote.endpoint_addr_for_advertisement()).await?;
+            let replacement_id = replacement.stable_id();
+            node.install_direct_path_request_connection(remote.id(), replacement)
+                .await;
+
+            let tracked_id = node
+                .state
+                .lock()
+                .await
+                .connections
+                .get(&remote.id())
+                .expect("replacement connection should be tracked")
+                .stable_id();
+            assert_eq!(tracked_id, replacement_id);
+            assert_ne!(tracked_id, existing_id);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(100), existing.closed())
+                    .await
+                    .is_err(),
+                "replaced connection must remain open so existing streams can drain"
+            );
+
+            Ok(())
+        })
+}
+
+#[test]
 fn direct_path_reverse_dial_does_not_publish_during_pending_handshake() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
