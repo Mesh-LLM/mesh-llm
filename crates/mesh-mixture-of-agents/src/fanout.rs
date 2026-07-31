@@ -59,7 +59,6 @@ pub(crate) type WorkerTaskResult = (String, WorkerRole, Result<BackendReply, Str
 pub(crate) async fn gather_workers_incremental(
     join_set: &mut tokio::task::JoinSet<WorkerTaskResult>,
     dispatched: &[DispatchedWorker],
-    has_tools: bool,
     allowed_tools: &[String],
     tools: Option<&Value>,
     policy: GatherPolicy,
@@ -175,7 +174,6 @@ pub(crate) async fn gather_workers_incremental(
                     &outputs,
                     total_workers,
                     total_finished,
-                    has_tools,
                     arbiter::StrongGate::Off,
                 ) {
                     drain_after_early_exit(join_set, &mut summaries).await;
@@ -232,7 +230,6 @@ pub(crate) async fn gather_workers_incremental(
                     &outputs,
                     total_workers,
                     total_finished,
-                    has_tools,
                     strong_gate(strong_finished, dispatched_at.elapsed()),
                 ) {
                     drain_after_early_exit(join_set, &mut summaries).await;
@@ -265,7 +262,6 @@ pub(crate) async fn gather_workers_incremental(
                     &outputs,
                     total_workers,
                     total_finished,
-                    has_tools,
                     strong_gate(strong_finished, dispatched_at.elapsed()),
                 ) {
                     drain_after_early_exit(join_set, &mut summaries).await;
@@ -603,7 +599,6 @@ mod tests {
         let (outputs, summaries, decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            false, // has_tools
             &[],
             None,
             GatherPolicy {
@@ -659,7 +654,6 @@ mod tests {
         let (outputs, _summaries, decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            true, // has_tools
             &[],
             None,
             GatherPolicy {
@@ -710,7 +704,6 @@ mod tests {
         let (outputs, _summaries, _decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            true,
             &[],
             None,
             GatherPolicy {
@@ -753,7 +746,6 @@ mod tests {
         let (_outputs, _summaries, decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            true,
             &["read".to_string()],
             None,
             GatherPolicy {
@@ -811,7 +803,6 @@ mod tests {
         let (outputs, _summaries, _decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            false, // has_tools
             &[],
             None,
             GatherPolicy {
@@ -862,7 +853,6 @@ mod tests {
         let (outputs, _summaries, _decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            false,
             &[],
             None,
             GatherPolicy {
@@ -918,7 +908,6 @@ mod tests {
         let (outputs, _summaries, decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            false,
             &[],
             None,
             GatherPolicy {
@@ -982,7 +971,6 @@ mod tests {
         let (_outputs, _summaries, decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            false,
             &[],
             None,
             GatherPolicy {

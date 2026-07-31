@@ -353,7 +353,6 @@ async fn handle_query(
     let (outputs, summaries, early_decision) = gather_workers_incremental(
         &mut join_set,
         &dispatched,
-        query_uses_tools,
         allowed_tools,
         session.tools(),
         fanout::GatherPolicy {
@@ -378,7 +377,7 @@ async fn handle_query(
     // Capture whether we took the early-exit path BEFORE we resolve the
     // decision: the arbiter never runs when early_decision is Some.
     let took_early_exit = early_decision.is_some();
-    let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs, query_uses_tools));
+    let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs));
     let (response_body, reducer_used, reducer_attempts) = resolve_decision(
         config,
         DecisionResolution {
