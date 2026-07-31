@@ -73,6 +73,25 @@ class StaticAbiArtifactTests(unittest.TestCase):
         ):
             self.assertIn(archive, build_script)
         self.assertIn("--require-prebuilt-llama", package_script)
+        self.assertNotIn("build_args=()", package_script)
+        build_section = package_script.split(
+            'if [[ "$BUILD" == "1" ]]; then',
+            maxsplit=1,
+        )[1].split("    cargo_args=", maxsplit=1)[0]
+        prebuilt_branch, normal_branch = build_section.split(
+            "    else\n",
+            maxsplit=1,
+        )
+        self.assertIn(
+            'if [[ "$REQUIRE_PREBUILT_LLAMA" == "1" ]]; then',
+            prebuilt_branch,
+        )
+        self.assertIn(
+            '"$SCRIPT_DIR/build-llama.sh" --require-existing',
+            prebuilt_branch,
+        )
+        self.assertIn('"$SCRIPT_DIR/build-llama.sh"', normal_branch)
+        self.assertNotIn("--require-existing", normal_branch)
         self.assertIn("SKIPPY_LLAMA_AUTO_BUILD=0", package_script)
         self.assertIn("MESH_LLM_AUTO_BUILD_LLAMA=0", package_script)
 

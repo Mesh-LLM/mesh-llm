@@ -187,6 +187,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Validate release preparation inputs
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}

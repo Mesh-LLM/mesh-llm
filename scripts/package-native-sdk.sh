@@ -252,14 +252,17 @@ fi
 if [[ "$BUILD" == "1" ]]; then
     "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
     llama_build_dir="$LLAMA_STAGE_BUILD_DIR"
-    build_args=()
     if [[ "$REQUIRE_PREBUILT_LLAMA" == "1" ]]; then
-        build_args+=(--require-existing)
+        LLAMA_STAGE_BACKEND="$(build_backend)" \
+            LLAMA_BUILD_DIR="$llama_build_dir" \
+            LLAMA_STAGE_BUILD_DIR="$llama_build_dir" \
+            "$SCRIPT_DIR/build-llama.sh" --require-existing
+    else
+        LLAMA_STAGE_BACKEND="$(build_backend)" \
+            LLAMA_BUILD_DIR="$llama_build_dir" \
+            LLAMA_STAGE_BUILD_DIR="$llama_build_dir" \
+            "$SCRIPT_DIR/build-llama.sh"
     fi
-    LLAMA_STAGE_BACKEND="$(build_backend)" \
-        LLAMA_BUILD_DIR="$llama_build_dir" \
-        LLAMA_STAGE_BUILD_DIR="$llama_build_dir" \
-        "$SCRIPT_DIR/build-llama.sh" "${build_args[@]}"
 
     cargo_args=(build -p mesh-llm-ffi --no-default-features --features "host,embedded-runtime")
     if [[ "$PROFILE" == "release" ]]; then

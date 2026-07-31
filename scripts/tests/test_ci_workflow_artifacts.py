@@ -595,6 +595,13 @@ class ReleaseNodeAddonArtifactTests(unittest.TestCase):
         )
         self.assertIn("currentMeshVersion()", self.producer)
         self.assertIn("npm pack", self.producer)
+        self.assertEqual(
+            self.producer.count(
+                'require.resolve("@mesh-llm/sdk", { paths: [root] })'
+            ),
+            3,
+        )
+        self.assertNotIn("const sdk = require(root)", self.producer)
         self.assertIn("$output_root/$archive.sha256", self.producer)
         self.assertIn(
             "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:",

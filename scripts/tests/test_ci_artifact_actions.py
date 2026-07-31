@@ -777,6 +777,23 @@ class CiArtifactActionTests(unittest.TestCase):
             "${{ inputs.static_abi_artifact_name != '' }}",
             producer,
         )
+        linux_start = producer.index("  linux_native_sdk_artifact:")
+        linux_end = producer.index("  macos_native_sdk_artifact:")
+        linux_producer = producer[linux_start:linux_end]
+        trust_step = (
+            'name: Trust checkout directory\n'
+            '        run: git config --global --add safe.directory '
+            '"$GITHUB_WORKSPACE"'
+        )
+        self.assertIn(trust_step, linux_producer)
+        self.assertLess(
+            linux_producer.index("uses: actions/checkout@"),
+            linux_producer.index(trust_step),
+        )
+        self.assertLess(
+            linux_producer.index(trust_step),
+            linux_producer.index("name: Prepare dispatched release version"),
+        )
         self.assertIn("scripts/package-native-sdk.sh", producer_action)
         self.assertIn("--build", producer_action)
         self.assertIn("--require-prebuilt-llama", producer_action)

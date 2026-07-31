@@ -70,6 +70,19 @@ inputs but never invoke `mesh-packaging`; this provides a safe artifact
 validation boundary without exposing prerelease inputs to production
 promotion.
 
+Merged
+[`mesh-packaging#16`](https://github.com/Mesh-LLM/mesh-packaging/pull/16)
+consumes that release graph without rebuilding the host, runtime, or Node
+addons. It uses typed independent selectors, one per-row
+product → package → install/QA → final image → exact-image QA chain,
+digest-only promotion, and a canonical immutable evidence index. Complete dry
+rehearsal
+[30593548823](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30593548823)
+passed 41 jobs with 15 intentional publication-only skips against
+`v0.75.0-rc1`; default-branch precheck
+[30595367445](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30595367445)
+passed merge commit `76c619bcdd82773e159248a2282187b0b2973daa`.
+
 The Windows host input also carries the checksum-protected `xtask` executable
 that performed producer-side attestation. Windows product composers invoke that
 prebuilt verifier for the immutable host instead of compiling workspace code.
@@ -247,15 +260,38 @@ reusable-workflow input.
 
 The Depot dashboard reports the `Mesh-LLM` GitHub connection active, and
 GitHub lists both `depot-managed-runners` and `depot-code-access` installations
-for all organization repositories. GitHub's organization settings show the
-Depot-managed `Default` group currently allows all workflows but excludes
-public repositories, while the separate `mesh-llm` group owns the two dedicated
-GPU scale sets. Before a canary, protect `main` with an enforceable
-review/status gate, restrict `Default` to this repository and exact
-default-branch workflow refs, then enable public-repository access. The
-`mesh-llm` GPU group also permits all workflows in a public repository and must
-be restricted to protected runner-owning entry points before it is considered a
-trusted-only pool.
+for all organization repositories. Live main-ref dispatches now prove that the
+public `Mesh-LLM/mesh-llm` repository can allocate ephemeral Depot runners.
+The available token cannot re-read organization runner-group settings (GitHub
+returns 403), so this operational evidence does not prove the current
+repository/workflow allowlist. Inspect that policy with organization-admin
+authority before enabling the global gate. The separate `mesh-llm` group owns
+the two dedicated GPU scale sets and is not the Depot group.
+
+Bounded rollout evidence:
+
+- cold and warm six-label canaries
+  [30525111329](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30525111329)
+  and
+  [30525247727](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30525247727)
+  passed on Intel `default`/`4`/`8`/`16` and ARM `default`/`8`;
+- denied feature-ref
+  [30593657371](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30593657371)
+  concluded skipped with no Depot allocation; its temporary ref pointed exactly
+  at main SHA `851888d0b0ce19916d6b0d7d73ce49246eef67d6` and was removed afterward;
+- exhaustive prerelease
+  [30586470043](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30586470043)
+  completed 55 jobs successfully, including 15 Depot jobs across all six
+  labels, and published the complete `v0.75.0-rc1` immutable release graph;
+- warm non-GPU release canary
+  [30590595090](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30590595090)
+  completed with 36 successes, 28 intentional skips, and zero failures. Its
+  nine Depot jobs included exact static-ABI cache hits with zero compilation
+  and roughly 95% sccache hits in both Linux native-SDK consumers.
+
+`DEPOT_RUNNERS_ENABLED` remains unset: `main` still lacks an enforceable
+review/status protection boundary, so only exact-main manual `use_depot=true`
+canaries are authorized.
 
 The checked-out local selector is not the security boundary because PRs can
 modify workflow and local-action files. The Depot runner group must use
@@ -308,8 +344,8 @@ as `ghcr.io/mesh-llm/mesh-llm-cuda-runner`. The source repository owns:
 Production consumers must use the multi-architecture manifest digest. Tags are
 discovery inputs and are mutable absent separately verified registry controls.
 
-Draft runner-images PR
-[`#9`](https://github.com/Mesh-LLM/mesh-llm-runner-images/pull/9) changes the
+Merged runner-images PR
+[`#9`](https://github.com/Mesh-LLM/mesh-llm-runner-images/pull/9) changed the
 publication control plane without changing those production digests. PRs route
 affected families plus a mandatory public CPU AMD64 contract, use BuildKit
 cache read-only, and cannot stage or promote. Main pushes stage verified
@@ -318,6 +354,11 @@ The reusable family workflow independently derives trusted runner/cache
 authority, verifies the requested MeshLLM source revision, uses content-digest
 immutable tags, and feeds one serial `latest` cohort reconciliation. Deleted
 files are included in affected-family routing.
+
+Its merge commit `4e79e68e22a5ea9bb1eedf9a2a7e7ccfc20b2bca`
+completed the trusted main
+[run 30522118156](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30522118156)
+with 35 successful jobs, four intentional skips, and zero failures.
 
 Its exhaustive Dockerfile-change PR
 [run 30504335079](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30504335079)

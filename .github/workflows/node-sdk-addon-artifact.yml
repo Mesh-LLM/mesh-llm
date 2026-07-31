@@ -134,7 +134,7 @@ jobs:
           (cd "$smoke_root/consumer" && npm init --yes >/dev/null && npm install "$tarball")
           node - "$smoke_root/consumer" "$expected_version" <<'NODE'
           const [root, expected] = process.argv.slice(2)
-          const sdk = require(root)
+          const sdk = require(require.resolve("@mesh-llm/sdk", { paths: [root] }))
           const actual = sdk.currentMeshVersion()
           if (actual !== expected) {
             throw new Error(`native addon version mismatch: expected ${expected}, got ${actual}`)
@@ -244,7 +244,7 @@ jobs:
           (cd "$smoke_root/consumer" && npm init --yes >/dev/null && npm install "$tarball")
           node - "$smoke_root/consumer" "$expected_version" <<'NODE'
           const [root, expected] = process.argv.slice(2)
-          const sdk = require(root)
+          const sdk = require(require.resolve("@mesh-llm/sdk", { paths: [root] }))
           const actual = sdk.currentMeshVersion()
           if (actual !== expected) {
             throw new Error(`native addon version mismatch: expected ${expected}, got ${actual}`)
@@ -338,7 +338,7 @@ jobs:
           (cd "$smoke_root/consumer" && npm init --yes >/dev/null && npm install "$tarball")
           node - "$smoke_root/consumer" "$expected_version" <<'NODE'
           const [root, expected] = process.argv.slice(2)
-          const sdk = require(root)
+          const sdk = require(require.resolve("@mesh-llm/sdk", { paths: [root] }))
           const actual = sdk.currentMeshVersion()
           if (actual !== expected) {
             throw new Error(`native addon version mismatch: expected ${expected}, got ${actual}`)
