@@ -7,7 +7,10 @@ use super::message_receive::{next_connection_session_id, receive_next_message};
 use super::reply::reply_window_for_message;
 use super::reply::send_stage_reply;
 use super::session_lifecycle::align_session_to_message;
-use super::session_tracker::{ConnectionSessionTracker, release_tracked_connection_sessions};
+use super::session_tracker::{
+    ConnectionSessionTracker, combine_connection_and_cleanup_results,
+    release_tracked_connection_sessions,
+};
 use super::summary::BinaryMessageObservation;
 use super::summary::BinaryRequestSummary;
 use super::telemetry::UpstreamReplyWriteSpan;
@@ -108,8 +111,9 @@ pub(super) fn handle_binary_connection(
         first_message,
         &mut session_tracker,
     );
-    release_tracked_connection_sessions(config, runtime, telemetry, &mut session_tracker);
-    result
+    let cleanup_result =
+        release_tracked_connection_sessions(config, runtime, telemetry, &mut session_tracker);
+    combine_connection_and_cleanup_results(result, cleanup_result)
 }
 
 #[allow(clippy::too_many_arguments)]
