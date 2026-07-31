@@ -1238,6 +1238,64 @@ fn native_splits_are_byte_balanced_not_tensor_count_balanced() {
 }
 
 #[test]
+fn recommends_enough_byte_balanced_splits_for_the_size_limit() {
+    let root = unique_temp_dir();
+    fs::create_dir_all(&root).unwrap();
+    write_safetensor(
+        &root.join("model.safetensors"),
+        &[
+            ("a.weight", "F32", &[4], &[1; 16]),
+            ("b.weight", "F32", &[4], &[2; 16]),
+            ("c.weight", "F32", &[4], &[3; 16]),
+        ],
+    );
+
+    let split_count = recommended_raw_safetensors_gguf_split_count(
+        &root,
+        RawGgufWriteOptions {
+            buffer_size: 4,
+            metadata: None,
+            tensor_name_map: TensorNameMap::Raw,
+            split: None,
+            output_type: None,
+            tensor_selection: TensorSelection::All,
+        },
+        20,
+    )
+    .unwrap();
+
+    assert_eq!(split_count, 3);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rejects_a_size_limit_smaller_than_one_selected_tensor() {
+    let root = unique_temp_dir();
+    fs::create_dir_all(&root).unwrap();
+    write_safetensor(
+        &root.join("model.safetensors"),
+        &[("a.weight", "F32", &[4], &[1; 16])],
+    );
+
+    let error = recommended_raw_safetensors_gguf_split_count(
+        &root,
+        RawGgufWriteOptions {
+            buffer_size: 4,
+            metadata: None,
+            tensor_name_map: TensorNameMap::Raw,
+            split: None,
+            output_type: None,
+            tensor_selection: TensorSelection::All,
+        },
+        15,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("largest selected tensor"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn keeps_rank_one_f32_tensor_as_f32_for_bf16_output() {
     let root = unique_temp_dir();
     fs::create_dir_all(&root).unwrap();

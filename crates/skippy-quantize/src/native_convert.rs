@@ -8,12 +8,14 @@ use crate::gguf_template::{
     MetadataOptions, metadata_from_hf_config_with_options, mtp_layer_start_from_hf_config,
 };
 use crate::gguf_writer::{
-    GgufSplit, RawGgufWriteOptions, TensorSelection, write_raw_safetensors_gguf,
+    GgufSplit, RawGgufWriteOptions, TensorSelection, recommended_raw_safetensors_gguf_split_count,
+    write_raw_safetensors_gguf,
 };
 use crate::hf_checkpoint::{inspect_hf_checkpoint, resolve_auto_output_type};
 use crate::manifest::Manifest;
 use crate::memory_budget::{
-    effective_stream_buffer_bytes, enforce_memory_budget, native_convert_stream_working_set_bytes,
+    MemorySize, effective_stream_buffer_bytes, enforce_memory_budget,
+    native_convert_stream_working_set_bytes,
 };
 use crate::output::{format_bytes, print_info};
 use crate::splits::SplitWindow;
@@ -49,6 +51,54 @@ pub(crate) fn build_native_convert_command(
         command.push("--mtp".to_string());
     }
     command
+}
+
+pub(crate) fn apply_native_convert_split_max_size(
+    runner: &ConvertRunnerArgs,
+    manifest: &mut Manifest,
+) -> Result<()> {
+    let max_size = runner
+        .split_max_size
+        .parse::<MemorySize>()
+        .map_err(anyhow::Error::msg)?;
+    if max_size.bytes() == 0 {
+        return Ok(());
+    }
+
+    let output_type = manifest
+        .output_type
+        .map(|kind| resolve_auto_output_type(&manifest.source, kind))
+        .transpose()?;
+    let plan = inspect_hf_checkpoint(&manifest.source, runner.max_memory, 0.60)?;
+    let mtp_layer_start = mtp_layer_start_from_hf_config(&manifest.source)?;
+    let recommended = recommended_raw_safetensors_gguf_split_count(
+        &manifest.source,
+        RawGgufWriteOptions {
+            buffer_size: runner.stream_buffer_bytes,
+            metadata: Some(metadata_from_hf_config_with_options(
+                &manifest.source,
+                plan.tensor_count,
+                MetadataOptions {
+                    include_mtp: !runner.no_mtp,
+                },
+            )?),
+            tensor_name_map: native_tensor_name_map(mtp_layer_start),
+            split: None,
+            output_type,
+            tensor_selection: native_tensor_selection(runner, mtp_layer_start)?,
+        },
+        max_size.bytes(),
+    )?;
+    let requested = manifest.expected_splits;
+    manifest.expected_splits = requested.max(recommended);
+    if manifest.expected_splits != requested {
+        print_info(format!(
+            "Raised native conversion split count from {requested} to {} to honor --split-max-size {}",
+            manifest.expected_splits,
+            format_bytes(max_size.bytes())
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn run_native_convert(

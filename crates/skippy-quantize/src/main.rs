@@ -1000,9 +1000,10 @@ fn init_convert(args: InitConvertArgs) -> Result<()> {
 }
 
 fn convert_job(args: ConvertJobArgs) -> Result<()> {
-    let manifest = convert_manifest_from_args(&args.init)?;
-    let manifest_path = args.init.manifest.clone();
     let runner = prepare_convert_runner(args.run.runner)?;
+    let mut manifest = convert_manifest_from_args(&args.init)?;
+    native_convert::apply_native_convert_split_max_size(&runner, &mut manifest)?;
+    let manifest_path = args.init.manifest.clone();
     if args.run.preflight_only {
         return run_job_preflight(
             &manifest_path,

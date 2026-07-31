@@ -5,8 +5,10 @@
 //! mixed-version compatibility. Skippy activation transport remains on the
 //! latency-sensitive `skippy-stage/2` ALPN.
 
+#[cfg(test)]
+pub(crate) use mesh_llm_types::mesh::MAX_SPLIT_RTT_MS;
 pub use mesh_llm_types::mesh::{
-    MAX_SPLIT_RTT_MS, ModelDemand, ModelRuntimeDescriptor, ModelSourceKind, ServedModelDescriptor,
+    ModelDemand, ModelRuntimeDescriptor, ModelSourceKind, ServedModelDescriptor,
     ServedModelIdentity, ServedModelMetadata, infer_available_model_descriptors,
     infer_local_served_model_descriptor, infer_served_model_descriptors, max_split_rtt_ms,
     split_allow_relay_paths,

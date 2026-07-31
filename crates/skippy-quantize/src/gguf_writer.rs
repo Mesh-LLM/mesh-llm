@@ -96,6 +96,58 @@ pub(crate) fn validate_raw_safetensors_gguf(
     })
 }
 
+pub(crate) fn recommended_raw_safetensors_gguf_split_count(
+    source: &Path,
+    mut options: RawGgufWriteOptions,
+    max_tensor_bytes: u64,
+) -> Result<u32> {
+    ensure!(
+        max_tensor_bytes > 0,
+        "split maximum tensor bytes must be greater than zero"
+    );
+    options.split = None;
+    let PreparedGgufWrite { tensors, .. } = prepare_raw_safetensors_gguf(source, &options)?;
+    let largest_tensor_bytes = tensors
+        .iter()
+        .map(|tensor| tensor.byte_len)
+        .max()
+        .unwrap_or_default();
+    ensure!(
+        largest_tensor_bytes <= max_tensor_bytes,
+        "largest selected tensor is {largest_tensor_bytes} bytes, exceeding split maximum {max_tensor_bytes} bytes"
+    );
+    let total_tensor_bytes = tensors
+        .iter()
+        .try_fold(0_u64, |total, tensor| total.checked_add(tensor.byte_len));
+    let total_tensor_bytes = total_tensor_bytes.context("selected tensor byte total overflow")?;
+    let minimum_count = total_tensor_bytes
+        .div_ceil(max_tensor_bytes)
+        .max(1)
+        .min(tensors.len() as u64);
+    let minimum_count = u32::try_from(minimum_count).context("split count does not fit u32")?;
+    let maximum_count = u32::try_from(tensors.len()).context("tensor count does not fit u32")?;
+
+    for split_count in minimum_count..=maximum_count {
+        let split = GgufSplit {
+            split_index: 1,
+            split_count,
+        };
+        let boundaries = byte_balanced_split_boundaries(&tensors, split)?;
+        let every_split_fits = boundaries.windows(2).all(|range| {
+            tensors[range[0]..range[1]]
+                .iter()
+                .map(|tensor| tensor.byte_len)
+                .sum::<u64>()
+                <= max_tensor_bytes
+        });
+        if every_split_fits {
+            return Ok(split_count);
+        }
+    }
+
+    anyhow::bail!("could not partition selected tensors within the split maximum")
+}
+
 struct PreparedGgufWrite {
     files: Vec<SafetensorFile>,
     tensors: Vec<TensorSource>,

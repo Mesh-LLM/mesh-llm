@@ -89,7 +89,8 @@ pub(crate) fn run_direct_convert(args: DirectConvertArgs) -> Result<()> {
         window_size: args.window_size,
         manifest: manifest_path.clone(),
     };
-    let manifest = convert_manifest_from_args(&manifest_args)?;
+    let mut manifest = convert_manifest_from_args(&manifest_args)?;
+    crate::native_convert::apply_native_convert_split_max_size(&runner, &mut manifest)?;
     if args.preflight_only {
         return run_job_preflight(
             &manifest_path,

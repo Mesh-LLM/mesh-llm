@@ -537,7 +537,7 @@ fn split_readiness_recommendations(
     {
         recommendations.push(format!(
             "Use lower-latency peers for split serving; direct stage RTT must be at or below {}ms.",
-            crate::mesh::MAX_SPLIT_RTT_MS
+            crate::mesh::max_split_rtt_ms()
         ));
     }
     recommendations
@@ -1163,7 +1163,7 @@ mod tests {
             report
                 .recommendations
                 .iter()
-                .any(|item| item.contains("80ms"))
+                .any(|item| item.contains(&format!("{}ms", crate::mesh::max_split_rtt_ms())))
         );
     }
 
