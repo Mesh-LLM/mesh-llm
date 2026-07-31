@@ -294,6 +294,99 @@ pub(crate) async fn gather_workers_incremental(
     (outputs, summaries, None)
 }
 
+/// Gather **references** for the asymmetric (Hermes-style) tool path.
+///
+/// References run tool-free and only advise; the actor acts afterwards. So
+/// unlike [`gather_workers_incremental`] this does no arbitration, no
+/// consensus, no early-exit — it just collects whatever advice arrives within
+/// a bounded window and returns it.
+///
+/// The bound is the whole point on a mixed/public mesh: we must not wait for
+/// perfect when good-enough advice is already in hand. We stop as soon as
+/// *either* `min_references` usable outputs have arrived *or* `deadline`
+/// elapses (or every reference finishes), then abort the stragglers. An empty
+/// result is legal — the actor proceeds on the user request alone.
+pub(crate) async fn gather_references(
+    join_set: &mut tokio::task::JoinSet<WorkerTaskResult>,
+    dispatched: &[DispatchedWorker],
+    deadline: Duration,
+    min_references: usize,
+) -> (Vec<WorkerOutput>, Vec<WorkerSummary>) {
+    let mut outputs = Vec::new();
+    let mut summaries = Vec::new();
+    let started = Instant::now();
+
+    loop {
+        // Enough advice already, or we've waited long enough: stop.
+        if !outputs.is_empty() && outputs.len() >= min_references {
+            break;
+        }
+        let remaining = deadline.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            tracing::info!(
+                "moa: reference deadline reached after {}ms with {} advisor(s)",
+                started.elapsed().as_millis(),
+                outputs.len(),
+            );
+            break;
+        }
+
+        let join_result = tokio::select! {
+            biased;
+            join = join_set.join_next() => join,
+            _ = tokio::time::sleep(remaining) => {
+                tracing::info!(
+                    "moa: reference deadline ({}ms) elapsed with {} advisor(s)",
+                    deadline.as_millis(),
+                    outputs.len(),
+                );
+                break;
+            }
+        };
+
+        let Some(join_result) = join_result else {
+            break; // all references finished
+        };
+
+        match join_result {
+            Ok((model, role, Ok(reply), elapsed)) => {
+                let mut normalized =
+                    normalize::normalize_worker_output(&reply.text, &model, role, elapsed);
+                normalized.truncated = reply.truncated;
+                // No `enforce_tool_call_contract`: references ran tool-free, so
+                // any tool-shaped text is advice, not an executable proposal.
+                summaries.push(WorkerSummary {
+                    model,
+                    role,
+                    succeeded: true,
+                    elapsed_ms: elapsed,
+                    output_kind: Some(normalized.kind),
+                    confidence: Some(normalized.confidence),
+                });
+                outputs.push(normalized);
+            }
+            Ok((model, role, Err(e), elapsed)) => {
+                tracing::warn!("moa: reference {model} ({}) failed: {e}", role.label());
+                summaries.push(WorkerSummary {
+                    model,
+                    role,
+                    succeeded: false,
+                    elapsed_ms: elapsed,
+                    output_kind: None,
+                    confidence: None,
+                });
+            }
+            Err(e) => {
+                tracing::warn!("moa: reference task panicked or was cancelled: {e}");
+            }
+        }
+    }
+
+    drain_after_early_exit(join_set, &mut summaries).await;
+    reconcile_dispatched(dispatched, &mut summaries);
+    (outputs, summaries)
+}
+
 fn grace_answer_decision(outputs: &[WorkerOutput]) -> arbiter::Decision {
     // Prefer the Strong worker's qualifying answer when it has landed:
     // if the biggest model already answered, shipping a smaller model's

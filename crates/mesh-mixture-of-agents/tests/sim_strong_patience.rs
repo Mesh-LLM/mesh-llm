@@ -112,6 +112,7 @@ fn mixed_pool(
         first_answer_grace: Duration::ZERO,
         strong_patience,
         enable_thinking: None,
+        actor_candidates: Vec::new(),
     }
 }
 
@@ -218,6 +219,7 @@ async fn same_tier_pool_keeps_early_exit() {
         // tier analysis must disable the gate anyway.
         strong_patience: Duration::from_secs(10),
         enable_thinking: None,
+        actor_candidates: Vec::new(),
     };
 
     let started = std::time::Instant::now();

@@ -327,6 +327,78 @@ pub fn pack_for_reducer_selected(
     )
 }
 
+/// Pack context for the **actor** in the asymmetric (Hermes-style) tool path.
+///
+/// Unlike [`pack_for_reducer_selected`], this is not synthesis-on-disagreement.
+/// The references ran *tool-free* — they only advise — and the actor is the one
+/// model that actually holds the tools and decides the action. So the framing
+/// is "here is advice, now you act", not "you all disagreed, reconcile".
+///
+/// Why asymmetric at all: tool authority should track capability, not
+/// popularity. A majority of weak models proposing the wrong tool must not
+/// outvote the one strong tool-caller. Letting only the actor emit tools
+/// removes that failure class entirely instead of patching a vote.
+///
+/// The advice is rendered as prose (references never carry `tool_calls` here),
+/// length-bounded per model, and truncation-labelled — same discipline as the
+/// reducer packing. `has_tools`/`selected_tool_names` attach the *real* tools
+/// to the actor's request even though the references never saw them.
+pub fn pack_for_actor(
+    session: &Session,
+    references: &[WorkerOutput],
+    has_tools: bool,
+    selected_tool_names: &[String],
+) -> (Vec<Value>, Option<Value>) {
+    let user_text = session.last_user_text();
+
+    let mut system_parts = vec![
+        augmented_system_prompt_for_mode(session, has_tools),
+        String::new(),
+        "Other models were asked to advise on this request. They did not have \
+         access to tools; you do. Use their advice as input, but you decide the \
+         action. Critically evaluate what they say — some of it may be biased or \
+         incorrect, and agreement between them is not proof of correctness. \
+         Respond with the single best action: a direct answer, or the appropriate \
+         tool call. Be concise."
+            .to_string(),
+    ];
+
+    if references.is_empty() {
+        // No advice arrived in time (slow/absent peers). The actor still acts
+        // on the user request alone — degraded, but never blocked.
+        system_parts.push(String::new());
+        system_parts
+            .push("(No advice from other models arrived in time — proceed on your own.)".into());
+    } else {
+        system_parts.push(String::new());
+        system_parts.push("## Advice from other models".to_string());
+        for (i, r) in references.iter().enumerate() {
+            system_parts.push(format!("\n[Advisor {} — {}]:", i + 1, r.model));
+            let payload = if r.payload.len() > 500 {
+                format!("{}...", crate::worker::truncate_chars(&r.payload, 497))
+            } else {
+                r.payload.clone()
+            };
+            system_parts.push(payload);
+            if r.truncated {
+                system_parts.push(
+                    "  → NOTE: cut off at the token limit — incomplete, treat as partial".into(),
+                );
+            }
+        }
+    }
+
+    let tools = selected_tools(session, has_tools, selected_tool_names);
+
+    (
+        vec![
+            json!({"role": "system", "content": system_parts.join("\n")}),
+            json!({"role": "user", "content": user_text}),
+        ],
+        tools,
+    )
+}
+
 fn selected_tools(
     session: &Session,
     has_tools: bool,

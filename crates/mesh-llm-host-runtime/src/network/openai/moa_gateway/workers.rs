@@ -176,6 +176,12 @@ pub async fn build_moa_config(
         return None;
     }
 
+    // Actor priority for the asymmetric tool path: best tool-caller first.
+    // The actor is the one model that actually emits the tool call, so it must
+    // be the best available tool-caller — a judgement the engine crate cannot
+    // make because it can't see gossiped capabilities.
+    let actor_candidates = compute_actor_candidates(node, &models).await;
+
     tracing::info!(
         required_tokens = ?required_tokens,
         "MoA config: {} workers ({} local, {} remote): {:?}",
@@ -238,6 +244,9 @@ pub async fn build_moa_config(
         // when the caller has expressed a preference
         // (`reasoning_effort: "none"`, `enable_thinking: false`, etc.).
         enable_thinking: None,
+        // Actor priority for tool turns / synthesis: best tool-caller first.
+        // Computed below from gossiped `tool_use`, model size, and peer health.
+        actor_candidates,
     })
 }
 
@@ -410,6 +419,71 @@ async fn add_worker_backend(
         return true;
     }
     false
+}
+
+/// Rank the fan-out pool into actor priority order for the asymmetric tool
+/// path: best tool-caller first, as indices into `models`.
+///
+/// The actor is the single model that emits the executable tool call, so it
+/// must be the best available tool-caller. That decision combines signals only
+/// the host can see:
+///
+///   1. gossiped `tool_use` capability (`Supported` > `Likely` > `None`),
+///   2. model size tier as a tiebreak (big-tier first — bigger models are
+///      usually the stronger reasoners for the acting pass),
+///   3. stable index order as a final tiebreak for determinism.
+///
+/// Capabilities are matched to pool entries by canonical base name, so a peer
+/// advertising `unsloth/Qwen3-8B-GGUF:Q4_K_M` still supplies the capability for
+/// a pool entry named `Qwen3-8B-Q4_K_M`. Models with no capability evidence
+/// fall to `None`, which lands them behind any known tool-caller but still
+/// ahead of nothing — the reducer fallback keeps them usable.
+///
+/// Returns indices into `models` (never empty when `models` is non-empty). The
+/// engine treats an empty vec as "no host guidance" and derives its own order,
+/// so we always return a full ranking here.
+async fn compute_actor_candidates(node: &mesh::Node, models: &[moa::ModelEntry]) -> Vec<usize> {
+    // canonical base name -> best tool_use level seen for it across the mesh.
+    let mut tool_use_by_base: std::collections::HashMap<String, crate::models::CapabilityLevel> =
+        std::collections::HashMap::new();
+    for descriptor in node.all_served_model_descriptors().await {
+        let base = canonical_base_name(&descriptor.identity.model_name);
+        let level = descriptor.capabilities.tool_use;
+        tool_use_by_base
+            .entry(base)
+            .and_modify(|existing| {
+                if level > *existing {
+                    *existing = level;
+                }
+            })
+            .or_insert(level);
+    }
+
+    let mut ranked: Vec<usize> = (0..models.len()).collect();
+    ranked.sort_by(|&a, &b| {
+        let ma = &models[a];
+        let mb = &models[b];
+        let tool_a = tool_use_by_base
+            .get(&canonical_base_name(&ma.name))
+            .copied()
+            .unwrap_or(crate::models::CapabilityLevel::None);
+        let tool_b = tool_use_by_base
+            .get(&canonical_base_name(&mb.name))
+            .copied()
+            .unwrap_or(crate::models::CapabilityLevel::None);
+        // 1) higher tool_use first
+        tool_b
+            .cmp(&tool_a)
+            // 2) big-tier before small-tier
+            .then_with(|| {
+                let small_a = moa::model_name_is_small_tier(&ma.name);
+                let small_b = moa::model_name_is_small_tier(&mb.name);
+                small_a.cmp(&small_b) // false (big) sorts before true (small)
+            })
+            // 3) stable index order
+            .then_with(|| a.cmp(&b))
+    });
+    ranked
 }
 
 /// Canonical name used for cross-peer dedup. Different peers advertise the

@@ -43,6 +43,7 @@ pub mod normalize;
 mod reducer;
 pub mod session;
 mod tool_guard;
+mod tool_turn;
 pub mod worker;
 
 pub use backend::{HttpBackend, ModelBackend, ModelEntry, SamplingParams, apply_enable_thinking};
@@ -57,7 +58,7 @@ use serde_json::{Value, json};
 use session::Session;
 use std::time::{Duration, Instant};
 use worker::WorkerRole;
-pub use worker::{strip_thinking, truncate_chars};
+pub use worker::{model_name_is_small_tier, strip_thinking, truncate_chars};
 
 const SAME_TOOL_FORCE_ANSWER_THRESHOLD: usize = 3;
 
@@ -104,6 +105,20 @@ pub struct GatewayConfig {
     /// populates this from the caller's `reasoning_effort` / `enable_thinking`
     /// / `reasoning.enabled` knobs so MoA users get a single switch.
     pub enable_thinking: Option<bool>,
+    /// Actor priority order for tool turns and synthesis, as indices into
+    /// [`Self::models`], best actor first.
+    ///
+    /// In the asymmetric (Hermes-style) tool path the *actor* is the model
+    /// that actually emits the tool call; references only advise. The actor
+    /// should be the best available tool-caller, which is a host-side judgement
+    /// combining gossiped `tool_use` capability, model size, and recent peer
+    /// health — signals the engine crate cannot see. The host computes the
+    /// ordering and passes it here.
+    ///
+    /// Empty (the default) means "no host guidance": the engine falls back to
+    /// its name-derived size tier (big-tier first), preserving prior behaviour
+    /// for tests and any caller that doesn't populate it.
+    pub actor_candidates: Vec<usize>,
 }
 
 // ─── Turn result ─────────────────────────────────────────────────────
@@ -163,9 +178,9 @@ pub struct WorkerSummary {
 }
 
 #[derive(Debug, Clone)]
-struct ForcedToolChoice {
-    name: String,
-    fallback_arguments: Value,
+pub(crate) struct ForcedToolChoice {
+    pub(crate) name: String,
+    pub(crate) fallback_arguments: Value,
 }
 
 struct DecisionResolution<'a> {
@@ -241,6 +256,15 @@ async fn handle_query(
     forced_tool: Option<&ForcedToolChoice>,
     start: Instant,
 ) -> TurnResult {
+    // Tool-bearing turns take the asymmetric (Hermes-style) path: references
+    // advise tool-free, the best tool-caller acts. Tool authority tracks
+    // capability, not a majority vote — see `tool_turn`. Text-only turns keep
+    // the symmetric fan-out + synthesis-on-divergence path below.
+    if has_tools || forced_tool.is_some() {
+        return tool_turn::handle_tool_query(config, session, allowed_tools, forced_tool, start)
+            .await;
+    }
+
     let assignments = worker::assign_roles(&config.models);
     let grace_mode = grace_mode_for_turn(session, has_tools);
 
@@ -453,7 +477,10 @@ fn looks_like_tool_intent(text: &str) -> bool {
         .any(|phrase| text.contains(phrase))
 }
 
-fn selected_tool_names_for_turn(session: &Session, allowed_tools: &[String]) -> Vec<String> {
+pub(crate) fn selected_tool_names_for_turn(
+    session: &Session,
+    allowed_tools: &[String],
+) -> Vec<String> {
     let available = if allowed_tools.is_empty() {
         session.tool_names()
     } else {
@@ -1155,7 +1182,7 @@ async fn resolve_decision(
 
 // ─── Response builders ───────────────────────────────────────────────
 
-fn best_answer(outputs: &[WorkerOutput]) -> String {
+pub(crate) fn best_answer(outputs: &[WorkerOutput]) -> String {
     outputs
         .iter()
         .filter(|o| {
@@ -1172,7 +1199,7 @@ fn best_answer(outputs: &[WorkerOutput]) -> String {
         .unwrap_or_default()
 }
 
-fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
+pub(crate) fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
     let answer = best_answer(outputs);
     if answer.is_empty() {
         error_response(
@@ -1184,7 +1211,7 @@ fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
     }
 }
 
-fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
+pub(crate) fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
     if let (true, Some(name)) = (has_tools, output.tool_name.as_ref()) {
         let args = output.tool_arguments.as_ref().unwrap_or(&Value::Null);
         return tool_call_response(name, args);
@@ -1220,7 +1247,7 @@ fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
 ///
 /// The ingress layer is responsible for choosing the HTTP status; this
 /// body is the in-band signal.
-fn error_response(message: &str, code: &str) -> Value {
+pub(crate) fn error_response(message: &str, code: &str) -> Value {
     json!({
         "id": format!("chatcmpl-moa-{}", short_id()),
         "object": "chat.completion",
@@ -1266,7 +1293,7 @@ pub const MOA_ERR_ALL_REDUCERS_FAILED: &str = "all_reducers_failed";
 /// MoA only received silence directives or uncertainty after reduction.
 pub const MOA_ERR_NO_USABLE_ANSWER: &str = "no_usable_answer";
 
-fn chat_response(content: &str) -> Value {
+pub(crate) fn chat_response(content: &str) -> Value {
     json!({
         "id": format!("chatcmpl-moa-{}", short_id()),
         "object": "chat.completion",
@@ -1280,7 +1307,7 @@ fn chat_response(content: &str) -> Value {
     })
 }
 
-fn tool_call_response(name: &str, arguments: &Value) -> Value {
+pub(crate) fn tool_call_response(name: &str, arguments: &Value) -> Value {
     // OpenAI tool-call `arguments` is a JSON-object *string*. Three input
     // shapes have to collapse to a valid object string here:
     //
@@ -1602,6 +1629,7 @@ mod response_builder_tests {
             first_answer_grace: Duration::from_millis(10),
             strong_patience: Duration::ZERO,
             enable_thinking: Some(false),
+            actor_candidates: Vec::new(),
         };
         let forced_tool = ForcedToolChoice {
             name: "lookup_probe_fact".to_string(),

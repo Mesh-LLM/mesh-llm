@@ -94,6 +94,7 @@ fn config_with_three_workers_returning(text: &str) -> moa::GatewayConfig {
         first_answer_grace: Duration::ZERO,
         strong_patience: Duration::ZERO,
         enable_thinking: None,
+        actor_candidates: Vec::new(),
     }
 }
 

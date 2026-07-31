@@ -130,6 +130,17 @@ pub fn has_quality_gap<'a>(workers: impl IntoIterator<Item = (&'a str, WorkerRol
 ///
 /// Mirrors `pick_model_classified`'s sizing heuristic in the main
 /// router so MoA picks the same "strong" model as `auto` would.
+/// Public size-tier classifier for out-of-crate callers (the host uses it to
+/// break ties when ranking actor candidates by capability).
+///
+/// True when the model name advertises a single-digit billion-parameter count
+/// (1B–9B) — the "small tier". Multi-digit sizes (31B, 70B) and names that
+/// encode no size (MiniMax-M2.5) are big-tier. Same heuristic MoA uses
+/// internally for role assignment, exposed so the host doesn't re-implement it.
+pub fn model_name_is_small_tier(name: &str) -> bool {
+    is_single_digit_b_name(name)
+}
+
 pub(crate) fn is_single_digit_b_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     for i in 0..bytes.len() {

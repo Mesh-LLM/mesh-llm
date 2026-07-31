@@ -116,6 +116,7 @@ fn config_with_three_recording_workers() -> (
         first_answer_grace: Duration::ZERO,
         strong_patience: Duration::ZERO,
         enable_thinking: None,
+        actor_candidates: Vec::new(),
     };
     (config, fast, mid, strong)
 }

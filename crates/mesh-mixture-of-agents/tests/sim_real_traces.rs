@@ -220,6 +220,7 @@ fn config_for(case: &RecordedCase) -> moa::GatewayConfig {
         // Mirrors `effective_enable_thinking_for_moa`, which is now
         // unconditionally off.
         enable_thinking: Some(false),
+        actor_candidates: Vec::new(),
     }
 }
 
