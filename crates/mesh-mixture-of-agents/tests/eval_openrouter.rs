@@ -103,6 +103,51 @@ impl OpenRouterBackend {
             .await
             .map_err(|e| format!("openrouter request failed: {e}"))
     }
+
+    /// Call with a predeclared retry on transient upstream/infra errors.
+    ///
+    /// OpenRouter surfaces provider rate-limits and gateway hiccups as
+    /// 429/502/503/504. The eval must NOT score these as *capability*
+    /// failures (the expert review flagged this), so we retry with backoff and,
+    /// if still failing, return a distinguishable `INFRA:` error the caller
+    /// treats as "excluded / missing", never as a wrong answer.
+    async fn chat_completion_retrying(
+        &self,
+        model: &str,
+        messages: &[Value],
+        tools: Option<&Value>,
+        max_tokens: u32,
+        sampling: SamplingParams,
+    ) -> Result<Value, String> {
+        let mut last = String::new();
+        for attempt in 0..4 {
+            match self
+                .chat_completion(
+                    model,
+                    messages,
+                    tools,
+                    max_tokens,
+                    Duration::from_secs(90),
+                    sampling,
+                )
+                .await
+            {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    let transient = ["429", "502", "503", "504", "temporarily", "aborted"]
+                        .iter()
+                        .any(|c| e.contains(c));
+                    last = e;
+                    if !transient {
+                        return Err(last); // genuine error (e.g. 400) — surface it
+                    }
+                    // backoff: 0.5s, 1s, 2s
+                    tokio::time::sleep(Duration::from_millis(500 << attempt)).await;
+                }
+            }
+        }
+        Err(format!("INFRA: {last}"))
+    }
 }
 
 #[async_trait]
@@ -622,9 +667,297 @@ fn scores_task(tools: &[(String, String)], task: &ToolTask) -> bool {
     }
 }
 
+// ─── Ablation: does the advice actually help the actor? ──────────────
+//
+// The controlled experiment the eval review demanded. In the asymmetric
+// design the actor is already the best tool-caller in the pool — so the only
+// question that matters is whether the *references* add anything the actor
+// could not do alone. "MoA beats the best single model" is the wrong bar,
+// because the actor IS one of the models.
+//
+// Everything is held fixed except the one variable of interest — the
+// references — so a difference cannot be blamed on sampling, token budget,
+// system prompt, or a different actor winning a latency race:
+//
+//   * ONE pinned actor model, at the actor's own sampling and token budget,
+//     with the real `pack_for_actor` system prompt.
+//   * Three arms differing ONLY in the `references` passed to the actor:
+//       A. none      — actor alone (the true comparator)
+//       B. real      — advice from the other pool models (the production path)
+//       C. shuffled  — advice generated for a DIFFERENT task (length-similar)
+//
+// Metric: rescue = (A fails, B passes); harm = (A passes, B fails);
+//         net uplift = rescue - harm. Arm C separates "useful information"
+//         from "extra tokens + a think-carefully prompt": if B beats A but C
+//         beats A just as much, the gain is not the advice.
+//
+// Robustness to imperfect labels: the same scorer is applied to all three
+// arms of the *same* actor, so a systematically over/under-specified label
+// affects every arm equally and largely cancels in the rescue-minus-harm
+// delta. That is why this paired design is sound where "beat the best single
+// model" (a max over models on the eval tasks) was not.
+
+/// The pinned actor for the ablation, overridable via `MOA_ABLATION_ACTOR`.
+///
+/// Default is the strongest tool-caller in the pool. But a strong actor tends
+/// to ace easy single-tool tasks alone, leaving no headroom for references to
+/// rescue — so the ablation is only informative when the actor fails a
+/// meaningful fraction alone. Pinning a *weaker* actor (a realistic case: a
+/// mesh of only small models) creates that headroom and directly tests whether
+/// advice from the pool rescues an actor that would otherwise fail.
+fn ablation_actor() -> String {
+    std::env::var("MOA_ABLATION_ACTOR").unwrap_or_else(|_| "qwen/qwen3-32b".to_string())
+}
+
+fn ablation_draws() -> usize {
+    std::env::var("MOA_ABLATION_DRAWS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5)
+}
+
+/// Run every non-actor pool model tool-free and collect its prose advice,
+/// exactly as the production reference phase does.
+async fn gather_advice(
+    backend: &OpenRouterBackend,
+    pool: &[PoolModel],
+    session: &moa::session::Session,
+    actor: &str,
+) -> Vec<moa::normalize::WorkerOutput> {
+    let mut refs = Vec::new();
+    for m in pool {
+        if m.id == actor {
+            continue; // the actor advises itself implicitly when it acts
+        }
+        let packed = moa::context::pack_for_worker_selected(
+            session,
+            moa::worker::WorkerRole::Generalist,
+            false, // tool-free: references only advise
+            &[],
+        );
+        match backend
+            .chat_completion_retrying(
+                m.id,
+                &packed.messages,
+                packed.tools.as_ref(),
+                packed.max_tokens,
+                SamplingParams::worker().with_thinking(Some(false)),
+            )
+            .await
+        {
+            Ok(body) => {
+                let text = response_text(&body);
+                if !text.trim().is_empty() {
+                    refs.push(moa::normalize::normalize_worker_output(
+                        &text,
+                        m.id,
+                        moa::worker::WorkerRole::Generalist,
+                        0,
+                    ));
+                }
+            }
+            Err(e) => eprintln!("      advisor {} unavailable: {}", m.id, truncate(&e, 70)),
+        }
+    }
+    refs
+}
+
+/// Outcome of one actor arm on one task/draw.
+enum ArmOutcome {
+    Pass,
+    Fail,
+    /// Excluded from the capability analysis (transient infra error).
+    Infra,
+}
+
+async fn run_actor_arm(
+    backend: &OpenRouterBackend,
+    session: &moa::session::Session,
+    references: &[moa::normalize::WorkerOutput],
+    selected: &[String],
+    task: &ToolTask,
+    actor: &str,
+) -> ArmOutcome {
+    let (messages, tools) = moa::context::pack_for_actor(session, references, true, selected);
+    match backend
+        .chat_completion_retrying(
+            actor,
+            &messages,
+            tools.as_ref(),
+            2048,
+            SamplingParams::reducer().with_thinking(Some(false)),
+        )
+        .await
+    {
+        Ok(body) => {
+            if scores_task(&response_tool_calls(&body), task) {
+                ArmOutcome::Pass
+            } else {
+                ArmOutcome::Fail
+            }
+        }
+        Err(e) if e.starts_with("INFRA:") => ArmOutcome::Infra,
+        Err(_) => ArmOutcome::Fail,
+    }
+}
+
+/// The falsification test for the asymmetric design: do references rescue the
+/// actor more than they harm it? Reports rescue / harm / net uplift and a
+/// shuffled-advice control. Pilot scale by default — the printed protocol note
+/// states what a merge-blocking result would require.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live network + cost; run explicitly with --ignored"]
+async fn ablation_do_references_help_the_actor() {
+    let Some(key) = api_key_or_skip("ablation") else {
+        return;
+    };
+    let pool = mesh_pool();
+    let tasks = tool_tasks();
+    let draws = ablation_draws();
+    let backend = OpenRouterBackend::new(key);
+    let selected = agent_tools_names();
+
+    // Per-task tallies across draws.
+    let n = tasks.len();
+    let mut a_pass = vec![0usize; n];
+    let mut b_pass = vec![0usize; n];
+    let mut c_pass = vec![0usize; n];
+    let mut a_scored = vec![0usize; n]; // non-infra A trials
+    let mut b_scored = vec![0usize; n];
+    let mut c_scored = vec![0usize; n];
+    let mut rescue = 0usize; // A fail, B pass (both scored)
+    let mut harm = 0usize; // A pass, B fail (both scored)
+    let mut paired = 0usize; // trials where both A and B were scored
+
+    let actor = ablation_actor();
+    eprintln!("\n=== ablation: do references help the actor? ===");
+    eprintln!("actor = {actor}, {n} tasks x {draws} draws, 3 arms\n");
+
+    for draw in 0..draws {
+        // Generate advice for every task first, so arm C can borrow a
+        // different task's advice within the same draw.
+        let sessions: Vec<moa::session::Session> = tasks.iter().map(session_for_task).collect();
+        let mut advice: Vec<Vec<moa::normalize::WorkerOutput>> = Vec::with_capacity(n);
+        for s in &sessions {
+            advice.push(gather_advice(&backend, &pool, s, &actor).await);
+        }
+
+        for (i, task) in tasks.iter().enumerate() {
+            let real = &advice[i];
+            let shuffled = &advice[(i + 1) % n]; // different task's advice
+            let s = &sessions[i];
+
+            let a = run_actor_arm(&backend, s, &[], &selected, task, &actor).await;
+            let b = run_actor_arm(&backend, s, real, &selected, task, &actor).await;
+            let c = run_actor_arm(&backend, s, shuffled, &selected, task, &actor).await;
+
+            let tally = |o: &ArmOutcome, pass: &mut usize, scored: &mut usize| match o {
+                ArmOutcome::Pass => {
+                    *pass += 1;
+                    *scored += 1;
+                }
+                ArmOutcome::Fail => *scored += 1,
+                ArmOutcome::Infra => {}
+            };
+            tally(&a, &mut a_pass[i], &mut a_scored[i]);
+            tally(&b, &mut b_pass[i], &mut b_scored[i]);
+            tally(&c, &mut c_pass[i], &mut c_scored[i]);
+
+            // Paired rescue/harm only when both A and B produced a real score.
+            if let (ArmOutcome::Pass | ArmOutcome::Fail, ArmOutcome::Pass | ArmOutcome::Fail) =
+                (&a, &b)
+            {
+                paired += 1;
+                match (matches!(a, ArmOutcome::Pass), matches!(b, ArmOutcome::Pass)) {
+                    (false, true) => rescue += 1,
+                    (true, false) => harm += 1,
+                    _ => {}
+                }
+            }
+
+            eprintln!(
+                "  draw {draw} {:22} A={} B={} C={}  ({} advisors)",
+                task.name,
+                outcome_mark(&a),
+                outcome_mark(&b),
+                outcome_mark(&c),
+                real.len(),
+            );
+        }
+    }
+
+    eprintln!("\n  per-task pass rates (actor-alone A / +real B / +shuffled C):");
+    for (i, task) in tasks.iter().enumerate() {
+        eprintln!(
+            "    {:22} A {}/{}  B {}/{}  C {}/{}",
+            task.name, a_pass[i], a_scored[i], b_pass[i], b_scored[i], c_pass[i], c_scored[i],
+        );
+    }
+    let sum = |v: &[usize]| v.iter().sum::<usize>();
+    eprintln!(
+        "\n  aggregate: A {}/{}  B {}/{}  C {}/{}",
+        sum(&a_pass),
+        sum(&a_scored),
+        sum(&b_pass),
+        sum(&b_scored),
+        sum(&c_pass),
+        sum(&c_scored),
+    );
+    eprintln!(
+        "  paired A↔B trials: {paired}   rescue (A✗→B✓): {rescue}   harm (A✓→B✗): {harm}   net uplift: {}",
+        rescue as i64 - harm as i64,
+    );
+    eprintln!(
+        "\n  PILOT — directional only. A defensible / merge-blocking result needs\n  \
+         ~40 preregistered stratified tasks x k>=10 draws, a paired hierarchical\n  \
+         bootstrap CI on net uplift, and the production-selected actor. This run\n  \
+         builds the instrument and shows direction; it is not that study.\n"
+    );
+
+    // Guard: fail loudly if the API was down (so we never report a silent 0/0
+    // as if it were a real null result).
+    assert!(
+        paired >= (n * draws) / 2,
+        "too few scored A↔B pairs ({paired}) — API likely unavailable, results not interpretable"
+    );
+}
+
+/// Tool names offered to every arm (held constant across arms).
+fn agent_tools_names() -> Vec<String> {
+    vec![
+        "list_dir".into(),
+        "read_file".into(),
+        "search".into(),
+        "run_command".into(),
+    ]
+}
+
+fn session_for_task(task: &ToolTask) -> moa::session::Session {
+    let mut s = moa::session::Session::new();
+    s.ingest(
+        &[json!({"role": "user", "content": task.prompt})],
+        &Some(agent_tools()),
+    );
+    s
+}
+
+fn outcome_mark(o: &ArmOutcome) -> &'static str {
+    match o {
+        ArmOutcome::Pass => "✓",
+        ArmOutcome::Fail => "✗",
+        ArmOutcome::Infra => "∅",
+    }
+}
+
 /// The headline claim: MoA over the pool is at least as tool-coherent as the
 /// best single model in the pool, measured on the same agentic tasks under the
 /// same thinking policy.
+///
+/// NOTE: superseded by `ablation_do_references_help_the_actor`. This test
+/// compares MoA against a max over single models at *different* sampling and
+/// prompt than the actor, so a win here is confounded by sampling/prompt and
+/// must NOT be cited as evidence the design helps. Kept only as a smoke test
+/// that the full `handle_turn` path produces valid tool calls end to end.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "live network + cost; run explicitly with --ignored"]
 async fn tool_coherence_moa_at_least_best_single() {
