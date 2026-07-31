@@ -203,28 +203,36 @@ Activation prerequisites:
    pull request, review, or successful CI check. An exact-main workflow
    allowlist is not a durable privilege boundary while an unreviewed direct
    push can replace that workflow.
-3. While public-repository access is still disabled, change GitHub's
-   organization `Default` runner group to selected repository
-   `Mesh-LLM/mesh-llm` and selected workflow
-   `Mesh-LLM/mesh-llm/.github/workflows/depot-canary.yml@refs/heads/main`.
-4. Only after both restrictions are saved, enable public repositories for the
-   `Default` group. Depot-managed ephemeral runners register in that group.
-5. Dispatch `depot-canary.yml` from `refs/heads/main` once with
-   `expect_cache_hit=false`, then again with `expect_cache_hit=true`. The
+3. With organization-admin authority, verify that GitHub's `Default` runner
+   group is restricted to `Mesh-LLM/mesh-llm` and exact protected
+   default-branch workflow refs. Public-repository allocation is operational,
+   but the current token cannot inspect the administrative policy.
+4. If either restriction is absent, restrict the group immediately before any
+   further rollout. Depot-managed ephemeral runners register in that group.
+5. The cold/warm `depot-canary.yml` pair from `refs/heads/main` is complete:
+   runs
+   [30525111329](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30525111329)
+   and
+   [30525247727](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30525247727)
+   passed all six labels. The
    workflow fails closed unless Depot injects its WebDAV endpoint,
    authentication, and runner-image identity. It compiles a deterministic
    no-checkout probe through sccache and rejects WebDAV read/write errors; the
    warm pass requires both sccache and Actions cache hits. Verify all four Intel
    runner sizes, both ARM runner sizes, and their reported architectures
    without printing credentials.
-6. Dispatch the canary from a feature ref, prove that it cannot acquire a
-   Depot runner, and cancel that exact queued run.
+6. The denied feature-ref
+   [run 30593657371](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30593657371)
+   concluded skipped without allocating a Depot runner. Its temporary ref
+   pointed exactly at main SHA
+   `851888d0b0ce19916d6b0d7d73ce49246eef67d6` and was removed after inspection.
 7. Add exact default-branch workflow refs only as their phase starts. Reusable
    workflows whose jobs run on Depot must be listed separately, must derive
    runner placement from immutable caller context inside the protected
    workflow, and must never pass a caller-provided label to `runs-on`.
-8. Set `DEPOT_RUNNERS_ENABLED=true` only after comparable trusted canaries meet
-   the rollout targets.
+8. Set `DEPOT_RUNNERS_ENABLED=true` only after the administrative trust
+   boundary is verified and comparable trusted canaries meet the rollout
+   targets. It remains unset.
 
 The initial main allowlist is:
 
@@ -268,24 +276,43 @@ Do not use `pull_request_target` to build or execute PR content. A
 default-branch-pinned reusable workflow preserves the normal `pull_request`
 event while keeping the runner-owning workflow definition trusted.
 
-As of 2026-07-29, the Depot dashboard reports the `Mesh-LLM` GitHub connection
-active with automatic Depot Cache and registry authentication enabled. GitHub's
+The Depot dashboard reports the `Mesh-LLM` GitHub connection active with
+automatic Depot Cache and registry authentication enabled. GitHub's
 organization installation API lists `depot-managed-runners` and
-`depot-code-access` for all repositories. A read-only organization-settings
-inspection found:
+`depot-code-access` for all repositories. Main-ref dispatches on this public
+repository now allocate ephemeral Depot runners, superseding the 2026-07-29
+observation that public access was disabled. The available token currently gets
+403 when reading organization runner-group settings, so the exact live
+repository/workflow restrictions remain administratively unverified. Re-check
+them with organization-admin authority before setting the global gate. The
+separate `mesh-llm` group owns two dedicated GPU scale sets and is not the Depot
+group.
 
-- `Default`: all repositories, public repositories disabled, all workflows,
-  and no persistent runner;
-- `mesh-llm`: two dedicated GPU scale sets, selected repositories including
-  public repositories, and all workflows.
+The bounded evidence is:
 
-The current `Default` state safely prevents Depot from serving this public
-repository, so a canary will queue until the ordered restriction changes above
-are made. The GPU group is separate from Depot and its all-workflows policy
-must also be restricted to protected workflow entry points before treating
-those devices as a trusted-only pool; a public repository with an
-all-workflows runner group otherwise allows PR-controlled workflow definitions
-to request those persistent runners directly.
+- cold and warm `depot-canary.yml` runs
+  [30525111329](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30525111329)
+  and
+  [30525247727](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30525247727)
+  passed all six Intel/ARM runner labels;
+- denied feature-ref
+  [30593657371](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30593657371)
+  was skipped before runner allocation, and its main-identical temporary ref
+  was removed;
+- exhaustive prerelease
+  [30586470043](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30586470043)
+  passed all 55 executed jobs, including 15 Depot jobs across those labels, and
+  published the complete `v0.75.0-rc1` immutable artifact graph;
+- warm non-GPU release canary
+  [30590595090](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30590595090)
+  finished with 36 successes, 28 intentional skips, and zero failures. Nine
+  jobs allocated ephemeral Depot runners; both static-ABI producers restored
+  exact cache entries without compiling, and both Linux native-SDK consumers
+  reported roughly 95% sccache hits.
+
+The canaries do not satisfy the trust prerequisite by themselves.
+`DEPOT_RUNNERS_ENABLED` remains unset because `main` has no enforceable
+review/status protection boundary.
 
 Depot redirects every GitHub Actions cache API consumer on its runners,
 including `actions/cache`, `actions/setup-node`, and third-party cache actions.
@@ -329,7 +356,7 @@ Relevant Depot documentation:
 ### `Mesh-LLM/mesh-llm-runner-images`
 
 Runner images own stable tools and backend SDKs, not commit-specific products.
-The first migration phase is implemented in draft
+The first migration phase was merged in
 [`mesh-llm-runner-images#9`](https://github.com/Mesh-LLM/mesh-llm-runner-images/pull/9):
 PRs route only affected image families plus the mandatory public CPU AMD64
 contract, never export BuildKit cache, and never stage or promote registry
@@ -338,6 +365,11 @@ promote a retained candidate cohort. The reusable family workflow independently
 derives its runner/cache authority, verifies the source revision, identifies
 candidate content by digest, and serially reconciles the complete `latest`
 cohort. Deleted files participate in routing.
+
+Merge commit `4e79e68e22a5ea9bb1eedf9a2a7e7ccfc20b2bca`
+then passed the trusted main
+[run 30522118156](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30522118156)
+with 35 successful jobs, four intentional skips, and zero failures.
 
 The subsequent role-isolation revision should:
 
@@ -385,8 +417,9 @@ completed in 6m 22s wall and 1h 13m 07s aggregate, and emitted no real cache
 export phase. Compared with the first build-once run's 22m 57s wall and
 2h 52m 59s aggregate, that is a 72.3% wall reduction and 57.7% aggregate
 reduction. The slowest self-hosted ROCm 7.2 row fell from 22m 20s to 5m 48s.
-This validates read-only PR cache and change routing; trusted registry
-stage/promotion remains to be canaried separately.
+This validates read-only PR cache and change routing. Trusted main staging then
+passed in run 30522118156 above; retained-cohort promotion remains a separate
+scheduled/manual operational gate.
 
 No retained audit evidence currently substantiates the previously cited
 1.53 GB/1.92 GB compressed sizes or backend cold-initialization medians, so
@@ -405,52 +438,37 @@ token to PR code.
 
 ### `Mesh-LLM/mesh-packaging`
 
-Packaging already consumes product-v2 native products and must not rebuild the
-CLI/runtime. Its current OCI publication path is not build-once: `runtime-image`
-tests a `runtime-qa` cache-only build, while `publish-images` later rebuilds the
-`runtime` target from mutable base tags. The published bytes are therefore not
-guaranteed to be the bytes that passed QA. A filtered manual native run also
-enables every npm lane and Homebrew regardless of the native filters. In
-[run 30390907268](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30390907268),
-the selected CPU package/image each took less than a minute, but the unintended
-macOS and Windows addon builds extended the workflow to 22m 53s. The historical
-11-row full run
-[30327805587](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30327805587)
-took 30m 36s and retained 3.09 GB of Actions artifacts: 1.46 GB of verified
-products plus 1.63 GB of native packages.
+Merged
+[`mesh-packaging#16`](https://github.com/Mesh-LLM/mesh-packaging/pull/16)
+completed the packaging conversion at merge commit
+`76c619bcdd82773e159248a2282187b0b2973daa`. It consumes the immutable
+product-v2 release index and upstream Node addon artifacts without rebuilding
+the CLI, runtime, or addons. Typed native, Homebrew, and npm selectors fail
+closed; publication still requires each complete release validation set.
 
-There is no successful current product-v2 full baseline yet. Run
-[30460399813](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30460399813)
-correctly failed closed because v0.74.0 predates that schema. After the MeshLLM
-graph produces a complete product-v2 release:
+Each selected row now restores and re-verifies the exact upstream product,
+produces and installs one native package, builds one final image from
+digest-resolved bases, tests that exact image, and records immutable package,
+product, host, runtime, base-image, upstream, and source identities. Trusted
+publication stages by digest and promotes the tested digest without rebuilding;
+an existing identical immutable tag is a no-op and a mismatch fails closed.
+Dry runs have read-only repository permissions and no registry login or push.
 
-1. add typed `validate_npm` and `validate_homebrew` dispatch inputs so a
-   filtered native canary runs only the requested rows; publication still
-   requires the complete release validation set;
-2. replace provider-name/source-build blacklists with positive runner-class
-   and artifact-consumer contracts;
-3. publish a canonical release artifact index from MeshLLM containing source
-   SHA, product/host/runtime/addon assets, schemas, and digests;
-4. publish Node addon producer artifacts from MeshLLM so packaging assembles
-   npm instead of rebuilding five targets;
-5. resolve every OCI base to a digest, build the final image once at an
-   immutable staging reference, test that exact digest, and promote versioned
-   and moving tags with registry manifest operations. An identical existing
-   version tag is a no-op; a mismatch fails closed;
-6. replace the global native-package matrix barrier with a reusable per-row
-   product restore → package → package QA → image → image QA pipeline;
-7. key BuildKit scope by base digest, product digest, architecture, distro,
-   Dockerfile inputs, and cache schema. PR canaries are restore-only; trusted
-   main/release may write. Re-verify every restored product;
-8. establish one filtered product-v2 canary, one full non-publishing main run,
-   and one full release rehearsal before publication;
-9. route eligible CPU-only Linux/ARM, Windows assembly, and compatible macOS
-   rows to Depot only after the main repository canary and runner-group trust
-   gates pass.
+The first successful complete product-v2 baseline is
+[run 30593548823](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30593548823)
+at PR head `ffd240c099d38dc1e16cb252f30b347a6d835399`. It completed in
+37m 10s with 41 successful jobs, 15 intentional publication-only skips, and
+zero failures. It validated all 11 native package rows, exact local final
+images, package installation, deterministic client readiness, Homebrew, all
+five upstream Node addon lanes, prerelease npm assembly, host invariants, and
+immutable release evidence against MeshLLM `v0.75.0-rc1`. No package, image,
+npm artifact, release asset, or production tag was published.
 
-The first successful product-v2 full run becomes the compatibility and timing
-baseline. Record per-row queue, download, package, QA, image, cache, artifact,
-and promotion timings plus the release-index and base-image digests.
+The merged default branch then passed
+[Packaging Precheck 30595367445](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30595367445)
+at the merge commit. Eligible packaging rows remain GitHub-hosted until the
+same Depot runner-group trust boundary required by the main repository is
+administratively verified and separately rolled out.
 
 ## Measurement and rollout gates
 
@@ -478,9 +496,10 @@ Rollout sequence:
 2. restrict the persistent `mesh-llm` GPU runner group to protected workflow
    entry points before scheduling untrusted public-repository workflows on
    those devices;
-3. restrict the Depot-backed `Default` runner group to the repository and only
-   `depot-canary.yml@refs/heads/main`, then enable public-repository access;
-4. run the allowed-main and denied-feature-ref canaries;
+3. verify with organization-admin authority that the Depot-backed `Default`
+   runner group is restricted to this repository and exact protected
+   default-branch workflow refs; correct it immediately if not;
+4. retain the completed allowed-main cold/warm and denied-feature-ref evidence;
 5. compare `-4`, `-8`, and `-16` using Depot CPU/memory/disk utilization data;
 6. allowlist main CI plus only the hardened reusable producers that directly
    allocate Depot runners, then canary routing, quality, and the Linux product
@@ -491,7 +510,9 @@ Rollout sequence:
 9. allowlist `release.yml@refs/heads/main` and exercise the non-publishing,
    non-secret runtime/composition producers. Tag-push publishing remains hosted;
 10. keep all PR-event code hosted while automatic Depot Cache is enabled;
-11. migrate packaging only after product-v2 and addon contracts are stable.
+11. retain the completed packaging conversion and product-v2 rehearsal
+    evidence; route any eligible packaging rows to Depot only through a
+    separately reviewed trust rollout.
 
 Rollback for the currently implemented trusted lanes is one
 repository-variable change:

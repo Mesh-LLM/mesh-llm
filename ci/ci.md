@@ -347,6 +347,17 @@ flowchart TD
   `Mesh-LLM/mesh-packaging`, which owns package, GHCR, and npm publication.
   Prereleases publish immutable GitHub Release inputs but never dispatch
   downstream publication.
+- Merged
+  [`mesh-packaging#16`](https://github.com/Mesh-LLM/mesh-packaging/pull/16)
+  makes that downstream graph artifact-only and build-once. Its complete
+  `v0.75.0-rc1` dry rehearsal
+  [30593548823](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30593548823)
+  passed 41 jobs with 15 intentional publication-only skips, exercising all
+  11 native package rows, exact final-image QA, Homebrew, all five upstream
+  Node addon lanes, npm assembly, host invariants, and immutable evidence.
+  Merge commit `76c619bcdd82773e159248a2282187b0b2973daa` then passed
+  default-branch Packaging Precheck
+  [30595367445](https://github.com/Mesh-LLM/mesh-packaging/actions/runs/30595367445).
 - `fly-deploy-console.yml` is a manual (`workflow_dispatch`) deploy of the
   `mesh-llm-console` Fly app. It builds the image on Fly's remote builders from
   `fly/Dockerfile` and authenticates with the app-scoped `FLY_API_TOKEN` repo
@@ -392,7 +403,7 @@ role-isolated topology. The planned split has these prerequisites:
   contract even for Node-free images;
 - `self-hosted-*` runner/device overlays are added and verified last.
 
-The first runner-image migration phase in draft
+The first runner-image migration phase merged in
 [`mesh-llm-runner-images#9`](https://github.com/Mesh-LLM/mesh-llm-runner-images/pull/9)
 implements one immutable chain:
 `build once -> stage digest -> verify that exact digest -> promote digest`.
@@ -410,6 +421,11 @@ later second public ROCm 7.2 AMD64 publication build took 18m 03s. That run
 demonstrates duplicate construction, but it did not retain authoritative
 compressed-size or controlled cold-pull evidence. Role-size and pull-time
 thresholds remain proposed rollout gates until measured.
+
+Merge commit `4e79e68e22a5ea9bb1eedf9a2a7e7ccfc20b2bca`
+passed the trusted main
+[run 30522118156](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30522118156)
+with 35 successful jobs, four intentional skips, and zero failures.
 
 The replacement PR
 [run 30504335079](https://github.com/Mesh-LLM/mesh-llm-runner-images/actions/runs/30504335079)
@@ -548,10 +564,29 @@ an exact `Mesh-LLM/mesh-llm` main-ref `workflow_dispatch`; it is read from the
 immutable event payload and is not a reusable-workflow input.
 
 Depot-managed runners register in the organization `Default` runner group.
-Before enabling public access, restrict that group to
-`Mesh-LLM/mesh-llm` and exact default-branch workflow refs, beginning with
-`depot-canary.yml@refs/heads/main`. The existing `mesh-llm` runner group owns
-the dedicated GPU scale sets and is not the Depot group.
+Live main-ref dispatches prove that this public repository can now allocate
+ephemeral Depot runners. The available token cannot re-read organization
+runner-group settings (403), so verify the exact repository/workflow
+restrictions with organization-admin authority before enabling the global
+gate. The existing `mesh-llm` runner group owns the dedicated GPU scale sets
+and is not the Depot group.
+
+Cold/warm six-label canaries
+[30525111329](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30525111329)
+and
+[30525247727](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30525247727),
+denied feature-ref canary
+[30593657371](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30593657371),
+exhaustive prerelease
+[30586470043](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30586470043),
+and warm non-GPU release canary
+[30590595090](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30590595090)
+all passed. The warm release canary used nine Depot jobs, restored both static
+ABI inputs without compilation, and produced roughly 95% sccache hit rates in
+both Linux native-SDK consumers. The feature-ref run was skipped before runner
+allocation and its main-identical temporary ref was removed.
+`DEPOT_RUNNERS_ENABLED` remains unset because `main` lacks an enforceable
+review/status protection boundary.
 
 Current GitHub-hosted PR jobs may share the `mesh-llm` native-cache key
 namespace because GitHub scopes `actions/cache` PR writes to the merge ref;
