@@ -229,7 +229,31 @@ source ~/.bashrc
 ```
 
 #### 2. Enable Hyper-V & Windows Firewall for WSL2 Mirrored Mode
-If you use WSL2 `networkingMode=mirrored` in `~/.wslconfig`, Windows 11 manages a separate **Hyper-V VM Firewall** that defaults to `Block` for inbound network traffic when third-party security software (e.g. Norton, McAfee) is present. 
+If you use WSL2 `networkingMode=mirrored` in `%UserProfile%\.wslconfig`, Windows 11 manages a separate **Hyper-V VM Firewall** that defaults to `Block` for inbound network traffic when third-party security software (e.g. Norton, McAfee) is present. 
+
+##### 2.1 Configure Mirrored Networking (`.wslconfig`) Part 1
+Create or edit `C:\Users\<username>\.wslconfig` on the Windows host:
+
+```powershell
+notepad $env:USERPROFILE\.wslconfig
+```
+
+##### 2.2 Configure Mirrored Networking (`.wslconfig`) Part 2
+
+```ini
+[wsl2]
+networkingMode=mirrored
+autoProxy=true
+```
+
+##### 2.3 Restart WSL in Powershell
+
+Restart WSL in PowerShell:
+```powershell
+wsl --shutdown
+```
+
+##### 2.4 Enable Windows Firewall Needs
 
 To allow incoming LAN connections to the Web UI (`3131`) and P2P QUIC mesh transport (`9337`), run **PowerShell as Administrator** on the Windows host:
 
@@ -259,7 +283,6 @@ mesh-llm --llama-flavor cuda serve \
   --listen-all \
   --auto
 ```
-
 
 ## Documentation hub
 
