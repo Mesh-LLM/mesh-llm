@@ -421,29 +421,14 @@ async fn add_worker_backend(
     false
 }
 
-/// Rank the fan-out pool into actor priority order for the asymmetric tool
-/// path: best tool-caller first, as indices into `models`.
+/// Rank the pool best-tool-caller-first (indices into `models`) for the actor.
 ///
-/// The actor is the single model that emits the executable tool call, so it
-/// must be the best available tool-caller. That decision combines signals only
-/// the host can see:
-///
-///   1. gossiped `tool_use` capability (`Supported` > `Likely` > `None`),
-///   2. model size tier as a tiebreak (big-tier first — bigger models are
-///      usually the stronger reasoners for the acting pass),
-///   3. stable index order as a final tiebreak for determinism.
-///
-/// Capabilities are matched to pool entries by canonical base name, so a peer
-/// advertising `unsloth/Qwen3-8B-GGUF:Q4_K_M` still supplies the capability for
-/// a pool entry named `Qwen3-8B-Q4_K_M`. Models with no capability evidence
-/// fall to `None`, which lands them behind any known tool-caller but still
-/// ahead of nothing — the reducer fallback keeps them usable.
-///
-/// Returns indices into `models` (never empty when `models` is non-empty). The
-/// engine treats an empty vec as "no host guidance" and derives its own order,
-/// so we always return a full ranking here.
+/// Ordering: gossiped `tool_use` (`Supported` > `Likely` > `None`), then size
+/// tier, then stable index. Capabilities match pool entries by canonical base
+/// name (so `unsloth/Qwen3-8B-GGUF:Q4_K_M` supplies `Qwen3-8B-Q4_K_M`). Always
+/// returns a full ranking; the engine reads an empty vec as "no host guidance".
 async fn compute_actor_candidates(node: &mesh::Node, models: &[moa::ModelEntry]) -> Vec<usize> {
-    // canonical base name -> best tool_use level seen for it across the mesh.
+    // canonical base name -> best tool_use level seen across the mesh.
     let mut tool_use_by_base: std::collections::HashMap<String, crate::models::CapabilityLevel> =
         std::collections::HashMap::new();
     for descriptor in node.all_served_model_descriptors().await {

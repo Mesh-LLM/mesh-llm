@@ -263,20 +263,11 @@ pub fn pack_for_reducer_selected(
 ) -> (Vec<Value>, Option<Value>) {
     let user_text = session.last_user_text();
 
-    // Synthesis framing.
-    //
-    // The wording below is adapted from Together's MoA aggregator prompt —
-    // the one their AlpacaEval 2.0 / MT-Bench numbers were produced with.
-    // Two parts carry the weight: telling the model to *synthesize* rather
-    // than relay, and warning it that some inputs may be wrong. Without the
-    // second clause a reducer tends to average its inputs, including the
-    // confidently-wrong ones.
-    //
-    // What we keep that Together does not: the per-worker attribution, the
-    // structured tool proposals below, and a length bound on each payload.
-    // Their `inject_references_to_messages` concatenates unbounded
-    // references into one system prompt, which is why their own code has an
-    // "Input + output is longer than max_position_id" branch.
+    // Synthesis framing adapted from Together's MoA aggregator prompt: tell the
+    // model to synthesize (not relay) and warn that inputs may be wrong — the
+    // second clause stops it averaging in confidently-wrong inputs. We add
+    // per-worker attribution and per-payload length bounds (below), which
+    // Together omits.
     let mut system_parts = vec![
         augmented_system_prompt_for_mode(session, has_tools),
         String::new(),
@@ -327,22 +318,10 @@ pub fn pack_for_reducer_selected(
     )
 }
 
-/// Pack context for the **actor** in the asymmetric (Hermes-style) tool path.
-///
-/// Unlike [`pack_for_reducer_selected`], this is not synthesis-on-disagreement.
-/// The references ran *tool-free* — they only advise — and the actor is the one
-/// model that actually holds the tools and decides the action. So the framing
-/// is "here is advice, now you act", not "you all disagreed, reconcile".
-///
-/// Why asymmetric at all: tool authority should track capability, not
-/// popularity. A majority of weak models proposing the wrong tool must not
-/// outvote the one strong tool-caller. Letting only the actor emit tools
-/// removes that failure class entirely instead of patching a vote.
-///
-/// The advice is rendered as prose (references never carry `tool_calls` here),
-/// length-bounded per model, and truncation-labelled — same discipline as the
-/// reducer packing. `has_tools`/`selected_tool_names` attach the *real* tools
-/// to the actor's request even though the references never saw them.
+/// Pack context for the actor in the asymmetric tool path: "here is advice, now
+/// you act" (not the reducer's "you disagreed, reconcile"). Advice is prose,
+/// per-model length-bounded and truncation-labelled; `has_tools` /
+/// `selected_tool_names` attach the real tools the advisors never saw.
 pub fn pack_for_actor(
     session: &Session,
     references: &[WorkerOutput],
@@ -364,8 +343,7 @@ pub fn pack_for_actor(
     ];
 
     if references.is_empty() {
-        // No advice arrived in time (slow/absent peers). The actor still acts
-        // on the user request alone — degraded, but never blocked.
+        // No advice in time (slow/absent peers): actor proceeds alone.
         system_parts.push(String::new());
         system_parts
             .push("(No advice from other models arrived in time — proceed on your own.)".into());

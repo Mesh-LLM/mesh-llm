@@ -1,29 +1,10 @@
-//! Asymmetric (Hermes-style) tool turn.
+//! Asymmetric tool turn: the best tool-caller (the "actor") acts with the real
+//! tools; every other model advises tool-free. Tool authority tracks capability,
+//! not a majority vote — which removes the majority-of-weakness failure class
+//! (weak models outvoting the one strong tool-caller) by construction.
 //!
-//! For a fresh request that carries tools, MoA no longer fans out tools to
-//! every worker and votes on the result. Instead:
-//!
-//! 1. **References** — every model *except* the actor runs **tool-free** and
-//!    only advises in prose.
-//! 2. **Actor** — the single best tool-caller acts on that advice with the
-//!    real tools and emits the tool call (or a direct answer).
-//!
-//! Why: tool authority should track *capability*, not *popularity*. The old
-//! majority vote let a popular-but-wrong tool choice from several weak models
-//! outvote the one strong tool-caller that picked correctly (observed:
-//! `qwen3-32b` alone chose `run_command` for a failing-test triage while the
-//! smaller models all chose `list_dir`, and the vote shipped `list_dir`). An
-//! actor model removes that failure class rather than patching the arithmetic.
-//!
-//! This is the shape Together's MoA and Nous's Hermes both use, and it stays a
-//! pure stateless `/v1/chat/completions` turn: references are regenerated from
-//! the caller's transcript each request, and the external client still owns the
-//! tool-execution loop.
-//!
-//! Mesh flavour: references are gathered with a bounded wait (proceed at a
-//! majority of advisors, never block on the slow tail), and the actor is called
-//! through the hedged ladder so a slow or broken best-candidate falls through
-//! to the next tool-capable peer instead of stalling the turn.
+//! Stays a stateless `/v1/chat/completions` turn: references are rebuilt from
+//! the transcript each request, and the client still owns tool execution.
 
 use crate::backend::{SamplingParams, call_backend};
 use crate::context;
@@ -49,18 +30,14 @@ pub(crate) async fn handle_tool_query(
     forced_tool: Option<&ForcedToolChoice>,
     start: Instant,
 ) -> TurnResult {
-    // Actor priority order: best tool-caller first. `reducer_candidates`
-    // honours the host-supplied `actor_candidates` (gossiped `tool_use` +
-    // size + health) and falls back to name-derived size tier.
+    // Best tool-caller first (host `actor_candidates`, else name-derived tier).
     let candidates = reducer_candidates(config);
     let actor_top = candidates.first().map(|(name, _)| name.clone());
 
-    // References advise tool-free; the actor is excluded so it doesn't burn a
-    // redundant advisory pass on the critical path.
+    // Actor excluded from advisors so it doesn't pay a redundant advisory pass.
     let (references, mut summaries) =
         dispatch_and_gather_references(config, session, actor_top.as_deref()).await;
 
-    // Actor acts on the advice, this time WITH the real tools.
     let selected = selected_tool_names_for_turn(session, allowed_tools);
     let (messages, tools) = context::pack_for_actor(session, &references, true, &selected);
 
@@ -85,8 +62,7 @@ pub(crate) async fn handle_tool_query(
         hedge,
     );
 
-    // Record the actor as a distinct Reducer-role summary so observability can
-    // tell advisory passes from the acting pass.
+    // Reducer role marks the acting pass, distinct from advisory summaries.
     summaries.push(WorkerSummary {
         model: actor_name,
         role: WorkerRole::Reducer,
@@ -120,10 +96,9 @@ async fn dispatch_and_gather_references(
 
     for a in &assignments {
         if Some(a.model_name.as_str()) == exclude {
-            continue; // the actor advises itself implicitly when it acts
+            continue; // the actor advises itself when it acts
         }
-        // Tool-free: has_tools=false, no selected tool names. References
-        // reason in prose; they never emit an executable call.
+        // Tool-free: advisors reason in prose, never emit an executable call.
         let packed = context::pack_for_worker_selected(session, a.role, false, &[]);
         let model_name = a.model_name.clone();
         let role = a.role;
@@ -155,10 +130,8 @@ async fn dispatch_and_gather_references(
         return (Vec::new(), Vec::new());
     }
 
-    // Bounded wait: proceed once a majority of advisors are in, capped at the
-    // worker timeout. On a mixed/public mesh this is the "don't wait for
-    // perfect when good-enough advice is already in hand" guardrail — slow or
-    // absent peers can't hold up the actor.
+    // Bounded wait: proceed at a majority of advisors so slow/absent peers on a
+    // mixed mesh can't hold up the actor.
     let min_references = dispatched.len().div_ceil(2).max(1);
     gather_references(
         &mut join_set,
