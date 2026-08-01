@@ -58,7 +58,18 @@ impl KvStageIntegration {
         token_start: u64,
         token_ids: &[i32],
     ) -> Vec<PrefillKvIdentity> {
-        self.lookup_candidate_token_counts(token_ids.len() as u64)
+        let mut token_counts = self.lookup_candidate_token_counts(token_ids.len() as u64);
+        if self.payload.is_exact_state() {
+            token_counts.extend(
+                self.exact_states
+                    .lock()
+                    .expect("exact state cache lock poisoned")
+                    .token_counts_at_most(token_ids.len() as u64),
+            );
+            token_counts.sort_unstable_by(|left, right| right.cmp(left));
+            token_counts.dedup();
+        }
+        token_counts
             .into_iter()
             .map(|token_count| {
                 self.prefill_identity(
@@ -94,6 +105,8 @@ impl KvStageIntegration {
 
 #[cfg(test)]
 mod tests {
+    use crate::kv_integration::ExactStateExtra;
+    use skippy_cache::ExactStatePayload;
     use skippy_protocol::{
         LoadMode, SCHEMA_VERSION, StageConfig, StageKvCacheConfig, StageKvCacheMode,
         StageKvCachePayload,
@@ -234,5 +247,45 @@ mod tests {
 
         assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
         assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+    }
+
+    #[test]
+    fn exact_state_lookup_probes_cached_non_grid_prefix_length() {
+        let config = StageConfig {
+            ctx_size: 8192,
+            kv_cache: Some(StageKvCacheConfig {
+                payload: StageKvCachePayload::KvRecurrent,
+                min_tokens: 256,
+                shared_prefix_stride_tokens: 128,
+                max_entries: 1,
+                ..test_config().kv_cache.expect("test cache config")
+            }),
+            ..test_config()
+        };
+        let kv = KvStageIntegration::from_config(&config)
+            .unwrap()
+            .expect("cache enabled");
+        let base = test_base();
+        let recorded_tokens = (0..2214).collect::<Vec<_>>();
+        let recorded = kv.prefill_identity(&config, &base, 0, &recorded_tokens);
+        kv.exact_states
+            .lock()
+            .expect("exact state cache lock poisoned")
+            .record(
+                recorded.page_id.clone(),
+                recorded.identity.token_count,
+                ExactStatePayload::kv_recurrent(Vec::new(), vec![1]),
+                ExactStateExtra::default(),
+            );
+        let mut lookup_tokens = recorded_tokens.clone();
+        lookup_tokens.extend(100_000..100_017);
+
+        let lookup = kv
+            .lookup_identities(&config, &base, 0, &lookup_tokens)
+            .into_iter()
+            .find(|identity| identity.identity.token_count == 2214)
+            .expect("lookup should probe the retained exact-state prefix length");
+
+        assert_eq!(lookup.page_id, recorded.page_id);
     }
 }

@@ -81,6 +81,18 @@ impl<E: Clone> ExactStateCache<E> {
         })
     }
 
+    pub fn token_counts_at_most(&self, max_token_count: u64) -> Vec<u64> {
+        let mut token_counts = self
+            .entries
+            .values()
+            .map(|entry| entry.token_count)
+            .filter(|token_count| *token_count <= max_token_count)
+            .collect::<Vec<_>>();
+        token_counts.sort_unstable_by(|left, right| right.cmp(left));
+        token_counts.dedup();
+        token_counts
+    }
+
     pub fn record(
         &mut self,
         page_id: String,
@@ -197,6 +209,21 @@ mod tests {
         assert!(cache.lookup("first").is_none());
         assert!(cache.lookup("second").is_some());
         assert_eq!(cache.stats().entries, 1);
+    }
+
+    #[test]
+    fn cached_token_counts_are_bounded_sorted_and_deduplicated() {
+        let mut cache = ExactStateCache::new(4, 0);
+        for (page_id, token_count) in [("a", 96), ("b", 160), ("c", 96), ("d", 224)] {
+            cache.record(
+                page_id.to_string(),
+                token_count,
+                ExactStatePayload::full_state(vec![1]),
+                (),
+            );
+        }
+
+        assert_eq!(cache.token_counts_at_most(200), vec![160, 96]);
     }
 
     #[test]
