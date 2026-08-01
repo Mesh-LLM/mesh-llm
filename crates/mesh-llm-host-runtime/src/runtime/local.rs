@@ -133,12 +133,17 @@ impl LocalRuntimeModelHandle {
                 let status = model.status();
                 let ctx_size = status.ctx_size as u64;
                 let now = current_time_unix_ms();
+                // Lane data may be a cached snapshot, so report when it was
+                // captured: a wedged runtime then shows a success time that
+                // stops advancing instead of looking fresh every tick.
+                let captured_unix_ms =
+                    unix_nanos_to_unix_ms(status.sessions_captured_at_unix_nanos).unwrap_or(now);
                 Some(RuntimeLlamaSlotsSnapshot {
                     status: RuntimeLlamaEndpointStatus::Ready,
                     model: Some(model_name.to_string()),
                     instance_id: instance_id.map(str::to_string),
                     last_attempt_unix_ms: Some(now),
-                    last_success_unix_ms: Some(now),
+                    last_success_unix_ms: Some(captured_unix_ms),
                     error: None,
                     slots: status
                         .lanes
@@ -180,6 +185,15 @@ pub(super) fn current_time_unix_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+/// Convert a unix-nanosecond capture time to unix milliseconds. `None` for a
+/// non-positive input, meaning "never captured" rather than the epoch.
+fn unix_nanos_to_unix_ms(unix_nanos: i64) -> Option<u64> {
+    u64::try_from(unix_nanos)
+        .ok()
+        .filter(|nanos| *nanos > 0)
+        .map(|nanos| nanos / 1_000_000)
 }
 
 pub(super) struct ManagedModelController {
@@ -847,4 +861,25 @@ pub(super) fn skippy_stage_activation_width(activation_width: u32, model_ref: &s
             "activation width {activation_width} for {model_ref} exceeds skippy stage ABI limit"
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unix_nanos_to_unix_ms;
+
+    #[test]
+    fn unix_nanos_to_unix_ms_converts_a_real_capture_time() {
+        assert_eq!(
+            unix_nanos_to_unix_ms(1_700_000_000_123_000_000),
+            Some(1_700_000_000_123)
+        );
+    }
+
+    #[test]
+    fn unix_nanos_to_unix_ms_treats_non_positive_as_never_captured() {
+        // A zero or negative capture time means "never read", not "read at the
+        // epoch". Callers must not project 1970 as a success timestamp.
+        assert_eq!(unix_nanos_to_unix_ms(0), None);
+        assert_eq!(unix_nanos_to_unix_ms(-1), None);
+    }
 }

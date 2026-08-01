@@ -123,8 +123,12 @@ pub(crate) struct SkippyModelStatus {
     pub(crate) projector_path: Option<String>,
     pub(crate) ctx_size: u32,
     pub(crate) lane_count: u32,
+    /// Per-lane session state, possibly a frozen snapshot. Display only.
     pub(crate) lanes: Vec<SkippySessionLaneStatus>,
     pub(crate) max_session_tokens: u64,
+    /// When [`Self::lanes`] and [`Self::max_session_tokens`] were read, which
+    /// may be arbitrarily earlier than this status.
+    pub(crate) sessions_captured_at_unix_nanos: i64,
     pub(crate) n_batch: Option<u32>,
     pub(crate) n_ubatch: Option<u32>,
     pub(crate) n_gpu_layers: i32,
@@ -1156,6 +1160,7 @@ fn status_from_parts(
             })
             .collect(),
         max_session_tokens: embedded.sessions.max_session_tokens,
+        sessions_captured_at_unix_nanos: embedded.sessions_captured_at_unix_nanos,
         n_batch: config.n_batch,
         n_ubatch: config.n_ubatch,
         n_gpu_layers: config.n_gpu_layers,
@@ -1306,6 +1311,7 @@ mod tests {
                 total_session_tokens: 0,
                 lanes: vec![],
             },
+            sessions_captured_at_unix_nanos: 111,
             telemetry: TelemetryStats {
                 queued: 0,
                 sent: 0,

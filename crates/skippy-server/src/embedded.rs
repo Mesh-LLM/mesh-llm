@@ -43,7 +43,15 @@ pub struct EmbeddedRuntimeStatus {
     pub started_at_unix_nanos: i64,
     pub stopped_at_unix_nanos: Option<i64>,
     pub last_error: Option<String>,
+    /// Session stats, possibly a cached snapshot rather than a live read.
+    ///
+    /// `lane_count` is authoritative (it comes from `StageConfig`); everything
+    /// else may be frozen. Display only — never gate a decision on it.
     pub sessions: RuntimeSessionStats,
+    /// When [`Self::sessions`] was actually read, which may be arbitrarily
+    /// earlier than this status. Derive any freshness signal from this rather
+    /// than from the current time.
+    pub sessions_captured_at_unix_nanos: i64,
     pub telemetry: TelemetryStats,
 }
 
@@ -74,15 +82,21 @@ pub struct SkippyRuntimeHandle {
     runtime: Arc<Mutex<RuntimeState>>,
     telemetry: Telemetry,
     status: Arc<Mutex<RuntimeHandleState>>,
-    /// Last session stats read successfully out of [`Self::runtime`].
+    /// Last session stats read out of [`Self::runtime`], and when.
     ///
-    /// `RuntimeState` is held for the entire duration of a decode loop, so a
-    /// status read that locks it blocks for as long as the turn runs (tens of
-    /// seconds on a large model with a long prompt). Status is observability:
-    /// it must never queue behind inference. Reads take the runtime lock
-    /// opportunistically and refresh this cache; when inference holds it, they
-    /// serve the last published value instead of blocking.
-    last_session_stats: Arc<Mutex<RuntimeSessionStats>>,
+    /// A native call (long prefill, decode batch) holds the runtime lock while
+    /// it runs, so status reads take it opportunistically and fall back to
+    /// this cache rather than queueing behind inference. The capture time
+    /// travels with the value so a stalled runtime is distinguishable from an
+    /// idle one.
+    last_session_stats: Arc<Mutex<Captured<RuntimeSessionStats>>>,
+}
+
+/// A value together with when it was actually read from its source.
+#[derive(Clone, Debug)]
+struct Captured<V> {
+    value: V,
+    captured_at_unix_nanos: i64,
 }
 
 #[derive(Debug)]
@@ -106,10 +120,13 @@ impl SkippyRuntimeHandle {
         runtime: Arc<Mutex<RuntimeState>>,
         telemetry: Telemetry,
     ) -> Self {
-        let initial_session_stats = runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .session_stats();
+        let initial_session_stats = Captured {
+            value: runtime
+                .lock()
+                .expect("runtime lock poisoned")
+                .session_stats(),
+            captured_at_unix_nanos: now_unix_nanos(),
+        };
         Self {
             config: Arc::new(config),
             topology: topology.map(Arc::new),
@@ -211,15 +228,9 @@ impl SkippyRuntimeHandle {
         self.telemetry.clone()
     }
 
-    /// Session stats without ever waiting on the inference lock.
-    ///
-    /// `RuntimeState` is held across a whole decode loop, so `lock()` here
-    /// would make every status/readiness/dashboard read queue behind the
-    /// in-flight turn. Take the lock only if it is free — refreshing the cache
-    /// when we get it — and otherwise serve the last published snapshot. Stats
-    /// are advisory, so a value that is one turn stale is strictly better than
-    /// a caller blocked for the length of a generation.
-    fn session_stats_non_blocking(&self) -> RuntimeSessionStats {
+    /// Session stats without ever waiting on the inference lock, and when they
+    /// were read. A cached value carries the earlier read's time, not now.
+    fn session_stats_non_blocking(&self) -> Captured<RuntimeSessionStats> {
         read_without_blocking(&self.runtime, &self.last_session_stats, |runtime| {
             runtime.session_stats()
         })
@@ -227,7 +238,10 @@ impl SkippyRuntimeHandle {
 
     pub fn status(&self) -> EmbeddedRuntimeStatus {
         let handle = self.status.lock().expect("runtime status lock poisoned");
-        let sessions = self.session_stats_non_blocking();
+        let Captured {
+            value: sessions,
+            captured_at_unix_nanos: sessions_captured_at_unix_nanos,
+        } = self.session_stats_non_blocking();
         EmbeddedRuntimeStatus {
             state: handle.state,
             run_id: self.config.run_id.clone(),
@@ -242,6 +256,7 @@ impl SkippyRuntimeHandle {
             stopped_at_unix_nanos: handle.stopped_at_unix_nanos,
             last_error: handle.last_error.clone(),
             sessions,
+            sessions_captured_at_unix_nanos,
             telemetry: self.telemetry.stats(),
         }
     }
@@ -437,27 +452,27 @@ fn finish_server_status(status: &Arc<Mutex<ServerHandleState>>, result: &Result<
     }
 }
 
-/// Read a value derived from `source` without waiting on its lock.
+/// Read a value derived from `source` without waiting on its lock, reporting
+/// when it was actually read.
 ///
-/// `source` here is the inference runtime, whose mutex is held for the whole
-/// duration of a decode loop. Blocking on it from an observability path makes
-/// status/readiness reads queue behind the in-flight turn — and because those
-/// reads happen on async executor threads, a blocking acquire also parks a
-/// worker for the length of a generation. Take the lock only when it is free,
-/// refreshing `cache`; otherwise serve the last value we published.
+/// `source` is the inference runtime, whose mutex a native call holds for as
+/// long as it runs. Blocking on it from an observability path makes status
+/// reads queue behind that work, and since those reads happen on async
+/// executor threads it also parks a worker. So: take the lock only when free,
+/// refreshing `cache`; otherwise serve the last published value.
 ///
-/// Staleness is deliberately unbounded: under sustained load every
-/// opportunistic read can lose the race, so the snapshot may lag by many
-/// turns. That is acceptable only because these stats are observability —
-/// nothing admits, routes, evicts or limits on them (`lane_count` reaching
-/// mesh gossip comes from `StageConfig`, not from here). Do not reuse this
-/// helper for a value that gates a decision.
+/// Staleness is unbounded — under sustained load every read can lose the race.
+/// That is only safe because the capture time makes it visible, so callers
+/// must propagate it rather than stamp the value as freshly observed. Nothing
+/// may gate admission, routing, eviction or shutdown on these values.
 ///
-/// A poisoned `source` still panics, exactly as the previous blocking
-/// `lock().expect(..)` did: a poisoned inference runtime means generation
-/// panicked, and reporting healthy cached stats over the top of that would
-/// hide a real failure.
-fn read_without_blocking<S, V>(source: &Mutex<S>, cache: &Mutex<V>, read: impl FnOnce(&S) -> V) -> V
+/// A poisoned `source` still panics, as the previous blocking `lock().expect`
+/// did: cached stats over a panicked runtime would hide a real failure.
+fn read_without_blocking<S, V>(
+    source: &Mutex<S>,
+    cache: &Mutex<Captured<V>>,
+    read: impl FnOnce(&S) -> V,
+) -> Captured<V>
 where
     V: Clone,
 {
@@ -465,11 +480,15 @@ where
         Ok(guard) => {
             let value = read(&guard);
             drop(guard);
-            *cache.lock().expect("stats cache lock poisoned") = value.clone();
-            value
+            let captured = Captured {
+                value,
+                captured_at_unix_nanos: now_unix_nanos(),
+            };
+            *cache.lock().expect("stats cache lock poisoned") = captured.clone();
+            captured
         }
-        // Inference holds the runtime: serve the last published snapshot
-        // instead of blocking for the rest of the turn.
+        // Inference holds the runtime: serve the last published snapshot,
+        // carrying the time it was taken, instead of blocking.
         Err(TryLockError::WouldBlock) => cache.lock().expect("stats cache lock poisoned").clone(),
         Err(TryLockError::Poisoned(error)) => panic!("runtime lock poisoned: {error}"),
     }
@@ -575,9 +594,37 @@ mod tests {
 
         let cached = handle.session_stats_non_blocking();
 
-        assert_eq!(cached.lane_count, 2, "priming must publish real lanes");
-        assert_eq!(cached.lanes.len(), 2);
+        assert_eq!(
+            cached.value.lane_count, 2,
+            "priming must publish real lanes"
+        );
+        assert_eq!(cached.value.lanes.len(), 2);
+        assert!(
+            cached.captured_at_unix_nanos > 0,
+            "priming must record when it captured"
+        );
         drop(held);
+    }
+
+    #[test]
+    fn status_does_not_claim_a_fresh_capture_while_the_runtime_is_busy() {
+        // The false-freshness defect: a contended read must report the time of
+        // the earlier successful read, so a runtime wedged inside a native
+        // call shows a capture time that stops advancing rather than looking
+        // freshly observed on every tick.
+        let handle = test_handle(2);
+
+        let live = handle.status();
+        assert!(live.sessions_captured_at_unix_nanos > 0);
+
+        let held = handle.runtime.lock().expect("lock runtime");
+        let while_busy = handle.status();
+        drop(held);
+
+        assert_eq!(
+            while_busy.sessions_captured_at_unix_nanos, live.sessions_captured_at_unix_nanos,
+            "a cached read must not advance the capture time"
+        );
     }
 
     #[test]
@@ -591,41 +638,68 @@ mod tests {
         assert!(status.runtime_loaded);
     }
 
+    fn empty_cache(value: u32) -> Mutex<Captured<u32>> {
+        Mutex::new(Captured {
+            value,
+            captured_at_unix_nanos: 0,
+        })
+    }
+
     #[test]
     fn read_without_blocking_refreshes_cache_when_lock_is_free() {
         let source = Mutex::new(7u32);
-        let cache = Mutex::new(0u32);
+        let cache = empty_cache(0);
 
-        assert_eq!(read_without_blocking(&source, &cache, |v| *v), 7);
-        assert_eq!(*cache.lock().unwrap(), 7, "a free lock must refresh cache");
+        let read = read_without_blocking(&source, &cache, |v| *v);
+
+        assert_eq!(read.value, 7);
+        assert!(
+            read.captured_at_unix_nanos > 0,
+            "a live read must report when it happened"
+        );
+        assert_eq!(
+            cache.lock().unwrap().value,
+            7,
+            "a free lock must refresh cache"
+        );
     }
 
     #[test]
     fn read_without_blocking_serves_cache_instead_of_waiting_on_inference() {
-        // The regression: RuntimeState is held for an entire decode loop. A
-        // status read must return the last published value immediately rather
-        // than block for the length of the turn.
+        // The regression: a long native call holds the runtime for as long as
+        // it runs. A status read must return the last published value
+        // immediately rather than block behind it.
         let source = Mutex::new(7u32);
-        let cache = Mutex::new(0u32);
+        let cache = empty_cache(0);
 
         // Prime the cache while the runtime is idle.
-        assert_eq!(read_without_blocking(&source, &cache, |v| *v), 7);
+        let live = read_without_blocking(&source, &cache, |v| *v);
+        assert_eq!(live.value, 7);
 
-        // Now inference holds the runtime lock for the whole turn.
+        // Now inference holds the runtime lock.
         let held = source.lock().expect("lock runtime");
 
         let observed = read_without_blocking(&source, &cache, |v| *v);
         assert_eq!(
-            observed, 7,
+            observed.value, 7,
             "a contended runtime must serve the cached snapshot, never block"
+        );
+        assert_eq!(
+            observed.captured_at_unix_nanos, live.captured_at_unix_nanos,
+            "a cached read must report the earlier capture time, not now"
         );
 
         drop(held);
 
-        // Once the turn ends, reads go live again.
+        // Once the call ends, reads go live again.
         *source.lock().unwrap() = 9;
-        assert_eq!(read_without_blocking(&source, &cache, |v| *v), 9);
-        assert_eq!(*cache.lock().unwrap(), 9);
+        let refreshed = read_without_blocking(&source, &cache, |v| *v);
+        assert_eq!(refreshed.value, 9);
+        assert!(
+            refreshed.captured_at_unix_nanos >= live.captured_at_unix_nanos,
+            "a fresh read must advance the capture time"
+        );
+        assert_eq!(cache.lock().unwrap().value, 9);
     }
 
     #[test]
@@ -635,7 +709,7 @@ mod tests {
         // over the top of that would report a healthy node, so this must keep
         // the pre-existing panic behaviour rather than fall back to the cache.
         let source = Mutex::new(7u32);
-        let cache = Mutex::new(0u32);
+        let cache = empty_cache(0);
         let _ = std::panic::catch_unwind(|| {
             let _guard = source.lock().unwrap();
             panic!("inference exploded");
