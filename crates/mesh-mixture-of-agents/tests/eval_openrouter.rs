@@ -1806,6 +1806,363 @@ async fn correction_rescues_weak_tool_caller() {
     );
 }
 
+// ─── Committee study: reasoning/answer turns ─────────────────────────
+//
+// Tests where MoA's value actually lives per Together's validated claim:
+// open-ended ANSWER QUALITY on realistic agent-session turns (reasoning over
+// tool output, planning, explanation) — NOT tool selection.
+//
+// Fixed aggregator throughout; only its input varies (mirrors Together's own
+// ablation and keeps the comparison clean):
+//   A alone     — aggregator answers with no peer input
+//   B committee  — aggregator synthesizes 3 diverse-family peer drafts (1 round)
+//   C layered    — same, but peers first refine seeing each other's drafts
+//                  (Together's `layers`), then aggregator synthesizes
+//
+// Judged pairwise by an out-of-pool, different-family judge (gpt-4o-mini),
+// POSITION-SWAPPED: a win counts only if it survives both orders, else tie.
+// Output lengths are logged (not truncated) so a length-vs-preference check is
+// possible — the expert's required control against verbosity bias.
+
+fn committee_aggregator() -> String {
+    std::env::var("MOA_COMMITTEE_AGGREGATOR").unwrap_or_else(|_| "qwen/qwen3-32b".to_string())
+}
+
+fn committee_peers() -> Vec<String> {
+    std::env::var("MOA_COMMITTEE_PEERS")
+        .unwrap_or_else(|_| {
+            "qwen/qwen3-14b,mistralai/mistral-small-3.2-24b-instruct,minimax/minimax-m2.5"
+                .to_string()
+        })
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn committee_judge() -> String {
+    std::env::var("MOA_COMMITTEE_JUDGE").unwrap_or_else(|_| "openai/gpt-4o-mini".to_string())
+}
+
+#[derive(serde::Deserialize)]
+struct CommitteeTask {
+    id: String,
+    category: String,
+    prompt: String,
+}
+
+#[derive(serde::Deserialize)]
+struct CommitteeFixture {
+    tasks: Vec<CommitteeTask>,
+}
+
+fn load_committee_tasks() -> Vec<CommitteeTask> {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/committee_tasks.json"
+    );
+    let data = std::fs::read_to_string(path).expect("read committee fixture");
+    serde_json::from_str::<CommitteeFixture>(&data)
+        .expect("parse committee fixture")
+        .tasks
+}
+
+const COMMITTEE_SYNTH_PROMPT: &str = "You have been given a user request and several candidate responses from other \
+     models. Synthesize them into one high-quality response. Critically evaluate them — \
+     some may be biased or incorrect, and agreement is not proof of correctness. Do not \
+     merely copy the longest or most confident; produce the most accurate, well-structured \
+     reply. Be direct.";
+
+async fn plain_answer(backend: &OpenRouterBackend, model: &str, prompt: &str) -> Option<String> {
+    let msgs = vec![json!({"role": "user", "content": prompt})];
+    let body = backend
+        .chat_completion_retrying(
+            model,
+            &msgs,
+            None,
+            1024,
+            SamplingParams::worker().with_thinking(Some(false)),
+        )
+        .await
+        .ok()?;
+    let t = response_text(&body);
+    (!t.trim().is_empty()).then_some(t)
+}
+
+fn synth_messages(prompt: &str, drafts: &[String]) -> Vec<Value> {
+    let mut refs = String::new();
+    for (i, d) in drafts.iter().enumerate() {
+        refs.push_str(&format!("\n[Response {}]:\n{}\n", i + 1, d));
+    }
+    vec![
+        json!({"role": "system", "content": format!("{COMMITTEE_SYNTH_PROMPT}\n\nCandidate responses:{refs}")}),
+        json!({"role": "user", "content": prompt}),
+    ]
+}
+
+async fn synthesize(
+    backend: &OpenRouterBackend,
+    aggregator: &str,
+    prompt: &str,
+    drafts: &[String],
+) -> Option<String> {
+    if drafts.is_empty() {
+        return None;
+    }
+    let body = backend
+        .chat_completion_retrying(
+            aggregator,
+            &synth_messages(prompt, drafts),
+            None,
+            1024,
+            SamplingParams::reducer().with_thinking(Some(false)),
+        )
+        .await
+        .ok()?;
+    let t = response_text(&body);
+    (!t.trim().is_empty()).then_some(t)
+}
+
+/// One peer refines its own draft after seeing all peers' drafts (Together's
+/// layer 2+): the peer, not the aggregator, does the cross-pollination.
+async fn refine(
+    backend: &OpenRouterBackend,
+    model: &str,
+    prompt: &str,
+    all_drafts: &[String],
+) -> Option<String> {
+    let mut refs = String::new();
+    for (i, d) in all_drafts.iter().enumerate() {
+        refs.push_str(&format!("\n[Response {}]:\n{}\n", i + 1, d));
+    }
+    let msgs = vec![
+        json!({"role": "system", "content": format!("{COMMITTEE_SYNTH_PROMPT}\n\nCandidate responses:{refs}")}),
+        json!({"role": "user", "content": prompt}),
+    ];
+    let body = backend
+        .chat_completion_retrying(
+            model,
+            &msgs,
+            None,
+            1024,
+            SamplingParams::worker().with_thinking(Some(false)),
+        )
+        .await
+        .ok()?;
+    let t = response_text(&body);
+    (!t.trim().is_empty()).then_some(t)
+}
+
+/// Judge verdict for one ordered pair: which response better answers the prompt.
+/// Returns 1 (first better), 2 (second better), or 0 (tie/uncertain).
+async fn judge_once(
+    backend: &OpenRouterBackend,
+    judge: &str,
+    prompt: &str,
+    first: &str,
+    second: &str,
+) -> Option<u8> {
+    let j = format!(
+        "User request:\n{prompt}\n\n--- Response A ---\n{first}\n\n--- Response B ---\n{second}\n\n\
+         Which response better answers the request (more accurate, complete, and useful)? \
+         Reply with exactly one token: A, B, or TIE.",
+    );
+    let body = backend
+        .chat_completion_retrying(
+            judge,
+            &[json!({"role": "user", "content": j})],
+            None,
+            8,
+            SamplingParams::reducer().with_thinking(Some(false)),
+        )
+        .await
+        .ok()?;
+    let v = response_text(&body).trim().to_ascii_uppercase();
+    if v.starts_with('A') {
+        Some(1)
+    } else if v.starts_with('B') {
+        Some(2)
+    } else {
+        Some(0)
+    }
+}
+
+/// Position-swapped pairwise judgment of x vs y. Returns +1 (x wins), -1 (y
+/// wins), 0 (tie) — a win only if it survives BOTH orderings.
+async fn judge_pair(
+    backend: &OpenRouterBackend,
+    judge: &str,
+    prompt: &str,
+    x: &str,
+    y: &str,
+) -> i8 {
+    let fwd = judge_once(backend, judge, prompt, x, y).await; // A=x B=y
+    let rev = judge_once(backend, judge, prompt, y, x).await; // A=y B=x
+    match (fwd, rev) {
+        (Some(1), Some(2)) => 1,  // x preferred both times
+        (Some(2), Some(1)) => -1, // y preferred both times
+        _ => 0,                   // disagreement or tie => tie
+    }
+}
+
+#[derive(serde::Serialize)]
+struct CommitteeTrial {
+    draw: usize,
+    task_id: String,
+    category: String,
+    /// +1 committee(B) beats alone(A), -1 A beats B, 0 tie.
+    b_vs_a: i8,
+    /// +1 layered(C) beats alone(A).
+    c_vs_a: i8,
+    /// +1 layered(C) beats committee(B).
+    c_vs_b: i8,
+    len_a: usize,
+    len_b: usize,
+    len_c: usize,
+}
+
+/// Does a committee of diverse peers beat the aggregator alone on realistic
+/// reasoning/answer turns? Writes per-trial JSONL; prints win/tie/loss and mean
+/// lengths. Pilot scale by default.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live network + cost; run explicitly with --ignored"]
+async fn committee_beats_solo_on_reasoning() {
+    let Some(key) = api_key_or_skip("committee") else {
+        return;
+    };
+    let draws = std::env::var("MOA_COMMITTEE_DRAWS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    let out_path = std::env::var("MOA_COMMITTEE_OUT")
+        .unwrap_or_else(|_| "/tmp/moa_committee.jsonl".to_string());
+    let aggregator = committee_aggregator();
+    let peers = committee_peers();
+    let judge = committee_judge();
+    let backend = OpenRouterBackend::new(key);
+    let tasks = load_committee_tasks();
+
+    eprintln!("\n=== committee study (reasoning/answer turns) ===");
+    eprintln!("aggregator={aggregator}");
+    eprintln!("peers={peers:?}");
+    eprintln!(
+        "judge={judge}  tasks={}  draws={draws}  -> {out_path}\n",
+        tasks.len()
+    );
+
+    let mut lines: Vec<CommitteeTrial> = Vec::new();
+    for draw in 0..draws {
+        for task in &tasks {
+            let p = &task.prompt;
+            // A: aggregator alone.
+            let Some(a) = plain_answer(&backend, &aggregator, p).await else {
+                continue;
+            };
+            // Peer drafts (round 1).
+            let mut drafts = Vec::new();
+            for peer in &peers {
+                if let Some(d) = plain_answer(&backend, peer, p).await {
+                    drafts.push(d);
+                }
+            }
+            if drafts.len() < 2 {
+                continue; // not enough peers to form a committee this draw
+            }
+            // B: synthesize round-1 drafts.
+            let Some(b) = synthesize(&backend, &aggregator, p, &drafts).await else {
+                continue;
+            };
+            // C: peers refine seeing each other, then synthesize.
+            let mut refined = Vec::new();
+            for peer in &peers {
+                if let Some(r) = refine(&backend, peer, p, &drafts).await {
+                    refined.push(r);
+                }
+            }
+            let c = match synthesize(&backend, &aggregator, p, &refined).await {
+                Some(c) => c,
+                None => b.clone(),
+            };
+
+            let b_vs_a = judge_pair(&backend, &judge, p, &b, &a).await;
+            let c_vs_a = judge_pair(&backend, &judge, p, &c, &a).await;
+            let c_vs_b = judge_pair(&backend, &judge, p, &c, &b).await;
+
+            lines.push(CommitteeTrial {
+                draw,
+                task_id: task.id.clone(),
+                category: task.category.clone(),
+                b_vs_a,
+                c_vs_a,
+                c_vs_b,
+                len_a: a.len(),
+                len_b: b.len(),
+                len_c: c.len(),
+            });
+            eprintln!(
+                "  draw {draw} {:22} B/A={:+} C/A={:+} C/B={:+}  len A{} B{} C{}",
+                task.id,
+                b_vs_a,
+                c_vs_a,
+                c_vs_b,
+                a.len(),
+                b.len(),
+                c.len()
+            );
+        }
+    }
+
+    let mut buf = String::new();
+    for l in &lines {
+        buf.push_str(&serde_json::to_string(l).expect("serialize"));
+        buf.push('\n');
+    }
+    std::fs::write(&out_path, buf).expect("write jsonl");
+
+    let tally = |sel: fn(&CommitteeTrial) -> i8| {
+        let (mut w, mut t, mut l) = (0, 0, 0);
+        for x in &lines {
+            match sel(x) {
+                1 => w += 1,
+                0 => t += 1,
+                _ => l += 1,
+            }
+        }
+        (w, t, l)
+    };
+    let (bw, bt, bl) = tally(|x| x.b_vs_a);
+    let (cw, ct, cl) = tally(|x| x.c_vs_a);
+    let (cbw, cbt, cbl) = tally(|x| x.c_vs_b);
+    let mean = |f: fn(&CommitteeTrial) -> usize| {
+        if lines.is_empty() {
+            0
+        } else {
+            lines.iter().map(f).sum::<usize>() / lines.len()
+        }
+    };
+    eprintln!(
+        "\n  trials={}  (position-swapped; win only if consistent both orders)",
+        lines.len()
+    );
+    eprintln!("  committee(B) vs alone(A):  win {bw}  tie {bt}  loss {bl}");
+    eprintln!("  layered(C)   vs alone(A):  win {cw}  tie {ct}  loss {cl}");
+    eprintln!("  layered(C)   vs committee(B): win {cbw}  tie {cbt}  loss {cbl}");
+    eprintln!(
+        "  mean output chars: A {}  B {}  C {}  (length-vs-preference control)",
+        mean(|x| x.len_a),
+        mean(|x| x.len_b),
+        mean(|x| x.len_c),
+    );
+    eprintln!(
+        "\n  PILOT — directional. A defensible claim needs ~100 preregistered prompts, k>=3, bootstrap CI, and a length-controlled preference check.\n"
+    );
+
+    assert!(
+        !lines.is_empty(),
+        "no committee trials completed — API likely unavailable"
+    );
+}
+
 /// The headline claim: MoA over the pool is at least as tool-coherent as the
 /// best single model in the pool, measured on the same agentic tasks under the
 /// same thinking policy.
