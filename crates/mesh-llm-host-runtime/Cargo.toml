@@ -55,7 +55,7 @@ skippy-runtime = { path = "../skippy-runtime", version = "0.72.1"  }
 skippy-ffi = { path = "../skippy-ffi", version = "0.72.1", default-features = false }
 skippy-server = { path = "../skippy-server", version = "0.72.1"  }
 skippy-topology = { path = "../skippy-topology", version = "0.72.1"  }
-iroh = "1.0.0"
+iroh = { version = "1.0.0", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
