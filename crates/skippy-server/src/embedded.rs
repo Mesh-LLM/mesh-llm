@@ -94,6 +94,37 @@ struct RuntimeHandleState {
 }
 
 impl SkippyRuntimeHandle {
+    /// Assemble a ready handle around an already-loaded runtime.
+    ///
+    /// Shared by both loaders so the stats cache is primed exactly once, in one
+    /// place: priming has to happen while `runtime` is still unshared and
+    /// uncontended, so that a status read which loses the race to the very
+    /// first generation reports real lanes instead of zeros.
+    fn ready(
+        config: StageConfig,
+        topology: Option<StageTopology>,
+        runtime: Arc<Mutex<RuntimeState>>,
+        telemetry: Telemetry,
+    ) -> Self {
+        let initial_session_stats = runtime
+            .lock()
+            .expect("runtime lock poisoned")
+            .session_stats();
+        Self {
+            config: Arc::new(config),
+            topology: topology.map(Arc::new),
+            runtime,
+            telemetry,
+            status: Arc::new(Mutex::new(RuntimeHandleState {
+                state: EmbeddedState::Ready,
+                started_at_unix_nanos: now_unix_nanos(),
+                stopped_at_unix_nanos: None,
+                last_error: None,
+            })),
+            last_session_stats: Arc::new(Mutex::new(initial_session_stats)),
+        }
+    }
+
     pub fn load(options: EmbeddedRuntimeOptions) -> Result<Self> {
         validate_config(&options.config, options.topology.as_ref())?;
         let telemetry = Telemetry::new(
@@ -118,26 +149,12 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_ready",
             lifecycle_attrs(&options.config),
         );
-        // Prime the stats snapshot while the runtime is still unshared and
-        // uncontended, so a read that loses the race to the very first
-        // generation reports real lanes instead of zeros.
-        let initial_session_stats = runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .session_stats();
-        Ok(Self {
-            config: Arc::new(options.config),
-            topology: options.topology.map(Arc::new),
+        Ok(Self::ready(
+            options.config,
+            options.topology,
             runtime,
             telemetry,
-            status: Arc::new(Mutex::new(RuntimeHandleState {
-                state: EmbeddedState::Ready,
-                started_at_unix_nanos: now_unix_nanos(),
-                stopped_at_unix_nanos: None,
-                last_error: None,
-            })),
-            last_session_stats: Arc::new(Mutex::new(initial_session_stats)),
-        })
+        ))
     }
 
     pub fn load_with_open_events(
@@ -170,26 +187,12 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_ready",
             lifecycle_attrs(&options.config),
         );
-        // Prime the stats snapshot while the runtime is still unshared and
-        // uncontended, so a read that loses the race to the very first
-        // generation reports real lanes instead of zeros.
-        let initial_session_stats = runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .session_stats();
-        Ok(Self {
-            config: Arc::new(options.config),
-            topology: options.topology.map(Arc::new),
+        Ok(Self::ready(
+            options.config,
+            options.topology,
             runtime,
             telemetry,
-            status: Arc::new(Mutex::new(RuntimeHandleState {
-                state: EmbeddedState::Ready,
-                started_at_unix_nanos: now_unix_nanos(),
-                stopped_at_unix_nanos: None,
-                last_error: None,
-            })),
-            last_session_stats: Arc::new(Mutex::new(initial_session_stats)),
-        })
+        ))
     }
 
     pub fn config(&self) -> &StageConfig {
@@ -474,7 +477,119 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    use skippy_protocol::LoadMode;
+
     use super::*;
+
+    /// A ready handle over a modelless runtime.
+    ///
+    /// `status()` only reads lane bookkeeping and handle state, so it is
+    /// exercisable without loading a GGUF. Built through
+    /// [`SkippyRuntimeHandle::ready`] rather than by hand, so these tests cover
+    /// the real cache-priming path both loaders use.
+    fn test_handle(lane_count: u32) -> SkippyRuntimeHandle {
+        let config = StageConfig {
+            run_id: "run".to_string(),
+            topology_id: "topology".to_string(),
+            model_id: "org/model:Q4_K_M".to_string(),
+            package_ref: None,
+            manifest_sha256: None,
+            source_model_path: None,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path: None,
+            projector_path: None,
+            stage_id: "stage-0".to_string(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 1,
+            ctx_size: 512,
+            lane_count,
+            n_batch: None,
+            n_ubatch: None,
+            n_gpu_layers: 0,
+            mmap: None,
+            mlock: false,
+            cache_type_k: "f16".to_string(),
+            cache_type_v: "f16".to_string(),
+            flash_attn_type: Default::default(),
+            filter_tensors_on_load: false,
+            selected_device: None,
+            kv_cache: None,
+            native_mtp_enabled: false,
+            load_mode: LoadMode::RuntimeSlice,
+            bind_addr: "127.0.0.1:0".to_string(),
+            upstream: None,
+            downstream: None,
+        };
+        let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(lane_count)));
+        SkippyRuntimeHandle::ready(config, None, runtime, telemetry)
+    }
+
+    #[test]
+    fn status_does_not_block_while_inference_holds_the_runtime() {
+        // The actual regression, pinned at the call site rather than on the
+        // helper: `status()` must stay responsive while a decode loop owns the
+        // runtime mutex for the whole turn. Asserting on the helper alone does
+        // not catch `status()` being rewired back to a blocking `lock()`.
+        let handle = Arc::new(test_handle(3));
+
+        // Inference takes the runtime for the length of the turn.
+        let held = handle.runtime.lock().expect("lock runtime");
+
+        // Probe from a detached thread. It must not be joined: if `status()`
+        // regresses to a blocking acquire the probe never returns, and joining
+        // it would hang the suite instead of reporting a failure. The timeout
+        // below is the assertion.
+        let (tx, rx) = mpsc::channel();
+        thread::spawn({
+            let handle = Arc::clone(&handle);
+            move || {
+                let _ = tx.send(handle.status());
+            }
+        });
+        let probe = rx.recv_timeout(Duration::from_secs(5));
+
+        let status = probe.expect("status() must return while the runtime lock is held");
+        assert_eq!(
+            status.sessions.lane_count, 3,
+            "a contended read must serve the primed snapshot, not zeros"
+        );
+        assert_eq!(status.state, EmbeddedState::Ready);
+
+        drop(held);
+    }
+
+    #[test]
+    fn status_reports_primed_lanes_before_any_generation() {
+        // Regression for the zeros-on-the-first-turn defect: the cache is
+        // primed during construction, so even a read that never wins the
+        // runtime lock reports real lane counts.
+        let handle = test_handle(2);
+        let held = handle.runtime.lock().expect("lock runtime");
+
+        let cached = handle.session_stats_non_blocking();
+
+        assert_eq!(cached.lane_count, 2, "priming must publish real lanes");
+        assert_eq!(cached.lanes.len(), 2);
+        drop(held);
+    }
+
+    #[test]
+    fn status_reads_live_stats_when_the_runtime_is_idle() {
+        let handle = test_handle(4);
+
+        let status = handle.status();
+
+        assert_eq!(status.sessions.lane_count, 4);
+        assert_eq!(status.sessions.active_sessions, 0);
+        assert!(status.runtime_loaded);
+    }
 
     #[test]
     fn read_without_blocking_refreshes_cache_when_lock_is_free() {

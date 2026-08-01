@@ -115,6 +115,29 @@ struct ResidentLanePrefix {
 }
 
 impl RuntimeState {
+    /// A runtime with no model behind it, for tests that exercise code paths
+    /// which never touch the model.
+    ///
+    /// [`Self::session_stats`] is pure Rust over the lane bookkeeping below, so
+    /// status/observability behaviour can be tested without loading a GGUF.
+    /// Any call that reaches [`Self::model`] will dereference a null handle, so
+    /// this must not be used to drive inference.
+    #[cfg(test)]
+    pub(crate) fn new_modelless_for_test(lane_count: u32) -> Self {
+        Self {
+            model: StageModel::new_dummy(),
+            layer_start: 0,
+            layer_end: 1,
+            lane_count,
+            next_lane_index: 0,
+            free_lane_indices: Vec::new(),
+            sessions: BTreeMap::new(),
+            idle_sessions: Vec::new(),
+            session_token_counts: BTreeMap::new(),
+            session_resident_prefixes: BTreeMap::new(),
+        }
+    }
+
     pub fn prefill(&mut self, session_id: &str, token_ids: &[i32]) -> Result<()> {
         let session = self.session(session_id)?;
         session.prefill_chunked(token_ids)?;
