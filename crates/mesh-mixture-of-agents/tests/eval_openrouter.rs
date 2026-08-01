@@ -949,6 +949,313 @@ fn outcome_mark(o: &ArmOutcome) -> &'static str {
     }
 }
 
+// ─── Scaled ablation study (preregistered) ───────────────────────────
+//
+// The defensible version of the pilot: loads a preregistered 40-task fixture
+// (4 strata x 10), runs the same A/B/C arms at k>=10 draws with bounded
+// concurrency, and writes one JSONL trial line per (draw, task, arm). The
+// statistics (paired hierarchical bootstrap CI on net uplift) are computed by
+// `evals/moa-openrouter/analyze_ablation.py` from that JSONL — the live
+// measurement and the analysis are separate so the analysis is deterministic
+// and re-runnable.
+
+#[derive(Clone, serde::Deserialize)]
+struct AblationTask {
+    id: String,
+    category: String,
+    prompt: String,
+    /// Acceptable tools (a SET). Empty ⇒ pass iff NO tool call is emitted.
+    accept_tools: Vec<String>,
+    arg_must_contain: Option<String>,
+    #[serde(default)]
+    arg_must_not_contain: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct AblationFixture {
+    tasks: Vec<AblationTask>,
+}
+
+fn load_ablation_tasks() -> Vec<AblationTask> {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/ablation_tasks.json"
+    );
+    let data = std::fs::read_to_string(path).expect("read ablation fixture");
+    let f: AblationFixture = serde_json::from_str(&data).expect("parse ablation fixture");
+    f.tasks
+}
+
+/// Set-valued scorer: the emitted tool must be in `accept_tools` (or none, when
+/// the set is empty), and argument substring constraints must hold.
+fn scores_ablation(tools: &[(String, String)], task: &AblationTask) -> bool {
+    if task.accept_tools.is_empty() {
+        return tools.is_empty();
+    }
+    let Some((name, args)) = tools.first() else {
+        return false;
+    };
+    if !task.accept_tools.iter().any(|t| t == name) {
+        return false;
+    }
+    if let Some(needle) = &task.arg_must_contain
+        && !args.contains(needle.as_str())
+    {
+        return false;
+    }
+    if let Some(bad) = &task.arg_must_not_contain
+        && args.contains(bad.as_str())
+    {
+        return false;
+    }
+    true
+}
+
+fn session_for_prompt(prompt: &str) -> moa::session::Session {
+    let mut s = moa::session::Session::new();
+    s.ingest(
+        &[json!({"role": "user", "content": prompt})],
+        &Some(agent_tools()),
+    );
+    s
+}
+
+/// Run one actor arm against a fixture task, scoring set-valued acceptance.
+async fn actor_outcome(
+    backend: &OpenRouterBackend,
+    session: &moa::session::Session,
+    references: &[moa::normalize::WorkerOutput],
+    selected: &[String],
+    actor: &str,
+    task: &AblationTask,
+) -> ArmOutcome {
+    let (messages, tools) = moa::context::pack_for_actor(session, references, true, selected);
+    match backend
+        .chat_completion_retrying(
+            actor,
+            &messages,
+            tools.as_ref(),
+            2048,
+            SamplingParams::reducer().with_thinking(Some(false)),
+        )
+        .await
+    {
+        Ok(body) => {
+            if scores_ablation(&response_tool_calls(&body), task) {
+                ArmOutcome::Pass
+            } else {
+                ArmOutcome::Fail
+            }
+        }
+        Err(e) if e.starts_with("INFRA:") => ArmOutcome::Infra,
+        Err(_) => ArmOutcome::Fail,
+    }
+}
+
+#[derive(serde::Serialize)]
+struct TrialLine {
+    draw: usize,
+    task_id: String,
+    category: String,
+    arm: &'static str,
+    outcome: &'static str,
+    n_advisors: usize,
+}
+
+impl TrialLine {
+    fn new(
+        draw: usize,
+        task: &AblationTask,
+        arm: &'static str,
+        o: &ArmOutcome,
+        n_adv: usize,
+    ) -> Self {
+        Self {
+            draw,
+            task_id: task.id.clone(),
+            category: task.category.clone(),
+            arm,
+            outcome: match o {
+                ArmOutcome::Pass => "pass",
+                ArmOutcome::Fail => "fail",
+                ArmOutcome::Infra => "infra",
+            },
+            n_advisors: n_adv,
+        }
+    }
+}
+
+/// Gather tool-free advice for every task, concurrently (bounded).
+async fn gather_all_advice(
+    backend: &Arc<OpenRouterBackend>,
+    pool: &Arc<Vec<PoolModel>>,
+    tasks: &Arc<Vec<AblationTask>>,
+    actor: &str,
+    concurrency: usize,
+) -> Vec<Vec<moa::normalize::WorkerOutput>> {
+    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut js: tokio::task::JoinSet<(usize, Vec<moa::normalize::WorkerOutput>)> =
+        tokio::task::JoinSet::new();
+    for i in 0..tasks.len() {
+        let backend = backend.clone();
+        let pool = pool.clone();
+        let tasks = tasks.clone();
+        let actor = actor.to_string();
+        let sem = sem.clone();
+        js.spawn(async move {
+            let _permit = sem.acquire_owned().await.unwrap();
+            let session = session_for_prompt(&tasks[i].prompt);
+            (i, gather_advice(&backend, &pool, &session, &actor).await)
+        });
+    }
+    let mut out: Vec<Vec<moa::normalize::WorkerOutput>> =
+        (0..tasks.len()).map(|_| Vec::new()).collect();
+    while let Some(r) = js.join_next().await {
+        let (i, adv) = r.expect("advice task panicked");
+        out[i] = adv;
+    }
+    out
+}
+
+/// Run all three arms for every task in one draw, concurrently (bounded).
+async fn run_draw_arms(
+    backend: &Arc<OpenRouterBackend>,
+    tasks: &Arc<Vec<AblationTask>>,
+    advice: &Arc<Vec<Vec<moa::normalize::WorkerOutput>>>,
+    actor: &str,
+    selected: &Arc<Vec<String>>,
+    draw: usize,
+    concurrency: usize,
+) -> Vec<TrialLine> {
+    let n = tasks.len();
+    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut js: tokio::task::JoinSet<Vec<TrialLine>> = tokio::task::JoinSet::new();
+    for i in 0..n {
+        let backend = backend.clone();
+        let tasks = tasks.clone();
+        let advice = advice.clone();
+        let actor = actor.to_string();
+        let selected = selected.clone();
+        let sem = sem.clone();
+        js.spawn(async move {
+            let _permit = sem.acquire_owned().await.unwrap();
+            let task = &tasks[i];
+            let session = session_for_prompt(&task.prompt);
+            let real = &advice[i];
+            let shuffled = &advice[(i + 1) % n]; // advice generated for a different task
+            let a = actor_outcome(&backend, &session, &[], &selected, &actor, task).await;
+            let b = actor_outcome(&backend, &session, real, &selected, &actor, task).await;
+            let c = actor_outcome(&backend, &session, shuffled, &selected, &actor, task).await;
+            vec![
+                TrialLine::new(draw, task, "A", &a, 0),
+                TrialLine::new(draw, task, "B", &b, real.len()),
+                TrialLine::new(draw, task, "C", &c, shuffled.len()),
+            ]
+        });
+    }
+    let mut out = Vec::new();
+    while let Some(r) = js.join_next().await {
+        out.extend(r.expect("arm task panicked"));
+    }
+    out
+}
+
+/// The scaled, preregistered study. Writes per-trial JSONL for offline
+/// analysis; prints a compact summary. Defaults: 10 draws, concurrency 6,
+/// actor = strongest pool tool-caller (override with MOA_ABLATION_ACTOR to pin
+/// a weaker actor and probe rescue headroom).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live network + cost; run explicitly with --ignored"]
+async fn ablation_scaled_study() {
+    let Some(key) = api_key_or_skip("ablation_scaled") else {
+        return;
+    };
+    let draws = std::env::var("MOA_ABLATION_DRAWS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let concurrency = std::env::var("MOA_ABLATION_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(6);
+    let out_path =
+        std::env::var("MOA_ABLATION_OUT").unwrap_or_else(|_| "/tmp/moa_ablation.jsonl".to_string());
+    let actor = ablation_actor();
+
+    let backend = Arc::new(OpenRouterBackend::new(key));
+    let pool = Arc::new(mesh_pool());
+    let tasks = Arc::new(load_ablation_tasks());
+    let selected = Arc::new(agent_tools_names());
+
+    eprintln!("\n=== scaled ablation study ===");
+    eprintln!(
+        "actor={actor}  tasks={}  draws={draws}  concurrency={concurrency}  -> {out_path}\n",
+        tasks.len()
+    );
+
+    let mut lines: Vec<TrialLine> = Vec::new();
+    for draw in 0..draws {
+        let advice =
+            Arc::new(gather_all_advice(&backend, &pool, &tasks, &actor, concurrency).await);
+        let draw_lines = run_draw_arms(
+            &backend,
+            &tasks,
+            &advice,
+            &actor,
+            &selected,
+            draw,
+            concurrency,
+        )
+        .await;
+        let passes = |arm: &str| {
+            draw_lines
+                .iter()
+                .filter(|l| l.arm == arm && l.outcome == "pass")
+                .count()
+        };
+        eprintln!(
+            "  draw {draw}: A {}/{} B {}/{} C {}/{}",
+            passes("A"),
+            tasks.len(),
+            passes("B"),
+            tasks.len(),
+            passes("C"),
+            tasks.len(),
+        );
+        lines.extend(draw_lines);
+    }
+
+    let mut buf = String::new();
+    for l in &lines {
+        buf.push_str(&serde_json::to_string(l).expect("serialize trial"));
+        buf.push('\n');
+    }
+    std::fs::write(&out_path, buf).expect("write jsonl");
+
+    let total = lines.len();
+    let count = |arm: &str, oc: &str| {
+        lines
+            .iter()
+            .filter(|l| l.arm == arm && l.outcome == oc)
+            .count()
+    };
+    eprintln!("\n  wrote {total} trials to {out_path}");
+    eprintln!(
+        "  aggregate pass:  A {}  B {}  C {}  (of {} each)",
+        count("A", "pass"),
+        count("B", "pass"),
+        count("C", "pass"),
+        total / 3,
+    );
+    eprintln!("  run: python3 evals/moa-openrouter/analyze_ablation.py {out_path}\n");
+
+    let infra = lines.iter().filter(|l| l.outcome == "infra").count();
+    assert!(
+        infra * 4 < total.max(1),
+        "too many infra errors ({infra}/{total}) — API degraded, results not interpretable"
+    );
+}
+
 /// The headline claim: MoA over the pool is at least as tool-coherent as the
 /// best single model in the pool, measured on the same agentic tasks under the
 /// same thinking policy.
