@@ -104,9 +104,18 @@ These families now pass a cheap runtime-slice or package-backed text lane, but
 are not promoted to the customer support matrix until the remaining cache
 smoke, reviewed topology records, and family-specific policy notes are updated.
 
-```text
-Gemma text
-```
+- **Gemma text:** the sampled `gemma` artifact currently requires an F32
+  activation wire; see the exception below.
+- **Inkling text:** use pinned package
+  `meshllm/inkling-UD-Q2_K_XL-layers@9b4b91a7ddd978dd7a01679bc977f6e53777f2c7`.
+  It has 66 layers, activation width 6144, F32 wire, and Q4_0 K/V policy. PR
+  #1118 has proven ordinary all-CUDA Mesh planning and real split generation at
+  a 131,072-token allocation over a direct approximately 5 ms path, two
+  sequential native OpenAI tool loops, and exact-prefix cache restoration.
+  Promotion still requires a completed long-context continuation plus reliable
+  overlapping-request admission and changed-tail same-prefix cache reuse.
+  F16/Q8 wire, native MTP, and multimodal inference remain outside the current
+  claim.
 
 ## Exceptions
 

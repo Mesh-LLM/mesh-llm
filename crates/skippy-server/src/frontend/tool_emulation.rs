@@ -42,11 +42,11 @@ pub(super) const TOOL_CALL_MARKER: &str = "TOOL_CALL";
 /// true for every tools request) and `chat_parser` is always a non-empty PEG
 /// structure, so neither field distinguishes a tool-capable template.
 ///
-/// The signal that does distinguish them is `grammar_triggers`: when the jinja
-/// template natively describes tool calls, applying it with tools yields a
-/// tool-call grammar trigger (e.g. `<tool_call>`). A template with no native
-/// tool support (for example SmolLM2-135M) yields an empty `grammar_triggers`
-/// list. We treat a non-empty `grammar_triggers` as native tool-call support.
+/// Native tool templates expose either a sampling grammar trigger or semantic
+/// `tool*` tags in the serialized PEG response parser. The latter matters for
+/// formats such as Inkling: its PEG parser extracts tool calls, but it does not
+/// install a lazy sampling grammar. A template with no native tool support (for
+/// example SmolLM2-135M) exposes neither signal.
 pub(super) fn template_supports_native_tool_calls(metadata_json: &str) -> bool {
     let Ok(metadata) = serde_json::from_str::<Value>(metadata_json) else {
         return false;
@@ -55,6 +55,28 @@ pub(super) fn template_supports_native_tool_calls(metadata_json: &str) -> bool {
         .get("grammar_triggers")
         .and_then(Value::as_array)
         .is_some_and(|triggers| !triggers.is_empty())
+        || chat_parser_has_tool_semantics(&metadata)
+}
+
+fn chat_parser_has_tool_semantics(metadata: &Value) -> bool {
+    let Some(serialized_parser) = metadata.get("chat_parser").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(parser) = serde_json::from_str::<Value>(serialized_parser) else {
+        return false;
+    };
+    parser
+        .get("parsers")
+        .and_then(Value::as_array)
+        .is_some_and(|nodes| {
+            nodes.iter().any(|node| {
+                node.get("type").and_then(Value::as_str) == Some("tag")
+                    && node
+                        .get("tag")
+                        .and_then(Value::as_str)
+                        .is_some_and(|tag| tag == "tool" || tag.starts_with("tool-"))
+            })
+        })
 }
 
 /// Environment override, mirroring goose's `ToolCallingMode::ForceEmulated`.
@@ -532,14 +554,34 @@ mod tests {
     }
 
     #[test]
-    fn native_detection_uses_grammar_triggers() {
+    fn native_detection_uses_grammar_triggers_or_parser_semantics() {
         // Tool-capable template: applying it yields a tool-call grammar trigger.
         assert!(template_supports_native_tool_calls(
             r#"{"chat_format": 2, "grammar_triggers": [{"type": 1, "value": "<tool_call>"}]}"#
         ));
+        let inkling_parser = serde_json::json!({
+            "parsers": [
+                {"type": "literal", "literal": "<|content_invoke_tool_json|>"},
+                {"type": "tag", "child": 0, "tag": "tool-name"},
+                {"type": "tag", "child": 0, "tag": "tool-args"}
+            ],
+            "rules": {},
+            "root": 0
+        });
+        let inkling_metadata = serde_json::json!({
+            "chat_format": 2,
+            "grammar_triggers": [],
+            "chat_parser": inkling_parser.to_string()
+        });
+        assert!(template_supports_native_tool_calls(
+            &inkling_metadata.to_string()
+        ));
         // Non-tool-capable template (e.g. SmolLM2-135M): empty grammar triggers.
         assert!(!template_supports_native_tool_calls(
             r#"{"chat_format": 2, "grammar_triggers": []}"#
+        ));
+        assert!(!template_supports_native_tool_calls(
+            r#"{"grammar_triggers": [], "chat_parser": "{\"parsers\":[{\"type\":\"tag\",\"tag\":\"content\",\"child\":0}]}"}"#
         ));
         // Missing field or non-array is treated as non-native.
         assert!(!template_supports_native_tool_calls(

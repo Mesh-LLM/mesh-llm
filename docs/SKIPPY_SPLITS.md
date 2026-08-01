@@ -80,6 +80,83 @@ curl -sS http://127.0.0.1:9447/v1/chat/completions \
   -d '{"model":"meshllm/Qwen3-8B-Q4_K_M-layers","messages":[{"role":"user","content":"Reply with OK"}],"max_tokens":16}'
 ```
 
+## Try Inkling Q2 text splits (experimental)
+
+Inkling is available as an immutable layer package for operators who want to
+evaluate the text path before it is promoted to the customer support matrix:
+
+```text
+meshllm/inkling-UD-Q2_K_XL-layers@9b4b91a7ddd978dd7a01679bc977f6e53777f2c7
+```
+
+The package is about 296.5 GiB and contains 66 model layers plus shared and
+projector artifacts. Each node materializes only its assigned layer range, but
+the participating nodes still need enough aggregate GPU memory and per-host
+system memory for the model, KV cache, runtime workspaces, and headroom. Start
+every node with the same pinned package and context allocation:
+
+```bash
+# first node
+mesh-llm serve \
+  --model meshllm/inkling-UD-Q2_K_XL-layers@9b4b91a7ddd978dd7a01679bc977f6e53777f2c7 \
+  --split \
+  --ctx-size 131072 \
+  --bind-port 7842
+
+# each additional node
+mesh-llm serve \
+  --model meshllm/inkling-UD-Q2_K_XL-layers@9b4b91a7ddd978dd7a01679bc977f6e53777f2c7 \
+  --split \
+  --ctx-size 131072 \
+  --bind-port 7842 \
+  --join <token>
+```
+
+Use directly reachable, low-latency UDP paths. If a cloud provider remaps the
+container UDP port to a different public port, confirm that the invite advertises
+the reachable public endpoint and that runtime diagnostics report a direct path
+before paying the model-load cost. A relay-only peer is deliberately excluded
+from the Inkling split plan.
+
+Current Inkling policy uses an F32 activation wire and Q4_0 K/V cache. F16 and
+Q8 activation wires are not interchangeable shortcuts: both failed the current
+correctness policy. The published package has no default speculative strategy,
+and live native MTP and multimodal serving are not yet operator claims.
+
+PR #1118 has exercised ordinary all-CUDA Mesh planning on a direct roughly 5 ms
+Iroh/QUIC path using one 4 x 96 GB node and one 48 GB node. Automatic placement
+produced ranges `0..65 / 65..66`, four lanes, and a 131,072-token allocation;
+a short exact-answer request completed at 14.98 generated tokens/s. This is a
+runnable research topology, not a recommendation that the highly imbalanced
+range is optimal: the 65-layer head reserved about 589 GiB of CUDA host compute
+workspace. Do not size a host from package bytes and VRAM alone. Prefer multiple
+nearby nodes with enough system-memory headroom for a more balanced plan, and
+inspect `GET /api/runtime/stages` before inference.
+
+The same run completed two sequential OpenAI tool loops, each with two native
+structured tool calls, two intervening pressure turns, and final recall. Exact
+prompt replay restored all 3,531 prompt tokens and the native log scan found no
+fatal KV/decode/slot/eviction error. Both overlapping phases missed the full
+harness bar: one failed while opening a direct prediction-return sink; the other
+completed its tool behavior but reported zero changed-tail cached tokens. The
+separate same-prefix phase reported the same cache miss. Treat concurrent
+admission and suffix cache reuse as active validation gaps; the sequential tool
+and exact-cache results do not waive them.
+
+Use streaming for a cold long-context request. Inkling Q2 prefill at this scale
+can exceed the OpenAI frontend's 300-second non-streaming backend deadline; a
+non-streaming request then returns HTTP 504 even though native prefill is still
+healthy. Streaming establishes the response before prefill and also propagates
+client cancellation to the generation worker.
+
+Do not treat the 131,072-token allocation as a completed 128K workload proof.
+A 480,000-character repository prompt kept native prefill active for 3,429
+seconds without a fatal native-log pattern, but the two SSH-launched Mesh
+processes ended together before an SSE data event was delivered. The client saw
+an empty HTTP 200 stream with no content or usage. That probe is inconclusive;
+an operator-facing long-context claim still requires a completed response with
+reported prompt-token usage and correct far-prefix recall.
+
 ## Lock node order and layer ranges
 
 Maintainer and benchmark runs can replace automatic placement with an exact,

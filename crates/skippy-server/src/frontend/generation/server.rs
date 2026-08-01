@@ -23,7 +23,7 @@ use crate::frontend::prefill::PrefillChunkPolicyArgs;
 use crate::frontend::speculative::{
     SpeculativeDecodeConfig, load_standalone_speculative_config, standalone_ngram_proposal_limit,
 };
-use crate::kv_integration::{KvStageIntegration, model_requires_recurrent_state};
+use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::RuntimeState;
 use crate::runtime_state::load_runtime;
 use crate::telemetry::Telemetry;
@@ -308,14 +308,9 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         args.config.upstream.is_some(),
         args.config.downstream.is_some(),
     )?;
-    let speculative_windows_enabled = args.draft_model_path.is_some()
-        || args.speculative.native_mtp.enabled
-        || args.speculative.ngram.is_some();
-    if speculative_windows_enabled && model_requires_recurrent_state(&args.config) {
-        bail!(
-            "stage-state v11 positional speculation requires attention-only model stages; recurrent-state speculation is unsupported"
-        );
-    }
+    // Recurrent verify windows are supported by the native runtime's bounded
+    // recurrent checkpoints and accepted-prefix replay. Keep admission aligned
+    // with that recovery contract instead of rejecting these models up front.
     if args.config.stage_index != 0 || args.config.layer_start != 0 {
         bail!("embedded OpenAI serving is only supported on stage 0");
     }

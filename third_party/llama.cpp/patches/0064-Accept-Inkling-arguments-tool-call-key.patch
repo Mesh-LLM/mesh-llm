@@ -1,0 +1,94 @@
+From 1c496ba2c99581768a457d1e87ceeb5a41db7bc0 Mon Sep 17 00:00:00 2001
+From: Mesh LLM <dev@mesh-llm.invalid>
+Date: Sat, 1 Aug 2026 08:44:30 +1000
+Subject: [PATCH] Accept Inkling arguments tool-call key
+
+---
+ common/chat-peg-parser.cpp |  4 +++-
+ common/chat.cpp            |  5 ++++-
+ tests/test-chat.cpp        | 27 +++++++++++++++++++++++++++
+ 3 files changed, 34 insertions(+), 2 deletions(-)
+
+diff --git a/common/chat-peg-parser.cpp b/common/chat-peg-parser.cpp
+index db9004d84..d2e97bea7 100644
+--- a/common/chat-peg-parser.cpp
++++ b/common/chat-peg-parser.cpp
+@@ -751,7 +751,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+ 
+     auto tool_choices    = choice();
+     auto name_key_parser = literal("\"" + effective_name_key + "\"");
+-    auto args_key_parser = literal("\"" + effective_args_key + "\"");
++    auto args_key_parser = effective_args_key == "arguments"
++                               ? choice({ literal("\"arguments\""), literal("\"args\"") })
++                               : literal("\"" + effective_args_key + "\"");
+ 
+     for (const auto & tool_def : tools) {
+         if (!tool_def.contains("function")) {
+diff --git a/common/chat.cpp b/common/chat.cpp
+index 89f518716..3b71427d9 100644
+--- a/common/chat.cpp
++++ b/common/chat.cpp
+@@ -2465,11 +2465,14 @@ static common_chat_params common_chat_params_init_inkling(const common_chat_temp
+         // each call is its own block (role opener + bare name echo + JSON section);
+         // force_tool_calls=true makes the JSON section required so a pure-text answer fails the
+         // block cleanly; parallel calls are separate blocks, hence repeat + parallel=false
++        // The canonical TML history form uses "args", but Inkling can emit the
++        // OpenAI spelling "arguments". The standard parser's "arguments" alias
++        // accepts both generated forms.
+         auto tool_section = p.standard_json_tools(
+             INVOKE_TOOL, END_MESSAGE, inputs.tools, /* parallel_tool_calls = */ false,
+             /* force_tool_calls = */ true,
+             /* name_key          = */ "name",
+-            /* args_key          = */ "args",
++            /* args_key          = */ "arguments",
+             /* array_wrapped     = */ false);
+         // the name-echo scan must stop at any block marker: a greedy until(INVOKE_TOOL) returns
+         // NEED_MORE_INPUT mid-stream, which choice() treats as a match and shadows the text branch
+diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
+index fcf025d07..f57f6292a 100644
+--- a/tests/test-chat.cpp
++++ b/tests/test-chat.cpp
+@@ -436,6 +436,21 @@ static common_chat_tool special_function_tool{
+         "required": ["arg1"]
+     })",
+ };
++static common_chat_tool lookup_fixture_fact_tool{
++    /* .name = */ "lookup_fixture_fact",
++    /* .description = */ "Return one deterministic fact from the agent reliability fixture.",
++    /* .parameters = */ R"({
++        "type": "object",
++        "properties": {
++            "key": {
++                "type": "string",
++                "enum": ["codeword"]
++            }
++        },
++        "required": ["key"],
++        "additionalProperties": false
++    })",
++};
+ static common_chat_tool special_function_tool_with_optional_param{
+     /* .name = */ "special_function_with_opt",
+     /* .description = */ "I'm special but have optional stuff",
+@@ -2977,6 +2992,18 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+             .expect(message_assist_call)
+             .run();
+ 
++        // Inkling also emits the OpenAI key spelling despite the canonical
++        // history template using "args".
++        tst.test("lookup_fixture_fact<|content_invoke_tool_json|>"
++                 "{\"name\":\"lookup_fixture_fact\",\"arguments\":{\"key\":\"codeword\"}}<|end_message|>")
++            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
++            .tools({ lookup_fixture_fact_tool })
++            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
++            .enable_thinking(false)
++            .parallel_tool_calls(false)
++            .expect(simple_assist_msg("", "", "lookup_fixture_fact", "{\"key\":\"codeword\"}"))
++            .run();
++
+         // regression: the tool branch must not swallow a pure-text answer
+         tst.test("<|content_thinking|>I'm\nthinking<|end_message|>"
+                  "<|message_model|><|content_text|>Hello, world!\nWhat's up?<|end_message|>"
+-- 
+2.50.1 (Apple Git-155)
+

@@ -47,7 +47,7 @@ use crate::binary_transport::stage_execution::stage_mask;
 use crate::binary_transport::stage_execution::token_sideband_or_fill;
 use crate::binary_transport::stage_output_activation_capacity;
 use crate::binary_transport::write_stage_message_conditioned;
-use crate::kv_integration::{KvStageIntegration, model_requires_recurrent_state};
+use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::RuntimeState;
 use crate::telemetry::Telemetry;
 use crate::telemetry::now_unix_nanos;
@@ -139,7 +139,6 @@ fn handle_binary_connection_messages(
     session_tracker: &mut ConnectionSessionTracker,
 ) -> Result<()> {
     let connection_session_id = next_connection_session_id();
-    let positional_speculation_supported = !model_requires_recurrent_state(config);
     let max_deferred_prefill_replies =
         reply_credit_limit.unwrap_or_else(|| max_inflight.saturating_sub(1));
     let mut pending_prefill_replies = 0usize;
@@ -180,12 +179,6 @@ fn handle_binary_connection_messages(
         let session_id = binary_message_session_id(connection_session_id, &message);
         let session_key = session_id.to_string();
         session_tracker.touch(&session_key);
-        if message.kind == WireMessageKind::VerifyWindow && !positional_speculation_supported {
-            bail!(
-                "stage-state v11 positional speculation requires an attention-only stage; {} contains recurrent state",
-                config.stage_id
-            );
-        }
         emit_binary_message_received(
             telemetry,
             config,

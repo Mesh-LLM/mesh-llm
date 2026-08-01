@@ -23,8 +23,6 @@ mod identity;
 mod records;
 mod resident_prefix;
 
-pub(crate) use config::model_requires_recurrent_state;
-
 pub use records::{
     AttachedPage, ExactStateRecord, ExactStateRestore, LookupBatchOutcome, PrefillKvIdentity,
     RecordPageOutcome, ResidentActivationRecord, ResidentActivationRestore, ResidentPrefixRecord,
