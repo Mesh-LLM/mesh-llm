@@ -74,6 +74,15 @@ pub struct SkippyRuntimeHandle {
     runtime: Arc<Mutex<RuntimeState>>,
     telemetry: Telemetry,
     status: Arc<Mutex<RuntimeHandleState>>,
+    /// Last session stats read successfully out of [`Self::runtime`].
+    ///
+    /// `RuntimeState` is held for the entire duration of a decode loop, so a
+    /// status read that locks it blocks for as long as the turn runs (tens of
+    /// seconds on a large model with a long prompt). Status is observability:
+    /// it must never queue behind inference. Reads take the runtime lock
+    /// opportunistically and refresh this cache; when inference holds it, they
+    /// serve the last published value instead of blocking.
+    last_session_stats: Arc<Mutex<RuntimeSessionStats>>,
 }
 
 #[derive(Debug)]
@@ -120,6 +129,7 @@ impl SkippyRuntimeHandle {
                 stopped_at_unix_nanos: None,
                 last_error: None,
             })),
+            last_session_stats: Arc::new(Mutex::new(RuntimeSessionStats::default())),
         })
     }
 
@@ -164,6 +174,7 @@ impl SkippyRuntimeHandle {
                 stopped_at_unix_nanos: None,
                 last_error: None,
             })),
+            last_session_stats: Arc::new(Mutex::new(RuntimeSessionStats::default())),
         })
     }
 
@@ -183,13 +194,23 @@ impl SkippyRuntimeHandle {
         self.telemetry.clone()
     }
 
+    /// Session stats without ever waiting on the inference lock.
+    ///
+    /// `RuntimeState` is held across a whole decode loop, so `lock()` here
+    /// would make every status/readiness/dashboard read queue behind the
+    /// in-flight turn. Take the lock only if it is free — refreshing the cache
+    /// when we get it — and otherwise serve the last published snapshot. Stats
+    /// are advisory, so a value that is one turn stale is strictly better than
+    /// a caller blocked for the length of a generation.
+    fn session_stats_non_blocking(&self) -> RuntimeSessionStats {
+        read_without_blocking(&self.runtime, &self.last_session_stats, |runtime| {
+            runtime.session_stats()
+        })
+    }
+
     pub fn status(&self) -> EmbeddedRuntimeStatus {
         let handle = self.status.lock().expect("runtime status lock poisoned");
-        let sessions = self
-            .runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .session_stats();
+        let sessions = self.session_stats_non_blocking();
         EmbeddedRuntimeStatus {
             state: handle.state,
             run_id: self.config.run_id.clone(),
@@ -396,5 +417,89 @@ fn finish_server_status(status: &Arc<Mutex<ServerHandleState>>, result: &Result<
             status.state = EmbeddedState::Failed;
             status.last_error = Some(error.to_string());
         }
+    }
+}
+
+/// Read a value derived from `source` without ever waiting on its lock.
+///
+/// `source` here is the inference runtime, whose mutex is held for the whole
+/// duration of a decode loop. Blocking on it from an observability path makes
+/// status/readiness reads queue behind the in-flight turn — and because those
+/// reads happen on async executor threads, a blocking acquire also parks a
+/// worker for the length of a generation. Take the lock only when it is free,
+/// refreshing `cache`; otherwise serve the last value we published.
+///
+/// Returns `V::default()` only if the lock is contended *and* the cache has
+/// been poisoned, which cannot happen before the first successful read.
+fn read_without_blocking<S, V>(source: &Mutex<S>, cache: &Mutex<V>, read: impl FnOnce(&S) -> V) -> V
+where
+    V: Clone + Default,
+{
+    match source.try_lock() {
+        Ok(guard) => {
+            let value = read(&guard);
+            drop(guard);
+            if let Ok(mut cached) = cache.lock() {
+                cached.clone_from(&value);
+            }
+            value
+        }
+        Err(_) => cache
+            .lock()
+            .map(|cached| cached.clone())
+            .unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_without_blocking_refreshes_cache_when_lock_is_free() {
+        let source = Mutex::new(7u32);
+        let cache = Mutex::new(0u32);
+
+        assert_eq!(read_without_blocking(&source, &cache, |v| *v), 7);
+        assert_eq!(*cache.lock().unwrap(), 7, "a free lock must refresh cache");
+    }
+
+    #[test]
+    fn read_without_blocking_serves_cache_instead_of_waiting_on_inference() {
+        // The regression: RuntimeState is held for an entire decode loop. A
+        // status read must return the last published value immediately rather
+        // than block for the length of the turn.
+        let source = Mutex::new(7u32);
+        let cache = Mutex::new(0u32);
+
+        // Prime the cache while the runtime is idle.
+        assert_eq!(read_without_blocking(&source, &cache, |v| *v), 7);
+
+        // Now inference holds the runtime lock for the whole turn.
+        let held = source.lock().expect("lock runtime");
+
+        let observed = read_without_blocking(&source, &cache, |v| *v);
+        assert_eq!(
+            observed, 7,
+            "a contended runtime must serve the cached snapshot, never block"
+        );
+
+        drop(held);
+
+        // Once the turn ends, reads go live again.
+        *source.lock().unwrap() = 9;
+        assert_eq!(read_without_blocking(&source, &cache, |v| *v), 9);
+        assert_eq!(*cache.lock().unwrap(), 9);
+    }
+
+    #[test]
+    fn read_without_blocking_returns_default_before_any_successful_read() {
+        // Contended from the very first read: no snapshot exists yet, so the
+        // caller gets the type default rather than waiting on inference.
+        let source = Mutex::new(7u32);
+        let cache = Mutex::new(0u32);
+        let held = source.lock().expect("lock runtime");
+        assert_eq!(read_without_blocking(&source, &cache, |v| *v), 0);
+        drop(held);
     }
 }
