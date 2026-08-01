@@ -1256,6 +1256,556 @@ async fn ablation_scaled_study() {
     );
 }
 
+// ─── Matched-peer structured-proposal study ──────────────────────────
+//
+// Tests the one design cell the ablation did NOT: do *similar-strength,
+// different-family* peers make a fixed finalizer better at tool selection when
+// they contribute STRUCTURED candidate tool calls (not prose)?
+//
+// Arms share ONE fixed finalizer; only the candidate proposals it sees vary:
+//   A solo        — finalizer alone, no candidates
+//   B diverse     — 2 candidates, one each from 2 different-family peers
+//   C homogeneous — 2 candidates, both resampled from the finalizer's OWN model
+//
+// The key comparison is B − C (diverse minus homogeneous): it isolates
+// cross-family diversity from "just more samples of the same model". Reuses
+// the A/B/C JSONL schema so analyze_ablation.py computes it as `differential
+// B-C`. Also records oracle-union (did ANY candidate score): if oracle is high
+// but the final is not, the selector is the bug, not the pool.
+//
+// Candidates are structured `tool(args)`, never prose — prose advice is the
+// part the ablation already showed harms a strong actor.
+
+fn matched_finalizer() -> String {
+    std::env::var("MOA_MATCHED_FINALIZER").unwrap_or_else(|_| "qwen/qwen3-14b".to_string())
+}
+
+/// Different-family peers, similar-ish strength to the finalizer. Strength is
+/// approximate (no calibration set yet) — configurable so a matched trio can
+/// be pinned once one is defined.
+fn matched_diverse_peers() -> Vec<String> {
+    std::env::var("MOA_MATCHED_DIVERSE")
+        .unwrap_or_else(|_| {
+            "mistralai/mistral-small-3.2-24b-instruct,minimax/minimax-m2.5".to_string()
+        })
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Ask one model for a single structured tool-call proposal for the task.
+async fn structured_proposal(
+    backend: &OpenRouterBackend,
+    model: &str,
+    task: &AblationTask,
+) -> Option<(String, String)> {
+    let msgs = vec![json!({"role": "user", "content": task.prompt})];
+    let body = backend
+        .chat_completion_retrying(
+            model,
+            &msgs,
+            Some(&agent_tools()),
+            512,
+            SamplingParams::worker().with_thinking(Some(false)),
+        )
+        .await
+        .ok()?;
+    response_tool_calls(&body).into_iter().next()
+}
+
+/// Present anonymized candidate tool calls to the finalizer and let it emit the
+/// final call. Empty candidates ⇒ solo (finalizer acts with no suggestions).
+/// The scaffold is identical across arms except the candidate list.
+fn pack_finalizer(task: &AblationTask, candidates: &[(String, String)]) -> Vec<Value> {
+    let mut sys = String::from(
+        "You must choose the single best action for the user's request: emit exactly \
+         one tool call, or answer directly if no tool fits.",
+    );
+    if !candidates.is_empty() {
+        sys.push_str(
+            "\n\nOther models proposed these candidate tool calls (anonymized). Evaluate \
+             them critically — some may be wrong — then emit the single best tool call:\n",
+        );
+        for (i, (name, args)) in candidates.iter().enumerate() {
+            sys.push_str(&format!("  {}. {name}({args})\n", i + 1));
+        }
+    }
+    vec![
+        json!({"role": "system", "content": sys}),
+        json!({"role": "user", "content": task.prompt}),
+    ]
+}
+
+async fn finalizer_outcome(
+    backend: &OpenRouterBackend,
+    finalizer: &str,
+    task: &AblationTask,
+    candidates: &[(String, String)],
+) -> ArmOutcome {
+    let msgs = pack_finalizer(task, candidates);
+    match backend
+        .chat_completion_retrying(
+            finalizer,
+            &msgs,
+            Some(&agent_tools()),
+            2048,
+            SamplingParams::reducer().with_thinking(Some(false)),
+        )
+        .await
+    {
+        Ok(body) => {
+            if scores_ablation(&response_tool_calls(&body), task) {
+                ArmOutcome::Pass
+            } else {
+                ArmOutcome::Fail
+            }
+        }
+        Err(e) if e.starts_with("INFRA:") => ArmOutcome::Infra,
+        Err(_) => ArmOutcome::Fail,
+    }
+}
+
+#[derive(serde::Serialize)]
+struct MatchedTrial {
+    draw: usize,
+    task_id: String,
+    category: String,
+    arm: &'static str,
+    outcome: &'static str,
+    /// Did any candidate proposal in this arm score the task on its own?
+    oracle: bool,
+    n_candidates: usize,
+}
+
+/// Does cross-family structured diversity beat same-model resampling on tool
+/// turns? Writes A/B/C JSONL (A=solo, B=diverse, C=homogeneous) for
+/// analyze_ablation.py; the `differential B-C` it prints is diverse−homogeneous.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live network + cost; run explicitly with --ignored"]
+async fn matched_peer_structured_study() {
+    let Some(key) = api_key_or_skip("matched_peer") else {
+        return;
+    };
+    let draws = std::env::var("MOA_MATCHED_DRAWS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
+    let out_path =
+        std::env::var("MOA_MATCHED_OUT").unwrap_or_else(|_| "/tmp/moa_matched.jsonl".to_string());
+    let finalizer = matched_finalizer();
+    let peers = matched_diverse_peers();
+    let backend = OpenRouterBackend::new(key);
+    let tasks = load_ablation_tasks();
+
+    eprintln!("\n=== matched-peer structured-proposal study ===");
+    eprintln!("finalizer={finalizer}");
+    eprintln!("diverse peers={peers:?}");
+    eprintln!("tasks={}  draws={draws}  -> {out_path}\n", tasks.len());
+
+    let score_candidate =
+        |c: &(String, String), t: &AblationTask| scores_ablation(std::slice::from_ref(c), t);
+    let mut lines: Vec<MatchedTrial> = Vec::new();
+
+    for draw in 0..draws {
+        for task in &tasks {
+            // Diverse candidates: one per different-family peer.
+            let mut diverse = Vec::new();
+            for p in &peers {
+                if let Some(c) = structured_proposal(&backend, p, task).await {
+                    diverse.push(c);
+                }
+            }
+            // Homogeneous candidates: same count, resampled from finalizer's model.
+            let mut homo = Vec::new();
+            for _ in 0..diverse.len().max(1) {
+                if let Some(c) = structured_proposal(&backend, &finalizer, task).await {
+                    homo.push(c);
+                }
+            }
+
+            let a = finalizer_outcome(&backend, &finalizer, task, &[]).await;
+            let b = finalizer_outcome(&backend, &finalizer, task, &diverse).await;
+            let c = finalizer_outcome(&backend, &finalizer, task, &homo).await;
+
+            let mark = |o: &ArmOutcome| match o {
+                ArmOutcome::Pass => "pass",
+                ArmOutcome::Fail => "fail",
+                ArmOutcome::Infra => "infra",
+            };
+            let div_oracle = diverse.iter().any(|c| score_candidate(c, task));
+            let homo_oracle = homo.iter().any(|c| score_candidate(c, task));
+
+            lines.push(MatchedTrial {
+                draw,
+                task_id: task.id.clone(),
+                category: task.category.clone(),
+                arm: "A",
+                outcome: mark(&a),
+                oracle: false,
+                n_candidates: 0,
+            });
+            lines.push(MatchedTrial {
+                draw,
+                task_id: task.id.clone(),
+                category: task.category.clone(),
+                arm: "B",
+                outcome: mark(&b),
+                oracle: div_oracle,
+                n_candidates: diverse.len(),
+            });
+            lines.push(MatchedTrial {
+                draw,
+                task_id: task.id.clone(),
+                category: task.category.clone(),
+                arm: "C",
+                outcome: mark(&c),
+                oracle: homo_oracle,
+                n_candidates: homo.len(),
+            });
+        }
+        let dp = |arm: &str| {
+            lines
+                .iter()
+                .filter(|l| l.draw == draw && l.arm == arm && l.outcome == "pass")
+                .count()
+        };
+        eprintln!(
+            "  draw {draw}: A(solo) {}/{} B(diverse) {}/{} C(homo) {}/{}",
+            dp("A"),
+            tasks.len(),
+            dp("B"),
+            tasks.len(),
+            dp("C"),
+            tasks.len(),
+        );
+    }
+
+    let mut buf = String::new();
+    for l in &lines {
+        buf.push_str(&serde_json::to_string(l).expect("serialize"));
+        buf.push('\n');
+    }
+    std::fs::write(&out_path, buf).expect("write jsonl");
+
+    let count = |arm: &str, oc: &str| {
+        lines
+            .iter()
+            .filter(|l| l.arm == arm && l.outcome == oc)
+            .count()
+    };
+    let oracle = |arm: &str| lines.iter().filter(|l| l.arm == arm && l.oracle).count();
+    eprintln!("\n  wrote {} trials to {out_path}", lines.len());
+    eprintln!(
+        "  pass: A(solo) {}  B(diverse) {}  C(homo) {}  (of {} each)",
+        count("A", "pass"),
+        count("B", "pass"),
+        count("C", "pass"),
+        lines.len() / 3,
+    );
+    eprintln!(
+        "  oracle-union (any candidate correct): B(diverse) {}  C(homo) {}",
+        oracle("B"),
+        oracle("C"),
+    );
+    eprintln!(
+        "  run: python3 evals/moa-openrouter/analyze_ablation.py {out_path}  (differential B-C = diverse - homogeneous)\n"
+    );
+
+    let infra = lines.iter().filter(|l| l.outcome == "infra").count();
+    assert!(
+        infra * 4 < lines.len().max(1),
+        "too many infra errors ({infra}/{}) — API degraded",
+        lines.len()
+    );
+}
+
+// ─── Post-hoc tool-call correction study ─────────────────────────────
+//
+// The mesh scenario neither Hermes nor Together handles: a WEAK tool-caller
+// with no strong peer to defer to. Pre-hoc advice was inert-to-harmful (both
+// prose and structured). This tests correction of the *concrete drafted call*
+// instead — there's a real artifact to judge, not open-ended dilution.
+//
+// One weak finalizer drafts a call, then three arms (reuse A/B/C JSONL):
+//   A draft-alone         — baseline, no correction
+//   B deterministic       — schema-validate the draft; on structural failure
+//                           re-prompt the finalizer with the specific error
+//   C semantic            — a different-family peer critiques the concrete
+//                           drafted call; the finalizer revises once
+//
+// analyze_ablation.py then gives B-vs-A (deterministic rescue), C-vs-A
+// (semantic rescue), and differential B-C.
+
+fn correction_finalizer() -> String {
+    std::env::var("MOA_CORRECTION_FINALIZER").unwrap_or_else(|_| "qwen/qwen3-8b".to_string())
+}
+
+fn correction_critic() -> String {
+    std::env::var("MOA_CORRECTION_CRITIC")
+        .unwrap_or_else(|_| "mistralai/mistral-small-3.2-24b-instruct".to_string())
+}
+
+/// Structural validity of a drafted call: unknown tool, unparseable args, or a
+/// missing/empty required field. Returns an error message, or None if valid.
+/// This is the deterministic check a mesh can do with zero extra model calls.
+fn validate_tool_call(name: &str, args_json: &str) -> Option<String> {
+    let required: &[&str] = match name {
+        "list_dir" | "read_file" => &["path"],
+        "search" => &["pattern", "path"],
+        "run_command" => &["cmd"],
+        other => return Some(format!("unknown tool '{other}'")),
+    };
+    let parsed: Value = match serde_json::from_str(args_json) {
+        Ok(v) => v,
+        Err(e) => return Some(format!("arguments are not valid JSON: {e}")),
+    };
+    let Some(obj) = parsed.as_object() else {
+        return Some("arguments must be a JSON object".to_string());
+    };
+    for field in required {
+        match obj.get(*field).and_then(Value::as_str) {
+            Some(s) if !s.trim().is_empty() => {}
+            _ => return Some(format!("missing or empty required field '{field}'")),
+        }
+    }
+    None
+}
+
+/// One tool-drafting call against the finalizer with the given extra messages
+/// appended after the task prompt (for correction re-prompts).
+async fn draft_call(
+    backend: &OpenRouterBackend,
+    finalizer: &str,
+    task: &AblationTask,
+    extra: &[Value],
+) -> Result<Option<(String, String)>, String> {
+    let mut msgs = vec![json!({"role": "user", "content": task.prompt})];
+    msgs.extend_from_slice(extra);
+    let body = backend
+        .chat_completion_retrying(
+            finalizer,
+            &msgs,
+            Some(&agent_tools()),
+            2048,
+            SamplingParams::reducer().with_thinking(Some(false)),
+        )
+        .await?;
+    Ok(response_tool_calls(&body).into_iter().next())
+}
+
+/// Deterministic arm: draft, validate, and on structural failure re-prompt with
+/// the concrete error (up to 2 corrections). No extra model beyond the retries.
+async fn deterministic_correction(
+    backend: &OpenRouterBackend,
+    finalizer: &str,
+    task: &AblationTask,
+) -> ArmOutcome {
+    let mut extra: Vec<Value> = Vec::new();
+    for _ in 0..3 {
+        let draft = match draft_call(backend, finalizer, task, &extra).await {
+            Ok(d) => d,
+            Err(e) if e.starts_with("INFRA:") => return ArmOutcome::Infra,
+            Err(_) => return ArmOutcome::Fail,
+        };
+        let Some((name, args)) = draft else {
+            // No tool call — acceptable only if the task wanted none.
+            return if task.accept_tools.is_empty() {
+                ArmOutcome::Pass
+            } else {
+                ArmOutcome::Fail
+            };
+        };
+        match validate_tool_call(&name, &args) {
+            None => return outcome_for(&[(name, args)], task),
+            Some(err) => {
+                extra.push(json!({"role": "assistant", "content": Value::Null,
+                    "tool_calls": [{"id": "c", "type": "function",
+                        "function": {"name": name, "arguments": args}}]}));
+                extra.push(json!({"role": "user",
+                    "content": format!("That tool call is invalid: {err}. Emit a corrected tool call.")}));
+            }
+        }
+    }
+    ArmOutcome::Fail
+}
+
+/// Semantic arm: draft, have a different-family critic review the CONCRETE call,
+/// then let the finalizer revise once given the critique.
+async fn semantic_correction(
+    backend: &OpenRouterBackend,
+    finalizer: &str,
+    critic: &str,
+    task: &AblationTask,
+) -> ArmOutcome {
+    let draft = match draft_call(backend, finalizer, task, &[]).await {
+        Ok(Some(d)) => d,
+        Ok(None) => {
+            return if task.accept_tools.is_empty() {
+                ArmOutcome::Pass
+            } else {
+                ArmOutcome::Fail
+            };
+        }
+        Err(e) if e.starts_with("INFRA:") => return ArmOutcome::Infra,
+        Err(_) => return ArmOutcome::Fail,
+    };
+
+    let critique_prompt = format!(
+        "Task: {}\n\nA model proposed this tool call:\n  {}({})\n\nTools available: \
+         list_dir(path), read_file(path), search(pattern,path), run_command(cmd).\n\
+         Is this the right tool and arguments for the task? If good, reply exactly OK. \
+         If not, briefly say what's wrong.",
+        task.prompt, draft.0, draft.1
+    );
+    let critique = match backend
+        .chat_completion_retrying(
+            critic,
+            &[json!({"role": "user", "content": critique_prompt})],
+            None,
+            512,
+            SamplingParams::worker().with_thinking(Some(false)),
+        )
+        .await
+    {
+        Ok(body) => response_text(&body),
+        Err(e) if e.starts_with("INFRA:") => return ArmOutcome::Infra,
+        Err(_) => return outcome_for(&[draft], task), // critic down → keep draft
+    };
+
+    if critique.trim().eq_ignore_ascii_case("OK") || critique.trim().is_empty() {
+        return outcome_for(&[draft], task);
+    }
+
+    // Revise once given the concrete critique.
+    let extra = vec![
+        json!({"role": "assistant", "content": Value::Null,
+            "tool_calls": [{"id": "c", "type": "function",
+                "function": {"name": draft.0, "arguments": draft.1}}]}),
+        json!({"role": "user",
+            "content": format!("A reviewer said about your tool call: {}. Emit the corrected tool call.", critique.trim())}),
+    ];
+    match draft_call(backend, finalizer, task, &extra).await {
+        Ok(Some(revised)) => outcome_for(&[revised], task),
+        Ok(None) => ArmOutcome::Fail,
+        Err(e) if e.starts_with("INFRA:") => ArmOutcome::Infra,
+        Err(_) => ArmOutcome::Fail,
+    }
+}
+
+fn outcome_for(tools: &[(String, String)], task: &AblationTask) -> ArmOutcome {
+    if scores_ablation(tools, task) {
+        ArmOutcome::Pass
+    } else {
+        ArmOutcome::Fail
+    }
+}
+
+/// Does post-hoc correction of a concrete drafted call rescue a weak
+/// tool-caller? Writes A/B/C JSONL (A=draft-alone, B=deterministic,
+/// C=semantic) for analyze_ablation.py.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live network + cost; run explicitly with --ignored"]
+async fn correction_rescues_weak_tool_caller() {
+    let Some(key) = api_key_or_skip("correction") else {
+        return;
+    };
+    let draws = std::env::var("MOA_CORRECTION_DRAWS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+    let out_path = std::env::var("MOA_CORRECTION_OUT")
+        .unwrap_or_else(|_| "/tmp/moa_correction.jsonl".to_string());
+    let finalizer = correction_finalizer();
+    let critic = correction_critic();
+    let backend = OpenRouterBackend::new(key);
+    let tasks = load_ablation_tasks();
+
+    eprintln!("\n=== post-hoc correction study ===");
+    eprintln!("finalizer(weak)={finalizer}  critic={critic}");
+    eprintln!("tasks={}  draws={draws}  -> {out_path}\n", tasks.len());
+
+    let mark = |o: &ArmOutcome| match o {
+        ArmOutcome::Pass => "pass",
+        ArmOutcome::Fail => "fail",
+        ArmOutcome::Infra => "infra",
+    };
+    let mut lines: Vec<TrialLine> = Vec::new();
+
+    for draw in 0..draws {
+        for task in &tasks {
+            // A: draft alone (baseline).
+            let a = match draft_call(&backend, &finalizer, task, &[]).await {
+                Ok(d) => match d {
+                    Some(call) => outcome_for(&[call], task),
+                    None if task.accept_tools.is_empty() => ArmOutcome::Pass,
+                    None => ArmOutcome::Fail,
+                },
+                Err(e) if e.starts_with("INFRA:") => ArmOutcome::Infra,
+                Err(_) => ArmOutcome::Fail,
+            };
+            let b = deterministic_correction(&backend, &finalizer, task).await;
+            let c = semantic_correction(&backend, &finalizer, &critic, task).await;
+
+            for (arm, o) in [("A", &a), ("B", &b), ("C", &c)] {
+                lines.push(TrialLine {
+                    draw,
+                    task_id: task.id.clone(),
+                    category: task.category.clone(),
+                    arm,
+                    outcome: mark(o),
+                    n_advisors: 0,
+                });
+            }
+        }
+        let dp = |arm: &str| {
+            lines
+                .iter()
+                .filter(|l| l.draw == draw && l.arm == arm && l.outcome == "pass")
+                .count()
+        };
+        eprintln!(
+            "  draw {draw}: A(draft) {}/{} B(determ) {}/{} C(semantic) {}/{}",
+            dp("A"),
+            tasks.len(),
+            dp("B"),
+            tasks.len(),
+            dp("C"),
+            tasks.len(),
+        );
+    }
+
+    let mut buf = String::new();
+    for l in &lines {
+        buf.push_str(&serde_json::to_string(l).expect("serialize"));
+        buf.push('\n');
+    }
+    std::fs::write(&out_path, buf).expect("write jsonl");
+
+    let count = |arm: &str, oc: &str| {
+        lines
+            .iter()
+            .filter(|l| l.arm == arm && l.outcome == oc)
+            .count()
+    };
+    eprintln!("\n  wrote {} trials to {out_path}", lines.len());
+    eprintln!(
+        "  pass: A(draft) {}  B(determ) {}  C(semantic) {}  (of {} each)",
+        count("A", "pass"),
+        count("B", "pass"),
+        count("C", "pass"),
+        lines.len() / 3,
+    );
+    eprintln!("  run: python3 evals/moa-openrouter/analyze_ablation.py {out_path}\n");
+
+    let infra = lines.iter().filter(|l| l.outcome == "infra").count();
+    assert!(
+        infra * 4 < lines.len().max(1),
+        "too many infra errors ({infra}/{}) — API degraded",
+        lines.len()
+    );
+}
+
 /// The headline claim: MoA over the pool is at least as tool-coherent as the
 /// best single model in the pool, measured on the same agentic tasks under the
 /// same thinking policy.
