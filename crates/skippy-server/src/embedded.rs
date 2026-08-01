@@ -1,6 +1,6 @@
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, TryLockError},
 };
 
 use anyhow::{Context, Result};
@@ -118,6 +118,13 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_ready",
             lifecycle_attrs(&options.config),
         );
+        // Prime the stats snapshot while the runtime is still unshared and
+        // uncontended, so a read that loses the race to the very first
+        // generation reports real lanes instead of zeros.
+        let initial_session_stats = runtime
+            .lock()
+            .expect("runtime lock poisoned")
+            .session_stats();
         Ok(Self {
             config: Arc::new(options.config),
             topology: options.topology.map(Arc::new),
@@ -129,7 +136,7 @@ impl SkippyRuntimeHandle {
                 stopped_at_unix_nanos: None,
                 last_error: None,
             })),
-            last_session_stats: Arc::new(Mutex::new(RuntimeSessionStats::default())),
+            last_session_stats: Arc::new(Mutex::new(initial_session_stats)),
         })
     }
 
@@ -163,6 +170,13 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_ready",
             lifecycle_attrs(&options.config),
         );
+        // Prime the stats snapshot while the runtime is still unshared and
+        // uncontended, so a read that loses the race to the very first
+        // generation reports real lanes instead of zeros.
+        let initial_session_stats = runtime
+            .lock()
+            .expect("runtime lock poisoned")
+            .session_stats();
         Ok(Self {
             config: Arc::new(options.config),
             topology: options.topology.map(Arc::new),
@@ -174,7 +188,7 @@ impl SkippyRuntimeHandle {
                 stopped_at_unix_nanos: None,
                 last_error: None,
             })),
-            last_session_stats: Arc::new(Mutex::new(RuntimeSessionStats::default())),
+            last_session_stats: Arc::new(Mutex::new(initial_session_stats)),
         })
     }
 
@@ -420,7 +434,7 @@ fn finish_server_status(status: &Arc<Mutex<ServerHandleState>>, result: &Result<
     }
 }
 
-/// Read a value derived from `source` without ever waiting on its lock.
+/// Read a value derived from `source` without waiting on its lock.
 ///
 /// `source` here is the inference runtime, whose mutex is held for the whole
 /// duration of a decode loop. Blocking on it from an observability path makes
@@ -429,25 +443,32 @@ fn finish_server_status(status: &Arc<Mutex<ServerHandleState>>, result: &Result<
 /// worker for the length of a generation. Take the lock only when it is free,
 /// refreshing `cache`; otherwise serve the last value we published.
 ///
-/// Returns `V::default()` only if the lock is contended *and* the cache has
-/// been poisoned, which cannot happen before the first successful read.
+/// Staleness is deliberately unbounded: under sustained load every
+/// opportunistic read can lose the race, so the snapshot may lag by many
+/// turns. That is acceptable only because these stats are observability —
+/// nothing admits, routes, evicts or limits on them (`lane_count` reaching
+/// mesh gossip comes from `StageConfig`, not from here). Do not reuse this
+/// helper for a value that gates a decision.
+///
+/// A poisoned `source` still panics, exactly as the previous blocking
+/// `lock().expect(..)` did: a poisoned inference runtime means generation
+/// panicked, and reporting healthy cached stats over the top of that would
+/// hide a real failure.
 fn read_without_blocking<S, V>(source: &Mutex<S>, cache: &Mutex<V>, read: impl FnOnce(&S) -> V) -> V
 where
-    V: Clone + Default,
+    V: Clone,
 {
     match source.try_lock() {
         Ok(guard) => {
             let value = read(&guard);
             drop(guard);
-            if let Ok(mut cached) = cache.lock() {
-                cached.clone_from(&value);
-            }
+            *cache.lock().expect("stats cache lock poisoned") = value.clone();
             value
         }
-        Err(_) => cache
-            .lock()
-            .map(|cached| cached.clone())
-            .unwrap_or_default(),
+        // Inference holds the runtime: serve the last published snapshot
+        // instead of blocking for the rest of the turn.
+        Err(TryLockError::WouldBlock) => cache.lock().expect("stats cache lock poisoned").clone(),
+        Err(TryLockError::Poisoned(error)) => panic!("runtime lock poisoned: {error}"),
     }
 }
 
@@ -493,13 +514,18 @@ mod tests {
     }
 
     #[test]
-    fn read_without_blocking_returns_default_before_any_successful_read() {
-        // Contended from the very first read: no snapshot exists yet, so the
-        // caller gets the type default rather than waiting on inference.
+    #[should_panic(expected = "runtime lock poisoned")]
+    fn read_without_blocking_still_panics_on_a_poisoned_runtime() {
+        // A poisoned runtime means inference panicked. Serving cached stats
+        // over the top of that would report a healthy node, so this must keep
+        // the pre-existing panic behaviour rather than fall back to the cache.
         let source = Mutex::new(7u32);
         let cache = Mutex::new(0u32);
-        let held = source.lock().expect("lock runtime");
-        assert_eq!(read_without_blocking(&source, &cache, |v| *v), 0);
-        drop(held);
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = source.lock().unwrap();
+            panic!("inference exploded");
+        });
+        assert!(source.is_poisoned(), "precondition: source is poisoned");
+        let _ = read_without_blocking(&source, &cache, |v| *v);
     }
 }
