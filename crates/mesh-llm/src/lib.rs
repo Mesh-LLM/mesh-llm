@@ -131,6 +131,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         gguf: cli.gguf,
         mmproj: cli.mmproj,
         port: cli.port,
+        local_model_only: cli.local_model_only,
         client: cli.client,
         console: cli.console,
         headless: cli.headless,

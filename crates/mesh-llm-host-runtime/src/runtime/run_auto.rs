@@ -17,10 +17,11 @@ use super::{
     prepare_runtime_startup, publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
     resolve_runtime_owner_key_path, resolve_startup_mesh_creation_state, run_auto_join_mesh_phase,
     run_auto_model_identity, run_auto_model_path_or_shutdown, run_auto_runtime_loop_and_shutdown,
-    runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
-    setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
-    spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
-    start_run_auto_bootstrap_proxy, startup_local_model_loop, swarm_capture_observer_requested,
+    run_local_model_only, runtime_data_producer_for_console, runtime_startup_requirements,
+    setup_run_auto_console_state, setup_run_auto_serving_surface,
+    spawn_embedded_runtime_control_forwarder, spawn_run_auto_additional_model_tasks,
+    spawn_run_auto_discovery_publisher, start_run_auto_bootstrap_proxy, startup_local_model_loop,
+    swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -244,6 +245,13 @@ pub(super) async fn run_runtime_cli(
             message: warning,
             context: None,
         });
+    }
+
+    // This topology is intentionally selected before plugin startup, release
+    // lookup, config-driven mesh discovery, and `mesh::Node::start`. Its only
+    // long-lived serving surfaces are the local Skippy runtime and OpenAI API.
+    if options.local_model_only {
+        return run_local_model_only(options).await;
     }
 
     if let Some(name) = options.plugin.clone() {
@@ -489,7 +497,13 @@ pub(super) fn configure_run_auto_process_state(
     runtime: Option<&std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
 ) {
     // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("MESH_API_PORT", options.console.to_string()) };
+    unsafe {
+        if options.local_model_only {
+            std::env::remove_var("MESH_API_PORT");
+        } else {
+            std::env::set_var("MESH_API_PORT", options.console.to_string());
+        }
+    }
 
     let verbose_native_debug = options.debug
         && std::env::var("MESH_LLM_DEBUG_NATIVE_VERBOSE")
