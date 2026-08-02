@@ -7,7 +7,6 @@ use super::{
     resolve_local_model_only_startup_models, runtime_model_required_bytes,
     skippy_telemetry_options, start_local_openai_model, wait_shutdown_signal,
 };
-use crate::ModelServingHooksFactory;
 use crate::inference::election;
 use crate::plugin;
 use crate::runtime::survey;
@@ -15,7 +14,6 @@ use crate::system::hardware;
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_server::EmbeddedState;
-use skippy_server::SharedModelServingHooksFactory;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
@@ -89,21 +87,7 @@ pub(super) fn validate_local_model_only_options(options: &RuntimeOptions) -> Res
     Ok(())
 }
 
-pub(super) async fn run_local_model_only(options: RuntimeOptions) -> Result<()> {
-    run_local_model_only_inner(options, None).await
-}
-
-pub(crate) async fn run_local_model_only_with_hooks(
-    options: RuntimeOptions,
-    factory: std::sync::Arc<dyn ModelServingHooksFactory>,
-) -> Result<()> {
-    run_local_model_only_inner(options, Some(factory)).await
-}
-
-async fn run_local_model_only_inner(
-    mut options: RuntimeOptions,
-    serving_hooks_factory: Option<SharedModelServingHooksFactory>,
-) -> Result<()> {
+pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<()> {
     validate_local_model_only_options(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
@@ -175,7 +159,7 @@ async fn run_local_model_only_inner(
         skippy_telemetry: skippy_telemetry_options(&options),
         survey_telemetry: survey::SurveyTelemetry::disabled(),
         hook_policy: None,
-        serving_hooks_factory,
+        serving_hooks_factory: None,
         http_bind_addr: bind_addr,
     };
 

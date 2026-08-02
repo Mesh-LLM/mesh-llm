@@ -9,21 +9,7 @@ mod commands;
 pub use mesh_llm_host_runtime::*;
 
 pub async fn run_main() -> i32 {
-    run_main_with_optional_local_model_hooks(None).await
-}
-
-/// Runs the normal Mesh CLI with a product-neutral hook factory attached to
-/// the dedicated local-model serving surface.
-pub async fn run_main_with_local_model_hooks(
-    factory: std::sync::Arc<dyn mesh_llm_host_runtime::ModelServingHooksFactory>,
-) -> i32 {
-    run_main_with_optional_local_model_hooks(Some(factory)).await
-}
-
-async fn run_main_with_optional_local_model_hooks(
-    factory: Option<std::sync::Arc<dyn mesh_llm_host_runtime::ModelServingHooksFactory>>,
-) -> i32 {
-    match run_cli_entrypoint(factory).await {
+    match run_cli_entrypoint().await {
         Ok(()) => 0,
         Err(err) => {
             let _ = mesh_llm_tui::emit_fatal_error(&err);
@@ -33,9 +19,7 @@ async fn run_main_with_optional_local_model_hooks(
     }
 }
 
-async fn run_cli_entrypoint(
-    local_model_hooks: Option<std::sync::Arc<dyn mesh_llm_host_runtime::ModelServingHooksFactory>>,
-) -> anyhow::Result<()> {
+async fn run_cli_entrypoint() -> anyhow::Result<()> {
     maybe_print_binary_help_and_exit();
 
     let normalized_args = mesh_llm_cli::normalize_runtime_surface_args(std::env::args_os());
@@ -59,20 +43,6 @@ async fn run_cli_entrypoint(
     );
     mesh_llm_tui::install_terminal_panic_hook();
 
-    if let Some(factory) = local_model_hooks {
-        anyhow::ensure!(
-            options.local_model_only,
-            "injected local-model hooks require --local-model-only"
-        );
-        anyhow::ensure!(
-            matches!(
-                explicit_surface,
-                Some(mesh_llm_host_runtime::RuntimeSurface::Serve)
-            ),
-            "injected local-model hooks require the serve surface"
-        );
-        return mesh_llm_host_runtime::run_local_model_only_with_hooks(options, factory).await;
-    }
     mesh_llm_host_runtime::run_runtime_initialized(options, explicit_surface, warning).await
 }
 
