@@ -579,7 +579,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        FinishReason, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy,
+        FinishReason,
         backend::{
             CancellationToken, ChatCompletionStream, CompletionStream, OpenAiRequestContext,
             OpenAiResult,
@@ -780,11 +780,6 @@ mod tests {
         token: Arc<Mutex<Option<CancellationToken>>>,
     }
 
-    #[derive(Default)]
-    struct GuardrailRescueBackend {
-        seen_chat_requests: Arc<Mutex<Vec<ChatCompletionRequest>>>,
-    }
-
     #[async_trait]
     impl OpenAiBackend for CancellationBackend {
         async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
@@ -805,51 +800,6 @@ mod tests {
         ) -> OpenAiResult<ChatCompletionStream> {
             *self.token.lock().expect("token lock poisoned") = Some(context.cancellation_token());
             Ok(Box::pin(stream::pending()))
-        }
-    }
-
-    #[async_trait]
-    impl OpenAiBackend for GuardrailRescueBackend {
-        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
-            Ok(vec![ModelObject::new("Qwen3-8B-Q4_K_M")])
-        }
-
-        async fn chat_completion(
-            &self,
-            request: ChatCompletionRequest,
-        ) -> OpenAiResult<ChatCompletionResponse> {
-            self.seen_chat_requests
-                .lock()
-                .unwrap()
-                .push(request.clone());
-            Ok(ChatCompletionResponse::new(
-                request.model,
-                r#"lookup[ARGS]{"city":"Sydney"}"#,
-                Usage::new(8, 3),
-            ))
-        }
-
-        async fn chat_completion_stream(
-            &self,
-            _request: ChatCompletionRequest,
-            _context: OpenAiRequestContext,
-        ) -> OpenAiResult<ChatCompletionStream> {
-            unreachable!("guardrail rescue backend test only calls non-stream chat")
-        }
-
-        async fn completion(
-            &self,
-            _request: CompletionRequest,
-        ) -> OpenAiResult<CompletionResponse> {
-            unreachable!("guardrail rescue backend test only calls chat")
-        }
-
-        async fn completion_stream(
-            &self,
-            _request: CompletionRequest,
-            _context: OpenAiRequestContext,
-        ) -> OpenAiResult<CompletionStream> {
-            unreachable!("guardrail rescue backend test only calls chat")
         }
     }
 
@@ -1381,53 +1331,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn guarded_chat_rescues_tool_call_text() {
-        let backend = Arc::new(GuardrailRescueBackend::default());
-        let app = guarded_test_app(backend.clone());
-
-        let response = post_json_with_app_and_request_id(
-            app,
-            "/v1/chat/completions",
-            json!({
-                "model": "Qwen3-8B-Q4_K_M",
-                "messages": [{"role": "user", "content": "weather"}],
-                "tools": [{"type": "function", "function": {"name": "lookup"}}],
-                "tool_choice": "auto"
-            }),
-            Some("guarded-chat-req"),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers()["x-request-id"], "guarded-chat-req");
-        let body = response_body_json(response).await;
-        assert_eq!(body["object"], "chat.completion");
-        assert!(body["choices"][0]["message"]["content"].is_null());
-        assert_eq!(body["choices"][0]["finish_reason"], "tool_calls");
-        assert_eq!(
-            body["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
-            "lookup"
-        );
-        assert_eq!(
-            body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
-            "{\"city\":\"Sydney\"}"
-        );
-        assert!(!serde_json::to_string(&body).unwrap().contains("_mesh_"));
-
-        let seen_requests = backend.seen_chat_requests.lock().unwrap();
-        assert_eq!(seen_requests.len(), 1);
-        let seen_tools = seen_requests[0]
-            .tools
-            .as_ref()
-            .and_then(Value::as_array)
-            .cloned()
-            .expect("guarded backend should receive tools");
-        assert_eq!(seen_tools.len(), 2);
-        assert_eq!(seen_tools[0]["function"]["name"], "lookup");
-        assert_eq!(seen_tools[1]["function"]["name"], "_mesh_respond");
-    }
-
-    #[tokio::test]
     async fn responses_stream_route_returns_responses_sse() {
         let response = post_json(
             "/v1/responses",
@@ -1650,21 +1553,6 @@ mod tests {
         let body = response_body_json(response).await;
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(body["error"]["code"], "payload_too_large");
-    }
-
-    fn guarded_test_app(backend: Arc<GuardrailRescueBackend>) -> Router {
-        let guarded = Arc::new(GuardedOpenAiBackend::new(
-            backend,
-            GuardrailPolicy {
-                mode: GuardrailMode::Enforce,
-                apply_to_all_models: true,
-                ..GuardrailPolicy::default()
-            },
-        ));
-        router_for_with_config(
-            guarded,
-            OpenAiFrontendConfig::default().without_backend_timeout(),
-        )
     }
 
     async fn post_json(path: &str, value: Value) -> axum::response::Response {

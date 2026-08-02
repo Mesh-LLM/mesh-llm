@@ -9,12 +9,9 @@ use super::{
     errors::validation_failed_error,
     policy::{GuardrailPolicy, RetryExhaustionMode},
     request_contract::RawToolChoice,
-    rescue::{
-        ClassifiedGuardrailResponse, GuardrailParserStage, GuardrailResponseCategory,
-        strip_thinking_blocks,
-    },
     state::{GuardrailRequestOutcome, PreparedGuardrailRequest},
     tools::is_reserved_tool_name,
+    validation::{ClassifiedGuardrailResponse, GuardrailResponseCategory, strip_thinking_blocks},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,19 +46,7 @@ pub(crate) fn sanitize_success_response(
     classified: &ClassifiedGuardrailResponse,
 ) -> Option<ChatCompletionResponse> {
     match classified.category {
-        GuardrailResponseCategory::ValidToolCalls => {
-            if classified.parser_stage == GuardrailParserStage::None {
-                Some(response.clone())
-            } else {
-                Some(rewrite_response(
-                    response,
-                    None,
-                    None,
-                    classified.tool_calls.clone(),
-                    Some(FinishReason::ToolCalls),
-                ))
-            }
-        }
+        GuardrailResponseCategory::ValidToolCalls => Some(response.clone()),
         GuardrailResponseCategory::ValidSyntheticRespond => Some(rewrite_response(
             response,
             None,

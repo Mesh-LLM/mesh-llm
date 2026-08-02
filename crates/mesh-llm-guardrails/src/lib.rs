@@ -1,7 +1,7 @@
 pub mod compact;
+pub mod content;
 pub mod policy;
 pub mod request_contract;
-pub mod rescue;
 pub mod structured;
 pub mod tools;
 
@@ -9,6 +9,7 @@ pub use compact::{
     CompactionConfig, CompactionDecision, CompactionOverride, CompactionReport, CompactionRequest,
     MESH_COMPACT_FIELD, compact_messages, estimate_message_tokens,
 };
+pub use content::strip_thinking_blocks;
 pub use policy::{
     GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, RetryExhaustionMode,
     StreamingGuardrailMode,
@@ -16,10 +17,6 @@ pub use policy::{
 pub use request_contract::{
     GuardrailRequestContract, MESH_GUARDRAILS_FIELD, MeshGuardrailsOverride, ParallelToolCalls,
     RawResponseFormat, RawToolChoice, RawToolDefinition, RawToolSpec, StructuredResponseFormat,
-};
-pub use rescue::{
-    ParsedToolCall, ToolCallParseError, parse_tool_call_value, rescue_tool_call_from_text,
-    strip_thinking_blocks,
 };
 pub use structured::{StructuredOutputSpec, UnsupportedStructuredSchema};
 pub use tools::{

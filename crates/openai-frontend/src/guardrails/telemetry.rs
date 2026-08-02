@@ -48,7 +48,6 @@ impl GuardrailTelemetryBypassReason {
 pub(crate) enum GuardrailTelemetryOutcome {
     PassThrough,
     Valid,
-    Rescued,
     Retried,
     Failed,
     MetricsOnlyFailure,
@@ -59,29 +58,9 @@ impl GuardrailTelemetryOutcome {
         match self {
             Self::PassThrough => "pass_through",
             Self::Valid => "valid",
-            Self::Rescued => "rescued",
             Self::Retried => "retried",
             Self::Failed => "failed",
             Self::MetricsOnlyFailure => "metrics_only_failure",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GuardrailTelemetryParserStage {
-    None,
-    JsonExact,
-    JsonFenced,
-    JsonSubstring,
-}
-
-impl GuardrailTelemetryParserStage {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::JsonExact => "json_exact",
-            Self::JsonFenced => "json_fenced",
-            Self::JsonSubstring => "json_substring",
         }
     }
 }
@@ -132,7 +111,6 @@ pub trait GuardrailTelemetrySink: Send + Sync + 'static {
         mode: GuardrailMode,
         contract: Option<&'static str>,
         outcome: &'static str,
-        parser_stage: Option<&'static str>,
         attempt_bucket: Option<&'static str>,
     );
 }

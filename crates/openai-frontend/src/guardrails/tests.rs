@@ -21,15 +21,12 @@ use super::{
     request_contract::{
         MeshGuardrailsOverride, ParallelToolCalls, RawResponseFormat, RawToolChoice, RawToolSpec,
     },
-    rescue::{
-        ClassifiedGuardrailResponse, GuardrailParserStage, GuardrailResponseCategory,
-        strip_thinking_blocks,
-    },
     telemetry::{
         GuardrailTelemetryBypassReason, GuardrailTelemetryContract, GuardrailTelemetryDecision,
-        GuardrailTelemetryOutcome, GuardrailTelemetryParserStage,
+        GuardrailTelemetryOutcome,
     },
     tools::{MESH_EMIT_STRUCTURED_TOOL_NAME, MESH_RESPOND_TOOL_NAME},
+    validation::{ClassifiedGuardrailResponse, GuardrailResponseCategory},
 };
 
 #[derive(Default)]
@@ -73,7 +70,6 @@ struct RecordedOutcome {
     mode: GuardrailMode,
     contract: Option<&'static str>,
     outcome: &'static str,
-    parser_stage: Option<&'static str>,
     attempt_bucket: Option<&'static str>,
 }
 
@@ -98,14 +94,12 @@ impl GuardrailTelemetrySink for RecordingTelemetrySink {
         mode: GuardrailMode,
         contract: Option<&'static str>,
         outcome: &'static str,
-        parser_stage: Option<&'static str>,
         attempt_bucket: Option<&'static str>,
     ) {
         self.outcomes.lock().unwrap().push(RecordedOutcome {
             mode,
             contract,
             outcome,
-            parser_stage,
             attempt_bucket,
         });
     }
@@ -1228,10 +1222,6 @@ fn telemetry_response_records_use_bounded_enums_only() {
         GuardrailTelemetryOutcome::MetricsOnlyFailure.as_str(),
         "metrics_only_failure"
     );
-    assert_eq!(
-        GuardrailTelemetryParserStage::JsonFenced.as_str(),
-        "json_fenced"
-    );
     assert_eq!(telemetry_attempt_bucket(3).as_str(), "3_plus");
 }
 
@@ -1413,17 +1403,6 @@ fn tool_call_name(classified: &ClassifiedGuardrailResponse) -> Option<&str> {
         .first()?
         .get("function")?
         .get("name")?
-        .as_str()
-}
-
-fn tool_call_arguments(classified: &ClassifiedGuardrailResponse) -> Option<&str> {
-    classified
-        .tool_calls
-        .as_ref()?
-        .as_array()?
-        .first()?
-        .get("function")?
-        .get("arguments")?
         .as_str()
 }
 

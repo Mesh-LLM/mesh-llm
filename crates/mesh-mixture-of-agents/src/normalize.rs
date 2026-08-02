@@ -9,10 +9,7 @@
 //! Anything the model returns is treated as dirty input.
 
 use crate::worker::WorkerRole;
-use mesh_llm_guardrails::{
-    extract_tool_name_and_arguments, normalize_tool_arguments, rescue_tool_call_from_text,
-    strip_thinking_blocks,
-};
+use mesh_llm_guardrails::{normalize_tool_arguments, strip_thinking_blocks};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,41 +175,6 @@ fn try_json_parse(
     let json_str = extract_json_object(raw)?;
     let obj: Value = serde_json::from_str(&json_str).ok()?;
 
-    // First, recognise the OpenAI tool-call shape that models commonly
-    // emit even without our `kind`/`confidence` envelope:
-    //
-    //   {"function": "read_file", "arguments": {"path": "README.md"}}
-    //   {"name": "read_file",     "arguments": {...}}
-    //   {"tool": "read_file",     "arguments": {...}}
-    //
-    // Agent harnesses (Goose, OpenCode) only act on real `tool_calls`
-    // — if the worker writes inline tool JSON and we miss it, MoA leaks
-    // the JSON back as `content` and the agent does nothing. This is
-    // the failure mode PR #566 review called out.
-    let openai_tool_call = obj
-        .get("kind")
-        .is_none()
-        .then(|| extract_tool_name_and_arguments(&obj))
-        .flatten();
-    if let Some((tool_name, arguments)) = openai_tool_call {
-        let args = normalize_tool_arguments(arguments).map(Value::Object);
-        return Some(WorkerOutput {
-            kind: OutputKind::ToolProposal,
-            // OpenAI-shape tool calls have no native confidence
-            // marker, but a structurally well-formed proposal is a
-            // stronger signal than a heuristic catch — score it
-            // higher than the heuristic's 0.6 so the arbiter
-            // prefers it on tie.
-            confidence: 0.75,
-            tool_name: Some(tool_name.to_string()),
-            tool_arguments: args,
-            payload: raw.to_string(),
-            model: model.to_string(),
-            role,
-            elapsed_ms,
-        });
-    }
-
     let kind = match obj.get("kind").and_then(|k| k.as_str()) {
         Some("tool_proposal") => OutputKind::ToolProposal,
         Some("critique") => OutputKind::Critique,
@@ -374,35 +336,7 @@ fn try_kv_parse(raw: &str, model: &str, role: WorkerRole, elapsed_ms: u64) -> Op
 
 /// Heuristic: classify raw text by content patterns.
 fn heuristic_classify(raw: &str, model: &str, role: WorkerRole, elapsed_ms: u64) -> WorkerOutput {
-    if let Some(tool_call) = first_rescued_tool_call(raw) {
-        return WorkerOutput {
-            kind: OutputKind::ToolProposal,
-            confidence: 0.7,
-            tool_name: Some(tool_call.name),
-            tool_arguments: Some(Value::Object(tool_call.arguments)),
-            payload: raw.to_string(),
-            model: model.to_string(),
-            role,
-            elapsed_ms,
-        };
-    }
-
     let lower = raw.to_lowercase();
-
-    // Check for tool call patterns
-    if looks_like_tool_proposal(&lower, raw) {
-        let (name, args) = extract_tool_proposal(raw);
-        return WorkerOutput {
-            kind: OutputKind::ToolProposal,
-            confidence: 0.6,
-            tool_name: name,
-            tool_arguments: args,
-            payload: raw.to_string(),
-            model: model.to_string(),
-            role,
-            elapsed_ms,
-        };
-    }
 
     // Check for critique patterns
     if looks_like_critique(&lower) {
@@ -445,58 +379,6 @@ fn heuristic_classify(raw: &str, model: &str, role: WorkerRole, elapsed_ms: u64)
     }
 }
 
-/// Known tool names that models might reference in prose.  These are
-/// matched against the lowercased text to detect tool proposals that
-/// weren't formatted as structured output.
-const KNOWN_TOOLS: &[&str] = &[
-    "read_file",
-    "edit_file",
-    "run_command",
-    "search_code",
-    "web_search",
-    "get_weather",
-    "create_file",
-    "delete_file",
-    "list_files",
-];
-
-fn looks_like_tool_proposal(lower: &str, _raw: &str) -> bool {
-    // Explicit structured markers
-    let has_structured = lower.contains("tool_call")
-        || lower.contains("function_call")
-        || lower.contains("i would call")
-        || lower.contains("i propose calling")
-        || lower.contains("tool_proposal");
-
-    if has_structured && !lower.contains("i would not") {
-        return true;
-    }
-
-    // Agentic patterns: model describes using a tool by name
-    let mentions_tool = KNOWN_TOOLS.iter().any(|t| lower.contains(t));
-    if mentions_tool {
-        // Must also have an action verb — not just mentioning the tool in discussion
-        let has_action = lower.contains("i'll use")
-            || lower.contains("i will use")
-            || lower.contains("let me use")
-            || lower.contains("i need to use")
-            || lower.contains("use the")
-            || lower.contains("using the")
-            || lower.contains("should use")
-            || lower.contains("call the")
-            || lower.contains("calling")
-            || lower.contains("propose")
-            || lower.contains("**tool**")
-            || lower.contains("tool:")
-            || lower.contains("identify the tool");
-        if has_action {
-            return true;
-        }
-    }
-
-    false
-}
-
 fn looks_like_critique(lower: &str) -> bool {
     let markers = [
         "however,",
@@ -522,47 +404,6 @@ fn looks_like_uncertainty(lower: &str) -> bool {
         "insufficient information",
     ];
     markers.iter().any(|m| lower.contains(m))
-}
-
-/// Try to extract a tool name and arguments from messy text.
-fn extract_tool_proposal(raw: &str) -> (Option<String>, Option<Value>) {
-    if let Some(tool_call) = first_rescued_tool_call(raw) {
-        return (
-            Some(tool_call.name),
-            Some(Value::Object(tool_call.arguments)),
-        );
-    }
-
-    // Strategy 1: Look for structured JSON in the text
-    let parsed_json =
-        extract_json_object(raw).and_then(|json_str| serde_json::from_str::<Value>(&json_str).ok());
-    if let Some(obj) = parsed_json {
-        if let Some((name, arguments)) = extract_tool_name_and_arguments(&obj) {
-            let args = normalize_tool_arguments(arguments).map(Value::Object);
-            return (Some(name.to_string()), args);
-        }
-        // Could be the arguments themselves (e.g. {"path": "src/auth.py"})
-        // Look for a tool name in the surrounding text
-        let lower = raw.to_lowercase();
-        for tool in KNOWN_TOOLS {
-            if lower.contains(tool) {
-                return (Some(tool.to_string()), Some(obj));
-            }
-        }
-    }
-
-    // Strategy 2: Find a known tool name in prose and try to extract args
-    let lower = raw.to_lowercase();
-    for tool in KNOWN_TOOLS {
-        if lower.contains(tool) {
-            // Try to find JSON arguments nearby
-            let args =
-                extract_json_object(raw).and_then(|s| serde_json::from_str::<Value>(&s).ok());
-            return (Some(tool.to_string()), args);
-        }
-    }
-
-    (None, None)
 }
 
 /// Find the first JSON object in text (handles markdown fences, etc.).
@@ -602,12 +443,6 @@ fn extract_json_object(text: &str) -> Option<String> {
     }
 
     None
-}
-
-fn first_rescued_tool_call(raw: &str) -> Option<mesh_llm_guardrails::ParsedToolCall> {
-    rescue_tool_call_from_text(raw, &[])
-        .ok()
-        .and_then(|calls| calls.into_iter().next())
 }
 
 /// Clean passthrough content for display: strip think tags, orphan </think>,
@@ -696,24 +531,6 @@ mod tests {
     }
 
     #[test]
-    fn prose_tool_proposal() {
-        // Small models often describe tool usage in prose instead of structured output
-        let raw = "I'll use the read_file tool to examine the code:\n```json\n{\"path\": \"src/auth.py\"}\n```";
-        let out = normalize_worker_output(raw, "small-model", WorkerRole::Fast, 100);
-        assert_eq!(out.kind, OutputKind::ToolProposal);
-        assert_eq!(out.tool_name.as_deref(), Some("read_file"));
-    }
-
-    #[test]
-    fn prose_edit_proposal() {
-        let raw = "I need to use the edit_file tool to fix this bug. The arguments would be:\n{\"path\": \"src/auth.py\", \"old_text\": \"== password\", \"new_text\": \"== hash(password)\"}";
-        let out = normalize_worker_output(raw, "qwen3:4b", WorkerRole::Specialist, 200);
-        assert_eq!(out.kind, OutputKind::ToolProposal);
-        assert_eq!(out.tool_name.as_deref(), Some("edit_file"));
-        assert!(out.tool_arguments.is_some());
-    }
-
-    #[test]
     fn think_tags_then_kv() {
         let raw = "<think>\nThe user is asking a simple question.\nMultiple workers agree the answer is Canberra.\nI should provide a direct answer.\n</think>\nkind: answer\nconfidence: 1.0\npayload: Canberra is the capital of Australia.";
         let out = normalize_worker_output(raw, "glm", WorkerRole::Reducer, 500);
@@ -795,7 +612,7 @@ mod tests {
         // never made it through the inner `from_str` and leaked as a bare
         // string into the tool-call wire shape. With `extract_tool_arguments`,
         // the string is parsed into a real JSON object.
-        let raw = r#"{"function": "read_file", "arguments": "{\"path\": \"README.md\"}"}"#;
+        let raw = r#"{"kind":"tool_proposal","confidence":0.9,"tool":"read_file","arguments":"{\"path\":\"README.md\"}"}"#;
         let out = normalize_worker_output(raw, "test-model", WorkerRole::Fast, 100);
         assert_eq!(out.kind, OutputKind::ToolProposal);
         assert_eq!(out.tool_name.as_deref(), Some("read_file"));
@@ -810,7 +627,7 @@ mod tests {
         // which then serialized as the literal string `"null"` in the
         // OpenAI tool-call wire shape. Now it becomes `None`, and the
         // response builder substitutes `"{}"`.
-        let raw = r#"{"function": "list", "arguments": null}"#;
+        let raw = r#"{"kind":"tool_proposal","confidence":0.9,"tool":"list","arguments":null}"#;
         let out = normalize_worker_output(raw, "test-model", WorkerRole::Fast, 100);
         assert_eq!(out.kind, OutputKind::ToolProposal);
         assert!(out.tool_arguments.is_none());
@@ -820,50 +637,10 @@ mod tests {
     fn primitive_tool_arguments_collapse_to_empty_object() {
         // Defensive: a model that emits `"arguments": 42` should not
         // produce a wire-invalid tool call.
-        let raw = r#"{"function": "list", "arguments": 42}"#;
+        let raw = r#"{"kind":"tool_proposal","confidence":0.9,"tool":"list","arguments":42}"#;
         let out = normalize_worker_output(raw, "test-model", WorkerRole::Fast, 100);
         let args = out.tool_arguments.expect("sanitize produced an object");
         assert!(args.is_object());
         assert_eq!(args.as_object().unwrap().len(), 0);
-    }
-
-    #[test]
-    fn qwen_xml_tool_call_uses_guardrail_rescue() {
-        let raw = r#"<function=read_file><parameter=path>README.md</parameter></function>"#;
-        let out = normalize_worker_output(raw, "qwen", WorkerRole::Fast, 100);
-        assert_eq!(out.kind, OutputKind::ToolProposal);
-        assert_eq!(out.tool_name.as_deref(), Some("read_file"));
-        assert_eq!(out.tool_arguments.expect("args")["path"], "README.md");
-    }
-
-    #[test]
-    fn arg_tag_tool_call_uses_guardrail_rescue() {
-        let raw = "<tool_call>tree<arg_key>path</arg_key><arg_value>tests</arg_value>\
-                   <arg_key>depth</arg_key><arg_value>2</arg_value></tool_call>";
-        let out = normalize_worker_output(raw, "glm-4.7-flash", WorkerRole::Reducer, 100);
-        assert_eq!(out.kind, OutputKind::ToolProposal);
-        assert_eq!(out.tool_name.as_deref(), Some("tree"));
-        let arguments = out.tool_arguments.expect("args");
-        assert_eq!(arguments["path"], "tests");
-        assert_eq!(arguments["depth"], 2);
-    }
-
-    #[test]
-    fn parenthesized_tool_call_uses_guardrail_rescue() {
-        let raw = r#"read_file({"path":"README.md"})"#;
-        let out = normalize_worker_output(raw, "small-model", WorkerRole::Fast, 100);
-        assert_eq!(out.kind, OutputKind::ToolProposal);
-        assert_eq!(out.tool_name.as_deref(), Some("read_file"));
-        assert_eq!(out.tool_arguments.expect("args")["path"], "README.md");
-    }
-
-    #[test]
-    fn normalize_worker_output_rescues_tool_calls_after_thinking_strip() {
-        let raw =
-            r#"<think>I should inspect the file first.</think>read_file({"path":"README.md"})"#;
-        let out = normalize_worker_output(raw, "small-model", WorkerRole::Fast, 100);
-        assert_eq!(out.kind, OutputKind::ToolProposal);
-        assert_eq!(out.tool_name.as_deref(), Some("read_file"));
-        assert_eq!(out.tool_arguments.expect("args")["path"], "README.md");
     }
 }

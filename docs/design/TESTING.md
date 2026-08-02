@@ -673,9 +673,9 @@ python3 scripts/run-openai-guardrail-corpus.py \
   for server-side activation.
 - If the runtime is unavailable, the script falls back to deterministic
   fake-backend mode and still writes the expected JSON artifact.
-- The corpus covers streaming pass-through, tool-call reliability, synthetic
-  `_mesh_respond` rescue, strict structured output, and the unsupported real
-  tools plus strict structured combination.
+- The corpus covers streaming pass-through, native tool-call validation,
+  structured `_mesh_respond` output, strict structured output, and the
+  unsupported real tools plus strict structured combination.
 - The command is a reliability check, not a hard constrained decoding promise.
 
 If a Python sidecar baseline is available, you may optionally run a smoke

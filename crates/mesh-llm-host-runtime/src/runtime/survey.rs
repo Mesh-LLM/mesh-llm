@@ -38,7 +38,6 @@ const TELEMETRY_ATTRIBUTE_ALLOWLIST: &[&str] = &[
     "mesh_llm.guardrail.decision",
     "mesh_llm.guardrail.mode",
     "mesh_llm.guardrail.outcome",
-    "mesh_llm.guardrail.parser_stage",
     "mesh_llm.gpu_count",
     "mesh_llm.gpu_name",
     "mesh_llm.gpu_stable_id",
@@ -320,7 +319,6 @@ impl GuardrailTelemetrySink for SurveyTelemetry {
         mode: GuardrailMode,
         contract: Option<&'static str>,
         outcome: &'static str,
-        parser_stage: Option<&'static str>,
         attempt_bucket: Option<&'static str>,
     ) {
         let Some(inner) = self.inner.as_ref() else {
@@ -340,13 +338,6 @@ impl GuardrailTelemetrySink for SurveyTelemetry {
                 outcome: match guardrail_outcome_attr(outcome) {
                     Some(value) => value,
                     None => return,
-                },
-                parser_stage: match parser_stage {
-                    Some(value) => match guardrail_parser_stage_attr(value) {
-                        Some(label) => Some(label),
-                        None => return,
-                    },
-                    None => None,
                 },
                 attempt_bucket: match attempt_bucket {
                     Some(value) => match guardrail_attempt_bucket_attr(value) {
@@ -838,16 +829,7 @@ fn guardrail_bypass_reason_attr(value: &'static str) -> Option<&'static str> {
 
 fn guardrail_outcome_attr(value: &'static str) -> Option<&'static str> {
     match value {
-        "pass_through" | "valid" | "rescued" | "retried" | "failed" | "metrics_only_failure" => {
-            Some(value)
-        }
-        _ => None,
-    }
-}
-
-fn guardrail_parser_stage_attr(value: &'static str) -> Option<&'static str> {
-    match value {
-        "none" | "json_exact" | "json_fenced" | "json_substring" => Some(value),
+        "pass_through" | "valid" | "retried" | "failed" | "metrics_only_failure" => Some(value),
         _ => None,
     }
 }
@@ -890,7 +872,6 @@ struct GuardrailOutcomeAttributes {
     mode: &'static str,
     contract: Option<&'static str>,
     outcome: &'static str,
-    parser_stage: Option<&'static str>,
     attempt_bucket: Option<&'static str>,
 }
 
@@ -901,12 +882,6 @@ impl GuardrailOutcomeAttributes {
         attrs.push(KeyValue::new("mesh_llm.guardrail.outcome", self.outcome));
         if let Some(contract) = self.contract {
             attrs.push(KeyValue::new("mesh_llm.guardrail.contract", contract));
-        }
-        if let Some(parser_stage) = self.parser_stage {
-            attrs.push(KeyValue::new(
-                "mesh_llm.guardrail.parser_stage",
-                parser_stage,
-            ));
         }
         if let Some(attempt_bucket) = self.attempt_bucket {
             attrs.push(KeyValue::new(
@@ -1424,7 +1399,6 @@ mod tests {
                 "mesh_llm.guardrail.decision",
                 "mesh_llm.guardrail.mode",
                 "mesh_llm.guardrail.outcome",
-                "mesh_llm.guardrail.parser_stage",
                 "mesh_llm.gpu_count",
                 "mesh_llm.gpu_name",
                 "mesh_llm.gpu_stable_id",
@@ -1495,7 +1469,6 @@ mod tests {
                 mode: "metrics",
                 contract: Some("structured"),
                 outcome: "metrics_only_failure",
-                parser_stage: Some("json_fenced"),
                 attempt_bucket: Some("2"),
             }
             .key_values(),
@@ -1535,8 +1508,7 @@ mod tests {
             source: test_source(),
             mode: "enforce",
             contract: Some("structured"),
-            outcome: "rescued",
-            parser_stage: Some("json_substring"),
+            outcome: "valid",
             attempt_bucket: Some("3_plus"),
         };
         let outcome_kv: HashMap<_, _> = outcome
@@ -1549,12 +1521,6 @@ mod tests {
                 .get("mesh_llm.guardrail.contract")
                 .map(String::as_str),
             Some("structured")
-        );
-        assert_eq!(
-            outcome_kv
-                .get("mesh_llm.guardrail.parser_stage")
-                .map(String::as_str),
-            Some("json_substring")
         );
         assert!(outcome_kv.values().all(|value| {
             !value.contains("prompt")

@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+pub(crate) use mesh_llm_guardrails::strip_thinking_blocks;
 use serde_json::{Map, Value, json};
 
 use crate::{chat::ChatCompletionResponse, common::FinishReason};
@@ -9,9 +10,6 @@ use super::{
     state::{GuardrailRequestOutcome, PreparedGuardrailRequest},
     tools::{MESH_EMIT_STRUCTURED_TOOL_NAME, MESH_RESPOND_TOOL_NAME},
 };
-
-const MAX_RESCUE_INPUT_BYTES: usize = 64 * 1024;
-const MAX_JSON_CANDIDATES: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GuardrailResponseCategory {
@@ -29,18 +27,9 @@ pub(crate) enum GuardrailResponseCategory {
     EmptyOutput,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GuardrailParserStage {
-    None,
-    JsonExact,
-    JsonFenced,
-    JsonSubstring,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClassifiedGuardrailResponse {
     pub category: GuardrailResponseCategory,
-    pub parser_stage: GuardrailParserStage,
     pub visible_content: Option<String>,
     pub tool_calls: Option<Value>,
     pub synthetic_text: Option<String>,
@@ -70,7 +59,6 @@ pub(crate) fn classify_response(
         if visible_content.is_some() {
             return ClassifiedGuardrailResponse {
                 category: GuardrailResponseCategory::MixedTerminalAndTool,
-                parser_stage: GuardrailParserStage::None,
                 visible_content,
                 tool_calls: Some(tool_calls.clone()),
                 synthetic_text: None,
@@ -78,26 +66,16 @@ pub(crate) fn classify_response(
                 finish_reason,
             };
         }
-        return classify_tool_call_value(
-            prepared,
-            tool_calls,
-            GuardrailParserStage::None,
-            finish_reason,
-        );
+        return classify_tool_call_value(prepared, tool_calls, finish_reason);
     }
 
     if visible_content.is_none() {
         return empty_output();
     }
 
-    if let Some(classified) = rescue_from_text(prepared, &stripped, finish_reason) {
-        return classified;
-    }
-
     if request_expects_guarded_contract(prepared) {
         return ClassifiedGuardrailResponse {
             category: GuardrailResponseCategory::MalformedToolText,
-            parser_stage: GuardrailParserStage::None,
             visible_content: None,
             tool_calls: None,
             synthetic_text: None,
@@ -108,7 +86,6 @@ pub(crate) fn classify_response(
 
     ClassifiedGuardrailResponse {
         category: GuardrailResponseCategory::ValidText,
-        parser_stage: GuardrailParserStage::None,
         visible_content,
         tool_calls: None,
         synthetic_text: None,
@@ -117,344 +94,12 @@ pub(crate) fn classify_response(
     }
 }
 
-pub(crate) fn strip_thinking_blocks(content: &str) -> String {
-    let stripped_html = strip_tag_pairs(content, "<think>", "</think>");
-    let stripped_brackets = strip_tag_pairs(&stripped_html, "[THINK]", "[/THINK]");
-    stripped_brackets.trim().to_string()
-}
-
-fn strip_tag_pairs(content: &str, start_tag: &str, end_tag: &str) -> String {
-    let mut remainder = content;
-    let mut result = String::new();
-    while let Some(start_index) = remainder.find(start_tag) {
-        result.push_str(&remainder[..start_index]);
-        let after_start = &remainder[start_index + start_tag.len()..];
-        if let Some(end_index) = after_start.find(end_tag) {
-            remainder = &after_start[end_index + end_tag.len()..];
-        } else {
-            remainder = &remainder[..start_index];
-            break;
-        }
-    }
-    result.push_str(remainder);
-    result
-}
-
-fn rescue_from_text(
-    prepared: &PreparedGuardrailRequest,
-    content: &str,
-    finish_reason: Option<FinishReason>,
-) -> Option<ClassifiedGuardrailResponse> {
-    for json_candidate in openai_json_candidates(content) {
-        if let Ok(value) = serde_json::from_str::<Value>(&json_candidate.content) {
-            let classified =
-                classify_tool_call_value(prepared, &value, json_candidate.stage, finish_reason);
-            if classified.category != GuardrailResponseCategory::MalformedToolText {
-                return Some(classified.without_visible_content());
-            }
-        }
-    }
-
-    if let Some(value) = parse_bracket_args_tool_syntax(content) {
-        let classified = classify_tool_call_value(
-            prepared,
-            &value,
-            GuardrailParserStage::JsonSubstring,
-            finish_reason,
-        );
-        if classified.category != GuardrailResponseCategory::MalformedToolText {
-            return Some(classified.without_visible_content());
-        }
-    }
-
-    if let Some(value) = parse_qwen_xml_syntax(content) {
-        let classified = classify_tool_call_value(
-            prepared,
-            &value,
-            GuardrailParserStage::JsonSubstring,
-            finish_reason,
-        );
-        if classified.category != GuardrailResponseCategory::MalformedToolText {
-            return Some(classified.without_visible_content());
-        }
-    }
-
-    if let Some(value) = parse_granite_tool_call_syntax(content) {
-        let classified = classify_tool_call_value(
-            prepared,
-            &value,
-            GuardrailParserStage::JsonSubstring,
-            finish_reason,
-        );
-        if classified.category != GuardrailResponseCategory::MalformedToolText {
-            return Some(classified.without_visible_content());
-        }
-    }
-
-    None
-}
-
-struct JsonCandidate {
-    content: String,
-    stage: GuardrailParserStage,
-}
-
-fn openai_json_candidates(content: &str) -> Vec<JsonCandidate> {
-    let content = bounded_prefix(content, MAX_RESCUE_INPUT_BYTES);
-    let mut candidates = Vec::new();
-    push_candidate(
-        &mut candidates,
-        content.trim(),
-        GuardrailParserStage::JsonExact,
-    );
-
-    for fenced in fenced_code_blocks(content) {
-        if candidates.len() >= MAX_JSON_CANDIDATES {
-            break;
-        }
-        push_candidate(
-            &mut candidates,
-            fenced.trim(),
-            GuardrailParserStage::JsonFenced,
-        );
-    }
-
-    for balanced in balanced_json_substrings(content) {
-        if candidates.len() >= MAX_JSON_CANDIDATES {
-            break;
-        }
-        push_candidate(
-            &mut candidates,
-            balanced.trim(),
-            GuardrailParserStage::JsonSubstring,
-        );
-    }
-
-    candidates
-}
-
-fn bounded_prefix(content: &str, max_bytes: usize) -> &str {
-    if content.len() <= max_bytes {
-        return content;
-    }
-
-    let mut end = max_bytes;
-    while end > 0 && !content.is_char_boundary(end) {
-        end -= 1;
-    }
-    &content[..end]
-}
-
-fn push_candidate(
-    candidates: &mut Vec<JsonCandidate>,
-    candidate: &str,
-    stage: GuardrailParserStage,
-) {
-    if candidate.is_empty() {
-        return;
-    }
-    if !candidates
-        .iter()
-        .any(|existing| existing.content == candidate)
-    {
-        candidates.push(JsonCandidate {
-            content: candidate.to_string(),
-            stage,
-        });
-    }
-}
-
-fn fenced_code_blocks(content: &str) -> Vec<String> {
-    let mut blocks = Vec::new();
-    let mut remainder = content;
-    while let Some(open_index) = remainder.find("```") {
-        let after_open = &remainder[open_index + 3..];
-        let Some(close_index) = after_open.find("```") else {
-            break;
-        };
-        let block = &after_open[..close_index];
-        let block = block
-            .strip_prefix("json\n")
-            .or_else(|| block.strip_prefix("JSON\n"))
-            .unwrap_or(block);
-        blocks.push(block.to_string());
-        remainder = &after_open[close_index + 3..];
-    }
-    blocks
-}
-
-fn balanced_json_substrings(content: &str) -> Vec<String> {
-    let bytes = content.as_bytes();
-    let mut candidates = Vec::new();
-    for (index, byte) in bytes.iter().enumerate() {
-        if candidates.len() >= MAX_JSON_CANDIDATES {
-            break;
-        }
-        let closing = match byte {
-            b'{' => b'}',
-            b'[' => b']',
-            _ => continue,
-        };
-        if let Some(end) = balanced_substring_end(bytes, index, *byte, closing) {
-            candidates.push(content[index..=end].to_string());
-        }
-    }
-    candidates
-}
-
-fn balanced_substring_end(bytes: &[u8], start: usize, opening: u8, closing: u8) -> Option<usize> {
-    let mut depth = 0_u32;
-    let mut in_string = false;
-    let mut escaped = false;
-    for (index, byte) in bytes.iter().copied().enumerate().skip(start) {
-        if in_string {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            match byte {
-                b'\\' => escaped = true,
-                b'"' => in_string = false,
-                _ => {}
-            }
-            continue;
-        }
-        match byte {
-            b'"' => in_string = true,
-            _ if byte == opening => depth += 1,
-            _ if byte == closing => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return Some(index);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn parse_bracket_args_tool_syntax(content: &str) -> Option<Value> {
-    let marker = "[ARGS]";
-    if let Some(marker_index) = content.find(marker) {
-        let name = content[..marker_index]
-            .trim()
-            .rsplit(|character: char| {
-                !character.is_ascii_alphanumeric() && character != '_' && character != '-'
-            })
-            .next()?
-            .trim();
-        if name.is_empty() {
-            return None;
-        }
-        let after_marker = content[marker_index + marker.len()..].trim_start();
-        let json_text = first_balanced_object(after_marker)?;
-        let arguments = serde_json::from_str::<Value>(&json_text).ok()?;
-        return Some(json!({
-            "name": name,
-            "arguments": arguments,
-        }));
-    }
-
-    parse_parenthesized_tool_call(content)
-}
-
-fn parse_qwen_xml_syntax(content: &str) -> Option<Value> {
-    let function_prefix = "<function=";
-    let start_index = content.find(function_prefix)?;
-    let after_prefix = &content[start_index + function_prefix.len()..];
-    let name_end = after_prefix.find('>')?;
-    let name = after_prefix[..name_end]
-        .trim()
-        .trim_matches('"')
-        .trim_matches('\'');
-    if name.is_empty() {
-        return None;
-    }
-    let body = &after_prefix[name_end + 1..];
-    let function_end = body.find("</function>")?;
-    let parameters_body = &body[..function_end];
-    let mut arguments = Map::new();
-    let mut remainder = parameters_body;
-
-    while let Some(parameter_start) = remainder.find("<parameter=") {
-        let after_parameter = &remainder[parameter_start + "<parameter=".len()..];
-        let name_end = after_parameter.find('>')?;
-        let parameter_name = after_parameter[..name_end]
-            .trim()
-            .trim_matches('"')
-            .trim_matches('\'');
-        if parameter_name.is_empty() {
-            return None;
-        }
-        let parameter_body = &after_parameter[name_end + 1..];
-        let value_end = parameter_body.find("</parameter>")?;
-        let value = parameter_body[..value_end].trim();
-        let parsed_value = serde_json::from_str::<Value>(value)
-            .unwrap_or_else(|_| Value::String(value.to_string()));
-        arguments.insert(parameter_name.to_string(), parsed_value);
-        remainder = &parameter_body[value_end + "</parameter>".len()..];
-    }
-
-    if arguments.is_empty() {
-        return None;
-    }
-
-    Some(json!({
-        "name": name,
-        "arguments": Value::Object(arguments),
-    }))
-}
-
-fn parse_granite_tool_call_syntax(content: &str) -> Option<Value> {
-    let start_tag = "<tool_call>";
-    let end_tag = "</tool_call>";
-    let start_index = content.find(start_tag)?;
-    let after_start = &content[start_index + start_tag.len()..];
-    let end_index = after_start.find(end_tag)?;
-    serde_json::from_str(after_start[..end_index].trim()).ok()
-}
-
-fn first_balanced_object(content: &str) -> Option<String> {
-    let start = content.find('{')?;
-    let end = balanced_substring_end(content.as_bytes(), start, b'{', b'}')?;
-    Some(content[start..=end].to_string())
-}
-
-fn parse_parenthesized_tool_call(content: &str) -> Option<Value> {
-    let open_paren = content.find('(')?;
-    let name = content[..open_paren]
-        .trim()
-        .rsplit(|character: char| {
-            !character.is_ascii_alphanumeric() && character != '_' && character != '-'
-        })
-        .next()?
-        .trim();
-    if name.is_empty() {
-        return None;
-    }
-    let after_open = content[open_paren + 1..].trim_start();
-    let json_text = first_balanced_object(after_open)?;
-    let after_json = after_open[json_text.len()..].trim_start();
-    if !after_json.starts_with(')') {
-        return None;
-    }
-    let arguments = serde_json::from_str::<Value>(&json_text).ok()?;
-    Some(json!({
-        "name": name,
-        "arguments": arguments,
-    }))
-}
-
 fn classify_tool_call_value(
     prepared: &PreparedGuardrailRequest,
     value: &Value,
-    parser_stage: GuardrailParserStage,
     finish_reason: Option<FinishReason>,
 ) -> ClassifiedGuardrailResponse {
-    if let Some(classified) =
-        classify_direct_structured_payload(prepared, value, parser_stage, finish_reason)
-    {
+    if let Some(classified) = classify_direct_structured_payload(prepared, value, finish_reason) {
         return classified;
     }
 
@@ -465,7 +110,6 @@ fn classify_tool_call_value(
         _ => {
             return ClassifiedGuardrailResponse {
                 category: GuardrailResponseCategory::MalformedToolText,
-                parser_stage,
                 visible_content: None,
                 tool_calls: None,
                 synthetic_text: None,
@@ -482,7 +126,6 @@ fn classify_tool_call_value(
             ParsedToolCallStatus::UnknownTool => {
                 return ClassifiedGuardrailResponse {
                     category: GuardrailResponseCategory::UnknownTool,
-                    parser_stage,
                     visible_content: None,
                     tool_calls: None,
                     synthetic_text: None,
@@ -497,7 +140,6 @@ fn classify_tool_call_value(
                     } else {
                         GuardrailResponseCategory::InvalidToolArguments
                     },
-                    parser_stage,
                     visible_content: None,
                     tool_calls: None,
                     synthetic_text: None,
@@ -508,7 +150,6 @@ fn classify_tool_call_value(
             ParsedToolCallStatus::Malformed => {
                 return ClassifiedGuardrailResponse {
                     category: GuardrailResponseCategory::MalformedToolText,
-                    parser_stage,
                     visible_content: None,
                     tool_calls: None,
                     synthetic_text: None,
@@ -532,7 +173,6 @@ fn classify_tool_call_value(
     if request_disables_tool_calls(prepared) {
         return ClassifiedGuardrailResponse {
             category: GuardrailResponseCategory::ToolCallsNotAllowed,
-            parser_stage,
             visible_content: None,
             tool_calls: Some(normalized_tool_calls(&parsed_calls)),
             synthetic_text: None,
@@ -548,7 +188,6 @@ fn classify_tool_call_value(
     {
         return ClassifiedGuardrailResponse {
             category: GuardrailResponseCategory::UnknownTool,
-            parser_stage,
             visible_content: None,
             tool_calls: Some(normalized_tool_calls(&parsed_calls)),
             synthetic_text: None,
@@ -564,7 +203,6 @@ fn classify_tool_call_value(
     {
         return ClassifiedGuardrailResponse {
             category: GuardrailResponseCategory::TooManyToolCalls,
-            parser_stage,
             visible_content: None,
             tool_calls: Some(normalized_tool_calls(&parsed_calls)),
             synthetic_text: None,
@@ -578,7 +216,6 @@ fn classify_tool_call_value(
     {
         return ClassifiedGuardrailResponse {
             category: GuardrailResponseCategory::MixedTerminalAndTool,
-            parser_stage,
             visible_content: None,
             tool_calls: Some(normalized_tool_calls(&parsed_calls)),
             synthetic_text: None,
@@ -591,7 +228,6 @@ fn classify_tool_call_value(
         if parsed_calls.len() != 1 {
             return ClassifiedGuardrailResponse {
                 category: GuardrailResponseCategory::MixedTerminalAndTool,
-                parser_stage,
                 visible_content: None,
                 tool_calls: Some(normalized_tool_calls(&parsed_calls)),
                 synthetic_text: None,
@@ -603,7 +239,6 @@ fn classify_tool_call_value(
         let Some(message) = tool_call.arguments.get("message").and_then(Value::as_str) else {
             return ClassifiedGuardrailResponse {
                 category: GuardrailResponseCategory::InvalidToolArguments,
-                parser_stage,
                 visible_content: None,
                 tool_calls: None,
                 synthetic_text: None,
@@ -613,7 +248,6 @@ fn classify_tool_call_value(
         };
         return ClassifiedGuardrailResponse {
             category: GuardrailResponseCategory::ValidSyntheticRespond,
-            parser_stage,
             visible_content: None,
             tool_calls: Some(normalized_tool_calls(&parsed_calls)),
             synthetic_text: Some(message.to_string()),
@@ -626,7 +260,6 @@ fn classify_tool_call_value(
         if parsed_calls.len() != 1 {
             return ClassifiedGuardrailResponse {
                 category: GuardrailResponseCategory::MixedTerminalAndTool,
-                parser_stage,
                 visible_content: None,
                 tool_calls: Some(normalized_tool_calls(&parsed_calls)),
                 synthetic_text: None,
@@ -646,7 +279,6 @@ fn classify_tool_call_value(
             } else {
                 GuardrailResponseCategory::InvalidStructuredPayload
             },
-            parser_stage,
             visible_content: None,
             tool_calls: if valid_payload {
                 Some(normalized_tool_calls(&parsed_calls))
@@ -669,7 +301,6 @@ fn classify_tool_call_value(
 
     ClassifiedGuardrailResponse {
         category: GuardrailResponseCategory::ValidToolCalls,
-        parser_stage,
         visible_content: None,
         tool_calls: Some(normalized_tool_calls(&parsed_calls)),
         synthetic_text: None,
@@ -681,7 +312,6 @@ fn classify_tool_call_value(
 fn classify_direct_structured_payload(
     prepared: &PreparedGuardrailRequest,
     value: &Value,
-    parser_stage: GuardrailParserStage,
     finish_reason: Option<FinishReason>,
 ) -> Option<ClassifiedGuardrailResponse> {
     if prepared.state.request_contract.has_real_tools() {
@@ -696,7 +326,6 @@ fn classify_direct_structured_payload(
         } else {
             GuardrailResponseCategory::InvalidStructuredPayload
         },
-        parser_stage,
         visible_content: None,
         tool_calls: None,
         synthetic_text: None,
@@ -839,18 +468,10 @@ fn normalized_visible_content(content: &str) -> Option<String> {
 fn empty_output() -> ClassifiedGuardrailResponse {
     ClassifiedGuardrailResponse {
         category: GuardrailResponseCategory::EmptyOutput,
-        parser_stage: GuardrailParserStage::None,
         visible_content: None,
         tool_calls: None,
         synthetic_text: None,
         structured_payload: None,
         finish_reason: None,
-    }
-}
-
-impl ClassifiedGuardrailResponse {
-    fn without_visible_content(mut self) -> Self {
-        self.visible_content = None;
-        self
     }
 }
