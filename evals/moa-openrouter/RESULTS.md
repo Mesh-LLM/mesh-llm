@@ -92,25 +92,66 @@ one.
 Residual tool-selection failures are **semantic** (wrong tool for the job), not
 structural. Validation and criticism cannot close a capability gap.
 
-## Reasoning / answer turns (committee)
+## Reasoning / answer turns (committee) — the one place MoA clearly wins
 
-15 realistic agent-session reasoning turns, fixed aggregator, judged pairwise by
-an out-of-pool different-family judge (gpt-4o-mini), position-swapped.
+40 preregistered agent-session reasoning turns (4 strata × 10) × 3 draws = 120
+trials. Fixed aggregator (`qwen3-32b`); peers `qwen3-14b`,
+`mistral-small-24b`, `minimax-m2.5`. Judged pairwise by an **out-of-pool,
+different-family** judge (`gpt-4o-mini`), **position-swapped** — a win counts
+only if it survives both orderings, otherwise it is a tie.
 
-| comparison | win / tie / loss | sign test |
-|---|---|---|
-| committee (B) vs solo (A) | 6 / 2 / 2 | p=0.29 |
-| layered (C) vs solo (A) | 5 / 2 / 3 | p=0.73 |
-| layered (C) vs committee (B) | 2 / 2 / 6 | p=0.29 |
+- **A** aggregator alone
+- **B** committee: aggregator synthesizes 3 peer drafts (single round)
+- **C** layered: peers first refine seeing each other's drafts, then synthesize
+  (Together's `layers`)
 
-Directionally positive for a single-round committee, **not significant at
-n=10**. Together's extra refinement round (`layers`) *loses* to single-round
-synthesis while costing another full round of peer calls.
+| comparison | win / tie / loss | mean | 95% CI | sign test |
+|---|---|---|---|---|
+| **committee (B) vs solo (A)** | **86 / 16 / 18** | +0.567 | [+0.392, +0.733] | **p = 8.2e-12** |
+| **layered (C) vs solo (A)** | **90 / 11 / 19** | +0.592 | [+0.408, +0.758] | **p = 3.1e-12** |
+| layered (C) vs committee (B) | 57 / 30 / 33 | +0.200 | [+0.008, +0.392] | p = 0.015 |
 
-Caveats: every committee win was also the longer answer (length not cleanly
-ruled out); 20/30 trials were dropped because the aggregator returned empty
-content (reasoning-budget exhaustion — the `content: null` failure Hermes'
-troubleshooting doc also documents).
+Consistent across every stratum (B vs A): planning 25/2/3, explain 22/2/6,
+code_review 20/6/4, reason_over_output 19/6/5.
+
+### Length control
+
+The verbosity confound runs the *opposite* way here, which strengthens the
+result:
+
+| | mean chars |
+|---|---|
+| A solo | 3136 |
+| B committee | 2548 |
+| C layered | 2196 |
+
+The committee produces **shorter** answers than solo and still wins. Restricted
+to the 61 trials where B was shorter than A, B wins **40–14** (p = 5.4e-4). So
+the preference is not length-driven.
+
+### This reverses the pilot — and why
+
+An earlier 15-prompt pilot found B vs A at 6/2/2 (p=0.29, "not significant")
+and layered *losing* to single-round 2/2/6. Both conclusions were wrong,
+because 20 of 30 pilot trials were silently dropped: `response_text` read only
+`/message/content`, so a reasoning model that spends its budget in `reasoning`
+and returns `content: null` looked like an empty answer. That dropped exactly
+the trials where the aggregator struggled — a biased sample. With the fallback
+fixed, **0 of 120 trials skipped**.
+
+The earlier claim "Together's layering is negative value, don't build it" is
+**retracted**: layered beats solo about as strongly as single-round does, and
+edges single-round itself (p=0.015, CI lower bound +0.008 — the weakest of the
+three results, and it costs an extra round of peer calls).
+
+### Caveats
+
+- Prompts are authored for this repo's domain, not a standard benchmark; these
+  numbers are **not** comparable to AlpacaEval-style scores.
+- One aggregator, one peer set, one judge. A single judge model is the main
+  residual risk; self-preference is unlikely (judge is OpenAI-family, pool is
+  Qwen/Mistral/MiniMax) but unmeasured.
+- Judged answer quality, not task success in a real agent loop.
 
 ## Reproducing
 
@@ -131,8 +172,22 @@ Other studies: `matched_peer_structured_study`,
 
 ## Status
 
-Directional. 40 tasks × 10 draws is enough to detect the packing bug (a large
-effect) but **not** to separate the remaining ±0.05 effects. A merge-blocking
-claim needs the preregistered protocol: ~40+ held-out stratified tasks, k≥10,
-the production-selected actor, and end-to-end agent-task success rather than
-first-tool label match.
+**Tool selection — directional, no clear win for multi-model.** 40 tasks × 10
+draws detects the packing bug (a large effect) but cannot separate the
+remaining ±0.05 effects. Every intervention tried (prose advice, structured
+proposals, deterministic correction, semantic correction) was null-to-harmful
+against simply routing to a capable model. Correctly-packed references are
+roughly break-even, positive for a weak actor, mildly negative for a strong
+one — hence gating on actor headroom rather than always/never.
+
+**Reasoning/answer turns — a clear, robust win.** 120 trials, p < 1e-11,
+consistent across all four strata, and the length confound runs against the
+result rather than explaining it. This is where multi-model MoA earns its cost.
+
+The task split follows from the evidence: **route tool turns to the best
+tool-caller; convene the committee on reasoning/answer turns.**
+
+Still outstanding for a merge-blocking claim: end-to-end agent-task success
+(not first-tool label match, not judged answer quality), the production-selected
+actor rather than a pinned one, and a second judge model to bound
+single-judge risk.
