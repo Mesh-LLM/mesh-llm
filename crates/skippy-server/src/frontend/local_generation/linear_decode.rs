@@ -28,6 +28,12 @@ impl StageOpenAiBackend {
         let Some(committed_token_ids) = state.linear_context_tokens.as_mut() else {
             return Ok(LinearProposalProgress::NotUsed);
         };
+        if request
+            .cancellation
+            .is_some_and(openai_frontend::CancellationToken::is_cancelled)
+        {
+            return Err(OpenAiError::backend("request cancelled"));
+        }
         let remaining_new_tokens =
             (request.max_tokens as usize).saturating_sub(state.decoded_tokens);
         // Prefill leaves the final prompt token undecoded. When whole-prompt
@@ -81,6 +87,12 @@ impl StageOpenAiBackend {
         let Some(queried) = queried else {
             return Ok(LinearProposalProgress::NotUsed);
         };
+        if request
+            .cancellation
+            .is_some_and(openai_frontend::CancellationToken::is_cancelled)
+        {
+            return Err(OpenAiError::backend("request cancelled"));
+        }
         let decision_id = queried.proposal.decision_id.clone();
         let receipt = execute_linear_proposal_with_terminal_discard(config, &decision_id, || {
             self.execute_local_linear_proposal(
@@ -95,6 +107,7 @@ impl StageOpenAiBackend {
                     prompt_token_count: request.prompt_token_ids.len(),
                 },
                 queried,
+                request.cancellation,
                 emit_token,
             )
         })?;

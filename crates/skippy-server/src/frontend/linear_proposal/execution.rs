@@ -60,8 +60,10 @@ impl StageOpenAiBackend {
         &self,
         params: LinearProposalExecutionParams<'_>,
         queried: QueriedLinearProposal,
+        cancellation: Option<&openai_frontend::CancellationToken>,
         on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
     ) -> OpenAiResult<Option<LinearProposalReceipt>> {
+        ensure_request_active(cancellation)?;
         let proposal_token_count = queried.proposal.token_ids.len();
         let mut verify_inputs = Vec::with_capacity(proposal_token_count.saturating_add(1));
         verify_inputs.push(params.current);
@@ -71,6 +73,7 @@ impl StageOpenAiBackend {
             params,
             &queried.proposal.token_ids,
             &verify_inputs,
+            cancellation,
             on_token,
         )?
         else {
@@ -134,8 +137,10 @@ impl StageOpenAiBackend {
         params: LinearProposalExecutionParams<'_>,
         proposal_tokens: &[i32],
         verify_inputs: &[i32],
+        cancellation: Option<&openai_frontend::CancellationToken>,
         on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
     ) -> OpenAiResult<Option<LinearProposalExecution>> {
+        ensure_request_active(cancellation)?;
         let verify_timer = Instant::now();
         let verify_lock_timer = Instant::now();
         let mut runtime = self
@@ -192,6 +197,10 @@ impl StageOpenAiBackend {
         let mut reached_stop = false;
         let mut callback_error = None;
         for token in predictions.iter().copied().take(decision.commit_count) {
+            if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
+                callback_error = Some(OpenAiError::backend("request cancelled"));
+                break;
+            }
             committed_tokens.push(token);
             match on_token(token) {
                 Ok(TokenControl::Continue) => {}
@@ -320,6 +329,16 @@ impl StageOpenAiBackend {
             runtime_lock_hold_us,
             runtime_lock_acquires: 1,
         })
+    }
+}
+
+fn ensure_request_active(
+    cancellation: Option<&openai_frontend::CancellationToken>,
+) -> OpenAiResult<()> {
+    if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
+        Err(OpenAiError::backend("request cancelled"))
+    } else {
+        Ok(())
     }
 }
 
