@@ -250,6 +250,7 @@ pub async fn build_moa_config(
         // Gate advisory references on actor strength: they help a weak actor
         // and cost a strong one (evals/moa-openrouter/RESULTS.md).
         reference_policy: moa::ReferencePolicy::Auto,
+        refinement_policy: Default::default(),
     })
 }
 

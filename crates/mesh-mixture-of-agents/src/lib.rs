@@ -41,6 +41,7 @@ pub mod context;
 mod fanout;
 pub mod normalize;
 mod reducer;
+mod refinement;
 pub mod session;
 mod tool_guard;
 mod tool_turn;
@@ -121,6 +122,31 @@ pub struct GatewayConfig {
     pub actor_candidates: Vec<usize>,
     /// Whether tool turns gather advisory references before the actor acts.
     pub reference_policy: ReferencePolicy,
+    /// Whether text turns run a cross-peer refinement round before synthesis.
+    pub refinement_policy: RefinementPolicy,
+}
+
+/// When a text turn should run a cross-peer refinement round (Together's
+/// `layers`): every worker sees all round-1 drafts and rewrites its answer
+/// before the reducer synthesizes.
+///
+/// Measured over 40 preregistered reasoning prompts x 3 draws
+/// (`evals/moa-openrouter/RESULTS.md`): a pool of four 8B-class models beat its
+/// own best member **only** with this round — single-round synthesis was
+/// indistinguishable from the aggregator acting solo (26/75/19, p=0.37) while
+/// refine-then-synthesize won (42/66/12, p=5.2e-05). With a 32B aggregator the
+/// round adds much less over single-round synthesis (p=0.015), so it is not
+/// worth a second fan-out there.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RefinementPolicy {
+    /// Refine when the pool is all small-tier — the case where the round is
+    /// what makes the collective beat its best member.
+    #[default]
+    Auto,
+    /// Always run the refinement round.
+    Always,
+    /// Never refine: synthesize the round-1 drafts directly.
+    Never,
 }
 
 /// When the asymmetric tool path should gather advisory references.
@@ -371,7 +397,7 @@ async fn handle_query(
         });
     }
 
-    let (outputs, summaries, early_decision) = gather_workers_incremental(
+    let (mut outputs, mut summaries, early_decision) = gather_workers_incremental(
         &mut join_set,
         &dispatched,
         allowed_tools,
@@ -383,6 +409,26 @@ async fn handle_query(
         },
     )
     .await;
+
+    // Cross-peer refinement (Together's `layers`): each worker rewrites its
+    // answer after seeing the others'. Only worth a second fan-out when we're
+    // going to synthesize anyway — an early-exit consensus already has its
+    // answer — and only for pool shapes where it measurably pays
+    // (`evals/moa-openrouter/RESULTS.md`). Best-effort: on shortfall we keep
+    // the round-1 outputs.
+    if early_decision.is_none()
+        && refinement::should_refine(config, outputs.len())
+        && let Some((refined, refine_summaries)) =
+            refinement::refine_round(config, session, &outputs).await
+    {
+        tracing::info!(
+            "moa: refinement round produced {} draft(s) from {}",
+            refined.len(),
+            outputs.len(),
+        );
+        outputs = refined;
+        summaries.extend(refine_summaries);
+    }
 
     if outputs.is_empty() {
         return TurnResult {
@@ -1651,6 +1697,7 @@ mod response_builder_tests {
             enable_thinking: Some(false),
             actor_candidates: Vec::new(),
             reference_policy: Default::default(),
+            refinement_policy: Default::default(),
         };
         let forced_tool = ForcedToolChoice {
             name: "lookup_probe_fact".to_string(),

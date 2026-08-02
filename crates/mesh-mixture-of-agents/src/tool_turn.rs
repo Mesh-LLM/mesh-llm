@@ -276,6 +276,7 @@ mod tests {
             enable_thinking: Some(false),
             actor_candidates: Vec::new(),
             reference_policy: policy,
+            refinement_policy: Default::default(),
         }
     }
 

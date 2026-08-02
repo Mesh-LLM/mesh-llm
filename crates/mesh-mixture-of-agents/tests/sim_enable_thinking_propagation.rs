@@ -104,6 +104,7 @@ fn build_config(
         enable_thinking,
         actor_candidates: Vec::new(),
         reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     }
 }
 

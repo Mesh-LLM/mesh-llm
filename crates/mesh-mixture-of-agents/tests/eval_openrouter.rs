@@ -441,6 +441,7 @@ fn moa_config(pool: &[PoolModel], api_key: &str, realism: bool) -> GatewayConfig
         enable_thinking: Some(false),
         actor_candidates: Vec::new(),
         reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     }
 }
 

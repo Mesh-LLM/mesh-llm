@@ -117,6 +117,7 @@ fn four_workers_two_fast_consensus() -> moa::GatewayConfig {
         enable_thinking: None,
         actor_candidates: Vec::new(),
         reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     }
 }
 

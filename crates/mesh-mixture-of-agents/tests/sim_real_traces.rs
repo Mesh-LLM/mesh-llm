@@ -226,6 +226,7 @@ fn config_for(case: &RecordedCase) -> moa::GatewayConfig {
         // fan-out on. Production defaults to `Auto`, which skips advisors for
         // a strong actor — covered by `tool_turn`'s gate tests.
         reference_policy: moa::ReferencePolicy::Always,
+        refinement_policy: Default::default(),
     }
 }
 

@@ -118,6 +118,7 @@ fn config_with_three_recording_workers() -> (
         enable_thinking: None,
         actor_candidates: Vec::new(),
         reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     };
     (config, fast, mid, strong)
 }

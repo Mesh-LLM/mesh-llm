@@ -114,6 +114,7 @@ fn mixed_pool(
         enable_thinking: None,
         actor_candidates: Vec::new(),
         reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     }
 }
 
@@ -222,6 +223,7 @@ async fn same_tier_pool_keeps_early_exit() {
         enable_thinking: None,
         actor_candidates: Vec::new(),
         reference_policy: Default::default(),
+        refinement_policy: Default::default(),
     };
 
     let started = std::time::Instant::now();

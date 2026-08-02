@@ -378,6 +378,39 @@ pub fn pack_for_reference(session: &Session, max_messages: usize) -> PackedConte
     }
 }
 
+/// Pack context for a worker in the cross-peer refinement round.
+///
+/// The worker sees every round-1 draft (its own included, anonymized) and
+/// rewrites its answer. Anonymizing keeps the worker from deferring to a name
+/// it recognizes, and the framing asks for an improved answer rather than a
+/// critique — the reducer still does the final synthesis.
+pub fn pack_for_refinement(session: &Session, drafts: &[String]) -> PackedContext {
+    let mut system = String::from(
+        "Several models independently answered the request below. Their answers \
+         follow. Use them to write a better answer of your own: keep what is \
+         correct, fix what is wrong, and add what is missing. Some answers may be \
+         biased or incorrect, and agreement between them is not proof of \
+         correctness. Reply with your improved answer only.",
+    );
+    for (i, d) in drafts.iter().enumerate() {
+        let bounded = if d.len() > 1200 {
+            format!("{}...", crate::worker::truncate_chars(d, 1197))
+        } else {
+            d.clone()
+        };
+        system.push_str(&format!("\n\n[Answer {}]:\n{bounded}", i + 1));
+    }
+
+    PackedContext {
+        messages: vec![
+            json!({"role": "system", "content": system}),
+            json!({"role": "user", "content": session.last_user_text()}),
+        ],
+        max_tokens: 1024,
+        tools: None,
+    }
+}
+
 /// Pack context for the actor in the asymmetric tool path: "here is advice, now
 /// you act" (not the reducer's "you disagreed, reconcile"). Advice is prose,
 /// per-model length-bounded and truncation-labelled; `has_tools` /
