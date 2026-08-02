@@ -313,7 +313,23 @@ async fn handle_query(
     }
 
     let assignments = worker::assign_roles(&config.models);
-    let grace_mode = grace_mode_for_turn(session, has_tools);
+    let mut grace_mode = grace_mode_for_turn(session, has_tools);
+
+    // When refinement is what creates the value, the answer grace must not
+    // pre-empt it. Grace produces an `early_decision`, and refinement is
+    // skipped whenever one exists — so on an all-small pool (where a single
+    // synthesis round is worth nothing: 26/75/19, p=0.37, vs 42/66/12 with
+    // refinement) one fast peer answering while others straggle would ship a
+    // lone small-model answer and skip the only step that beats the best
+    // member. Variable peer latency is the norm on consumer hardware, so that
+    // would silently disable the feature exactly where it matters.
+    //
+    // The grace still bounds the round-1 wait via `worker_timeout`, and
+    // refinement carries its own half-budget deadline, so disabling grace here
+    // costs bounded latency rather than an unbounded wait.
+    if refinement::refinement_expected(config) {
+        grace_mode = fanout::GraceMode::Disabled;
+    }
 
     // If the caller gave us tools, the workers get tools. Full stop.
     //

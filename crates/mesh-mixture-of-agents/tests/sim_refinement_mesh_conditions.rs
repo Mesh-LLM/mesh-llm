@@ -348,14 +348,23 @@ async fn refinement_still_runs_under_production_grace() {
     );
 }
 
-/// Slow peers must not silently disable refinement either: when round-1 answers
-/// straggle past the grace window, grace ships one of them and refinement is
-/// skipped. This pins the *actual* behaviour so the tradeoff is visible rather
-/// than assumed.
+/// Straggling peers must NOT cost the refinement round.
+///
+/// This is the mesh case: one peer answers instantly, the others lag. The
+/// answer grace would normally ship the fast lone answer and skip refinement —
+/// but on an all-small pool refinement is the only step that beats the best
+/// member (26/75/19, p=0.37 without it vs 42/66/12 with). Since variable peer
+/// latency is the norm on consumer hardware, letting grace win here would
+/// silently disable the feature exactly where it matters, while still paying
+/// for the fan-out.
+///
+/// So when refinement is expected, grace is disabled for the turn. Round 1 is
+/// still bounded by `worker_timeout` and refinement by its own half-budget, so
+/// this costs bounded latency, never an unbounded wait.
 #[tokio::test(flavor = "multi_thread")]
-async fn grace_shipping_a_slow_answer_skips_refinement() {
+async fn straggling_peers_do_not_cost_the_refinement_round() {
     let grace = Duration::from_millis(150);
-    // First peer answers immediately; the others straggle past the grace window.
+    // First peer answers immediately; the others straggle well past the grace.
     let (a, ca) = MeshPeer::new(
         "queues fill up",
         Duration::ZERO,
@@ -380,10 +389,53 @@ async fn grace_shipping_a_slow_answer_skips_refinement() {
 
     let result = moa::handle_turn(&cfg, &request()).await;
 
+    assert!(
+        ca.load(Ordering::SeqCst) + cb.load(Ordering::SeqCst) + cc.load(Ordering::SeqCst) >= 2,
+        "a fast peer answering first must not skip refinement on an all-small pool"
+    );
+    let body = serde_json::to_string(&result.response_body).unwrap();
+    assert!(
+        body.contains(REFINED),
+        "refined drafts must reach the client despite stragglers, got: {body}"
+    );
+    assert_ne!(result.turn_kind, moa::TurnKind::Failed);
+}
+
+/// The grace must still work normally when refinement is NOT in play — a
+/// big-tier pool keeps its fast chat path.
+#[tokio::test(flavor = "multi_thread")]
+async fn grace_still_short_circuits_when_refinement_is_not_expected() {
+    let grace = Duration::from_millis(100);
+    let (a, ca) = MeshPeer::new(
+        "queues fill up",
+        Duration::ZERO,
+        RefineBehavior::Ok(Duration::ZERO),
+    );
+    let (b, cb) = MeshPeer::new(
+        "latency grows unbounded",
+        Duration::from_secs(30), // would stall the turn if grace didn't fire
+        RefineBehavior::Ok(Duration::ZERO),
+    );
+    let cfg = config_with_grace(
+        // Big-tier present => Auto does not refine => grace stays enabled.
+        &[("Qwen3-32B", a), ("Qwen3-8B", b)],
+        moa::RefinementPolicy::Auto,
+        Duration::from_secs(60),
+        grace,
+    );
+
+    let started = std::time::Instant::now();
+    let result = moa::handle_turn(&cfg, &request()).await;
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "grace must still short-circuit a slow peer when refinement is off (took {elapsed:?})"
+    );
     assert_eq!(
-        ca.load(Ordering::SeqCst) + cb.load(Ordering::SeqCst) + cc.load(Ordering::SeqCst),
+        ca.load(Ordering::SeqCst) + cb.load(Ordering::SeqCst),
         0,
-        "grace shipping an early answer must skip the refinement round"
+        "a big-tier pool must not refine"
     );
     assert_ne!(result.turn_kind, moa::TurnKind::Failed);
 }

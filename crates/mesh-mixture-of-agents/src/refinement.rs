@@ -46,19 +46,25 @@ fn refinement_budget(worker_timeout: std::time::Duration) -> std::time::Duration
 /// best member) and skip it when a big-tier model is present to synthesize
 /// directly, since there the extra round buys much less than it costs.
 pub(crate) fn should_refine(config: &GatewayConfig, drafts: usize) -> bool {
-    if drafts < MIN_DRAFTS {
-        return false;
-    }
+    drafts >= MIN_DRAFTS && refinement_expected(config)
+}
+
+/// Will this config refine, given enough drafts?
+///
+/// Depends only on policy and pool shape, so it can be answered *before*
+/// dispatch — which the text path needs in order to decide whether the answer
+/// grace may pre-empt the round.
+pub(crate) fn refinement_expected(config: &GatewayConfig) -> bool {
     match config.refinement_policy {
         RefinementPolicy::Never => false,
-        RefinementPolicy::Always => true,
+        RefinementPolicy::Always => config.models.len() >= MIN_DRAFTS,
         RefinementPolicy::Auto => {
             let big = config
                 .models
                 .iter()
                 .filter(|m| !worker::model_name_is_small_tier(&m.name))
                 .count();
-            big == 0
+            big == 0 && config.models.len() >= MIN_DRAFTS
         }
     }
 }
