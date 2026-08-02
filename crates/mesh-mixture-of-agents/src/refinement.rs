@@ -26,6 +26,19 @@ use std::time::Instant;
 /// Minimum round-1 drafts needed for refinement to be meaningful.
 const MIN_DRAFTS: usize = 2;
 
+/// Share of the worker budget the refinement round may spend.
+///
+/// Refinement sits between round 1 and the reducer, so an unbounded round would
+/// let one turn pay three sequential worker budgets. Half a budget is enough
+/// for a pool that answered round 1 promptly, and caps the worst case at ~2.5x
+/// a plain turn instead of 3x.
+const REFINEMENT_BUDGET_NUMERATOR: u32 = 1;
+const REFINEMENT_BUDGET_DENOMINATOR: u32 = 2;
+
+fn refinement_budget(worker_timeout: std::time::Duration) -> std::time::Duration {
+    worker_timeout / REFINEMENT_BUDGET_DENOMINATOR * REFINEMENT_BUDGET_NUMERATOR
+}
+
 /// Should this text turn run a refinement round?
 ///
 /// `Auto` follows the evidence: refine when the pool is dominated by
@@ -88,8 +101,13 @@ pub(crate) async fn refine_round(
         });
     }
 
-    // Bounded: the round waits for the pool, not for the slowest straggler.
-    let deadline = tokio::time::sleep(config.worker_timeout);
+    // Bounded well inside the worker budget. Refinement is an *optional*
+    // improvement inserted between round 1 and the reducer, so at full
+    // `worker_timeout` a slow pool could pay three sequential budgets for one
+    // turn — the worst outcome on exactly the high-latency meshes this feature
+    // targets. Give the round a fraction of the budget and fall back to the
+    // round-1 drafts if the pool can't refine in that time.
+    let deadline = tokio::time::sleep(refinement_budget(config.worker_timeout));
     tokio::pin!(deadline);
 
     let mut refined = Vec::new();
@@ -218,5 +236,15 @@ mod tests {
     #[test]
     fn auto_is_the_default() {
         assert_eq!(RefinementPolicy::default(), RefinementPolicy::Auto);
+    }
+
+    /// Refinement must not spend a full worker budget: it sits between round 1
+    /// and the reducer, so an unbounded round would make one turn pay three
+    /// sequential budgets on exactly the slow meshes this feature targets.
+    #[test]
+    fn refinement_budget_is_a_fraction_of_the_worker_timeout() {
+        let budget = refinement_budget(Duration::from_secs(60));
+        assert_eq!(budget, Duration::from_secs(30));
+        assert!(budget < Duration::from_secs(60));
     }
 }
