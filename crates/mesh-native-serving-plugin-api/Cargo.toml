@@ -1,0 +1,12 @@
+[package]
+name = "mesh-native-serving-plugin-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Stable native serving-plugin ABI for Mesh Skippy lifecycle and proposals"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true

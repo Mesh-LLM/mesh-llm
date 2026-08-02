@@ -72,6 +72,8 @@ pub struct GenerationReceipt {
 pub struct GenerationStart {
     pub request_id: u64,
     pub session_id: u64,
+    /// Stable caller-supplied agent session admitted at the OpenAI boundary.
+    pub agent_session_id: Option<Box<str>>,
     pub prompt_token_ids: Box<[i32]>,
 }
 
@@ -438,6 +440,7 @@ mod tests {
         let receipt = GenerationReceipt {
             request_id: 1,
             session_id: 2,
+            agent_session_id: None,
             prompt_token_count: prompt.len(),
             prompt_token_digest: generation_token_id_digest(&prompt),
             prompt_token_ids: prompt.to_vec().into_boxed_slice(),

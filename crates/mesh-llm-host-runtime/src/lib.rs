@@ -23,6 +23,7 @@ pub mod proto {
     pub use mesh_llm_protocol::proto::*;
 }
 
+use anyhow::Result;
 pub use crypto::{
     ReleaseAttestationClaims, ReleaseAttestationStatus, ReleaseAttestationSummary,
     ReleaseBuildAttestation, ReleaseSignerTrustStore, TrustedReleaseSigner,
@@ -38,8 +39,6 @@ pub use mesh::requirements::{
     ReleaseAttestationRequirement, SignedBootstrapToken, SignedMeshGenesisPolicy,
 };
 pub use skippy_server::{ModelServingHooks, ModelServingHooksFactory};
-
-use anyhow::Result;
 use std::path::Path;
 
 pub const BUILD_VERSION: &str = mesh_llm_build_info::BUILD_VERSION;

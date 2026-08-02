@@ -57,6 +57,7 @@ impl StageOpenAiBackend {
                 .begin(&GenerationStart {
                     request_id: receipt_request_id,
                     session_id: receipt_session_id,
+                    agent_session_id: receipt_agent_session_id.map(Into::into),
                     prompt_token_ids: receipt_prompt_token_ids.to_vec().into_boxed_slice(),
                 })
                 .map_err(openai_backend_error)?;

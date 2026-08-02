@@ -15,7 +15,6 @@ use crate::frontend::{
 };
 
 const MAX_OPAQUE_DECISION_ID_BYTES: usize = 64;
-const MAX_LINEAR_PROPOSAL_TOKENS: usize = 256;
 
 /// Source-owned identity that Skippy carries without interpreting.
 ///
@@ -97,6 +96,30 @@ pub struct LinearProposalQuery {
     pub max_proposal_tokens: usize,
     /// Advisory deadline the synchronous source must honor.
     pub deadline: Instant,
+}
+
+impl LinearProposalQuery {
+    /// Creates one target-authoritative proposal query.
+    #[must_use]
+    pub fn new(
+        request_id: u64,
+        session_id: u64,
+        prompt_token_count: usize,
+        committed_token_count: usize,
+        decode_step: usize,
+        max_proposal_tokens: usize,
+        deadline: Instant,
+    ) -> Self {
+        Self {
+            request_id,
+            session_id,
+            prompt_token_count,
+            committed_token_count,
+            decode_step,
+            max_proposal_tokens,
+            deadline,
+        }
+    }
 }
 
 /// Why Skippy rejected a source decision without producing a receipt.
@@ -301,11 +324,6 @@ impl LinearProposalIngressConfig {
         if max_proposal_tokens == 0 {
             bail!("linear proposal maximum token count must be greater than zero");
         }
-        if max_proposal_tokens > MAX_LINEAR_PROPOSAL_TOKENS {
-            bail!(
-                "linear proposal maximum token count is {max_proposal_tokens}; hard limit is {MAX_LINEAR_PROPOSAL_TOKENS}"
-            );
-        }
         Ok(Self {
             source,
             deadline,
@@ -379,15 +397,15 @@ pub(crate) fn query_linear_proposal(
     let proposal_started = Instant::now();
     let proposal = config
         .source()
-        .propose(LinearProposalQuery {
-            request_id: params.request_id,
-            session_id: params.session_id,
-            prompt_token_count: params.prompt_token_count,
-            committed_token_count: params.committed_token_count,
-            decode_step: params.decode_step,
+        .propose(LinearProposalQuery::new(
+            params.request_id,
+            params.session_id,
+            params.prompt_token_count,
+            params.committed_token_count,
+            params.decode_step,
             max_proposal_tokens,
             deadline,
-        })
+        ))
         .map_err(openai_backend_error)?;
     let proposal_elapsed_us = elapsed_us(proposal_started);
     let Some(proposal) = proposal else {
@@ -895,12 +913,8 @@ mod tests {
             LinearProposalIngressConfig::new(source.clone(), Duration::from_millis(1), 0).is_err()
         );
         assert!(
-            LinearProposalIngressConfig::new(
-                source.clone(),
-                Duration::from_millis(1),
-                MAX_LINEAR_PROPOSAL_TOKENS + 1,
-            )
-            .is_err()
+            LinearProposalIngressConfig::new(source.clone(), Duration::from_millis(1), 8_192)
+                .is_ok()
         );
         assert!(LinearProposalIngressConfig::new(source, Duration::from_millis(1), 8).is_ok());
     }

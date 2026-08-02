@@ -453,6 +453,7 @@ impl StageOpenAiBackend {
                 .begin(&GenerationStart {
                     request_id: ids.request_id,
                     session_id: ids.session_id,
+                    agent_session_id: ids.agent_session_id.clone(),
                     prompt_token_ids: prompt_token_ids.clone().into_boxed_slice(),
                 })
                 .map_err(openai_backend_error)?;

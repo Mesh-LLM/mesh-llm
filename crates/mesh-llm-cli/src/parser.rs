@@ -138,4 +138,52 @@ mod tests {
             Some(std::path::PathBuf::from("topology.json"))
         );
     }
+
+    #[test]
+    fn native_serving_plugin_requires_the_complete_local_model_contract() {
+        let error = Cli::try_parse_from([
+            "mesh-llm",
+            "--local-model-only",
+            "--native-serving-plugin",
+            "/plugins/cacheline.dylib",
+        ])
+        .expect_err("partial native serving plugin configuration should fail");
+        assert!(error.to_string().contains("native-serving-plugin-config"));
+
+        let cli = Cli::try_parse_from([
+            "mesh-llm",
+            "--local-model-only",
+            "--native-serving-plugin",
+            "/plugins/cacheline.dylib",
+            "--native-serving-plugin-config",
+            "/config/cacheline.toml",
+            "--native-serving-plugin-state",
+            "/state/cacheline",
+            "--native-serving-plugin-deadline-ms",
+            "4",
+        ])
+        .expect("complete native serving plugin configuration should parse");
+        assert_eq!(
+            cli.native_serving_plugin,
+            Some(std::path::PathBuf::from("/plugins/cacheline.dylib"))
+        );
+        assert_eq!(cli.native_serving_plugin_deadline_ms, Some(4));
+    }
+
+    #[test]
+    fn native_serving_plugin_is_rejected_outside_local_model_serving() {
+        let error = Cli::try_parse_from([
+            "mesh-llm",
+            "--native-serving-plugin",
+            "/plugins/cacheline.dylib",
+            "--native-serving-plugin-config",
+            "/config/cacheline.toml",
+            "--native-serving-plugin-state",
+            "/state/cacheline",
+            "--native-serving-plugin-deadline-ms",
+            "4",
+        ])
+        .expect_err("native serving plugins should require local-model serving");
+        assert!(error.to_string().contains("local-model-only"));
+    }
 }
