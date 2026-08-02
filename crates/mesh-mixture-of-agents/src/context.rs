@@ -318,6 +318,66 @@ pub fn pack_for_reducer_selected(
     )
 }
 
+/// Advisor framing for [`pack_for_reference`]. Deliberately does NOT ask for a
+/// tool call: references hold no schemas, so requesting one yields tool-shaped
+/// prose that can pull the actor off its own (better) choice.
+const REFERENCE_PREAMBLE: &str = "\
+You are advising another model that will decide and act on this request. \
+You do not have tools and must not emit a tool call. Give a short, direct \
+analysis: what the request is really asking, and what you would do. Be concise.";
+
+/// Pack context for a **reference** (advisor), Hermes-style: only the
+/// conversation's user/assistant text.
+///
+/// Three things are withheld on purpose:
+/// * the agent's system prompt — an advisor told "you are a coding agent, run
+///   the tests" role-plays the actor instead of advising it;
+/// * the tool-call transcript — it anchors every advisor on the trajectory
+///   already taken, collapsing the error-independence aggregation depends on;
+/// * any instruction to emit a tool call (see [`REFERENCE_PREAMBLE`]).
+///
+/// The view is uniform across advisors (no per-role trimming) and is a stable
+/// function of the history, so it caches across iterations.
+pub fn pack_for_reference(session: &Session, max_messages: usize) -> PackedContext {
+    let mut messages = vec![json!({"role": "system", "content": REFERENCE_PREAMBLE})];
+
+    // User/assistant prose only: no system turn, no tool_calls, no tool results.
+    let history: Vec<Value> = session
+        .messages()
+        .iter()
+        .filter(|m| {
+            let role = m.get("role").and_then(Value::as_str).unwrap_or("");
+            let is_prose = matches!(role, "user" | "assistant");
+            let carries_tool_call = m.get("tool_calls").is_some();
+            let has_text = m
+                .get("content")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.trim().is_empty());
+            is_prose && !carries_tool_call && has_text
+        })
+        .cloned()
+        .collect();
+
+    let start = history.len().saturating_sub(max_messages);
+    messages.extend_from_slice(&history[start..]);
+
+    // Guarantee the current request is present even if it was filtered above.
+    let user_text = session.last_user_text();
+    let last_is_current = messages
+        .last()
+        .and_then(|m| m.get("content").and_then(Value::as_str))
+        == Some(user_text.as_str());
+    if !last_is_current && !user_text.is_empty() {
+        messages.push(json!({"role": "user", "content": user_text}));
+    }
+
+    PackedContext {
+        messages,
+        max_tokens: 600, // Hermes caps advisors; the slowest advisor sets turn latency.
+        tools: None,
+    }
+}
+
 /// Pack context for the actor in the asymmetric tool path: "here is advice, now
 /// you act" (not the reducer's "you disagreed, reconcile"). Advice is prose,
 /// per-model length-bounded and truncation-labelled; `has_tools` /
@@ -866,6 +926,79 @@ mod tests {
         let mut s = Session::new();
         s.ingest(messages, &tools);
         s
+    }
+
+    /// Advisors must not be told to emit a tool call. Asking a schema-less
+    /// model for one yields tool-shaped prose, which measurably pulled the
+    /// actor off its own better choice.
+    #[test]
+    fn reference_packing_never_requests_a_tool_call() {
+        let s = session_with(&[json!({"role": "user", "content": "list src"})], None);
+        let packed = pack_for_reference(&s, 6);
+        let sys = system_text(&packed.messages).to_lowercase();
+        assert!(sys.contains("must not emit a tool call"));
+        assert!(packed.tools.is_none(), "advisors never receive schemas");
+    }
+
+    /// The agent's system prompt is withheld: an advisor handed "you are a
+    /// coding agent, run the tests" role-plays the actor instead of advising.
+    #[test]
+    fn reference_packing_strips_the_agent_system_prompt() {
+        let s = session_with(
+            &[
+                json!({"role": "system", "content": "You are a coding agent. SECRET_MARKER."}),
+                json!({"role": "user", "content": "what is failing?"}),
+            ],
+            None,
+        );
+        let packed = pack_for_reference(&s, 6);
+        let all = serde_json::to_string(&packed.messages).unwrap();
+        assert!(
+            !all.contains("SECRET_MARKER"),
+            "agent system prompt must not reach advisors: {all}"
+        );
+    }
+
+    /// The tool transcript is withheld so advisors stay independent of the
+    /// trajectory already taken — error independence is what makes
+    /// aggregation worth anything.
+    #[test]
+    fn reference_packing_strips_the_tool_transcript() {
+        let s = session_with(
+            &[
+                json!({"role": "user", "content": "find the bug"}),
+                json!({"role": "assistant", "content": Value::Null,
+                       "tool_calls": [{"id": "1", "type": "function",
+                           "function": {"name": "list_dir", "arguments": "{\"path\":\"TRAJECTORY\"}"}}]}),
+                json!({"role": "tool", "tool_call_id": "1", "content": "TOOL_RESULT_MARKER"}),
+                json!({"role": "user", "content": "and now?"}),
+            ],
+            None,
+        );
+        let packed = pack_for_reference(&s, 6);
+        let all = serde_json::to_string(&packed.messages).unwrap();
+        assert!(!all.contains("TOOL_RESULT_MARKER"), "tool results leaked");
+        assert!(!all.contains("TRAJECTORY"), "prior tool_calls leaked");
+        assert!(all.contains("and now?"), "current request must survive");
+    }
+
+    /// Uniform view regardless of role: every advisor sees the same prose,
+    /// so the packing is a stable function of history (and caches).
+    #[test]
+    fn reference_packing_keeps_user_assistant_prose() {
+        let s = session_with(
+            &[
+                json!({"role": "user", "content": "first question"}),
+                json!({"role": "assistant", "content": "first answer"}),
+                json!({"role": "user", "content": "second question"}),
+            ],
+            None,
+        );
+        let packed = pack_for_reference(&s, 6);
+        let all = serde_json::to_string(&packed.messages).unwrap();
+        assert!(all.contains("first question"));
+        assert!(all.contains("first answer"));
+        assert!(all.contains("second question"));
     }
 
     /// Helper: extract the system message content from a packed message vec.

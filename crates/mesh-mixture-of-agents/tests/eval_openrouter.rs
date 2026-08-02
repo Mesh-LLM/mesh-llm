@@ -716,6 +716,15 @@ fn ablation_draws() -> usize {
         .unwrap_or(5)
 }
 
+/// Which reference-packing style to test: `hermes` strips the agent system
+/// prompt and tool transcript and never asks for a tool call; default is the
+/// original worker packing (full system prompt + role-varied history).
+fn reference_packing_is_hermes() -> bool {
+    std::env::var("MOA_REFERENCE_PACKING")
+        .map(|v| v.eq_ignore_ascii_case("hermes"))
+        .unwrap_or(false)
+}
+
 /// Run every non-actor pool model tool-free and collect its prose advice,
 /// exactly as the production reference phase does.
 async fn gather_advice(
@@ -729,12 +738,19 @@ async fn gather_advice(
         if m.id == actor {
             continue; // the actor advises itself implicitly when it acts
         }
-        let packed = moa::context::pack_for_worker_selected(
-            session,
-            moa::worker::WorkerRole::Generalist,
-            false, // tool-free: references only advise
-            &[],
-        );
+        // Packing style under test. MOA_REFERENCE_PACKING=hermes strips the
+        // agent system prompt + tool transcript and drops the "or tool call"
+        // instruction; default reproduces the original worker packing.
+        let packed = if reference_packing_is_hermes() {
+            moa::context::pack_for_reference(session, 6)
+        } else {
+            moa::context::pack_for_worker_selected(
+                session,
+                moa::worker::WorkerRole::Generalist,
+                false, // tool-free: references only advise
+                &[],
+            )
+        };
         match backend
             .chat_completion_retrying(
                 m.id,
