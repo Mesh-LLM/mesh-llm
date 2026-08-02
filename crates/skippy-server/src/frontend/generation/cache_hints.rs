@@ -40,11 +40,15 @@ pub(in crate::frontend) struct OpenAiGenerationIds {
     pub(in crate::frontend) session_id: u64,
     pub(in crate::frontend) request_id: u64,
     pub(in crate::frontend) request_started_at: Instant,
+    pub(in crate::frontend) agent_session_id: Option<Box<str>>,
     pub(in crate::frontend) cache: OpenAiCacheHints,
 }
 
 impl OpenAiGenerationIds {
-    pub(in crate::frontend) fn new(cache: OpenAiCacheHints) -> Self {
+    pub(in crate::frontend) fn new(
+        cache: OpenAiCacheHints,
+        agent_session_id: Option<&str>,
+    ) -> Self {
         let request_started_at = Instant::now();
         let sequence = OPENAI_GENERATION_COUNTER.fetch_add(1, Ordering::Relaxed);
         let session_label = format!("openai-session-{}-{sequence}", now_unix_millis());
@@ -53,6 +57,7 @@ impl OpenAiGenerationIds {
             request_id: stable_wire_id(&[session_label.as_bytes(), b"request"]),
             session_label,
             request_started_at,
+            agent_session_id: agent_session_id.map(Into::into),
             cache,
         }
     }

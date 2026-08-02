@@ -14,7 +14,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{DefaultBodyLimit, State, rejection::JsonRejection},
-    http::{HeaderValue, Method, Request, StatusCode, Uri, header::HeaderName},
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header::HeaderName},
     middleware::{self, Next},
     response::{
         IntoResponse, Response,
@@ -31,6 +31,7 @@ use crate::{
         CancellationToken, OpenAiBackend, OpenAiRequestContext, OpenAiResult, SharedBackend,
     },
     chat::{ChatCompletionChunk, ChatCompletionRequest},
+    common::{AgentSessionIdentity, AgentSessionSource},
     completions::CompletionRequest,
     errors::OpenAiError,
     models::ModelsResponse,
@@ -52,10 +53,13 @@ struct FrontendState {
     config: OpenAiFrontendConfig,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiFrontendConfig {
     pub max_request_body_bytes: usize,
     pub backend_timeout: Option<Duration>,
+    /// Header accepted as stable agent-session identity from the endpoint's
+    /// trusted immediate upstream. `None` disables header-derived identity.
+    pub agent_session_header: Option<HeaderName>,
 }
 
 impl OpenAiFrontendConfig {
@@ -76,6 +80,11 @@ impl OpenAiFrontendConfig {
         self.backend_timeout = None;
         self
     }
+
+    pub fn with_agent_session_header(mut self, header: HeaderName) -> Self {
+        self.agent_session_header = Some(header);
+        self
+    }
 }
 
 impl Default for OpenAiFrontendConfig {
@@ -83,6 +92,7 @@ impl Default for OpenAiFrontendConfig {
         Self {
             max_request_body_bytes: Self::DEFAULT_MAX_REQUEST_BODY_BYTES,
             backend_timeout: Some(Self::DEFAULT_BACKEND_TIMEOUT),
+            agent_session_header: None,
         }
     }
 }
@@ -148,9 +158,11 @@ async fn models(State(state): State<FrontendState>) -> Result<Json<ModelsRespons
 
 async fn chat_completions(
     State(state): State<FrontendState>,
+    headers: HeaderMap,
     payload: Result<Json<ChatCompletionRequest>, JsonRejection>,
 ) -> Result<Response, OpenAiError> {
-    let Json(request) = json_payload(payload)?;
+    let Json(mut request) = json_payload(payload)?;
+    request.set_agent_session(agent_session_from_header(&state.config, &headers)?);
     request.validate()?;
     if request.stream {
         let include_usage = request.include_usage();
@@ -189,13 +201,20 @@ async fn chat_completions(
 
 async fn responses(
     State(state): State<FrontendState>,
+    headers: HeaderMap,
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Response, OpenAiError> {
     let Json(mut value) = json_payload(payload)?;
     let normalization = normalize_openai_compat_request("/v1/responses", &mut value)?;
-    let request: ChatCompletionRequest = serde_json::from_value(value).map_err(|error| {
+    let mut request: ChatCompletionRequest = serde_json::from_value(value).map_err(|error| {
         OpenAiError::invalid_request(format!("invalid Responses request: {error}"))
     })?;
+    let header_session = agent_session_from_header(&state.config, &headers)?;
+    let responses_session = normalization
+        .agent_session_id
+        .map(|id| AgentSessionIdentity::new(id, AgentSessionSource::ResponsesConversation))
+        .transpose()?;
+    request.set_agent_session(resolve_agent_session(header_session, responses_session)?);
     request.validate()?;
     match normalization.response_adapter {
         ResponseAdapterMode::OpenAiResponsesStream => {
@@ -406,9 +425,11 @@ async fn responses(
 
 async fn completions(
     State(state): State<FrontendState>,
+    headers: HeaderMap,
     payload: Result<Json<CompletionRequest>, JsonRejection>,
 ) -> Result<Response, OpenAiError> {
-    let Json(request) = json_payload(payload)?;
+    let Json(mut request) = json_payload(payload)?;
+    request.set_agent_session(agent_session_from_header(&state.config, &headers)?);
     request.validate()?;
     if request.stream {
         let include_usage = request.include_usage();
@@ -435,6 +456,41 @@ async fn completions(
             Json(backend_call(&state, "completion", state.backend.completion(request)).await?)
                 .into_response(),
         )
+    }
+}
+
+fn agent_session_from_header(
+    config: &OpenAiFrontendConfig,
+    headers: &HeaderMap,
+) -> OpenAiResult<Option<AgentSessionIdentity>> {
+    let Some(name) = config.agent_session_header.as_ref() else {
+        return Ok(None);
+    };
+    let Some(value) = headers.get(name) else {
+        return Ok(None);
+    };
+    let value = value.to_str().map_err(|_| {
+        OpenAiError::invalid_request("configured agent-session header is not valid UTF-8")
+    })?;
+    AgentSessionIdentity::new(
+        value,
+        AgentSessionSource::TrustedHeader(name.as_str().to_owned()),
+    )
+    .map(Some)
+}
+
+fn resolve_agent_session(
+    header: Option<AgentSessionIdentity>,
+    protocol: Option<AgentSessionIdentity>,
+) -> OpenAiResult<Option<AgentSessionIdentity>> {
+    match (header, protocol) {
+        (Some(header), Some(protocol)) if header.id() != protocol.id() => {
+            Err(OpenAiError::invalid_request(
+                "trusted agent-session header conflicts with Responses conversation identity",
+            ))
+        }
+        (Some(header), _) => Ok(Some(header)),
+        (None, protocol) => Ok(protocol),
     }
 }
 
@@ -780,6 +836,37 @@ mod tests {
         token: Arc<Mutex<Option<CancellationToken>>>,
     }
 
+    #[derive(Default)]
+    struct SessionCaptureBackend {
+        requests: Arc<Mutex<Vec<ChatCompletionRequest>>>,
+    }
+
+    #[async_trait]
+    impl OpenAiBackend for SessionCaptureBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(vec![ModelObject::new("capture-model")])
+        }
+
+        async fn chat_completion(
+            &self,
+            request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            self.requests.lock().unwrap().push(request.clone());
+            Ok(ChatCompletionResponse::new(
+                request.model,
+                "ok",
+                Usage::new(1, 1),
+            ))
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            unreachable!("agent-session tests use non-streaming requests")
+        }
+    }
     #[async_trait]
     impl OpenAiBackend for CancellationBackend {
         async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
@@ -969,6 +1056,134 @@ mod tests {
         let body = response_body_json(response).await;
         assert_eq!(body["error"]["type"], "server_error");
         assert_eq!(body["error"]["code"], "timeout");
+    }
+
+    #[tokio::test]
+    async fn configured_trusted_header_reaches_backend_as_agent_session_identity() {
+        let backend = Arc::new(SessionCaptureBackend::default());
+        let app = router_for_with_config(
+            backend.clone(),
+            OpenAiFrontendConfig::default()
+                .with_agent_session_header(HeaderName::from_static("x-litellm-session-id")),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("x-litellm-session-id", "agent-thread-42")
+                    .body(Body::from(
+                        json!({
+                            "model": "capture-model",
+                            "messages": [{"role": "user", "content": "hello"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = backend.requests.lock().unwrap();
+        assert_eq!(requests[0].agent_session(), Some("agent-thread-42"));
+        assert_eq!(
+            requests[0].agent_session_source(),
+            Some("x-litellm-session-id")
+        );
+    }
+
+    #[tokio::test]
+    async fn unconfigured_session_header_is_ignored() {
+        let backend = Arc::new(SessionCaptureBackend::default());
+        let app = router_for(backend.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("x-litellm-session-id", "untrusted-thread")
+                    .body(Body::from(
+                        json!({
+                            "model": "capture-model",
+                            "messages": [{"role": "user", "content": "hello"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            backend.requests.lock().unwrap()[0]
+                .agent_session()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_conversation_is_normalized_without_leaking_into_chat_body() {
+        let backend = Arc::new(SessionCaptureBackend::default());
+        let app = router_for(backend.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "capture-model",
+                            "conversation": {"id": "conversation-7"},
+                            "input": "hello"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = backend.requests.lock().unwrap();
+        assert_eq!(requests[0].agent_session(), Some("conversation-7"));
+        assert_eq!(
+            requests[0].agent_session_source(),
+            Some("responses.conversation")
+        );
+        assert!(!requests[0].extra.contains_key("conversation"));
+    }
+
+    #[tokio::test]
+    async fn conflicting_header_and_responses_conversation_fail_closed() {
+        let backend = Arc::new(SessionCaptureBackend::default());
+        let app = router_for_with_config(
+            backend.clone(),
+            OpenAiFrontendConfig::default()
+                .with_agent_session_header(HeaderName::from_static("x-litellm-session-id")),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .header("x-litellm-session-id", "header-session")
+                    .body(Body::from(
+                        json!({
+                            "model": "capture-model",
+                            "conversation": {"id": "body-session"},
+                            "input": "hello"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(backend.requests.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

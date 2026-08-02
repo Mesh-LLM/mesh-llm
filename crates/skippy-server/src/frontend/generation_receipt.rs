@@ -39,6 +39,10 @@ pub struct GenerationReceipt {
     pub request_id: u64,
     /// OpenAI session identity.
     pub session_id: u64,
+    /// Stable caller-supplied agent session, when admitted at the OpenAI
+    /// boundary. Authentication remains an endpoint concern. This is distinct
+    /// from Mesh's request-scoped runtime session.
+    pub agent_session_id: Option<Box<str>>,
     /// Number of target-tokenized prompt-text IDs supplied to local generation.
     ///
     /// For multimodal requests, media embeddings have no token IDs and are not included.
@@ -177,6 +181,7 @@ pub(crate) struct LocalGenerationReceiptDelivery<'a> {
     pub(crate) session_label: &'a str,
     pub(crate) request_id: u64,
     pub(crate) session_id: u64,
+    pub(crate) agent_session_id: Option<&'a str>,
     pub(crate) prompt_token_ids: &'a [i32],
     pub(crate) observation: GenerationReceiptObservation,
 }
@@ -309,6 +314,7 @@ fn build_generation_receipt(
     Ok(GenerationReceipt {
         request_id: delivery.request_id,
         session_id: delivery.session_id,
+        agent_session_id: delivery.agent_session_id.map(Into::into),
         prompt_token_count: delivery.prompt_token_ids.len(),
         prompt_token_digest: generation_token_id_digest(delivery.prompt_token_ids),
         prompt_token_ids: delivery.prompt_token_ids.to_vec().into_boxed_slice(),
@@ -555,6 +561,7 @@ mod tests {
                 session_label: "session",
                 request_id: 2,
                 session_id: 3,
+                agent_session_id: Some("agent-session"),
                 prompt_token_ids: &[4, 5, 6],
                 observation,
             },
@@ -565,6 +572,10 @@ mod tests {
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].final_session_position, 4);
         assert_eq!(receipts[0].generated_token_ids.as_ref(), &[9]);
+        assert_eq!(
+            receipts[0].agent_session_id.as_deref(),
+            Some("agent-session")
+        );
         assert_eq!(
             receipts[0].full_state.as_ref().unwrap().blake3_digest,
             *blake3::hash(b"state").as_bytes()
@@ -581,6 +592,7 @@ mod tests {
                 session_label: "session",
                 request_id: 2,
                 session_id: 3,
+                agent_session_id: None,
                 prompt_token_ids: &[],
                 observation: {
                     let mut observation = GenerationReceiptObservation::new(0);
@@ -606,6 +618,7 @@ mod tests {
                 session_label: "session",
                 request_id: 2,
                 session_id: 3,
+                agent_session_id: None,
                 prompt_token_ids: &[],
                 observation,
             },

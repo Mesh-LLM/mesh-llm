@@ -624,6 +624,7 @@ impl StageOpenAiBackend {
                         session_label: &session_id,
                         request_id: ids.request_id,
                         session_id: ids.session_id,
+                        agent_session_id: ids.agent_session_id.as_deref(),
                         prompt_token_ids: receipt_prompt_token_ids.as_deref().unwrap_or_default(),
                         observation: receipt_observation,
                         cancelled: receipt_cancelled,

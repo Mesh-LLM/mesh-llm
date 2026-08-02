@@ -61,7 +61,10 @@ impl OpenAiBackend for StageOpenAiBackend {
         &self,
         mut request: ChatCompletionRequest,
     ) -> OpenAiResult<ChatCompletionResponse> {
-        let ids = OpenAiGenerationIds::new(OpenAiCacheHints::from_chat_request(&request));
+        let ids = OpenAiGenerationIds::new(
+            OpenAiCacheHints::from_chat_request(&request),
+            request.agent_session(),
+        );
         let request_timer = PhaseTimer::start();
         self.apply_before_chat_hooks(&mut request).await?;
         self.ensure_model(&request.model)?;
@@ -160,7 +163,10 @@ impl OpenAiBackend for StageOpenAiBackend {
         mut request: ChatCompletionRequest,
         context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionStream> {
-        let ids = OpenAiGenerationIds::new(OpenAiCacheHints::from_chat_request(&request));
+        let ids = OpenAiGenerationIds::new(
+            OpenAiCacheHints::from_chat_request(&request),
+            request.agent_session(),
+        );
         self.apply_before_chat_hooks(&mut request).await?;
         self.ensure_model(&request.model)?;
         apply_chat_request_defaults(&mut request, &self.request_defaults);
@@ -215,7 +221,10 @@ impl OpenAiBackend for StageOpenAiBackend {
     }
 
     async fn completion(&self, mut request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
-        let ids = OpenAiGenerationIds::new(OpenAiCacheHints::from_completion_request(&request));
+        let ids = OpenAiGenerationIds::new(
+            OpenAiCacheHints::from_completion_request(&request),
+            request.agent_session(),
+        );
         let request_timer = PhaseTimer::start();
         self.ensure_model(&request.model)?;
         apply_completion_request_defaults(&mut request, &self.request_defaults);
@@ -288,7 +297,10 @@ impl OpenAiBackend for StageOpenAiBackend {
         mut request: CompletionRequest,
         context: OpenAiRequestContext,
     ) -> OpenAiResult<CompletionStream> {
-        let ids = OpenAiGenerationIds::new(OpenAiCacheHints::from_completion_request(&request));
+        let ids = OpenAiGenerationIds::new(
+            OpenAiCacheHints::from_completion_request(&request),
+            request.agent_session(),
+        );
         self.ensure_model(&request.model)?;
         apply_completion_request_defaults(&mut request, &self.request_defaults);
         ensure_completion_runtime_features_supported(&request)?;
