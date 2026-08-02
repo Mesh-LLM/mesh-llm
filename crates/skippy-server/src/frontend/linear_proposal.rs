@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Result, bail};
 use openai_frontend::{OpenAiError, OpenAiResult};
 use serde_json::json;
+use skippy_runtime::SamplingConfig;
 
 use crate::frontend::{
     NativeMtpVerifyWindowDecision, StageOpenAiBackend, TokenControl,
@@ -431,10 +432,16 @@ pub(crate) fn report_linear_proposal_receipt(
 }
 
 pub(crate) fn greedy_linear_proposal_admitted(
-    sampling_enabled: bool,
+    sampling: &SamplingConfig,
     chat_sampling_metadata: Option<&str>,
 ) -> bool {
-    if sampling_enabled {
+    let greedy_equivalent = !sampling.enabled
+        || (sampling.temperature <= 0.0
+            && sampling.presence_penalty == 0.0
+            && sampling.frequency_penalty == 0.0
+            && sampling.repeat_penalty == 1.0
+            && sampling.logit_bias.is_empty());
+    if !greedy_equivalent {
         return false;
     }
     match chat_sampling_metadata {
@@ -971,19 +978,45 @@ mod tests {
     }
 
     #[test]
-    fn greedy_admission_rejects_sampling_and_grammar() {
-        assert!(greedy_linear_proposal_admitted(false, None));
-        assert!(greedy_linear_proposal_admitted(false, Some("{}")));
+    fn greedy_admission_accepts_zero_temperature_and_rejects_logit_modifiers() {
+        let disabled = SamplingConfig::default();
+        let temperature_zero = SamplingConfig {
+            enabled: true,
+            temperature: 0.0,
+            top_p: 0.95,
+            top_k: 40,
+            min_p: 0.05,
+            ..SamplingConfig::default()
+        };
+        let stochastic = SamplingConfig {
+            enabled: true,
+            temperature: 0.8,
+            ..SamplingConfig::default()
+        };
+        let biased_greedy = SamplingConfig {
+            enabled: true,
+            temperature: 0.0,
+            logit_bias: vec![skippy_runtime::LogitBias {
+                token_id: 7,
+                bias: 1.0,
+            }],
+            ..SamplingConfig::default()
+        };
+
+        assert!(greedy_linear_proposal_admitted(&disabled, None));
+        assert!(greedy_linear_proposal_admitted(&disabled, Some("{}")));
         assert!(greedy_linear_proposal_admitted(
-            false,
+            &disabled,
             Some(r#"{"grammar":""}"#)
         ));
-        assert!(!greedy_linear_proposal_admitted(true, None));
+        assert!(greedy_linear_proposal_admitted(&temperature_zero, None));
+        assert!(!greedy_linear_proposal_admitted(&stochastic, None));
+        assert!(!greedy_linear_proposal_admitted(&biased_greedy, None));
         assert!(!greedy_linear_proposal_admitted(
-            false,
+            &disabled,
             Some(r#"{"grammar":"root ::= value"}"#)
         ));
-        assert!(!greedy_linear_proposal_admitted(false, Some("{")));
+        assert!(!greedy_linear_proposal_admitted(&disabled, Some("{")));
     }
 
     #[test]

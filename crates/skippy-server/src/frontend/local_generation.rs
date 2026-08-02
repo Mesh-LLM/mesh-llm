@@ -579,7 +579,7 @@ impl StageOpenAiBackend {
                 && !request.native_mtp_enabled
                 && !generation_hooks_active
                 && greedy_linear_proposal_admitted(
-                    request.sampling.enabled,
+                    request.sampling,
                     request.chat_sampling_metadata,
                 );
             let linear_proposal_max_tokens = if linear_proposals_enabled {
