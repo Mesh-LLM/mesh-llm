@@ -504,10 +504,26 @@ fn user_turn(prompt: &str, tools: Option<Value>) -> Value {
     body
 }
 
+/// Assistant text, mirroring the in-tree backend's fallback chain.
+///
+/// Reasoning models routinely spend their whole budget in `reasoning` and
+/// return `content: null` (the failure Hermes' troubleshooting doc also
+/// documents). Reading `content` alone silently dropped 20/30 committee trials,
+/// so fall back to `reasoning` before declaring the response empty.
 fn response_text(body: &Value) -> String {
-    body.pointer("/choices/0/message/content")
+    let msg = body.pointer("/choices/0/message");
+    let content = msg
+        .and_then(|m| m.get("content"))
         .and_then(Value::as_str)
         .unwrap_or("")
+        .trim();
+    if !content.is_empty() {
+        return content.to_string();
+    }
+    msg.and_then(|m| m.get("reasoning"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
         .to_string()
 }
 
@@ -2038,6 +2054,76 @@ struct CommitteeTrial {
     len_c: usize,
 }
 
+/// One committee trial: build all three arms for a prompt, then judge them.
+/// Returns `None` when an arm produced no usable text (counted as skipped
+/// rather than scored, so an empty output never masquerades as a preference).
+#[allow(clippy::too_many_arguments)]
+async fn run_committee_trial(
+    backend: &Arc<OpenRouterBackend>,
+    aggregator: &str,
+    peers: &[String],
+    judge: &str,
+    draw: usize,
+    task_id: &str,
+    category: &str,
+    prompt: &str,
+) -> Option<CommitteeTrial> {
+    // A: aggregator alone.
+    let a = plain_answer(backend, aggregator, prompt).await?;
+
+    // Peer drafts (round 1), gathered concurrently.
+    let mut drafts = Vec::new();
+    let mut js: tokio::task::JoinSet<Option<String>> = tokio::task::JoinSet::new();
+    for peer in peers {
+        let (b, p, q) = (backend.clone(), peer.clone(), prompt.to_string());
+        js.spawn(async move { plain_answer(&b, &p, &q).await });
+    }
+    while let Some(r) = js.join_next().await {
+        if let Some(d) = r.ok().flatten() {
+            drafts.push(d);
+        }
+    }
+    if drafts.len() < 2 {
+        return None; // not enough peers to form a committee
+    }
+
+    // B: synthesize the round-1 drafts.
+    let b = synthesize(backend, aggregator, prompt, &drafts).await?;
+
+    // C: peers refine seeing each other's drafts, then synthesize.
+    let mut refined = Vec::new();
+    let mut js: tokio::task::JoinSet<Option<String>> = tokio::task::JoinSet::new();
+    for peer in peers {
+        let (bk, p, q, d) = (
+            backend.clone(),
+            peer.clone(),
+            prompt.to_string(),
+            drafts.clone(),
+        );
+        js.spawn(async move { refine(&bk, &p, &q, &d).await });
+    }
+    while let Some(r) = js.join_next().await {
+        if let Some(x) = r.ok().flatten() {
+            refined.push(x);
+        }
+    }
+    let c = synthesize(backend, aggregator, prompt, &refined)
+        .await
+        .unwrap_or_else(|| b.clone());
+
+    Some(CommitteeTrial {
+        draw,
+        task_id: task_id.to_string(),
+        category: category.to_string(),
+        b_vs_a: judge_pair(backend, judge, prompt, &b, &a).await,
+        c_vs_a: judge_pair(backend, judge, prompt, &c, &a).await,
+        c_vs_b: judge_pair(backend, judge, prompt, &c, &b).await,
+        len_a: a.len(),
+        len_b: b.len(),
+        len_c: c.len(),
+    })
+}
+
 /// Does a committee of diverse peers beat the aggregator alone on realistic
 /// reasoning/answer turns? Writes per-trial JSONL; prints win/tie/loss and mean
 /// lengths. Pilot scale by default.
@@ -2067,67 +2153,67 @@ async fn committee_beats_solo_on_reasoning() {
         tasks.len()
     );
 
-    let mut lines: Vec<CommitteeTrial> = Vec::new();
+    // Trials are independent, so run them with bounded concurrency: serial
+    // execution was ~18 calls x 30 trials and far too slow to scale to the
+    // prompt count a defensible claim needs.
+    let concurrency = std::env::var("MOA_COMMITTEE_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4);
+    let backend = Arc::new(backend);
+    let peers = Arc::new(peers);
+    let aggregator = Arc::new(aggregator);
+    let judge = Arc::new(judge);
+    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let skipped = Arc::new(AtomicU64::new(0));
+
+    let mut js: tokio::task::JoinSet<Option<CommitteeTrial>> = tokio::task::JoinSet::new();
     for draw in 0..draws {
         for task in &tasks {
-            let p = &task.prompt;
-            // A: aggregator alone.
-            let Some(a) = plain_answer(&backend, &aggregator, p).await else {
-                continue;
-            };
-            // Peer drafts (round 1).
-            let mut drafts = Vec::new();
-            for peer in &peers {
-                if let Some(d) = plain_answer(&backend, peer, p).await {
-                    drafts.push(d);
-                }
-            }
-            if drafts.len() < 2 {
-                continue; // not enough peers to form a committee this draw
-            }
-            // B: synthesize round-1 drafts.
-            let Some(b) = synthesize(&backend, &aggregator, p, &drafts).await else {
-                continue;
-            };
-            // C: peers refine seeing each other, then synthesize.
-            let mut refined = Vec::new();
-            for peer in &peers {
-                if let Some(r) = refine(&backend, peer, p, &drafts).await {
-                    refined.push(r);
-                }
-            }
-            let c = match synthesize(&backend, &aggregator, p, &refined).await {
-                Some(c) => c,
-                None => b.clone(),
-            };
-
-            let b_vs_a = judge_pair(&backend, &judge, p, &b, &a).await;
-            let c_vs_a = judge_pair(&backend, &judge, p, &c, &a).await;
-            let c_vs_b = judge_pair(&backend, &judge, p, &c, &b).await;
-
-            lines.push(CommitteeTrial {
-                draw,
-                task_id: task.id.clone(),
-                category: task.category.clone(),
-                b_vs_a,
-                c_vs_a,
-                c_vs_b,
-                len_a: a.len(),
-                len_b: b.len(),
-                len_c: c.len(),
-            });
-            eprintln!(
-                "  draw {draw} {:22} B/A={:+} C/A={:+} C/B={:+}  len A{} B{} C{}",
-                task.id,
-                b_vs_a,
-                c_vs_a,
-                c_vs_b,
-                a.len(),
-                b.len(),
-                c.len()
+            let (backend, peers, aggregator, judge, sem, skipped) = (
+                backend.clone(),
+                peers.clone(),
+                aggregator.clone(),
+                judge.clone(),
+                sem.clone(),
+                skipped.clone(),
             );
+            let (id, category, prompt) =
+                (task.id.clone(), task.category.clone(), task.prompt.clone());
+            js.spawn(async move {
+                let _permit = sem.acquire_owned().await.ok()?;
+                let t = run_committee_trial(
+                    &backend,
+                    &aggregator,
+                    &peers,
+                    &judge,
+                    draw,
+                    &id,
+                    &category,
+                    &prompt,
+                )
+                .await;
+                if t.is_none() {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    eprintln!("  draw {draw} {id:22} SKIPPED (empty output)");
+                }
+                t
+            });
         }
     }
+
+    let mut lines: Vec<CommitteeTrial> = Vec::new();
+    while let Some(res) = js.join_next().await {
+        if let Some(t) = res.expect("committee trial panicked") {
+            eprintln!(
+                "  draw {} {:22} B/A={:+} C/A={:+} C/B={:+}  len A{} B{} C{}",
+                t.draw, t.task_id, t.b_vs_a, t.c_vs_a, t.c_vs_b, t.len_a, t.len_b, t.len_c
+            );
+            lines.push(t);
+        }
+    }
+    lines.sort_by(|x, y| (x.draw, &x.task_id).cmp(&(y.draw, &y.task_id)));
+    let skipped = skipped.load(Ordering::Relaxed);
 
     let mut buf = String::new();
     for l in &lines {
@@ -2158,7 +2244,8 @@ async fn committee_beats_solo_on_reasoning() {
         }
     };
     eprintln!(
-        "\n  trials={}  (position-swapped; win only if consistent both orders)",
+        "\n  trials={}  skipped={skipped} (empty output)  \
+         (position-swapped; win only if consistent both orders)",
         lines.len()
     );
     eprintln!("  committee(B) vs alone(A):  win {bw}  tie {bt}  loss {bl}");
