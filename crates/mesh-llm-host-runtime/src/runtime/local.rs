@@ -257,6 +257,7 @@ pub(super) struct LocalOpenAiModelStartSpec<'a> {
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
     pub(super) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub(super) serving_hooks_factory: Option<skippy_server::SharedModelServingHooksFactory>,
     pub(super) http_bind_addr: SocketAddr,
 }
 
@@ -551,6 +552,7 @@ pub(super) async fn start_runtime_local_model(
             skippy_telemetry: spec.skippy_telemetry,
             survey_telemetry: spec.survey_telemetry,
             hook_policy,
+            serving_hooks_factory: None,
             http_bind_addr,
         },
         runtime_model_name,
@@ -697,6 +699,7 @@ async fn start_local_skippy_model(
     let mut options = resolved
         .to_model_load_options(spec.skippy_telemetry.clone())?
         .with_embedded_openai(embedded_openai)
+        .with_serving_hooks_factory(spec.serving_hooks_factory.clone())
         .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
             spec.openai_guardrail_policy.clone(),
         ));
@@ -837,6 +840,7 @@ async fn start_local_layer_package_model(
             skippy_telemetry,
             Some(skippy_native_model_open_event_reporter(reporter_model_ref)),
             skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
+            spec.serving_hooks_factory,
         )
     })
     .await

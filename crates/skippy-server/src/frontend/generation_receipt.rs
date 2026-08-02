@@ -45,6 +45,8 @@ pub struct GenerationReceipt {
     pub prompt_token_count: usize,
     /// Stable digest of the target-tokenized prompt-text IDs.
     pub prompt_token_digest: [u8; 32],
+    /// Exact target-tokenized prompt-text IDs supplied to local generation.
+    pub prompt_token_ids: Box<[i32]>,
     /// Target-authoritative generated token IDs in callback order.
     pub generated_token_ids: Box<[i32]>,
     /// Canonical runtime position captured before session teardown.
@@ -53,12 +55,58 @@ pub struct GenerationReceipt {
     pub termination: GenerationTermination,
     /// Time spent in model generation, excluding receipt delivery.
     pub model_generation_elapsed_us: u64,
+    /// Backend request-start to first generated-token availability.
+    pub request_to_first_token_us: Option<u64>,
+    /// Backend request-start to each generated-token availability, in token order.
+    pub request_to_token_emission_us: Box<[u64]>,
     /// Optional digest of the target runtime's full exported state.
     pub full_state: Option<GenerationStateDigest>,
 }
 
-/// Receives one successful local-generation result before its runtime session is dropped.
+/// Target-authoritative beginning of one local generation lifecycle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenerationStart {
+    pub request_id: u64,
+    pub session_id: u64,
+    pub prompt_token_ids: Box<[i32]>,
+}
+
+/// Target-authoritative termination of a generation that produced no final
+/// receipt. The proposal/session adapter uses this boundary to close durable
+/// request state instead of leaving later requests blocked behind it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GenerationAbort {
+    pub request_id: u64,
+    pub session_id: u64,
+}
+
+/// A canonical target-token delta committed during an active generation.
+///
+/// This is a model-neutral lifecycle event. It deliberately carries no
+/// consumer-specific state or evidence concept: consumers receive only the
+/// target-owned request identity, canonical position, and token delta.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenerationCommit {
+    pub request_id: u64,
+    pub session_id: u64,
+    /// Total generated canonical tokens after applying `token_ids`.
+    pub generated_token_count: usize,
+    pub token_ids: Box<[i32]>,
+}
+
+/// Receives the complete local-generation lifecycle before runtime teardown.
+///
+/// A successful `begin` is followed exactly once by either `record` or
+/// `abort`. Implementations can therefore advance durable request state
+/// without relying on an agent-specific hook.
 pub trait GenerationReceiptSink: Send + Sync {
+    fn begin(&self, start: &GenerationStart) -> Result<()>;
+
+    /// Delivers canonical target tokens before the next proposal lookup.
+    fn committed(&self, commit: &GenerationCommit) -> Result<()>;
+
+    fn abort(&self, abort: &GenerationAbort) -> Result<()>;
+
     /// Records one successful local-generation receipt.
     fn record(&self, receipt: &GenerationReceipt) -> Result<()>;
 }
@@ -118,6 +166,7 @@ pub fn generation_token_id_digest(token_ids: &[i32]) -> [u8; 32] {
 
 pub(crate) struct GenerationReceiptObservation {
     generated_token_ids: Vec<i32>,
+    token_emission_elapsed: Vec<Duration>,
     max_tokens: usize,
     termination: Option<GenerationTermination>,
     model_generation_elapsed: Option<Duration>,
@@ -151,19 +200,34 @@ impl GenerationReceiptObservation {
     pub(crate) fn new(max_tokens: usize) -> Self {
         Self {
             generated_token_ids: Vec::with_capacity(max_tokens.min(4_096)),
+            token_emission_elapsed: Vec::with_capacity(max_tokens.min(4_096)),
             max_tokens,
             termination: None,
             model_generation_elapsed: None,
         }
     }
 
-    pub(crate) fn record_token(&mut self, token_id: i32) -> OpenAiResult<()> {
+    pub(crate) fn record_token(
+        &mut self,
+        token_id: i32,
+        request_elapsed: Duration,
+    ) -> OpenAiResult<()> {
         if self.generated_token_ids.len() >= self.max_tokens {
             return Err(OpenAiError::backend(
                 "generation receipt observed more tokens than the request budget",
             ));
         }
+        if self
+            .token_emission_elapsed
+            .last()
+            .is_some_and(|prior| request_elapsed < *prior)
+        {
+            return Err(OpenAiError::backend(
+                "generation receipt observed non-monotonic token timing",
+            ));
+        }
         self.generated_token_ids.push(token_id);
+        self.token_emission_elapsed.push(request_elapsed);
         Ok(())
     }
 
@@ -185,10 +249,18 @@ impl GenerationReceiptObservation {
         let model_generation_elapsed = self.model_generation_elapsed.ok_or_else(|| {
             OpenAiError::backend("generation receipt is missing model-generation timing")
         })?;
+        let request_to_token_emission_us = self
+            .token_emission_elapsed
+            .into_iter()
+            .map(duration_us)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Ok(FinishedGenerationObservation {
             generated_token_ids: self.generated_token_ids.into_boxed_slice(),
             termination: self.termination.unwrap_or(GenerationTermination::MaxTokens),
             model_generation_elapsed_us: duration_us(model_generation_elapsed),
+            request_to_first_token_us: request_to_token_emission_us.first().copied(),
+            request_to_token_emission_us,
         })
     }
 }
@@ -197,6 +269,8 @@ struct FinishedGenerationObservation {
     generated_token_ids: Box<[i32]>,
     termination: GenerationTermination,
     model_generation_elapsed_us: u64,
+    request_to_first_token_us: Option<u64>,
+    request_to_token_emission_us: Box<[u64]>,
 }
 
 impl StageOpenAiBackend {
@@ -237,10 +311,13 @@ fn build_generation_receipt(
         session_id: delivery.session_id,
         prompt_token_count: delivery.prompt_token_ids.len(),
         prompt_token_digest: generation_token_id_digest(delivery.prompt_token_ids),
+        prompt_token_ids: delivery.prompt_token_ids.to_vec().into_boxed_slice(),
         generated_token_ids: observation.generated_token_ids,
         final_session_position,
         termination: observation.termination,
         model_generation_elapsed_us: observation.model_generation_elapsed_us,
+        request_to_first_token_us: observation.request_to_first_token_us,
+        request_to_token_emission_us: observation.request_to_token_emission_us,
         full_state,
     })
 }
@@ -257,15 +334,22 @@ pub(crate) fn complete_generation_before_cleanup<T>(
     deliver_receipt: impl FnOnce() -> OpenAiResult<()>,
     cleanup: impl FnOnce(),
 ) -> OpenAiResult<T> {
-    let receipt_result = if generation_result.is_ok() {
-        deliver_receipt()
-    } else {
-        Ok(())
-    };
+    let receipt_result = deliver_receipt();
     cleanup();
-    let output = generation_result?;
-    receipt_result?;
-    Ok(output)
+    match generation_result {
+        Ok(output) => {
+            receipt_result?;
+            Ok(output)
+        }
+        Err(primary) => {
+            if receipt_result.is_err() {
+                eprintln!(
+                    "generation lifecycle abort failed; preserving the primary generation error"
+                );
+            }
+            Err(primary)
+        }
+    }
 }
 
 fn state_digest(bytes: &[u8]) -> OpenAiResult<GenerationStateDigest> {
@@ -309,6 +393,18 @@ mod tests {
     }
 
     impl GenerationReceiptSink for RecordingSink {
+        fn begin(&self, _start: &GenerationStart) -> Result<()> {
+            Ok(())
+        }
+
+        fn committed(&self, _commit: &GenerationCommit) -> Result<()> {
+            Ok(())
+        }
+
+        fn abort(&self, _abort: &GenerationAbort) -> Result<()> {
+            Ok(())
+        }
+
         fn record(&self, receipt: &GenerationReceipt) -> Result<()> {
             self.receipts.lock().unwrap().push(receipt.clone());
             self.error
@@ -331,28 +427,82 @@ mod tests {
     }
 
     #[test]
+    fn receipt_prompt_evidence_preserves_exact_signed_token_ids() {
+        let prompt = [-1, 0, 7, i32::MAX];
+        let receipt = GenerationReceipt {
+            request_id: 1,
+            session_id: 2,
+            prompt_token_count: prompt.len(),
+            prompt_token_digest: generation_token_id_digest(&prompt),
+            prompt_token_ids: prompt.to_vec().into_boxed_slice(),
+            generated_token_ids: vec![9].into_boxed_slice(),
+            final_session_position: 4,
+            termination: GenerationTermination::MaxTokens,
+            model_generation_elapsed_us: 3,
+            request_to_first_token_us: Some(1),
+            request_to_token_emission_us: vec![1].into_boxed_slice(),
+            full_state: None,
+        };
+        assert_eq!(receipt.prompt_token_ids.as_ref(), prompt);
+        assert_eq!(receipt.prompt_token_count, receipt.prompt_token_ids.len());
+        assert_eq!(
+            receipt.prompt_token_digest,
+            generation_token_id_digest(&receipt.prompt_token_ids)
+        );
+        assert_eq!(
+            receipt.generated_token_ids.len(),
+            receipt.request_to_token_emission_us.len()
+        );
+        assert_eq!(
+            receipt.request_to_first_token_us,
+            receipt.request_to_token_emission_us.first().copied()
+        );
+    }
+
+    #[test]
     fn observation_keeps_the_callback_stopping_token() {
         let mut observation = GenerationReceiptObservation::new(3);
-        observation.record_token(7).unwrap();
-        observation.record_token(8).unwrap();
+        observation
+            .record_token(7, Duration::from_micros(11))
+            .unwrap();
+        observation
+            .record_token(8, Duration::from_micros(17))
+            .unwrap();
         observation.mark_callback_stop();
         observation.set_model_generation_elapsed(Duration::from_micros(42));
         let finished = observation.finish().unwrap();
         assert_eq!(&*finished.generated_token_ids, &[7, 8]);
         assert_eq!(finished.termination, GenerationTermination::CallbackStop);
         assert_eq!(finished.model_generation_elapsed_us, 42);
+        assert_eq!(finished.request_to_first_token_us, Some(11));
+        assert_eq!(&*finished.request_to_token_emission_us, &[11, 17]);
     }
 
     #[test]
     fn observation_is_bounded_by_the_resolved_token_budget() {
         let mut observation = GenerationReceiptObservation::new(1);
-        observation.record_token(7).unwrap();
+        observation.record_token(7, Duration::ZERO).unwrap();
         assert!(
             observation
-                .record_token(8)
+                .record_token(8, Duration::from_micros(1))
                 .unwrap_err()
                 .to_string()
                 .contains("more tokens than the request budget")
+        );
+    }
+
+    #[test]
+    fn observation_rejects_non_monotonic_token_timing() {
+        let mut observation = GenerationReceiptObservation::new(2);
+        observation
+            .record_token(7, Duration::from_micros(2))
+            .unwrap();
+        assert!(
+            observation
+                .record_token(8, Duration::from_micros(1))
+                .unwrap_err()
+                .to_string()
+                .contains("non-monotonic token timing")
         );
     }
 
@@ -368,10 +518,10 @@ mod tests {
 
         let mut max_tokens = GenerationReceiptObservation::new(0);
         max_tokens.set_model_generation_elapsed(Duration::ZERO);
-        assert_eq!(
-            max_tokens.finish().unwrap().termination,
-            GenerationTermination::MaxTokens
-        );
+        let finished = max_tokens.finish().unwrap();
+        assert_eq!(finished.termination, GenerationTermination::MaxTokens);
+        assert_eq!(finished.request_to_first_token_us, None);
+        assert!(finished.request_to_token_emission_us.is_empty());
     }
 
     #[test]
@@ -390,7 +540,9 @@ mod tests {
         let sink = Arc::new(RecordingSink::default());
         let config = GenerationReceiptConfig::new(sink.clone()).with_full_state_digest(true);
         let mut observation = GenerationReceiptObservation::new(1);
-        observation.record_token(9).unwrap();
+        observation
+            .record_token(9, Duration::from_micros(5))
+            .unwrap();
         observation.set_model_generation_elapsed(Duration::from_micros(17));
         let mut runtime = FakeRuntime {
             position: Ok(4),
@@ -482,13 +634,40 @@ mod tests {
         let generation_error = complete_generation_before_cleanup::<()>(
             Err(OpenAiError::backend("generation failed")),
             || {
-                events.lock().unwrap().push("receipt");
+                events.lock().unwrap().push("abort");
                 Ok(())
             },
             || events.lock().unwrap().push("cleanup"),
         )
         .unwrap_err();
         assert!(generation_error.to_string().contains("generation failed"));
-        assert_eq!(*events.lock().unwrap(), ["cleanup"]);
+        assert_eq!(*events.lock().unwrap(), ["abort", "cleanup"]);
+    }
+
+    #[test]
+    fn receipt_lifecycle_begins_before_generation_and_closes_before_cleanup() {
+        let source = include_str!("local_generation.rs");
+        let begin = source
+            .find(".begin(&GenerationStart")
+            .expect("receipt lifecycle must begin before model execution");
+        let generation = source
+            .find("let result = (||")
+            .expect("local generation body should remain explicit");
+        let record = source
+            .find("observation.record_token(token_id, request.ids.request_started_at.elapsed())?")
+            .expect("receipt should record each generated token");
+        let callback = source
+            .find("let control = on_token(token_id)?")
+            .expect("generation callback should still control stopping");
+        let finalization = source
+            .find("self.finalize_generation_receipt(")
+            .expect("receipt lifecycle should close on every generation outcome");
+        let cleanup = source
+            .find("self.cleanup_local_generation_session")
+            .expect("session should still be dropped");
+        assert!(begin < generation);
+        assert!(record < callback);
+        assert!(callback < finalization);
+        assert!(finalization < cleanup);
     }
 }
