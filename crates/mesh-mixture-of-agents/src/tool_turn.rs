@@ -14,8 +14,8 @@ use crate::reducer::{self, hedged_reducer_call, reducer_candidates};
 use crate::session::Session;
 use crate::worker::{self, WorkerRole};
 use crate::{
-    ForcedToolChoice, GatewayConfig, MOA_ERR_ALL_REDUCERS_FAILED, TurnKind, TurnResult,
-    WorkerSummary, chat_response, enforce_tool_call_contract, error_response,
+    ForcedToolChoice, GatewayConfig, MOA_ERR_ALL_REDUCERS_FAILED, ReferencePolicy, TurnKind,
+    TurnResult, WorkerSummary, chat_response, enforce_tool_call_contract, error_response,
     fallback_worker_response, selected_tool_names_for_turn, tool_call_response,
     tool_proposal_response,
 };
@@ -38,9 +38,18 @@ pub(crate) async fn handle_tool_query(
     let candidates = reducer_candidates(config);
     let actor_top = candidates.first().map(|(name, _)| name.clone());
 
+    // Advisors are gathered only when they're likely to pay for themselves.
     // Actor excluded from advisors so it doesn't pay a redundant advisory pass.
-    let (references, mut summaries) =
-        dispatch_and_gather_references(config, session, actor_top.as_deref()).await;
+    let (references, mut summaries) = if should_gather_references(config, actor_top.as_deref()) {
+        dispatch_and_gather_references(config, session, actor_top.as_deref()).await
+    } else {
+        tracing::debug!(
+            "moa: skipping advisory references (policy={:?}, actor={:?})",
+            config.reference_policy,
+            actor_top,
+        );
+        (Vec::new(), Vec::new())
+    };
 
     let selected = selected_tool_names_for_turn(session, allowed_tools);
     let (messages, tools) = context::pack_for_actor(session, &references, true, &selected);
@@ -83,6 +92,35 @@ pub(crate) async fn handle_tool_query(
         reducer_attempts: attempts,
         turn_kind: TurnKind::Fanout,
         elapsed_ms: start.elapsed().as_millis() as u64,
+    }
+}
+
+/// Should this tool turn gather advisory references?
+///
+/// Under [`ReferencePolicy::Auto`] the answer tracks *actor headroom*. Measured
+/// over 40 preregistered tool tasks x 10 draws with correct advisor packing
+/// (`evals/moa-openrouter/RESULTS.md`):
+///
+/// * weak actor (qwen3-8b): +0.017 net uplift — references help
+/// * strong actor (qwen3-32b): -0.037 net uplift — references cost
+///
+/// Per-stratum the split is sharper still: references gained where the actor
+/// had headroom (search +10, execute +4) and lost where it was already perfect
+/// (inspect -7). So we advise a small-tier actor and let a big-tier one act
+/// alone.
+///
+/// Size tier is a coarse proxy for tool-calling strength; it is the same signal
+/// the host already ranks actors by, and it needs no extra round trip. If a
+/// pool has only one model there is nobody to advise, so we skip regardless.
+fn should_gather_references(config: &GatewayConfig, actor: Option<&str>) -> bool {
+    if config.models.len() < 2 {
+        return false;
+    }
+    match config.reference_policy {
+        ReferencePolicy::Never => false,
+        ReferencePolicy::Always => true,
+        // Unknown actor: fall back to advising, which is the prior behaviour.
+        ReferencePolicy::Auto => actor.is_none_or(worker::model_name_is_small_tier),
     }
 }
 
@@ -211,5 +249,87 @@ fn actor_body(
             Some(t) => tool_call_response(&t.name, &t.fallback_arguments),
             None => chat_response(&acted.payload),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::ModelEntry;
+    use std::time::Duration;
+
+    fn config_with(models: &[&str], policy: ReferencePolicy) -> GatewayConfig {
+        GatewayConfig {
+            backends: Vec::new(),
+            models: models
+                .iter()
+                .map(|n| ModelEntry {
+                    name: (*n).to_string(),
+                    backend_index: 0,
+                })
+                .collect(),
+            worker_timeout: Duration::from_secs(60),
+            hedge_delay: Duration::from_secs(5),
+            reducer_timeout: Duration::from_secs(60),
+            first_answer_grace: Duration::ZERO,
+            strong_patience: Duration::ZERO,
+            enable_thinking: Some(false),
+            actor_candidates: Vec::new(),
+            reference_policy: policy,
+        }
+    }
+
+    const POOL: &[&str] = &["Qwen3-32B", "Qwen3-8B", "Ministral-8B"];
+
+    /// A strong actor is measurably worse with advice (-0.037 net uplift), so
+    /// Auto must let it act alone.
+    #[test]
+    fn auto_skips_references_for_a_big_tier_actor() {
+        let config = config_with(POOL, ReferencePolicy::Auto);
+        assert!(!should_gather_references(&config, Some("Qwen3-32B")));
+    }
+
+    /// A weak actor has headroom advice can fill (+0.017), so Auto advises it.
+    #[test]
+    fn auto_gathers_references_for_a_small_tier_actor() {
+        let config = config_with(POOL, ReferencePolicy::Auto);
+        assert!(should_gather_references(&config, Some("Qwen3-8B")));
+    }
+
+    /// Unknown actor keeps the prior behaviour rather than silently degrading.
+    #[test]
+    fn auto_advises_when_the_actor_is_unknown() {
+        let config = config_with(POOL, ReferencePolicy::Auto);
+        assert!(should_gather_references(&config, None));
+    }
+
+    #[test]
+    fn explicit_policies_override_actor_strength() {
+        let never = config_with(POOL, ReferencePolicy::Never);
+        assert!(!should_gather_references(&never, Some("Qwen3-8B")));
+
+        let always = config_with(POOL, ReferencePolicy::Always);
+        assert!(should_gather_references(&always, Some("Qwen3-32B")));
+    }
+
+    /// Nobody left to advise once the actor is excluded.
+    #[test]
+    fn a_single_model_pool_never_gathers_references() {
+        for policy in [
+            ReferencePolicy::Auto,
+            ReferencePolicy::Always,
+            ReferencePolicy::Never,
+        ] {
+            let config = config_with(&["Qwen3-8B"], policy);
+            assert!(
+                !should_gather_references(&config, Some("Qwen3-8B")),
+                "{policy:?} must not advise a one-model pool"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_is_the_default_policy() {
+        assert_eq!(ReferencePolicy::default(), ReferencePolicy::Auto);
     }
 }

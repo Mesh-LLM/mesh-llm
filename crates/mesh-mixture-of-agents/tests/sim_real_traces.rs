@@ -221,6 +221,11 @@ fn config_for(case: &RecordedCase) -> moa::GatewayConfig {
         // unconditionally off.
         enable_thinking: Some(false),
         actor_candidates: Vec::new(),
+        // This suite exists to verify fan-out accounting (every dispatched
+        // worker attributed, aborted stragglers reconciled), so it pins the
+        // fan-out on. Production defaults to `Auto`, which skips advisors for
+        // a strong actor — covered by `tool_turn`'s gate tests.
+        reference_policy: moa::ReferencePolicy::Always,
     }
 }
 

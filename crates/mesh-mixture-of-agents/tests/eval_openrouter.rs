@@ -440,6 +440,7 @@ fn moa_config(pool: &[PoolModel], api_key: &str, realism: bool) -> GatewayConfig
         // MoA policy: thinking always off (matches effective_enable_thinking_for_moa).
         enable_thinking: Some(false),
         actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
     }
 }
 

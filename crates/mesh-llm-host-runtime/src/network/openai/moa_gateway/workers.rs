@@ -247,6 +247,9 @@ pub async fn build_moa_config(
         // Actor priority for tool turns / synthesis: best tool-caller first.
         // Computed below from gossiped `tool_use`, model size, and peer health.
         actor_candidates,
+        // Gate advisory references on actor strength: they help a weak actor
+        // and cost a strong one (evals/moa-openrouter/RESULTS.md).
+        reference_policy: moa::ReferencePolicy::Auto,
     })
 }
 

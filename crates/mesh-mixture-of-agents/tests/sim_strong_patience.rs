@@ -113,6 +113,7 @@ fn mixed_pool(
         strong_patience,
         enable_thinking: None,
         actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
     }
 }
 
@@ -220,6 +221,7 @@ async fn same_tier_pool_keeps_early_exit() {
         strong_patience: Duration::from_secs(10),
         enable_thinking: None,
         actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
     };
 
     let started = std::time::Instant::now();

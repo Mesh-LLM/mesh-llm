@@ -119,6 +119,27 @@ pub struct GatewayConfig {
     /// its name-derived size tier (big-tier first), preserving prior behaviour
     /// for tests and any caller that doesn't populate it.
     pub actor_candidates: Vec<usize>,
+    /// Whether tool turns gather advisory references before the actor acts.
+    pub reference_policy: ReferencePolicy,
+}
+
+/// When the asymmetric tool path should gather advisory references.
+///
+/// Measured on 40 preregistered tool tasks x 10 draws (see
+/// `evals/moa-openrouter/RESULTS.md`): with correct advisor packing, references
+/// are worth +0.017 net uplift to a weak actor but -0.037 to a strong one. They
+/// help where the actor has headroom and cost where it is already reliable, so
+/// the useful default is to gate on actor strength rather than always or never.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ReferencePolicy {
+    /// Gather references only when the acting model looks weak enough to
+    /// benefit. Cheapest correct default.
+    #[default]
+    Auto,
+    /// Always gather references, regardless of actor strength.
+    Always,
+    /// Never gather references: the actor acts alone (Hermes' `enabled: false`).
+    Never,
 }
 
 // ─── Turn result ─────────────────────────────────────────────────────
@@ -1629,6 +1650,7 @@ mod response_builder_tests {
             strong_patience: Duration::ZERO,
             enable_thinking: Some(false),
             actor_candidates: Vec::new(),
+            reference_policy: Default::default(),
         };
         let forced_tool = ForcedToolChoice {
             name: "lookup_probe_fact".to_string(),

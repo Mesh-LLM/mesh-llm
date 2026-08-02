@@ -103,6 +103,7 @@ fn build_config(
         strong_patience: Duration::ZERO,
         enable_thinking,
         actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
     }
 }
 

@@ -95,6 +95,7 @@ fn three_failing_backends() -> moa::GatewayConfig {
         strong_patience: Duration::ZERO,
         enable_thinking: None,
         actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
     }
 }
 
