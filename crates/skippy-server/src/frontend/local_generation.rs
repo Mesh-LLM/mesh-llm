@@ -32,6 +32,7 @@ pub(super) struct LocalGenerationReceiptFinalization<'a> {
     pub(super) session_label: &'a str,
     pub(super) request_id: u64,
     pub(super) session_id: u64,
+    pub(super) agent_session_id: Option<&'a str>,
     pub(super) prompt_token_ids: &'a [i32],
     pub(super) observation: Option<GenerationReceiptObservation>,
     pub(super) cancelled: bool,
@@ -47,6 +48,7 @@ impl StageOpenAiBackend {
         let session_id = request.ids.session_label.clone();
         let receipt_request_id = request.ids.request_id;
         let receipt_session_id = request.ids.session_id;
+        let receipt_agent_session_id = request.ids.agent_session_id.as_deref();
         let receipt_prompt_token_ids = request.prompt_token_ids;
         let receipt_observation = self.generation_receipt.as_ref().map(|_| {
             RefCell::new(Some(GenerationReceiptObservation::new(
@@ -974,6 +976,7 @@ impl StageOpenAiBackend {
                     session_label: &session_id,
                     request_id: receipt_request_id,
                     session_id: receipt_session_id,
+                    agent_session_id: receipt_agent_session_id,
                     prompt_token_ids: receipt_prompt_token_ids,
                     observation: receipt_observation,
                     cancelled: receipt_cancelled,
@@ -1004,6 +1007,7 @@ impl StageOpenAiBackend {
                     session_label: finalization.session_label,
                     request_id: finalization.request_id,
                     session_id: finalization.session_id,
+                    agent_session_id: finalization.agent_session_id,
                     prompt_token_ids: finalization.prompt_token_ids,
                     observation,
                 })
@@ -1197,7 +1201,7 @@ mod tests {
         };
         let sampling = SamplingConfig::default();
         let prompt_token_ids = [1];
-        let ids = OpenAiGenerationIds::new(OpenAiCacheHints::default());
+        let ids = OpenAiGenerationIds::new(OpenAiCacheHints::default(), None);
         let mut emitted = Vec::new();
         backend.generate_local_tokens(
             LocalGeneration {
@@ -1238,7 +1242,7 @@ mod tests {
         );
 
         sink.fail.store(true, Ordering::Relaxed);
-        let failing_ids = OpenAiGenerationIds::new(OpenAiCacheHints::default());
+        let failing_ids = OpenAiGenerationIds::new(OpenAiCacheHints::default(), None);
         let error = match backend.generate_local_tokens(
             LocalGeneration {
                 prompt_token_ids: &prompt_token_ids,

@@ -8,6 +8,66 @@ use serde_json::Value;
 
 use crate::errors::OpenAiError;
 
+const MAX_AGENT_SESSION_ID_BYTES: usize = 512;
+
+/// Where the OpenAI frontend obtained a stable, caller-authenticated session
+/// identity. The identity is routing/lifecycle metadata, not a request ID or a
+/// prompt-cache key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentSessionSource {
+    /// A header explicitly configured as trusted by the endpoint operator.
+    TrustedHeader(String),
+    /// The protocol-native `conversation.id` from an OpenAI Responses request.
+    ResponsesConversation,
+}
+
+/// Stable opaque identity supplied by the agent or its trusted upstream proxy.
+/// Authentication remains the endpoint operator's responsibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSessionIdentity {
+    id: String,
+    source: AgentSessionSource,
+}
+
+impl AgentSessionIdentity {
+    pub fn new(id: impl Into<String>, source: AgentSessionSource) -> Result<Self, OpenAiError> {
+        let id = id.into();
+        let trimmed = id.trim();
+        if trimmed.is_empty()
+            || trimmed.len() > MAX_AGENT_SESSION_ID_BYTES
+            || trimmed.chars().any(char::is_control)
+        {
+            return Err(OpenAiError::invalid_request(
+                "agent session identity must be non-empty, printable, and at most 512 bytes",
+            ));
+        }
+        Ok(Self {
+            id: trimmed.to_owned(),
+            source,
+        })
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &AgentSessionSource {
+        &self.source
+    }
+}
+
+impl AgentSessionSource {
+    #[must_use]
+    pub(crate) fn label(&self) -> &str {
+        match self {
+            Self::TrustedHeader(header) => header,
+            Self::ResponsesConversation => "responses.conversation",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum StopSequence {
