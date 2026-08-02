@@ -29,8 +29,10 @@ if [[ ! "$expected_sha" =~ ^[[:xdigit:]]{64}$ ]] \
   rm -f "$archive_path" "$checksum_path"
   archive_tmp="$(mktemp "${archive_path}.tmp.XXXXXX")"
   checksum_tmp="$(mktemp "${checksum_path}.tmp.XXXXXX")"
-  if ! curl -fsSL --retry 3 "${base}/${archive}" -o "$archive_tmp" \
-      || ! curl -fsSL --retry 3 "${base}/${archive}.sha256" -o "$checksum_tmp"; then
+  if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
+      "${base}/${archive}" -o "$archive_tmp" \
+      || ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
+        "${base}/${archive}.sha256" -o "$checksum_tmp"; then
     rm -f "$archive_tmp" "$checksum_tmp"
     exit 1
   fi
