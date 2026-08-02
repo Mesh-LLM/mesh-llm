@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::Value;
 
 use crate::{
@@ -118,9 +118,26 @@ fn invalid_tools_value(value: &Value) -> bool {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ChatMessage {
     pub role: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_message_content",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub content: Option<MessageContent>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+fn deserialize_present_message_content<'de, D>(
+    deserializer: D,
+) -> Result<Option<MessageContent>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(D::Error::custom)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -386,5 +403,16 @@ mod tests {
         let value = serde_json::to_value(delta).unwrap();
 
         assert_eq!(value, json!({ "reasoning_content": "Still thinking." }));
+    }
+
+    #[test]
+    fn chat_message_round_trip_preserves_missing_and_null_content() {
+        for expected in [
+            json!({"role": "assistant", "tool_calls": []}),
+            json!({"role": "assistant", "content": null, "tool_calls": []}),
+        ] {
+            let message: ChatMessage = serde_json::from_value(expected.clone()).unwrap();
+            assert_eq!(serde_json::to_value(message).unwrap(), expected);
+        }
     }
 }

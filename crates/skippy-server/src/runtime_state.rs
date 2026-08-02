@@ -459,15 +459,16 @@ impl RuntimeState {
         Ok(native_position)
     }
 
-    pub(crate) fn verify_tokens(
+    pub(crate) fn verify_tokens_sampled(
         &mut self,
         session_id: &str,
         token_ids: &[i32],
+        sampling: Option<&SamplingConfig>,
     ) -> Result<Vec<i32>> {
         let token_count = u64::try_from(token_ids.len())
             .context("linear verification token count exceeds u64")?;
         let session = self.session(session_id)?;
-        let predicted = session.verify_tokens(token_ids)?;
+        let predicted = session.verify_tokens_sampled(token_ids, sampling)?;
         self.add_session_tokens(session_id, token_count);
         Ok(predicted)
     }

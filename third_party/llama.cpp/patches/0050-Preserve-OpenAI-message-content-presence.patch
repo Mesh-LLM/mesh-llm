@@ -1,0 +1,102 @@
+From 551993765b392414535d7359d841b7b1ab614779 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 2 Aug 2026 14:42:39 +1000
+Subject: [PATCH] Preserve OpenAI message content presence
+
+---
+ common/chat.cpp     | 10 +++++++++-
+ common/chat.h       |  5 ++++-
+ tests/test-chat.cpp | 22 ++++++++++++++++++++++
+ 3 files changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/common/chat.cpp b/common/chat.cpp
+index 91658e6df..5498e676f 100644
+--- a/common/chat.cpp
++++ b/common/chat.cpp
+@@ -226,6 +226,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
+                 });
+             }
+         }
++    } else if (!content_present) {
++        // Preserve an omitted OpenAI-compatible content field. Some templates
++        // distinguish this from explicit null and an empty string.
++    } else if (content_is_null) {
++        jmsg["content"] = nullptr;
+     } else {
+         jmsg["content"] = "";
+     }
+@@ -390,6 +395,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+
+             auto has_content    = message.contains("content");
+             auto has_tool_calls = message.contains("tool_calls");
++            msg.content_present = has_content;
+             if (has_content) {
+                 const auto & content = message.at("content");
+                 if (content.is_string()) {
+@@ -408,7 +414,9 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+                         msg_part.text = part.at("text");
+                         msg.content_parts.push_back(msg_part);
+                     }
+-                } else if (!content.is_null()) {
++                } else if (content.is_null()) {
++                    msg.content_is_null = true;
++                } else {
+                     throw std::invalid_argument("Invalid 'content' type: expected string or array, got " +
+                                                 content.dump() +
+                                                 " (ref: https://github.com/ggml-org/llama.cpp/issues/8367)");
+diff --git a/common/chat.h b/common/chat.h
+index d79f4ecd7..b3c846aff 100644
+--- a/common/chat.h
++++ b/common/chat.h
+@@ -86,6 +86,8 @@ struct common_chat_msg {
+     std::string                               reasoning_content;
+     std::string                               tool_name;
+     std::string                               tool_call_id;
++    bool                                      content_present = true;
++    bool                                      content_is_null = false;
+
+     nlohmann::ordered_json to_json_oaicompat(bool concat_typed_text = false) const;
+
+@@ -122,7 +124,8 @@ struct common_chat_msg {
+     bool operator==(const common_chat_msg & other) const {
+         return role == other.role && content == other.content && content_parts == other.content_parts &&
+                tool_calls == other.tool_calls && reasoning_content == other.reasoning_content &&
+-               tool_name == other.tool_name && tool_call_id == other.tool_call_id;
++               tool_name == other.tool_name && tool_call_id == other.tool_call_id &&
++               content_present == other.content_present && content_is_null == other.content_is_null;
+     }
+
+     bool operator!=(const common_chat_msg & other) const { return !(*this == other); }
+diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
+index 431d80dc7..4c30d33ad 100644
+--- a/tests/test-chat.cpp
++++ b/tests/test-chat.cpp
+@@ -1564,6 +1564,28 @@ static void test_msgs_oaicompat_json_conversion() {
+     assert_equals<std::string>(res[0].role, "assistant");
+     assert_equals(true, res[0].content.empty());
+     assert_equals(true, res[0].tool_calls.empty());
++    assert_equals(false, res[0].content_present);
++    assert_equals(
++        std::string("[{\"role\":\"assistant\"}]"),
++        common_chat_msgs_to_json_oaicompat(res).dump());
++
++    auto null_content =
++        common_chat_msgs_parse_oaicompat(json::parse("[{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[]}]"));
++    assert_equals<size_t>(1, null_content.size());
++    assert_equals(true, null_content[0].content_present);
++    assert_equals(true, null_content[0].content_is_null);
++    assert_equals(
++        std::string("[{\"role\":\"assistant\",\"content\":null}]"),
++        common_chat_msgs_to_json_oaicompat(null_content).dump());
++
++    auto empty_content =
++        common_chat_msgs_parse_oaicompat(json::parse("[{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[]}]"));
++    assert_equals<size_t>(1, empty_content.size());
++    assert_equals(true, empty_content[0].content_present);
++    assert_equals(false, empty_content[0].content_is_null);
++    assert_equals(
++        std::string("[{\"role\":\"assistant\",\"content\":\"\"}]"),
++        common_chat_msgs_to_json_oaicompat(empty_content).dump());
+
+     try {
+         common_chat_msgs_parse_oaicompat(json::parse("[{\"role\": \"assistant\"}]"));
