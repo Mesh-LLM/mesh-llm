@@ -286,51 +286,6 @@ async fn benchy_stream_chat_omits_usage_without_stream_option() {
 }
 
 #[tokio::test]
-async fn guarded_benchy_non_stream_chat_rescues_tool_call_text() {
-    let backend = Arc::new(GuardedBenchyBackend::default());
-
-    let response = request_with_app(
-        guarded_backend_app(backend.clone()),
-        "POST",
-        "/v1/chat/completions",
-        json!({
-            "model": BENCHY_MODEL_ID,
-            "messages": [{"role": "user", "content": "weather"}],
-            "tools": [{"type": "function", "function": {"name": "lookup"}}],
-            "tool_choice": "auto"
-        }),
-        Some("guarded-benchy-chat"),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["x-request-id"], "guarded-benchy-chat");
-
-    let body = response_json(response).await;
-    assert!(body["choices"][0]["message"]["content"].is_null());
-    assert_eq!(body["choices"][0]["finish_reason"], "tool_calls");
-    assert_eq!(
-        body["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
-        "lookup"
-    );
-    assert_eq!(
-        body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
-        "{\"city\":\"Sydney\"}"
-    );
-    assert!(!serde_json::to_string(&body).unwrap().contains("_mesh_"));
-
-    let seen_requests = backend.seen_chat_requests.lock().unwrap();
-    assert_eq!(seen_requests.len(), 1);
-    let seen_tools = seen_requests[0]
-        .tools
-        .as_ref()
-        .and_then(Value::as_array)
-        .cloned()
-        .expect("guarded backend should receive tools");
-    assert_eq!(seen_tools[0]["function"]["name"], "lookup");
-    assert_eq!(seen_tools[1]["function"]["name"], "_mesh_respond");
-}
-
-#[tokio::test]
 async fn guarded_benchy_stream_chat_bypasses_guardrails_and_preserves_sse_framing() {
     let backend = Arc::new(GuardedBenchyBackend::default());
 

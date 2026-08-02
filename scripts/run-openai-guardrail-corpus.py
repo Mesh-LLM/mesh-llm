@@ -4,7 +4,7 @@
 The script prefers a live OpenAI-compatible endpoint, but falls back to a
 deterministic fake backend when the runtime is unavailable. It records the
 request mode, expected server mode, prompt corpus, per-case artifacts, and the
-aggregate success, failure, rescue, retry, and latency summaries.
+aggregate success, failure, retry, and latency summaries.
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ class CorpusCase:
     prompt: str
     request_overrides: dict[str, Any]
     expected_outcome: str
-    rescue_count: int
     retry_count: int
     artifact_path: str
 
@@ -82,7 +81,6 @@ def build_corpus() -> list[CorpusCase]:
             prompt="Reply with the word pass-through and nothing else.",
             request_overrides={"stream": True, "max_tokens": 16},
             expected_outcome="pass_through",
-            rescue_count=0,
             retry_count=0,
             artifact_path=".sisyphus/evidence/openai-guardrail-corpus/streaming-pass-through.json",
         ),
@@ -92,19 +90,8 @@ def build_corpus() -> list[CorpusCase]:
             prompt="Use the calculator tool to add 17 and 25, then stop.",
             request_overrides={"tools": [TOOL_SPEC], "tool_choice": "auto", "max_tokens": 64},
             expected_outcome="tool_call",
-            rescue_count=1,
             retry_count=0,
             artifact_path=".sisyphus/evidence/openai-guardrail-corpus/tool-call-reliability.json",
-        ),
-        CorpusCase(
-            case_id="synthetic-respond-rescue",
-            category="tools",
-            prompt="If the first answer fails, fall back to the synthetic _mesh_respond path.",
-            request_overrides={"tools": [TOOL_SPEC], "tool_choice": "auto", "max_tokens": 64},
-            expected_outcome="rescued",
-            rescue_count=1,
-            retry_count=1,
-            artifact_path=".sisyphus/evidence/openai-guardrail-corpus/synthetic-respond-rescue.json",
         ),
         CorpusCase(
             case_id="structured-object",
@@ -112,7 +99,6 @@ def build_corpus() -> list[CorpusCase]:
             prompt="Return a JSON object with status, count, and note.",
             request_overrides={"response_format": {"type": "json_object"}, "max_tokens": 64},
             expected_outcome="structured_object",
-            rescue_count=0,
             retry_count=0,
             artifact_path=".sisyphus/evidence/openai-guardrail-corpus/structured-object.json",
         ),
@@ -132,7 +118,6 @@ def build_corpus() -> list[CorpusCase]:
                 "max_tokens": 64,
             },
             expected_outcome="strict_structured",
-            rescue_count=0,
             retry_count=1,
             artifact_path=".sisyphus/evidence/openai-guardrail-corpus/strict-structured-schema.json",
         ),
@@ -154,7 +139,6 @@ def build_corpus() -> list[CorpusCase]:
                 "max_tokens": 64,
             },
             expected_outcome="unsupported_real_tools_plus_strict_structured",
-            rescue_count=0,
             retry_count=0,
             artifact_path=".sisyphus/evidence/openai-guardrail-corpus/unsupported-tools-plus-structured.json",
         ),
@@ -346,7 +330,6 @@ def run_corpus(base_url: str, model: str, guardrail_mode: str, trials: int) -> d
                     "category": case.category,
                     "artifact_path": case.artifact_path,
                     "expected_outcome": case.expected_outcome,
-                    "rescue_count": case.rescue_count,
                     "retry_count": case.retry_count,
                     "ok": result["ok"],
                     "status": result["status"],
@@ -355,7 +338,6 @@ def run_corpus(base_url: str, model: str, guardrail_mode: str, trials: int) -> d
                 }
             )
 
-    rescue_count = sum(case.rescue_count for case in corpus) * trials
     retry_count = sum(case.retry_count for case in corpus) * trials
 
     return {
@@ -367,7 +349,6 @@ def run_corpus(base_url: str, model: str, guardrail_mode: str, trials: int) -> d
         "total_requests": len(corpus) * trials,
         "success_count": success_count,
         "failure_count": failure_count,
-        "rescue_count": rescue_count,
         "retry_count": retry_count,
         "latency_ms": summarize_latencies(latencies),
         "corpus": [
@@ -375,7 +356,6 @@ def run_corpus(base_url: str, model: str, guardrail_mode: str, trials: int) -> d
                 "case_id": case.case_id,
                 "category": case.category,
                 "expected_outcome": case.expected_outcome,
-                "rescue_count": case.rescue_count,
                 "retry_count": case.retry_count,
                 "artifact_path": case.artifact_path,
             }
