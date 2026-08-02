@@ -153,6 +153,43 @@ three results, and it costs an extra round of peer calls).
   Qwen/Mistral/MiniMax) but unmeasured.
 - Judged answer quality, not task success in a real agent loop.
 
+## The mesh case: can a pool of small models beat its best member?
+
+The question that decides whether mesh MoA is worth running on consumer
+hardware. Same 40 prompts × 3 draws, same judge and controls — but the whole
+pool is 8B-class and **diverse by family**, the shape a few laptops actually
+have:
+
+- aggregator `qwen/qwen3-8b`
+- peers `meta-llama/llama-3.1-8b-instruct`, `ibm-granite/granite-4.1-8b`,
+  `mistralai/ministral-8b-2512`
+
+| comparison | win / tie / loss | mean | 95% CI | sign test |
+|---|---|---|---|---|
+| committee (1 round) vs solo | 26 / 75 / 19 | +0.058 | [−0.092, +0.200] | p = 0.37 **ns** |
+| **layered (2 rounds) vs solo** | **42 / 66 / 12** | +0.250 | [+0.100, +0.400] | **p = 5.2e-05** |
+| **layered vs committee** | **39 / 73 / 8** | +0.258 | [+0.133, +0.392] | **p = 5.5e-06** |
+
+**Yes — but only with the refinement round.** For a small pool, single-round
+synthesis is indistinguishable from the aggregator working alone; the
+cross-peer refinement round is what produces the gain. Compare the strong
+aggregator above, where single-round already wins big and the extra round adds
+comparatively little (p=0.015).
+
+Reading: with weaker members the aggregator has little to work with until the
+peers have *seen each other* and improved their drafts. That is the mechanism
+Together's `layers` provides, and it matters most exactly where mesh operates.
+
+This retracts (again) the pilot claim that layering is negative value. It is
+essential for consumer-hardware pools and merely marginal for strong ones —
+hence `RefinementPolicy::Auto` gates on pool shape rather than always/never.
+
+Caveat: the small pool's ties dominate (75/120 for single-round), so the
+effect is real but smaller than the strong-aggregator case; and answers here
+are *longer* than solo (3654 vs 4064 chars for B, 3839 for C), so unlike the
+strong-pool result the length control is not clean — the C-vs-A win restricted
+to shorter-C trials is 21–12, p=0.16.
+
 ## Reproducing
 
 ```bash
