@@ -131,6 +131,17 @@ impl moa::ModelBackend for MeshPeer {
     }
 }
 
+fn config_with_grace(
+    models: &[(&str, Arc<MeshPeer>)],
+    policy: moa::RefinementPolicy,
+    worker_timeout: Duration,
+    first_answer_grace: Duration,
+) -> moa::GatewayConfig {
+    let mut cfg = config(models, policy, worker_timeout);
+    cfg.first_answer_grace = first_answer_grace;
+    cfg
+}
+
 fn config(
     models: &[(&str, Arc<MeshPeer>)],
     policy: moa::RefinementPolicy,
@@ -287,6 +298,94 @@ async fn total_refinement_failure_falls_back_to_round_one() {
         body.contains("FINAL-FROM-ROUND1"),
         "round-1 drafts must be used when refinement produces nothing, got: {body}"
     );
+}
+
+/// The production-settings check: refinement must still run when
+/// `first_answer_grace` is the real 3s default rather than the ZERO used by the
+/// other tests here.
+///
+/// Grace produces an `early_decision`, and refinement is skipped whenever one
+/// exists — so if grace fired on a fast all-small pool, this feature would be
+/// dead code on real traffic. Grace only arms once the window has *elapsed*, so
+/// a pool that answers promptly reaches synthesis (and refinement) first; this
+/// pins that ordering.
+#[tokio::test(flavor = "multi_thread")]
+async fn refinement_still_runs_under_production_grace() {
+    let (a, ca) = MeshPeer::new(
+        "queues fill up",
+        Duration::ZERO,
+        RefineBehavior::Ok(Duration::ZERO),
+    );
+    let (b, cb) = MeshPeer::new(
+        "latency grows unbounded",
+        Duration::ZERO,
+        RefineBehavior::Ok(Duration::ZERO),
+    );
+    let (c, cc) = MeshPeer::new(
+        "memory exhausts eventually",
+        Duration::ZERO,
+        RefineBehavior::Ok(Duration::ZERO),
+    );
+    let cfg = config_with_grace(
+        &[("Qwen3-8B", a), ("Llama-3.1-8B", b), ("Ministral-8B", c)],
+        moa::RefinementPolicy::Auto,
+        Duration::from_secs(5),
+        // The production default from `build_moa_config`.
+        Duration::from_secs(3),
+    );
+
+    let result = moa::handle_turn(&cfg, &request()).await;
+
+    assert!(
+        ca.load(Ordering::SeqCst) + cb.load(Ordering::SeqCst) + cc.load(Ordering::SeqCst) >= 2,
+        "refinement must still run at the production grace setting, or the \
+         feature is dead code on real traffic"
+    );
+    let body = serde_json::to_string(&result.response_body).unwrap();
+    assert!(
+        body.contains(REFINED),
+        "refined drafts must reach the client under production grace, got: {body}"
+    );
+}
+
+/// Slow peers must not silently disable refinement either: when round-1 answers
+/// straggle past the grace window, grace ships one of them and refinement is
+/// skipped. This pins the *actual* behaviour so the tradeoff is visible rather
+/// than assumed.
+#[tokio::test(flavor = "multi_thread")]
+async fn grace_shipping_a_slow_answer_skips_refinement() {
+    let grace = Duration::from_millis(150);
+    // First peer answers immediately; the others straggle past the grace window.
+    let (a, ca) = MeshPeer::new(
+        "queues fill up",
+        Duration::ZERO,
+        RefineBehavior::Ok(Duration::ZERO),
+    );
+    let (b, cb) = MeshPeer::new(
+        "latency grows unbounded",
+        Duration::from_millis(600),
+        RefineBehavior::Ok(Duration::ZERO),
+    );
+    let (c, cc) = MeshPeer::new(
+        "memory exhausts eventually",
+        Duration::from_millis(600),
+        RefineBehavior::Ok(Duration::ZERO),
+    );
+    let cfg = config_with_grace(
+        &[("Qwen3-8B", a), ("Llama-3.1-8B", b), ("Ministral-8B", c)],
+        moa::RefinementPolicy::Auto,
+        Duration::from_secs(5),
+        grace,
+    );
+
+    let result = moa::handle_turn(&cfg, &request()).await;
+
+    assert_eq!(
+        ca.load(Ordering::SeqCst) + cb.load(Ordering::SeqCst) + cc.load(Ordering::SeqCst),
+        0,
+        "grace shipping an early answer must skip the refinement round"
+    );
+    assert_ne!(result.turn_kind, moa::TurnKind::Failed);
 }
 
 #[tokio::test(flavor = "multi_thread")]
