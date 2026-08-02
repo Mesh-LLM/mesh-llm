@@ -899,10 +899,14 @@ impl SkippyModelHandle {
         Some(guardrails.status())
     }
 
-    pub(crate) fn start_http(&self, port: u16) -> SkippyHttpHandle {
+    pub(crate) fn start_http(&self, port: u16) -> Result<SkippyHttpHandle> {
         let bind_addr = ([127, 0, 0, 1], port).into();
-        let server = skippy_server::start_openai_backend(bind_addr, self.backend());
-        SkippyHttpHandle { port, server }
+        let tokenizer = self
+            .runtime
+            .tokenizer_capability()
+            .context("loaded Skippy runtime cannot provide its stage-0 tokenizer capability")?;
+        let server = skippy_server::start_openai_backend(bind_addr, self.backend(), tokenizer);
+        Ok(SkippyHttpHandle { port, server })
     }
 
     pub(crate) fn status(&self) -> SkippyModelStatus {

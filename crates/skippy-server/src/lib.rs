@@ -15,6 +15,7 @@ pub mod kv_proto;
 pub mod package;
 pub mod runtime_state;
 pub mod telemetry;
+pub mod tokenizer;
 
 // Re-export key types for consumers
 pub use binary_transport::serve_binary;
@@ -37,3 +38,4 @@ pub use frontend::{
     generation_token_id_digest,
 };
 pub use skippy_protocol::StageConfig;
+pub use tokenizer::{MAX_TOKENIZE_TOKENS, TokenizerCapability, TokenizerCapabilityError};

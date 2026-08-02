@@ -58,6 +58,14 @@ pub struct BufferedHttpRequest {
 }
 
 impl BufferedHttpRequest {
+    /// Whether this is the product tokenizer capability route.
+    ///
+    /// This deliberately requires the exact method and path. Tokenization is
+    /// not a generation request and must never inherit chat routing behavior.
+    pub fn is_tokenize_request(&self) -> bool {
+        is_tokenize_request(&self.method, &self.path)
+    }
+
     pub fn ensure_body_json(&mut self) {
         if self.body_json.is_none() && !self.body_json_attempted {
             self.body_json = self
@@ -84,6 +92,14 @@ struct RequestMetadata {
     max_output_tokens: Option<u32>,
     #[serde(default)]
     n_predict: Option<u32>,
+    #[serde(default)]
+    expected_identity: Option<RequestExpectedIdentity>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RequestExpectedIdentity {
+    #[serde(default)]
+    model_id: Option<String>,
 }
 
 struct RequestRewriteOutcome {
@@ -124,8 +140,14 @@ pub(super) async fn read_http_request_with_limits(
     let body =
         read_buffered_request_body(stream, &mut raw, &parsed, header_end, body_limits).await?;
 
+    let tokenize_request = is_tokenize_request(&parsed.method, &parsed.path);
     let metadata = if body.is_empty() {
         None
+    } else if tokenize_request {
+        Some(
+            serde_json::from_slice::<RequestMetadata>(&body)
+                .context("parse /v1/tokenize request metadata")?,
+        )
     } else {
         serde_json::from_slice::<RequestMetadata>(&body).ok()
     };
@@ -148,7 +170,19 @@ pub(super) async fn read_http_request_with_limits(
             ResponseAdapter::OpenAiChatCompletionsJson
         };
     }
-    let model_name = metadata.as_ref().and_then(|value| value.model.clone());
+    let model_name = if tokenize_request {
+        Some(
+            metadata
+                .as_ref()
+                .and_then(|value| value.expected_identity.as_ref())
+                .and_then(|identity| identity.model_id.as_deref())
+                .filter(|model_id| !model_id.is_empty())
+                .context("/v1/tokenize requires non-empty expected_identity.model_id")?
+                .to_owned(),
+        )
+    } else {
+        metadata.as_ref().and_then(|value| value.model.clone())
+    };
     let completion_tokens = metadata.as_ref().and_then(|value| {
         value
             .max_completion_tokens
@@ -640,6 +674,10 @@ pub fn is_drop_request(method: &str, path: &str) -> bool {
     method == "POST" && path == "/mesh/drop"
 }
 
+fn is_tokenize_request(method: &str, path: &str) -> bool {
+    method == "POST" && path == "/v1/tokenize"
+}
+
 pub fn pipeline_request_supported(path: &str, body: &serde_json::Value) -> bool {
     let path = path.split('?').next().unwrap_or(path);
     path == "/v1/chat/completions"
@@ -657,6 +695,13 @@ pub fn rewrite_public_model_alias(
     let Some(requested) = request.model_name.as_deref() else {
         return;
     };
+    if request.is_tokenize_request() {
+        // Tokenizer identity is authoritative end to end. Rewriting only the
+        // routing key would send a different expected identity to the target
+        // and correctly fail its authority check. Require an exact served
+        // identity instead.
+        return;
+    }
     if requested == "auto" || models.iter().any(|model| model == requested) {
         return;
     }
@@ -834,6 +879,27 @@ mod tests {
     async fn read_request_from_parts(parts: Vec<Vec<u8>>) -> BufferedHttpRequest {
         read_request_from_parts_with_limits(parts, HTTP_READ_LIMITS).await
     }
+
+    fn tokenize_http_request(model_id: &str, text_bytes: usize) -> (Vec<u8>, Vec<u8>) {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "expected_identity": {
+                "model_id": model_id,
+                "source_model_sha256": "a".repeat(64),
+                "tokenizer_id": format!("gguf-source-sha256:{}", "a".repeat(64)),
+            },
+            "text": "x".repeat(text_bytes),
+            "add_special": false,
+            "include_token_pieces": false,
+        }))
+        .expect("tokenizer request should serialize");
+        let mut raw = format!(
+            "POST /v1/tokenize HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(&body);
+        (raw, body)
+    }
     fn build_chunked_request(body: &[u8], chunks: &[usize]) -> Vec<u8> {
         let mut out = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
         let mut pos = 0usize;
@@ -899,6 +965,52 @@ mod tests {
 
         assert_eq!(request.model_name.as_deref(), Some(models[0].as_str()));
         assert_eq!(request.body_json.as_ref().unwrap()["model"], models[0]);
+    }
+
+    #[test]
+    fn tokenize_route_is_strict() {
+        assert!(is_tokenize_request("POST", "/v1/tokenize"));
+        assert!(!is_tokenize_request("GET", "/v1/tokenize"));
+        assert!(!is_tokenize_request("POST", "/v1/tokenize?mode=fast"));
+        assert!(!is_tokenize_request("POST", "/v1/tokenize/"));
+    }
+
+    #[tokio::test]
+    async fn large_tokenize_request_routes_by_expected_identity_without_parsing_chat_body() {
+        let model_id = "acme/code-model:Q4_K_M";
+        let (raw, body) = tokenize_http_request(model_id, 140_000);
+        let request = read_request_from_parts(vec![raw]).await;
+
+        assert!(request.is_tokenize_request());
+        assert_eq!(request.model_name.as_deref(), Some(model_id));
+        assert!(request.body_json.is_none());
+        assert!(!request.body_json_attempted);
+        assert!(request.body_len_bytes / 4 > 32_768);
+        assert_eq!(request.body_bytes.as_deref(), Some(body.as_slice()));
+        let forwarded_body_start = request
+            .raw
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("forwarded headers should terminate")
+            + 4;
+        assert_eq!(&request.raw[forwarded_body_start..], body.as_slice());
+    }
+
+    #[tokio::test]
+    async fn tokenizer_identity_is_not_alias_rewritten() {
+        let internal = "CodeModel-Q4_K_M".to_owned();
+        let descriptors = vec![catalog_model_ref_descriptor(&internal)];
+        let public = "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M";
+        let (raw, _) = tokenize_http_request(public, 140_000);
+        let mut request = read_request_from_parts(vec![raw]).await;
+        let forwarded_before_alias_resolution = request.raw.clone();
+
+        rewrite_public_model_alias(&mut request, std::slice::from_ref(&internal), &descriptors);
+
+        assert_eq!(request.raw, forwarded_before_alias_resolution);
+        assert_eq!(request.model_name.as_deref(), Some(public));
+        assert!(request.body_json.is_none());
+        assert!(!request.body_json_attempted);
     }
     #[test]
     fn test_pipeline_request_supported_chat_completions() {
