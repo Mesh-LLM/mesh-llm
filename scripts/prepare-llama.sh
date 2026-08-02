@@ -247,11 +247,13 @@ if (( ${#PATCHES[@]} > 0 )); then
       GIT_COMMITTER_DATE \
       GIT_COMMITTER_EMAIL \
       GIT_COMMITTER_NAME
-    git -C "$LLAMA_WORKDIR" am \
+    # `git am --no-verify` was added after the Git shipped by Debian Bookworm.
+    # Disable hooks through configuration instead so container and local Git
+    # versions produce the same non-interactive patch application.
+    git -c core.hooksPath=/dev/null -C "$LLAMA_WORKDIR" am \
       --3way \
       --committer-date-is-author-date \
       --no-gpg-sign \
-      --no-verify \
       "${PATCHES[@]}"
   )
 fi

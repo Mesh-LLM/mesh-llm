@@ -127,6 +127,8 @@ class PrepareLlamaTests(unittest.TestCase):
             author = root / "author"
             patch_dir = root / "patches"
             pin_file = root / "upstream.txt"
+            hook_dir = root / "hooks"
+            hook_marker = root / "hook-ran"
 
             self.run_git(root, "init", "--initial-branch=master", str(upstream))
             self.run_git(upstream, "config", "user.name", "Patch Author")
@@ -149,6 +151,13 @@ class PrepareLlamaTests(unittest.TestCase):
                 author, "format-patch", "-1", "--stdout", capture_output=True
             ).stdout
             (patch_dir / "0001-local.patch").write_text(patch, encoding="utf-8")
+            hook_dir.mkdir()
+            for hook_name in ("applypatch-msg", "pre-applypatch"):
+                hook = hook_dir / hook_name
+                hook.write_text(
+                    f"#!/bin/sh\ntouch '{hook_marker}'\nexit 1\n", encoding="utf-8"
+                )
+                hook.chmod(0o755)
 
             patched_shas = []
             for index, (committer_date, timezone) in enumerate(
@@ -164,9 +173,11 @@ class PrepareLlamaTests(unittest.TestCase):
                     "GIT_COMMITTER_DATE": committer_date,
                     "GIT_COMMITTER_EMAIL": f"committer-{index}@example.com",
                     "GIT_COMMITTER_NAME": f"Ambient Committer {index}",
-                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_COUNT": "2",
                     "GIT_CONFIG_KEY_0": "commit.gpgsign",
                     "GIT_CONFIG_VALUE_0": "true",
+                    "GIT_CONFIG_KEY_1": "core.hooksPath",
+                    "GIT_CONFIG_VALUE_1": str(hook_dir),
                     "TZ": timezone,
                     "LLAMA_UPSTREAM_URL": f"file://{upstream}",
                     "LLAMA_WORKDIR": str(workdir),
@@ -191,6 +202,7 @@ class PrepareLlamaTests(unittest.TestCase):
                     .strip(),
                     "2",
                 )
+                self.assertFalse(hook_marker.exists())
 
             self.assertEqual(patched_shas[0], patched_shas[1])
 

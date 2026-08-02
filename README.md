@@ -36,7 +36,7 @@ Finish setup:
 mesh-llm setup
 ```
 
-On Windows PowerShell, use `mesh-llm.exe setup`.
+On Windows PowerShell, use `mesh-llm.exe setup`. *(If you plan to run MeshLLM inside WSL2 for CUDA 13+ support or multi-node LAN clustering, see the [Windows & WSL2 Troubleshooting Guide](#-windows--wsl2-troubleshooting).)*
 
 To remove an executable install later, preview the cleanup first:
 
@@ -206,6 +206,83 @@ Bare `inspect --binary ...` is only enough to classify an unstamped binary as
 `missing`; stamped binaries require `--public-key-file` and otherwise report
 `invalid` with an explicit error. Post-download mutation can flip a stamped
 binary to `invalid`, but default startup still allows it.
+
+## 🪟 Windows & WSL2 Troubleshooting
+
+### Running on Windows with CUDA 13+ Drivers
+
+If you are running Windows with an NVIDIA CUDA 13.x driver (e.g., Driver version 595+) and `mesh-llm` reports `0 GPUs` or falls back to Vulkan, use **WSL2 (Windows Subsystem for Linux)** with `--llama-flavor cuda` to access Linux CUDA 13 runtimes.
+
+#### 1. Install CUDA 13.0 Toolkit inside WSL2
+Inside your Ubuntu WSL2 terminal, install `cuda-toolkit-13-0` to supply `libcudart.so.13`:
+
+```bash
+wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-wsl-ubuntu.pin
+sudo mv cuda-wsl-ubuntu.pin /etc/apt/preferences.d/cuda-repository-pin-600
+wget https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda-repo-wsl-ubuntu-13-0-local_13.0.0-1_amd64.deb
+sudo dpkg -i cuda-repo-wsl-ubuntu-13-0-local_13.0.0-1_amd64.deb
+sudo cp /var/cuda-repo-wsl-ubuntu-13-0-local/cuda-*-keyring.gpg /usr/share/keyrings/
+sudo apt-get update && sudo apt-get -y install cuda-toolkit-13-0
+
+echo 'export LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### 2. Enable Hyper-V & Windows Firewall for WSL2 Mirrored Mode
+If you use WSL2 `networkingMode=mirrored` in `%UserProfile%\.wslconfig`, Windows 11 manages a separate **Hyper-V VM Firewall** that defaults to `Block` for inbound network traffic when third-party security software (e.g. Norton, McAfee) is present. 
+
+##### 2.1 Configure Mirrored Networking (`.wslconfig`) Part 1
+Create or edit `C:\Users\<username>\.wslconfig` on the Windows host:
+
+```powershell
+notepad $env:USERPROFILE\.wslconfig
+```
+
+##### 2.2 Configure Mirrored Networking (`.wslconfig`) Part 2
+
+```ini
+[wsl2]
+networkingMode=mirrored
+autoProxy=true
+```
+
+##### 2.3 Restart WSL in Powershell
+
+Restart WSL in PowerShell:
+```powershell
+wsl --shutdown
+```
+
+##### 2.4 Enable Windows Firewall Needs
+
+To allow incoming LAN connections to the Web UI (`3131`) and P2P QUIC mesh transport (`9337`), run **PowerShell as Administrator** on the Windows host:
+
+```powershell
+# 1. Allow Inbound Traffic through the WSL Hyper-V VM Firewall Container
+$vmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+Set-NetFirewallHyperVVMSetting -Name $vmCreatorId -DefaultInboundAction Allow
+
+# 2. Allow MeshLLM Ports in Windows Defender Firewall
+New-NetFirewallRule -DisplayName "MeshLLM TCP In" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3131,9337 -Profile Any
+New-NetFirewallRule -DisplayName "MeshLLM UDP In" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9337,5353 -Profile Any
+```
+
+#### 3. Match Model Paths for Direct LAN Reading
+To ensure worker nodes load GGUF model shards directly off local NVMe/SSD storage without streaming tens of gigabytes over the network, ensure the `--gguf` file path string is identical across all nodes (or use symlinks/bind mounts):
+
+```bash
+# Example: Mount or symlink model path on worker nodes
+sudo mkdir -p /mnt/d/models/
+sudo mount --bind /path/to/local/fast/nvme/ /mnt/d/models/
+
+# Launch Master and Worker with matching path strings
+mesh-llm --llama-flavor cuda serve \
+  --console 3131 \
+  --gguf "/mnt/d/models/model.gguf" \
+  --mesh-name "MainMesh" \
+  --listen-all \
+  --auto
+```
 
 ## Documentation hub
 
