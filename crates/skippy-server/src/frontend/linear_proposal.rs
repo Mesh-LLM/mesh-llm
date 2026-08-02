@@ -446,14 +446,7 @@ pub(crate) fn greedy_linear_proposal_admitted(
     }
     match chat_sampling_metadata {
         None => true,
-        Some(metadata) => serde_json::from_str::<serde_json::Value>(metadata)
-            .ok()
-            .is_some_and(|value| {
-                value
-                    .get("grammar")
-                    .and_then(serde_json::Value::as_str)
-                    .is_none_or(str::is_empty)
-            }),
+        Some(metadata) => serde_json::from_str::<serde_json::Value>(metadata).is_ok(),
     }
 }
 
@@ -478,6 +471,9 @@ pub(crate) struct LinearProposalExecutionParams<'a> {
     pub(crate) base_position: u64,
     pub(crate) generated_len: usize,
     pub(crate) max_new_tokens: usize,
+    pub(crate) sampling: &'a SamplingConfig,
+    pub(crate) chat_sampling_metadata: Option<&'a str>,
+    pub(crate) prompt_token_count: usize,
 }
 
 #[derive(Default)]
@@ -584,7 +580,11 @@ impl StageOpenAiBackend {
             return Ok(None);
         }
         let predictions = runtime
-            .verify_tokens(params.session_id, verify_inputs)
+            .verify_tokens_sampled(
+                params.session_id,
+                verify_inputs,
+                params.sampling.enabled.then_some(params.sampling),
+            )
             .map_err(openai_backend_error)?;
         let decision = classify_native_mtp_verify_window(
             proposal_tokens,
@@ -652,6 +652,9 @@ impl StageOpenAiBackend {
                 params.session_id,
                 canonical_position,
                 position_after_verification,
+                params.sampling,
+                params.chat_sampling_metadata,
+                params.prompt_token_count,
             )
         })?;
 
@@ -675,6 +678,9 @@ impl StageOpenAiBackend {
         session_id: &str,
         canonical_position: u64,
         position_after_verification: u64,
+        sampling: &SamplingConfig,
+        chat_sampling_metadata: Option<&str>,
+        prompt_token_count: usize,
     ) -> OpenAiResult<LinearProposalRepairTiming> {
         if canonical_position >= position_after_verification {
             return Ok(LinearProposalRepairTiming::default());
@@ -695,6 +701,16 @@ impl StageOpenAiBackend {
             return Err(OpenAiError::backend(format!(
                 "linear proposal repair failed and the session was retired: {error:#}"
             )));
+        }
+        if let Some(metadata) = chat_sampling_metadata {
+            runtime
+                .configure_chat_sampling(
+                    session_id,
+                    metadata,
+                    u64::try_from(prompt_token_count).unwrap_or(u64::MAX),
+                    sampling.enabled.then_some(sampling),
+                )
+                .map_err(openai_backend_error)?;
         }
         let repaired_position = runtime
             .session_token_count(session_id)
@@ -978,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn greedy_admission_accepts_zero_temperature_and_rejects_logit_modifiers() {
+    fn greedy_admission_rejects_stochastic_sampling_but_accepts_valid_grammar_metadata() {
         let disabled = SamplingConfig::default();
         let temperature_zero = SamplingConfig {
             enabled: true,
@@ -1012,7 +1028,7 @@ mod tests {
         assert!(greedy_linear_proposal_admitted(&temperature_zero, None));
         assert!(!greedy_linear_proposal_admitted(&stochastic, None));
         assert!(!greedy_linear_proposal_admitted(&biased_greedy, None));
-        assert!(!greedy_linear_proposal_admitted(
+        assert!(greedy_linear_proposal_admitted(
             &disabled,
             Some(r#"{"grammar":"root ::= value"}"#)
         ));

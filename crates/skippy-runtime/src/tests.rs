@@ -217,6 +217,90 @@ mod tests {
     }
 
     #[test]
+    fn batched_sampled_verification_matches_serial_across_lazy_grammar_trigger()
+    -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        let model = open_correctness_model(&model_path)?;
+        let rendered = model.apply_chat_template_json(
+            r#"[{"role":"user","content":"Call execute_bash."}]"#,
+            ChatTemplateJsonOptions {
+                tools_json: Some(
+                    r#"[{"type":"function","function":{"name":"execute_bash","description":"Run a command.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}}]"#
+                        .to_string(),
+                ),
+                ..ChatTemplateJsonOptions::default()
+            },
+        )?;
+        let metadata: Value = serde_json::from_str(&rendered.metadata_json)?;
+        assert!(
+            metadata
+                .get("grammar")
+                .and_then(Value::as_str)
+                .is_some_and(|grammar| !grammar.is_empty()),
+            "tool-capable template must produce a grammar"
+        );
+        assert_eq!(
+            metadata.get("grammar_lazy").and_then(Value::as_bool),
+            Some(true),
+            "tool grammar must wait for its trigger"
+        );
+
+        let prompt_tokens = model.tokenize(&rendered.prompt, true)?;
+        assert!(prompt_tokens.len() > 1);
+        let mut verify_inputs = vec![*prompt_tokens.last().expect("checked nonempty prompt")];
+        verify_inputs.extend(model.tokenize("<tool_call>", false)?);
+        verify_inputs.extend(model.tokenize(
+            "execute_bash<arg_key>command</arg_key><arg_value>pwd</arg_value></tool_call>",
+            false,
+        )?);
+
+        let sampling = SamplingConfig {
+            enabled: true,
+            temperature: 0.0,
+            top_p: 0.95,
+            top_k: 40,
+            min_p: 0.05,
+            ..SamplingConfig::default()
+        };
+        let prompt_prefix = &prompt_tokens[..prompt_tokens.len() - 1];
+        let prompt_token_count = u64::try_from(prompt_tokens.len())?;
+
+        let mut serial = model.create_session()?;
+        serial.prefill_chunked(prompt_prefix)?;
+        serial.configure_chat_sampling(
+            &rendered.metadata_json,
+            prompt_token_count,
+            Some(&sampling),
+        )?;
+        let serial_predictions = verify_inputs
+            .iter()
+            .copied()
+            .map(|token| serial.decode_step_sampled(token, Some(&sampling)))
+            .collect::<Result<Vec<_>>>()?;
+        let serial_token_count = serial.token_count();
+        let serial_native_position = serial.native_position()?;
+        drop(serial);
+
+        let mut batched = model.create_session()?;
+        batched.prefill_chunked(prompt_prefix)?;
+        batched.configure_chat_sampling(
+            &rendered.metadata_json,
+            prompt_token_count,
+            Some(&sampling),
+        )?;
+        let batched_predictions =
+            batched.verify_tokens_sampled(&verify_inputs, Some(&sampling))?;
+
+        assert_eq!(batched_predictions, serial_predictions);
+        assert_eq!(batched.token_count(), serial_token_count);
+        assert_eq!(batched.native_position()?, serial_native_position);
+        Ok(())
+    }
+
+    #[test]
     fn stage_session_exposes_non_frame_native_mtp_decode_api() {
         type DecodeStepSampledMtp = fn(
             &mut StageSession,

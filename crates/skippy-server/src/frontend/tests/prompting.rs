@@ -552,3 +552,22 @@ fn chat_message_generation_value_preserves_tool_history() {
     assert_eq!(value["tool_calls"][0]["id"], "call_123");
     assert_eq!(value["tool_calls"][0]["function"]["name"], "lookup");
 }
+
+#[test]
+fn chat_message_generation_value_preserves_omitted_content() {
+    let message: openai_frontend::ChatMessage = serde_json::from_value(json!({
+        "role": "assistant",
+        "tool_calls": [{
+            "id": "call_123",
+            "type": "function",
+            "function": {"name": "lookup", "arguments": "{}"}
+        }]
+    }))
+    .unwrap();
+    let mut media = Vec::new();
+
+    let value = chat_message_generation_value(&message, "<__media__>", &mut media).unwrap();
+
+    assert!(!value.as_object().unwrap().contains_key("content"));
+    assert_eq!(value["tool_calls"][0]["id"], "call_123");
+}

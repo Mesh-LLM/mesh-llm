@@ -343,6 +343,14 @@ impl StageSession {
         Ok(predicted)
     }
 
+    pub fn verify_tokens_sampled(
+        &mut self,
+        token_ids: &[i32],
+        sampling: Option<&SamplingConfig>,
+    ) -> Result<Vec<i32>> {
+        self.verify_tokens_sampled_without_mtp(token_ids, sampling)
+    }
+
     /// Runs batched verification and trims the speculative suffix.
     pub fn verify_tokens_rewound(&mut self, token_ids: &[i32]) -> Result<Vec<i32>> {
         if token_ids.is_empty() {

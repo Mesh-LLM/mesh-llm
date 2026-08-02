@@ -622,6 +622,19 @@ impl StageSession {
         ))
     }
 
+    pub(crate) fn verify_tokens_sampled_without_mtp(
+        &mut self,
+        token_ids: &[i32],
+        sampling: Option<&SamplingConfig>,
+    ) -> Result<Vec<i32>> {
+        if token_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .verify_tokens_frame_raw(token_ids, sampling, None, 0, 0)?
+            .predicted_tokens)
+    }
+
     fn verify_tokens_frame_raw(
         &mut self,
         token_ids: &[i32],

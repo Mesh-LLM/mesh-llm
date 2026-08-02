@@ -7,6 +7,7 @@ use openai_frontend::ChatCompletionResponse;
 use openai_frontend::ChatHookAction;
 use openai_frontend::ChatHookOutcome;
 use openai_frontend::FinishReason;
+use openai_frontend::MessageContent;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
 use serde_json::Value;
@@ -396,20 +397,12 @@ pub(in crate::frontend) fn chat_message_generation_value(
 ) -> OpenAiResult<Value> {
     let mut value = serde_json::to_value(message)
         .map_err(|error| OpenAiError::invalid_request(format!("serialize message: {error}")))?;
-    let content = message
-        .content
-        .as_ref()
-        .map(|content| message_content_to_generation_text(content, marker, media))
-        .transpose()?;
-    if let Some(object) = value.as_object_mut() {
-        match content {
-            Some(content) => {
-                object.insert("content".to_string(), Value::String(content));
-            }
-            None => {
-                object.insert("content".to_string(), Value::Null);
-            }
-        }
+    let content = match message.content.as_ref() {
+        Some(MessageContent::Other(Value::Null)) | None => None,
+        Some(content) => Some(message_content_to_generation_text(content, marker, media)?),
+    };
+    if let (Some(object), Some(content)) = (value.as_object_mut(), content) {
+        object.insert("content".to_string(), Value::String(content));
     }
     Ok(value)
 }
