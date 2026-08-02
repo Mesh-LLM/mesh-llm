@@ -22,6 +22,10 @@ use crate::{
 use serde_json::Value;
 use std::time::Instant;
 
+/// How much conversation prose advisors see. Enough for continuity on a
+/// multi-turn session, short enough to stay cheap and cacheable.
+const REFERENCE_HISTORY_MESSAGES: usize = 6;
+
 /// Handle a fresh, tool-bearing query with the asymmetric actor design.
 pub(crate) async fn handle_tool_query(
     config: &GatewayConfig,
@@ -98,8 +102,11 @@ async fn dispatch_and_gather_references(
         if Some(a.model_name.as_str()) == exclude {
             continue; // the actor advises itself when it acts
         }
-        // Tool-free: advisors reason in prose, never emit an executable call.
-        let packed = context::pack_for_worker_selected(session, a.role, false, &[]);
+        // Advisor packing: conversation prose only, no agent system prompt, no
+        // tool transcript, no request for a tool call. Measured: the old
+        // worker packing cost -0.102 net uplift vs -0.037 for this one (same
+        // actor, same 40 tasks) — see evals/moa-openrouter/RESULTS.md.
+        let packed = context::pack_for_reference(session, REFERENCE_HISTORY_MESSAGES);
         let model_name = a.model_name.clone();
         let role = a.role;
         let backend = config.backends[a.backend_index].clone();
