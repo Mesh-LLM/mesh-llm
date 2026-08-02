@@ -80,7 +80,6 @@ use self::auto_join::*;
 use self::control_loop::*;
 use self::dashboard::*;
 pub use self::discovery::nostr_relays;
-pub(crate) use self::local_model_only::run_local_model_only_with_hooks;
 use self::model_lifecycle::*;
 use self::publication::*;
 pub use self::run_auto::load_resolved_plugins;
