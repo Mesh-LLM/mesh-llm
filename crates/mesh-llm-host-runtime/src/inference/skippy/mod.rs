@@ -428,6 +428,10 @@ impl SkippyHttpHandle {
         self.port
     }
 
+    pub(crate) fn status(&self) -> skippy_server::EmbeddedServerStatus {
+        self.server.status()
+    }
+
     pub(crate) async fn shutdown(self) -> Result<()> {
         self.server.shutdown().await
     }
@@ -902,7 +906,13 @@ impl SkippyModelHandle {
     }
 
     pub(crate) fn start_http(&self, port: u16) -> Result<SkippyHttpHandle> {
-        let bind_addr = ([127, 0, 0, 1], port).into();
+        self.start_http_on(([127, 0, 0, 1], port).into())
+    }
+
+    pub(crate) fn start_http_on(
+        &self,
+        bind_addr: std::net::SocketAddr,
+    ) -> Result<SkippyHttpHandle> {
         let tokenizer = self
             .runtime
             .tokenizer_capability()

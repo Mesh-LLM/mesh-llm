@@ -473,6 +473,10 @@ pub struct Cli {
     #[arg(long, default_value = "9337")]
     pub port: u16,
 
+    /// Serve one model directly through the local OpenAI API without starting a mesh node.
+    #[arg(long)]
+    pub local_model_only: bool,
+
     /// Run as a client — no GPU, no model needed.
     #[arg(long)]
     pub client: bool,

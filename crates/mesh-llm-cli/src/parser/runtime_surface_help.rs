@@ -12,6 +12,7 @@ pub fn runtime_surface_help(surface: RuntimeSurface) -> String {
             "      --auto                   Auto-join the best discovered mesh\n",
             "      --join <JOIN>            Join a mesh via invite token\n",
             "      --publish                Publish this mesh for discovery\n",
+            "      --local-model-only       Serve one local model without mesh networking or management APIs\n",
             "      --port <PORT>            OpenAI-compatible API port [default: 9337]\n",
             "      --console <CONSOLE>      Management console/API port [default: 3131]\n",
             "      --log-format <FORMAT>    Terminal output format [default: pretty]\n\n",
@@ -47,6 +48,7 @@ mod tests {
         assert!(help.contains("Usage: mesh-llm serve"));
         assert!(help.contains("--model"));
         assert!(help.contains("--gguf"));
+        assert!(help.contains("--local-model-only"));
         assert!(help.contains("startup models"));
         assert!(!help.contains("Pool GPUs over the internet for LLM inference\n\nUsage: mesh-llm"));
     }

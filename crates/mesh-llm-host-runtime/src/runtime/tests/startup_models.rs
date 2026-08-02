@@ -569,6 +569,82 @@ fn test_build_startup_model_specs_uses_config_models_when_cli_is_empty() {
     assert!(specs[1].config_owned);
 }
 
+#[tokio::test]
+async fn config_hardware_model_path_loads_local_file_under_logical_model_identity() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let model_path = temp_dir.path().join("glm.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write model");
+    let options = runtime_options_for_test(&["mesh-llm"]);
+    let config = plugin::MeshConfig {
+        models: vec![plugin::ModelConfigEntry {
+            model: "glm-4.7-flash".into(),
+            hardware: Some(plugin::HardwareConfig {
+                model_path: Some(model_path.to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let specs = build_startup_model_specs(&options, &config).expect("startup specs");
+    assert_eq!(specs[0].model_ref, model_path);
+    assert_eq!(specs[0].declared_ref.as_deref(), Some("glm-4.7-flash"));
+
+    let plans = resolve_local_model_only_startup_models(&specs)
+        .await
+        .expect("local startup model resolves");
+    assert_eq!(
+        plans[0].resolved_path,
+        std::fs::canonicalize(&specs[0].model_ref).expect("canonical model path")
+    );
+    assert_eq!(plans[0].declared_ref, "glm-4.7-flash");
+}
+
+#[tokio::test]
+async fn local_model_only_rejects_catalog_and_relative_model_refs() {
+    let specs = [StartupModelSpec {
+        model_ref: PathBuf::from("glm-4.7-flash"),
+        declared_ref: None,
+        mmproj_ref: None,
+        ctx_size: None,
+        gpu_id: None,
+        parallel: None,
+        cache_type_k: None,
+        cache_type_v: None,
+        n_batch: None,
+        n_ubatch: None,
+        flash_attention: FlashAttentionType::Auto,
+        profile: "default".into(),
+        config_owned: false,
+    }];
+
+    let error = resolve_local_model_only_startup_models(&specs)
+        .await
+        .expect_err("direct serving must not resolve a catalog or relative model ref");
+    assert!(format!("{error:#}").contains("absolute local model path"));
+}
+
+#[test]
+fn config_hardware_model_path_rejects_relative_path_before_resolution() {
+    let options = runtime_options_for_test(&["mesh-llm"]);
+    let config = plugin::MeshConfig {
+        models: vec![plugin::ModelConfigEntry {
+            model: "glm-4.7-flash".into(),
+            hardware: Some(plugin::HardwareConfig {
+                model_path: Some("relative/model.gguf".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let error = build_startup_model_specs(&options, &config).unwrap_err();
+    assert!(format!("{error:#}").contains("hardware.model_path"));
+    assert!(format!("{error:#}").contains("must be absolute"));
+}
+
 #[test]
 fn test_build_startup_model_specs_ignores_config_models_for_client() {
     let options = runtime_options_for_test(&["mesh-llm", "--client"]);
@@ -734,6 +810,7 @@ fn pinned_gpu_startup_preflight_rejects_synthesized_backend_missing_from_probe()
     };
     let specs = vec![StartupModelSpec {
         model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
+        declared_ref: None,
         mmproj_ref: None,
         ctx_size: Some(4096),
         gpu_id: Some("pci:0000:b3:00.0".into()),
@@ -794,6 +871,7 @@ fn pinned_gpu_startup_preflight_canonicalizes_rocm_hip_alias_from_probe() {
     };
     let specs = vec![StartupModelSpec {
         model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
+        declared_ref: None,
         mmproj_ref: None,
         ctx_size: Some(4096),
         gpu_id: Some("pci:0000:b3:00.0".into()),
@@ -956,6 +1034,7 @@ fn pinned_gpu_startup_preflight_missing_gpu_id_fails_closed() {
     };
     let specs = vec![StartupModelSpec {
         model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
+        declared_ref: None,
         mmproj_ref: None,
         ctx_size: None,
         gpu_id: None,
@@ -1005,6 +1084,7 @@ fn pinned_gpu_startup_preflight_stores_resolved_pinned_target_in_plan() {
     };
     let specs = vec![StartupModelSpec {
         model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
+        declared_ref: None,
         mmproj_ref: None,
         ctx_size: Some(4096),
         gpu_id: Some("uuid:GPU-123".into()),
@@ -1057,6 +1137,7 @@ fn pinned_gpu_startup_preflight_rejects_resolved_gpu_without_backend_device() {
     };
     let specs = vec![StartupModelSpec {
         model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
+        declared_ref: None,
         mmproj_ref: None,
         ctx_size: Some(4096),
         gpu_id: Some("uuid:GPU-123".into()),
@@ -1106,6 +1187,7 @@ fn pinned_gpu_startup_preflight_unresolvable_gpu_id_fails_closed() {
     };
     let specs = vec![StartupModelSpec {
         model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
+        declared_ref: None,
         mmproj_ref: None,
         ctx_size: None,
         gpu_id: Some("pci:0000:b3:00.0".into()),
@@ -1161,6 +1243,7 @@ fn test_should_not_show_serve_config_help_when_models_are_present() {
     let options = runtime_options_for_test(&["mesh-llm"]);
     let startup_specs = vec![StartupModelSpec {
         model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
+        declared_ref: None,
         mmproj_ref: None,
         ctx_size: None,
         gpu_id: None,

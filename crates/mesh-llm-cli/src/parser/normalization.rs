@@ -28,7 +28,7 @@ where
     // Recognized value-taking flags: --log-format, --mesh-discovery-mode, --max-vram,
     // --llama-flavor, --device, --tensor-split, --bind-port, --bind-ip, --max-clients,
     // --port, --console, --swarm-capture, --draft-max, --ctx-size.
-    // Boolean flags: --help-advanced, --auto, --client, --headless, --publish,
+    // Boolean flags: --help-advanced, --auto, --client, --local-model-only, --headless, --publish,
     // --plugin, --auto-update, --no-draft, --split, --no-enumerate-host, --listen-all,
     // --no-console, --owner-required.
     let value_taking_flags = [
@@ -440,6 +440,23 @@ mod tests {
             !cli.headless,
             "--no-console must not activate headless mode"
         );
+    }
+
+    #[test]
+    fn local_model_only_is_an_explicit_serve_topology() {
+        let args = vec![
+            "mesh-llm",
+            "serve",
+            "--local-model-only",
+            "--model",
+            "/models/model.gguf",
+        ];
+        let normalized = normalize_runtime_surface_args(args);
+        let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
+
+        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
+        assert!(cli.local_model_only);
+        assert!(!cli.client);
     }
 
     #[test]
