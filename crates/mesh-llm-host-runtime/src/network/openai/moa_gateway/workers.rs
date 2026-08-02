@@ -182,6 +182,10 @@ pub async fn build_moa_config(
     // make because it can't see gossiped capabilities.
     let actor_candidates = compute_actor_candidates(node, &models).await;
 
+    // Public meshes are a pathological availability case, not a trust case:
+    // unknown peers, wider latency spread, more churn. Wait less for perfect.
+    let patience = patience_profile(node.public_mesh);
+
     tracing::info!(
         required_tokens = ?required_tokens,
         "MoA config: {} workers ({} local, {} remote): {:?}",
@@ -229,7 +233,9 @@ pub async fn build_moa_config(
         // With the relaxed eligibility added in this change, the timer
         // is the dominant chat path, so a tighter default is the right
         // default.
-        first_answer_grace: std::time::Duration::from_secs(3),
+        //
+        // Tightened further on a public mesh — see `patience_profile`.
+        first_answer_grace: patience.first_answer_grace,
         // Tier-gate patience: how long small-tier-only answers/consensus
         // are held when a big-tier strong worker (e.g. MiniMax) is still
         // running. 20s covers the strong worker's typical first-token
@@ -238,7 +244,7 @@ pub async fn build_moa_config(
         // decision rules revert to ungated behavior. Same-tier pools are
         // unaffected, so "many small models lift each other" keeps its
         // current latency profile.
-        strong_patience: std::time::Duration::from_secs(20),
+        strong_patience: patience.strong_patience,
         // Defaults to leaving each model's thinking behavior alone.
         // `try_handle_moa` overrides this from the inbound request body
         // when the caller has expressed a preference
@@ -423,6 +429,37 @@ async fn add_worker_backend(
         return true;
     }
     false
+}
+
+/// How long a turn waits for better answers before shipping what it has.
+struct PatienceProfile {
+    first_answer_grace: std::time::Duration,
+    strong_patience: std::time::Duration,
+}
+
+/// Timing profile for the turn, tightened on a public mesh.
+///
+/// A public mesh is a pathological *availability* case (unknown peers, wider
+/// latency spread, more churn), not a trust case. Both knobs here are
+/// "how long do we hold a usable answer hoping for a better one" — exactly the
+/// wait that hurts most when the tail is long. The hard bounds are unchanged;
+/// only the optional waiting shrinks, so quality paths still run when peers are
+/// prompt.
+fn patience_profile(public_mesh: bool) -> PatienceProfile {
+    if public_mesh {
+        PatienceProfile {
+            // Ship a good answer sooner rather than wait out a long tail.
+            first_answer_grace: std::time::Duration::from_millis(1500),
+            // Still give a strong peer a real chance, but don't hold a usable
+            // small-tier answer for 20s against an unknown remote worker.
+            strong_patience: std::time::Duration::from_secs(8),
+        }
+    } else {
+        PatienceProfile {
+            first_answer_grace: std::time::Duration::from_secs(3),
+            strong_patience: std::time::Duration::from_secs(20),
+        }
+    }
 }
 
 /// Rank the pool best-tool-caller-first (indices into `models`) for the actor.
@@ -888,5 +925,43 @@ mod tests {
             "tools": [{"type": "function", "function": {"name": "x"}}],
         });
         assert_eq!(effective_enable_thinking_for_moa(&body), Some(false));
+    }
+
+    /// Public meshes are a pathological availability case: unknown peers,
+    /// wider latency spread, more churn. Both patience knobs are "hold a
+    /// usable answer hoping for a better one", which is exactly the wait that
+    /// hurts when the tail is long — so they shrink, and only they.
+    #[test]
+    fn public_mesh_waits_less_for_a_better_answer() {
+        let public = patience_profile(true);
+        let private = patience_profile(false);
+        assert!(
+            public.first_answer_grace < private.first_answer_grace,
+            "public mesh must ship a good answer sooner"
+        );
+        assert!(
+            public.strong_patience < private.strong_patience,
+            "public mesh must not hold a usable answer as long for a slow strong peer"
+        );
+    }
+
+    /// Shrinking patience must not disable the quality paths entirely — a
+    /// prompt strong peer should still get a chance to land.
+    #[test]
+    fn public_mesh_still_gives_strong_peers_a_chance() {
+        let public = patience_profile(true);
+        assert!(!public.first_answer_grace.is_zero());
+        assert!(public.strong_patience >= std::time::Duration::from_secs(5));
+    }
+
+    /// Private-mesh timings are the tuned defaults and must not drift silently.
+    #[test]
+    fn private_mesh_keeps_the_tuned_defaults() {
+        let private = patience_profile(false);
+        assert_eq!(
+            private.first_answer_grace,
+            std::time::Duration::from_secs(3)
+        );
+        assert_eq!(private.strong_patience, std::time::Duration::from_secs(20));
     }
 }
