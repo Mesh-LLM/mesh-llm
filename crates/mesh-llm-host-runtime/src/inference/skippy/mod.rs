@@ -188,6 +188,7 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) telemetry: SkippyTelemetryOptions,
     pub(crate) openai_guardrails: Option<OpenAiGuardrailsConfig>,
     pub(crate) native_mtp_enabled: bool,
+    pub(crate) serving_hooks_factory: Option<skippy_server::SharedModelServingHooksFactory>,
 }
 
 #[derive(Clone, Debug)]
@@ -288,6 +289,7 @@ impl SkippyModelLoadOptions {
             telemetry: SkippyTelemetryOptions::off(),
             openai_guardrails: Some(OpenAiGuardrailsConfig::disabled_for_skippy()),
             native_mtp_enabled: true,
+            serving_hooks_factory: None,
         }
     }
 
@@ -375,6 +377,14 @@ impl SkippyModelLoadOptions {
         self
     }
 
+    pub(crate) fn with_serving_hooks_factory(
+        mut self,
+        factory: Option<skippy_server::SharedModelServingHooksFactory>,
+    ) -> Self {
+        self.serving_hooks_factory = factory;
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn with_package_identity(mut self, package_identity: SkippyPackageIdentity) -> Self {
         self.package_identity = Some(package_identity);
@@ -444,6 +454,7 @@ fn embedded_openai_args_from(
     prediction_returns: Option<Arc<PredictionReturnHub>>,
     telemetry: Telemetry,
     hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    serving_hooks: &crate::ModelServingHooks,
 ) -> Result<EmbeddedOpenAiArgs> {
     Ok(EmbeddedOpenAiArgs {
         bind_addr: "127.0.0.1:0"
@@ -478,10 +489,25 @@ fn embedded_openai_args_from(
         prediction_returns,
         telemetry,
         hook_policy,
-        generation_receipt: None,
-        linear_proposal_ingress: None,
+        generation_receipt: serving_hooks.generation_receipt(),
+        linear_proposal_ingress: serving_hooks.linear_proposal_ingress(),
         openai_guardrails: None,
     })
+}
+
+fn resolve_serving_hooks(
+    factory: Option<&skippy_server::SharedModelServingHooksFactory>,
+    runtime: &SkippyRuntimeHandle,
+) -> Result<crate::ModelServingHooks> {
+    let Some(factory) = factory else {
+        return Ok(crate::ModelServingHooks::default());
+    };
+    let tokenizer = runtime
+        .tokenizer_capability()
+        .context("loaded Skippy runtime cannot provide its tokenizer capability")?;
+    factory
+        .create(tokenizer)
+        .context("product-neutral serving hook factory rejected the loaded model")
 }
 
 impl SkippyModelHandle {
@@ -517,6 +543,8 @@ impl SkippyModelHandle {
             stage_config.clone(),
             options.telemetry.level,
         );
+        let serving_hooks =
+            resolve_serving_hooks(options.serving_hooks_factory.as_ref(), &runtime)?;
         let family_policy = family_policy_for_stage_config(&stage_config);
         let embedded_args = options.embedded_openai.clone().unwrap_or_else(|| {
             resolver::ResolvedEmbeddedOpenAiArgs::direct_single_stage_defaults(
@@ -535,6 +563,7 @@ impl SkippyModelHandle {
             None,
             telemetry,
             hook_policy,
+            &serving_hooks,
         )?)
         .context("construct skippy OpenAI backend")?;
         let backend = wrap_host_guardrail_backend(
@@ -591,6 +620,8 @@ impl SkippyModelHandle {
             stage_config.clone(),
             options.telemetry.level,
         );
+        let serving_hooks =
+            resolve_serving_hooks(options.serving_hooks_factory.as_ref(), &runtime)?;
         let family_policy = family_policy_for_stage_config(&stage_config);
         let embedded_args = options.embedded_openai.clone().unwrap_or_else(|| {
             resolver::ResolvedEmbeddedOpenAiArgs::direct_single_stage_defaults(
@@ -609,6 +640,7 @@ impl SkippyModelHandle {
             None,
             telemetry,
             hook_policy,
+            &serving_hooks,
         )?)
         .context("construct skippy OpenAI backend")?;
         let backend = wrap_host_guardrail_backend(
@@ -684,6 +716,7 @@ impl SkippyModelHandle {
             hook_policy,
             telemetry,
             guardrails,
+            None,
         )
     }
 
@@ -693,6 +726,7 @@ impl SkippyModelHandle {
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         guardrails: SkippyOpenAiGuardrailOptions,
+        serving_hooks_factory: Option<skippy_server::SharedModelServingHooksFactory>,
     ) -> Result<Self> {
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;
@@ -743,6 +777,7 @@ impl SkippyModelHandle {
             runtime_config.clone(),
             telemetry.level,
         );
+        let serving_hooks = resolve_serving_hooks(serving_hooks_factory.as_ref(), &runtime)?;
         let prediction_return_listener = if runtime_config.downstream.is_some() {
             Some(PredictionReturnListener::start(
                 runtime_config.bind_addr.parse()?,
@@ -760,6 +795,7 @@ impl SkippyModelHandle {
             prediction_returns,
             telemetry,
             hook_policy,
+            &serving_hooks,
         )?)
         .context("construct skippy stage 0 OpenAI backend")?;
         let backend = wrap_host_guardrail_backend(
@@ -791,6 +827,7 @@ impl SkippyModelHandle {
         telemetry: SkippyTelemetryOptions,
         model_open_event_reporter: Option<NativeModelOpenEventReporter>,
         guardrails: SkippyOpenAiGuardrailOptions,
+        serving_hooks_factory: Option<skippy_server::SharedModelServingHooksFactory>,
     ) -> Result<Self> {
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;
@@ -843,6 +880,7 @@ impl SkippyModelHandle {
             runtime_config.clone(),
             telemetry.level,
         );
+        let serving_hooks = resolve_serving_hooks(serving_hooks_factory.as_ref(), &runtime)?;
         let prediction_return_listener = if runtime_config.downstream.is_some() {
             Some(PredictionReturnListener::start(
                 runtime_config.bind_addr.parse()?,
@@ -860,6 +898,7 @@ impl SkippyModelHandle {
             prediction_returns,
             telemetry,
             hook_policy,
+            &serving_hooks,
         )?)
         .context("construct skippy stage 0 OpenAI backend")?;
         let backend = wrap_host_guardrail_backend(

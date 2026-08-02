@@ -37,6 +37,7 @@ pub use mesh::requirements::{
     NodeVersionBounds, PeerReleaseAttestationStatus, ProtocolGenerationBounds,
     ReleaseAttestationRequirement, SignedBootstrapToken, SignedMeshGenesisPolicy,
 };
+pub use skippy_server::{ModelServingHooks, ModelServingHooksFactory};
 
 use anyhow::Result;
 use std::path::Path;
@@ -69,6 +70,19 @@ pub async fn run_runtime_initialized(
     legacy_warning: Option<String>,
 ) -> Result<()> {
     runtime::run_cli(options, explicit_surface, legacy_warning).await
+}
+
+/// Runs the dedicated local model/OpenAI surface with product-neutral hooks.
+///
+/// The caller supplies implementations of Skippy's lifecycle and proposal
+/// contracts. Mesh remains authoritative for model execution, tokenization,
+/// verification, and the OpenAI server.
+pub async fn run_local_model_only_with_hooks(
+    options: RuntimeOptions,
+    factory: std::sync::Arc<dyn ModelServingHooksFactory>,
+) -> Result<()> {
+    initialize_host_runtime_with_config(options.config.as_deref()).await?;
+    runtime::run_local_model_only_with_hooks(options, factory).await
 }
 
 pub async fn initialize_host_runtime() -> Result<()> {

@@ -29,6 +29,7 @@ use crate::frontend::wire_messages::ReusableDecodeMessage;
 use crate::frontend::wire_messages::ReusableDecodeMessageArgs;
 use crate::frontend::wire_messages::generation_config_message;
 use crate::frontend::wire_messages::multimodal_prefill_message;
+use crate::frontend::{GenerationCommit, GenerationStart};
 use crate::kv_integration::proactive_eviction_attrs;
 use crate::kv_integration::proactive_eviction_error_kind;
 use anyhow::anyhow;
@@ -443,6 +444,20 @@ impl StageOpenAiBackend {
             return Err(openai_backend_error(error));
         }
 
+        if let (Some(config), Some(prompt_token_ids)) = (
+            self.generation_receipt.as_ref(),
+            receipt_prompt_token_ids.as_ref(),
+        ) {
+            config
+                .sink()
+                .begin(&GenerationStart {
+                    request_id: ids.request_id,
+                    session_id: ids.session_id,
+                    prompt_token_ids: prompt_token_ids.clone().into_boxed_slice(),
+                })
+                .map_err(openai_backend_error)?;
+        }
+
         let mut collector =
             TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)
                 .with_emulation_stop(emulation_active);
@@ -481,7 +496,18 @@ impl StageOpenAiBackend {
                     continue;
                 }
                 if let Some(observation) = receipt_observation.as_mut() {
-                    observation.record_token(current)?;
+                    observation.record_token(current, ids.request_started_at.elapsed())?;
+                }
+                if let Some(config) = self.generation_receipt.as_ref() {
+                    config
+                        .sink()
+                        .committed(&GenerationCommit {
+                            request_id: ids.request_id,
+                            session_id: ids.session_id,
+                            generated_token_count: decoded_tokens.saturating_add(1),
+                            token_ids: vec![current].into_boxed_slice(),
+                        })
+                        .map_err(openai_backend_error)?;
                 }
                 if collector.push_token(current)? == TokenControl::Stop {
                     if let Some(observation) = receipt_observation.as_mut() {
@@ -589,18 +615,22 @@ impl StageOpenAiBackend {
             self.emit_openai_summary("stage.openai_decode", decode_timer, attrs);
             Ok(())
         })();
+        let generation_succeeded = result.is_ok();
         complete_generation_before_cleanup(
             result,
             || {
-                self.finalize_generation_receipt(LocalGenerationReceiptFinalization {
-                    session_label: &session_id,
-                    request_id: ids.request_id,
-                    session_id: ids.session_id,
-                    prompt_token_ids: receipt_prompt_token_ids.as_deref().unwrap_or_default(),
-                    observation: receipt_observation,
-                    cancelled: receipt_cancelled,
-                    model_generation_elapsed: receipt_model_generation_elapsed,
-                })
+                self.finalize_generation_receipt(
+                    LocalGenerationReceiptFinalization {
+                        session_label: &session_id,
+                        request_id: ids.request_id,
+                        session_id: ids.session_id,
+                        prompt_token_ids: receipt_prompt_token_ids.as_deref().unwrap_or_default(),
+                        observation: receipt_observation,
+                        cancelled: receipt_cancelled,
+                        model_generation_elapsed: receipt_model_generation_elapsed,
+                    },
+                    generation_succeeded,
+                )
             },
             || self.cleanup_local_generation_session(&session_id, &ids),
         )?;

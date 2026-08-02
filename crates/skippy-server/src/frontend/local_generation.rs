@@ -15,11 +15,12 @@ use crate::frontend::generation_receipt::{
 };
 use crate::frontend::linear_proposal::{
     LinearProposalDiscardReason, LinearProposalExecutionParams, LinearProposalQueryOutcome,
-    execute_linear_proposal_with_terminal_discard, greedy_linear_proposal_admitted,
-    query_linear_proposal, report_linear_proposal_receipt,
+    LinearProposalQueryParams, execute_linear_proposal_with_terminal_discard,
+    greedy_linear_proposal_admitted, query_linear_proposal, report_linear_proposal_receipt,
 };
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
+use crate::frontend::{GenerationAbort, GenerationStart};
 use crate::kv_integration::proactive_eviction_attrs;
 use crate::kv_integration::proactive_eviction_error_kind;
 use openai_frontend::OpenAiError;
@@ -48,6 +49,16 @@ impl StageOpenAiBackend {
         let receipt_request_id = request.ids.request_id;
         let receipt_session_id = request.ids.session_id;
         let receipt_prompt_token_ids = request.prompt_token_ids;
+        if let Some(config) = self.generation_receipt.as_ref() {
+            config
+                .sink()
+                .begin(&GenerationStart {
+                    request_id: receipt_request_id,
+                    session_id: receipt_session_id,
+                    prompt_token_ids: receipt_prompt_token_ids.to_vec().into_boxed_slice(),
+                })
+                .map_err(openai_backend_error)?;
+        }
         let receipt_observation = self.generation_receipt.as_ref().map(|_| {
             RefCell::new(Some(GenerationReceiptObservation::new(
                 usize::try_from(request.max_tokens)
@@ -61,7 +72,7 @@ impl StageOpenAiBackend {
             if let Some(observation) = receipt_observation.as_ref()
                 && let Some(observation) = observation.borrow_mut().as_mut()
             {
-                observation.record_token(token_id)?;
+                observation.record_token(token_id, request.ids.request_started_at.elapsed())?;
             }
             let control = on_token(token_id)?;
             if control == TokenControl::Stop
@@ -569,6 +580,17 @@ impl StageOpenAiBackend {
             if let Some(predicted) = prompt_prefill_sample {
                 current = predicted;
                 decoded_tokens += 1;
+                if let Some(config) = self.generation_receipt.as_ref() {
+                    config
+                        .sink()
+                        .committed(&crate::frontend::GenerationCommit {
+                            request_id: receipt_request_id,
+                            session_id: receipt_session_id,
+                            generated_token_count: decoded_tokens,
+                            token_ids: vec![current].into_boxed_slice(),
+                        })
+                        .map_err(openai_backend_error)?;
+                }
                 stopped = emit_token(current)? == TokenControl::Stop;
             }
             let mut hook_request = request.hook_request;
@@ -594,13 +616,6 @@ impl StageOpenAiBackend {
             } else {
                 0
             };
-            let mut linear_context_tokens = (linear_proposal_max_tokens > 0).then(|| {
-                let mut tokens = request.prompt_token_ids.to_vec();
-                if decoded_tokens > 0 {
-                    tokens.push(current);
-                }
-                tokens
-            });
             let emit_token_debug = self.telemetry.is_debug_enabled();
             let native_mtp_options = NativeMtpDecodeOptions::from_config(request.speculative);
             let mut native_mtp = NativeMtpVerifier::default();
@@ -614,10 +629,9 @@ impl StageOpenAiBackend {
                     receipt_cancelled = true;
                     break;
                 }
-                if let (Some(config), Some(committed_token_ids)) = (
-                    self.linear_proposal_ingress.as_ref(),
-                    linear_context_tokens.as_mut(),
-                ) {
+                if let Some(config) = self.linear_proposal_ingress.as_ref()
+                    && linear_proposals_enabled
+                {
                     let remaining_new_tokens =
                         (request.max_tokens as usize).saturating_sub(decoded_tokens);
                     // Prefill leaves the final prompt token undecoded. When whole-prompt
@@ -638,12 +652,18 @@ impl StageOpenAiBackend {
                     })?;
                     let queried = match query_linear_proposal(
                         config,
-                        request.ids.request_id,
-                        request.ids.session_id,
-                        decoded_tokens,
-                        committed_token_ids,
-                        remaining_new_tokens,
-                        linear_proposal_max_tokens,
+                        LinearProposalQueryParams {
+                            request_id: request.ids.request_id,
+                            session_id: request.ids.session_id,
+                            prompt_token_count: request.prompt_token_ids.len(),
+                            decode_step: decoded_tokens,
+                            committed_token_count: request
+                                .prompt_token_ids
+                                .len()
+                                .saturating_add(decoded_tokens),
+                            remaining_new_tokens,
+                            runtime_max_proposal_tokens: linear_proposal_max_tokens,
+                        },
                     )? {
                         LinearProposalQueryOutcome::NoProposal => None,
                         LinearProposalQueryOutcome::DeadlineExceeded {
@@ -705,6 +725,24 @@ impl StageOpenAiBackend {
                             }
                         }
                         if let Some(receipt) = receipt {
+                            if let Some(lifecycle) = self.generation_receipt.as_ref() {
+                                let generated_token_count = decoded_tokens
+                                    .checked_add(receipt.committed_tokens.len())
+                                    .ok_or_else(|| {
+                                        OpenAiError::backend(
+                                            "linear proposal committed-token count overflow",
+                                        )
+                                    })?;
+                                lifecycle
+                                    .sink()
+                                    .committed(&crate::frontend::GenerationCommit {
+                                        request_id: receipt_request_id,
+                                        session_id: receipt_session_id,
+                                        generated_token_count,
+                                        token_ids: receipt.committed_tokens.clone(),
+                                    })
+                                    .map_err(openai_backend_error)?;
+                            }
                             if report_linear_proposal_receipt(config, &receipt).is_some() {
                                 let mut attrs = BTreeMap::new();
                                 receipt.insert_telemetry_attrs(&mut attrs);
@@ -739,7 +777,6 @@ impl StageOpenAiBackend {
                             current = *receipt.committed_tokens.last().ok_or_else(|| {
                                 OpenAiError::backend("linear proposal receipt committed no tokens")
                             })?;
-                            committed_token_ids.extend_from_slice(&receipt.committed_tokens);
                             let stopped_by_proposal =
                                 receipt.disposition == LinearProposalDisposition::Stopped;
                             if emit_token_debug {
@@ -866,8 +903,16 @@ impl StageOpenAiBackend {
                     continue;
                 }
                 decoded_tokens += 1;
-                if let Some(committed_token_ids) = linear_context_tokens.as_mut() {
-                    committed_token_ids.push(current);
+                if let Some(config) = self.generation_receipt.as_ref() {
+                    config
+                        .sink()
+                        .committed(&crate::frontend::GenerationCommit {
+                            request_id: receipt_request_id,
+                            session_id: receipt_session_id,
+                            generated_token_count: decoded_tokens,
+                            token_ids: vec![current].into_boxed_slice(),
+                        })
+                        .map_err(openai_backend_error)?;
                 }
                 if emit_token_debug {
                     let mut token_attrs = self.openai_attrs(request.ids);
@@ -970,18 +1015,22 @@ impl StageOpenAiBackend {
         let receipt_observation = receipt_observation
             .as_ref()
             .and_then(|observation| observation.borrow_mut().take());
+        let generation_succeeded = result.is_ok();
         complete_generation_before_cleanup(
             result,
             || {
-                self.finalize_generation_receipt(LocalGenerationReceiptFinalization {
-                    session_label: &session_id,
-                    request_id: receipt_request_id,
-                    session_id: receipt_session_id,
-                    prompt_token_ids: receipt_prompt_token_ids,
-                    observation: receipt_observation,
-                    cancelled: receipt_cancelled,
-                    model_generation_elapsed: receipt_model_generation_elapsed,
-                })
+                self.finalize_generation_receipt(
+                    LocalGenerationReceiptFinalization {
+                        session_label: &session_id,
+                        request_id: receipt_request_id,
+                        session_id: receipt_session_id,
+                        prompt_token_ids: receipt_prompt_token_ids,
+                        observation: receipt_observation,
+                        cancelled: receipt_cancelled,
+                        model_generation_elapsed: receipt_model_generation_elapsed,
+                    },
+                    generation_succeeded,
+                )
             },
             || self.cleanup_local_generation_session(&session_id, request.ids),
         )?;
@@ -991,6 +1040,7 @@ impl StageOpenAiBackend {
     pub(super) fn finalize_generation_receipt(
         &self,
         mut finalization: LocalGenerationReceiptFinalization<'_>,
+        generation_succeeded: bool,
     ) -> OpenAiResult<()> {
         if let Some(observation) = finalization.observation.as_mut() {
             if finalization.cancelled {
@@ -1000,18 +1050,29 @@ impl StageOpenAiBackend {
                 observation.set_model_generation_elapsed(elapsed);
             }
         }
-        match (self.generation_receipt.as_ref(), finalization.observation) {
-            (Some(config), Some(observation)) => {
-                self.deliver_local_generation_receipt(LocalGenerationReceiptDelivery {
-                    config,
-                    session_label: finalization.session_label,
-                    request_id: finalization.request_id,
-                    session_id: finalization.session_id,
-                    prompt_token_ids: finalization.prompt_token_ids,
-                    observation,
-                })
+        let abort = GenerationAbort {
+            request_id: finalization.request_id,
+            session_id: finalization.session_id,
+        };
+        match (
+            self.generation_receipt.as_ref(),
+            generation_succeeded,
+            finalization.observation,
+        ) {
+            (Some(config), true, Some(observation)) => {
+                let recorded =
+                    self.deliver_local_generation_receipt(LocalGenerationReceiptDelivery {
+                        config,
+                        session_label: finalization.session_label,
+                        request_id: finalization.request_id,
+                        session_id: finalization.session_id,
+                        prompt_token_ids: finalization.prompt_token_ids,
+                        observation,
+                    });
+                abort_after_failed_receipt(config, &abort, recorded)
             }
-            _ => Ok(()),
+            (Some(config), _, _) => config.sink().abort(&abort).map_err(openai_backend_error),
+            (None, _, _) => Ok(()),
         }
     }
 
@@ -1060,6 +1121,17 @@ fn prompt_fits_single_prefill_sample(prompt_token_count: usize, session_batch_si
     prompt_token_count > 1 && prompt_token_count <= session_batch_size
 }
 
+fn abort_after_failed_receipt(
+    config: &crate::frontend::GenerationReceiptConfig,
+    abort: &GenerationAbort,
+    receipt_result: OpenAiResult<()>,
+) -> OpenAiResult<()> {
+    if receipt_result.is_err() {
+        let _ = config.sink().abort(abort);
+    }
+    receipt_result
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -1079,8 +1151,8 @@ mod tests {
     use crate::frontend::decode_batcher::DecodeBatcher;
     use crate::frontend::generation::{OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds};
     use crate::frontend::{
-        EmbeddedOpenAiRequestDefaults, GenerationReceipt, GenerationReceiptConfig,
-        GenerationReceiptSink, GenerationTermination,
+        EmbeddedOpenAiRequestDefaults, GenerationAbort, GenerationCommit, GenerationReceipt,
+        GenerationReceiptConfig, GenerationReceiptSink, GenerationStart, GenerationTermination,
     };
     use crate::runtime_state::load_runtime;
     use crate::telemetry::{Telemetry, TelemetryLevel};
@@ -1089,9 +1161,23 @@ mod tests {
     struct RecordingReceiptSink {
         receipts: Mutex<Vec<GenerationReceipt>>,
         fail: AtomicBool,
+        aborts: AtomicUsize,
     }
 
     impl GenerationReceiptSink for RecordingReceiptSink {
+        fn begin(&self, _start: &GenerationStart) -> Result<()> {
+            Ok(())
+        }
+
+        fn committed(&self, _commit: &GenerationCommit) -> Result<()> {
+            Ok(())
+        }
+
+        fn abort(&self, _abort: &GenerationAbort) -> Result<()> {
+            self.aborts.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
         fn record(&self, receipt: &GenerationReceipt) -> Result<()> {
             self.receipts.lock().unwrap().push(receipt.clone());
             if self.fail.load(Ordering::Relaxed) {
@@ -1114,6 +1200,38 @@ mod tests {
         let source = include_str!("local_generation.rs");
         assert!(source.contains(concat!(".decode", "_sampled_mtp(")));
         assert!(!source.contains(concat!(".decode_frame", "_sampled_mtp(")));
+    }
+
+    #[test]
+    fn failed_receipt_aborts_the_generation_lifecycle_once() {
+        let sink = Arc::new(RecordingReceiptSink::default());
+        let config = GenerationReceiptConfig::new(sink.clone());
+        let abort = GenerationAbort {
+            request_id: 7,
+            session_id: 11,
+        };
+
+        let result = abort_after_failed_receipt(
+            &config,
+            &abort,
+            Err(OpenAiError::backend("receipt rejected")),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(sink.aborts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn successful_receipt_does_not_abort_the_generation_lifecycle() {
+        let sink = Arc::new(RecordingReceiptSink::default());
+        let config = GenerationReceiptConfig::new(sink.clone());
+        let abort = GenerationAbort {
+            request_id: 7,
+            session_id: 11,
+        };
+
+        assert!(abort_after_failed_receipt(&config, &abort, Ok(())).is_ok());
+        assert_eq!(sink.aborts.load(Ordering::SeqCst), 0);
     }
 
     #[test]

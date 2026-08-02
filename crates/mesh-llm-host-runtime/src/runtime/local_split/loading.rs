@@ -196,6 +196,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             skippy_telemetry,
             Some(skippy_native_model_open_event_reporter(reporter_model_ref)),
             skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
+            None,
         )
     })
     .await
