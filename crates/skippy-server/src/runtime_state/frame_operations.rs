@@ -115,7 +115,7 @@ impl RuntimeState {
     }
 
     pub fn session_batch_size(&mut self, session_id: &str) -> Result<usize> {
-        self.active_session(session_id)?.batch_size()
+        self.session(session_id)?.batch_size()
     }
 
     pub fn ensure_session_active(&mut self, session_id: &str) -> Result<()> {
