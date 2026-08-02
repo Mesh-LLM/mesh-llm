@@ -15,24 +15,34 @@
 # syntax=docker/dockerfile:1.7
 
 FROM node:24-alpine AS ui-builder
-RUN npm install -g pnpm
+ARG TARGETARCH
+RUN --mount=type=cache,id=mesh-llm-npm-alpine-node24-${TARGETARCH},target=/root/.npm,sharing=locked \
+    npm install -g pnpm
 WORKDIR /app
 COPY crates/mesh-llm-ui/package.json crates/mesh-llm-ui/pnpm-lock.yaml crates/mesh-llm-ui/pnpm-workspace.yaml ./
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+RUN --mount=type=cache,id=mesh-llm-pnpm-store-alpine-node24-${TARGETARCH},target=/root/.local/share/pnpm/store,sharing=locked \
     pnpm install --frozen-lockfile
 COPY crates/mesh-llm-ui/ ./
 RUN pnpm run build
 # Output: /app/dist
 
 FROM debian:bookworm-slim AS rust-deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential \
-    && rm -rf /var/lib/apt/lists/*
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+ARG TARGETARCH
+ARG SCCACHE_VERSION=0.16.0
+RUN --mount=type=cache,id=mesh-llm-apt-lists-debian-bookworm-${TARGETARCH},target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=cache,id=mesh-llm-apt-archives-debian-bookworm-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential
+COPY scripts/install-sccache.sh /usr/local/bin/install-sccache
+RUN --mount=type=cache,id=mesh-llm-downloads-debian-bookworm-sccache-${TARGETARCH},target=/var/cache/mesh-downloads,sharing=locked \
+    TARGETARCH="$TARGETARCH" SCCACHE_VERSION="$SCCACHE_VERSION" install-sccache
+RUN --mount=type=cache,id=mesh-llm-rustup-stable-debian-bookworm-${TARGETARCH},target=/root/.rustup/downloads,sharing=locked \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
 ENV PATH="/root/.cargo/bin:$PATH"
 ENV LLAMA_STAGE_BUILD_DIR=".deps/llama.cpp/build-stage-abi-static"
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/root/.cargo/git \
+RUN --mount=type=cache,id=mesh-llm-cargo-registry-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=mesh-llm-cargo-git-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/git,sharing=locked \
     cargo install cargo-chef --version 0.1.68 --locked
 WORKDIR /src
 # Satisfy GitHub Actions preflight checks (exact strings required)
@@ -94,16 +104,21 @@ COPY tools/xtask/ tools/xtask/
 COPY scripts/prepare-llama.sh scripts/build-llama.sh scripts/
 COPY third_party/llama.cpp/upstream.txt third_party/llama.cpp/upstream.txt
 COPY third_party/llama.cpp/patches/ third_party/llama.cpp/patches/
-RUN LLAMA_STAGE_USE_SCCACHE=0 scripts/prepare-llama.sh pinned && \
-    LLAMA_STAGE_USE_SCCACHE=0 scripts/build-llama.sh
+RUN --mount=type=cache,id=mesh-llm-sccache-debian-bookworm-gcc12-cpu-${TARGETARCH},target=/root/.cache/sccache,sharing=locked \
+    scripts/prepare-llama.sh pinned && \
+    SCCACHE_DIR=/root/.cache/sccache \
+    MESH_LLM_REQUIRE_SCCACHE=1 \
+    LLAMA_STAGE_USE_SCCACHE=1 \
+    scripts/build-llama.sh
 RUN mkdir -p crates/mesh-llm-ui/dist && echo '<html></html>' > crates/mesh-llm-ui/dist/index.html
 RUN cargo chef prepare --recipe-path recipe.json
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/root/.cargo/git \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,id=mesh-llm-cargo-registry-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=mesh-llm-cargo-git-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/git,sharing=locked \
+    --mount=type=cache,id=mesh-llm-cargo-target-debian-bookworm-rust-stable-cpu-${TARGETARCH},target=/src/target,sharing=locked \
     cargo chef cook --release --locked --recipe-path recipe.json
 
 FROM rust-deps AS rust-builder
+ARG TARGETARCH
 WORKDIR /src
 RUN rm -rf crates/mesh-llm-ui/dist
 COPY --from=ui-builder /app/dist crates/mesh-llm-ui/dist
@@ -164,17 +179,20 @@ COPY crates/skippy-bench/ crates/skippy-bench/
 COPY crates/skippy-prompt/ crates/skippy-prompt/
 COPY crates/mesh-mixture-of-agents/ crates/mesh-mixture-of-agents/
 COPY tools/xtask/ tools/xtask/
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/root/.cargo/git \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,id=mesh-llm-cargo-registry-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=mesh-llm-cargo-git-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/git,sharing=locked \
+    --mount=type=cache,id=mesh-llm-cargo-target-debian-bookworm-rust-stable-cpu-${TARGETARCH},target=/src/target,sharing=locked \
     cargo build --release --locked -p mesh-llm && \
     mkdir -p /out && \
     cp /src/target/release/mesh-llm /out/mesh-llm
 
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libgomp1 libdbus-1-3 \
-    && rm -rf /var/lib/apt/lists/*
+ARG TARGETARCH
+RUN --mount=type=cache,id=mesh-llm-apt-lists-debian-bookworm-${TARGETARCH},target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=cache,id=mesh-llm-apt-archives-debian-bookworm-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libgomp1 libdbus-1-3
 COPY --from=rust-builder /out/mesh-llm /usr/local/bin/mesh-llm
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

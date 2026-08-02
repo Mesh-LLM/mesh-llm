@@ -1,8 +1,13 @@
 # syntax=docker/dockerfile:1.7
 
 FROM debian:bookworm-slim AS builder
+ARG TARGETARCH
+ARG SCCACHE_VERSION=0.16.0
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,id=mesh-llm-apt-lists-debian-bookworm-${TARGETARCH},target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=cache,id=mesh-llm-apt-archives-debian-bookworm-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     cmake \
     curl \
@@ -12,27 +17,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     ninja-build \
     pkg-config \
-    python3 \
-    && rm -rf /var/lib/apt/lists/*
+    python3
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+COPY scripts/install-sccache.sh /usr/local/bin/install-sccache
+RUN --mount=type=cache,id=mesh-llm-downloads-debian-bookworm-sccache-${TARGETARCH},target=/var/cache/mesh-downloads,sharing=locked \
+    TARGETARCH="$TARGETARCH" SCCACHE_VERSION="$SCCACHE_VERSION" install-sccache
+
+RUN --mount=type=cache,id=mesh-llm-rustup-stable-debian-bookworm-${TARGETARCH},target=/root/.rustup/downloads,sharing=locked \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal
-
 ENV PATH="/root/.cargo/bin:${PATH}"
 ENV LLAMA_STAGE_BUILD_DIR=".deps/llama.cpp/build-stage-abi-static"
 WORKDIR /src
 
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/root/.cargo/git \
+RUN --mount=type=cache,id=mesh-llm-cargo-registry-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=mesh-llm-cargo-git-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/git,sharing=locked \
     cargo install just --locked
 
 COPY . .
 
-RUN LLAMA_STAGE_USE_SCCACHE=0 just llama-build
-
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/root/.cargo/git \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,id=mesh-llm-sccache-debian-bookworm-gcc12-cpu-${TARGETARCH},target=/root/.cache/sccache,sharing=locked \
+    SCCACHE_DIR=/root/.cache/sccache \
+    MESH_LLM_REQUIRE_SCCACHE=1 \
+    LLAMA_STAGE_USE_SCCACHE=1 \
+    just llama-build
+RUN --mount=type=cache,id=mesh-llm-cargo-registry-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=mesh-llm-cargo-git-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/git,sharing=locked \
+    --mount=type=cache,id=mesh-llm-cargo-target-debian-bookworm-rust-stable-cpu-${TARGETARCH},target=/src/target,sharing=locked \
     just skippy-wan-lab-build-bins && \
     mkdir -p /out && \
     cp /src/target/release/skippy-server /out/skippy-server && \
@@ -41,8 +52,12 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     cp /src/target/release/skippy-model-package /out/skippy-model-package
 
 FROM debian:bookworm-slim AS runtime
+ARG TARGETARCH
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,id=mesh-llm-apt-lists-debian-bookworm-${TARGETARCH},target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=cache,id=mesh-llm-apt-archives-debian-bookworm-${TARGETARCH},target=/var/cache/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
     curl \
@@ -54,8 +69,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     netcat-openbsd \
     python3 \
-    tini \
-    && rm -rf /var/lib/apt/lists/*
+    tini
 
 COPY --from=builder /out/skippy-server /usr/local/bin/skippy-server
 COPY --from=builder /out/skippy-prompt /usr/local/bin/skippy-prompt
