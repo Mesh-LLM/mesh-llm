@@ -215,7 +215,7 @@ pub(super) async fn load_split_runtime_generation_inner(
         model: model_ref,
         bytes: None,
     });
-    let http = handle.start_http(alloc_local_port().await?);
+    let http = handle.start_http(alloc_local_port().await?)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
     let capabilities = models::runtime_verified_model_capabilities(
         spec.model_ref,

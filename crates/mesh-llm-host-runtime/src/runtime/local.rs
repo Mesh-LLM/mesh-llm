@@ -672,7 +672,7 @@ async fn start_runtime_skippy_model(
         model: model_name.clone(),
         bytes: None,
     });
-    let http = skippy_model.start_http(port);
+    let http = skippy_model.start_http(port)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
     Ok((
@@ -793,7 +793,7 @@ async fn start_runtime_layer_package_model(
         model: model_ref,
         bytes: None,
     });
-    let http = handle.start_http(alloc_local_port().await?);
+    let http = handle.start_http(alloc_local_port().await?)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
     Ok((

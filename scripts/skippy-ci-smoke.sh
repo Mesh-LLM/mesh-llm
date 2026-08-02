@@ -213,6 +213,7 @@ write_stage_config() {
   local n_ubatch="${9:-$SMOKE_N_UBATCH}"
   local upstream_endpoint="${10:-}"
   python3 - "$config_path" "$model_id" "$model_path" "$layer_end" "$ctx_size" "$bind_addr" "$payload" "$SMOKE_FLASH_ATTN" "$n_batch" "$n_ubatch" "$upstream_endpoint" <<'PY'
+import hashlib
 import json
 import sys
 
@@ -229,11 +230,18 @@ import sys
     n_ubatch,
     upstream_endpoint,
 ) = sys.argv[1:]
+
+model_digest = hashlib.sha256()
+with open(model_path, "rb") as model_file:
+    for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
+        model_digest.update(chunk)
+
 config = {
     "run_id": "skippy-ci-smoke",
     "topology_id": "skippy-ci-smoke-single-stage",
     "model_id": model_id,
     "model_path": model_path,
+    "source_model_sha256": model_digest.hexdigest(),
     "stage_id": "stage-0",
     "stage_index": 0,
     "layer_start": 0,

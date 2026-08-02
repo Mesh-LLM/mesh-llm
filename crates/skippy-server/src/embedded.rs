@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use axum::Router;
 use openai_frontend::OpenAiBackend;
 use skippy_protocol::{StageConfig, StageTopology};
 use tokio::{sync::oneshot, task::JoinHandle};
@@ -18,6 +19,7 @@ use crate::{
         load_runtime_with_overrides_and_open_events,
     },
     telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
+    tokenizer::{TokenizerCapability, TokenizerCapabilityError, tokenizer_http_router},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -236,6 +238,12 @@ impl SkippyRuntimeHandle {
         })
     }
 
+    /// Returns the stateless tokenizer capability backed by this already-loaded
+    /// stage-zero runtime. This never opens a second model.
+    pub fn tokenizer_capability(&self) -> Result<TokenizerCapability, TokenizerCapabilityError> {
+        TokenizerCapability::from_stage_zero(&self.config, self.runtime.clone())
+    }
+
     pub fn status(&self) -> EmbeddedRuntimeStatus {
         let handle = self.status.lock().expect("runtime status lock poisoned");
         let Captured {
@@ -360,16 +368,24 @@ pub fn start_embedded_openai(args: EmbeddedOpenAiArgs) -> EmbeddedServerHandle {
 pub fn start_openai_backend(
     bind_addr: SocketAddr,
     backend: Arc<dyn OpenAiBackend>,
+    tokenizer: TokenizerCapability,
 ) -> EmbeddedServerHandle {
     spawn_async_server("openai-backend", bind_addr, move |shutdown| async move {
         let listener = tokio::net::TcpListener::bind(bind_addr).await?;
-        axum::serve(listener, openai_frontend::router_for(backend))
+        axum::serve(listener, openai_backend_router(backend, tokenizer))
             .with_graceful_shutdown(async move {
                 let _ = shutdown.await;
             })
             .await?;
         Ok(())
     })
+}
+
+pub(crate) fn openai_backend_router(
+    backend: Arc<dyn OpenAiBackend>,
+    tokenizer: TokenizerCapability,
+) -> Router {
+    openai_frontend::router_for(backend).merge(tokenizer_http_router(tokenizer))
 }
 
 pub fn start_binary_stage(options: BinaryStageOptions) -> EmbeddedServerHandle {

@@ -7426,6 +7426,7 @@ dependencies = [
  "prost-build",
  "protoc-bin-vendored",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7484,6 +7485,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+ "tower",
 ]
 
 [[package]]

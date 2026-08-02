@@ -42,6 +42,17 @@ use super::routing_rank::{
 
 const REMOTE_UNCOMMITTED_RETRIES: usize = 1;
 
+/// Generation context is a property of decode requests, not capability RPCs.
+/// A tokenizer request may carry a megabyte of source text while using no
+/// target KV context at all.
+pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u32> {
+    if request.is_tokenize_request() {
+        None
+    } else {
+        request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens)
+    }
+}
+
 enum AutoModelResolution {
     Model(Option<String>),
     UnsupportedMedia,
@@ -142,27 +153,29 @@ pub async fn handle_mesh_request(
     // peers serving each model); on a host node the locally-served model
     // is wired directly to its skippy port via the targets table.
     //
-    // try_handle_moa self-gates on the model name and returns the stream
-    // back unchanged if this isn't a MoA request, so we can call it
-    // unconditionally here.
-    let moa_model_name = request.model_name.clone();
-    let moa_required_tokens =
-        request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
-    let tcp_stream = match crate::network::openai::moa_gateway::try_handle_moa(
-        &node,
-        tcp_stream,
-        &mut request,
-        moa_model_name.as_deref(),
-        None, // passive path has no local targets table
-        moa_required_tokens,
-    )
-    .await
-    {
-        Some(stream) => stream,
-        None => {
-            // MoA handled the request and consumed the stream.
-            release_request_objects(&node, &request.request_object_request_ids).await;
-            return;
+    // Tokenization is a direct capability RPC, never an MoA generation. Other
+    // requests retain the normal self-gating MoA path.
+    let tcp_stream = if request.is_tokenize_request() {
+        tcp_stream
+    } else {
+        let moa_model_name = request.model_name.clone();
+        let moa_required_tokens = request_context_budget(&request);
+        match crate::network::openai::moa_gateway::try_handle_moa(
+            &node,
+            tcp_stream,
+            &mut request,
+            moa_model_name.as_deref(),
+            None, // passive path has no local targets table
+            moa_required_tokens,
+        )
+        .await
+        {
+            Some(stream) => stream,
+            None => {
+                // MoA handled the request and consumed the stream.
+                release_request_objects(&node, &request.request_object_request_ids).await;
+                return;
+            }
         }
     };
 
@@ -198,11 +211,11 @@ async fn build_mesh_request_plan(
     let descriptors = node.all_served_model_descriptors().await;
     rewrite_public_model_alias(request, &served, &descriptors);
 
-    let is_auto_request =
-        request.model_name.is_none() || request.model_name.as_deref() == Some("auto");
+    let tokenize_request = request.is_tokenize_request();
+    let is_auto_request = !tokenize_request
+        && (request.model_name.is_none() || request.model_name.as_deref() == Some("auto"));
     let auto_session_key = auto_session_key_for_request(request, is_auto_request);
-    let required_tokens =
-        request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
+    let required_tokens = request_context_budget(request);
     let effective_model = match resolve_auto_model_request(AutoModelRequestArgs {
         node,
         request,
@@ -216,7 +229,9 @@ async fn build_mesh_request_plan(
     .await
     {
         AutoModelResolution::Model(model) => model.or(request.model_name.clone()),
-        AutoModelResolution::UnsupportedMedia => return Err(MeshRequestFailure::UnsupportedMedia),
+        AutoModelResolution::UnsupportedMedia => {
+            return Err(MeshRequestFailure::UnsupportedMedia);
+        }
     };
     rewrite_effective_model(request, effective_model.as_deref());
     if is_auto_request {
@@ -257,6 +272,12 @@ async fn build_mesh_request_plan(
 }
 
 fn rewrite_effective_model(request: &mut BufferedHttpRequest, effective_model: Option<&str>) {
+    if request.is_tokenize_request() {
+        // The tokenizer's expected identity is authoritative. Never let a
+        // later routing decision diverge the routing key from the unchanged
+        // wire identity.
+        return;
+    }
     if let Some(name) = effective_model
         && request.model_name.as_deref() != Some(name)
     {
@@ -270,7 +291,7 @@ fn prepare_mesh_targets(
     target_hosts: &[iroh::EndpointId],
     affinity: &AffinityRouter,
 ) -> PreparedTargets {
-    if effective_model.is_some() && target_hosts.len() > 1 {
+    if !request.is_tokenize_request() && effective_model.is_some() && target_hosts.len() > 1 {
         request.ensure_body_json();
     }
     let body_json = request.body_json.as_ref();
@@ -1531,6 +1552,23 @@ mod tests {
             response_adapter: ResponseAdapter::None,
         }
     }
+    fn large_tokenize_request(model: &str) -> BufferedHttpRequest {
+        BufferedHttpRequest {
+            raw: b"exact tokenizer request bytes".to_vec(),
+            method: "POST".to_string(),
+            path: "/v1/tokenize".to_string(),
+            client_path: "/v1/tokenize".to_string(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: 140_000,
+            completion_tokens: None,
+            model_name: Some(model.to_string()),
+            stream: None,
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::None,
+        }
+    }
     fn local_gguf_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
         mesh::ServedModelDescriptor {
             identity: mesh::ServedModelIdentity {
@@ -1567,6 +1605,63 @@ mod tests {
                 completion_tokens: None,
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn remote_tokenizer_plan_routes_identity_model_without_context_rejection() -> Result<()> {
+        let model = "acme/code-model:Q4_K_M";
+        let peer_id = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+        let node = test_node_with_remote_models(&[(model, peer_id)]).await;
+        let mut peer = test_peer_serving_model(peer_id, model);
+        peer.served_model_runtime = vec![mesh::ModelRuntimeDescriptor {
+            model_name: model.to_owned(),
+            identity_hash: None,
+            context_length: Some(32_768),
+            ready: true,
+        }];
+        node.insert_test_peer(peer).await;
+        let affinity = AffinityRouter::new();
+        let mut request = large_tokenize_request(model);
+        let raw_before_plan = request.raw.clone();
+
+        let generation_budget =
+            request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
+        assert!(generation_budget.is_some_and(|tokens| tokens > 32_768));
+        assert!(
+            order_remote_hosts_by_context(
+                &node,
+                model,
+                generation_budget,
+                std::slice::from_ref(&peer_id),
+            )
+            .await
+            .is_empty(),
+            "a generation budget would incorrectly reject the tokenizer target"
+        );
+
+        let plan = build_mesh_request_plan(&node, &mut request, false, &affinity)
+            .await
+            .map_err(|_| anyhow::anyhow!("tokenizer request plan should resolve"))?;
+
+        assert_eq!(request_context_budget(&request), None);
+        assert_eq!(plan.effective_model.as_deref(), Some(model));
+        assert_eq!(plan.target_hosts, vec![peer_id]);
+        assert_eq!(request.raw, raw_before_plan);
+        assert!(request.body_json.is_none());
+        assert!(!request.body_json_attempted);
+        Ok(())
+    }
+
+    #[test]
+    fn tokenizer_effective_model_cannot_override_authoritative_identity() {
+        let model = "acme/code-model:Q4_K_M";
+        let mut request = large_tokenize_request(model);
+        let raw_before = request.raw.clone();
+
+        rewrite_effective_model(&mut request, Some("different/internal-model"));
+
+        assert_eq!(request.model_name.as_deref(), Some(model));
+        assert_eq!(request.raw, raw_before);
     }
     #[tokio::test]
     async fn cached_auto_model_stays_sticky_when_no_ready_remote_model_exists() -> Result<()> {
