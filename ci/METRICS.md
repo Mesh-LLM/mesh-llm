@@ -192,6 +192,24 @@ retain the raw observations. Until those records exist, the proposed role-size,
 cold-pull, and publication-time thresholds in
 [`DEPOT_MIGRATION.md`](DEPOT_MIGRATION.md) are design budgets, not baselines.
 
+## Depot Registry pull-through measurements
+
+Use the manual `depot-registry-canary.yml` workflow for registry comparisons.
+The upstream input must be digest-pinned, and the Depot repository must mirror
+that exact upstream repository. Each source receives five fresh ephemeral
+Depot runners so local layer reuse cannot turn a warm local pull into a false
+registry result. Downloaded observation artifacts can be reevaluated with:
+
+```bash
+python3 scripts/summarize-depot-registry-pulls.py \
+  --enforce /tmp/depot-registry-pull-observations
+```
+
+Adoption requires identical resolved digests, at least five unique samples per
+source, at least 20% median improvement, and at least 10 seconds saved at the
+median. This result applies only to image transfer. Do not attribute it to
+`apt`, Cargo, pnpm/npm, native backend compilation, or Docker layer export.
+
 | Phase | Change class | Provider / runner | Samples | p50 | p90 | p95 | Notes |
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
 | Product-v2 PR graph | full CI refactor | hosted mix | 1 | 1h 7m 34s | 1h 7m 34s | 1h 7m 34s | Green; queue-contaminated; composition 10s–70s |

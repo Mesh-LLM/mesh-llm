@@ -210,6 +210,13 @@ update the skill resources in the same change.
   selected-workflow restriction, and every selected runner label before
   enabling Depot. Hardware-qualified GPU execution remains on a restricted
   device runner.
+- Treat Depot Registry pull-through caching as an opt-in, trusted-build
+  optimization. Benchmark an upstream digest and its cached mirror on fresh
+  ephemeral runners, require identical manifest digests, and adopt a mirror
+  only when at least five samples show both 20% and 10 seconds of median pull
+  improvement. Never pass the pull token to PR code or use pull timing as
+  evidence for package installation, dependency resolution, compilation, or
+  Docker layer-export improvements.
 
 ## Dependencies and runner setup
 
