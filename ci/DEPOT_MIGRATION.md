@@ -444,13 +444,15 @@ token to PR code.
 The checked-in `depot-registry-canary.yml` implements that measurement gate for
 any digest-pinned public base or runner image. Configure each upstream
 repository as a distinct Depot pull-through repository, set the nonsecret
-`DEPOT_REGISTRY_HOST` repository variable, and permit the job's GitHub OIDC
-identity to mint a short-lived read-only `depot pull-token`. No stored registry
-secret is required. Run the workflow from `main` with the exact upstream digest
-and relative Depot repository name. It allocates five fresh ephemeral runners
-per source, verifies digest identity, retains raw timing observations for 14
-days, and reports whether both thresholds pass. Do not enable a mirror in
-normal builds until its own retained cohort passes.
+`DEPOT_REGISTRY_HOST` repository variable, and enable Depot's native Actions-job
+Registry access for the organization. Depot pre-authenticates each trusted
+ephemeral runner with a short-lived job credential, so no stored registry secret
+or workflow-minted pull token is required. Run the workflow from `main` with the
+exact upstream digest and relative Depot repository name. It allocates five
+fresh ephemeral runners per source, verifies the injected Depot organization
+identity and digest identity, retains raw timing observations for 14 days, and
+reports whether both thresholds pass. Do not enable a mirror in normal builds
+until its own retained cohort passes.
 
 ### `Mesh-LLM/mesh-packaging`
 

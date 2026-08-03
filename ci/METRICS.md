@@ -197,10 +197,10 @@ cold-pull, and publication-time thresholds in
 Use the manual `depot-registry-canary.yml` workflow for registry comparisons.
 The upstream input must be digest-pinned, and the Depot repository must mirror
 that exact upstream repository. Each source receives five fresh ephemeral
-GitHub-hosted runners so local layer reuse cannot turn a warm local pull into a
-false registry result while Depot authenticates through the project's GitHub
-Actions OIDC trust relationship. Downloaded observation artifacts can be
-reevaluated with:
+Depot-managed runners so local layer reuse cannot turn a warm local pull into a
+false registry result. Depot pre-authenticates each ephemeral runner with a
+short-lived organization Registry job credential. Downloaded observations can
+be reevaluated with:
 
 ```bash
 python3 scripts/summarize-depot-registry-pulls.py \

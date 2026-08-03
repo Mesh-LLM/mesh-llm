@@ -20,9 +20,6 @@ on:
 permissions:
   contents: read
 
-env:
-  DEPOT_PROJECT_ID: mzm95zcv7p
-
 concurrency:
   group: depot-registry-canary
   cancel-in-progress: false
@@ -74,33 +71,16 @@ jobs:
     needs: policy
     permissions:
       contents: read
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
         source: [upstream, depot]
         sample: [1, 2, 3, 4, 5]
-    # Use GitHub's OIDC issuer for the Depot project trust relationship while
-    # retaining a fresh hosted VM for every timing sample.
-    runs-on: ubuntu-24.04
+    # Depot provisions a fresh runner for every sample and pre-authenticates it
+    # to the organization Registry with a short-lived job credential.
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Set up Depot CLI
-        if: ${{ matrix.source == 'depot' }}
-        uses: depot/setup-action@15c09a5f77a0840ad4bce955686522a257853461 # v1
-        with:
-          version: 2.101.77
-      - name: Authenticate to Depot Registry
-        if: ${{ matrix.source == 'depot' }}
-        shell: bash
-        env:
-          DEPOT_REGISTRY_HOST: ${{ vars.DEPOT_REGISTRY_HOST }}
-        run: |
-          set -euo pipefail
-
-          depot pull-token --project "$DEPOT_PROJECT_ID" |
-            docker login "$DEPOT_REGISTRY_HOST" --username x-token --password-stdin
-
       - name: Pull exact image on a fresh runner
         shell: bash
         env:
@@ -111,6 +91,11 @@ jobs:
           UPSTREAM_IMAGE: ${{ inputs.upstream_image }}
         run: |
           set -euo pipefail
+
+          if [[ "${DEPOT_ORG_ID:-}" != "1ntz5vlngn" ]]; then
+            echo "registry canaries require a pre-authenticated Mesh-LLM Depot runner" >&2
+            exit 1
+          fi
 
           image="$UPSTREAM_IMAGE"
           if [[ "$SOURCE" == "depot" ]]; then

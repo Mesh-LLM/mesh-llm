@@ -616,8 +616,8 @@ public reference with a configured Depot mirror using five fresh ephemeral
 runner samples per source. The workflow verifies that every pull resolves to
 the same manifest digest and requires both 20% and 10 seconds of median pull
 improvement before a mirror is eligible for broader use. Its read-only pull
-token is minted through GitHub OIDC only in the cached pull step; no stored
-registry secret is used, and the OIDC permission is never available to PR code.
+access comes from Depot's short-lived job credential on each trusted ephemeral
+runner; no stored registry secret or workflow-minted pull token is used.
 This measures registry transfer only; it does not measure package-manager,
 Cargo, npm/pnpm, native compilation, or Docker export work.
 
