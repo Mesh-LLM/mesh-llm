@@ -59,12 +59,26 @@ pub(crate) fn refinement_expected(config: &GatewayConfig) -> bool {
         RefinementPolicy::Never => false,
         RefinementPolicy::Always => config.models.len() >= MIN_DRAFTS,
         RefinementPolicy::Auto => {
-            let big = config
+            if config.models.len() < MIN_DRAFTS {
+                return false;
+            }
+            // Refine when the drafts will be correlated — that is where the
+            // cross-peer round measurably pays:
+            //   * homogeneous pool (same model, incl. repeated instances or
+            //     quant variants): same-model 32B ×2 wins 48/2 with refinement
+            //     vs 35/10 without;
+            //   * all-small pool: 8B needs the round to beat its best member.
+            // A diverse pool that already has a big-tier synthesizer gains
+            // ~nothing from the extra fan-out (mid diverse: 49/6 layered vs
+            // 47/4 single-round), so skip it there to save the round-trip.
+            // See `evals/moa-openrouter/RESULTS.md`.
+            if worker::pool_is_homogeneous(&config.models) {
+                return true;
+            }
+            config
                 .models
                 .iter()
-                .filter(|m| !worker::model_name_is_small_tier(&m.name))
-                .count();
-            big == 0 && config.models.len() >= MIN_DRAFTS
+                .all(|m| worker::model_name_is_small_tier(&m.name))
         }
     }
 }
@@ -216,12 +230,33 @@ mod tests {
         assert!(should_refine(&c, 3));
     }
 
-    /// With a big-tier synthesizer present the extra round buys much less than
-    /// it costs, so Auto skips it.
+    /// A *diverse* pool with a big-tier synthesizer gains ~nothing from the
+    /// extra round (measured 49/6 layered vs 47/4 single-round), so Auto skips
+    /// it to save the round-trip.
     #[test]
-    fn auto_skips_when_a_big_tier_model_is_present() {
+    fn auto_skips_for_a_diverse_big_tier_pool() {
         let c = config(&["Qwen3-32B", "Qwen3-8B"], RefinementPolicy::Auto);
         assert!(!should_refine(&c, 2));
+    }
+
+    /// A *homogeneous* big-tier pool (same model, incl. repeated instances)
+    /// produces correlated drafts, and the round is what pulls them apart —
+    /// same-model 32B ×2 wins 48/2 with refinement vs 35/10 without. Auto must
+    /// refine here even though the members are big-tier.
+    #[test]
+    fn auto_refines_a_homogeneous_big_tier_pool() {
+        let c = config(&["Qwen3-32B", "Qwen3-32B"], RefinementPolicy::Auto);
+        assert!(should_refine(&c, 2));
+    }
+
+    /// Repeated instances of one model (same alias) are homogeneous.
+    #[test]
+    fn auto_refines_repeated_instances_of_one_model() {
+        let c = config(
+            &["Qwen3-32B", "Qwen3-32B", "Qwen3-32B"],
+            RefinementPolicy::Auto,
+        );
+        assert!(should_refine(&c, 3));
     }
 
     #[test]
