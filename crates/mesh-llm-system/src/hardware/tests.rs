@@ -834,6 +834,42 @@ fn test_parse_windows_video_controller_json_single_object() {
 }
 
 #[test]
+fn test_windows_per_gpu_vram_keeps_zero_vram_adapters_aligned() {
+    let controllers = vec![
+        ("Virtual Display Adapter".to_string(), 0),
+        ("AMD Radeon RX 9070 XT".to_string(), 4_293_918_720),
+    ];
+
+    assert_eq!(
+        windows_per_gpu_vram(&controllers),
+        vec![0, 4_293_918_720],
+        "adapters reporting no VRAM must keep a slot so later adapters stay aligned"
+    );
+}
+
+#[test]
+fn test_windows_zero_vram_adapter_does_not_shift_vram_onto_wrong_gpu() {
+    let controllers = vec![
+        ("Virtual Display Adapter".to_string(), 0),
+        ("AMD Radeon RX 9070 XT".to_string(), 4_293_918_720),
+    ];
+    let names: Vec<String> = controllers.iter().map(|(name, _)| name.clone()).collect();
+    let mut survey = HardwareSurvey {
+        gpu_count: 2,
+        gpu_vram: windows_per_gpu_vram(&controllers),
+        ..Default::default()
+    };
+
+    hydrate_gpu_facts_with_identities(&mut survey, &[Metric::GpuFacts], &[], names, 2, false);
+
+    assert_eq!(survey.gpus.len(), 2);
+    assert_eq!(survey.gpus[0].display_name, "Virtual Display Adapter");
+    assert_eq!(survey.gpus[0].vram_bytes, 0);
+    assert_eq!(survey.gpus[1].display_name, "AMD Radeon RX 9070 XT");
+    assert_eq!(survey.gpus[1].vram_bytes, 4_293_918_720);
+}
+
+#[test]
 fn test_parse_windows_total_physical_memory() {
     assert_eq!(
         parse_windows_total_physical_memory("68719476736\r\n"),
