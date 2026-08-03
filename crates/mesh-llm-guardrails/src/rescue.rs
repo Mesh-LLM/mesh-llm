@@ -320,21 +320,35 @@ fn tagged_body<'a>(content: &'a str, start_tag: &str, end_tag: &str) -> Option<&
 }
 
 fn first_balanced_object(content: &str) -> Option<String> {
+    let (start, end) = first_balanced_object_span(content)?;
+    Some(content[start..end].to_string())
+}
+
+/// Byte span `[start, end)` of the first balanced `{...}` in `content`.
+///
+/// Callers that need to keep parsing *after* the object must use the span, not
+/// the returned string's length: the object does not necessarily begin at index
+/// 0, so `content[json_text.len()..]` is off by however much preceded the `{`.
+/// With any multi-byte character in that prefix the bad index also lands inside
+/// a character and panics — observed in production as
+/// "start byte index 13 is not a char boundary; it is inside '‑'".
+fn first_balanced_object_span(content: &str) -> Option<(usize, usize)> {
     let start = content.find('{')?;
     let end = balanced_substring_end(content.as_bytes(), start, b'{', b'}')?;
-    Some(content[start..=end].to_string())
+    Some((start, end + 1))
 }
 
 fn parse_parenthesized_tool_call(content: &str) -> Option<Value> {
     let open_paren = content.find('(')?;
     let name = trailing_tool_name(&content[..open_paren])?;
     let after_open = content[open_paren + 1..].trim_start();
-    let json_text = first_balanced_object(after_open)?;
-    let after_json = after_open[json_text.len()..].trim_start();
+    // Resume from the object's END, not its length: it may not start at 0.
+    let (json_start, json_end) = first_balanced_object_span(after_open)?;
+    let after_json = after_open[json_end..].trim_start();
     if !after_json.starts_with(')') {
         return None;
     }
-    let arguments = serde_json::from_str::<Value>(&json_text).ok()?;
+    let arguments = serde_json::from_str::<Value>(&after_open[json_start..json_end]).ok()?;
     Some(json!({ "name": name, "arguments": arguments }))
 }
 
@@ -428,5 +442,35 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error, ToolCallParseError::UnknownTool);
+    }
+
+    /// Regression: a multi-byte character before the JSON object made the
+    /// caller slice at a bad byte index and panic. Observed in production as
+    /// "start byte index 13 is not a char boundary; it is inside '‑'" while
+    /// parsing a real model answer containing a non-breaking hyphen.
+    #[test]
+    fn parenthesized_tool_call_survives_multibyte_prefix() {
+        // U+2011 non-breaking hyphen inside the parentheses, before the `{`.
+        let content = "read_file(non\u{2011}breaking {\"path\": \"a.rs\"})";
+        // Must not panic. Parsing may or may not succeed; the contract here is
+        // simply that malformed-ish input is rejected rather than crashing.
+        let _ = parse_parenthesized_tool_call(content);
+    }
+
+    /// The happy path still parses after the span fix.
+    #[test]
+    fn parenthesized_tool_call_still_parses() {
+        let parsed = parse_parenthesized_tool_call("read_file({\"path\": \"a.rs\"})")
+            .expect("well-formed parenthesized call should parse");
+        assert_eq!(parsed["name"], "read_file");
+        assert_eq!(parsed["arguments"]["path"], "a.rs");
+    }
+
+    /// Multi-byte content *inside* the JSON object must round-trip.
+    #[test]
+    fn parenthesized_tool_call_handles_multibyte_arguments() {
+        let parsed = parse_parenthesized_tool_call("read_file({\"path\": \"café‑x.rs\"})")
+            .expect("multibyte argument should parse");
+        assert_eq!(parsed["arguments"]["path"], "café‑x.rs");
     }
 }
