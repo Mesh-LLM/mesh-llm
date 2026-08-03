@@ -24,7 +24,7 @@ use crate::{GatewayConfig, RefinementPolicy, WorkerSummary};
 use std::time::Instant;
 
 /// Minimum round-1 drafts needed for refinement to be meaningful.
-const MIN_DRAFTS: usize = 2;
+pub(crate) const MIN_DRAFTS: usize = 2;
 
 /// Share of the worker budget the refinement round may spend.
 ///

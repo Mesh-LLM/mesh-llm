@@ -37,6 +37,14 @@ pub(crate) struct GatherPolicy {
     pub grace_mode: GraceMode,
     /// See [`crate::GatewayConfig::strong_patience`].
     pub strong_patience: Duration,
+    /// How many qualifying answers must be in hand before the answer grace may
+    /// fire. Normally 1 — ship the good answer, stop waiting for the tail.
+    ///
+    /// Raised when a refinement round is expected: grace is a *timeout*, not a
+    /// quality signal, and shipping a lone answer there would forfeit the only
+    /// step that makes a small pool beat its best member. Grace still bounds
+    /// the wait; it just won't finalize before refinement is possible.
+    pub min_grace_answers: usize,
 }
 
 /// Identifier for a worker we dispatched. Used to reconcile the
@@ -71,6 +79,7 @@ pub(crate) async fn gather_workers_incremental(
         first_answer_grace,
         grace_mode,
         strong_patience,
+        min_grace_answers,
     } = policy;
     let total_workers = dispatched.len();
     let mut outputs = Vec::new();
@@ -109,9 +118,15 @@ pub(crate) async fn gather_workers_incremental(
         }
         match grace_mode {
             GraceMode::Disabled => false,
-            GraceMode::Answer => outs.iter().any(|o| {
-                o.kind == normalize::OutputKind::Answer && o.confidence >= GRACE_MIN_CONFIDENCE
-            }),
+            GraceMode::Answer => {
+                outs.iter()
+                    .filter(|o| {
+                        o.kind == normalize::OutputKind::Answer
+                            && o.confidence >= GRACE_MIN_CONFIDENCE
+                    })
+                    .count()
+                    >= min_grace_answers.max(1)
+            }
             GraceMode::Tool => outs.iter().any(|o| {
                 o.kind == normalize::OutputKind::ToolProposal
                     && o.tool_name.is_some()
@@ -605,6 +620,7 @@ mod tests {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
             },
         )
         .await;
@@ -660,6 +676,7 @@ mod tests {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
             },
         )
         .await;
@@ -710,6 +727,7 @@ mod tests {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Disabled,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
             },
         )
         .await;
@@ -752,6 +770,7 @@ mod tests {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Tool,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
             },
         )
         .await;
@@ -809,6 +828,7 @@ mod tests {
                 first_answer_grace: Duration::ZERO,
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
             },
         )
         .await;
@@ -859,6 +879,7 @@ mod tests {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
             },
         )
         .await;
@@ -914,6 +935,7 @@ mod tests {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
             },
         )
         .await;
@@ -977,6 +999,7 @@ mod tests {
                 first_answer_grace: Duration::from_millis(100),
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
             },
         )
         .await;

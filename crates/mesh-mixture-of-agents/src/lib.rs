@@ -313,23 +313,7 @@ async fn handle_query(
     }
 
     let assignments = worker::assign_roles(&config.models);
-    let mut grace_mode = grace_mode_for_turn(session, has_tools);
-
-    // When refinement is what creates the value, the answer grace must not
-    // pre-empt it. Grace produces an `early_decision`, and refinement is
-    // skipped whenever one exists — so on an all-small pool (where a single
-    // synthesis round is worth nothing: 26/75/19, p=0.37, vs 42/66/12 with
-    // refinement) one fast peer answering while others straggle would ship a
-    // lone small-model answer and skip the only step that beats the best
-    // member. Variable peer latency is the norm on consumer hardware, so that
-    // would silently disable the feature exactly where it matters.
-    //
-    // The grace still bounds the round-1 wait via `worker_timeout`, and
-    // refinement carries its own half-budget deadline, so disabling grace here
-    // costs bounded latency rather than an unbounded wait.
-    if refinement::refinement_expected(config) {
-        grace_mode = fanout::GraceMode::Disabled;
-    }
+    let grace_mode = grace_mode_for_turn(session, has_tools);
 
     // If the caller gave us tools, the workers get tools. Full stop.
     //
@@ -422,16 +406,28 @@ async fn handle_query(
             first_answer_grace: config.first_answer_grace,
             grace_mode,
             strong_patience: config.strong_patience,
+            // When refinement is expected, don't let grace finalize on a lone
+            // answer: refinement needs >=2 drafts, and it is the only step
+            // that makes a small pool beat its best member.
+            min_grace_answers: if refinement::refinement_expected(config) {
+                refinement::MIN_DRAFTS
+            } else {
+                1
+            },
         },
     )
     .await;
 
     // Cross-peer refinement (Together's `layers`): each worker rewrites its
-    // answer after seeing the others'. Only worth a second fan-out when we're
-    // going to synthesize anyway — an early-exit consensus already has its
-    // answer — and only for pool shapes where it measurably pays
-    // (`evals/moa-openrouter/RESULTS.md`). Best-effort: on shortfall we keep
-    // the round-1 outputs.
+    // answer after seeing the others'. Runs only for pool shapes where it
+    // measurably pays (`evals/moa-openrouter/RESULTS.md`), and is best-effort —
+    // on shortfall we keep the round-1 outputs.
+    //
+    // An `early_decision` here means the workers actually *agreed* — that is a
+    // real signal and the cheap path, so it still short-circuits. (The other
+    // early-exit source, the answer grace, is a timeout rather than a quality
+    // signal; when refinement is expected it is configured above to bound the
+    // gather without finalizing, so it no longer pre-empts this round.)
     if early_decision.is_none()
         && refinement::should_refine(config, outputs.len())
         && let Some((refined, refine_summaries)) =
