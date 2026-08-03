@@ -80,7 +80,9 @@ jobs:
       matrix:
         source: [upstream, depot]
         sample: [1, 2, 3, 4, 5]
-    runs-on: depot-ubuntu-24.04
+    # Use GitHub's OIDC issuer for the Depot project trust relationship while
+    # retaining a fresh hosted VM for every timing sample.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Set up Depot CLI

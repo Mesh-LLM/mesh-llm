@@ -28,7 +28,7 @@ class DepotRegistryCanaryWorkflowTests(unittest.TestCase):
     def test_canary_uses_fresh_runner_samples_and_exact_digest(self) -> None:
         self.assertIn("source: [upstream, depot]", self.workflow)
         self.assertIn("sample: [1, 2, 3, 4, 5]", self.workflow)
-        self.assertIn("runs-on: depot-ubuntu-24.04", self.workflow)
+        self.assertIn("runs-on: ubuntu-24.04", self.workflow)
         self.assertIn("upstream_image must be pinned by sha256 digest", self.workflow)
         self.assertIn("digest mismatch", self.workflow)
 

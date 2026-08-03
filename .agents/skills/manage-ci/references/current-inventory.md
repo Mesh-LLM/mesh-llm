@@ -272,7 +272,7 @@ the two dedicated GPU scale sets and is not the Depot group.
 The manual `depot-registry-canary.yml` is the pull-through adoption boundary.
 It accepts only a digest-pinned public reference and a safe relative Depot
 repository name on an exact `main` dispatch. Five upstream jobs and five Depot
-jobs each receive a fresh ephemeral Depot runner. The summary rejects digest
+jobs each receive a fresh ephemeral GitHub-hosted runner. The summary rejects digest
 drift and requires at least 20% and 10 seconds of median pull improvement.
 `DEPOT_REGISTRY_HOST` supplies the nonsecret organization registry host;
 the cached pull step uses GitHub OIDC to mint a short-lived read-only
