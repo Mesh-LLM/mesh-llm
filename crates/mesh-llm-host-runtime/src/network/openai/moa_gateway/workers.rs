@@ -132,49 +132,7 @@ pub async fn build_moa_config(
     required_tokens: Option<u32>,
 ) -> Option<moa::GatewayConfig> {
     let http = reqwest::Client::new();
-    let mut backends: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
-    let mut models: Vec<moa::ModelEntry> = Vec::new();
-    let mut local_count = 0usize;
-
-    // Full mesh-wide model list (local + every peer's advertised
-    // routable models).
-    let all_models: Vec<String> = node
-        .models_being_served()
-        .await
-        .into_iter()
-        .filter(|n| n != moa::VIRTUAL_MODEL_NAME)
-        .collect();
-
-    // Group aliases by canonical base. The old shape sorted by name
-    // length, took the *first* alias per base, and dropped the rest —
-    // which silently dropped the model from the worker pool whenever the
-    // shortest-named peer was unreachable (regression flagged by PR #566
-    // review). Now we keep every alias per base and try them in order so
-    // a longer-named reachable alias can still resolve when the shortest
-    // one is offline.
-    let groups = group_aliases_by_canonical_base(all_models, targets);
-    for aliases in groups {
-        resolve_one_worker_from_aliases(
-            node,
-            targets,
-            &http,
-            &aliases,
-            required_tokens,
-            &mut backends,
-            &mut models,
-            &mut local_count,
-        )
-        .await;
-    }
-
-    // Admission control: a weak worker must not drag down a pool that already
-    // has a stronger one. Measured, aggregation is sensitive to proposal
-    // quality (Self-MoA, arXiv:2502.00674), and adding an 8B draft to a 24-32B
-    // pool is expected noise-to-harm. So when any big-tier worker is present,
-    // drop the small-tier ones. A lone big model then simply serves solo
-    // (falls through the <2 check below), which is the safe outcome; an
-    // all-small pool keeps every member (that is the 8B N=4 case that wins).
-    apply_admission_control(&mut backends, &mut models);
+    let (backends, models) = assemble_worker_pool(node, targets, required_tokens, &http).await;
 
     if models.len() < 2 {
         tracing::warn!(
@@ -436,6 +394,110 @@ async fn add_worker_backend(
         return true;
     }
     false
+}
+
+/// Discover and assemble the MoA worker pool: resolve one worker per distinct
+/// model, apply admission control, then self-fill same-model instances.
+///
+/// Returns parallel `(backends, models)` vecs linked by `backend_index`.
+async fn assemble_worker_pool(
+    node: &mesh::Node,
+    targets: Option<&election::ModelTargets>,
+    required_tokens: Option<u32>,
+    http: &reqwest::Client,
+) -> (
+    Vec<std::sync::Arc<dyn moa::ModelBackend>>,
+    Vec<moa::ModelEntry>,
+) {
+    let mut backends: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
+    let mut models: Vec<moa::ModelEntry> = Vec::new();
+    let mut local_count = 0usize;
+
+    // Full mesh-wide model list (local + every peer's advertised routable
+    // models).
+    let all_models: Vec<String> = node
+        .models_being_served()
+        .await
+        .into_iter()
+        .filter(|n| n != moa::VIRTUAL_MODEL_NAME)
+        .collect();
+
+    // Group aliases by canonical base and resolve one worker per base, trying
+    // aliases in order so a longer-named reachable alias still resolves when
+    // the shortest one is offline (PR #566).
+    for aliases in group_aliases_by_canonical_base(all_models, targets) {
+        resolve_one_worker_from_aliases(
+            node,
+            targets,
+            http,
+            &aliases,
+            required_tokens,
+            &mut backends,
+            &mut models,
+            &mut local_count,
+        )
+        .await;
+    }
+
+    // Admission control: a weak worker must not drag down a pool that already
+    // has a stronger one. Aggregation is sensitive to proposal quality
+    // (Self-MoA, arXiv:2502.00674), so an 8B draft added to a 24-32B pool is
+    // expected noise-to-harm. When tiers are mixed, keep only big-tier workers;
+    // an all-small or all-big pool is untouched. A lone big model then serves
+    // solo (fails the caller's <2 check), the safe outcome.
+    apply_admission_control(&mut backends, &mut models);
+
+    // Same-model fill: if only one model resolved but it is served by more than
+    // one node, add the extra nodes as workers. Self-MoA shows repeated
+    // sampling of one model ensembles as well as different models, so a mesh
+    // where every node serves the SAME model should still get MoA — the "add a
+    // modest node and it helps" case. Distinct remote endpoints only, never the
+    // same node twice, so the added capacity is real.
+    if models.len() == 1 {
+        self_fill_from_extra_instances(node, http, &mut backends, &mut models).await;
+    }
+
+    (backends, models)
+}
+
+/// Cap on same-model instances added by self-fill. Two is enough to switch a
+/// single-model mesh from solo to a working committee; beyond that the extra
+/// draft's marginal value falls and it is just latency/cost.
+const SELF_FILL_TARGET_WORKERS: usize = 2;
+
+/// When only one model resolved, add extra reachable *nodes* serving that same
+/// model as additional workers, up to [`SELF_FILL_TARGET_WORKERS`].
+///
+/// Only genuinely distinct remote endpoints are added — never the local backend
+/// again and never the same peer twice — so each added worker is real capacity
+/// from a node that joined the mesh. This is what makes a same-model mesh get
+/// MoA at all; without it `build_moa_config` returns None for such a mesh.
+async fn self_fill_from_extra_instances(
+    node: &mesh::Node,
+    _http: &reqwest::Client,
+    backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
+    models: &mut Vec<moa::ModelEntry>,
+) {
+    let Some(existing) = models.first().cloned() else {
+        return;
+    };
+    let name = existing.name.clone();
+
+    for peer_id in node.hosts_for_model(&name).await {
+        if models.len() >= SELF_FILL_TARGET_WORKERS {
+            break;
+        }
+        let backend_idx = backends.len();
+        backends.push(std::sync::Arc::new(RemoteModelBackend {
+            node: node.clone(),
+            peer_id,
+        }));
+        models.push(moa::ModelEntry {
+            name: name.clone(),
+            backend_index: backend_idx,
+        });
+        tracing::info!("MoA: self-fill added instance of {name} from peer {peer_id}");
+    }
 }
 
 /// How long a turn waits for better answers before shipping what it has.
