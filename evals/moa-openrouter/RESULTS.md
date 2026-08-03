@@ -215,6 +215,37 @@ became ties. The direction survived; the magnitude did not.
 This is the same control the strong-pool section applies — it was simply never
 carried into the small-pool and e2e harnesses.
 
+## The problem with N=2 was scale, not count
+
+The N=2-8B null (below) suggested "two peers isn't enough". A mid-scale re-run
+refutes that reading: the count was fine, the 8B *members* were too weak.
+
+Same 40 prompts, same judge, same shipped `handle_turn`, layered arm:
+
+| pool | layered vs best member | p (sign) | length r | MoA vs solo length |
+|---|---|---|---|---|
+| N=2, 8B (Qwen + Meta) | 2W / 75T / 3L | 1.00 | n/a (5 decided) | — |
+| N=3, 8B (+ IBM) | 3W / 76T / 1L | 0.63 | — | — |
+| N=4, 8B (+ Mistral) | 11W / 68T / 1L | 0.006 | — | — |
+| **N=2, mid (32B + 24B)** | **49W / 24T / 6L** | **2e-9** | **−0.04** | MoA shorter (2516 vs 3064) |
+| N=4, strong (32B agg) | 90W / 11T / 19L | 3e-12 | +0.30 | MoA shorter (2196 vs 3136) |
+
+The N=2-mid result is the cleanest in the whole study: no length confound
+(r=−0.04), MoA answers *shorter* than solo, and it still won 93% of the trials
+where it was shorter. Two mid-size models beat one of equal strength decisively.
+
+So diversity/capability of the *members*, not the raw count, is what matters —
+at 8B you need ~4 models before it pays; at 24–32B, 2 already win.
+
+**Open caveat (the important one).** This shows *ensembling* beats one run of
+the best member. It does NOT yet show that cross-model *diversity* is the cause,
+because the baseline is strength-matched but not compute-matched: MoA spends
+two drafts + a refinement round + synthesis, the solo baseline spends one draw.
+A compute-matched Self-MoA arm (two samples of the *same* model, same
+aggregator) is the deciding test and is being run. If Self-MoA ties Mixed, the
+honest claim becomes "test-time ensembling beats one draw", and "2 different
+models" is the wrong framing.
+
 ## How many peers does it take? (N=2 vs N=4)
 
 Same 40 prompts, same judge, same harness — only the pool size differs. N=2 is
