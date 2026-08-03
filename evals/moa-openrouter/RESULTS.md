@@ -278,12 +278,37 @@ refinement.** Length-controlled: layered beats solo 11–1 on decided trials
 (p = 0.0063), single-round does not (6–1, ns). Ties dominate at 68/80 — on most
 prompts a small mesh and a single small model are indistinguishable.
 
-**End-to-end through `handle_turn` — parity, not yet a win.** 5 / 65 / 10
-(p = 0.30) against the pool's best member. Five eval-vs-production divergences
-were found and fixed by measuring the shipped path (grace finalizing before
-refinement, two truncation bounds, and two prompts that contradicted the
-measured configuration); a sixth hypothesis was measured and *rejected*. The
-harness shows the mechanism works; the shipped path currently reaches parity.
+**End-to-end through `handle_turn` — parity, not yet a win.** Latest:
+9 / 59 / 12 (p = 0.66) against the pool's best member; the prior run was
+5 / 65 / 10 (p = 0.30). Both are parity, and the difference between them is
+noise at this sample size.
+
+Six eval-vs-production divergences were found by measuring the shipped path and
+fixed: grace finalizing the turn before refinement could run, two truncation
+bounds that discarded most of each answer, two prompts that contradicted the
+measured configuration, and named-vs-anonymous reducer inputs. A seventh
+hypothesis (removing the worker preamble from the reducer) was measured,
+*rejected*, and reverted.
+
+The gap that remains is unexplained:
+
+| | win / tie / loss | sign test |
+|---|---|---|
+| harness (`refine` + `synthesize` helpers) | 11 / 68 / 1 | p = 0.0063 |
+| shipped (`moa::handle_turn`) | 9 / 59 / 12 | p = 0.66 |
+
+Same models, same prompts, same judge, same packing. The mechanism works when
+driven directly; something in the shipped orchestration still costs the gain.
+Candidates not yet ruled out: the arbiter short-circuiting synthesis when
+refined drafts converge (74/80 turns did reach the reducer, so this is partial
+at most), the worker preamble that production adds and the harness does not,
+and the extra reducer scaffolding ("Reason for synthesis", "## Worker
+outputs").
+
+Caution on the numbers above: r(length, verdict) was +0.465 in the latest e2e
+run versus +0.132 in the small-pool study, so length bias is not fully
+suppressed even with the corrected judge. Treat single-run e2e deltas as
+directional only.
 
 The task split follows from the evidence: **route tool turns to the best
 tool-caller; convene the committee on reasoning/answer turns.**
