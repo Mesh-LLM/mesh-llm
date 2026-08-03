@@ -40,11 +40,22 @@ pub(crate) struct GatherPolicy {
     /// How many qualifying answers must be in hand before the answer grace may
     /// fire. Normally 1 — ship the good answer, stop waiting for the tail.
     ///
-    /// Raised when a refinement round is expected: grace is a *timeout*, not a
-    /// quality signal, and shipping a lone answer there would forfeit the only
-    /// step that makes a small pool beat its best member. Grace still bounds
-    /// the wait; it just won't finalize before refinement is possible.
+    /// Raised when a refinement round is expected, so grace cannot trip before
+    /// there is enough material to refine with.
     pub min_grace_answers: usize,
+    /// Whether grace expiry *finalizes* the turn or merely *stops collecting*.
+    ///
+    /// Normally true: grace ships the best answer in hand and the turn is done.
+    ///
+    /// False when a refinement round is expected. Grace is a deadline on
+    /// waiting, not a quality signal — but finalizing there skips refinement,
+    /// which on a small pool is the only step that beats the best member.
+    /// Measured end-to-end through `handle_turn`, finalizing grace made MoA
+    /// *lose* 7/8/65 to a single small model: 79 of 80 turns exited at grace
+    /// with a lone 8B answer and never refined. With this false, grace still
+    /// bounds the round-1 wait, then the turn proceeds to refine and
+    /// synthesize what arrived.
+    pub grace_finalizes: bool,
 }
 
 /// Identifier for a worker we dispatched. Used to reconcile the
@@ -80,6 +91,7 @@ pub(crate) async fn gather_workers_incremental(
         grace_mode,
         strong_patience,
         min_grace_answers,
+        grace_finalizes,
     } = policy;
     let total_workers = dispatched.len();
     let mut outputs = Vec::new();
@@ -164,18 +176,26 @@ pub(crate) async fn gather_workers_incremental(
             join = join_set.join_next() => join,
             _ = tokio::time::sleep(grace_remaining), if armed => {
                 tracing::info!(
-                    "moa: grace early-exit after {}ms (grace={}ms), {} pending",
+                    "moa: grace expiry after {}ms (grace={}ms), {} pending, finalize={}",
                     dispatched_at.elapsed().as_millis(),
                     first_answer_grace.as_millis(),
                     total_workers.saturating_sub(total_finished),
+                    grace_finalizes,
                 );
+                drain_after_early_exit(join_set, &mut summaries).await;
+                reconcile_dispatched(dispatched, &mut summaries);
+                // When a refinement round is expected, grace is only a deadline
+                // on *collecting*: stop waiting for the tail, but let the turn
+                // refine and synthesize what arrived instead of shipping one
+                // worker's answer.
+                if !grace_finalizes {
+                    return (outputs, summaries, None);
+                }
                 let decision = match grace_mode {
                     GraceMode::Answer => grace_answer_decision(&outputs),
                     GraceMode::Tool => grace_tool_decision(&outputs),
                     GraceMode::Disabled => unreachable!("disabled grace cannot be armed"),
                 };
-                drain_after_early_exit(join_set, &mut summaries).await;
-                reconcile_dispatched(dispatched, &mut summaries);
                 return (outputs, summaries, Some(decision));
             }
             _ = tokio::time::sleep(patience_remaining), if gate_holding => {
@@ -621,6 +641,7 @@ mod tests {
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
                 min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -677,6 +698,7 @@ mod tests {
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
                 min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -728,6 +750,7 @@ mod tests {
                 grace_mode: GraceMode::Disabled,
                 strong_patience: Duration::ZERO,
                 min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -771,6 +794,7 @@ mod tests {
                 grace_mode: GraceMode::Tool,
                 strong_patience: Duration::ZERO,
                 min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -829,6 +853,7 @@ mod tests {
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
                 min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -880,6 +905,7 @@ mod tests {
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
                 min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -936,6 +962,7 @@ mod tests {
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
                 min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -1000,6 +1027,7 @@ mod tests {
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
                 min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
