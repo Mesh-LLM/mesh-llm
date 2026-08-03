@@ -283,10 +283,14 @@ pub fn pack_for_reducer_selected(
     // Worker outputs
     system_parts.push(String::new());
     system_parts.push("## Worker outputs".to_string());
+    let payload_budget = reducer_payload_budget(has_tools);
     for (i, output) in outputs.iter().enumerate() {
         system_parts.push(format!("\n[Worker {} — {}]:", i + 1, output.model,));
-        let payload = if output.payload.len() > 500 {
-            format!("{}...", crate::worker::truncate_chars(&output.payload, 497))
+        let payload = if output.payload.len() > payload_budget {
+            format!(
+                "{}...",
+                crate::worker::truncate_chars(&output.payload, payload_budget - 3)
+            )
         } else {
             output.payload.clone()
         };
@@ -378,6 +382,24 @@ pub fn pack_for_reference(session: &Session, max_messages: usize) -> PackedConte
     }
 }
 
+/// How much of each peer draft a refiner may see.
+const REFINEMENT_DRAFT_BUDGET: usize = 4000;
+
+/// How much of each worker payload the reducer may see.
+///
+/// Tool turns keep the tight bound: the reducer is choosing an action, the
+/// signal is the proposal itself, and long prose crowds out the tool schemas.
+///
+/// Text turns need far more. Measured refined answers average ~3.8k chars
+/// (`evals/moa-openrouter/RESULTS.md`), so a 500-char bound would hand the
+/// reducer ~13% of each answer and discard exactly the content refinement just
+/// produced — the measured gain could not survive it. Together's aggregator
+/// passes references unbounded; we keep a bound so a pathological worker can't
+/// blow the context, just a realistic one.
+fn reducer_payload_budget(has_tools: bool) -> usize {
+    if has_tools { 500 } else { 4000 }
+}
+
 /// Pack context for a worker in the cross-peer refinement round.
 ///
 /// The worker sees every round-1 draft (its own included, anonymized) and
@@ -393,8 +415,14 @@ pub fn pack_for_refinement(session: &Session, drafts: &[String]) -> PackedContex
          correctness. Reply with your improved answer only.",
     );
     for (i, d) in drafts.iter().enumerate() {
-        let bounded = if d.len() > 1200 {
-            format!("{}...", crate::worker::truncate_chars(d, 1197))
+        // Same reasoning as `reducer_payload_budget`: measured drafts average
+        // ~3.8k chars, so a tight bound would hand each refiner a fraction of
+        // what its peers actually said — the input the round exists to use.
+        let bounded = if d.len() > REFINEMENT_DRAFT_BUDGET {
+            format!(
+                "{}...",
+                crate::worker::truncate_chars(d, REFINEMENT_DRAFT_BUDGET - 3)
+            )
         } else {
             d.clone()
         };
@@ -959,6 +987,92 @@ mod tests {
         let mut s = Session::new();
         s.ingest(messages, &tools);
         s
+    }
+
+    /// The reducer must actually see the answers it is synthesizing.
+    ///
+    /// Measured refined answers average ~3.8k chars. The old flat 500-char
+    /// bound handed the reducer ~13% of each one, discarding exactly the
+    /// content the refinement round produces — the measured gain could not
+    /// have survived it. Tool turns keep the tight bound (the signal is the
+    /// proposal, and prose crowds out schemas).
+    #[test]
+    fn text_reducer_sees_realistic_answer_lengths() {
+        let long_answer = "x".repeat(3800);
+        let outputs = vec![
+            WorkerOutput {
+                kind: OutputKind::Answer,
+                confidence: 0.5,
+                tool_name: None,
+                tool_arguments: None,
+                payload: long_answer.clone(),
+                model: "a".into(),
+                role: WorkerRole::Generalist,
+                elapsed_ms: 0,
+                truncated: false,
+            },
+            WorkerOutput {
+                kind: OutputKind::Answer,
+                confidence: 0.5,
+                tool_name: None,
+                tool_arguments: None,
+                payload: long_answer,
+                model: "b".into(),
+                role: WorkerRole::Generalist,
+                elapsed_ms: 0,
+                truncated: false,
+            },
+        ];
+        let session = session_with(&[json!({"role": "user", "content": "explain"})], None);
+
+        let (messages, _) =
+            pack_for_reducer_selected(&session, &outputs, "no agreement", false, &[]);
+        let sys = system_text(&messages);
+        // Each 3800-char answer must survive largely intact (2 answers).
+        assert!(
+            sys.len() > 7000,
+            "text reducer truncated the answers it must synthesize: {} chars",
+            sys.len()
+        );
+    }
+
+    /// Tool turns keep the tight payload bound.
+    #[test]
+    fn tool_reducer_keeps_the_tight_payload_bound() {
+        let outputs = vec![WorkerOutput {
+            kind: OutputKind::Answer,
+            confidence: 0.5,
+            tool_name: None,
+            tool_arguments: None,
+            payload: "x".repeat(3800),
+            model: "a".into(),
+            role: WorkerRole::Generalist,
+            elapsed_ms: 0,
+            truncated: false,
+        }];
+        let session = session_with(&[json!({"role": "user", "content": "read a file"})], None);
+
+        let (messages, _) = pack_for_reducer_selected(&session, &outputs, "conflict", true, &[]);
+        let sys = system_text(&messages);
+        assert!(
+            !sys.contains(&"x".repeat(1000)),
+            "tool reducer must keep payloads tight so schemas aren't crowded out"
+        );
+    }
+
+    /// Refiners must see what their peers actually said, for the same reason.
+    #[test]
+    fn refiners_see_realistic_peer_draft_lengths() {
+        let session = session_with(&[json!({"role": "user", "content": "explain"})], None);
+        let drafts = vec!["y".repeat(3800), "z".repeat(3800)];
+
+        let packed = pack_for_refinement(&session, &drafts);
+        let sys = system_text(&packed.messages);
+        assert!(
+            sys.len() > 7000,
+            "refiners were handed a fraction of their peers' drafts: {} chars",
+            sys.len()
+        );
     }
 
     /// Advisors must not be told to emit a tool call. Asking a schema-less
@@ -1566,17 +1680,18 @@ keep this";
     #[test]
     fn reducer_truncates_long_worker_payloads() {
         let s = session_with(&[user_msg("go")], None);
-        let big = "x".repeat(2000);
+        // Above the text-turn budget: realistic answers (~3.8k chars) must pass
+        // through intact — see `text_reducer_sees_realistic_answer_lengths` —
+        // but a pathological payload still gets bounded.
+        let big = "x".repeat(9000);
         let outputs = vec![worker_out("alpha", &big)];
 
         let (messages, _tools) = pack_for_reducer(&s, &outputs, "conflict", false);
         let sys = system_text(&messages);
 
-        // Long payloads must be truncated (cap is ~500 chars + ellipsis).
-        // The full 2000-char string must NOT appear verbatim.
         assert!(
             !sys.contains(&big),
-            "reducer must truncate long worker payloads to keep context bounded",
+            "reducer must bound pathological worker payloads to keep context sane",
         );
         assert!(
             sys.contains("..."),
