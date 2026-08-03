@@ -297,7 +297,17 @@ pub fn pack_for_reducer_selected(
     system_parts.push("## Worker outputs".to_string());
     let payload_budget = reducer_payload_budget(has_tools);
     for (i, output) in outputs.iter().enumerate() {
-        system_parts.push(format!("\n[Worker {} — {}]:", i + 1, output.model,));
+        // Anonymous on text turns, matching the measured configuration and
+        // Hermes, which anonymizes reference outputs "to prevent aggregator
+        // bias" — a named model invites deference to the name rather than the
+        // content. Tool turns keep attribution: the reducer is arbitrating
+        // between proposals and provenance is genuinely useful there, and it
+        // is what the tool-path tests pin.
+        if has_tools {
+            system_parts.push(format!("\n[Worker {} — {}]:", i + 1, output.model));
+        } else {
+            system_parts.push(format!("\n[Response {}]:", i + 1));
+        }
         let payload = if output.payload.len() > payload_budget {
             format!(
                 "{}...",
