@@ -299,11 +299,36 @@ The gap that remains is unexplained:
 
 Same models, same prompts, same judge, same packing. The mechanism works when
 driven directly; something in the shipped orchestration still costs the gain.
-Candidates not yet ruled out: the arbiter short-circuiting synthesis when
-refined drafts converge (74/80 turns did reach the reducer, so this is partial
-at most), the worker preamble that production adds and the harness does not,
-and the extra reducer scaffolding ("Reason for synthesis", "## Worker
-outputs").
+
+Two prompt-level explanations were tested and **rejected**:
+
+| change | decided-trial winrate | MoA output |
+|---|---|---|
+| baseline (v7) | 5/15 = 33% | 3606 |
+| anonymize reducer inputs (v8) | 9/21 = 43% | 3679 |
+| also drop preamble + "Reason for synthesis" (v9) | 8/23 = 35% | 3314 |
+
+Dropping the worker preamble shortened output and lost ground on both
+occasions it was tried (v6 3534 chars, v9 3314) versus keeping it (v7 3606,
+v8 3679), so it was reverted twice. Reading: the preamble ("the best parts of
+each will be combined; give your most accurate and complete answer") does
+useful work on the reducer even though it is nominally addressed to a worker.
+**Matching the harness exactly is not automatically right** — the harness sent
+no system prompt at all, production sends one, and the preamble evidently
+compensates.
+
+Anonymization (v8) is retained: it is what Hermes does and what the study
+measured, and it did not hurt. But 43% vs 33% on ~20 decided trials is not a
+result; both runs are parity.
+
+Still unruled-out: the arbiter short-circuiting synthesis when refined drafts
+converge (74/80 turns did reach the reducer, so partial at most), and
+differences in what `normalize_worker_output` does to prose before refinement
+consumes it. Neither has been tested.
+
+After two rejected hypotheses in a row, the honest read is that the remaining
+gap is not another prompt-wording difference. It needs a diff of the actual
+prompt bytes sent by each path on the same input, not more guesses.
 
 Caution on the numbers above: r(length, verdict) was +0.465 in the latest e2e
 run versus +0.132 in the small-pool study, so length bias is not fully
