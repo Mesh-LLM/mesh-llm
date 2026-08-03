@@ -110,7 +110,10 @@ impl moa::ModelBackend for MeshPeer {
         }
 
         // Refinement round.
-        if sys.contains("Several models independently answered") {
+        // Refinement round: peers are shown each other's drafts under a
+        // "Candidate responses:" header. Checked after the reducer branch
+        // above, which is identified by its "## Worker outputs" section.
+        if sys.contains("Candidate responses:") {
             self.refine_calls.fetch_add(1, Ordering::SeqCst);
             return match self.on_refine {
                 RefineBehavior::Ok(d) => {

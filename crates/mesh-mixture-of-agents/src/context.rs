@@ -407,12 +407,18 @@ fn reducer_payload_budget(has_tools: bool) -> usize {
 /// it recognizes, and the framing asks for an improved answer rather than a
 /// critique — the reducer still does the final synthesis.
 pub fn pack_for_refinement(session: &Session, drafts: &[String]) -> PackedContext {
+    // Wording deliberately matches the eval that measured the +0.250 gain
+    // (`evals/moa-openrouter/RESULTS.md`), which in turn matches Together's
+    // `advanced-moa.py` — it reuses the aggregator prompt for refinement
+    // layers. A refinement-specific wording may well read better, but this is
+    // the configuration with evidence behind it; changing it should be a
+    // measured change, not an assumed improvement.
     let mut system = String::from(
-        "Several models independently answered the request below. Their answers \
-         follow. Use them to write a better answer of your own: keep what is \
-         correct, fix what is wrong, and add what is missing. Some answers may be \
-         biased or incorrect, and agreement between them is not proof of \
-         correctness. Reply with your improved answer only.",
+        "You have been given a user request and several candidate responses from \
+         other models. Synthesize them into one high-quality response. Critically \
+         evaluate them — some may be biased or incorrect, and agreement is not proof \
+         of correctness. Do not merely copy the longest or most confident; produce \
+         the most accurate, well-structured reply. Be direct.\n\nCandidate responses:",
     );
     for (i, d) in drafts.iter().enumerate() {
         // Same reasoning as `reducer_payload_budget`: measured drafts average
@@ -426,7 +432,7 @@ pub fn pack_for_refinement(session: &Session, drafts: &[String]) -> PackedContex
         } else {
             d.clone()
         };
-        system.push_str(&format!("\n\n[Answer {}]:\n{bounded}", i + 1));
+        system.push_str(&format!("\n[Response {}]:\n{bounded}\n", i + 1));
     }
 
     PackedContext {
