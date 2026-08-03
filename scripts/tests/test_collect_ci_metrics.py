@@ -26,6 +26,7 @@ def job(
     *,
     conclusion="success",
     labels=None,
+    steps=None,
 ):
     return {
         "id": hash((name, started_at)) & 0xFFFF,
@@ -37,6 +38,7 @@ def job(
         "completed_at": completed_at,
         "html_url": f"https://example.test/jobs/{name}",
         "labels": labels or ["ubuntu-24.04"],
+        "steps": steps or [],
     }
 
 
@@ -285,11 +287,70 @@ class CollectCiMetricsTests(unittest.TestCase):
 
             report = json.loads(json_path.read_text(encoding="utf-8"))
             markdown = markdown_path.read_text(encoding="utf-8")
-            self.assertEqual(report["schema_version"], 1)
+            self.assertEqual(report["schema_version"], 2)
             self.assertEqual(report["benchmark_labels"], {"provider": "fixture"})
             self.assertIn("# CI timing summary", markdown)
+            self.assertIn("Runner dimensions", markdown)
+            self.assertIn("Step timing", markdown)
             self.assertIn("Slow job families", markdown)
             self.assertIn("20m 0s", markdown)
+
+    def test_analysis_preserves_runner_dimensions_and_step_timing(self):
+        raw = run(
+            104,
+            "2026-07-03T00:00:00Z",
+            "2026-07-03T00:00:01Z",
+            "2026-07-03T00:03:00Z",
+            [
+                job(
+                    "Linux CPU runtime",
+                    "2026-07-03T00:00:02Z",
+                    "2026-07-03T00:00:03Z",
+                    "2026-07-03T00:02:00Z",
+                    labels=["depot-ubuntu-24.04-8"],
+                    steps=[
+                        {
+                            "name": "Restore native cache",
+                            "number": 1,
+                            "conclusion": "success",
+                            "started_at": "2026-07-03T00:00:04Z",
+                            "completed_at": "2026-07-03T00:00:14Z",
+                        },
+                        {
+                            "name": "Build runtime",
+                            "number": 2,
+                            "conclusion": "success",
+                            "started_at": "2026-07-03T00:00:14Z",
+                            "completed_at": "2026-07-03T00:01:44Z",
+                        },
+                    ],
+                )
+            ],
+        )
+        report = self.collector.analyze(
+            [self.collector.normalize_run(raw)],
+            requested_status="success",
+            top=5,
+            source={"description": "step fixture"},
+            labels={},
+        )
+
+        self.assertEqual(
+            report["jobs"]["by_runner"][0]["provider"],
+            "depot",
+        )
+        self.assertEqual(
+            report["jobs"]["by_runner"][0]["runner_size"],
+            "8",
+        )
+        self.assertEqual(report["jobs"]["by_runner"][0]["architecture"], "amd64")
+        steps = {
+            item["step_name"]: item for item in report["steps"]["by_name"]
+        }
+        self.assertEqual(steps["Restore native cache"]["duration_seconds"]["p50"], 10.0)
+        self.assertEqual(steps["Build runtime"]["duration_seconds"]["p50"], 90.0)
+        slowest = report["jobs"]["slowest_observations"][0]
+        self.assertEqual(slowest["runner_dimensions"]["runner_size"], "8")
 
     def test_cli_rejects_run_list_json_without_detailed_jobs(self):
         with tempfile.TemporaryDirectory() as directory:

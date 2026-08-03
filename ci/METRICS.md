@@ -112,8 +112,9 @@ Migration success targets:
 | Rust compilation cache | at least 80% hit rate on comparable warm runs |
 | Artifact consumers | zero host, runtime, or ABI rebuilds |
 
-`collect-ci-metrics.py` measures timing and runner queue only; it does not
-measure sccache. Compile jobs retain machine-readable
+`collect-ci-metrics.py` measures workflow, job, and (when returned by the jobs
+API) step timing, runner queue, and runner dimensions derived from labels. It
+does not measure sccache. Compile jobs retain machine-readable
 `sccache --show-stats --stats-format json` evidence separately. Zero the
 counters immediately before the measured compilation and define aggregate hit
 rate as:
@@ -233,6 +234,45 @@ cohorts because they produced no pull observations.
 | Phase | Change class | Provider / runner | Samples | p50 | p90 | p95 | Notes |
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
 | Product-v2 PR graph | full CI refactor | hosted mix | 1 | 1h 7m 34s | 1h 7m 34s | 1h 7m 34s | Green; queue-contaminated; composition 10s–70s |
-| Depot canary cold | trusted main canary | Depot | pending | — | — | — | Restricted workflow allowlist |
-| Depot canary warm | trusted main canary | Depot | pending | — | — | — | Same SHA, runner size, and image |
+| Depot canary cold | trusted main canary | Depot | 1 | 37s | 37s | 37s | Six resource/cache probes; not a full build |
+| Depot canary warm | trusted main canary | Depot | 1 | 37s | 37s | 37s | Six resource/cache probes; not a full build |
 | Main after rollout | full main | mixed | pending | — | — | — | Five comparable green runs minimum |
+
+## Post-Depot observations and tuning decision
+
+The following read-only observations are from the MeshLLM repository. The two
+canary runs compile one tiny C file and validate runner/cache plumbing; their
+wall times are not native-build or packaging measurements.
+
+| Run | Workload | Measured wall time | Measured Depot job evidence |
+| --- | --- | ---: | --- |
+| [30525111329](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30525111329) | Cold canary | 37s; jobs 30–34s | Six labels: default, 4, 8, 16, ARM default, ARM-8 |
+| [30525247727](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30525247727) | Warm canary | 37s; jobs 29–33s | Same six labels; probe-only cache hit signal |
+| [30590595090](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30590595090) | Same-SHA warm non-GPU release | 53m 11s; 9 Depot jobs | CPU/native SDK/static ABI producers on x86/ARM-8 took 1m 37s–4m 20s; composers on x86/ARM-4 took 1m 17s–1m 31s |
+| [30586470043](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30586470043) | Same-SHA prerelease backend slice | 1h 41m 51s; 15 Depot jobs | x86 CPU `-8`: 2m 23s; x86 Vulkan `-16`: 3m 46s; x86 ROCm `-16`: 13m 25s; native SDK x86/ARM-8: 11m 16s/12m 38s |
+
+The two full-build runs share SHA `851888d0`, but they are not a controlled
+cold/warm pair: the release run restored exact static-ABI cache entries and
+reported native-SDK sccache hit rates of 95.5% (x86) and 95.0% (ARM), while the
+prerelease run has different workflow inputs and cache state. The warm release
+also shows architecture variance within the same role: native runtime x86/ARM
+was 1m 37s/2m 02s, native SDK was 4m 09s/4m 20s, static ABI was 1m 57s/1m 47s,
+and composition was 1m 31s/1m 17s. These are observations, not runner-size
+experiments.
+
+No same-backend `-4`/`-8`/`-16` A/B exists in the retained evidence. The `-16`
+ROCm and Vulkan rows therefore do not justify moving CPU or SDK rows to a
+larger runner; their elapsed-time benefit and additional runner cost were not
+measured. Keep the checked-in role split: `-8` for CPU/native-SDK/static-ABI
+producers, `-4` for composition, and `-16` only for the existing high-parallel
+ROCm/Vulkan runtime rows. No matrix-concurrency change is justified without a
+queue/capacity series or a controlled completion-time comparison.
+
+This repository has no Bake-group, Depot-project/billing, CPU-utilization, or
+BuildKit context-upload/cache-import/export telemetry. The runner-image
+repository owns the image BuildKit lifecycle; MeshLLM owns the workflow graph,
+runner selectors, and cache-key contracts. Consequently this change does not
+alter runner size, matrix concurrency, bake groups, cache project boundaries,
+or cache identities. Step timestamps and label-derived runner dimensions are
+now retained by `collect-ci-metrics.py` so a future comparable cohort can
+measure build phases without inferring unavailable cache or upload timings.
