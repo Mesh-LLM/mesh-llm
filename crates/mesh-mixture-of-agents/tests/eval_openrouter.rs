@@ -1996,10 +1996,19 @@ async fn judge_once(
     first: &str,
     second: &str,
 ) -> Option<u8> {
+    // Length control. The unguarded wording ("more accurate, complete, and
+    // useful") produced a judge that scored length, not quality: over 80 e2e
+    // trials the longer answer won 13-0 and the shorter one lost 24-4,
+    // point-biserial r=+0.68 between length delta and verdict. "Complete"
+    // in particular reads as "longer". The instruction below is the standard
+    // mitigation — name the bias and forbid it explicitly.
     let j = format!(
         "User request:\n{prompt}\n\n--- Response A ---\n{first}\n\n--- Response B ---\n{second}\n\n\
-         Which response better answers the request (more accurate, complete, and useful)? \
-         Reply with exactly one token: A, B, or TIE.",
+         Which response better answers the request? Judge only on correctness, relevance, \
+         and whether it actually addresses what was asked. Length is NOT quality: do not \
+         prefer a response for being longer, more detailed, or more thorough-looking. A \
+         shorter response that answers correctly beats a longer one that pads, repeats, or \
+         drifts. Reply with exactly one token: A, B, or TIE.",
     );
     let body = backend
         .chat_completion_retrying(
