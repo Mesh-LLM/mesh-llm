@@ -67,7 +67,24 @@ const MOA_PREAMBLE: &str = "\
 [Multiple models are analyzing this request in parallel. \
 Respond with your best answer or tool call. Be direct.]";
 
+/// Text-turn preamble.
+///
+/// The tool-turn wording ("your best answer **or tool call**. Be direct.") is
+/// wrong on a text turn twice over: there is no tool to call, and "be direct"
+/// pushes workers toward stubs. Since these drafts are the *input* to the
+/// refinement round, brevity here compounds — measured end-to-end, MoA answers
+/// ran ~3.3k chars against a ~4.1k-char solo baseline and lost on judged
+/// quality. The study that showed the gain gave workers no such instruction.
+const MOA_PREAMBLE_TEXT: &str = "\
+[Multiple models are answering this request in parallel; the best parts of each \
+will be combined. Give your most accurate and complete answer.]";
+
 fn augmented_system_prompt_for_mode(session: &Session, include_tool_guidance: bool) -> String {
+    let preamble = if include_tool_guidance {
+        MOA_PREAMBLE
+    } else {
+        MOA_PREAMBLE_TEXT
+    };
     match session.system_prompt() {
         Some(sp) => {
             let prompt = if include_tool_guidance {
@@ -75,9 +92,9 @@ fn augmented_system_prompt_for_mode(session: &Session, include_tool_guidance: bo
             } else {
                 strip_tool_guidance_sections(&sp)
             };
-            format!("{MOA_PREAMBLE}\n\n{prompt}")
+            format!("{preamble}\n\n{prompt}")
         }
-        None => MOA_PREAMBLE.to_string(),
+        None => preamble.to_string(),
     }
 }
 
