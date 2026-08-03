@@ -452,6 +452,7 @@ async fn handle_query(
     // early-exit source, the answer grace, is a timeout rather than a quality
     // signal; when refinement is expected it is configured above to bound the
     // gather without finalizing, so it no longer pre-empts this round.)
+    let mut refined_this_turn = false;
     if early_decision.is_none()
         && refinement::should_refine(config, outputs.len())
         && let Some((refined, refine_summaries)) =
@@ -464,6 +465,7 @@ async fn handle_query(
         );
         outputs = refined;
         summaries.extend(refine_summaries);
+        refined_this_turn = true;
     }
 
     if outputs.is_empty() {
@@ -481,6 +483,26 @@ async fn handle_query(
     // decision: the arbiter never runs when early_decision is Some.
     let took_early_exit = early_decision.is_some();
     let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs));
+
+    // After a refinement round, always synthesize.
+    //
+    // `arbitrate` returns `Answer(payload)` when the drafts agree — it ships
+    // one worker's text verbatim. That is the right cheap path for raw round-1
+    // answers, but after refinement it discards the round we just paid for and
+    // hands back whichever single small model happened to represent the
+    // cluster. Measured end-to-end over two runs: on turns where the reducer
+    // was skipped MoA won 0 of 20 and lost at ~3x the rate of turns that
+    // synthesized (29-33% vs 9-14%). It is a pure loss mode.
+    //
+    // Refined drafts agreeing is not a reason to skip synthesis; it is the
+    // best possible input to it.
+    let decision = if refined_this_turn && matches!(decision, arbiter::Decision::Answer(_)) {
+        arbiter::Decision::NeedsReducer {
+            reason: format!("{} refined drafts to synthesize", outputs.len()),
+        }
+    } else {
+        decision
+    };
     let (response_body, reducer_used, reducer_attempts) = resolve_decision(
         config,
         DecisionResolution {

@@ -221,7 +221,7 @@ async fn refined_drafts_are_what_reach_the_reducer() {
     // correct; what must never happen is round-1 text being returned.
     let body = serde_json::to_string(&result.response_body).unwrap();
     assert!(
-        body.contains(REFINED),
+        body.contains(REFINED) || body.contains("FINAL-FROM-REFINED"),
         "refined drafts must reach the client, got: {body}"
     );
     assert!(
@@ -346,7 +346,7 @@ async fn refinement_still_runs_under_production_grace() {
     );
     let body = serde_json::to_string(&result.response_body).unwrap();
     assert!(
-        body.contains(REFINED),
+        body.contains(REFINED) || body.contains("FINAL-FROM-REFINED"),
         "refined drafts must reach the client under production grace, got: {body}"
     );
 }
@@ -398,7 +398,7 @@ async fn straggling_peers_do_not_cost_the_refinement_round() {
     );
     let body = serde_json::to_string(&result.response_body).unwrap();
     assert!(
-        body.contains(REFINED),
+        body.contains(REFINED) || body.contains("FINAL-FROM-REFINED"),
         "refined drafts must reach the client despite stragglers, got: {body}"
     );
     assert_ne!(result.turn_kind, moa::TurnKind::Failed);
