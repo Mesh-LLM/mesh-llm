@@ -165,6 +165,7 @@ flowchart TD
         MainCI["ci.yml\npush main / dispatch"]
         WebsiteDeploy["website-pages.yml\nActions Pages deploy\nPublic Website environment"]
         DockerValidate["docker.yml\nmanual client Dockerfile validation"]
+        DepotRegistryCanary["depot-registry-canary.yml\nfresh-runner upstream vs pull-through pulls"]
         Release["release.yml\nrelease artifacts + package/image/npm dispatch"]
         FlyConsole["fly-deploy-console.yml\nmanual Fly console deploy"]
     end
@@ -585,8 +586,11 @@ all passed. The warm release canary used nine Depot jobs, restored both static
 ABI inputs without compilation, and produced roughly 95% sccache hit rates in
 both Linux native-SDK consumers. The feature-ref run was skipped before runner
 allocation and its main-identical temporary ref was removed.
-`DEPOT_RUNNERS_ENABLED` remains unset because `main` lacks an enforceable
-review/status protection boundary.
+Live inspection on 2026-08-02 found `DEPOT_RUNNERS_ENABLED=true`, although
+`main` has no classic branch protection and the exact organization runner-group
+workflow allowlist remains unverified with the available token. This is an
+unresolved administrative risk; the checked-in trust gates and hosted PR
+fallback remain required.
 
 Current GitHub-hosted PR jobs may share the `mesh-llm` native-cache key
 namespace because GitHub scopes `actions/cache` PR writes to the merge ref;
@@ -605,6 +609,17 @@ mode-independent Rust dependency cache and only trusted main pushes save it.
 Hardware-qualified GPU execution stays on dedicated runners. See
 [`DEPOT_MIGRATION.md`](DEPOT_MIGRATION.md) for activation prerequisites,
 baseline metrics, target service levels, and the cross-repository plan.
+
+Depot Registry pull-through caching has a separate manual adoption gate. An
+exact-main dispatch of `depot-registry-canary.yml` compares one digest-pinned
+public reference with a configured Depot mirror using five fresh ephemeral
+runner samples per source. The workflow verifies that every pull resolves to
+the same manifest digest and requires both 20% and 10 seconds of median pull
+improvement before a mirror is eligible for broader use. Its read-only pull
+access comes from Depot's short-lived job credential on each trusted ephemeral
+runner; no stored registry secret or workflow-minted pull token is used.
+This measures registry transfer only; it does not measure package-manager,
+Cargo, npm/pnpm, native compilation, or Docker export work.
 
 ## Public website deployment
 

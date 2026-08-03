@@ -27,6 +27,7 @@ the commands at the end before operational changes.
 | `nightly-stability.yml` | Schedule, dispatch | Nightly operator entry point |
 | `nightly-stability-run.yml` | Reusable call | Stability probes and evidence |
 | `llama-upstream-canary.yml` | Schedule, dispatch | Upstream llama.cpp compatibility canary |
+| `depot-registry-canary.yml` | Dispatch from `main` | Five-pair fresh-runner comparison of one digest-pinned upstream image and its Depot pull-through mirror |
 | `queue-unsloth-layer-packages.yml` | Schedule, dispatch | Hugging Face layer-package job queueing |
 | `windows-warm-caches.yml` | Main path push, dispatch | Trusted Windows ABI cache warming |
 | `website-pages.yml` | Main website path push, dispatch | Public website Pages build/deploy |
@@ -268,6 +269,16 @@ repository/workflow allowlist. Inspect that policy with organization-admin
 authority before enabling the global gate. The separate `mesh-llm` group owns
 the two dedicated GPU scale sets and is not the Depot group.
 
+The manual `depot-registry-canary.yml` is the pull-through adoption boundary.
+It accepts only a digest-pinned public reference and a safe relative Depot
+repository name on an exact `main` dispatch. Five upstream jobs and five Depot
+jobs each receive a fresh ephemeral GitHub-hosted runner. The summary rejects digest
+drift and requires at least 20% and 10 seconds of median pull improvement.
+`DEPOT_REGISTRY_HOST` supplies the nonsecret organization registry host;
+the cached pull step uses GitHub OIDC to mint a short-lived read-only
+`depot pull-token`. No stored registry secret is used, and the OIDC permission
+is not available to PR code.
+
 Bounded rollout evidence:
 
 - cold and warm six-label canaries
@@ -289,9 +300,12 @@ Bounded rollout evidence:
   nine Depot jobs included exact static-ABI cache hits with zero compilation
   and roughly 95% sccache hits in both Linux native-SDK consumers.
 
-`DEPOT_RUNNERS_ENABLED` remains unset: `main` still lacks an enforceable
-review/status protection boundary, so only exact-main manual `use_depot=true`
-canaries are authorized.
+Live inspection on 2026-08-02 found `DEPOT_RUNNERS_ENABLED=true`. The checked-in
+selector still restricts Depot to eligible trusted `main` push/dispatch jobs,
+but `main` has no classic branch protection and the available token cannot
+fully inspect the organization runner-group workflow allowlist. Treat that
+administrative boundary as unverified until an organization administrator
+confirms it.
 
 The checked-out local selector is not the security boundary because PRs can
 modify workflow and local-action files. The Depot runner group must use
@@ -438,6 +452,7 @@ All GitHub Actions variables are strings.
 | `USE_SELF_HOSTED` | Exact `true` selects supported self-hosted GPU/release lanes; otherwise hosted |
 | `DEPOT_PR_RUNNERS_ENABLED` | Deprecated compatibility variable; the current selector ignores it and all PR jobs remain GitHub-hosted |
 | `DEPOT_RUNNERS_ENABLED` | Exact `true` routes eligible trusted main/release Linux jobs to Depot; otherwise GitHub-hosted |
+| `DEPOT_REGISTRY_HOST` | Depot organization registry host (`<org-id>.registry.depot.dev`) used only by the manual pull-through canary; required for that workflow |
 | `CUDA_VERSION` | Windows CUDA toolkit selection; Linux CUDA lanes use digest-pinned backend images |
 | `VULKAN_SDK_VERSION` | Windows Vulkan SDK; fallback `1.4.328.1` |
 | `LLAMA_UPSTREAM_CANARY_SMOKE` | Enables canary smoke; fallback `1` |

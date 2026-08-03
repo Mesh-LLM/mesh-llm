@@ -232,13 +232,16 @@ Activation prerequisites:
    workflow, and must never pass a caller-provided label to `runs-on`.
 8. Set `DEPOT_RUNNERS_ENABLED=true` only after the administrative trust
    boundary is verified and comparable trusted canaries meet the rollout
-   targets. It remains unset.
+   targets. Live inspection on 2026-08-02 found it set to `true` even though
+   the administrative boundary remains unverified with the available token;
+   an organization administrator must confirm that boundary.
 
 The initial main allowlist is:
 
 ```text
 Mesh-LLM/mesh-llm/.github/workflows/ci.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/pr_quality.yml@refs/heads/main
+Mesh-LLM/mesh-llm/.github/workflows/depot-registry-canary.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/native-sdk-artifact.yml@refs/heads/main
 Mesh-LLM/mesh-llm/.github/workflows/static-abi-artifact.yml@refs/heads/main
 ```
@@ -284,7 +287,7 @@ repository now allocate ephemeral Depot runners, superseding the 2026-07-29
 observation that public access was disabled. The available token currently gets
 403 when reading organization runner-group settings, so the exact live
 repository/workflow restrictions remain administratively unverified. Re-check
-them with organization-admin authority before setting the global gate. The
+them with organization-admin authority. The
 separate `mesh-llm` group owns two dedicated GPU scale sets and is not the Depot
 group.
 
@@ -310,9 +313,11 @@ The bounded evidence is:
   exact cache entries without compiling, and both Linux native-SDK consumers
   reported roughly 95% sccache hits.
 
-The canaries do not satisfy the trust prerequisite by themselves.
-`DEPOT_RUNNERS_ENABLED` remains unset because `main` has no enforceable
-review/status protection boundary.
+The canaries do not satisfy the trust prerequisite by themselves. Live
+inspection on 2026-08-02 found `DEPOT_RUNNERS_ENABLED=true`, while `main` still
+has no classic branch protection and the exact organization runner-group
+allowlist remains unverified with the available token. Treat this as an
+unresolved administrative risk, not evidence that the prerequisite is met.
 
 Depot redirects every GitHub Actions cache API consumer on its runners,
 including `actions/cache`, `actions/setup-node`, and third-party cache actions.
@@ -435,6 +440,19 @@ Depot Registry pull-through reference and the containerd layer store against
 the exact same GHCR index/child digests. Adopt either only with at least 20%
 and 10 seconds of median pull improvement; never expose the registry or cache
 token to PR code.
+
+The checked-in `depot-registry-canary.yml` implements that measurement gate for
+any digest-pinned public base or runner image. Configure each upstream
+repository as a distinct Depot pull-through repository, set the nonsecret
+`DEPOT_REGISTRY_HOST` repository variable, and enable Depot's native Actions-job
+Registry access for the organization. Depot pre-authenticates each trusted
+ephemeral runner with a short-lived job credential, so no stored registry secret
+or workflow-minted pull token is required. Run the workflow from `main` with the
+exact upstream digest and relative Depot repository name. It allocates five
+fresh ephemeral runners per source, verifies the injected Depot organization
+identity and digest identity, retains raw timing observations for 14 days, and
+reports whether both thresholds pass. Do not enable a mirror in normal builds
+until its own retained cohort passes.
 
 ### `Mesh-LLM/mesh-packaging`
 

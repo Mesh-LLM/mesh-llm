@@ -97,8 +97,29 @@ def summarize(values: list[float | None]) -> dict[str, float | int | None]:
     }
 
 
+def normalize_step(raw: dict[str, Any]) -> dict[str, Any]:
+    started = timestamp(pick(raw, "started_at", "startedAt"))
+    completed = timestamp(pick(raw, "completed_at", "completedAt"))
+    return {
+        "name": str(pick(raw, "name", default="unknown step")),
+        "number": pick(raw, "number"),
+        "conclusion": str(pick(raw, "conclusion", default="")),
+        "started": started,
+        "completed": completed,
+        "duration_seconds": elapsed(started, completed),
+    }
+
+
 def normalize_job(raw: dict[str, Any]) -> dict[str, Any]:
     labels = pick(raw, "labels", "runner_labels", default=[])
+    raw_steps = pick(raw, "steps", default=[])
+    steps = []
+    if isinstance(raw_steps, list):
+        steps = [
+            normalize_step(step)
+            for step in raw_steps
+            if isinstance(step, dict)
+        ]
     return {
         "id": pick(raw, "id", "databaseId", "database_id"),
         "name": str(pick(raw, "name", default="unknown job")),
@@ -110,6 +131,7 @@ def normalize_job(raw: dict[str, Any]) -> dict[str, Any]:
         "labels": [str(label) for label in labels]
         if isinstance(labels, list)
         else [],
+        "steps": steps,
     }
 
 
@@ -258,6 +280,61 @@ def fetch_runs(args: argparse.Namespace) -> list[dict[str, Any]]:
     return runs
 
 
+def runner_dimensions(labels: list[str]) -> dict[str, str | None]:
+    """Derive only dimensions encoded by the selected runner label.
+
+    Depot labels encode architecture and vCPU size. Hosted and legacy labels
+    identify a provider/architecture in the checked-in runner contract, but do
+    not expose a comparable Depot size, so their runner_size remains null.
+    """
+
+    normalized = {label.lower() for label in labels}
+    depot_label = next(
+        (label for label in sorted(normalized) if label.startswith("depot-")),
+        None,
+    )
+    if depot_label:
+        suffix = depot_label.rsplit("-", 1)[-1]
+        return {
+            "provider": "depot",
+            "architecture": "arm64" if "-arm" in depot_label else "amd64",
+            "runner_size": suffix if suffix in {"4", "8", "16"} else "default",
+        }
+
+    if "mesh-llm-arm64" in normalized or "ubuntu-24.04-arm" in normalized:
+        architecture = "arm64"
+    elif "macos-15" in normalized:
+        architecture = "arm64"
+    elif (
+        "macos-15-intel" in normalized
+        or "windows-2022" in normalized
+        or "ubuntu-24.04" in normalized
+        or "x64" in normalized
+        or "amd64" in normalized
+    ):
+        architecture = "amd64"
+    else:
+        architecture = None
+
+    if "self-hosted" in normalized or any(
+        label.startswith("mesh-llm-") for label in normalized
+    ):
+        provider = "self-hosted"
+    elif architecture is not None or any(
+        label.startswith(("ubuntu-", "macos-", "windows-"))
+        for label in normalized
+    ):
+        provider = "github-hosted"
+    else:
+        provider = "unknown"
+
+    return {
+        "provider": provider,
+        "architecture": architecture,
+        "runner_size": None,
+    }
+
+
 def observation(run: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
     return {
         "run_id": run["id"],
@@ -275,6 +352,7 @@ def observation(run: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
         "runner_labels": job["labels"],
+        "runner_dimensions": runner_dimensions(job["labels"]),
     }
 
 
@@ -307,6 +385,10 @@ def analyze(
     observations: list[dict[str, Any]] = []
     run_reports = []
     terminal_counts = collections.Counter()
+    runner_groups: dict[
+        tuple[str | None, str | None, str | None], list[dict[str, Any]]
+    ] = collections.defaultdict(list)
+    step_observations: list[dict[str, Any]] = []
     wall_times = []
     queue_times = []
     workflow_timing_excluded_reruns = 0
@@ -314,6 +396,27 @@ def analyze(
         jobs = [job for job in run["jobs"] if job["conclusion"] != SKIPPED]
         samples = [observation(run, job) for job in jobs]
         observations.extend(samples)
+        for sample, job in zip(samples, jobs, strict=True):
+            dimensions = sample["runner_dimensions"]
+            runner_groups[
+                (
+                    dimensions["provider"],
+                    dimensions["architecture"],
+                    dimensions["runner_size"],
+                )
+            ].append(sample)
+            for step in job["steps"]:
+                step_observations.append(
+                    {
+                        "run_id": run["id"],
+                        "job_id": job["id"],
+                        "job_name": job["name"],
+                        "step_name": step["name"],
+                        "conclusion": step["conclusion"],
+                        "duration_seconds": step["duration_seconds"],
+                        "runner_dimensions": dimensions,
+                    }
+                )
         completed = [job for job in jobs if job["completed"] is not None]
         terminal = (
             max(completed, key=lambda job: job["completed"]) if completed else None
@@ -410,8 +513,84 @@ def analyze(
         }
         for name, count in terminal_counts.most_common(top)
     ]
+    by_runner = []
+    for (provider, architecture, runner_size), samples in runner_groups.items():
+        by_runner.append(
+            {
+                "provider": provider,
+                "architecture": architecture,
+                "runner_size": runner_size,
+                "sample_count": len(samples),
+                "job_names": sorted({sample["name"] for sample in samples}),
+                "duration_seconds": summarize(
+                    [sample["duration_seconds"] for sample in samples]
+                ),
+                "queue_seconds": summarize(
+                    [sample["queue_seconds"] for sample in samples]
+                ),
+            }
+        )
+    by_runner.sort(
+        key=lambda item: (
+            item["duration_seconds"]["p95"] or -1,
+            item["duration_seconds"]["mean"] or -1,
+        ),
+        reverse=True,
+    )
+
+    step_groups: dict[
+        tuple[
+            str,
+            str,
+            str | None,
+            str | None,
+            str | None,
+        ],
+        list[dict[str, Any]],
+    ] = collections.defaultdict(list)
+    for sample in step_observations:
+        dimensions = sample["runner_dimensions"]
+        step_groups[
+            (
+                sample["job_name"],
+                sample["step_name"],
+                dimensions["provider"],
+                dimensions["architecture"],
+                dimensions["runner_size"],
+            )
+        ].append(sample)
+    by_step = [
+        {
+            "job_name": job_name,
+            "step_name": step_name,
+            "provider": provider,
+            "architecture": architecture,
+            "runner_size": runner_size,
+            "sample_count": len(samples),
+            "duration_seconds": summarize(
+                [sample["duration_seconds"] for sample in samples]
+            ),
+            "conclusions": dict(
+                sorted(collections.Counter(s["conclusion"] for s in samples).items())
+            ),
+        }
+        for (
+            job_name,
+            step_name,
+            provider,
+            architecture,
+            runner_size,
+        ), samples in step_groups.items()
+    ]
+    by_step.sort(
+        key=lambda item: (
+            item["duration_seconds"]["p95"] or -1,
+            item["duration_seconds"]["mean"] or -1,
+        ),
+        reverse=True,
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": dt.datetime.now(dt.timezone.utc)
         .isoformat()
         .replace("+00:00", "Z"),
@@ -435,6 +614,10 @@ def analyze(
             "terminal_job": (
                 "last non-skipped job to finish; a critical-path candidate"
             ),
+            "runner_dimensions": (
+                "provider, architecture, and Depot runner size derived from labels"
+            ),
+            "step_duration_seconds": "step started_at to completed_at",
         },
         "selection": {
             "requested_status": requested_status,
@@ -459,8 +642,13 @@ def analyze(
                 [sample["start_delay_seconds"] for sample in observations]
             ),
             "by_name": by_name,
+            "by_runner": by_runner,
             "critical_finish_candidates": critical,
             "slowest_observations": slowest,
+        },
+        "steps": {
+            "sample_count": len(step_observations),
+            "by_name": by_step,
         },
         "runs": run_reports,
     }
@@ -515,6 +703,48 @@ def render_markdown(report: dict[str, Any], top: int) -> str:
             f"| {label} | {stats['count']} | {human(stats['p50'])} | "
             f"{human(stats['p90'])} | {human(stats['p95'])} | "
             f"{human(stats['max'])} |"
+        )
+    lines += [
+        "",
+        "## Runner dimensions",
+        "",
+        "| Provider | Architecture | Depot size | Jobs | Duration p50 | Duration p95 | Queue p95 |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: |",
+    ]
+    for item in jobs["by_runner"][:top]:
+        lines.append(
+            f"| {markdown_escape(item['provider'])} | "
+            f"{markdown_escape(item['architecture'] or 'n/a')} | "
+            f"{markdown_escape(item['runner_size'] or 'n/a')} | "
+            f"{item['sample_count']} | "
+            f"{human(item['duration_seconds']['p50'])} | "
+            f"{human(item['duration_seconds']['p95'])} | "
+            f"{human(item['queue_seconds']['p95'])} |"
+        )
+    lines += [
+        "",
+        "## Step timing",
+        "",
+    ]
+    if report["steps"]["by_name"]:
+        lines += [
+            "| Provider | Architecture | Runner size | Job | Step | Samples | Duration p50 | Duration p95 |",
+            "| --- | --- | --- | --- | --- | ---: | ---: | ---: |",
+        ]
+        for item in report["steps"]["by_name"][:top]:
+            lines.append(
+                f"| {markdown_escape(item['provider'] or 'n/a')} | "
+                f"{markdown_escape(item['architecture'] or 'n/a')} | "
+                f"{markdown_escape(item['runner_size'] or 'n/a')} | "
+                f"{markdown_escape(item['job_name'])} | "
+                f"{markdown_escape(item['step_name'])} | {item['sample_count']} | "
+                f"{human(item['duration_seconds']['p50'])} | "
+                f"{human(item['duration_seconds']['p95'])} |"
+            )
+    else:
+        lines.append(
+            "No job step timestamps were available; cache, context-upload, and "
+            "export/import phases are not inferred from logs."
         )
     lines += [
         "",
@@ -591,7 +821,7 @@ def labels(values: list[str]) -> dict[str, str]:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Collect read-only GitHub Actions wall, queue, and job metrics."
+        description="Collect read-only GitHub Actions timing and runner metrics."
     )
     parser.add_argument("--repo", default="Mesh-LLM/mesh-llm")
     parser.add_argument("--workflow")
