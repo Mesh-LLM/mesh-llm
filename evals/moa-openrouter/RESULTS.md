@@ -262,6 +262,30 @@ diverse pool. Any ≥2 reasonably-capable participants — distinct models *or*
 repeated instances of one — beat picking a single model, once they are strong
 enough individually (mid-scale here; 8B needs ~4).
 
+## The 8B ladder: how many small models beat one?
+
+Does stacking 8B models beat a single 8B? Same prompts/judge/harness, layered arm:
+
+| pool | vs one 8B | p |
+|---|---|---|
+| 2× 8B, different (Qwen + Meta) | 2W / 75T / 3L | 1.00 |
+| 2× 8B, **same** (Qwen ×2) | 2W / 78T / 0L | 0.50 |
+| 3× 8B, different | 3W / 76T / 1L | 0.63 |
+| 4× 8B, different | 11W / 68T / 1L | 0.006 |
+
+Two results worth stating plainly:
+
+- **You need ~4 at 8B.** Two or three 8B models don't beat one; four do. There
+  is a floor below which stacking small models buys nothing.
+- **Same-vs-different makes no difference at N=2** (2W/3L vs 2W/0L, both null),
+  exactly as the mid-scale Self-vs-Mixed test showed. Count and member
+  strength drive the result; family identity does not.
+
+The one gap in this ladder: 4× 8B *same-model* (four qwen3-8b instances) was not
+run, so "does the 8B N=4 win need distinct models or just four drafts?" is
+open. Mid-scale Self-MoA predicts four drafts alone would suffice, but that is
+an extrapolation.
+
 ## How many peers does it take? (N=2 vs N=4)
 
 Same 40 prompts, same judge, same harness — only the pool size differs. N=2 is
