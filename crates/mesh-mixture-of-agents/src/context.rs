@@ -286,12 +286,7 @@ pub fn pack_for_reducer_selected(
     // per-worker attribution and per-payload length bounds (below), which
     // Together omits.
     let mut system_parts = vec![
-        // The agent's own system prompt only — NOT the worker preamble. That
-        // preamble tells a model "you are one of several answering in
-        // parallel", which is the wrong role for the combiner and directly
-        // contradicts the synthesis instruction that follows. The measured
-        // study gave the synthesizer the synthesis framing alone.
-        reducer_system_prompt(session, has_tools),
+        augmented_system_prompt_for_mode(session, has_tools),
         String::new(),
         format!("Multiple models analyzed this request. Reason for synthesis: {reason}"),
         synthesis_instruction(has_tools),
@@ -401,21 +396,6 @@ pub fn pack_for_reference(session: &Session, max_messages: usize) -> PackedConte
 
 /// How much of each peer draft a refiner may see.
 const REFINEMENT_DRAFT_BUDGET: usize = 4000;
-
-/// System prompt for the reducer: the agent's own instructions, without the
-/// worker preamble.
-///
-/// Workers get a preamble saying "several models are answering this in
-/// parallel". The reducer is not one of them — it is the combiner — so that
-/// framing is wrong and contradicts the synthesis instruction that follows it.
-/// The measured study gave the synthesizer only the synthesis framing.
-fn reducer_system_prompt(session: &Session, has_tools: bool) -> String {
-    match session.system_prompt() {
-        Some(sp) if has_tools => sp,
-        Some(sp) => strip_tool_guidance_sections(&sp),
-        None => String::new(),
-    }
-}
 
 /// What the reducer is asked to do with the worker outputs.
 ///
