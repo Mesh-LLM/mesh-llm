@@ -285,29 +285,12 @@ pub fn pack_for_reducer_selected(
     // second clause stops it averaging in confidently-wrong inputs. We add
     // per-worker attribution and per-payload length bounds (below), which
     // Together omits.
-    // Text turns get exactly the framing the study measured: the synthesis
-    // instruction and the candidate answers, nothing else. Two extras that
-    // production carried are dropped there:
-    //
-    //   * the worker preamble ("several models are answering in parallel") —
-    //     the reducer is the combiner, not one of the answerers;
-    //   * "Reason for synthesis: {reason}" — an internal arbiter string
-    //     ("3 workers answered with no agreement") that reads as a warning the
-    //     inputs are unreliable, which is not what the measured prompt said.
-    //
-    // Tool turns keep both: there the reducer is arbitrating a disagreement,
-    // the reason is genuinely informative, and the agent's tool guidance
-    // matters.
-    let mut system_parts = if has_tools {
-        vec![
-            augmented_system_prompt_for_mode(session, has_tools),
-            String::new(),
-            format!("Multiple models analyzed this request. Reason for synthesis: {reason}"),
-            synthesis_instruction(has_tools),
-        ]
-    } else {
-        vec![synthesis_instruction(has_tools)]
-    };
+    let mut system_parts = vec![
+        augmented_system_prompt_for_mode(session, has_tools),
+        String::new(),
+        format!("Multiple models analyzed this request. Reason for synthesis: {reason}"),
+        synthesis_instruction(has_tools),
+    ];
 
     // Worker outputs
     system_parts.push(String::new());
