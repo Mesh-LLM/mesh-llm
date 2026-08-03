@@ -129,6 +129,12 @@ The committee produces **shorter** answers than solo and still wins. Restricted
 to the 61 trials where B was shorter than A, B wins **40–14** (p = 5.4e-4). So
 the preference is not length-driven.
 
+**Note on the judge.** These numbers were collected with the pre-fix judge
+wording that was later found to reward length (see "Withdrawn" below). This
+section's result survives that finding, because the bias ran *against* the
+winner here: the shorter arm won anyway, and won on the shorter-only subset.
+The small-pool and e2e sections did not have that protection and were re-run.
+
 ### This reverses the pilot — and why
 
 An earlier 15-prompt pilot found B vs A at 6/2/2 (p=0.29, "not significant")
@@ -164,31 +170,50 @@ have:
 - peers `meta-llama/llama-3.1-8b-instruct`, `ibm-granite/granite-4.1-8b`,
   `mistralai/ministral-8b-2512`
 
-| comparison | win / tie / loss | mean | 95% CI | sign test |
-|---|---|---|---|---|
-| committee (1 round) vs solo | 26 / 75 / 19 | +0.058 | [−0.092, +0.200] | p = 0.37 **ns** |
-| **layered (2 rounds) vs solo** | **42 / 66 / 12** | +0.250 | [+0.100, +0.400] | **p = 5.2e-05** |
-| **layered vs committee** | **39 / 73 / 8** | +0.258 | [+0.133, +0.392] | **p = 5.5e-06** |
+**These are the length-controlled numbers** (n=80). See the judge-bias section
+below for why the earlier, larger figures are withdrawn.
 
-**Yes — but only with the refinement round.** For a small pool, single-round
-synthesis is indistinguishable from the aggregator working alone; the
-cross-peer refinement round is what produces the gain. Compare the strong
-aggregator above, where single-round already wins big and the extra round adds
-comparatively little (p=0.015).
+| comparison | win / tie / loss | sign test |
+|---|---|---|
+| committee (1 round) vs solo | 6 / 73 / 1 | p = 0.125 **ns** |
+| **layered (2 rounds) vs solo** | **11 / 68 / 1** | **p = 0.0063** |
+| layered vs committee | 3 / 77 / 0 | p = 0.25 **ns** |
+
+**Yes — but only with the refinement round.** Single-round synthesis is
+indistinguishable from the aggregator working alone; layering is what produces
+the gain, winning 11–1 on decided trials.
 
 Reading: with weaker members the aggregator has little to work with until the
 peers have *seen each other* and improved their drafts. That is the mechanism
 Together's `layers` provides, and it matters most exactly where mesh operates.
 
-This retracts (again) the pilot claim that layering is negative value. It is
-essential for consumer-hardware pools and merely marginal for strong ones —
-hence `RefinementPolicy::Auto` gates on pool shape rather than always/never.
+Honest scale: ties dominate (68/80). On most prompts a small mesh and a single
+small model are indistinguishable; the mesh wins a minority and almost never
+loses. That is a real but modest effect, not the large one the first pass
+reported.
 
-Caveat: the small pool's ties dominate (75/120 for single-round), so the
-effect is real but smaller than the strong-aggregator case; and answers here
-are *longer* than solo (3654 vs 4064 chars for B, 3839 for C), so unlike the
-strong-pool result the length control is not clean — the C-vs-A win restricted
-to shorter-C trials is 21–12, p=0.16.
+### Withdrawn: the length-biased numbers
+
+The first run of this study scored **42/66/12, p=5.2e-05** for layered-vs-solo,
+and **39/73/8** for layered-vs-committee. Both are withdrawn.
+
+The judge was asked which response was "more accurate, complete, and useful".
+"Complete" reads as "longer", and the judge duly scored length. Measured on the
+e2e run with the same judge:
+
+| | n | win | loss | winrate |
+|---|---|---|---|---|
+| MoA answer **longer** than solo | 25 | 13 | 0 | 100% |
+| MoA answer **shorter** than solo | 55 | 4 | 24 | 14% |
+
+point-biserial r(length delta, verdict) = **+0.681**.
+
+Re-run with a judge told to score correctness and relevance only, and that
+length is explicitly not quality, r fell to +0.132 and most former "wins"
+became ties. The direction survived; the magnitude did not.
+
+This is the same control the strong-pool section applies — it was simply never
+carried into the small-pool and e2e harnesses.
 
 ## Eval-vs-production fidelity
 
@@ -244,14 +269,29 @@ against simply routing to a capable model. Correctly-packed references are
 roughly break-even, positive for a weak actor, mildly negative for a strong
 one — hence gating on actor headroom rather than always/never.
 
-**Reasoning/answer turns — a clear, robust win.** 120 trials, p < 1e-11,
-consistent across all four strata, and the length confound runs against the
-result rather than explaining it. This is where multi-model MoA earns its cost.
+**Reasoning/answer turns, strong pool — a clear win.** 120 trials, p < 1e-11,
+consistent across all four strata, and the length confound runs *against* the
+result rather than explaining it (the winning arm was the shorter one).
+
+**Reasoning/answer turns, small pool — a real but modest win, and only with
+refinement.** Length-controlled: layered beats solo 11–1 on decided trials
+(p = 0.0063), single-round does not (6–1, ns). Ties dominate at 68/80 — on most
+prompts a small mesh and a single small model are indistinguishable.
+
+**End-to-end through `handle_turn` — parity, not yet a win.** 5 / 65 / 10
+(p = 0.30) against the pool's best member. Five eval-vs-production divergences
+were found and fixed by measuring the shipped path (grace finalizing before
+refinement, two truncation bounds, and two prompts that contradicted the
+measured configuration); a sixth hypothesis was measured and *rejected*. The
+harness shows the mechanism works; the shipped path currently reaches parity.
 
 The task split follows from the evidence: **route tool turns to the best
 tool-caller; convene the committee on reasoning/answer turns.**
 
-Still outstanding for a merge-blocking claim: end-to-end agent-task success
-(not first-tool label match, not judged answer quality), the production-selected
-actor rather than a pinned one, and a second judge model to bound
-single-judge risk.
+Outstanding before this is a merge-blocking claim:
+
+- close the remaining harness-vs-production gap (parity → the harness's 11–1)
+- end-to-end agent-task success, not judged answer quality
+- a second judge model to bound single-judge risk
+- 2-node mesh validation (everything here is measured through the engine, not
+  gossip)
