@@ -396,7 +396,7 @@ def analyze(
         jobs = [job for job in run["jobs"] if job["conclusion"] != SKIPPED]
         samples = [observation(run, job) for job in jobs]
         observations.extend(samples)
-        for sample, job in zip(samples, jobs):
+        for sample, job in zip(samples, jobs, strict=True):
             dimensions = sample["runner_dimensions"]
             runner_groups[
                 (
@@ -539,14 +539,33 @@ def analyze(
     )
 
     step_groups: dict[
-        tuple[str, str], list[dict[str, Any]]
+        tuple[
+            str,
+            str,
+            str | None,
+            str | None,
+            str | None,
+        ],
+        list[dict[str, Any]],
     ] = collections.defaultdict(list)
     for sample in step_observations:
-        step_groups[(sample["job_name"], sample["step_name"])].append(sample)
+        dimensions = sample["runner_dimensions"]
+        step_groups[
+            (
+                sample["job_name"],
+                sample["step_name"],
+                dimensions["provider"],
+                dimensions["architecture"],
+                dimensions["runner_size"],
+            )
+        ].append(sample)
     by_step = [
         {
             "job_name": job_name,
             "step_name": step_name,
+            "provider": provider,
+            "architecture": architecture,
+            "runner_size": runner_size,
             "sample_count": len(samples),
             "duration_seconds": summarize(
                 [sample["duration_seconds"] for sample in samples]
@@ -555,7 +574,13 @@ def analyze(
                 sorted(collections.Counter(s["conclusion"] for s in samples).items())
             ),
         }
-        for (job_name, step_name), samples in step_groups.items()
+        for (
+            job_name,
+            step_name,
+            provider,
+            architecture,
+            runner_size,
+        ), samples in step_groups.items()
     ]
     by_step.sort(
         key=lambda item: (
@@ -703,12 +728,15 @@ def render_markdown(report: dict[str, Any], top: int) -> str:
     ]
     if report["steps"]["by_name"]:
         lines += [
-            "| Job | Step | Samples | Duration p50 | Duration p95 |",
-            "| --- | --- | ---: | ---: | ---: |",
+            "| Provider | Architecture | Runner size | Job | Step | Samples | Duration p50 | Duration p95 |",
+            "| --- | --- | --- | --- | --- | ---: | ---: | ---: |",
         ]
         for item in report["steps"]["by_name"][:top]:
             lines.append(
-                f"| {markdown_escape(item['job_name'])} | "
+                f"| {markdown_escape(item['provider'] or 'n/a')} | "
+                f"{markdown_escape(item['architecture'] or 'n/a')} | "
+                f"{markdown_escape(item['runner_size'] or 'n/a')} | "
+                f"{markdown_escape(item['job_name'])} | "
                 f"{markdown_escape(item['step_name'])} | {item['sample_count']} | "
                 f"{human(item['duration_seconds']['p50'])} | "
                 f"{human(item['duration_seconds']['p95'])} |"
