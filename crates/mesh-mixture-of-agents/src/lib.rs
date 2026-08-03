@@ -363,10 +363,23 @@ async fn handle_query(
     let mut dispatched: Vec<fanout::DispatchedWorker> = Vec::with_capacity(assignments.len());
 
     let enable_thinking = config.enable_thinking;
+    // Role tiers (Fast 256 tokens, Specialist 512, Strong 1024) encode a
+    // capability spread so the cheap worker can answer the grace path quickly.
+    // A homogeneous pool has no such spread, and when refinement is expected
+    // every draft is an *input* to the round — a 256-token draft is a ~1000-char
+    // stub that drags the refined answer down. Measured end-to-end, production's
+    // tiered budgets produced ~3.1k-char answers against a ~4.1k-char solo
+    // baseline; the study that showed the gain gave every peer the full budget.
+    let uniform_packing = refinement::refinement_expected(config);
     for assignment in &assignments {
+        let pack_role = if uniform_packing {
+            worker::WorkerRole::Generalist
+        } else {
+            assignment.role
+        };
         let packed = context::pack_for_worker_selected(
             session,
-            assignment.role,
+            pack_role,
             query_uses_tools,
             &selected_tool_names,
         );
@@ -414,6 +427,10 @@ async fn handle_query(
             } else {
                 1
             },
+            // When refinement is expected, grace is a deadline on collecting,
+            // not a verdict: finalizing there shipped one 8B answer and skipped
+            // the round in 79/80 measured end-to-end turns.
+            grace_finalizes: !refinement::refinement_expected(config),
         },
     )
     .await;
