@@ -237,14 +237,30 @@ where it was shorter. Two mid-size models beat one of equal strength decisively.
 So diversity/capability of the *members*, not the raw count, is what matters —
 at 8B you need ~4 models before it pays; at 24–32B, 2 already win.
 
-**Open caveat (the important one).** This shows *ensembling* beats one run of
-the best member. It does NOT yet show that cross-model *diversity* is the cause,
-because the baseline is strength-matched but not compute-matched: MoA spends
-two drafts + a refinement round + synthesis, the solo baseline spends one draw.
-A compute-matched Self-MoA arm (two samples of the *same* model, same
-aggregator) is the deciding test and is being run. If Self-MoA ties Mixed, the
-honest claim becomes "test-time ensembling beats one draw", and "2 different
-models" is the wrong framing.
+**Resolved: diversity is not the active ingredient — ensembling is.**
+Compute-matched Self-MoA (two samples of the *same* qwen3-32b, same aggregator,
+same drafts+refine+synthesize) was run against Mixed (qwen3-32b + mistral-24b):
+
+| arm | layered vs solo | p | length r |
+|---|---|---|---|
+| Mixed (2 different models) | 49W / 24T / 6L | 1.8e-9 | −0.04 |
+| Self (same model ×2) | 48W / 23T / 2L | 2.3e-12 | −0.04 |
+
+Mixed vs Self: Fisher exact p = 0.27 — **statistically indistinguishable**.
+Both crush the single best member, both with no length confound and MoA answers
+*shorter* than solo (winning ~93% of shorter-MoA trials in each arm).
+
+So different-family membership is **not required**. The active mechanism is
+test-time ensembling — several sampled drafts (workers run at temperature 0.8,
+so repeated draws genuinely differ), a cross-peer refinement round, and
+synthesis — and it works whether the drafts come from different models or
+repeated sampling of one. This matches the Self-MoA paper (arXiv:2502.00674):
+proposal quality and sampling, not heterogeneity, carry the gain.
+
+Practical consequence for a mesh: the value does not depend on curating a
+diverse pool. Any ≥2 reasonably-capable participants — distinct models *or*
+repeated instances of one — beat picking a single model, once they are strong
+enough individually (mid-scale here; 8B needs ~4).
 
 ## How many peers does it take? (N=2 vs N=4)
 
