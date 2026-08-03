@@ -212,6 +212,24 @@ source, at least 20% median improvement, and at least 10 seconds saved at the
 median. This result applies only to image transfer. Do not attribute it to
 `apt`, Cargo, pnpm/npm, native backend compilation, or Docker layer export.
 
+The first valid cohorts ran on 2026-08-02. Each row used five fresh runners per
+source, and every sample resolved to the listed digest. None met the gate:
+
+| Image | Digest | Run | Upstream median | Depot median | Result |
+| --- | --- | --- | ---: | ---: | --- |
+| GHCR Actions runner | `sha256:0cfdcc701ce933c6d243c6b0b2da767366dc9f2e99961d4c3754b0b78084cdda` | [30776030734](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30776030734) | 12.055s | 12.047s | Fail; 8ms (0.1%) faster |
+| Ubuntu 24.04 | `sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90` | [30776128516](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30776128516) | 1.452s | 1.363s | Fail; 89ms (6.1%) faster |
+| CUDA 12.9.2 | `sha256:6d2a0dabc50c3bf14d27fc66822b6b1f94a325807ace17bd1997762307790587` | [30776197769](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30776197769) | 38.661s | 79.495s | Fail; 40.834s slower |
+| CUDA 13.1.2 | `sha256:bff001d3257971cc4752e15ac2d354befa70995ded8e141741ade50569fc192e` | [30776298367](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30776298367) | 21.537s | 43.256s | Fail; 21.719s slower |
+| ROCm 7.0 | `sha256:41faf6a0e3d2302db28d5112f8896ae6b8e2d4637c4280115e1b213271c9d3f8` | [30776371194](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30776371194) | 27.349s | 45.253s | Fail; 17.904s slower |
+| Arch `base-devel` | `sha256:40d14ac9db5af04f695eacd82a53181ad685fecc2534a66e05a51182a077cbd5` | [30776449087](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30776449087) | 7.691s | 13.071s | Fail; 5.380s slower |
+| Arch `base` | `sha256:3406a568f45d68f0bef35dc80b3eacec8bda59b0292b2e50d5932ba1667f20cf` | [30776499761](https://github.com/Mesh-LLM/mesh-llm/actions/runs/30776499761) | 4.637s | 6.440s | Fail; 1.803s slower |
+
+The runner-images and packaging repository cache gates therefore remain
+`false`. Alpine was not measured because its packaging release and matrix rows
+are disabled. Earlier authentication-failure runs are excluded from these
+cohorts because they produced no pull observations.
+
 | Phase | Change class | Provider / runner | Samples | p50 | p90 | p95 | Notes |
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
 | Product-v2 PR graph | full CI refactor | hosted mix | 1 | 1h 7m 34s | 1h 7m 34s | 1h 7m 34s | Green; queue-contaminated; composition 10s–70s |
