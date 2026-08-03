@@ -190,6 +190,33 @@ are *longer* than solo (3654 vs 4064 chars for B, 3839 for C), so unlike the
 strong-pool result the length control is not clean — the C-vs-A win restricted
 to shorter-C trials is 21–12, p=0.16.
 
+## Eval-vs-production fidelity
+
+A measured gain only counts if the shipped path reproduces the measured
+configuration. Three gaps were found and closed after the numbers above were
+collected — all in the same class as the reference-packing bug, where code that
+looked equivalent was not:
+
+| | measured in eval | shipped (before) | now |
+|---|---|---|---|
+| refinement input per draft | untruncated (~3.8k chars) | 1200 chars (~30%) | 4000 chars |
+| reducer payload per answer | untruncated (~3.8k chars) | 500 chars (~13%) | 4000 chars (text) |
+| refinement prompt | aggregator wording + `[Response N]` | different wording + `[Answer N]` | matches eval |
+
+The truncation gaps were the serious ones: the reducer was seeing ~13% of each
+refined answer, discarding most of exactly what the refinement round produces.
+Tool turns deliberately keep the tight 500-char bound — there the signal is the
+proposal itself and long prose crowds out the schemas.
+
+Sampling already matched (`SamplingParams::worker()`, thinking off, 1024
+tokens).
+
+**Implication for reading the numbers above:** they were produced by the eval
+harness, and production now matches that configuration — but the small-pool
+result has not been *re-measured* through the shipped code path since these
+fixes. The engine is transport-agnostic and the packing is now identical, so
+the gain should carry; that is an expectation, not an observation.
+
 ## Reproducing
 
 ```bash
