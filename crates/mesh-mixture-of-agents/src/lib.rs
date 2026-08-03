@@ -419,11 +419,18 @@ async fn handle_query(
             first_answer_grace: config.first_answer_grace,
             grace_mode,
             strong_patience: config.strong_patience,
-            // When refinement is expected, don't let grace finalize on a lone
-            // answer: refinement needs >=2 drafts, and it is the only step
-            // that makes a small pool beat its best member.
+            // Refinement quality scales with how many perspectives it gets.
+            // MIN_DRAFTS (2) is the minimum for the round to *run*, not a good
+            // target to collect: on a 4-model pool it let grace stop gathering
+            // at 2 of 4, while the study that measured the gain refined over
+            // every draft. Wait for all but one, so a single straggler still
+            // cannot hold the turn and `worker_timeout` still bounds the wait.
             min_grace_answers: if refinement::refinement_expected(config) {
-                refinement::MIN_DRAFTS
+                config
+                    .models
+                    .len()
+                    .saturating_sub(1)
+                    .max(refinement::MIN_DRAFTS)
             } else {
                 1
             },
