@@ -2125,6 +2125,181 @@ async fn run_committee_trial(
     })
 }
 
+// ─── End-to-end: the shipped path, not the harness ───────────────────
+//
+// The committee study above measures MoA's *mechanism* using this file's own
+// helpers. This one measures `moa::handle_turn` itself — the code that actually
+// runs in production, including round-1 fan-out, the refinement round, grace,
+// arbitration and the reducer.
+//
+// It exists because "the harness and production do the same thing" has been
+// wrong three times in this branch (reference packing, draft truncation,
+// refinement prompt). This converts the headline claim from an expectation
+// about the shipped path into an observation of it.
+
+/// An all-small, family-diverse pool: what a few laptops actually look like.
+fn small_mesh_pool() -> Vec<String> {
+    std::env::var("MOA_E2E_POOL")
+        .unwrap_or_else(|_| {
+            "qwen/qwen3-8b,meta-llama/llama-3.1-8b-instruct,\
+             ibm-granite/granite-4.1-8b,mistralai/ministral-8b-2512"
+                .to_string()
+        })
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Build a `GatewayConfig` over live OpenRouter backends with production-shaped
+/// timings, so the turn exercises the real policies (`ReferencePolicy::Auto`,
+/// `RefinementPolicy::Auto`) rather than test overrides.
+fn e2e_config(pool: &[String], api_key: &str) -> GatewayConfig {
+    let mut backends: Vec<Arc<dyn ModelBackend>> = Vec::new();
+    let mut models = Vec::new();
+    for id in pool {
+        models.push(ModelEntry {
+            name: id.clone(),
+            backend_index: backends.len(),
+        });
+        backends.push(Arc::new(OpenRouterBackend::new(api_key.to_string())));
+    }
+    GatewayConfig {
+        backends,
+        models,
+        worker_timeout: Duration::from_secs(90),
+        hedge_delay: Duration::from_secs(5),
+        reducer_timeout: Duration::from_secs(60),
+        // Production defaults — including the grace that must not forfeit
+        // the refinement round.
+        first_answer_grace: Duration::from_secs(3),
+        strong_patience: Duration::from_secs(20),
+        enable_thinking: Some(false),
+        actor_candidates: Vec::new(),
+        reference_policy: Default::default(),
+        refinement_policy: Default::default(),
+    }
+}
+
+/// The claim, measured through the shipped entrypoint: does `handle_turn` over
+/// a small diverse pool beat the single best member of that pool?
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live network + cost; run explicitly with --ignored"]
+async fn e2e_handle_turn_beats_best_single_small_model() {
+    let Some(key) = api_key_or_skip("e2e") else {
+        return;
+    };
+    let draws = std::env::var("MOA_E2E_DRAWS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    let concurrency = std::env::var("MOA_E2E_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
+    let out_path =
+        std::env::var("MOA_E2E_OUT").unwrap_or_else(|_| "/tmp/moa_e2e.jsonl".to_string());
+
+    let pool = small_mesh_pool();
+    // Solo baseline is the pool's strongest member, so this is "mesh vs the
+    // best you could have run alone", not "mesh vs an average member".
+    let solo = pool[0].clone();
+    let judge = committee_judge();
+    let tasks = load_committee_tasks();
+    let backend = Arc::new(OpenRouterBackend::new(key.clone()));
+    let cfg = Arc::new(e2e_config(&pool, &key));
+
+    eprintln!("\n=== e2e: handle_turn vs best single small model ===");
+    eprintln!("pool={pool:?}");
+    eprintln!(
+        "solo baseline={solo}  judge={judge}  tasks={}  draws={draws}  -> {out_path}\n",
+        tasks.len()
+    );
+
+    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut js: tokio::task::JoinSet<Option<CommitteeTrial>> = tokio::task::JoinSet::new();
+    for draw in 0..draws {
+        for task in &tasks {
+            let (backend, cfg, sem) = (backend.clone(), cfg.clone(), sem.clone());
+            let (solo, judge) = (solo.clone(), judge.clone());
+            let (id, category, prompt) =
+                (task.id.clone(), task.category.clone(), task.prompt.clone());
+            js.spawn(async move {
+                let _permit = sem.acquire_owned().await.ok()?;
+                // A: the best single model, alone.
+                let a = plain_answer(&backend, &solo, &prompt).await?;
+                // B: the shipped MoA path over the whole pool.
+                let turn = moa::handle_turn(&cfg, &user_turn(&prompt, None)).await;
+                let b = response_text(&turn.response_body);
+                if b.trim().is_empty() {
+                    eprintln!("  draw {draw} {id:22} SKIPPED (empty MoA turn)");
+                    return None;
+                }
+                let verdict = judge_pair(&backend, &judge, &prompt, &b, &a).await;
+                eprintln!(
+                    "  draw {draw} {id:22} MoA/solo={verdict:+}  kind={:?} reducer={}  len A{} B{}",
+                    turn.turn_kind,
+                    turn.reducer_used,
+                    a.len(),
+                    b.len(),
+                );
+                Some(CommitteeTrial {
+                    draw,
+                    task_id: id,
+                    category,
+                    b_vs_a: verdict,
+                    c_vs_a: 0,
+                    c_vs_b: 0,
+                    len_a: a.len(),
+                    len_b: b.len(),
+                    len_c: 0,
+                })
+            });
+        }
+    }
+
+    let mut lines: Vec<CommitteeTrial> = Vec::new();
+    while let Some(r) = js.join_next().await {
+        if let Some(t) = r.expect("e2e trial panicked") {
+            lines.push(t);
+        }
+    }
+    lines.sort_by(|x, y| (x.draw, &x.task_id).cmp(&(y.draw, &y.task_id)));
+
+    let mut buf = String::new();
+    for l in &lines {
+        buf.push_str(&serde_json::to_string(l).expect("serialize"));
+        buf.push('\n');
+    }
+    std::fs::write(&out_path, buf).expect("write jsonl");
+
+    let w = lines.iter().filter(|l| l.b_vs_a == 1).count();
+    let t = lines.iter().filter(|l| l.b_vs_a == 0).count();
+    let l_ = lines.iter().filter(|l| l.b_vs_a == -1).count();
+    let mean = |f: fn(&CommitteeTrial) -> usize| {
+        if lines.is_empty() {
+            0
+        } else {
+            lines.iter().map(f).sum::<usize>() / lines.len()
+        }
+    };
+    eprintln!("\n  trials={}  (position-swapped)", lines.len());
+    eprintln!("  handle_turn vs best single small model:  win {w}  tie {t}  loss {l_}");
+    eprintln!(
+        "  mean output chars: solo {}  MoA {}",
+        mean(|x| x.len_a),
+        mean(|x| x.len_b)
+    );
+    eprintln!(
+        "  analyze: python3 evals/moa-openrouter/analyze_ablation.py is for the ablation; use the printed w/t/l here\n"
+    );
+
+    assert!(
+        !lines.is_empty(),
+        "no e2e trials completed — API likely unavailable"
+    );
+}
+
 /// Does a committee of diverse peers beat the aggregator alone on realistic
 /// reasoning/answer turns? Writes per-trial JSONL; prints win/tie/loss and mean
 /// lengths. Pilot scale by default.

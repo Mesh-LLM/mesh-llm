@@ -271,13 +271,8 @@ pub fn pack_for_reducer_selected(
     let mut system_parts = vec![
         augmented_system_prompt_for_mode(session, has_tools),
         String::new(),
-        format!("Multiple models analyzed this request and disagreed. Reason: {reason}"),
-        "You have been provided with their responses below. Synthesize them into ONE \
-         final response — either a direct answer or a tool call. Critically evaluate \
-         what they say: some of it may be biased or incorrect, and agreement between \
-         workers is not proof of correctness. Do not simply copy the longest or most \
-         confident response; produce the most accurate reply to the request. Be concise."
-            .to_string(),
+        format!("Multiple models analyzed this request. Reason for synthesis: {reason}"),
+        synthesis_instruction(has_tools),
     ];
 
     // Worker outputs
@@ -384,6 +379,36 @@ pub fn pack_for_reference(session: &Session, max_messages: usize) -> PackedConte
 
 /// How much of each peer draft a refiner may see.
 const REFINEMENT_DRAFT_BUDGET: usize = 4000;
+
+/// What the reducer is asked to do with the worker outputs.
+///
+/// Text turns use the wording the committee study measured
+/// (`evals/moa-openrouter/RESULTS.md`), which asks for a *well-structured*
+/// synthesis. The previous text wording framed the turn as reconciling a
+/// disagreement and ended with "Be concise" — measured end-to-end through
+/// `handle_turn`, that produced ~2.0k-char answers against a ~4.1k-char solo
+/// baseline and lost to it on judged quality. Terseness is not the goal on a
+/// reasoning turn; accuracy and completeness are.
+///
+/// Tool turns keep the tight framing: the output there is an action, and the
+/// reducer must be free to emit a tool call rather than prose.
+fn synthesis_instruction(has_tools: bool) -> String {
+    if has_tools {
+        "You have been provided with their responses below. Synthesize them into ONE \
+         final response — either a direct answer or a tool call. Critically evaluate \
+         what they say: some of it may be biased or incorrect, and agreement between \
+         workers is not proof of correctness. Do not simply copy the longest or most \
+         confident response; produce the most accurate reply to the request. Be concise."
+            .to_string()
+    } else {
+        "You have been given a user request and several candidate responses from other \
+         models. Synthesize them into one high-quality response. Critically evaluate them — \
+         some may be biased or incorrect, and agreement is not proof of correctness. Do not \
+         merely copy the longest or most confident; produce the most accurate, \
+         well-structured reply. Be direct."
+            .to_string()
+    }
+}
 
 /// How much of each worker payload the reducer may see.
 ///
