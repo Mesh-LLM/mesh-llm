@@ -167,9 +167,18 @@ pub async fn build_moa_config(
         .await;
     }
 
+    // Admission control: a weak worker must not drag down a pool that already
+    // has a stronger one. Measured, aggregation is sensitive to proposal
+    // quality (Self-MoA, arXiv:2502.00674), and adding an 8B draft to a 24-32B
+    // pool is expected noise-to-harm. So when any big-tier worker is present,
+    // drop the small-tier ones. A lone big model then simply serves solo
+    // (falls through the <2 check below), which is the safe outcome; an
+    // all-small pool keeps every member (that is the 8B N=4 case that wins).
+    apply_admission_control(&mut backends, &mut models);
+
     if models.len() < 2 {
         tracing::warn!(
-            "MoA: only {} model(s) reachable, need ≥2 (models={:?})",
+            "MoA: only {} qualified model(s) after admission, need ≥2 (models={:?})",
             models.len(),
             models.iter().map(|m| &m.name).collect::<Vec<_>>()
         );
@@ -188,10 +197,8 @@ pub async fn build_moa_config(
 
     tracing::info!(
         required_tokens = ?required_tokens,
-        "MoA config: {} workers ({} local, {} remote): {:?}",
+        "MoA config: {} workers (admitted): {:?}",
         models.len(),
-        local_count,
-        models.len() - local_count,
         models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
     );
 
@@ -462,6 +469,49 @@ fn patience_profile(public_mesh: bool) -> PatienceProfile {
     }
 }
 
+/// Drop small-tier workers when any big-tier worker is present.
+///
+/// A weak draft can contaminate synthesis, and aggregation quality tracks
+/// proposal quality (Self-MoA, arXiv:2502.00674), so a modest node must not be
+/// admitted into a committee that already has a stronger member. When the pool
+/// is mixed we keep only the big-tier workers; an all-small or all-big pool is
+/// left untouched. `backends` and `models` are parallel vecs linked by
+/// `backend_index`, so we rebuild both and reindex.
+fn apply_admission_control(
+    backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
+    models: &mut Vec<moa::ModelEntry>,
+) {
+    let has_big = models
+        .iter()
+        .any(|m| !moa::model_name_is_small_tier(&m.name));
+    let has_small = models
+        .iter()
+        .any(|m| moa::model_name_is_small_tier(&m.name));
+    if !(has_big && has_small) {
+        return; // homogeneous-tier pool: nothing to exclude
+    }
+
+    let mut kept_backends: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
+    let mut kept_models: Vec<moa::ModelEntry> = Vec::new();
+    for m in models.iter() {
+        if moa::model_name_is_small_tier(&m.name) {
+            tracing::info!(
+                "MoA: excluding small-tier worker {} (big-tier present)",
+                m.name
+            );
+            continue;
+        }
+        let new_idx = kept_backends.len();
+        kept_backends.push(backends[m.backend_index].clone());
+        kept_models.push(moa::ModelEntry {
+            name: m.name.clone(),
+            backend_index: new_idx,
+        });
+    }
+    *backends = kept_backends;
+    *models = kept_models;
+}
+
 /// Rank the pool best-tool-caller-first (indices into `models`) for the actor.
 ///
 /// Ordering: gossiped `tool_use` (`Supported` > `Likely` > `None`), then size
@@ -682,6 +732,73 @@ fn parse_quic_http_response(response: &[u8]) -> Result<serde_json::Value, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal backend stub for admission-control tests.
+    struct FakeBackend;
+    #[async_trait::async_trait]
+    impl moa::ModelBackend for FakeBackend {
+        async fn chat_completion(
+            &self,
+            _model: &str,
+            _messages: &[serde_json::Value],
+            _tools: Option<&serde_json::Value>,
+            _max_tokens: u32,
+            _timeout: std::time::Duration,
+            _sampling: moa::SamplingParams,
+        ) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({"choices":[{"message":{"content":"x"}}]}))
+        }
+    }
+
+    fn pool(
+        names: &[&str],
+    ) -> (
+        Vec<std::sync::Arc<dyn moa::ModelBackend>>,
+        Vec<moa::ModelEntry>,
+    ) {
+        let mut b: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
+        let mut m = Vec::new();
+        for name in names {
+            m.push(moa::ModelEntry {
+                name: (*name).to_string(),
+                backend_index: b.len(),
+            });
+            b.push(std::sync::Arc::new(FakeBackend));
+        }
+        (b, m)
+    }
+
+    #[test]
+    fn admission_drops_small_when_big_present() {
+        let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-8B", "Ministral-8B"]);
+        apply_admission_control(&mut b, &mut m);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].name, "Qwen3-32B");
+        // backends stay aligned and reindexed
+        assert_eq!(b.len(), 1);
+        assert_eq!(m[0].backend_index, 0);
+    }
+
+    #[test]
+    fn admission_keeps_all_small_pool() {
+        let (mut b, mut m) = pool(&["Qwen3-8B", "Llama-3.1-8B", "Ministral-8B"]);
+        apply_admission_control(&mut b, &mut m);
+        assert_eq!(m.len(), 3);
+    }
+
+    #[test]
+    fn admission_keeps_all_big_pool() {
+        let (mut b, mut m) = pool(&["Qwen3-32B", "Mistral-Small-24B"]);
+        apply_admission_control(&mut b, &mut m);
+        assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn admission_keeps_homogeneous_big_pool() {
+        let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-32B"]);
+        apply_admission_control(&mut b, &mut m);
+        assert_eq!(m.len(), 2);
+    }
 
     #[test]
     fn canonical_base_dedupes_unsloth_and_gguf_variants() {
