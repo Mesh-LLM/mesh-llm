@@ -215,6 +215,34 @@ became ties. The direction survived; the magnitude did not.
 This is the same control the strong-pool section applies — it was simply never
 carried into the small-pool and e2e harnesses.
 
+## How many peers does it take? (N=2 vs N=4)
+
+Same 40 prompts, same judge, same harness — only the pool size differs. N=2 is
+`qwen3-8b` + `llama-3.1-8b` with qwen3-8b aggregating (Together's
+`advanced-moa.py` shape, where the aggregator is also a reference).
+
+| pool | 1 round vs solo | 2 rounds vs solo | decided trials |
+|---|---|---|---|
+| **N=2** (Qwen, Meta) | 2W / 75T / 3L, p=1.0 | 2W / 75T / 3L, p=1.0 | 5 of 80 |
+| **N=4** (+ IBM, Mistral) | 6W / 73T / 1L, p=0.125 | **11W / 68T / 1L, p=0.0063** | 12 of 80 |
+
+Fisher exact on decided win/loss, N=2 vs N=4: **p = 0.053**.
+
+**Two peers was not enough.** At 8B scale, adding one different model produced
+no measurable gain — 2 wins against 3 losses, indistinguishable from noise. The
+same harness with four models across four families wins 11–1.
+
+Two things move together as peers are added: the number of *decided* trials
+rises (5 → 12; more peers produce more differentiated output rather than
+near-identical answers the judge calls a tie), and the win share among those
+rises (40% → 92%).
+
+Caveats: only 5 decided trials at N=2, so this is weak evidence of absence, not
+evidence of no effect. And it is a claim about *small* models — Hermes reports
+a two-model preset (`claude-opus-4.8` aggregating a `gpt-5.5` reference) at
+0.8202 vs 0.7607 for the stronger model alone, so frontier pairs may behave
+differently. Untested here.
+
 ## Eval-vs-production fidelity
 
 A measured gain only counts if the shipped path reproduces the measured
