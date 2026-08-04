@@ -28,6 +28,8 @@ use skippy_server::tokenizer::TokenizerCapability;
 
 const ERROR_BUFFER_BYTES: usize = 2_048;
 const PLUGIN_COMMAND_CAPACITY: usize = 1_024;
+const MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS: usize = 4_096;
+const PROPOSAL_POLL_INTERVAL: Duration = Duration::from_micros(50);
 const CLEAN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Mesh-owned factory for one independently built native serving plugin.
@@ -115,6 +117,7 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
         let active = ActivePlugin {
             definition: Arc::clone(&self.definition),
             instance: Some(instance),
+            proposal_token_buffer: vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS],
         };
         let driver = Arc::new(PluginDriver::spawn(active)?);
         let lifecycle: Arc<dyn GenerationLifecycleIngress> = Arc::new(NativeLifecycleIngress {
@@ -123,7 +126,11 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
         let proposals: Arc<dyn LinearProposalIngress> = Arc::new(NativeProposalIngress { driver });
         Ok(ModelServingHooks::new(
             GenerationReceiptConfig::from_lifecycle_ingress(lifecycle),
-            LinearProposalIngressConfig::new(proposals, deadline, usize::MAX)?,
+            LinearProposalIngressConfig::new(
+                proposals,
+                deadline,
+                MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS,
+            )?,
         ))
     }
 }
@@ -202,7 +209,7 @@ fn validate_table(table: &abi::NativeServingPluginV1) -> Result<String> {
             size_of::<abi::NativeServingPluginV1>()
         );
     }
-    let name = unsafe { read_utf8(table.plugin_name, "plugin name") }?.to_owned();
+    let name = unsafe { read_utf8(table.plugin_name, "plugin name") }?;
     if name.trim().is_empty() {
         bail!("native serving plugin name must not be empty");
     }
@@ -212,6 +219,7 @@ fn validate_table(table: &abi::NativeServingPluginV1) -> Result<String> {
 struct ActivePlugin {
     definition: Arc<LoadedDefinition>,
     instance: Option<NonNull<c_void>>,
+    proposal_token_buffer: Vec<i32>,
 }
 
 // SAFETY: activation succeeds only for plugins implementing the ABI's
@@ -241,6 +249,7 @@ impl ActivePlugin {
     fn begin(&self, start: &GenerationStart) -> Result<()> {
         let agent_session_id = start.agent_session_id.as_deref().unwrap_or_default();
         let event = abi::GenerationStart {
+            struct_size: size_of::<abi::GenerationStart>(),
             request_id: start.request_id,
             session_id: start.session_id,
             agent_session_id: abi::ByteSlice::from_bytes(agent_session_id.as_bytes()),
@@ -252,6 +261,7 @@ impl ActivePlugin {
 
     fn committed(&self, commit: &GenerationCommit) -> Result<()> {
         let event = abi::GenerationCommit {
+            struct_size: size_of::<abi::GenerationCommit>(),
             request_id: commit.request_id,
             session_id: commit.session_id,
             generated_token_count: u64::try_from(commit.generated_token_count)?,
@@ -263,6 +273,7 @@ impl ActivePlugin {
 
     fn abort(&self, abort: &GenerationAbort) -> Result<()> {
         let event = abi::GenerationAbort {
+            struct_size: size_of::<abi::GenerationAbort>(),
             request_id: abort.request_id,
             session_id: abort.session_id,
         };
@@ -273,6 +284,7 @@ impl ActivePlugin {
     fn finish(&self, receipt: &GenerationReceipt) -> Result<()> {
         let request_to_first_token_us = receipt.request_to_first_token_us.unwrap_or_default();
         let event = abi::GenerationFinish {
+            struct_size: size_of::<abi::GenerationFinish>(),
             request_id: receipt.request_id,
             session_id: receipt.session_id,
             prompt_token_count: u64::try_from(receipt.prompt_token_count)?,
@@ -292,8 +304,9 @@ impl ActivePlugin {
         self.call_status("finish generation", status)
     }
 
-    fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
+    fn propose(&mut self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
         let event = abi::ProposalQuery {
+            struct_size: size_of::<abi::ProposalQuery>(),
             request_id: query.request_id,
             session_id: query.session_id,
             prompt_token_count: u64::try_from(query.prompt_token_count)?,
@@ -311,15 +324,30 @@ impl ActivePlugin {
     }
 
     fn poll_until_deadline(
-        &self,
+        &mut self,
         operation: abi::ProposalOperation,
         deadline: Instant,
         max_proposal_tokens: usize,
     ) -> Result<Option<LinearProposal>> {
+        let mut token_buffer = std::mem::take(&mut self.proposal_token_buffer);
+        let token_capacity = max_proposal_tokens.min(token_buffer.len());
+        let result =
+            self.poll_with_buffer(operation, deadline, &mut token_buffer[..token_capacity]);
+        self.proposal_token_buffer = token_buffer;
+        result
+    }
+
+    fn poll_with_buffer(
+        &self,
+        operation: abi::ProposalOperation,
+        deadline: Instant,
+        token_ids: &mut [i32],
+    ) -> Result<Option<LinearProposal>> {
+        let instance = self.instance()?;
         let mut decision_id = [0_u8; abi::MAX_DECISION_ID_BYTES];
-        let mut token_ids = vec![0_i32; max_proposal_tokens];
         while Instant::now() < deadline {
             let mut output = abi::ProposalOutput {
+                struct_size: size_of::<abi::ProposalOutput>(),
                 decision_id: decision_id.as_mut_ptr(),
                 decision_id_capacity: decision_id.len(),
                 decision_id_length: 0,
@@ -328,35 +356,48 @@ impl ActivePlugin {
                 token_length: 0,
             };
             let status = unsafe {
-                (self.definition.api().poll_proposal)(self.instance()?, operation, &raw mut output)
+                (self.definition.api().poll_proposal)(instance, operation, &raw mut output)
             };
             match status {
-                abi::ProposalPollStatus::PENDING => std::hint::spin_loop(),
+                abi::ProposalPollStatus::PENDING => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if !remaining.is_zero() {
+                        thread::sleep(PROPOSAL_POLL_INTERVAL.min(remaining));
+                    }
+                }
                 abi::ProposalPollStatus::ABSTAIN => return Ok(None),
                 abi::ProposalPollStatus::FAILED => {
-                    return Err(self.definition.status_error(
-                        self.instance()?,
+                    let error = self.definition.status_error(
+                        instance,
                         "poll proposal",
                         abi::PluginStatus::INTERNAL_ERROR,
-                    ));
+                    );
+                    unsafe { (self.definition.api().cancel_proposal)(instance, operation) };
+                    return Err(error);
                 }
                 abi::ProposalPollStatus::READY => {
-                    return proposal_from_output(&decision_id, &token_ids, &output).map(Some);
+                    let proposal = proposal_from_output(&decision_id, token_ids, &output);
+                    if proposal.is_err() {
+                        unsafe { (self.definition.api().cancel_proposal)(instance, operation) };
+                    }
+                    return proposal.map(Some);
                 }
-                unknown => bail!(
-                    "native serving plugin returned unknown proposal poll status {}",
-                    unknown.0
-                ),
+                unknown => {
+                    unsafe { (self.definition.api().cancel_proposal)(instance, operation) };
+                    bail!(
+                        "native serving plugin returned unknown proposal poll status {}",
+                        unknown.0
+                    );
+                }
             }
         }
-        unsafe {
-            (self.definition.api().cancel_proposal)(self.instance()?, operation);
-        }
+        unsafe { (self.definition.api().cancel_proposal)(instance, operation) };
         Ok(None)
     }
 
     fn report(&self, receipt: &LinearProposalReceipt) -> Result<()> {
         let event = abi::ProposalOutcome {
+            struct_size: size_of::<abi::ProposalOutcome>(),
             decision_id: abi::ByteSlice::from_bytes(receipt.decision_id.as_bytes()),
             disposition: convert_disposition(receipt.disposition),
             proposal_token_count: u64::try_from(receipt.proposal_token_count)?,
@@ -380,6 +421,7 @@ impl ActivePlugin {
 
     fn discard(&self, decision_id: &[u8], reason: LinearProposalDiscardReason) -> Result<()> {
         let event = abi::ProposalDiscard {
+            struct_size: size_of::<abi::ProposalDiscard>(),
             decision_id: abi::ByteSlice::from_bytes(decision_id),
             reason: convert_discard_reason(reason),
         };
@@ -594,7 +636,8 @@ fn plugin_worker(
         if lifecycle && result.is_err() {
             lifecycle_delivery_failures.fetch_add(1, Ordering::Relaxed);
         }
-        if let Err(error) = result
+        if terminal
+            && let Err(error) = result
             && let Ok(mut fatal) = fatal_error.lock()
         {
             *fatal = Some(format!("{error:#}"));
@@ -698,7 +741,7 @@ fn path_slice(path: &Path) -> abi::ByteSlice {
     abi::ByteSlice::from_bytes(path.as_os_str().as_encoded_bytes())
 }
 
-unsafe fn read_utf8<'a>(slice: abi::ByteSlice, label: &str) -> Result<&'a str> {
+unsafe fn read_utf8(slice: abi::ByteSlice, label: &str) -> Result<String> {
     if slice.pointer.is_null() && slice.length != 0 {
         bail!("native serving plugin {label} has a null pointer");
     }
@@ -709,6 +752,7 @@ unsafe fn read_utf8<'a>(slice: abi::ByteSlice, label: &str) -> Result<&'a str> {
     };
     std::str::from_utf8(bytes)
         .with_context(|| format!("native serving plugin {label} is not UTF-8"))
+        .map(ToOwned::to_owned)
 }
 
 #[cfg(test)]
@@ -861,6 +905,7 @@ mod tests {
             ActivePlugin {
                 definition,
                 instance: NonNull::new(Box::into_raw(state).cast::<c_void>()),
+                proposal_token_buffer: vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS],
             },
             events,
         )
@@ -871,6 +916,7 @@ mod tests {
         let decision = [1_u8; abi::MAX_DECISION_ID_BYTES];
         let tokens = [7_i32; 8_192];
         let mut output = abi::ProposalOutput {
+            struct_size: size_of::<abi::ProposalOutput>(),
             decision_id: std::ptr::null_mut(),
             decision_id_capacity: decision.len(),
             decision_id_length: 1,
@@ -956,7 +1002,7 @@ mod tests {
                 request_id: 1,
                 session_id: 2,
                 agent_session_id: None,
-                prompt_token_ids: vec![3].into_boxed_slice(),
+                prompt_token_ids: Arc::from([3]),
             }))
             .unwrap();
         ingress

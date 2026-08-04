@@ -9,10 +9,13 @@ use serde_json::Value;
 use crate::errors::OpenAiError;
 
 const MAX_AGENT_SESSION_ID_BYTES: usize = 512;
+const INTERNAL_AGENT_SESSION_ID: &str = "mesh_internal_agent_session_id";
+const INTERNAL_AGENT_SESSION_SOURCE: &str = "mesh_internal_agent_session_source";
 
 /// Where the OpenAI frontend obtained a stable, caller-authenticated session
-/// identity. The identity is routing/lifecycle metadata, not a request ID or a
-/// prompt-cache key.
+/// identity. The identity is routing/lifecycle metadata, not a request ID. A
+/// protocol-native conversation ID may also be used to derive a prompt-cache
+/// key, but the two uses remain separate policy decisions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSessionSource {
     /// A header explicitly configured as trusted by the endpoint operator.
@@ -66,6 +69,34 @@ impl AgentSessionSource {
             Self::ResponsesConversation => "responses.conversation",
         }
     }
+}
+
+pub(crate) fn set_agent_session_metadata(
+    extra: &mut BTreeMap<String, Value>,
+    identity: Option<AgentSessionIdentity>,
+) {
+    extra.remove(INTERNAL_AGENT_SESSION_ID);
+    extra.remove(INTERNAL_AGENT_SESSION_SOURCE);
+    if let Some(identity) = identity {
+        extra.insert(
+            INTERNAL_AGENT_SESSION_SOURCE.to_owned(),
+            Value::String(identity.source().label().to_owned()),
+        );
+        extra.insert(
+            INTERNAL_AGENT_SESSION_ID.to_owned(),
+            Value::String(identity.id().to_owned()),
+        );
+    }
+}
+
+pub(crate) fn agent_session_metadata(extra: &BTreeMap<String, Value>) -> Option<&str> {
+    extra.get(INTERNAL_AGENT_SESSION_ID).and_then(Value::as_str)
+}
+
+pub(crate) fn agent_session_source_metadata(extra: &BTreeMap<String, Value>) -> Option<&str> {
+    extra
+        .get(INTERNAL_AGENT_SESSION_SOURCE)
+        .and_then(Value::as_str)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

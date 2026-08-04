@@ -501,7 +501,7 @@ fn translate_openai_responses_input(object: &mut Map<String, Value>) -> Result<b
     if state_cache_key.is_none()
         && let Some(value) = object.get("conversation")
     {
-        state_cache_key = responses_conversation_cache_key(value);
+        state_cache_key = responses_conversation_id(value);
     }
     if let Some(cache_key) = state_cache_key {
         object
@@ -527,7 +527,7 @@ fn translate_openai_responses_input(object: &mut Map<String, Value>) -> Result<b
     Ok(changed)
 }
 
-fn responses_conversation_cache_key(value: &Value) -> Option<String> {
+fn responses_conversation_id(value: &Value) -> Option<String> {
     if let Some(id) = value.as_str() {
         return Some(id.to_string());
     }
@@ -562,7 +562,7 @@ pub fn normalize_openai_compat_request(
     if path_only == "/v1/responses" {
         agent_session_id = object
             .get("conversation")
-            .and_then(responses_conversation_cache_key);
+            .and_then(responses_conversation_id);
         let is_stream = object
             .get("stream")
             .and_then(Value::as_bool)

@@ -499,7 +499,12 @@ pub struct Cli {
     pub native_serving_plugin_state: Option<PathBuf>,
 
     /// Mesh-enforced hard proposal deadline in milliseconds.
-    #[arg(long, hide = true, requires = "native_serving_plugin")]
+    #[arg(
+        long,
+        hide = true,
+        requires = "native_serving_plugin",
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
     pub native_serving_plugin_deadline_ms: Option<u64>,
 
     /// Run as a client — no GPU, no model needed.
@@ -1177,6 +1182,25 @@ mod tests {
     use crate::models::{ModelSearchSort, ModelsCommand};
     use clap::{CommandFactory, Parser, error::ErrorKind};
     use mesh_llm_events::LogFormat;
+
+    #[test]
+    fn native_serving_plugin_deadline_rejects_zero() {
+        let normalized = crate::parser::normalize_runtime_surface_args([
+            "mesh-llm",
+            "serve",
+            "--local-model-only",
+            "--native-serving-plugin",
+            "/tmp/plugin.dylib",
+            "--native-serving-plugin-config",
+            "/tmp/plugin.json",
+            "--native-serving-plugin-state",
+            "/tmp/plugin-state",
+            "--native-serving-plugin-deadline-ms",
+            "0",
+        ]);
+        let error = Cli::try_parse_from(normalized.normalized).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+    }
 
     #[test]
     fn serve_parses_speculative_decode_overrides() {

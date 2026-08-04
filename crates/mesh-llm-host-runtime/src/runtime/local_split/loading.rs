@@ -283,7 +283,12 @@ pub(super) async fn load_downstream_split_runtime_stages(
             spec.node,
             stage.node_id,
             &load,
-            stage_source_prepare_timeout(spec.package, stage),
+            stage_source_prepare_timeout(
+                spec.model_path,
+                spec.package,
+                stage,
+                downstream.is_none(),
+            )?,
         )
         .await
         .with_context(|| {
@@ -336,19 +341,44 @@ pub(super) async fn load_downstream_split_runtime_stages(
 }
 
 pub(super) fn stage_source_prepare_timeout(
+    model_path: &Path,
     package: &skippy::SkippyPackageIdentity,
     stage: &RuntimeSliceStagePlan,
-) -> Duration {
-    let package_layers = u64::from(package.layer_count.max(1));
-    let stage_layers = u64::from(stage.layer_end.saturating_sub(stage.layer_start).max(1));
-    let estimated_stage_bytes = package
-        .source_model_bytes
-        .saturating_mul(stage_layers)
-        .div_ceil(package_layers);
-    let transfer_secs = estimated_stage_bytes.div_ceil(STAGE_SOURCE_MIN_BYTES_PER_SEC);
-    Duration::from_secs(transfer_secs)
+    include_output: bool,
+) -> Result<Duration> {
+    let assigned_bytes = if model_path.is_dir() {
+        crate::models::artifact_transfer::required_stage_package_bytes(
+            model_path,
+            &package.package_ref,
+            &package.manifest_sha256,
+            crate::models::artifact_transfer::StageArtifactSelection {
+                layer_start: stage.layer_start,
+                layer_end: stage.layer_end,
+                include_embeddings: stage.layer_start == 0,
+                include_output,
+                include_projectors: stage.layer_start == 0,
+            },
+        )?
+    } else if package.layer_weight_bytes.len() == package.layer_count as usize {
+        package
+            .layer_weight_bytes
+            .get(stage.layer_start as usize..stage.layer_end as usize)
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .fold(0_u64, u64::saturating_add)
+    } else {
+        let package_layers = u64::from(package.layer_count.max(1));
+        let stage_layers = u64::from(stage.layer_end.saturating_sub(stage.layer_start).max(1));
+        package
+            .source_model_bytes
+            .saturating_mul(stage_layers)
+            .div_ceil(package_layers)
+    };
+    let transfer_secs = assigned_bytes.div_ceil(STAGE_SOURCE_MIN_BYTES_PER_SEC);
+    Ok(Duration::from_secs(transfer_secs)
         .saturating_add(STAGE_SOURCE_PREPARE_ALLOWANCE)
-        .max(MIN_STAGE_SOURCE_PREPARE_TIMEOUT)
+        .max(MIN_STAGE_SOURCE_PREPARE_TIMEOUT))
 }
 
 pub(super) fn split_runtime_stage_load_request(

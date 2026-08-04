@@ -1,3 +1,5 @@
+mod decode_step;
+mod linear_decode;
 #[cfg(test)]
 mod tests;
 mod token_generation;
@@ -12,6 +14,7 @@ use crate::frontend::generation_receipt::{
 };
 use openai_frontend::OpenAiResult;
 use serde_json::json;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(super) struct LocalGenerationReceiptFinalization<'a> {
@@ -19,7 +22,7 @@ pub(super) struct LocalGenerationReceiptFinalization<'a> {
     pub(super) request_id: u64,
     pub(super) session_id: u64,
     pub(super) agent_session_id: Option<&'a str>,
-    pub(super) prompt_token_ids: &'a [i32],
+    pub(super) prompt_token_ids: Arc<[i32]>,
     pub(super) observation: Option<GenerationReceiptObservation>,
     pub(super) cancelled: bool,
     pub(super) model_generation_elapsed: Option<Duration>,
@@ -43,6 +46,17 @@ impl StageOpenAiBackend {
             return Ok(());
         };
         if !generation_succeeded {
+            config.abort(crate::frontend::GenerationAbort {
+                request_id: finalization.request_id,
+                session_id: finalization.session_id,
+            });
+            return Ok(());
+        }
+        if finalization
+            .observation
+            .as_ref()
+            .is_some_and(|observation| !observation.is_recording_enabled())
+        {
             config.abort(crate::frontend::GenerationAbort {
                 request_id: finalization.request_id,
                 session_id: finalization.session_id,

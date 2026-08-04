@@ -152,6 +152,7 @@ pub struct PluginActivation {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GenerationStart {
+    pub struct_size: usize,
     pub request_id: u64,
     pub session_id: u64,
     pub agent_session_id: ByteSlice,
@@ -161,6 +162,7 @@ pub struct GenerationStart {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GenerationCommit {
+    pub struct_size: usize,
     pub request_id: u64,
     pub session_id: u64,
     pub generated_token_count: u64,
@@ -170,6 +172,7 @@ pub struct GenerationCommit {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GenerationAbort {
+    pub struct_size: usize,
     pub request_id: u64,
     pub session_id: u64,
 }
@@ -177,6 +180,7 @@ pub struct GenerationAbort {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct GenerationFinish {
+    pub struct_size: usize,
     pub request_id: u64,
     pub session_id: u64,
     pub prompt_token_count: u64,
@@ -194,6 +198,7 @@ pub struct GenerationFinish {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ProposalQuery {
+    pub struct_size: usize,
     pub request_id: u64,
     pub session_id: u64,
     pub prompt_token_count: u64,
@@ -206,6 +211,7 @@ pub struct ProposalQuery {
 #[repr(C)]
 #[derive(Debug)]
 pub struct ProposalOutput {
+    pub struct_size: usize,
     pub decision_id: *mut u8,
     pub decision_id_capacity: usize,
     pub decision_id_length: usize,
@@ -217,6 +223,7 @@ pub struct ProposalOutput {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ProposalOutcome {
+    pub struct_size: usize,
     pub decision_id: ByteSlice,
     pub disposition: ProposalDisposition,
     pub proposal_token_count: u64,
@@ -236,6 +243,7 @@ pub struct ProposalOutcome {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ProposalDiscard {
+    pub struct_size: usize,
     pub decision_id: ByteSlice,
     pub reason: ProposalDiscardReason,
 }
