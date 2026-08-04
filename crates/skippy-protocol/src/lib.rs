@@ -1,10 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-mod tokenizer;
-
-pub use tokenizer::{
-    MAX_TOKENIZE_INPUT_BYTES, TokenizeRequest, TokenizeResponse, TokenizerIdentity,
-};
+pub mod tokenizer;
 
 pub mod binary;
 pub mod proto {

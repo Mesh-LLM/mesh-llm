@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use skippy_metrics::attr;
 use skippy_protocol::{
     AckMessage, MessageBase, SCHEMA_VERSION, StageConfig, StageMessage, StageTopology,
-    TokenReplyMessage, TokenizerIdentity,
+    TokenReplyMessage, tokenizer::TokenizerIdentity,
 };
 use tokio::net::TcpListener;
 

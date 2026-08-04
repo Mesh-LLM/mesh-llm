@@ -13,7 +13,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use skippy_protocol::{
-    MAX_TOKENIZE_INPUT_BYTES, StageConfig, TokenizeRequest, TokenizeResponse, TokenizerIdentity,
+    StageConfig,
+    tokenizer::{MAX_TOKENIZE_INPUT_BYTES, TokenizeRequest, TokenizeResponse, TokenizerIdentity},
 };
 
 use crate::runtime_state::RuntimeState;
