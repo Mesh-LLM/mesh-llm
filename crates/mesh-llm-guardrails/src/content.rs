@@ -17,8 +17,7 @@ fn strip_tag_pairs(content: &str, start_tag: &str, end_tag: &str) -> String {
         if let Some(end_index) = after_start.find(end_tag) {
             remainder = &after_start[end_index + end_tag.len()..];
         } else {
-            remainder = &remainder[..start_index];
-            break;
+            return result;
         }
     }
     result.push_str(remainder);
@@ -39,5 +38,10 @@ mod tests {
             strip_thinking_blocks("[THINK]hidden[/THINK]Visible answer"),
             "Visible answer"
         );
+    }
+
+    #[test]
+    fn drops_unterminated_thinking_blocks_without_duplicating_prefix() {
+        assert_eq!(strip_thinking_blocks("hello <think>truncated"), "hello");
     }
 }

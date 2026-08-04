@@ -214,8 +214,13 @@ fn parse_chat_completion_response(response: &[u8]) -> Result<String> {
 
 fn tool_calls_as_consultation_text(message: &Value) -> Option<String> {
     let first = message.get("tool_calls")?.as_array()?.first()?;
-    let (name, raw_arguments) = extract_tool_name_and_arguments(first)?;
-    let arguments = normalize_tool_arguments(raw_arguments)?;
+    let name = first
+        .pointer("/function/name")
+        .and_then(Value::as_str)
+        .or_else(|| first.get("name").and_then(Value::as_str))?;
+    let arguments = extract_tool_name_and_arguments(first)
+        .and_then(|(_, raw_arguments)| normalize_tool_arguments(raw_arguments))
+        .unwrap_or_default();
     let arguments = serde_json::to_string(&arguments).ok()?;
     Some(format!("{name}({arguments})"))
 }
@@ -472,12 +477,10 @@ mod tests {
             body["messages"][0]["content"][1]["input_audio"]["url"],
             "data:audio/wav;base64,abc"
         );
-        assert!(
-            body["messages"][0]["content"][0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("please transcribe this")
-        );
+        assert!(body["messages"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("please transcribe this"));
     }
 
     #[test]
