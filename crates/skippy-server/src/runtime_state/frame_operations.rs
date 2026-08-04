@@ -120,7 +120,7 @@ impl RuntimeState {
     }
 
     /// Returns the batch size of an already admitted session.
-    pub fn active_session_batch_size(&self, session_id: &str) -> Result<usize> {
+    pub fn active_session_batch_size(&mut self, session_id: &str) -> Result<usize> {
         self.active_session(session_id)?.batch_size()
     }
 
