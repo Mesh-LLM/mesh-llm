@@ -457,7 +457,54 @@ async fn assemble_worker_pool(
         self_fill_from_extra_instances(node, http, &mut backends, &mut models).await;
     }
 
+    // Committee cap: fan-out cost is ~2N+1 model calls per turn (N drafts + N
+    // refines + 1 synthesis), and measured quality is flat past ~4 workers
+    // while latency and spend keep climbing. On a big shared mesh (say 20
+    // nodes) an uncapped pool would fan out to all of them — 41 calls for no
+    // quality gain. Keep the best MAX_COMMITTEE_WORKERS by capability ranking;
+    // the rest are standbys (they still serve direct traffic, just not this
+    // committee).
+    cap_committee(node, &mut backends, &mut models).await;
+
     (backends, models)
+}
+
+/// Largest committee we will fan out to. Measured quality is flat past ~4
+/// diverse workers (evals/moa-openrouter/RESULTS.md), so more than this is pure
+/// latency/cost. A big shared mesh has standbys beyond this, not bigger turns.
+const MAX_COMMITTEE_WORKERS: usize = 4;
+
+/// Trim the pool to the best [`MAX_COMMITTEE_WORKERS`] by capability ranking.
+async fn cap_committee(
+    node: &mesh::Node,
+    backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
+    models: &mut Vec<moa::ModelEntry>,
+) {
+    if models.len() <= MAX_COMMITTEE_WORKERS {
+        return;
+    }
+    // Rank strongest-first (gossiped tool_use, then size, then stable index),
+    // reusing the actor-selection ranking, and keep the top N.
+    let ranked = compute_actor_candidates(node, models).await;
+    let keep: std::collections::HashSet<usize> =
+        ranked.into_iter().take(MAX_COMMITTEE_WORKERS).collect();
+
+    let mut kept_backends: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
+    let mut kept_models: Vec<moa::ModelEntry> = Vec::new();
+    for (i, m) in models.iter().enumerate() {
+        if !keep.contains(&i) {
+            tracing::info!("MoA: capping committee, dropping worker {}", m.name);
+            continue;
+        }
+        let new_idx = kept_backends.len();
+        kept_backends.push(backends[m.backend_index].clone());
+        kept_models.push(moa::ModelEntry {
+            name: m.name.clone(),
+            backend_index: new_idx,
+        });
+    }
+    *backends = kept_backends;
+    *models = kept_models;
 }
 
 /// Cap on same-model instances added by self-fill. Two is enough to switch a
