@@ -296,38 +296,6 @@ pub(super) fn pinned_stage_device(
     }
 }
 
-#[cfg(test)]
-pub(super) fn resolve_runtime_skippy_config(
-    spec: &LocalRuntimeModelStartSpec<'_>,
-    model_name: &str,
-    model_bytes: u64,
-    context_length: u32,
-    slots: usize,
-    fallback_projector_path: Option<PathBuf>,
-) -> Result<skippy::ResolvedSkippyConfig> {
-    let allocatable_memory_bytes = spec
-        .capacity_budget_bytes
-        .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()));
-    let mut resolved = skippy::resolve_skippy_config(skippy::SkippyConfigResolveRequest {
-        mesh_config: spec.mesh_config,
-        model_id: spec.config_model_id.unwrap_or(model_name),
-        model_path: spec.model_path,
-        model_bytes,
-        allocatable_memory_bytes,
-        request_defaults: None,
-        package_generation: None,
-    })?;
-    resolved.model_id = model_name.to_string();
-    apply_runtime_skippy_launch_overrides(
-        &mut resolved,
-        spec,
-        context_length,
-        slots,
-        fallback_projector_path,
-    );
-    Ok(resolved)
-}
-
 fn resolve_local_openai_skippy_config(
     spec: &LocalOpenAiModelStartSpec<'_>,
     model_name: &str,
@@ -372,41 +340,6 @@ fn resolve_local_openai_skippy_config(
         resolved.hardware.device = Some(gpu.backend_device.clone());
     }
     Ok(resolved)
-}
-
-#[cfg(test)]
-fn apply_runtime_skippy_launch_overrides(
-    resolved: &mut skippy::ResolvedSkippyConfig,
-    spec: &LocalRuntimeModelStartSpec<'_>,
-    context_length: u32,
-    slots: usize,
-    fallback_projector_path: Option<PathBuf>,
-) {
-    resolved.model_fit.ctx_size = context_length;
-    resolved.throughput.parallel = slots;
-    if let Some(cache_type_k) = spec.cache_type_k_override {
-        resolved.model_fit.cache_type_k = cache_type_k.to_string();
-    }
-    if let Some(cache_type_v) = spec.cache_type_v_override {
-        resolved.model_fit.cache_type_v = cache_type_v.to_string();
-    }
-    if let Some(n_batch) = spec.n_batch_override {
-        resolved.model_fit.batch = n_batch;
-    }
-    if let Some(n_ubatch) = spec.n_ubatch_override {
-        resolved.model_fit.ubatch = n_ubatch;
-    }
-    if spec.flash_attention_override != FlashAttentionType::Auto {
-        resolved.model_fit.flash_attention = spec.flash_attention_override;
-    }
-    if let Some(mmproj_override) = spec.mmproj_override {
-        resolved.hardware.projector_path = Some(mmproj_override.to_path_buf());
-    } else if resolved.hardware.projector_path.is_none() {
-        resolved.hardware.projector_path = fallback_projector_path;
-    }
-    if let Some(gpu) = spec.pinned_gpu {
-        resolved.hardware.device = Some(gpu.backend_device.clone());
-    }
 }
 
 pub(super) async fn alloc_local_port() -> Result<u16> {
