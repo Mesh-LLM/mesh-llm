@@ -27,14 +27,25 @@ pub struct ModelServingHooks {
 
 impl ModelServingHooks {
     #[must_use]
+    pub fn with_generation_receipt(mut self, config: GenerationReceiptConfig) -> Self {
+        self.generation_receipt = Some(config);
+        self
+    }
+
+    #[must_use]
+    pub fn with_linear_proposal_ingress(mut self, config: LinearProposalIngressConfig) -> Self {
+        self.linear_proposal_ingress = Some(config);
+        self
+    }
+
+    #[must_use]
     pub fn new(
         generation_receipt: GenerationReceiptConfig,
         linear_proposal_ingress: LinearProposalIngressConfig,
     ) -> Self {
-        Self {
-            generation_receipt: Some(generation_receipt),
-            linear_proposal_ingress: Some(linear_proposal_ingress),
-        }
+        Self::default()
+            .with_generation_receipt(generation_receipt)
+            .with_linear_proposal_ingress(linear_proposal_ingress)
     }
 
     pub fn generation_receipt(&self) -> Option<GenerationReceiptConfig> {
@@ -123,5 +134,24 @@ mod tests {
         assert!(configured.generation_receipt().is_some());
         assert!(configured.linear_proposal_ingress().is_some());
         assert!(configured.clone().generation_receipt().is_some());
+    }
+
+    #[test]
+    fn hooks_can_be_configured_independently() {
+        let receipt = ModelServingHooks::default()
+            .with_generation_receipt(GenerationReceiptConfig::new(Arc::new(ReceiptSink)));
+        assert!(receipt.generation_receipt().is_some());
+        assert!(receipt.linear_proposal_ingress().is_none());
+
+        let proposal = ModelServingHooks::default().with_linear_proposal_ingress(
+            LinearProposalIngressConfig::new(
+                Arc::new(ProposalIngress),
+                Duration::from_millis(4),
+                32,
+            )
+            .unwrap(),
+        );
+        assert!(proposal.generation_receipt().is_none());
+        assert!(proposal.linear_proposal_ingress().is_some());
     }
 }
