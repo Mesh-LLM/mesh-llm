@@ -396,6 +396,14 @@ fn request_default_reasoning_budget_controls_chat_template() {
     for (configured, expected) in [
         (EmbeddedReasoningBudget::Tokens(0), Some(false)),
         (EmbeddedReasoningBudget::Tokens(256), Some(true)),
+        (
+            EmbeddedReasoningBudget::Effort(openai_frontend::ReasoningEffort::None),
+            Some(false),
+        ),
+        (
+            EmbeddedReasoningBudget::Effort(openai_frontend::ReasoningEffort::Low),
+            Some(true),
+        ),
         (EmbeddedReasoningBudget::Auto, None),
     ] {
         let defaults = EmbeddedOpenAiRequestDefaults {

@@ -306,9 +306,11 @@ fn default_reasoning_enabled(value: Option<EmbeddedReasoningEnabled>) -> Option<
 fn default_reasoning_budget_enabled(value: Option<EmbeddedReasoningBudget>) -> Option<bool> {
     match value {
         Some(EmbeddedReasoningBudget::Tokens(0)) => Some(false),
-        Some(EmbeddedReasoningBudget::Tokens(_)) | Some(EmbeddedReasoningBudget::Effort(_)) => {
-            Some(true)
+        Some(EmbeddedReasoningBudget::Tokens(_)) => Some(true),
+        Some(EmbeddedReasoningBudget::Effort(openai_frontend::ReasoningEffort::None)) => {
+            Some(false)
         }
+        Some(EmbeddedReasoningBudget::Effort(_)) => Some(true),
         Some(EmbeddedReasoningBudget::Auto) | None => None,
     }
 }
