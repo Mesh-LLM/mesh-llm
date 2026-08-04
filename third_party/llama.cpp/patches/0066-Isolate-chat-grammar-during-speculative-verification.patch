@@ -1,0 +1,115 @@
+From e43d21d62c8fec577587d79c2cef954d49f46344 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Wed, 5 Aug 2026 01:59:17 +1000
+Subject: [PATCH] Isolate chat grammar during speculative verification
+
+---
+ src/skippy.cpp | 66 +++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 62 insertions(+), 4 deletions(-)
+
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 46cf3a3a1..d2d751c90 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -155,6 +155,7 @@ struct skippy_session {
+     std::string chat_sampling_metadata;
+     uint64_t grammar_generated_start = 0;
+     size_t sampling_accepted_token_count = 0;
++    bool speculative_sampling = false;
+     int32_t mtp_next_pos = 0;
+     bool mtp_prefix_valid = true;
+     bool mtp_has_pending_h = false;
+@@ -252,9 +253,11 @@ static void skippy_disable_chat_grammar_after_exception(
+     if (session == nullptr || session->grammar_sampler == nullptr) {
+         return;
+     }
+-    fprintf(stderr, "skippy: disabling chat grammar after %s failed: %s\n",
+-            operation != nullptr ? operation : "grammar operation",
+-            message != nullptr ? message : "unknown native exception");
++    if (!session->speculative_sampling) {
++        fprintf(stderr, "skippy: disabling chat grammar after %s failed: %s\n",
++                operation != nullptr ? operation : "grammar operation",
++                message != nullptr ? message : "unknown native exception");
++    }
+     llama_sampler_free(session->grammar_sampler);
+     session->grammar_sampler = nullptr;
+ }
+@@ -3808,6 +3811,7 @@ static llama_token skippy_sample_token_ith(
+         int32_t logits_index) {
+     if (skippy_mtp_greedy_sampling_fastpath_enabled() &&
+             session != nullptr &&
++            !session->speculative_sampling &&
+             session->grammar_sampler == nullptr &&
+             skippy_sampling_is_greedy_equivalent(sampling)) {
+         if (session->sampling_chain != nullptr) {
+@@ -6619,12 +6623,66 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+ 
+     if (session->stage_model->config.include_output) {
+         session->token_history.resize(session->token_history.size() - token_count);
++        llama_sampler * authoritative_sampling_chain = session->sampling_chain;
++        llama_sampler * authoritative_grammar_sampler = session->grammar_sampler;
++        const size_t authoritative_accepted_token_count = session->sampling_accepted_token_count;
++        const bool isolate_sampling = authoritative_grammar_sampler != nullptr;
++
++        if (isolate_sampling) {
++            if (authoritative_sampling_chain == nullptr) {
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "chat grammar has no sampling chain");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++            session->sampling_chain = llama_sampler_clone(authoritative_sampling_chain);
++            session->grammar_sampler = llama_sampler_clone(authoritative_grammar_sampler);
++            if (session->sampling_chain == nullptr || session->grammar_sampler == nullptr) {
++                llama_sampler_free(session->sampling_chain);
++                llama_sampler_free(session->grammar_sampler);
++                session->sampling_chain = authoritative_sampling_chain;
++                session->grammar_sampler = authoritative_grammar_sampler;
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to clone sampling state for verification");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++            session->speculative_sampling = true;
++        }
++
++        bool proposal_mismatched = false;
+         for (size_t i = 0; i < token_count; ++i) {
+             skippy_record_tokens(session, &token_ids[i], 1);
+             const int32_t logits_index = static_cast<int32_t>(i);
+             output_tokens[i] = skippy_sample_token_ith(session, sampling, logits_index);
++            if (isolate_sampling && i + 1 < token_count && output_tokens[i] != token_ids[i + 1]) {
++                // Later rows are conditioned on a rejected token and are not
++                // authoritative predictions. Stop advancing the speculative
++                // sampler and grammar state through that rejected suffix.
++                proposal_mismatched = true;
++                *out_token_count = i + 1;
++                break;
++            }
++        }
++
++        if (isolate_sampling) {
++            llama_sampler * speculative_sampling_chain = session->sampling_chain;
++            llama_sampler * speculative_grammar_sampler = session->grammar_sampler;
++            const size_t speculative_accepted_token_count = session->sampling_accepted_token_count;
++            session->speculative_sampling = false;
++
++            if (!proposal_mismatched && speculative_grammar_sampler == nullptr) {
++                llama_sampler_free(speculative_sampling_chain);
++                session->sampling_chain = authoritative_sampling_chain;
++                session->grammar_sampler = authoritative_grammar_sampler;
++                session->sampling_accepted_token_count = authoritative_accepted_token_count;
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "target-verified sampling prefix invalidated chat grammar");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++
++            llama_sampler_free(authoritative_sampling_chain);
++            llama_sampler_free(authoritative_grammar_sampler);
++            session->sampling_chain = speculative_sampling_chain;
++            session->grammar_sampler = speculative_grammar_sampler;
++            session->sampling_accepted_token_count = speculative_accepted_token_count;
+         }
+-        if (out_mtp_draft != nullptr && token_count > 0) {
++        if (out_mtp_draft != nullptr && token_count > 0 && !proposal_mismatched) {
+             status = skippy_mtp_propose_next(
+                     session,
+                     output_tokens[token_count - 1],
+-- 
+2.54.0 (Apple Git-157)
+

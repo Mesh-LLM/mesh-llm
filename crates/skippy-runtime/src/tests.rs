@@ -293,8 +293,17 @@ mod tests {
         )?;
         let batched_predictions =
             batched.verify_tokens_sampled(&verify_inputs, Some(&sampling))?;
+        let canonical_prediction_count = verify_inputs[1..]
+            .iter()
+            .zip(&serial_predictions)
+            .position(|(proposed, predicted)| proposed != predicted)
+            .map_or(serial_predictions.len(), |mismatch| mismatch + 1);
 
-        assert_eq!(batched_predictions, serial_predictions);
+        assert_eq!(
+            batched_predictions,
+            serial_predictions[..canonical_prediction_count],
+            "batched verification must stop at the first target mismatch"
+        );
         assert_eq!(batched.token_count(), serial_token_count);
         assert_eq!(batched.native_position()?, serial_native_position);
         Ok(())
