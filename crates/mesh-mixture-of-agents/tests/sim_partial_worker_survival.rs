@@ -121,26 +121,25 @@ async fn turn_completes_when_some_workers_die() {
         body.contains("choices"),
         "a well-formed response must be returned, got: {body}"
     );
-    // Every dispatched worker is accounted for, dead ones included.
+    // Every dispatched worker is accounted for, dead ones included — none is
+    // silently dropped. We deliberately do NOT assert exact succeeded/failed
+    // counts: early-exit consensus may abort a live worker once a usable answer
+    // is in hand, so the split between "succeeded" and "aborted" is timing
+    // dependent. The contract is that all four appear and the two dead ones are
+    // recorded as not-succeeded.
     assert_eq!(
         result.worker_summaries.len(),
         4,
         "all four dispatched workers must appear in summaries"
     );
-    let succeeded = result
-        .worker_summaries
-        .iter()
-        .filter(|s| s.succeeded)
-        .count();
     let failed = result
         .worker_summaries
         .iter()
         .filter(|s| !s.succeeded)
         .count();
-    assert_eq!(succeeded, 2, "two workers answered");
-    assert_eq!(
-        failed, 2,
-        "two workers were recorded as failed, not dropped"
+    assert!(
+        failed >= 2,
+        "the two dead workers must be recorded as failed, not dropped (got {failed})"
     );
 }
 
