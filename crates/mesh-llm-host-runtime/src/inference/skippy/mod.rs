@@ -907,7 +907,11 @@ impl SkippyModelHandle {
             .runtime
             .tokenizer_capability()
             .context("loaded Skippy runtime cannot provide its stage-0 tokenizer capability")?;
-        let server = skippy_server::start_openai_backend(bind_addr, self.backend(), tokenizer);
+        let server = skippy_server::start_openai_backend_with_tokenizer(
+            bind_addr,
+            self.backend(),
+            tokenizer,
+        );
         Ok(SkippyHttpHandle { port, server })
     }
 

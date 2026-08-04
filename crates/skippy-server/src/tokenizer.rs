@@ -81,7 +81,7 @@ fn is_sha256(value: &str) -> bool {
 trait TokenizerSource: Send + Sync {
     fn tokenize(&self, text: &str, add_special: bool)
     -> Result<Vec<i32>, TokenizerCapabilityError>;
-    fn token_piece(&self, token_id: i32) -> Result<Vec<u8>, TokenizerCapabilityError>;
+    fn token_pieces(&self, token_ids: &[i32]) -> Result<Vec<Vec<u8>>, TokenizerCapabilityError>;
 }
 
 struct LoadedStageZeroTokenizer {
@@ -102,13 +102,20 @@ impl TokenizerSource for LoadedStageZeroTokenizer {
             .map_err(|_| TokenizerCapabilityError::BackendFailure)
     }
 
-    fn token_piece(&self, token_id: i32) -> Result<Vec<u8>, TokenizerCapabilityError> {
-        self.runtime
+    fn token_pieces(&self, token_ids: &[i32]) -> Result<Vec<Vec<u8>>, TokenizerCapabilityError> {
+        let runtime = self
+            .runtime
             .lock()
-            .map_err(|_| TokenizerCapabilityError::BackendFailure)?
-            .model
-            .detokenize_bytes(&[token_id])
-            .map_err(|_| TokenizerCapabilityError::BackendFailure)
+            .map_err(|_| TokenizerCapabilityError::BackendFailure)?;
+        token_ids
+            .iter()
+            .map(|token_id| {
+                runtime
+                    .model
+                    .detokenize_bytes(&[*token_id])
+                    .map_err(|_| TokenizerCapabilityError::BackendFailure)
+            })
+            .collect()
     }
 }
 
@@ -161,12 +168,7 @@ impl TokenizerCapability {
         }
         let token_pieces = request
             .include_token_pieces
-            .then(|| {
-                token_ids
-                    .iter()
-                    .map(|token_id| self.source.token_piece(*token_id))
-                    .collect()
-            })
+            .then(|| self.source.token_pieces(&token_ids))
             .transpose()?;
         Ok(TokenizeResponse {
             identity: self.identity.clone(),
@@ -218,16 +220,15 @@ async fn tokenize_entrypoint(
     State(capability): State<TokenizerCapability>,
     Json(request): Json<TokenizeRequest>,
 ) -> Result<Json<TokenizeResponse>, TokenizerHttpError> {
-    capability
-        .tokenize(request)
+    tokio::task::spawn_blocking(move || capability.tokenize(request))
+        .await
+        .map_err(|_| TokenizerHttpError(TokenizerCapabilityError::BackendFailure))?
         .map(Json)
         .map_err(TokenizerHttpError)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode, header::CONTENT_TYPE},
@@ -240,7 +241,6 @@ mod tests {
 
     struct RecordingTokenizer {
         tokens: Vec<i32>,
-        generation_mutations: AtomicUsize,
     }
 
     struct UnreachableOpenAiBackend;
@@ -280,8 +280,14 @@ mod tests {
             Ok(tokens)
         }
 
-        fn token_piece(&self, token_id: i32) -> Result<Vec<u8>, TokenizerCapabilityError> {
-            Ok(token_id.to_string().into_bytes())
+        fn token_pieces(
+            &self,
+            token_ids: &[i32],
+        ) -> Result<Vec<Vec<u8>>, TokenizerCapabilityError> {
+            Ok(token_ids
+                .iter()
+                .map(|token_id| token_id.to_string().into_bytes())
+                .collect())
         }
     }
 
@@ -290,10 +296,7 @@ mod tests {
     }
 
     fn capability(tokens: Vec<i32>) -> (TokenizerCapability, Arc<RecordingTokenizer>) {
-        let source = Arc::new(RecordingTokenizer {
-            tokens,
-            generation_mutations: AtomicUsize::new(0),
-        });
+        let source = Arc::new(RecordingTokenizer { tokens });
         (
             TokenizerCapability {
                 identity: identity(),
@@ -334,11 +337,10 @@ mod tests {
     }
 
     #[test]
-    fn tokenization_does_not_mutate_generation_state() {
-        let (capability, source) = capability(vec![4, 5]);
+    fn tokenization_returns_source_tokens() {
+        let (capability, _) = capability(vec![4, 5]);
         let response = capability.tokenize(request("hello".to_string())).unwrap();
         assert_eq!(response.token_ids, vec![4, 5]);
-        assert_eq!(source.generation_mutations.load(Ordering::SeqCst), 0);
     }
 
     #[test]

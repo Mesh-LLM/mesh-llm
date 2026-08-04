@@ -368,6 +368,21 @@ pub fn start_embedded_openai(args: EmbeddedOpenAiArgs) -> EmbeddedServerHandle {
 pub fn start_openai_backend(
     bind_addr: SocketAddr,
     backend: Arc<dyn OpenAiBackend>,
+) -> EmbeddedServerHandle {
+    spawn_async_server("openai-backend", bind_addr, move |shutdown| async move {
+        let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+        axum::serve(listener, openai_frontend::router_for(backend))
+            .with_graceful_shutdown(async move {
+                let _ = shutdown.await;
+            })
+            .await?;
+        Ok(())
+    })
+}
+
+pub fn start_openai_backend_with_tokenizer(
+    bind_addr: SocketAddr,
+    backend: Arc<dyn OpenAiBackend>,
     tokenizer: TokenizerCapability,
 ) -> EmbeddedServerHandle {
     spawn_async_server("openai-backend", bind_addr, move |shutdown| async move {
