@@ -913,6 +913,7 @@ impl SkippyModelHandle {
         &self,
         bind_addr: std::net::SocketAddr,
     ) -> Result<SkippyHttpHandle> {
+        let port = bind_addr.port();
         let tokenizer = self
             .runtime
             .tokenizer_capability()
