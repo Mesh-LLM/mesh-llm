@@ -11,7 +11,7 @@ use crate::inference::election;
 use crate::plugin;
 use crate::runtime::survey;
 use crate::system::hardware;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_server::EmbeddedState;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -131,7 +131,6 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
     );
 
     let bind_addr = local_openai_bind_addr(&options);
-    preflight_openai_bind(bind_addr).await?;
     let runtime = acquire_instance_runtime(&options);
     configure_run_auto_process_state(&options, runtime.as_ref());
     let _native_log_forwarding = SkippyNativeLogForwardingGuard;
@@ -189,14 +188,6 @@ fn local_openai_bind_addr(options: &RuntimeOptions) -> SocketAddr {
     SocketAddr::new(ip, options.port)
 }
 
-async fn preflight_openai_bind(bind_addr: SocketAddr) -> Result<()> {
-    let listener = tokio::net::TcpListener::bind(bind_addr)
-        .await
-        .with_context(|| format!("bind local OpenAI API to {bind_addr}"))?;
-    drop(listener);
-    Ok(())
-}
-
 async fn run_loaded_local_model(
     launch: LocalOpenAiModelStartSpec<'_>,
     model_name: &str,
@@ -235,7 +226,6 @@ async fn wait_for_openai_ready(
     model: &super::LocalRuntimeModelHandle,
     bind_addr: SocketAddr,
 ) -> Result<()> {
-    let connect_addr = SocketAddr::new(connect_ip(bind_addr), bind_addr.port());
     let deadline = tokio::time::Instant::now() + OPENAI_STARTUP_TIMEOUT;
     loop {
         let status = model.openai_server_status();
@@ -245,12 +235,12 @@ async fn wait_for_openai_ready(
                 status.last_error.as_deref().unwrap_or("unknown error")
             );
         }
-        if tokio::net::TcpStream::connect(connect_addr).await.is_ok() {
+        if status.state == EmbeddedState::Ready && status.bind_addr == bind_addr {
             return Ok(());
         }
         anyhow::ensure!(
             tokio::time::Instant::now() < deadline,
-            "local OpenAI API did not become ready at {connect_addr}"
+            "local OpenAI API did not bind {bind_addr}"
         );
         tokio::time::sleep(OPENAI_STATUS_POLL_INTERVAL).await;
     }

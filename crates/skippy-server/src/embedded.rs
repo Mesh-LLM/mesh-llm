@@ -369,15 +369,7 @@ pub fn start_openai_backend(
     bind_addr: SocketAddr,
     backend: Arc<dyn OpenAiBackend>,
 ) -> EmbeddedServerHandle {
-    spawn_async_server("openai-backend", bind_addr, move |shutdown| async move {
-        let listener = tokio::net::TcpListener::bind(bind_addr).await?;
-        axum::serve(listener, openai_frontend::router_for(backend))
-            .with_graceful_shutdown(async move {
-                let _ = shutdown.await;
-            })
-            .await?;
-        Ok(())
-    })
+    spawn_openai_backend(bind_addr, openai_frontend::router_for(backend))
 }
 
 pub fn start_openai_backend_with_tokenizer(
@@ -385,15 +377,43 @@ pub fn start_openai_backend_with_tokenizer(
     backend: Arc<dyn OpenAiBackend>,
     tokenizer: TokenizerCapability,
 ) -> EmbeddedServerHandle {
-    spawn_async_server("openai-backend", bind_addr, move |shutdown| async move {
-        let listener = tokio::net::TcpListener::bind(bind_addr).await?;
-        axum::serve(listener, openai_backend_router(backend, tokenizer))
-            .with_graceful_shutdown(async move {
-                let _ = shutdown.await;
-            })
-            .await?;
-        Ok(())
-    })
+    spawn_openai_backend(bind_addr, openai_backend_router(backend, tokenizer))
+}
+
+fn spawn_openai_backend(bind_addr: SocketAddr, router: Router) -> EmbeddedServerHandle {
+    let status = Arc::new(Mutex::new(ServerHandleState {
+        name: "openai-backend",
+        bind_addr,
+        state: EmbeddedState::Starting,
+        started_at_unix_nanos: now_unix_nanos(),
+        stopped_at_unix_nanos: None,
+        last_error: None,
+    }));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let task_status = status.clone();
+    let task = tokio::spawn(async move {
+        let result = async {
+            let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+            {
+                let mut status = task_status.lock().expect("server status lock poisoned");
+                status.state = EmbeddedState::Ready;
+            }
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await?;
+            Ok(())
+        }
+        .await;
+        finish_server_status(&task_status, &result);
+        result
+    });
+    EmbeddedServerHandle {
+        status,
+        shutdown: Some(shutdown_tx),
+        task: Some(task),
+    }
 }
 
 pub(crate) fn openai_backend_router(
