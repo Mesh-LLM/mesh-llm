@@ -775,6 +775,7 @@ mod tests {
 
     struct FakeState {
         start_delay: Duration,
+        begin_fails: bool,
         events: Arc<Mutex<Vec<&'static str>>>,
         abort_count: Arc<AtomicUsize>,
     }
@@ -799,7 +800,11 @@ mod tests {
     ) -> abi::PluginStatus {
         let state = unsafe { &*instance.cast::<FakeState>() };
         state.events.lock().unwrap().push("begin");
-        abi::PluginStatus::OK
+        if state.begin_fails {
+            abi::PluginStatus::INTERNAL_ERROR
+        } else {
+            abi::PluginStatus::OK
+        }
     }
 
     unsafe extern "C" fn fake_commit(
@@ -914,6 +919,17 @@ mod tests {
         Arc<Mutex<Vec<&'static str>>>,
         Arc<AtomicUsize>,
     ) {
+        fake_active_with_options(start_delay, false)
+    }
+
+    fn fake_active_with_options(
+        start_delay: Duration,
+        begin_fails: bool,
+    ) -> (
+        ActivePlugin,
+        Arc<Mutex<Vec<&'static str>>>,
+        Arc<AtomicUsize>,
+    ) {
         let table = Box::leak(Box::new(fake_table()));
         let definition = Arc::new(LoadedDefinition {
             _library: None,
@@ -924,6 +940,7 @@ mod tests {
         let abort_count = Arc::new(AtomicUsize::new(0));
         let state = Box::new(FakeState {
             start_delay,
+            begin_fails,
             events: Arc::clone(&events),
             abort_count: Arc::clone(&abort_count),
         });
@@ -1058,7 +1075,39 @@ mod tests {
     }
 
     #[test]
-    fn generation_abort_reaches_plugin_after_prior_callback_failure() {
+    fn lifecycle_callback_failure_is_observed_without_poisoning_the_driver() {
+        let (active, _, _) = fake_active_with_options(Duration::ZERO, true);
+        let driver = Arc::new(PluginDriver::spawn(active).unwrap());
+        let ingress = NativeLifecycleIngress {
+            driver: Arc::clone(&driver),
+        };
+        ingress
+            .try_submit(GenerationLifecycleObservation::Started(GenerationStart {
+                request_id: 7,
+                session_id: 9,
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([3]),
+            }))
+            .unwrap();
+
+        driver
+            .propose(LinearProposalQuery::new(
+                7,
+                9,
+                1,
+                1,
+                0,
+                8,
+                Instant::now() + Duration::from_millis(100),
+            ))
+            .unwrap();
+
+        assert_eq!(driver.lifecycle_delivery_failures(), 1);
+        assert!(driver.ensure_healthy().is_ok());
+    }
+
+    #[test]
+    fn generation_abort_bypasses_unhealthy_driver_gate() {
         let (active, _, abort_count) = fake_active_with_observations(Duration::ZERO);
         let driver = Arc::new(PluginDriver::spawn(active).unwrap());
         *driver.fatal_error.lock().unwrap() = Some("report proposal failed".to_string());
