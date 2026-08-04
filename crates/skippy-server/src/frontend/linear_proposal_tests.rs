@@ -1,3 +1,5 @@
+use std::{cell::Cell, sync::Mutex, thread};
+
 use super::*;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -96,12 +98,7 @@ fn ingress_config_requires_positive_bounds() {
     assert!(LinearProposalIngressConfig::new(source.clone(), Duration::ZERO, 8).is_err());
     assert!(LinearProposalIngressConfig::new(source.clone(), Duration::from_millis(1), 0).is_err());
     assert!(
-        LinearProposalIngressConfig::new(
-            source.clone(),
-            Duration::from_millis(1),
-            MAX_LINEAR_PROPOSAL_TOKENS + 1,
-        )
-        .is_err()
+        LinearProposalIngressConfig::new(source.clone(), Duration::from_millis(1), 8_192).is_ok()
     );
     assert!(LinearProposalIngressConfig::new(source, Duration::from_millis(1), 8).is_ok());
 }
