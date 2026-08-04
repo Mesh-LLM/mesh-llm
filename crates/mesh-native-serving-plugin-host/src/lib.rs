@@ -455,7 +455,9 @@ impl GenerationLifecycleIngress for NativeLifecycleIngress {
         let command = match observation {
             GenerationLifecycleObservation::Started(start) => PluginCommand::Begin(start),
             GenerationLifecycleObservation::Committed(commit) => PluginCommand::Committed(commit),
-            GenerationLifecycleObservation::Aborted(abort) => PluginCommand::Abort(abort),
+            GenerationLifecycleObservation::Aborted(abort) => {
+                return self.driver.enqueue_recovery(PluginCommand::Abort(abort));
+            }
             GenerationLifecycleObservation::Completed(receipt) => PluginCommand::Finish(receipt),
             _ => return Ok(()),
         };
@@ -552,6 +554,14 @@ impl PluginDriver {
 
     fn enqueue(&self, command: PluginCommand) -> Result<()> {
         self.ensure_healthy()?;
+        self.enqueue_recovery(command)
+    }
+
+    /// Deliver lifecycle cleanup even after an earlier callback failed.
+    ///
+    /// This bypasses only the health gate. The command still uses the same
+    /// bounded FIFO queue and fails if the worker has stopped or is full.
+    fn enqueue_recovery(&self, command: PluginCommand) -> Result<()> {
         self.sender.try_send(command).map_err(|error| match error {
             TrySendError::Full(_) => anyhow!("native serving plugin command queue is full"),
             TrySendError::Disconnected(_) => anyhow!("native serving plugin worker stopped"),
@@ -766,6 +776,7 @@ mod tests {
     struct FakeState {
         start_delay: Duration,
         events: Arc<Mutex<Vec<&'static str>>>,
+        abort_count: Arc<AtomicUsize>,
     }
 
     unsafe extern "C" fn fake_activate(
@@ -801,9 +812,11 @@ mod tests {
     }
 
     unsafe extern "C" fn fake_abort(
-        _instance: abi::PluginInstance,
+        instance: abi::PluginInstance,
         _event: *const abi::GenerationAbort,
     ) -> abi::PluginStatus {
+        let state = unsafe { &*instance.cast::<FakeState>() };
+        state.abort_count.fetch_add(1, Ordering::SeqCst);
         abi::PluginStatus::OK
     }
 
@@ -890,6 +903,17 @@ mod tests {
     fn fake_active_with_events(
         start_delay: Duration,
     ) -> (ActivePlugin, Arc<Mutex<Vec<&'static str>>>) {
+        let (active, events, _) = fake_active_with_observations(start_delay);
+        (active, events)
+    }
+
+    fn fake_active_with_observations(
+        start_delay: Duration,
+    ) -> (
+        ActivePlugin,
+        Arc<Mutex<Vec<&'static str>>>,
+        Arc<AtomicUsize>,
+    ) {
         let table = Box::leak(Box::new(fake_table()));
         let definition = Arc::new(LoadedDefinition {
             _library: None,
@@ -897,9 +921,11 @@ mod tests {
             name: "test-serving-plugin".to_string(),
         });
         let events = Arc::new(Mutex::new(Vec::new()));
+        let abort_count = Arc::new(AtomicUsize::new(0));
         let state = Box::new(FakeState {
             start_delay,
             events: Arc::clone(&events),
+            abort_count: Arc::clone(&abort_count),
         });
         (
             ActivePlugin {
@@ -908,6 +934,7 @@ mod tests {
                 proposal_token_buffer: vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS],
             },
             events,
+            abort_count,
         )
     }
 
@@ -1028,5 +1055,26 @@ mod tests {
             .unwrap();
 
         assert_eq!(*events.lock().unwrap(), ["begin", "commit", "proposal"]);
+    }
+
+    #[test]
+    fn generation_abort_reaches_plugin_after_prior_callback_failure() {
+        let (active, _, abort_count) = fake_active_with_observations(Duration::ZERO);
+        let driver = Arc::new(PluginDriver::spawn(active).unwrap());
+        *driver.fatal_error.lock().unwrap() = Some("report proposal failed".to_string());
+        let ingress = NativeLifecycleIngress {
+            driver: Arc::clone(&driver),
+        };
+
+        ingress
+            .try_submit(GenerationLifecycleObservation::Aborted(GenerationAbort {
+                request_id: 7,
+                session_id: 9,
+            }))
+            .unwrap();
+
+        drop(ingress);
+        drop(driver);
+        assert_eq!(abort_count.load(Ordering::SeqCst), 1);
     }
 }
