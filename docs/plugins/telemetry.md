@@ -97,12 +97,12 @@ hostnames, mesh gossip, relay messages, raw node IDs, raw GPU stable IDs,
 endpoint URLs, or prompt hashes.
 
 Guardrail telemetry follows the same boundary. It exports only bounded labels for
-guardrail mode, contract kind, decision, bypass reason, parser stage, and retry
+guardrail mode, contract kind, decision, bypass reason, outcome, and retry
 bucket. It does not export prompt text, completion text, schemas, tool
 arguments, raw tool names, reserved sentinel names, request paths, endpoints, or
 hostnames.
 
-Guardrail v1 is validated emulation, not hard constrained decoding. Streaming is
+Guardrail v1 validates native runtime output, not hard constrained decoding. Streaming is
 pass-through, no tool execution happens inside the guardrail layer, and real
 tools plus strict structured output stays unsupported in v1. See
 `docs/design/OPENAI_GUARDRAILS.md` for the rollout contract and evidence path.
@@ -145,8 +145,7 @@ to an OTLP record.
 | `mesh_llm.guardrail.contract` | guardrail decision, guardrail outcome | Bounded enum: `tools` or `structured`. |
 | `mesh_llm.guardrail.decision` | guardrail decision | Bounded enum: `eligible`, `bypassed`, `unsupported`, or `rejected`. |
 | `mesh_llm.guardrail.bypass_reason` | guardrail decision | Bounded enum: `disabled`, `streaming`, `no_contract`, `unsupported_surface`, `reserved_collision`, or `mixed_tools_structured`. Omitted when no bypass reason applies. |
-| `mesh_llm.guardrail.outcome` | guardrail outcome | Bounded enum: `pass_through`, `valid`, `rescued`, `retried`, `failed`, or `metrics_only_failure`. |
-| `mesh_llm.guardrail.parser_stage` | guardrail outcome | Bounded enum: `none`, `json_exact`, `json_fenced`, or `json_substring`. |
+| `mesh_llm.guardrail.outcome` | guardrail outcome | Bounded enum: `pass_through`, `valid`, `retried`, `failed`, or `metrics_only_failure`. |
 | `mesh_llm.guardrail.attempt_bucket` | guardrail outcome | Bounded retry bucket: `1`, `2`, or `3_plus`. |
 | `llama_stage.verify_window.direct_return_upstream_opened` | Skippy decode summary | Boolean indicating that the preferred upstream-opened v10 prediction-return sink completed its handshake. |
 | `llama_stage.verify_window.direct_return_reverse_fallback` | Skippy decode summary | Boolean indicating that the final stage used the bounded reverse-open v10 prediction-return fallback after the preferred sink was unavailable. |

@@ -15,7 +15,9 @@
 use crate::mesh;
 use anyhow::Result;
 use iroh::EndpointId;
-use mesh_llm_guardrails::{parse_tool_call_value, strip_thinking_blocks};
+use mesh_llm_guardrails::{
+    extract_tool_name_and_arguments, normalize_tool_arguments, strip_thinking_blocks,
+};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -211,11 +213,16 @@ fn parse_chat_completion_response(response: &[u8]) -> Result<String> {
 }
 
 fn tool_calls_as_consultation_text(message: &Value) -> Option<String> {
-    let allowed_tools = Vec::new();
-    let calls = parse_tool_call_value(&message["tool_calls"], &allowed_tools).ok()?;
-    let first = calls.first()?;
-    let arguments = serde_json::to_string(&first.arguments).ok()?;
-    Some(format!("{}({arguments})", first.name))
+    let first = message.get("tool_calls")?.as_array()?.first()?;
+    let name = first
+        .pointer("/function/name")
+        .and_then(Value::as_str)
+        .or_else(|| first.get("name").and_then(Value::as_str))?;
+    let arguments = extract_tool_name_and_arguments(first)
+        .and_then(|(_, raw_arguments)| normalize_tool_arguments(raw_arguments))
+        .unwrap_or_default();
+    let arguments = serde_json::to_string(&arguments).ok()?;
+    Some(format!("{name}({arguments})"))
 }
 
 // ---------------------------------------------------------------------------
@@ -497,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_chat_completion_response_falls_back_to_tool_calls() {
+    fn parse_chat_completion_response_uses_native_tool_calls_when_content_is_empty() {
         let response = concat!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n",
             "{\"choices\":[{\"message\":{\"content\":\"\",\"tool_calls\":[",
@@ -512,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_chat_completion_response_falls_back_to_tool_calls_after_thinking_stripping() {
+    fn parse_chat_completion_response_uses_native_tool_calls_after_thinking_stripping() {
         let response = concat!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n",
             "{\"choices\":[{\"message\":{\"content\":\"<think>scratch</think>\",\"tool_calls\":[",

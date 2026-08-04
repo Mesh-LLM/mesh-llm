@@ -639,6 +639,7 @@ impl SplitTopologyCoordinator {
             slots: self.slots,
             skippy_telemetry: self.skippy_telemetry.clone(),
             survey_telemetry: self.survey_telemetry.clone(),
+            serving_hooks_factory: None,
         })
         .await?;
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();

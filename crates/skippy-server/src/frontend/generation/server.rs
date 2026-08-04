@@ -29,6 +29,7 @@ use crate::runtime_state::load_runtime;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
+use crate::tokenizer::{TokenizerCapability, tokenizer_http_router};
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -121,6 +122,8 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let decode_batcher = DecodeBatcher::new(runtime.clone(), args.generation_concurrency);
     let decode_frame_batcher =
         DecodeFrameBatcher::new(runtime.clone(), args.generation_concurrency);
+    let tokenizer = TokenizerCapability::from_stage_zero(&config, runtime.clone())
+        .context("construct stage-0 tokenizer capability for OpenAI serving")?;
     let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
         runtime,
         config,
@@ -148,7 +151,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     });
     let backend = OpenAiGuardrailsConfig::for_standalone_mode(args.openai_guardrails)
         .wrap_backend_with_context_limit(backend, Some(ctx_size));
-    let app: Router = instrumented_openai_router(backend, telemetry.clone());
+    let app: Router = instrumented_openai_router(backend, tokenizer, telemetry.clone());
 
     println!(
         "skippy-server listening: openai={} model_id={} backend={} generation_concurrency={}",
@@ -275,8 +278,10 @@ pub struct EmbeddedOpenAiBackend {
 
 pub fn embedded_openai_router(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAiRouter> {
     let telemetry = args.telemetry.clone();
+    let tokenizer = TokenizerCapability::from_stage_zero(&args.config, args.runtime.clone())
+        .context("construct stage-0 tokenizer capability for embedded OpenAI serving")?;
     let binding = embedded_openai_backend(args)?;
-    let router = instrumented_openai_router(binding.backend.clone(), telemetry);
+    let router = instrumented_openai_router(binding.backend.clone(), tokenizer, telemetry);
 
     Ok(EmbeddedOpenAiRouter {
         router,
@@ -431,12 +436,15 @@ fn validate_generation_receipt_topology(
 
 pub(in crate::frontend) fn instrumented_openai_router(
     backend: Arc<dyn OpenAiBackend>,
+    tokenizer: TokenizerCapability,
     telemetry: Telemetry,
 ) -> Router {
-    openai_frontend::router_for(backend).layer(middleware::from_fn_with_state(
-        telemetry,
-        openai_http_telemetry,
-    ))
+    openai_frontend::router_for(backend)
+        .merge(tokenizer_http_router(tokenizer))
+        .layer(middleware::from_fn_with_state(
+            telemetry,
+            openai_http_telemetry,
+        ))
 }
 
 pub(in crate::frontend) async fn openai_http_telemetry(

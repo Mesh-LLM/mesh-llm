@@ -19,6 +19,9 @@ pub struct NormalizationOutcome {
     pub changed: bool,
     pub rewritten_path: Option<String>,
     pub response_adapter: ResponseAdapterMode,
+    /// Stable Responses conversation identity captured before compatibility
+    /// fields are removed from the translated Chat Completions body.
+    pub agent_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -498,7 +501,7 @@ fn translate_openai_responses_input(object: &mut Map<String, Value>) -> Result<b
     if state_cache_key.is_none()
         && let Some(value) = object.get("conversation")
     {
-        state_cache_key = responses_conversation_cache_key(value);
+        state_cache_key = responses_conversation_id(value);
     }
     if let Some(cache_key) = state_cache_key {
         object
@@ -524,7 +527,7 @@ fn translate_openai_responses_input(object: &mut Map<String, Value>) -> Result<b
     Ok(changed)
 }
 
-fn responses_conversation_cache_key(value: &Value) -> Option<String> {
+fn responses_conversation_id(value: &Value) -> Option<String> {
     if let Some(id) = value.as_str() {
         return Some(id.to_string());
     }
@@ -546,15 +549,20 @@ pub fn normalize_openai_compat_request(
             changed: false,
             rewritten_path: None,
             response_adapter: ResponseAdapterMode::None,
+            agent_session_id: None,
         });
     };
 
     let mut changed = alias_max_tokens(object);
     let mut rewritten_path = None;
     let mut response_adapter = ResponseAdapterMode::None;
+    let mut agent_session_id = None;
 
     let path_only = path_only(path);
     if path_only == "/v1/responses" {
+        agent_session_id = object
+            .get("conversation")
+            .and_then(responses_conversation_id);
         let is_stream = object
             .get("stream")
             .and_then(Value::as_bool)
@@ -575,6 +583,7 @@ pub fn normalize_openai_compat_request(
         changed,
         rewritten_path,
         response_adapter,
+        agent_session_id,
     })
 }
 

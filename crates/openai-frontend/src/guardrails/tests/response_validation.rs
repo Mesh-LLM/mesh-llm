@@ -1,53 +1,7 @@
 use super::*;
 
 #[test]
-fn strips_thinking_blocks_before_rescue_attempts() {
-    assert_eq!(
-        strip_thinking_blocks(
-            "<think>private plan</think>```json\n{\"name\":\"lookup\",\"arguments\":{\"city\":\"Sydney\"}}\n```"
-        ),
-        "```json\n{\"name\":\"lookup\",\"arguments\":{\"city\":\"Sydney\"}}\n```"
-    );
-    assert_eq!(
-        strip_thinking_blocks("[THINK]hidden[/THINK]Visible answer"),
-        "Visible answer"
-    );
-}
-
-#[test]
-fn rescues_plain_json_tool_call_text() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_tool_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "weather"}],
-            "tools": [{"type": "function", "function": {"name": "lookup"}}],
-            "tool_choice": "auto"
-        }),
-    );
-    let response = response_with_content(
-        "Qwen3-8B-Q4_K_M",
-        r#"{"name":"lookup","arguments":{"city":"Sydney"}}"#,
-    );
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::ValidToolCalls
-    );
-    assert_eq!(classified.parser_stage, GuardrailParserStage::JsonExact);
-    assert_eq!(classified.visible_content, None);
-    assert_eq!(tool_call_name(&classified), Some("lookup"));
-    assert_eq!(
-        tool_call_arguments(&classified),
-        Some(r#"{"city":"Sydney"}"#)
-    );
-}
-
-#[test]
-fn rescues_json_tool_call_array_text() {
+fn text_form_tool_shapes_are_not_parsed() {
     let engine = GuardrailEngine::new(enforce_policy());
     let prepared = prepared_tool_request(
         &engine,
@@ -57,235 +11,23 @@ fn rescues_json_tool_call_array_text() {
             "tools": [{"type": "function", "function": {"name": "lookup"}}]
         }),
     );
-    let response = response_with_content(
-        "Qwen3-8B-Q4_K_M",
-        r#"[{"type":"function","function":{"name":"lookup","arguments":{"city":"Sydney"}}}]"#,
-    );
 
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::ValidToolCalls
-    );
-    assert_eq!(tool_call_name(&classified), Some("lookup"));
-}
-
-#[test]
-fn rescues_fenced_json_tool_call_text() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_tool_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "weather"}],
-            "tools": [{"type": "function", "function": {"name": "lookup"}}]
-        }),
-    );
-    let response = response_with_content(
-        "Qwen3-8B-Q4_K_M",
-        "```json\n{\"name\":\"lookup\",\"arguments\":{\"city\":\"Sydney\"}}\n```",
-    );
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::ValidToolCalls
-    );
-    assert_eq!(classified.parser_stage, GuardrailParserStage::JsonFenced);
-}
-
-#[test]
-fn rescues_brace_balanced_json_substring_only_for_allowed_tools() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_tool_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "weather"}],
-            "tools": [{"type": "function", "function": {"name": "lookup"}}]
-        }),
-    );
-    let response = response_with_content(
-        "Qwen3-8B-Q4_K_M",
-        "I'll call this now: {\"name\":\"lookup\",\"arguments\":{\"city\":\"Sydney\"}}",
-    );
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::ValidToolCalls
-    );
-    assert_eq!(tool_call_name(&classified), Some("lookup"));
-}
-
-#[test]
-fn arbitrary_json_without_allowed_tool_name_is_not_rescued() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_tool_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "weather"}],
-            "tools": [{"type": "function", "function": {"name": "lookup"}}]
-        }),
-    );
-    let response = response_with_content("Qwen3-8B-Q4_K_M", r#"{"payload":{"city":"Sydney"}}"#);
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::MalformedToolText
-    );
-    assert!(classified.tool_calls.is_none());
-}
-
-#[test]
-fn rescues_bracket_args_tool_syntax() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_tool_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "weather"}],
-            "tools": [{"type": "function", "function": {"name": "lookup"}}]
-        }),
-    );
-    let response = response_with_content("Qwen3-8B-Q4_K_M", "lookup[ARGS]{\"city\":\"Sydney\"}");
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::ValidToolCalls
-    );
-    assert_eq!(classified.parser_stage, GuardrailParserStage::JsonSubstring);
-    assert_eq!(tool_call_name(&classified), Some("lookup"));
-}
-
-#[test]
-fn rescues_qwen_xml_tool_syntax() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_tool_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "weather"}],
-            "tools": [{"type": "function", "function": {"name": "lookup"}}]
-        }),
-    );
-    let response = response_with_content(
-        "Qwen3-8B-Q4_K_M",
-        "<function=lookup><parameter=city>Sydney</parameter></function>",
-    );
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::ValidToolCalls
-    );
-    assert_eq!(classified.parser_stage, GuardrailParserStage::JsonSubstring);
-    assert_eq!(tool_call_name(&classified), Some("lookup"));
-    assert_eq!(
-        tool_call_arguments(&classified),
-        Some(r#"{"city":"Sydney"}"#)
-    );
-}
-
-#[test]
-fn rescues_granite_tool_call_syntax() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_tool_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "weather"}],
-            "tools": [{"type": "function", "function": {"name": "lookup"}}]
-        }),
-    );
-    let response = response_with_content(
-        "Qwen3-8B-Q4_K_M",
-        "<tool_call>{\"name\":\"lookup\",\"arguments\":{\"city\":\"Sydney\"}}</tool_call>",
-    );
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::ValidToolCalls
-    );
-    assert_eq!(tool_call_name(&classified), Some("lookup"));
-}
-
-#[test]
-fn rescue_strips_hidden_reasoning_from_client_visible_content() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_text_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "hello"}]
-        }),
-    );
-    let response = response_with_content(
-        "Qwen3-8B-Q4_K_M",
-        "<think>private reasoning</think>Hello there",
-    );
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(classified.category, GuardrailResponseCategory::ValidText);
-    assert_eq!(classified.visible_content.as_deref(), Some("Hello there"));
-}
-
-#[test]
-fn unknown_tool_text_classifies_for_retry() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_tool_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "weather"}],
-            "tools": [{"type": "function", "function": {"name": "lookup"}}]
-        }),
-    );
-    let response = response_with_content(
-        "Qwen3-8B-Q4_K_M",
-        r#"{"name":"other_tool","arguments":{"city":"Sydney"}}"#,
-    );
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(classified.category, GuardrailResponseCategory::UnknownTool);
-    assert!(classified.tool_calls.is_none());
-}
-
-#[test]
-fn malformed_arguments_classify_without_panicking() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_tool_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "weather"}],
-            "tools": [{"type": "function", "function": {"name": "lookup"}}]
-        }),
-    );
-    let response = response_with_content(
-        "Qwen3-8B-Q4_K_M",
-        r#"{"name":"lookup","arguments":"not-json"}"#,
-    );
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::InvalidToolArguments
-    );
+    for content in [
+        r#"lookup[ARGS]{"city":"Sydney"}"#,
+        r#"lookup({"city":"Sydney"})"#,
+        r#"<function=lookup><parameter=city>Sydney</parameter></function>"#,
+        r#"```json
+{"name":"lookup","arguments":{"city":"Sydney"}}
+```"#,
+    ] {
+        let classified =
+            engine.classify_response(&prepared, &response_with_content("model", content));
+        assert_eq!(
+            classified.category,
+            GuardrailResponseCategory::MalformedToolText
+        );
+        assert!(classified.tool_calls.is_none());
+    }
 }
 
 #[test]
@@ -318,7 +60,6 @@ fn existing_valid_tool_calls_are_classified() {
         classified.category,
         GuardrailResponseCategory::ValidToolCalls
     );
-    assert_eq!(classified.parser_stage, GuardrailParserStage::None);
 }
 
 #[test]
@@ -383,52 +124,6 @@ fn synthetic_structured_classifies_when_allowed() {
         classified.category,
         GuardrailResponseCategory::ValidSyntheticStructured
     );
-    assert_eq!(classified.structured_payload, Some(json!({"answer": 42})));
-}
-
-#[test]
-fn direct_structured_json_object_classifies_when_allowed() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_text_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "json"}],
-            "response_format": supported_json_schema_response_format()
-        }),
-    );
-    let response = response_with_content("Qwen3-8B-Q4_K_M", r#"{"answer":42}"#);
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::ValidSyntheticStructured
-    );
-    assert_eq!(classified.parser_stage, GuardrailParserStage::JsonExact);
-    assert_eq!(classified.structured_payload, Some(json!({"answer": 42})));
-}
-
-#[test]
-fn fenced_direct_structured_json_object_classifies_when_allowed() {
-    let engine = GuardrailEngine::new(enforce_policy());
-    let prepared = prepared_text_request(
-        &engine,
-        json!({
-            "model": "Qwen3-8B-Q4_K_M",
-            "messages": [{"role": "user", "content": "json"}],
-            "response_format": supported_json_schema_response_format()
-        }),
-    );
-    let response = response_with_content("Qwen3-8B-Q4_K_M", "```json\n{\"answer\":42}\n```");
-
-    let classified = engine.classify_response(&prepared, &response);
-
-    assert_eq!(
-        classified.category,
-        GuardrailResponseCategory::ValidSyntheticStructured
-    );
-    assert_eq!(classified.parser_stage, GuardrailParserStage::JsonFenced);
     assert_eq!(classified.structured_payload, Some(json!({"answer": 42})));
 }
 
@@ -663,7 +358,7 @@ async fn malformed_tool_arguments_retry_once_then_succeed() {
             .expect("retry content exists"),
     )
     .expect("retry text exists");
-    assert!(retry_text.contains("invalid JSON tool arguments"));
+    assert!(retry_text.contains("plain text instead of a valid guarded call"));
     assert!(retry_text.contains("Do not add extra text."));
 }
 
@@ -822,41 +517,6 @@ async fn pass_last_text_rejects_sentinel_leaking_text_without_safe_fallback() {
         Some(GUARDRAIL_VALIDATION_FAILED_CODE)
     );
     assert_eq!(body.error.message, GUARDRAIL_VALIDATION_FAILED_MESSAGE);
-}
-
-#[tokio::test]
-async fn mesh_respond_stripped_to_assistant_text() {
-    let backend = Arc::new(SequencedBackend::new(vec![Ok(response_with_content(
-        "Qwen3-8B-Q4_K_M",
-        r#"_mesh_respond({"message":"Hello there"})"#,
-    ))]));
-    let guarded = GuardedOpenAiBackend::new(
-        backend,
-        GuardrailPolicy {
-            mode: GuardrailMode::Enforce,
-            apply_to_all_models: true,
-            ..GuardrailPolicy::default()
-        },
-    );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
-        "model": "Qwen3-8B-Q4_K_M",
-        "messages": [{"role": "user", "content": "weather"}],
-        "tools": [{"type": "function", "function": {"name": "lookup"}}],
-        "tool_choice": "auto"
-    }))
-    .unwrap();
-
-    let response = guarded.chat_completion(request).await.unwrap();
-
-    assert_eq!(
-        response.choices[0].message.content.as_deref(),
-        Some("Hello there")
-    );
-    assert!(response.choices[0].message.tool_calls.is_none());
-    assert_eq!(
-        response.choices[0].finish_reason,
-        Some(crate::common::FinishReason::Stop)
-    );
 }
 
 #[tokio::test]
@@ -1066,40 +726,6 @@ async fn valid_structured_payload_becomes_json_assistant_text() {
 }
 
 #[tokio::test]
-async fn direct_structured_payload_becomes_json_assistant_text() {
-    let backend = Arc::new(SequencedBackend::new(vec![Ok(response_with_content(
-        "Qwen3-8B-Q4_K_M",
-        "```json\n{\"answer\":42}\n```",
-    ))]));
-    let guarded = GuardedOpenAiBackend::new(
-        backend,
-        GuardrailPolicy {
-            mode: GuardrailMode::Enforce,
-            apply_to_all_models: true,
-            ..GuardrailPolicy::default()
-        },
-    );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
-        "model": "Qwen3-8B-Q4_K_M",
-        "messages": [{"role": "user", "content": "json"}],
-        "response_format": supported_json_schema_response_format()
-    }))
-    .unwrap();
-
-    let response = guarded.chat_completion(request).await.unwrap();
-
-    assert_eq!(
-        response.choices[0].message.content.as_deref(),
-        Some("{\"answer\":42}")
-    );
-    assert!(response.choices[0].message.tool_calls.is_none());
-    assert_eq!(
-        response.choices[0].finish_reason,
-        Some(crate::common::FinishReason::Stop)
-    );
-}
-
-#[tokio::test]
 async fn invalid_structured_payload_retries_then_exhaustion_error() {
     let backend = Arc::new(SequencedBackend::new(vec![
         Ok(response_with_tool_calls(
@@ -1231,7 +857,6 @@ async fn metrics_only_failed_validation_returns_original_backend_response() {
     assert_eq!(response, original);
     assert!(telemetry.outcomes.lock().unwrap().iter().any(|record| {
         record.outcome == GuardrailTelemetryOutcome::MetricsOnlyFailure.as_str()
-            && record.parser_stage == Some(GuardrailTelemetryParserStage::JsonExact.as_str())
     }));
 }
 
@@ -1272,6 +897,5 @@ async fn metrics_only_eligible_tool_request_does_not_rewrite_or_sanitize() {
     }));
     assert!(telemetry.outcomes.lock().unwrap().iter().any(|record| {
         record.outcome == GuardrailTelemetryOutcome::MetricsOnlyFailure.as_str()
-            && record.parser_stage == Some(GuardrailTelemetryParserStage::None.as_str())
     }));
 }

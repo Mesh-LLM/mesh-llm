@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use skippy_metrics::attr;
 use skippy_protocol::{
     AckMessage, MessageBase, SCHEMA_VERSION, StageConfig, StageMessage, StageTopology,
-    TokenReplyMessage,
+    TokenReplyMessage, tokenizer::TokenizerIdentity,
 };
 use tokio::net::TcpListener;
 
@@ -29,6 +29,7 @@ use crate::{
     kv_integration::KvStageIntegration,
     runtime_state::{RuntimeState, load_runtime},
     telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
+    tokenizer::tokenizer_identity_from_stage,
 };
 
 type KvRecordCandidate = ();
@@ -71,6 +72,7 @@ pub struct StatusBody {
     pub layer_end: u32,
     pub topology_stage_count: Option<usize>,
     pub runtime_loaded: bool,
+    pub tokenizer_identity: Option<TokenizerIdentity>,
     pub kv_mode: Option<String>,
     pub ready: bool,
     pub started_at_unix_nanos: i64,
@@ -502,6 +504,14 @@ fn status_body(state: &AppState) -> StatusBody {
             .as_ref()
             .map(|topology| topology.stages.len()),
         runtime_loaded: state.runtime.is_some(),
+        tokenizer_identity: state.runtime.as_ref().and_then(|_| {
+            tokenizer_identity_from_stage(
+                state.config.stage_index,
+                &state.config.model_id,
+                state.config.source_model_sha256.as_deref(),
+            )
+            .ok()
+        }),
         kv_mode: state.kv.as_ref().map(|kv| format!("{:?}", kv.mode())),
         ready: lifecycle.ready,
         started_at_unix_nanos: lifecycle.started_at_unix_nanos,
@@ -738,5 +748,76 @@ fn message_has_activation_payload(message: &StageMessage) -> bool {
                     .is_some_and(|activation| activation.payload_bytes > 0)
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use skippy_protocol::LoadMode;
+    use tower::ServiceExt;
+
+    use super::*;
+
+    fn stage_config_without_runtime() -> StageConfig {
+        StageConfig {
+            run_id: "run".to_owned(),
+            topology_id: "topology".to_owned(),
+            model_id: "model".to_owned(),
+            package_ref: None,
+            manifest_sha256: None,
+            source_model_path: None,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path: None,
+            projector_path: None,
+            stage_id: "stage-0".to_owned(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 1,
+            ctx_size: 1024,
+            lane_count: 1,
+            n_batch: None,
+            n_ubatch: None,
+            n_gpu_layers: 0,
+            mmap: None,
+            mlock: false,
+            cache_type_k: "f16".to_owned(),
+            cache_type_v: "f16".to_owned(),
+            flash_attn_type: Default::default(),
+            filter_tensors_on_load: false,
+            selected_device: None,
+            kv_cache: None,
+            native_mtp_enabled: true,
+            load_mode: LoadMode::RuntimeSlice,
+            bind_addr: "127.0.0.1:0".to_owned(),
+            upstream: None,
+            downstream: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn stage_transport_does_not_expose_the_product_tokenizer_route() {
+        let router = stage_http_router(StageHttpOptions {
+            config: stage_config_without_runtime(),
+            topology: None,
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            metrics_otlp_grpc: None,
+            telemetry_queue_capacity: 1,
+            telemetry_level: TelemetryLevel::Off,
+        })
+        .unwrap();
+
+        let response = router
+            .oneshot(Request::post("/v1/tokenize").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

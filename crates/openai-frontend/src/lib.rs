@@ -20,9 +20,10 @@ pub use chat::{
     MessageContent, MessageContentPart, message_content_to_text, messages_to_plain_prompt,
 };
 pub use common::{
-    FinishReason, PromptCacheRetention, ReasoningConfig, ReasoningEffort, ReasoningTemplateOptions,
-    StopSequence, StreamOptions, THINKING_BOOLEAN_ALIASES, Usage, completion_id,
-    normalize_reasoning_template_options, now_unix_secs,
+    AgentSessionIdentity, AgentSessionSource, FinishReason, PromptCacheRetention, ReasoningConfig,
+    ReasoningEffort, ReasoningTemplateOptions, StopSequence, StreamOptions,
+    THINKING_BOOLEAN_ALIASES, Usage, completion_id, normalize_reasoning_template_options,
+    now_unix_secs,
 };
 pub use completions::{
     CompletionChoice, CompletionChunk, CompletionChunkChoice, CompletionPrompt, CompletionRequest,

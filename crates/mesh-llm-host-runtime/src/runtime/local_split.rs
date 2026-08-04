@@ -239,6 +239,7 @@ pub(super) async fn start_runtime_split_model(
         slots,
         skippy_telemetry: spec.skippy_telemetry.clone(),
         survey_telemetry: spec.survey_telemetry.clone(),
+        serving_hooks_factory: None,
     })
     .await?;
     let (coordinator_tx, coordinator_rx) = tokio::sync::mpsc::channel(1);

@@ -16,8 +16,12 @@ use crate::runtime_data::{
 };
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
+use openai_frontend::OpenAiHookPolicy;
 use skippy_protocol::{FlashAttentionType, LoadMode};
+use skippy_server::serving_hooks::SharedModelServingHooksFactory;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod native_runtime_events;
@@ -109,6 +113,12 @@ impl LocalRuntimeModelHandle {
     pub(super) fn openai_guardrails(&self) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => model.openai_guardrails(),
+        }
+    }
+
+    pub(super) fn openai_server_status(&self) -> skippy_server::EmbeddedServerStatus {
+        match &self.inner {
+            LocalRuntimeBackendHandle::Skippy { http, .. } => http.status(),
         }
     }
 
@@ -228,6 +238,30 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) survey_telemetry: survey::SurveyTelemetry,
 }
 
+pub(super) struct LocalOpenAiModelStartSpec<'a> {
+    pub(super) mesh_config: &'a plugin::MeshConfig,
+    pub(super) config_model_id: Option<&'a str>,
+    pub(super) model_path: &'a Path,
+    pub(super) model_bytes: u64,
+    pub(super) mmproj_override: Option<&'a Path>,
+    pub(super) ctx_size_override: Option<u32>,
+    pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    pub(super) capacity_budget_bytes: u64,
+    pub(super) cache_type_k_override: Option<&'a str>,
+    pub(super) cache_type_v_override: Option<&'a str>,
+    pub(super) n_batch_override: Option<u32>,
+    pub(super) n_ubatch_override: Option<u32>,
+    pub(super) flash_attention_override: FlashAttentionType,
+    pub(super) parallel_override: Option<usize>,
+    pub(super) planning_profile: RuntimeResourcePlanningProfile,
+    pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
+    pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
+    pub(super) survey_telemetry: survey::SurveyTelemetry,
+    pub(super) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub(super) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
+    pub(super) http_bind_addr: SocketAddr,
+}
+
 pub(super) fn resolved_model_name(path: &Path) -> String {
     let stem = path
         .file_stem()
@@ -264,44 +298,24 @@ pub(super) fn pinned_stage_device(
     }
 }
 
-pub(super) fn resolve_runtime_skippy_config(
-    spec: &LocalRuntimeModelStartSpec<'_>,
+pub(super) fn resolve_local_openai_skippy_config(
+    spec: &LocalOpenAiModelStartSpec<'_>,
     model_name: &str,
     model_bytes: u64,
     context_length: u32,
     slots: usize,
     fallback_projector_path: Option<PathBuf>,
 ) -> Result<skippy::ResolvedSkippyConfig> {
-    let allocatable_memory_bytes = spec
-        .capacity_budget_bytes
-        .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()));
     let mut resolved = skippy::resolve_skippy_config(skippy::SkippyConfigResolveRequest {
         mesh_config: spec.mesh_config,
         model_id: spec.config_model_id.unwrap_or(model_name),
         model_path: spec.model_path,
         model_bytes,
-        allocatable_memory_bytes,
+        allocatable_memory_bytes: Some(spec.capacity_budget_bytes),
         request_defaults: None,
         package_generation: None,
     })?;
     resolved.model_id = model_name.to_string();
-    apply_runtime_skippy_launch_overrides(
-        &mut resolved,
-        spec,
-        context_length,
-        slots,
-        fallback_projector_path,
-    );
-    Ok(resolved)
-}
-
-fn apply_runtime_skippy_launch_overrides(
-    resolved: &mut skippy::ResolvedSkippyConfig,
-    spec: &LocalRuntimeModelStartSpec<'_>,
-    context_length: u32,
-    slots: usize,
-    fallback_projector_path: Option<PathBuf>,
-) {
     resolved.model_fit.ctx_size = context_length;
     resolved.throughput.parallel = slots;
     if let Some(cache_type_k) = spec.cache_type_k_override {
@@ -327,6 +341,7 @@ fn apply_runtime_skippy_launch_overrides(
     if let Some(gpu) = spec.pinned_gpu {
         resolved.hardware.device = Some(gpu.backend_device.clone());
     }
+    Ok(resolved)
 }
 
 pub(super) async fn alloc_local_port() -> Result<u16> {
@@ -510,6 +525,50 @@ pub(super) async fn start_runtime_local_model(
     LocalRuntimeModelHandle,
     tokio::sync::oneshot::Receiver<()>,
 )> {
+    let local_capacity_bytes = spec
+        .capacity_budget_bytes
+        .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
+        .unwrap_or_else(|| spec.node.vram_bytes());
+    let http_bind_addr = ([127, 0, 0, 1], alloc_local_port().await?).into();
+    let hook_policy =
+        Some(skippy::MeshAutoHookPolicy::new(spec.node.clone()) as Arc<dyn OpenAiHookPolicy>);
+    start_local_openai_model(
+        LocalOpenAiModelStartSpec {
+            mesh_config: spec.mesh_config,
+            config_model_id: spec.config_model_id,
+            model_path: spec.model_path,
+            model_bytes: spec.model_bytes,
+            mmproj_override: spec.mmproj_override,
+            ctx_size_override: spec.ctx_size_override,
+            pinned_gpu: spec.pinned_gpu,
+            capacity_budget_bytes: local_capacity_bytes,
+            cache_type_k_override: spec.cache_type_k_override,
+            cache_type_v_override: spec.cache_type_v_override,
+            n_batch_override: spec.n_batch_override,
+            n_ubatch_override: spec.n_ubatch_override,
+            flash_attention_override: spec.flash_attention_override,
+            parallel_override: spec.parallel_override,
+            planning_profile: spec.planning_profile,
+            openai_guardrail_policy: spec.openai_guardrail_policy,
+            skippy_telemetry: spec.skippy_telemetry,
+            survey_telemetry: spec.survey_telemetry,
+            hook_policy,
+            serving_hooks_factory: None,
+            http_bind_addr,
+        },
+        runtime_model_name,
+    )
+    .await
+}
+
+pub(super) async fn start_local_openai_model(
+    spec: LocalOpenAiModelStartSpec<'_>,
+    runtime_model_name: &str,
+) -> Result<(
+    String,
+    LocalRuntimeModelHandle,
+    tokio::sync::oneshot::Receiver<()>,
+)> {
     let model_name = runtime_model_name.to_string();
     let package_ref = spec.model_path.to_string_lossy().to_string();
     let layer_package = if skippy::is_layer_package_ref(&package_ref) {
@@ -528,10 +587,7 @@ pub(super) async fn start_runtime_local_model(
         .as_ref()
         .map(|package| package.source_model_bytes)
         .unwrap_or_else(|| election::total_model_bytes(spec.model_path));
-    let my_vram = spec
-        .capacity_budget_bytes
-        .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
-        .unwrap_or_else(|| spec.node.local_runtime_capacity_bytes());
+    let my_vram = spec.capacity_budget_bytes;
 
     // For split/layer-package models, compute the local share of model weights
     // and the layer fraction so the context planner budgets correctly.
@@ -596,14 +652,14 @@ pub(super) async fn start_runtime_local_model(
     });
 
     if let Some(package) = layer_package {
-        start_runtime_layer_package_model(spec, model_name, package, plan).await
+        start_local_layer_package_model(spec, model_name, package, plan).await
     } else {
-        start_runtime_skippy_model(spec, model_name, plan).await
+        start_local_skippy_model(spec, model_name, plan).await
     }
 }
 
-async fn start_runtime_skippy_model(
-    spec: LocalRuntimeModelStartSpec<'_>,
+async fn start_local_skippy_model(
+    spec: LocalOpenAiModelStartSpec<'_>,
     model_name: String,
     plan: RuntimeResourcePlan,
 ) -> Result<(
@@ -611,10 +667,9 @@ async fn start_runtime_skippy_model(
     LocalRuntimeModelHandle,
     tokio::sync::oneshot::Receiver<()>,
 )> {
-    let port = alloc_local_port().await?;
     let context_length = plan.context_length;
     let fallback_projector_path = mmproj_path_for_model(&model_name).filter(|path| path.exists());
-    let resolved = resolve_runtime_skippy_config(
+    let resolved = resolve_local_openai_skippy_config(
         &spec,
         &model_name,
         spec.model_bytes,
@@ -645,6 +700,7 @@ async fn start_runtime_skippy_model(
     let mut options = resolved
         .to_model_load_options(spec.skippy_telemetry.clone())?
         .with_embedded_openai(embedded_openai)
+        .with_serving_hooks_factory(spec.serving_hooks_factory.clone())
         .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
             spec.openai_guardrail_policy.clone(),
         ));
@@ -655,13 +711,13 @@ async fn start_runtime_skippy_model(
         model: model_name.clone(),
         source: None,
     });
-    let node_for_hook = spec.node.clone();
+    let hook_policy = spec.hook_policy.clone();
     let reporter_model_name = model_name.clone();
     let guardrail_telemetry = spec.survey_telemetry.clone();
     let skippy_model = tokio::task::spawn_blocking(move || {
         skippy::SkippyModelHandle::load_with_hooks_and_open_events(
             options,
-            Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
+            hook_policy,
             Some(skippy_native_model_open_event_reporter(reporter_model_name)),
             guardrail_telemetry,
         )
@@ -672,7 +728,7 @@ async fn start_runtime_skippy_model(
         model: model_name.clone(),
         bytes: None,
     });
-    let http = skippy_model.start_http(port);
+    let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
     Ok((
@@ -693,8 +749,8 @@ async fn start_runtime_skippy_model(
     ))
 }
 
-async fn start_runtime_layer_package_model(
-    spec: LocalRuntimeModelStartSpec<'_>,
+async fn start_local_layer_package_model(
+    spec: LocalOpenAiModelStartSpec<'_>,
     model_name: String,
     package: skippy::SkippyPackageIdentity,
     plan: RuntimeResourcePlan,
@@ -705,7 +761,7 @@ async fn start_runtime_layer_package_model(
 )> {
     let context_length = plan.context_length;
     let fallback_projector_path = mmproj_path_for_model(&model_name).filter(|path| path.exists());
-    let resolved = resolve_runtime_skippy_config(
+    let resolved = resolve_local_openai_skippy_config(
         &spec,
         &model_name,
         package.source_model_bytes,
@@ -766,7 +822,7 @@ async fn start_runtime_layer_package_model(
     runtime_options.config.bind_addr = "127.0.0.1:0".to_string();
     runtime_options.config.upstream = None;
     runtime_options.config.downstream = None;
-    let node_for_hook = spec.node.clone();
+    let hook_policy = spec.hook_policy.clone();
     let model_ref = model_name.clone();
     let reporter_model_ref = model_ref.clone();
     let skippy_telemetry = spec.skippy_telemetry.clone();
@@ -781,10 +837,11 @@ async fn start_runtime_layer_package_model(
         skippy::SkippyModelHandle::load_stage0_runtime_options_with_openai_args_and_open_events(
             runtime_options,
             embedded_openai,
-            Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
+            hook_policy,
             skippy_telemetry,
             Some(skippy_native_model_open_event_reporter(reporter_model_ref)),
             skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
+            spec.serving_hooks_factory,
         )
     })
     .await
@@ -793,7 +850,7 @@ async fn start_runtime_layer_package_model(
         model: model_ref,
         bytes: None,
     });
-    let http = handle.start_http(alloc_local_port().await?);
+    let http = handle.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
     Ok((

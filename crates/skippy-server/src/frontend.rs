@@ -38,8 +38,9 @@ pub use self::generation::{
     serve_embedded_openai_with_shutdown, serve_openai,
 };
 pub use self::generation_receipt::{
-    GenerationReceipt, GenerationReceiptConfig, GenerationReceiptSink, GenerationStateDigest,
-    GenerationTermination, generation_token_id_digest,
+    GenerationAbort, GenerationCommit, GenerationLifecycleIngress, GenerationLifecycleObservation,
+    GenerationReceipt, GenerationReceiptConfig, GenerationReceiptSink, GenerationStart,
+    GenerationStateDigest, GenerationTermination, generation_token_id_digest,
 };
 pub use self::guardrails::{
     OpenAiGuardrailsConfig, OpenAiGuardrailsStatus, OpenAiGuardrailsTarget,

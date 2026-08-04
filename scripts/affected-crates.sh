@@ -36,6 +36,8 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-plugin-manager"
   "mesh-llm-client"
   "mesh-mixture-of-agents"
+  "mesh-native-serving-plugin-api"
+  "mesh-native-serving-plugin-host"
   "mesh-llm-api-client"
   "mesh-llm-api-server"
   "mesh-llm-node"

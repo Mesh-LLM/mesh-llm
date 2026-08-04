@@ -257,7 +257,7 @@ pub(crate) fn check_test_all_coverage_command() -> DynResult<()> {
     let repo_root = repo_root()?;
     let workspace_crates = workspace_package_names(&repo_root)?;
     let justfile = fs::read_to_string(repo_root.join("Justfile"))?;
-    let (dynamic_targets, excluded_targets) = test_all_test_targets(&justfile)?;
+    let (dynamic_targets, excluded_targets, isolated_targets) = test_all_test_targets(&justfile)?;
     check_subset(
         &workspace_crates,
         &dynamic_targets,
@@ -265,11 +265,20 @@ pub(crate) fn check_test_all_coverage_command() -> DynResult<()> {
     )?;
     check_subset(
         &workspace_crates,
+        &isolated_targets,
+        "test-all isolated test targets",
+    )?;
+    check_subset(
+        &workspace_crates,
         &excluded_targets,
         "test-all test excludes",
     )?;
+    let expected_excluded = dynamic_targets
+        .union(&isolated_targets)
+        .cloned()
+        .collect::<BTreeSet<_>>();
     ensure_set_eq(
-        &dynamic_targets,
+        &expected_excluded,
         &excluded_targets,
         "test-all dynamic/exclude target parity",
     )?;
@@ -278,7 +287,9 @@ pub(crate) fn check_test_all_coverage_command() -> DynResult<()> {
     Ok(())
 }
 
-fn test_all_test_targets(contents: &str) -> DynResult<(BTreeSet<String>, BTreeSet<String>)> {
+fn test_all_test_targets(
+    contents: &str,
+) -> DynResult<(BTreeSet<String>, BTreeSet<String>, BTreeSet<String>)> {
     let mut lines = contents
         .lines()
         .skip_while(|line| line.trim_end() != "test-all:");
@@ -315,9 +326,21 @@ fn test_all_test_targets(contents: &str) -> DynResult<(BTreeSet<String>, BTreeSe
         .iter()
         .find(|command| command.contains("cargo test --workspace"))
         .ok_or("test-all: missing workspace cargo test command")?;
+    let isolated = commands
+        .iter()
+        .filter(|command| {
+            command.contains("cargo test ")
+                && (command.contains(" --package ") || command.contains(" --package="))
+        })
+        .map(|command| command_flag_values(command, "--package"))
+        .fold(BTreeSet::new(), |mut targets, values| {
+            targets.extend(values);
+            targets
+        });
     Ok((
         command_flag_values(dynamic, "-p"),
         command_flag_values(workspace, "--exclude"),
+        isolated,
     ))
 }
 
@@ -356,9 +379,10 @@ test-all:
 # Another recipe
 "#;
         let expected = BTreeSet::from(["dynamic-a".to_string(), "dynamic-b".to_string()]);
-        let (dynamic, excluded) = test_all_test_targets(justfile).unwrap();
+        let (dynamic, excluded, isolated) = test_all_test_targets(justfile).unwrap();
         assert_eq!(dynamic, expected);
         assert_eq!(excluded, expected);
+        assert!(isolated.is_empty());
     }
 
     #[test]
@@ -369,8 +393,30 @@ test-all:
     cargo test --workspace --exclude=dynamic-a --exclude dynamic-b
 "#;
         let expected = BTreeSet::from(["dynamic-a".to_string(), "dynamic-b".to_string()]);
-        let (dynamic, excluded) = test_all_test_targets(justfile).unwrap();
+        let (dynamic, excluded, isolated) = test_all_test_targets(justfile).unwrap();
         assert_eq!(dynamic, expected);
         assert_eq!(excluded, expected);
+        assert!(isolated.is_empty());
+    }
+
+    #[test]
+    fn test_all_targets_accepts_isolated_static_tests() {
+        let justfile = r#"
+test-all:
+    cargo test \
+        -p dynamic-a
+    cargo test --workspace \
+        --exclude dynamic-a \
+        --exclude static-a
+    cargo test --package static-a --no-default-features --lib
+"#;
+        let dynamic = BTreeSet::from(["dynamic-a".to_string()]);
+        let excluded = BTreeSet::from(["dynamic-a".to_string(), "static-a".to_string()]);
+        let isolated = BTreeSet::from(["static-a".to_string()]);
+        let (actual_dynamic, actual_excluded, actual_isolated) =
+            test_all_test_targets(justfile).unwrap();
+        assert_eq!(actual_dynamic, dynamic);
+        assert_eq!(actual_excluded, excluded);
+        assert_eq!(actual_isolated, isolated);
     }
 }

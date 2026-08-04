@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{CacheBlobStore, CacheDedupeStats, ExactStatePayload};
 
@@ -10,6 +10,7 @@ pub struct ExactStateCache<E> {
     logical_bytes: u64,
     blobs: CacheBlobStore,
     entries: HashMap<String, ExactStateEntry<E>>,
+    token_count_refs: BTreeMap<u64, usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +64,7 @@ impl<E: Clone> ExactStateCache<E> {
             logical_bytes: 0,
             blobs: CacheBlobStore::default(),
             entries: HashMap::new(),
+            token_count_refs: BTreeMap::new(),
         }
     }
 
@@ -81,6 +83,14 @@ impl<E: Clone> ExactStateCache<E> {
         })
     }
 
+    pub fn token_counts_at_most(&self, max_token_count: u64) -> Vec<u64> {
+        self.token_count_refs
+            .range(..=max_token_count)
+            .rev()
+            .map(|(token_count, _)| *token_count)
+            .collect()
+    }
+
     pub fn record(
         &mut self,
         page_id: String,
@@ -96,6 +106,7 @@ impl<E: Clone> ExactStateCache<E> {
         let logical_bytes = payload.byte_len();
         let (payload, dedupe) = payload.dedupe_into(&mut self.blobs);
         self.logical_bytes = self.logical_bytes.saturating_add(logical_bytes);
+        self.add_token_count(token_count);
         self.entries.insert(
             page_id.clone(),
             ExactStateEntry {
@@ -170,7 +181,23 @@ impl<E: Clone> ExactStateCache<E> {
 
     fn remove_entry(&mut self, entry: ExactStateEntry<E>) {
         self.logical_bytes = self.logical_bytes.saturating_sub(entry.logical_bytes);
+        self.remove_token_count(entry.token_count);
         entry.payload.release_from(&mut self.blobs);
+    }
+
+    fn add_token_count(&mut self, token_count: u64) {
+        *self.token_count_refs.entry(token_count).or_default() += 1;
+    }
+
+    fn remove_token_count(&mut self, token_count: u64) {
+        let Some(count) = self.token_count_refs.get_mut(&token_count) else {
+            debug_assert!(false, "exact-state token-count index drifted");
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            self.token_count_refs.remove(&token_count);
+        }
     }
 }
 
@@ -197,6 +224,47 @@ mod tests {
         assert!(cache.lookup("first").is_none());
         assert!(cache.lookup("second").is_some());
         assert_eq!(cache.stats().entries, 1);
+    }
+
+    #[test]
+    fn cached_token_counts_are_bounded_sorted_and_deduplicated() {
+        let mut cache = ExactStateCache::new(4, 0);
+        for (page_id, token_count) in [("a", 96), ("b", 160), ("c", 96), ("d", 224)] {
+            cache.record(
+                page_id.to_string(),
+                token_count,
+                ExactStatePayload::full_state(vec![1]),
+                (),
+            );
+        }
+
+        assert_eq!(cache.token_counts_at_most(200), vec![160, 96]);
+    }
+
+    #[test]
+    fn cached_token_counts_track_replacement_and_eviction() {
+        let mut cache = ExactStateCache::new(1, 0);
+        cache.record(
+            "first".to_string(),
+            96,
+            ExactStatePayload::full_state(vec![1]),
+            (),
+        );
+        cache.record(
+            "first".to_string(),
+            160,
+            ExactStatePayload::full_state(vec![2]),
+            (),
+        );
+        assert_eq!(cache.token_counts_at_most(160), vec![160]);
+
+        cache.record(
+            "second".to_string(),
+            224,
+            ExactStatePayload::full_state(vec![3]),
+            (),
+        );
+        assert_eq!(cache.token_counts_at_most(224), vec![224]);
     }
 
     #[test]

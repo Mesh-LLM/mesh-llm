@@ -16,7 +16,6 @@ use skippy_runtime::SamplingConfig;
 use crate::frontend::openai_backend_error;
 
 const MAX_OPAQUE_DECISION_ID_BYTES: usize = 64;
-const MAX_LINEAR_PROPOSAL_TOKENS: usize = 256;
 
 /// Source-owned identity that Skippy carries without interpreting.
 ///
@@ -68,22 +67,60 @@ impl LinearProposal {
     }
 }
 
-/// Causal, committed-only state supplied to a proposal source.
+/// Bounded, target-authoritative state supplied to a proposal source.
+///
+/// The proposal path deliberately does not pass a full context buffer. A
+/// lifecycle observer receives canonical committed token deltas separately;
+/// the request path carries only O(1) identity and position data so a source
+/// can honor its absolute deadline without copying or hashing an arbitrarily
+/// large prompt.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
-pub struct LinearProposalQuery<'a> {
+pub struct LinearProposalQuery {
     /// OpenAI request identity.
     pub request_id: u64,
     /// OpenAI session identity.
     pub session_id: u64,
+    /// Number of leading committed tokens supplied by the original prompt.
+    ///
+    /// This is target-authoritative lifecycle information. Proposal sources
+    /// use it to separate the immutable request prompt from generated tokens
+    /// that may already have been committed during prefill.
+    pub prompt_token_count: usize,
+    /// Total canonical tokens committed at this query boundary, including the
+    /// prompt and every target token previously delivered to the lifecycle
+    /// observer.
+    pub committed_token_count: usize,
     /// Number of target tokens already generated.
     pub decode_step: usize,
-    /// Prompt and target tokens committed before this query.
-    pub committed_token_ids: &'a [i32],
     /// Maximum proposal width Skippy will accept for this query.
     pub max_proposal_tokens: usize,
     /// Advisory deadline the synchronous source must honor.
     pub deadline: Instant,
+}
+
+impl LinearProposalQuery {
+    /// Creates one target-authoritative proposal query.
+    #[must_use]
+    pub fn new(
+        request_id: u64,
+        session_id: u64,
+        prompt_token_count: usize,
+        committed_token_count: usize,
+        decode_step: usize,
+        max_proposal_tokens: usize,
+        deadline: Instant,
+    ) -> Self {
+        Self {
+            request_id,
+            session_id,
+            prompt_token_count,
+            committed_token_count,
+            decode_step,
+            max_proposal_tokens,
+            deadline,
+        }
+    }
 }
 
 /// Why Skippy rejected a source decision without producing a receipt.
@@ -248,7 +285,7 @@ impl LinearProposalReceipt {
 /// any pending decision without treating it as verified.
 pub trait LinearProposalIngress: Send + Sync {
     /// Returns an optional bounded proposal for the committed query state.
-    fn propose(&self, query: LinearProposalQuery<'_>) -> Result<Option<LinearProposal>>;
+    fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>>;
 
     /// Receives the target-authoritative outcome for a verified proposal.
     fn report(&self, receipt: &LinearProposalReceipt) -> Result<()>;
@@ -288,11 +325,6 @@ impl LinearProposalIngressConfig {
         if max_proposal_tokens == 0 {
             bail!("linear proposal maximum token count must be greater than zero");
         }
-        if max_proposal_tokens > MAX_LINEAR_PROPOSAL_TOKENS {
-            bail!(
-                "linear proposal maximum token count is {max_proposal_tokens}; hard limit is {MAX_LINEAR_PROPOSAL_TOKENS}"
-            );
-        }
         Ok(Self {
             source,
             deadline,
@@ -328,18 +360,33 @@ pub(crate) enum LinearProposalQueryOutcome {
     Ready(QueriedLinearProposal),
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct LinearProposalQueryParams {
+    pub(crate) request_id: u64,
+    pub(crate) session_id: u64,
+    pub(crate) prompt_token_count: usize,
+    pub(crate) decode_step: usize,
+    pub(crate) committed_token_count: usize,
+    pub(crate) remaining_new_tokens: usize,
+    pub(crate) runtime_max_proposal_tokens: usize,
+}
+
 pub(crate) fn query_linear_proposal(
     config: &LinearProposalIngressConfig,
-    request_id: u64,
-    session_id: u64,
-    decode_step: usize,
-    committed_token_ids: &[i32],
-    remaining_new_tokens: usize,
-    runtime_max_proposal_tokens: usize,
+    params: LinearProposalQueryParams,
 ) -> OpenAiResult<LinearProposalQueryOutcome> {
-    let max_proposal_tokens = remaining_new_tokens
+    if params.prompt_token_count == 0
+        || params.committed_token_count
+            != params.prompt_token_count.saturating_add(params.decode_step)
+    {
+        return Err(OpenAiError::backend(
+            "linear proposal query does not match the authoritative prompt/decode boundary",
+        ));
+    }
+    let max_proposal_tokens = params
+        .remaining_new_tokens
         .saturating_sub(1)
-        .min(runtime_max_proposal_tokens)
+        .min(params.runtime_max_proposal_tokens)
         .min(config.max_proposal_tokens());
     if max_proposal_tokens == 0 {
         return Ok(LinearProposalQueryOutcome::NoProposal);
@@ -351,14 +398,15 @@ pub(crate) fn query_linear_proposal(
     let proposal_started = Instant::now();
     let proposal = config
         .source()
-        .propose(LinearProposalQuery {
-            request_id,
-            session_id,
-            decode_step,
-            committed_token_ids,
+        .propose(LinearProposalQuery::new(
+            params.request_id,
+            params.session_id,
+            params.prompt_token_count,
+            params.committed_token_count,
+            params.decode_step,
             max_proposal_tokens,
             deadline,
-        })
+        ))
         .map_err(openai_backend_error)?;
     let proposal_elapsed_us = elapsed_us(proposal_started);
     let Some(proposal) = proposal else {
@@ -462,9 +510,30 @@ mod tests {
     struct RecordedQuery {
         request_id: u64,
         session_id: u64,
+        prompt_token_count: usize,
+        committed_token_count: usize,
         decode_step: usize,
-        committed_token_ids: Vec<i32>,
         max_proposal_tokens: usize,
+    }
+
+    fn query_params(
+        request_id: u64,
+        session_id: u64,
+        prompt_token_count: usize,
+        decode_step: usize,
+        committed_token_count: usize,
+        remaining_new_tokens: usize,
+        runtime_max_proposal_tokens: usize,
+    ) -> LinearProposalQueryParams {
+        LinearProposalQueryParams {
+            request_id,
+            session_id,
+            prompt_token_count,
+            decode_step,
+            committed_token_count,
+            remaining_new_tokens,
+            runtime_max_proposal_tokens,
+        }
     }
 
     #[derive(Default)]
@@ -479,12 +548,13 @@ mod tests {
     }
 
     impl LinearProposalIngress for FakeIngress {
-        fn propose(&self, query: LinearProposalQuery<'_>) -> Result<Option<LinearProposal>> {
+        fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
             self.queries.lock().unwrap().push(RecordedQuery {
                 request_id: query.request_id,
                 session_id: query.session_id,
+                prompt_token_count: query.prompt_token_count,
+                committed_token_count: query.committed_token_count,
                 decode_step: query.decode_step,
-                committed_token_ids: query.committed_token_ids.to_vec(),
                 max_proposal_tokens: query.max_proposal_tokens,
             });
             thread::sleep(*self.delay.lock().unwrap());
@@ -532,14 +602,6 @@ mod tests {
         assert!(LinearProposalIngressConfig::new(source.clone(), Duration::ZERO, 8).is_err());
         assert!(
             LinearProposalIngressConfig::new(source.clone(), Duration::from_millis(1), 0).is_err()
-        );
-        assert!(
-            LinearProposalIngressConfig::new(
-                source.clone(),
-                Duration::from_millis(1),
-                MAX_LINEAR_PROPOSAL_TOKENS + 1,
-            )
-            .is_err()
         );
         assert!(LinearProposalIngressConfig::new(source, Duration::from_millis(1), 8).is_ok());
     }
@@ -683,7 +745,7 @@ mod tests {
     }
 
     #[test]
-    fn query_passes_exact_causal_context_and_accepts_a_bounded_proposal() {
+    fn query_passes_bounded_committed_position_and_accepts_a_bounded_proposal() {
         let source = Arc::new(FakeIngress::default());
         let id = OpaqueProposalDecisionId::new(vec![1, 2, 3]).unwrap();
         *source.proposal.lock().unwrap() = Some(LinearProposal::new(id.clone(), vec![31, 32, 33]));
@@ -691,7 +753,7 @@ mod tests {
             LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
 
         let LinearProposalQueryOutcome::Ready(queried) =
-            query_linear_proposal(&config, 7, 8, 9, &[21, 22, 23], 5, 4).unwrap()
+            query_linear_proposal(&config, query_params(7, 8, 2, 1, 3, 5, 4)).unwrap()
         else {
             panic!("bounded proposal should be ready");
         };
@@ -703,12 +765,31 @@ mod tests {
             &[RecordedQuery {
                 request_id: 7,
                 session_id: 8,
-                decode_step: 9,
-                committed_token_ids: vec![21, 22, 23],
+                prompt_token_count: 2,
+                decode_step: 1,
+                committed_token_count: 3,
                 max_proposal_tokens: 4,
             }]
         );
         assert!(source.discards.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn query_rejects_an_inconsistent_prompt_decode_boundary_before_ingress() {
+        let source = Arc::new(FakeIngress::default());
+        let config =
+            LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 4).unwrap();
+
+        for (prompt_token_count, decode_step) in [(0, 3), (4, 0), (2, 0), (1, 3)] {
+            assert!(
+                query_linear_proposal(
+                    &config,
+                    query_params(7, 8, prompt_token_count, decode_step, 3, 5, 4),
+                )
+                .is_err()
+            );
+        }
+        assert!(source.queries.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -721,7 +802,7 @@ mod tests {
             LinearProposalIngressConfig::new(invalid_source.clone(), Duration::from_secs(1), 4)
                 .unwrap();
         assert!(matches!(
-            query_linear_proposal(&invalid_config, 1, 2, 3, &[4], 5, 4).unwrap(),
+            query_linear_proposal(&invalid_config, query_params(1, 2, 1, 0, 1, 5, 4)).unwrap(),
             LinearProposalQueryOutcome::NoProposal
         ));
         assert_eq!(
@@ -739,7 +820,7 @@ mod tests {
                 .unwrap();
         let LinearProposalQueryOutcome::DeadlineExceeded {
             proposal_elapsed_us,
-        } = query_linear_proposal(&late_config, 1, 2, 3, &[4], 5, 4).unwrap()
+        } = query_linear_proposal(&late_config, query_params(1, 2, 1, 0, 1, 5, 4)).unwrap()
         else {
             panic!("late proposal should produce deadline telemetry");
         };
@@ -760,7 +841,8 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            query_linear_proposal(&invalid_token_config, 1, 2, 3, &[4], 5, 4).unwrap(),
+            query_linear_proposal(&invalid_token_config, query_params(1, 2, 1, 0, 1, 5, 4),)
+                .unwrap(),
             LinearProposalQueryOutcome::NoProposal
         ));
         assert_eq!(
@@ -817,7 +899,7 @@ mod tests {
             LinearProposalIngressConfig::new(source.clone(), Duration::from_secs(1), 32).unwrap();
 
         assert!(matches!(
-            query_linear_proposal(&config, 1, 2, 3, &[4], 64, 7).unwrap(),
+            query_linear_proposal(&config, query_params(1, 2, 1, 0, 1, 64, 7)).unwrap(),
             LinearProposalQueryOutcome::NoProposal
         ));
         assert_eq!(source.queries.lock().unwrap()[0].max_proposal_tokens, 7);
