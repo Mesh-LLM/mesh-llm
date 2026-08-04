@@ -215,6 +215,32 @@ became ties. The direction survived; the magnitude did not.
 This is the same control the strong-pool section applies — it was simply never
 carried into the small-pool and e2e harnesses.
 
+## Admission control: does a weak node help a strong pool? (No.)
+
+The A/B/C test the goal hinges on — should a modest node be admitted into a
+committee that already has a stronger member? Same 40 prompts, same judge,
+layered arm, through the committee harness (no admission control, so C is the
+counterfactual "what if we admitted it"):
+
+| arm | pool | layered vs solo | decided winrate | losses |
+|---|---|---|---|---|
+| B | 32B ×2 | 48W / 23T / 2L, p=2e-12 | 96% | 2 |
+| C | 32B ×2 + 8B | 50W / 25T / 5L, p=2e-10 | 91% | 5 |
+
+Fisher exact B-vs-C: p=0.44 — not statistically separable at n=80, but the
+direction is one-way: **admitting the weak 8B node never helped and modestly
+raised losses (5 vs 2).** Both still beat solo — a weak node does not collapse
+the pool — but it adds latency and cost for no upside and a small tail risk.
+
+This is the measured basis for tier-based admission control
+(`apply_admission_control`): when a big-tier worker is present, drop small-tier
+ones. The conservative choice, and the evidence says conservative is right here.
+
+Caveat: this rejects the *possibility* that a genuinely complementary weak model
+could help a specific prompt. The data says that possibility is not worth the
+average-case cost at these scales; a per-turn admission signal (measured
+marginal contribution) could revisit it later, but tier is the safe default now.
+
 ## The problem with N=2 was scale, not count
 
 The N=2-8B null (below) suggested "two peers isn't enough". A mid-scale re-run
