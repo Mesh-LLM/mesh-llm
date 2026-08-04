@@ -122,7 +122,10 @@ impl NativeRuntimeCache {
     /// TODO(issue #1162): Remove this resolver-specific compatibility boundary
     /// once the oldest supported upgrade path no longer contains pre-checksum
     /// runtime caches, if full-cache resolver enumeration is safe again.
-    pub fn installed_for_version(&self, mesh_version: &str) -> Result<Vec<InstalledNativeRuntime>> {
+    pub(crate) fn installed_for_version(
+        &self,
+        mesh_version: &str,
+    ) -> Result<Vec<InstalledNativeRuntime>> {
         installed_in_version_dir(&self.root.join(mesh_version))
     }
 
