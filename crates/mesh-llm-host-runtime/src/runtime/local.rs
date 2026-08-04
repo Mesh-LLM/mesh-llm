@@ -296,7 +296,7 @@ pub(super) fn pinned_stage_device(
     }
 }
 
-fn resolve_local_openai_skippy_config(
+pub(super) fn resolve_local_openai_skippy_config(
     spec: &LocalOpenAiModelStartSpec<'_>,
     model_name: &str,
     model_bytes: u64,
@@ -584,10 +584,7 @@ pub(super) async fn start_local_openai_model(
         .as_ref()
         .map(|package| package.source_model_bytes)
         .unwrap_or_else(|| election::total_model_bytes(spec.model_path));
-    let my_vram = spec
-        .capacity_budget_bytes
-        .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
-        .unwrap_or_else(|| spec.node.local_runtime_capacity_bytes());
+    let my_vram = spec.capacity_budget_bytes;
 
     // For split/layer-package models, compute the local share of model weights
     // and the layer fraction so the context planner budgets correctly.

@@ -11,7 +11,7 @@ use crate::inference::election;
 use crate::plugin;
 use crate::runtime::survey;
 use crate::system::hardware;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_server::EmbeddedState;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
