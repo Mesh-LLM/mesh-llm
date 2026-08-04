@@ -241,6 +241,27 @@ could help a specific prompt. The data says that possibility is not worth the
 average-case cost at these scales; a per-turn admission signal (measured
 marginal contribution) could revisit it later, but tier is the safe default now.
 
+### But only when a committee survives the exclusion
+
+Arm C dropped the 8B from a pool that *still had two 32B*. The other case — one
+strong + one weak, where dropping the 8B collapses the pool to a solo 32B — is
+different, and admission must NOT drop there:
+
+| pool | vs solo 32B | length r |
+|---|---|---|
+| 32B + 8B, layered | 47W / 27T / 5L, p=1.3e-9 | −0.01 (clean) |
+| 32B + 8B, single-round | 40W / 31T / 8L, p=3.3e-6 | +0.02 |
+
+A mixed committee beats a solo strong model decisively. So the rule is not
+"drop small whenever a big is present" — it is **drop small only when ≥2 big
+remain**. Dropping to protect quality is right when a real committee is left; it
+is wrong when it would throw away MoA entirely.
+
+This is exactly the core mesh case: a modest node joining a single strong node
+*does* help (47/5), and admission control now keeps it. Adding a modest node to
+an *already-strong committee* does not help (arm C), and admission drops it.
+Both are handled by the same "≥2 big remain" gate.
+
 ## The problem with N=2 was scale, not count
 
 The N=2-8B null (below) suggested "two peers isn't enough". A mid-scale re-run

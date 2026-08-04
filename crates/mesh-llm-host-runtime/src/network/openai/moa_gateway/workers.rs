@@ -543,14 +543,24 @@ fn apply_admission_control(
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
 ) {
-    let has_big = models
+    let big_count = models
         .iter()
-        .any(|m| !moa::model_name_is_small_tier(&m.name));
+        .filter(|m| !moa::model_name_is_small_tier(&m.name))
+        .count();
     let has_small = models
         .iter()
         .any(|m| moa::model_name_is_small_tier(&m.name));
-    if !(has_big && has_small) {
-        return; // homogeneous-tier pool: nothing to exclude
+    // Only exclude small-tier workers when doing so still leaves a committee
+    // (>=2 big-tier). Measured:
+    //   * 32B x2 + 8B  -> dropping the 8B leaves 32B x2, and the 8B added
+    //     nothing (arm C: no upside, losses 2->5) — so drop it.
+    //   * 32B + 8B     -> dropping the 8B collapses to a solo 32B, but the
+    //     mixed committee beats solo decisively (47W/27T/5L, p=1e-9) — so
+    //     KEEP the 8B. Admission must not throw away MoA to protect a pool
+    //     that no longer exists.
+    // See `evals/moa-openrouter/RESULTS.md`.
+    if !(has_small && big_count >= 2) {
+        return;
     }
 
     let mut kept_backends: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
@@ -831,14 +841,26 @@ mod tests {
     }
 
     #[test]
-    fn admission_drops_small_when_big_present() {
-        let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-8B", "Ministral-8B"]);
+    fn admission_drops_small_when_two_big_remain() {
+        // Dropping the small workers still leaves a committee (2x 32B), and the
+        // small drafts add nothing there — so exclude them.
+        let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-32B", "Qwen3-8B", "Ministral-8B"]);
         apply_admission_control(&mut b, &mut m);
-        assert_eq!(m.len(), 1);
-        assert_eq!(m[0].name, "Qwen3-32B");
+        assert_eq!(m.len(), 2);
+        assert!(m.iter().all(|e| e.name == "Qwen3-32B"));
+        assert_eq!(b.len(), 2);
         // backends stay aligned and reindexed
-        assert_eq!(b.len(), 1);
         assert_eq!(m[0].backend_index, 0);
+        assert_eq!(m[1].backend_index, 1);
+    }
+
+    #[test]
+    fn admission_keeps_mix_when_dropping_would_collapse_to_solo() {
+        // One strong + one weak: dropping the 8B leaves a solo 32B, but the
+        // mixed committee beats solo (47W/27T/5L) — so keep the mix.
+        let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-8B"]);
+        apply_admission_control(&mut b, &mut m);
+        assert_eq!(m.len(), 2, "must not collapse a lone-strong pool to solo");
     }
 
     #[test]
