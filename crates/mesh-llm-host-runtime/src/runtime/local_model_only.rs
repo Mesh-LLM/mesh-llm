@@ -14,7 +14,7 @@ use crate::system::hardware;
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_server::EmbeddedState;
-use skippy_server::SharedModelServingHooksFactory;
+use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 

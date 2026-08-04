@@ -16,6 +16,7 @@ use crate::runtime::survey;
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
+use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -43,7 +44,7 @@ pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
-    pub(super) serving_hooks_factory: Option<skippy_server::SharedModelServingHooksFactory>,
+    pub(super) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
 }
 
 pub(super) struct SplitGenerationLoadSettings<'a> {

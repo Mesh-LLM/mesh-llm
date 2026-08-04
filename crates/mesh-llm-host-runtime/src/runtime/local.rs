@@ -18,6 +18,7 @@ use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
 use openai_frontend::OpenAiHookPolicy;
 use skippy_protocol::{FlashAttentionType, LoadMode};
+use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -257,7 +258,7 @@ pub(super) struct LocalOpenAiModelStartSpec<'a> {
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
     pub(super) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-    pub(super) serving_hooks_factory: Option<skippy_server::SharedModelServingHooksFactory>,
+    pub(super) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     pub(super) http_bind_addr: SocketAddr,
 }
 

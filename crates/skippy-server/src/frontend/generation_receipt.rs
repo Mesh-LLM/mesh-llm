@@ -91,9 +91,10 @@ pub struct GenerationAbort {
 
 /// A canonical target-token delta committed during an active generation.
 ///
-/// This is a model-neutral lifecycle event. It deliberately carries no
-/// consumer-specific state or evidence concept: consumers receive only the
-/// target-owned request identity, canonical position, and token delta.
+/// This is a model-neutral producer observation. It deliberately carries no
+/// consumer-specific state: integrations receive only the target-owned
+/// request identity, canonical position, and token delta. Normal runtime event
+/// adapters must reduce it to bounded counts rather than forwarding token IDs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerationCommit {
     pub request_id: u64,
@@ -105,13 +106,14 @@ pub struct GenerationCommit {
 
 /// Receives the complete local-generation lifecycle before runtime teardown.
 ///
-/// A successful `begin` is followed exactly once by either `record` or
-/// `abort`. Implementations can therefore advance durable request state
-/// without relying on an agent-specific hook.
+/// The producer submits a successful `begin` before exactly one `record` or
+/// `abort`. The compatibility adapter is bounded and may report delivery
+/// failures, so integrations that require shared ordering or custom
+/// backpressure should implement [`GenerationLifecycleIngress`] directly.
 pub trait GenerationReceiptSink: Send + Sync {
     fn begin(&self, start: &GenerationStart) -> Result<()>;
 
-    /// Delivers canonical target tokens before the next proposal lookup.
+    /// Observes canonical target tokens submitted before the next proposal lookup.
     fn committed(&self, commit: &GenerationCommit) -> Result<()>;
 
     fn abort(&self, abort: &GenerationAbort) -> Result<()>;
@@ -120,30 +122,65 @@ pub trait GenerationReceiptSink: Send + Sync {
     fn record(&self, receipt: &GenerationReceipt) -> Result<()>;
 }
 
-/// Optional local-generation observation.
+/// One producer-side observation from Skippy's authoritative generation path.
 ///
-/// The default configuration records exact token IDs and positions without exporting
-/// full model state. Full-state export is intended for exactness checks only: it is
-/// deliberately opt-in and must remain disabled for timed measurements.
-#[derive(Clone)]
-pub struct GenerationReceiptConfig {
-    sender: SyncSender<GenerationReceiptEvent>,
-    delivery_failures: Arc<AtomicU64>,
-    export_full_state: bool,
+/// This is deliberately not a runtime domain event or a consumer projection.
+/// Some variants contain exact token IDs for serving integrations that require
+/// canonical model evidence. An adapter into a normal runtime event pipeline
+/// must project only bounded, privacy-safe summaries and must not forward those
+/// token IDs or their prompt-derived digest.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GenerationLifecycleObservation {
+    Started(GenerationStart),
+    Committed(GenerationCommit),
+    Aborted(GenerationAbort),
+    Completed(GenerationReceipt),
 }
 
-impl GenerationReceiptConfig {
-    /// Creates receipt delivery with full-state export disabled.
-    pub fn new(sink: Arc<dyn GenerationReceiptSink>) -> Self {
+impl GenerationLifecycleObservation {
+    fn deliver_to(self, sink: &dyn GenerationReceiptSink) -> Result<()> {
+        match self {
+            Self::Started(start) => sink.begin(&start),
+            Self::Committed(commit) => sink.committed(&commit),
+            Self::Aborted(abort) => sink.abort(&abort),
+            Self::Completed(receipt) => sink.record(&receipt),
+        }
+    }
+}
+
+/// Nonblocking ingress for authoritative generation observations.
+///
+/// Implementations must copy or take ownership of the observation and return
+/// promptly. They must not perform formatting, I/O, telemetry export, or call
+/// arbitrary application subscribers inline. The future runtime event system
+/// can implement this boundary as an adapter into its bounded ingress without
+/// changing Skippy's generation loops.
+pub trait GenerationLifecycleIngress: Send + Sync {
+    fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()>;
+
+    /// Asynchronous delivery failures observed after a successful submission.
+    fn delivery_failures(&self) -> u64 {
+        0
+    }
+}
+
+struct QueuedGenerationReceiptSink {
+    sender: SyncSender<GenerationLifecycleObservation>,
+    delivery_failures: Arc<AtomicU64>,
+}
+
+impl QueuedGenerationReceiptSink {
+    fn new(sink: Arc<dyn GenerationReceiptSink>) -> Self {
         let (sender, receiver) =
-            sync_channel::<GenerationReceiptEvent>(GENERATION_RECEIPT_QUEUE_CAPACITY);
+            sync_channel::<GenerationLifecycleObservation>(GENERATION_RECEIPT_QUEUE_CAPACITY);
         let delivery_failures = Arc::new(AtomicU64::new(0));
         let worker_delivery_failures = Arc::clone(&delivery_failures);
         std::thread::Builder::new()
             .name("skippy-generation-receipts".into())
             .spawn(move || {
-                while let Ok(event) = receiver.recv() {
-                    if let Err(error) = event.deliver(sink.as_ref()) {
+                while let Ok(observation) = receiver.recv() {
+                    if let Err(error) = observation.deliver_to(sink.as_ref()) {
                         worker_delivery_failures.fetch_add(1, Ordering::Relaxed);
                         eprintln!("generation lifecycle delivery failed: {error:#}");
                     }
@@ -153,6 +190,56 @@ impl GenerationReceiptConfig {
         Self {
             sender,
             delivery_failures,
+        }
+    }
+}
+
+impl GenerationLifecycleIngress for QueuedGenerationReceiptSink {
+    fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()> {
+        self.sender
+            .try_send(observation)
+            .map_err(|error| match error {
+                TrySendError::Full(_) => anyhow::anyhow!("generation lifecycle queue is full"),
+                TrySendError::Disconnected(_) => {
+                    anyhow::anyhow!("generation lifecycle delivery worker is unavailable")
+                }
+            })
+    }
+
+    fn delivery_failures(&self) -> u64 {
+        self.delivery_failures.load(Ordering::Relaxed)
+    }
+}
+
+/// Optional local-generation observation.
+///
+/// The default configuration records exact token IDs and positions without exporting
+/// full model state. Full-state export is intended for exactness checks only: it is
+/// deliberately opt-in and must remain disabled for timed measurements.
+#[derive(Clone)]
+pub struct GenerationReceiptConfig {
+    ingress: Arc<dyn GenerationLifecycleIngress>,
+    submission_failures: Arc<AtomicU64>,
+    export_full_state: bool,
+}
+
+impl GenerationReceiptConfig {
+    /// Creates queued receipt delivery with full-state export disabled.
+    ///
+    /// The sink is always invoked from an isolated worker. Event-pipeline
+    /// integrations should use [`Self::from_lifecycle_ingress`] instead.
+    pub fn new(sink: Arc<dyn GenerationReceiptSink>) -> Self {
+        Self::from_lifecycle_ingress(Arc::new(QueuedGenerationReceiptSink::new(sink)))
+    }
+
+    /// Uses an existing bounded, nonblocking lifecycle ingress.
+    ///
+    /// This avoids adding a second queue when the host already owns delivery,
+    /// ordering, backpressure, and health accounting.
+    pub fn from_lifecycle_ingress(ingress: Arc<dyn GenerationLifecycleIngress>) -> Self {
+        Self {
+            ingress,
+            submission_failures: Arc::new(AtomicU64::new(0)),
             export_full_state: false,
         }
     }
@@ -169,53 +256,33 @@ impl GenerationReceiptConfig {
         self.export_full_state
     }
 
-    /// Number of lifecycle events that the queue could not accept or the sink rejected.
+    /// Number of rejected submissions or asynchronous downstream delivery failures.
     pub fn delivery_failures(&self) -> u64 {
-        self.delivery_failures.load(Ordering::Relaxed)
+        self.submission_failures
+            .load(Ordering::Relaxed)
+            .saturating_add(self.ingress.delivery_failures())
     }
 
     pub(crate) fn begin(&self, start: GenerationStart) {
-        self.enqueue(GenerationReceiptEvent::Begin(start));
+        self.enqueue(GenerationLifecycleObservation::Started(start));
     }
 
     pub(crate) fn committed(&self, commit: GenerationCommit) {
-        self.enqueue(GenerationReceiptEvent::Committed(commit));
+        self.enqueue(GenerationLifecycleObservation::Committed(commit));
     }
 
     pub(crate) fn abort(&self, abort: GenerationAbort) {
-        self.enqueue(GenerationReceiptEvent::Abort(abort));
+        self.enqueue(GenerationLifecycleObservation::Aborted(abort));
     }
 
     pub(crate) fn record(&self, receipt: GenerationReceipt) {
-        self.enqueue(GenerationReceiptEvent::Record(receipt));
+        self.enqueue(GenerationLifecycleObservation::Completed(receipt));
     }
 
-    fn enqueue(&self, event: GenerationReceiptEvent) {
-        if let Err(error) = self.sender.try_send(event) {
-            self.delivery_failures.fetch_add(1, Ordering::Relaxed);
-            let reason = match error {
-                TrySendError::Full(_) => "queue is full",
-                TrySendError::Disconnected(_) => "delivery worker is unavailable",
-            };
-            eprintln!("generation lifecycle delivery dropped: {reason}");
-        }
-    }
-}
-
-enum GenerationReceiptEvent {
-    Begin(GenerationStart),
-    Committed(GenerationCommit),
-    Abort(GenerationAbort),
-    Record(GenerationReceipt),
-}
-
-impl GenerationReceiptEvent {
-    fn deliver(self, sink: &dyn GenerationReceiptSink) -> Result<()> {
-        match self {
-            Self::Begin(start) => sink.begin(&start),
-            Self::Committed(commit) => sink.committed(&commit),
-            Self::Abort(abort) => sink.abort(&abort),
-            Self::Record(receipt) => sink.record(&receipt),
+    fn enqueue(&self, observation: GenerationLifecycleObservation) {
+        if let Err(error) = self.ingress.try_submit(observation) {
+            self.submission_failures.fetch_add(1, Ordering::Relaxed);
+            eprintln!("generation lifecycle observation dropped: {error:#}");
         }
     }
 }
@@ -468,6 +535,20 @@ mod tests {
         error: Option<&'static str>,
     }
 
+    #[derive(Default)]
+    struct RecordingIngress {
+        observations: Mutex<Vec<GenerationLifecycleObservation>>,
+        error: Option<&'static str>,
+    }
+
+    impl GenerationLifecycleIngress for RecordingIngress {
+        fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()> {
+            self.observations.lock().unwrap().push(observation);
+            self.error
+                .map_or(Ok(()), |error| Err(anyhow::anyhow!(error)))
+        }
+    }
+
     impl GenerationReceiptSink for RecordingSink {
         fn begin(&self, _start: &GenerationStart) -> Result<()> {
             Ok(())
@@ -510,6 +591,53 @@ mod tests {
             ]
         );
         assert_ne!(digest, generation_token_id_digest(&[0, -1, 1, i32::MAX]));
+    }
+
+    #[test]
+    fn typed_ingress_preserves_authoritative_observation_order_without_an_adapter_queue() {
+        let ingress = Arc::new(RecordingIngress::default());
+        let config = GenerationReceiptConfig::from_lifecycle_ingress(ingress.clone());
+        config.begin(GenerationStart {
+            request_id: 1,
+            session_id: 2,
+            agent_session_id: None,
+            prompt_token_ids: vec![3, 4].into_boxed_slice(),
+        });
+        config.committed(GenerationCommit {
+            request_id: 1,
+            session_id: 2,
+            generated_token_count: 1,
+            token_ids: vec![5].into_boxed_slice(),
+        });
+        config.abort(GenerationAbort {
+            request_id: 1,
+            session_id: 2,
+        });
+
+        let observations = ingress.observations.lock().unwrap();
+        assert!(matches!(
+            observations.as_slice(),
+            [
+                GenerationLifecycleObservation::Started(_),
+                GenerationLifecycleObservation::Committed(_),
+                GenerationLifecycleObservation::Aborted(_)
+            ]
+        ));
+        assert_eq!(config.delivery_failures(), 0);
+    }
+
+    #[test]
+    fn typed_ingress_rejection_is_accounted_without_failing_generation() {
+        let ingress = Arc::new(RecordingIngress {
+            observations: Mutex::new(Vec::new()),
+            error: Some("ingress full"),
+        });
+        let config = GenerationReceiptConfig::from_lifecycle_ingress(ingress);
+        config.abort(GenerationAbort {
+            request_id: 1,
+            session_id: 2,
+        });
+        assert_eq!(config.delivery_failures(), 1);
     }
 
     #[test]

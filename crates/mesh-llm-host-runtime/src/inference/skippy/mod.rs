@@ -31,6 +31,7 @@ use openai_frontend::{
 };
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageDevice, StageKvCacheConfig};
 use skippy_runtime::ModelInfo;
+use skippy_server::serving_hooks::{ModelServingHooks, SharedModelServingHooksFactory};
 use skippy_server::{
     DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs, EmbeddedRuntimeOptions, EmbeddedRuntimeStatus,
     EmbeddedServerHandle, EmbeddedState, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
@@ -190,7 +191,7 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) telemetry: SkippyTelemetryOptions,
     pub(crate) openai_guardrails: Option<OpenAiGuardrailsConfig>,
     pub(crate) native_mtp_enabled: bool,
-    pub(crate) serving_hooks_factory: Option<skippy_server::SharedModelServingHooksFactory>,
+    pub(crate) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
 }
 
 #[derive(Clone, Debug)]
@@ -381,7 +382,7 @@ impl SkippyModelLoadOptions {
 
     pub(crate) fn with_serving_hooks_factory(
         mut self,
-        factory: Option<skippy_server::SharedModelServingHooksFactory>,
+        factory: Option<SharedModelServingHooksFactory>,
     ) -> Self {
         self.serving_hooks_factory = factory;
         self
@@ -456,7 +457,7 @@ fn embedded_openai_args_from(
     prediction_returns: Option<Arc<PredictionReturnHub>>,
     telemetry: Telemetry,
     hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-    serving_hooks: &crate::ModelServingHooks,
+    serving_hooks: &ModelServingHooks,
 ) -> Result<EmbeddedOpenAiArgs> {
     Ok(EmbeddedOpenAiArgs {
         bind_addr: "127.0.0.1:0"
@@ -498,11 +499,11 @@ fn embedded_openai_args_from(
 }
 
 fn resolve_serving_hooks(
-    factory: Option<&skippy_server::SharedModelServingHooksFactory>,
+    factory: Option<&SharedModelServingHooksFactory>,
     runtime: &SkippyRuntimeHandle,
-) -> Result<crate::ModelServingHooks> {
+) -> Result<ModelServingHooks> {
     let Some(factory) = factory else {
-        return Ok(crate::ModelServingHooks::default());
+        return Ok(ModelServingHooks::default());
     };
     let tokenizer = runtime
         .tokenizer_capability()
@@ -728,7 +729,7 @@ impl SkippyModelHandle {
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         guardrails: SkippyOpenAiGuardrailOptions,
-        serving_hooks_factory: Option<skippy_server::SharedModelServingHooksFactory>,
+        serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;
@@ -829,7 +830,7 @@ impl SkippyModelHandle {
         telemetry: SkippyTelemetryOptions,
         model_open_event_reporter: Option<NativeModelOpenEventReporter>,
         guardrails: SkippyOpenAiGuardrailOptions,
-        serving_hooks_factory: Option<skippy_server::SharedModelServingHooksFactory>,
+        serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;

@@ -38,7 +38,6 @@ pub use mesh::requirements::{
     NodeVersionBounds, PeerReleaseAttestationStatus, ProtocolGenerationBounds,
     ReleaseAttestationRequirement, SignedBootstrapToken, SignedMeshGenesisPolicy,
 };
-pub use skippy_server::{ModelServingHooks, ModelServingHooksFactory};
 use std::path::Path;
 
 pub const BUILD_VERSION: &str = mesh_llm_build_info::BUILD_VERSION;

@@ -6,6 +6,7 @@ use std::{
     ptr::NonNull,
     sync::{
         Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
         mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
     },
     thread::{self, JoinHandle},
@@ -15,13 +16,15 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use libloading::Library;
 use mesh_native_serving_plugin_api as abi;
-use skippy_server::{
-    GenerationAbort, GenerationCommit, GenerationReceipt, GenerationReceiptConfig,
-    GenerationReceiptSink, GenerationStart, LinearProposal, LinearProposalDiscardReason,
-    LinearProposalDisposition, LinearProposalIngress, LinearProposalIngressConfig,
-    LinearProposalQuery, LinearProposalReceipt, ModelServingHooks, ModelServingHooksFactory,
-    OpaqueProposalDecisionId, TokenizerCapability,
+use skippy_server::frontend::{
+    GenerationAbort, GenerationCommit, GenerationLifecycleIngress, GenerationLifecycleObservation,
+    GenerationReceipt, GenerationReceiptConfig, GenerationStart, LinearProposal,
+    LinearProposalDiscardReason, LinearProposalDisposition, LinearProposalIngress,
+    LinearProposalIngressConfig, LinearProposalQuery, LinearProposalReceipt,
+    OpaqueProposalDecisionId,
 };
+use skippy_server::serving_hooks::{ModelServingHooks, ModelServingHooksFactory};
+use skippy_server::tokenizer::TokenizerCapability;
 
 const ERROR_BUFFER_BYTES: usize = 2_048;
 const PLUGIN_COMMAND_CAPACITY: usize = 1_024;
@@ -114,12 +117,12 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
             instance: Some(instance),
         };
         let driver = Arc::new(PluginDriver::spawn(active)?);
-        let receipts: Arc<dyn GenerationReceiptSink> = Arc::new(NativeReceiptSink {
+        let lifecycle: Arc<dyn GenerationLifecycleIngress> = Arc::new(NativeLifecycleIngress {
             driver: Arc::clone(&driver),
         });
         let proposals: Arc<dyn LinearProposalIngress> = Arc::new(NativeProposalIngress { driver });
         Ok(ModelServingHooks::new(
-            GenerationReceiptConfig::new(receipts),
+            GenerationReceiptConfig::from_lifecycle_ingress(lifecycle),
             LinearProposalIngressConfig::new(proposals, deadline, usize::MAX)?,
         ))
     }
@@ -401,28 +404,24 @@ impl Drop for ActivePlugin {
     }
 }
 
-struct NativeReceiptSink {
+struct NativeLifecycleIngress {
     driver: Arc<PluginDriver>,
 }
 
-impl GenerationReceiptSink for NativeReceiptSink {
-    fn begin(&self, start: &GenerationStart) -> Result<()> {
-        self.driver.enqueue(PluginCommand::Begin(start.clone()))
+impl GenerationLifecycleIngress for NativeLifecycleIngress {
+    fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()> {
+        let command = match observation {
+            GenerationLifecycleObservation::Started(start) => PluginCommand::Begin(start),
+            GenerationLifecycleObservation::Committed(commit) => PluginCommand::Committed(commit),
+            GenerationLifecycleObservation::Aborted(abort) => PluginCommand::Abort(abort),
+            GenerationLifecycleObservation::Completed(receipt) => PluginCommand::Finish(receipt),
+            _ => return Ok(()),
+        };
+        self.driver.enqueue(command)
     }
 
-    fn committed(&self, commit: &GenerationCommit) -> Result<()> {
-        self.driver
-            .enqueue(PluginCommand::Committed(commit.clone()))
-    }
-
-    fn abort(&self, abort: &GenerationAbort) -> Result<()> {
-        self.driver
-            .terminal(|reply| PluginCommand::Abort(*abort, reply))
-    }
-
-    fn record(&self, receipt: &GenerationReceipt) -> Result<()> {
-        self.driver
-            .terminal(|reply| PluginCommand::Finish(receipt.clone(), reply))
+    fn delivery_failures(&self) -> u64 {
+        self.driver.lifecycle_delivery_failures()
     }
 }
 
@@ -454,11 +453,8 @@ impl LinearProposalIngress for NativeProposalIngress {
 enum PluginCommand {
     Begin(GenerationStart),
     Committed(GenerationCommit),
-    Abort(GenerationAbort, SyncSender<std::result::Result<(), String>>),
-    Finish(
-        GenerationReceipt,
-        SyncSender<std::result::Result<(), String>>,
-    ),
+    Abort(GenerationAbort),
+    Finish(GenerationReceipt),
     Proposal(
         LinearProposalQuery,
         SyncSender<std::result::Result<Option<LinearProposal>, String>>,
@@ -471,6 +467,7 @@ enum PluginCommand {
 struct PluginDriver {
     sender: SyncSender<PluginCommand>,
     fatal_error: Arc<Mutex<Option<String>>>,
+    lifecycle_delivery_failures: Arc<AtomicU64>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -479,13 +476,23 @@ impl PluginDriver {
         let (sender, receiver) = sync_channel(PLUGIN_COMMAND_CAPACITY);
         let fatal_error = Arc::new(Mutex::new(None));
         let worker_fatal_error = Arc::clone(&fatal_error);
+        let lifecycle_delivery_failures = Arc::new(AtomicU64::new(0));
+        let worker_lifecycle_delivery_failures = Arc::clone(&lifecycle_delivery_failures);
         let worker = thread::Builder::new()
             .name("mesh-native-serving-plugin".to_string())
-            .spawn(move || plugin_worker(active, receiver, worker_fatal_error))
+            .spawn(move || {
+                plugin_worker(
+                    active,
+                    receiver,
+                    worker_fatal_error,
+                    worker_lifecycle_delivery_failures,
+                );
+            })
             .context("spawn native serving plugin worker")?;
         Ok(Self {
             sender,
             fatal_error,
+            lifecycle_delivery_failures,
             worker: Mutex::new(Some(worker)),
         })
     }
@@ -509,16 +516,8 @@ impl PluginDriver {
         })
     }
 
-    fn terminal(
-        &self,
-        command: impl FnOnce(SyncSender<std::result::Result<(), String>>) -> PluginCommand,
-    ) -> Result<()> {
-        let (reply, response) = sync_channel(1);
-        self.enqueue(command(reply))?;
-        response
-            .recv_timeout(CLEAN_SHUTDOWN_TIMEOUT)
-            .context("native serving plugin terminal callback timed out")?
-            .map_err(anyhow::Error::msg)
+    fn lifecycle_delivery_failures(&self) -> u64 {
+        self.lifecycle_delivery_failures.load(Ordering::Relaxed)
     }
 
     fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
@@ -564,21 +563,14 @@ fn plugin_worker(
     mut active: ActivePlugin,
     receiver: Receiver<PluginCommand>,
     fatal_error: Arc<Mutex<Option<String>>>,
+    lifecycle_delivery_failures: Arc<AtomicU64>,
 ) {
     while let Ok(command) = receiver.recv() {
-        let (result, terminal) = match command {
-            PluginCommand::Begin(event) => (active.begin(&event), false),
-            PluginCommand::Committed(event) => (active.committed(&event), false),
-            PluginCommand::Abort(event, reply) => {
-                let result = active.abort(&event);
-                let _ = reply.send(result.as_ref().map(|_| ()).map_err(ToString::to_string));
-                (result, false)
-            }
-            PluginCommand::Finish(event, reply) => {
-                let result = active.finish(&event);
-                let _ = reply.send(result.as_ref().map(|_| ()).map_err(ToString::to_string));
-                (result, false)
-            }
+        let (result, terminal, lifecycle) = match command {
+            PluginCommand::Begin(event) => (active.begin(&event), false, true),
+            PluginCommand::Committed(event) => (active.committed(&event), false, true),
+            PluginCommand::Abort(event) => (active.abort(&event), false, true),
+            PluginCommand::Finish(event) => (active.finish(&event), false, true),
             PluginCommand::Proposal(query, reply) => {
                 let result = active.propose(query);
                 let _ = reply.send(
@@ -587,18 +579,21 @@ fn plugin_worker(
                         .map(Clone::clone)
                         .map_err(ToString::to_string),
                 );
-                (result.map(|_| ()), false)
+                (result.map(|_| ()), false, false)
             }
-            PluginCommand::Report(event) => (active.report(&event), false),
+            PluginCommand::Report(event) => (active.report(&event), false, false),
             PluginCommand::Discard(decision_id, reason) => {
-                (active.discard(&decision_id, reason), false)
+                (active.discard(&decision_id, reason), false, false)
             }
             PluginCommand::Shutdown(reply) => {
                 let result = active.shutdown();
                 let _ = reply.send(result.as_ref().map(|_| ()).map_err(ToString::to_string));
-                (result, true)
+                (result, true, false)
             }
         };
+        if lifecycle && result.is_err() {
+            lifecycle_delivery_failures.fetch_add(1, Ordering::Relaxed);
+        }
         if let Err(error) = result
             && let Ok(mut fatal) = fatal_error.lock()
         {
@@ -635,13 +630,19 @@ fn proposal_from_output(
     ))
 }
 
-fn convert_termination(value: skippy_server::GenerationTermination) -> abi::GenerationTermination {
+fn convert_termination(
+    value: skippy_server::frontend::GenerationTermination,
+) -> abi::GenerationTermination {
     match value {
-        skippy_server::GenerationTermination::CallbackStop => {
+        skippy_server::frontend::GenerationTermination::CallbackStop => {
             abi::GenerationTermination::CALLBACK_STOP
         }
-        skippy_server::GenerationTermination::MaxTokens => abi::GenerationTermination::MAX_TOKENS,
-        skippy_server::GenerationTermination::Cancelled => abi::GenerationTermination::CANCELLED,
+        skippy_server::frontend::GenerationTermination::MaxTokens => {
+            abi::GenerationTermination::MAX_TOKENS
+        }
+        skippy_server::frontend::GenerationTermination::Cancelled => {
+            abi::GenerationTermination::CANCELLED
+        }
         _ => abi::GenerationTermination::CANCELLED,
     }
 }
@@ -720,6 +721,7 @@ mod tests {
 
     struct FakeState {
         start_delay: Duration,
+        events: Arc<Mutex<Vec<&'static str>>>,
     }
 
     unsafe extern "C" fn fake_activate(
@@ -737,16 +739,20 @@ mod tests {
     }
 
     unsafe extern "C" fn fake_begin(
-        _instance: abi::PluginInstance,
+        instance: abi::PluginInstance,
         _event: *const abi::GenerationStart,
     ) -> abi::PluginStatus {
+        let state = unsafe { &*instance.cast::<FakeState>() };
+        state.events.lock().unwrap().push("begin");
         abi::PluginStatus::OK
     }
 
     unsafe extern "C" fn fake_commit(
-        _instance: abi::PluginInstance,
+        instance: abi::PluginInstance,
         _event: *const abi::GenerationCommit,
     ) -> abi::PluginStatus {
+        let state = unsafe { &*instance.cast::<FakeState>() };
+        state.events.lock().unwrap().push("commit");
         abi::PluginStatus::OK
     }
 
@@ -770,6 +776,7 @@ mod tests {
         operation: *mut abi::ProposalOperation,
     ) -> abi::PluginStatus {
         let state = unsafe { &*instance.cast::<FakeState>() };
+        state.events.lock().unwrap().push("proposal");
         thread::sleep(state.start_delay);
         unsafe { *operation = 1 };
         abi::PluginStatus::OK
@@ -833,17 +840,30 @@ mod tests {
     }
 
     fn fake_active(start_delay: Duration) -> ActivePlugin {
+        fake_active_with_events(start_delay).0
+    }
+
+    fn fake_active_with_events(
+        start_delay: Duration,
+    ) -> (ActivePlugin, Arc<Mutex<Vec<&'static str>>>) {
         let table = Box::leak(Box::new(fake_table()));
         let definition = Arc::new(LoadedDefinition {
             _library: None,
             api: NonNull::from(table),
             name: "test-serving-plugin".to_string(),
         });
-        let state = Box::new(FakeState { start_delay });
-        ActivePlugin {
-            definition,
-            instance: NonNull::new(Box::into_raw(state).cast::<c_void>()),
-        }
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let state = Box::new(FakeState {
+            start_delay,
+            events: Arc::clone(&events),
+        });
+        (
+            ActivePlugin {
+                definition,
+                instance: NonNull::new(Box::into_raw(state).cast::<c_void>()),
+            },
+            events,
+        )
     }
 
     #[test]
@@ -922,5 +942,45 @@ mod tests {
         );
         drop(driver);
         assert_eq!(CANCEL_COUNT.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn lifecycle_ingress_shares_plugin_queue_order_with_proposals() {
+        let (active, events) = fake_active_with_events(Duration::ZERO);
+        let driver = Arc::new(PluginDriver::spawn(active).unwrap());
+        let ingress = NativeLifecycleIngress {
+            driver: Arc::clone(&driver),
+        };
+        ingress
+            .try_submit(GenerationLifecycleObservation::Started(GenerationStart {
+                request_id: 1,
+                session_id: 2,
+                agent_session_id: None,
+                prompt_token_ids: vec![3].into_boxed_slice(),
+            }))
+            .unwrap();
+        ingress
+            .try_submit(GenerationLifecycleObservation::Committed(
+                GenerationCommit {
+                    request_id: 1,
+                    session_id: 2,
+                    generated_token_count: 1,
+                    token_ids: vec![4].into_boxed_slice(),
+                },
+            ))
+            .unwrap();
+        driver
+            .propose(LinearProposalQuery::new(
+                1,
+                2,
+                1,
+                1,
+                0,
+                8,
+                Instant::now() + Duration::from_millis(100),
+            ))
+            .unwrap();
+
+        assert_eq!(*events.lock().unwrap(), ["begin", "commit", "proposal"]);
     }
 }

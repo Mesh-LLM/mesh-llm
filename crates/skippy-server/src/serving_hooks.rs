@@ -2,7 +2,10 @@ use std::{fmt, sync::Arc};
 
 use anyhow::Result;
 
-use crate::{GenerationReceiptConfig, LinearProposalIngressConfig, TokenizerCapability};
+use crate::{
+    frontend::{GenerationReceiptConfig, LinearProposalIngressConfig},
+    tokenizer::TokenizerCapability,
+};
 
 /// Constructs product-neutral serving hooks after Skippy has loaded the model
 /// and can expose its authoritative tokenizer capability.
@@ -79,7 +82,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use crate::{
+    use crate::frontend::{
         GenerationAbort, GenerationCommit, GenerationReceipt, GenerationReceiptSink,
         GenerationStart, LinearProposal, LinearProposalIngress, LinearProposalQuery,
         LinearProposalReceipt,
