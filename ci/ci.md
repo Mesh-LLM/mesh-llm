@@ -267,7 +267,10 @@ flowchart TD
   that downstream smoke jobs consume before long validation groups finish.
   Every affected Rust workspace crate is assigned to a generated
   `rust_crate_tests` matrix and runs its complete `cargo test -p <crate>` suite;
-  protocol compatibility and Skippy smoke remain separate integration rows.
+  the shard containing `skippy-runtime` downloads the public Qwen3 correctness
+  fixture and sets `SKIPPY_CORRECTNESS_MODEL`, so the model-backed grammar
+  equivalence test runs instead of being skipped; protocol compatibility and
+  Skippy smoke remain separate integration rows.
   Linux host/CPU-runtime and macOS host/Metal-runtime producers run
   independently, and their product composers never compile. Linux backend rows
   are split into one independent CUDA, ROCm, or Vulkan runtime producer plus

@@ -425,6 +425,9 @@ bulk Cargo target caches retain cross-run reuse. Other producer and grouped-test
 jobs remain remote-enabled. An explicitly authorized Depot call selects
 `disk,webdav` before that GHA opt-out. Swift restores a
 mode-independent Rust dependency cache that only trusted main pushes save.
+The main and PR `rust_crate_tests` shard containing `skippy-runtime` downloads
+the public Qwen3 correctness fixture and exposes `SKIPPY_CORRECTNESS_MODEL` to
+the crate tests; this fixture does not require `HF_TOKEN`.
 Persistent Cargo target and ABI reuse remains owned by
 `Swatinem/rust-cache` and `actions/cache`. Current PR jobs use the normal
 `mesh-llm` key namespace; native `actions/cache` writes remain merge-ref scoped,

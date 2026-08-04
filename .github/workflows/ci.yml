@@ -451,8 +451,21 @@ jobs:
           path: ${{ runner.temp }}/static-abi-input
       - name: Restore immutable static ABI input
         run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
+      - name: Download Skippy correctness model
+        if: ${{ contains(matrix.batch.crates, 'skippy-runtime') }}
+        env:
+          SKIPPY_CORRECTNESS_MODEL: ${{ runner.temp }}/skippy-correctness-model/Qwen3-0.6B-Q4_K_M.gguf
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/skippy-correctness-model"
+          hf download \
+            jc-builds/Qwen3-0.6B-Q4_K_M-GGUF \
+            Qwen3-0.6B-Q4_K_M.gguf \
+            --local-dir "$RUNNER_TEMP/skippy-correctness-model"
+          test -s "$SKIPPY_CORRECTNESS_MODEL"
       - name: Run crate tests
         env:
+          SKIPPY_CORRECTNESS_MODEL: ${{ runner.temp }}/skippy-correctness-model/Qwen3-0.6B-Q4_K_M.gguf
           TEST_CRATES: ${{ toJson(matrix.batch.crates) }}
         run: |
           mapfile -t crates < <(jq -r '.[]' <<<"$TEST_CRATES")

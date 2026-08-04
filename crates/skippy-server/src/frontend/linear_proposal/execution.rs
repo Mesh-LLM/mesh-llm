@@ -261,13 +261,22 @@ impl StageOpenAiBackend {
             prompt_token_count,
         } = params;
         if canonical_position >= position_after_verification {
+            let retire_timer = Instant::now();
+            let retire_lock_timer = Instant::now();
             let mut runtime = self.runtime.lock().map_err(|_| {
                 OpenAiError::backend("runtime lock poisoned during verify retirement")
             })?;
+            let runtime_lock_wait_us = elapsed_us(retire_lock_timer);
+            let retire_hold_timer = Instant::now();
             runtime
                 .retire_verify_checkpoint(session_id, checkpoint_start, checkpoint_count as u64)
                 .map_err(openai_backend_error)?;
-            return Ok(LinearProposalRepairTiming::default());
+            return Ok(LinearProposalRepairTiming {
+                elapsed_us: elapsed_us(retire_timer),
+                runtime_lock_wait_us,
+                runtime_lock_hold_us: elapsed_us(retire_hold_timer),
+                runtime_lock_acquires: 1,
+            });
         }
 
         let repair_timer = Instant::now();

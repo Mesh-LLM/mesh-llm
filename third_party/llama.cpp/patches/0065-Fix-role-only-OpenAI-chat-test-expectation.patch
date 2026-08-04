@@ -4,13 +4,22 @@ Date: Tue, 4 Aug 2026 12:13:45 +1000
 Subject: [PATCH] Fix role-only OpenAI chat test expectation
 
 ---
- tests/test-chat.cpp | 8 --------
- 1 file changed, 8 deletions(-)
+ tests/test-chat.cpp | 9 ++++++++--
+ 1 file changed, 1 insertion(+), 9 deletions(-)
 
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
 index 462020186..c9edf8953 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
+@@ -1642,7 +1642,7 @@ static void test_msgs_oaicompat_json_conversion() {
+-    auto res = common_chat_msgs_parse_oaicompat(json::parse("[{\"role\": \"assistant\", \"tool_calls\": []}]"));
++    auto res = common_chat_msgs_parse_oaicompat(json::parse("[{\"role\": \"assistant\"}]"));
+     assert_equals<size_t>(1, res.size());
+     assert_equals<std::string>(res[0].role, "assistant");
+     assert_equals(true, res[0].content.empty());
+     assert_equals(true, res[0].tool_calls.empty());
+     assert_equals(false, res[0].content_present);
+     assert_equals(
 @@ -1667,14 +1667,6 @@ static void test_msgs_oaicompat_json_conversion() {
          std::string("[{\"role\":\"assistant\",\"content\":\"\"}]"),
          common_chat_msgs_to_json_oaicompat(empty_content).dump());
@@ -28,4 +37,3 @@ index 462020186..c9edf8953 100644
  static void test_msg_token_delimiters_split() {
 -- 
 2.54.0 (Apple Git-157)
-

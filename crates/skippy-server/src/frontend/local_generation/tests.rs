@@ -16,7 +16,9 @@ use crate::frontend::generation::{
     LocalGeneration, OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds, StageOpenAiBackend,
     TokenControl,
 };
-use crate::frontend::local_generation::prompt_fits_single_prefill_sample;
+use crate::frontend::local_generation::{
+    native_mtp_dispatch_counts_for_test, prompt_fits_single_prefill_sample,
+};
 use crate::frontend::{
     EmbeddedOpenAiRequestDefaults, GenerationReceipt, GenerationReceiptConfig,
     GenerationReceiptSink, GenerationTermination,
@@ -50,9 +52,9 @@ fn single_prefill_sample_requires_prompt_to_fit_session_batch() {
 
 #[test]
 fn local_native_mtp_decode_uses_non_frame_runtime_api() {
-    let source = include_str!("token_generation.rs");
-    assert!(source.contains(concat!(".decode", "_sampled_mtp(")));
-    assert!(!source.contains(concat!(".decode_frame", "_sampled_mtp(")));
+    let (sampled_calls, frame_calls) = native_mtp_dispatch_counts_for_test();
+    assert_eq!(sampled_calls, 1);
+    assert_eq!(frame_calls, 0);
 }
 
 #[test]

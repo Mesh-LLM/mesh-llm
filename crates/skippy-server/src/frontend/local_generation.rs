@@ -2,6 +2,9 @@
 mod tests;
 mod token_generation;
 
+#[cfg(test)]
+pub(super) use token_generation::native_mtp_dispatch_counts_for_test;
+
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation_receipt::{
