@@ -638,18 +638,23 @@ pub(super) fn build_startup_model_specs(
         return Ok(specs);
     }
 
+    let default_model_path = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.hardware.as_ref())
+        .and_then(|hardware| hardware.model_path.as_ref());
+    if config.models.len() > 1 && default_model_path.is_some() {
+        anyhow::bail!(
+            "defaults.hardware.model_path cannot be used when multiple logical models are configured; set hardware.model_path on each model"
+        );
+    }
+
     for model in &config.models {
         let configured_model_path = model
             .hardware
             .as_ref()
             .and_then(|hardware| hardware.model_path.as_ref())
-            .or_else(|| {
-                config
-                    .defaults
-                    .as_ref()
-                    .and_then(|defaults| defaults.hardware.as_ref())
-                    .and_then(|hardware| hardware.model_path.as_ref())
-            });
+            .or(default_model_path);
         let (model_ref, declared_ref) = if let Some(configured_path) = configured_model_path {
             let path = PathBuf::from(configured_path);
             if !path.is_absolute() {
