@@ -106,6 +106,7 @@ pub async fn try_handle_moa(
 }
 
 pub(in crate::network::openai) mod context_selection;
+mod pool;
 mod progress;
 mod streaming;
 mod workers;
