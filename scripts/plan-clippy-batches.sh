@@ -67,6 +67,8 @@ WORKSPACE_MEMBERS=(
   "skippy-bench"
   "skippy-prompt"
   "mesh-mixture-of-agents"
+  "mesh-native-serving-plugin-api"
+  "mesh-native-serving-plugin-host"
   "xtask"
 )
 
@@ -173,6 +175,8 @@ weights = {
     "mesh-llm-plugin": 2,
     "mesh-llm-skills": 1,
     "mesh-llm-plugin-manager": 1,
+    "mesh-native-serving-plugin-api": 1,
+    "mesh-native-serving-plugin-host": 2,
     "mesh-llm-node": 2,
     "mesh-llm-nodejs": 2,
     "skippy-protocol": 2,

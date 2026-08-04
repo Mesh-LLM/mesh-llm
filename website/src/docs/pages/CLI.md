@@ -133,6 +133,31 @@ curl -s localhost:9337/v1/models | jq '.data[].id'
 See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) for the complete state,
 draining, activity, privacy, and compatibility model.
 
+### Native serving integrations
+
+`mesh-llm serve --local-model-only` can host one native serving integration for
+an embedded product component. Mesh owns model execution, tokenization,
+verification, and the OpenAI-compatible endpoint; the integration receives the
+authoritative generation lifecycle and may submit proposals before Mesh's
+configured hard deadline. It cannot delay normal decoding: late or unavailable
+work is ignored and generation continues normally.
+
+This is a versioned ABI for components compiled for the same Mesh release, not
+the general managed-plugin system. It requires all four explicit values below:
+
+```bash
+mesh-llm serve --local-model-only \
+  --native-serving-plugin /absolute/path/to/libintegration.dylib \
+  --native-serving-plugin-config /absolute/path/to/integration.json \
+  --native-serving-plugin-state /absolute/path/to/state \
+  --native-serving-plugin-deadline-ms 8
+```
+
+Mesh validates the ABI and the complete local-model contract before starting.
+The state directory belongs to the integration and must be durable. Use the
+ordinary `serve` command without these options when no native integration is
+needed.
+
 ### `setup`
 
 Use this to finish a fresh install after the executable is on your `PATH`.

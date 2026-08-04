@@ -477,6 +477,31 @@ pub struct Cli {
     #[arg(long)]
     pub local_model_only: bool,
 
+    /// Load a native serving plugin into the dedicated local-model path.
+    #[arg(
+        long,
+        hide = true,
+        requires = "local_model_only",
+        requires_all = [
+            "native_serving_plugin_config",
+            "native_serving_plugin_state",
+            "native_serving_plugin_deadline_ms"
+        ]
+    )]
+    pub native_serving_plugin: Option<PathBuf>,
+
+    /// Absolute path to the native serving plugin configuration.
+    #[arg(long, hide = true, requires = "native_serving_plugin")]
+    pub native_serving_plugin_config: Option<PathBuf>,
+
+    /// Absolute path to the native serving plugin state directory.
+    #[arg(long, hide = true, requires = "native_serving_plugin")]
+    pub native_serving_plugin_state: Option<PathBuf>,
+
+    /// Mesh-enforced hard proposal deadline in milliseconds.
+    #[arg(long, hide = true, requires = "native_serving_plugin")]
+    pub native_serving_plugin_deadline_ms: Option<u64>,
+
     /// Run as a client — no GPU, no model needed.
     #[arg(long)]
     pub client: bool,

@@ -14,6 +14,7 @@ use crate::system::hardware;
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_server::EmbeddedState;
+use skippy_server::SharedModelServingHooksFactory;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
@@ -84,11 +85,30 @@ pub(super) fn validate_local_model_only_options(options: &RuntimeOptions) -> Res
             "--max-vram must be a finite positive number"
         );
     }
+    match options.native_serving_plugin.as_ref() {
+        Some(_) => {
+            anyhow::ensure!(
+                options.native_serving_plugin_config.is_some()
+                    && options.native_serving_plugin_state.is_some()
+                    && options.native_serving_plugin_deadline_ms.is_some(),
+                "--native-serving-plugin requires config, state, and deadline options"
+            );
+        }
+        None => {
+            anyhow::ensure!(
+                options.native_serving_plugin_config.is_none()
+                    && options.native_serving_plugin_state.is_none()
+                    && options.native_serving_plugin_deadline_ms.is_none(),
+                "native serving plugin config, state, and deadline require --native-serving-plugin"
+            );
+        }
+    }
     Ok(())
 }
 
 pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<()> {
     validate_local_model_only_options(&options)?;
+    let serving_hooks_factory = native_serving_plugin_factory(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
     apply_runtime_config_options(&mut options, &config);
@@ -158,13 +178,43 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
         skippy_telemetry: skippy_telemetry_options(&options),
         survey_telemetry: survey::SurveyTelemetry::disabled(),
         hook_policy: None,
-        serving_hooks_factory: None,
+        serving_hooks_factory,
         http_bind_addr: bind_addr,
     };
 
     let result = run_loaded_local_model(launch, &model_name, bind_addr).await;
     cleanup_run_auto_runtime_dir(runtime);
     result
+}
+
+fn native_serving_plugin_factory(
+    options: &RuntimeOptions,
+) -> Result<Option<SharedModelServingHooksFactory>> {
+    let Some(library_path) = options.native_serving_plugin.as_deref() else {
+        return Ok(None);
+    };
+    let config_path = options
+        .native_serving_plugin_config
+        .clone()
+        .context("--native-serving-plugin-config is required")?;
+    let state_directory = options
+        .native_serving_plugin_state
+        .clone()
+        .context("--native-serving-plugin-state is required")?;
+    let deadline_ms = options
+        .native_serving_plugin_deadline_ms
+        .context("--native-serving-plugin-deadline-ms is required")?;
+    anyhow::ensure!(
+        deadline_ms > 0,
+        "--native-serving-plugin-deadline-ms must be greater than zero"
+    );
+    let factory = mesh_native_serving_plugin_host::NativeServingPluginFactory::load(
+        library_path,
+        config_path,
+        state_directory,
+        Duration::from_millis(deadline_ms),
+    )?;
+    Ok(Some(std::sync::Arc::new(factory)))
 }
 
 fn local_capacity_bytes(

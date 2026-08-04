@@ -188,7 +188,7 @@ fn maps_generation_exhaustion_to_length_finish_reason() {
 #[test]
 fn generation_ids_are_unique_under_fast_creation() {
     let ids = (0..1024)
-        .map(|_| OpenAiGenerationIds::new(OpenAiCacheHints::default()))
+        .map(|_| OpenAiGenerationIds::new(OpenAiCacheHints::default(), None))
         .collect::<Vec<_>>();
     let mut sessions = std::collections::BTreeSet::new();
     let mut requests = std::collections::BTreeSet::new();
