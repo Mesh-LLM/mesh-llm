@@ -477,10 +477,12 @@ mod tests {
             body["messages"][0]["content"][1]["input_audio"]["url"],
             "data:audio/wav;base64,abc"
         );
-        assert!(body["messages"][0]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("please transcribe this"));
+        assert!(
+            body["messages"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("please transcribe this")
+        );
     }
 
     #[test]
