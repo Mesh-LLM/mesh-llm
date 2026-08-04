@@ -1,0 +1,653 @@
+use super::*;
+
+impl RuntimeState {
+    pub fn prewarm_idle_sessions(
+        &mut self,
+        target_idle_sessions: usize,
+    ) -> Result<RuntimeSessionStats> {
+        while self.idle_sessions.len() < target_idle_sessions {
+            if self.sessions.len() + self.idle_sessions.len() >= self.lane_count as usize {
+                break;
+            }
+            let lane_session = self.create_lane_session()?;
+            self.idle_sessions.push(lane_session);
+        }
+        Ok(self.session_stats())
+    }
+
+    /// Release the session slot identified by `session_id`.
+    ///
+    /// This is the cleanup path called at the end of every chat
+    /// completion (success, cancellation, or backend error). It must
+    /// leave [`Self`] in a self-consistent state regardless of whether
+    /// the underlying StageSession can be reset cleanly:
+    ///
+    ///  - The lane is either returned to `idle_sessions` (reset OK) or
+    ///    dropped entirely (reset failed). Dropping the lane triggers
+    ///    `StageSession::drop`, which calls `skippy_session_free` on
+    ///    the C side — the authoritative path for releasing native KV
+    ///    cells held by that sequence id.
+    ///  - `session_token_counts` and `session_resident_prefixes` for
+    ///    `session_id` are always removed.
+    ///  - The function always returns `Ok` so per-request cleanup at
+    ///    callsites never propagates a reset failure as a request
+    ///    error. The outcome is reported via [`RuntimeSessionDropStats`]
+    ///    fields (`lane_discarded`, `lane_discard_reason`) for
+    ///    telemetry.
+    ///
+    /// Previously a reset error propagated `?` through this function,
+    /// which left `session_token_counts` holding stale entries and dropped the lane on the floor without
+    /// any record. That accumulated bookkeeping drift over time and
+    /// could leave the native KV cache reporting "all slots in use"
+    /// long after the owning sessions were gone, producing
+    /// `failed to find a memory slot` errors on subsequent admissions.
+    pub fn drop_session_timed(&mut self, session_id: &str) -> Result<RuntimeSessionDropStats> {
+        let reset_started = Instant::now();
+        let mut reset_session = false;
+        let preserved_resident_prefix = false;
+        let mut lane_discarded = false;
+        let mut lane_discard_reason: Option<String> = None;
+
+        if let Some(mut lane_session) = self.sessions.remove(session_id) {
+            let lane_index = lane_session.index;
+            // Always release the lane's native KV cells back to the
+            // unified pool. The trim+preserve path kept the lane's cells
+            // pinned to a specific (`page_id`, `token_count`) pair so a
+            // future request whose content prefix hashed to the *exact*
+            // same `page_id` AND same `token_count` could acquire the
+            // warm lane via `acquire_resident_prefix_lane`. Real chat /
+            // agent workloads vary the conversation tail every turn, so
+            // both the hash and the length change request-to-request and
+            // that exact-match acquisition almost never fires. Meanwhile
+            // the pinned cells remain claimed in the unified pool, in
+            // parallel with the cells the cache layer itself pins, and
+            // the pool runs out of contiguous space — producing
+            // `decode: failed to find a memory slot` under repeated
+            // tool-using agent traffic (#652). Cross-request prefix
+            // reuse is still done by the cache layer (by `page_id`); we
+            // just stop double-claiming cells on the lane side.
+            self.session_resident_prefixes.remove(session_id);
+            reset_session = true;
+            match lane_session.session.reset() {
+                Ok(()) => {
+                    lane_session.resident_prefix = None;
+                    self.idle_sessions.push(lane_session);
+                }
+                Err(reset_err) => {
+                    lane_discarded = true;
+                    let reason = format!("reset() failed ({reset_err:#})");
+                    eprintln!(
+                        "skippy::runtime_state: drop_session_timed: discarding lane {lane_index} for session {session_id}: {reason}"
+                    );
+                    lane_discard_reason = Some(reason);
+                    drop(lane_session);
+                    self.free_lane_indices.push(lane_index);
+                }
+            }
+        }
+
+        // Always clear per-session bookkeeping. The previous version
+        // skipped these when reset returned Err, which leaked entries.
+        //
+        // session_resident_prefixes is also cleared here defensively:
+        // it's already removed above on the active-session path, but
+        // calling drop_session_timed for an id that's no longer in
+        // `sessions` (idempotent cleanup, stale callers) must still
+        // clear any stray resident-prefix entry under that id.
+        self.session_token_counts.remove(session_id);
+        self.session_resident_prefixes.remove(session_id);
+
+        Ok(RuntimeSessionDropStats {
+            reset_session,
+            reset_ms: reset_started.elapsed().as_secs_f64() * 1000.0,
+            preserved_resident_prefix,
+            lane_discarded,
+            lane_discard_reason,
+            stats_after: self.session_stats(),
+        })
+    }
+
+    pub fn session_stats(&self) -> RuntimeSessionStats {
+        let mut max_session_tokens = 0u64;
+        let mut total_session_tokens = 0u64;
+        let mut lanes = (0..self.lane_count as usize)
+            .map(|index| RuntimeSessionLaneStats {
+                index,
+                active: false,
+                session_id: None,
+                token_count: None,
+            })
+            .collect::<Vec<_>>();
+
+        for (session_id, lane_session) in &self.sessions {
+            if let Some(token_count) = self.session_token_counts.get(session_id).copied() {
+                max_session_tokens = max_session_tokens.max(token_count);
+                total_session_tokens = total_session_tokens.saturating_add(token_count);
+            }
+            if let Some(lane) = lanes.get_mut(lane_session.index) {
+                lane.active = true;
+                lane.session_id = Some(session_id.clone());
+                lane.token_count = self.session_token_counts.get(session_id).copied();
+            }
+        }
+
+        RuntimeSessionStats {
+            lane_count: self.lane_count as usize,
+            active_sessions: self.sessions.len(),
+            idle_sessions: self.idle_sessions.len(),
+            idle_resident_prefixes: self
+                .idle_sessions
+                .iter()
+                .filter(|idle| idle.resident_prefix.is_some())
+                .count(),
+            tracked_token_counts: self.session_token_counts.len(),
+            max_session_tokens,
+            total_session_tokens,
+            lanes,
+        }
+    }
+
+    pub(super) fn take_idle_session(&mut self) -> Option<RuntimeLaneSession> {
+        if let Some(index) = self
+            .idle_sessions
+            .iter()
+            .position(|idle| idle.resident_prefix.is_none())
+        {
+            return Some(self.idle_sessions.swap_remove(index));
+        }
+        self.idle_sessions.pop()
+    }
+
+    pub fn retain_resident_prefix_on_drop(
+        &mut self,
+        session_id: &str,
+        page_id: String,
+        token_count: u64,
+    ) -> Result<()> {
+        if !self.sessions.contains_key(session_id) {
+            bail!("session {session_id} does not exist");
+        }
+        if self
+            .session_resident_prefixes
+            .get(session_id)
+            .is_some_and(|current| current.token_count >= token_count)
+        {
+            return Ok(());
+        }
+        self.session_resident_prefixes.insert(
+            session_id.to_string(),
+            ResidentLanePrefix {
+                page_id,
+                token_count,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn acquire_resident_prefix_lane(
+        &mut self,
+        session_id: &str,
+        page_id: &str,
+        token_count: u64,
+    ) -> Result<bool> {
+        if self.sessions.contains_key(session_id) {
+            bail!("session {session_id} already exists");
+        }
+        let Some(index) = self.idle_sessions.iter().position(|idle| {
+            idle.resident_prefix.as_ref().is_some_and(|prefix| {
+                prefix.page_id == page_id && prefix.token_count == token_count
+            })
+        }) else {
+            return Ok(false);
+        };
+        let mut idle = self.idle_sessions.swap_remove(index);
+        idle.resident_prefix = None;
+        self.sessions.insert(session_id.to_string(), idle);
+        self.session_token_counts
+            .insert(session_id.to_string(), token_count);
+        self.session_resident_prefixes.insert(
+            session_id.to_string(),
+            ResidentLanePrefix {
+                page_id: page_id.to_string(),
+                token_count,
+            },
+        );
+        Ok(true)
+    }
+
+    pub fn has_session_range(&self, session_id: &str, token_start: u64, token_count: u64) -> bool {
+        let Some(token_end) = token_start.checked_add(token_count) else {
+            return false;
+        };
+        self.session_token_counts
+            .get(session_id)
+            .copied()
+            .is_some_and(|known_tokens| token_end <= known_tokens)
+    }
+
+    #[allow(dead_code)]
+    pub fn export_kv_page(
+        &mut self,
+        session_id: &str,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<RuntimeKvPage> {
+        self.validate_export_range(session_id, token_start, token_count)?;
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        let session = self.session(session_id)?;
+        session.export_kv_page(layer_start, layer_end, token_start, token_count)
+    }
+
+    #[allow(dead_code)]
+    pub fn probe_kv_page(
+        &mut self,
+        session_id: &str,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<RuntimeKvPageDesc> {
+        self.validate_export_range(session_id, token_start, token_count)?;
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        let session = self.session(session_id)?;
+        let page = session.export_kv_page(layer_start, layer_end, token_start, token_count)?;
+        Ok(page.desc)
+    }
+
+    pub fn import_kv_page(
+        &mut self,
+        session_id: &str,
+        desc: &RuntimeKvPageDesc,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let session = self.session(session_id)?;
+        session.import_kv_page(desc, bytes)?;
+        let token_end = desc
+            .token_start
+            .checked_add(desc.token_count)
+            .ok_or_else(|| anyhow::anyhow!("KV page token range overflows"))?;
+        self.session_token_counts
+            .entry(session_id.to_string())
+            .and_modify(|current| *current = (*current).max(token_end))
+            .or_insert(token_end);
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn export_state(&mut self, session_id: &str) -> Result<Vec<u8>> {
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        let session = self.session(session_id)?;
+        session.export_state(layer_start, layer_end)
+    }
+
+    pub fn import_state(&mut self, session_id: &str, bytes: &[u8]) -> Result<()> {
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        let session = self.session(session_id)?;
+        session.import_state(layer_start, layer_end, bytes)
+    }
+
+    pub fn import_state_for_token_count(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+        token_count: u64,
+    ) -> Result<()> {
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        let session = self.session(session_id)?;
+        session.import_state_for_token_count(layer_start, layer_end, bytes, token_count)?;
+        record_restored_session_token_count(
+            &mut self.session_token_counts,
+            session_id,
+            token_count,
+        );
+        Ok(())
+    }
+
+    pub fn export_full_state(&mut self, session_id: &str) -> Result<Vec<u8>> {
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        let session = self.session(session_id)?;
+        session.export_full_state(layer_start, layer_end)
+    }
+
+    pub fn import_full_state(&mut self, session_id: &str, bytes: &[u8]) -> Result<()> {
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        let session = self.session(session_id)?;
+        session.import_full_state(layer_start, layer_end, bytes)
+    }
+
+    pub fn import_full_state_for_token_count(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+        token_count: u64,
+    ) -> Result<()> {
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        let session = self.session(session_id)?;
+        session.import_full_state_for_token_count(layer_start, layer_end, bytes, token_count)?;
+        record_restored_session_token_count(
+            &mut self.session_token_counts,
+            session_id,
+            token_count,
+        );
+        Ok(())
+    }
+
+    pub fn export_recurrent_state(&mut self, session_id: &str) -> Result<Vec<u8>> {
+        self.session(session_id)?.export_recurrent_state()
+    }
+
+    pub fn import_recurrent_state_for_token_count(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+        token_count: u64,
+    ) -> Result<()> {
+        self.session(session_id)?
+            .import_recurrent_state_for_token_count(bytes, token_count)?;
+        record_restored_session_token_count(
+            &mut self.session_token_counts,
+            session_id,
+            token_count,
+        );
+        Ok(())
+    }
+
+    pub fn save_resident_prefix(
+        &mut self,
+        session_id: &str,
+        cache_seq_id: i32,
+        token_count: u64,
+    ) -> Result<()> {
+        self.session(session_id)?
+            .save_prefix(cache_seq_id, token_count)
+    }
+
+    pub fn restore_resident_prefix(
+        &mut self,
+        session_id: &str,
+        cache_seq_id: i32,
+        token_ids: &[i32],
+    ) -> Result<()> {
+        let session = self.session(session_id)?;
+        session.restore_prefix(cache_seq_id, token_ids)?;
+        self.session_token_counts
+            .insert(session_id.to_string(), token_ids.len() as u64);
+        Ok(())
+    }
+
+    pub fn borrow_resident_prefix_session(
+        &mut self,
+        session_id: &str,
+        cache_seq_id: i32,
+        token_ids: &[i32],
+    ) -> Result<()> {
+        if self.sessions.contains_key(session_id) {
+            bail!("session {session_id} already exists");
+        }
+        let model = &self.model;
+        let (index, session) = create_indexed_lane_resource(
+            &mut self.next_lane_index,
+            &mut self.free_lane_indices,
+            self.lane_count,
+            || model.create_session_from_resident_prefix(cache_seq_id, token_ids),
+        )?;
+        let lane_session = RuntimeLaneSession {
+            index,
+            session,
+            resident_prefix: None,
+        };
+        self.sessions.insert(session_id.to_string(), lane_session);
+        self.session_token_counts
+            .insert(session_id.to_string(), token_ids.len() as u64);
+        Ok(())
+    }
+
+    pub fn drop_resident_prefix_sequence(
+        &mut self,
+        session_id: &str,
+        cache_seq_id: i32,
+    ) -> Result<()> {
+        self.active_session(session_id)?.drop_sequence(cache_seq_id)
+    }
+
+    pub(super) fn add_session_tokens(&mut self, session_id: &str, count: u64) {
+        self.session_token_counts
+            .entry(session_id.to_string())
+            .and_modify(|current| *current = current.saturating_add(count))
+            .or_insert(count);
+    }
+
+    fn validate_export_range(
+        &self,
+        session_id: &str,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<()> {
+        let token_end = token_start
+            .checked_add(token_count)
+            .ok_or_else(|| anyhow::anyhow!("KV page token range overflows"))?;
+        let known_tokens = self
+            .session_token_counts
+            .get(session_id)
+            .copied()
+            .unwrap_or_default();
+        if token_end > known_tokens {
+            bail!(
+                "cannot export KV page [{token_start}, {token_end}) from session with {known_tokens} known tokens"
+            );
+        }
+        Ok(())
+    }
+
+    fn model_layer_start(&self) -> u32 {
+        self.layer_start
+    }
+
+    fn model_layer_end(&self) -> u32 {
+        self.layer_end
+    }
+
+    pub(super) fn create_lane_session(&mut self) -> Result<RuntimeLaneSession> {
+        let model = &self.model;
+        let (index, session) = create_indexed_lane_resource(
+            &mut self.next_lane_index,
+            &mut self.free_lane_indices,
+            self.lane_count,
+            || model.create_session(),
+        )?;
+        Ok(RuntimeLaneSession {
+            index,
+            session,
+            resident_prefix: None,
+        })
+    }
+}
+
+fn record_restored_session_token_count(
+    session_token_counts: &mut BTreeMap<String, u64>,
+    session_id: &str,
+    token_count: u64,
+) {
+    // A prefix restore can move an existing lane backwards to a shorter
+    // common prefix. The tracked position must follow the imported native
+    // state exactly; retaining the previous high-water mark submits the next
+    // divergent token at the wrong position and makes llama_decode fail.
+    session_token_counts.insert(session_id.to_string(), token_count);
+}
+
+/// Allocate the next lane slot.
+///
+/// Prefers indices in `free_lane_indices` (lanes previously discarded
+/// via [`RuntimeState::drop_session_timed`]) so they can be reused
+/// without growing `next_lane_index` past `lane_count`. If the free
+/// list is empty, falls through to bumping `next_lane_index`. If both
+/// are exhausted, returns "all execution lanes are busy".
+///
+/// If `create()` fails after popping from the free list, the index is
+/// pushed back so a retry can reuse it. The high-water counter is only
+/// bumped on success, matching the prior behavior.
+fn create_indexed_lane_resource<T>(
+    next_lane_index: &mut usize,
+    free_lane_indices: &mut Vec<usize>,
+    lane_count: u32,
+    create: impl FnOnce() -> Result<T>,
+) -> Result<(usize, T)> {
+    if let Some(index) = free_lane_indices.pop() {
+        let resource = match create() {
+            Ok(resource) => resource,
+            Err(err) => {
+                // Return the freed index so the next allocation can
+                // still reuse it.
+                free_lane_indices.push(index);
+                return Err(err);
+            }
+        };
+        return Ok((index, resource));
+    }
+    if *next_lane_index >= lane_count as usize {
+        bail!("all execution lanes are busy");
+    }
+    let index = *next_lane_index;
+    let resource = create()?;
+    *next_lane_index = index + 1;
+    Ok((index, resource))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::{Result, bail};
+
+    #[test]
+    fn prefix_restore_moves_tracked_position_backwards() {
+        let mut token_counts = std::collections::BTreeMap::from([("lane-a".to_string(), 3_535)]);
+
+        record_restored_session_token_count(&mut token_counts, "lane-a", 3_530);
+
+        assert_eq!(token_counts.get("lane-a"), Some(&3_530));
+    }
+
+    #[test]
+    fn create_indexed_lane_resource_keeps_index_available_when_creation_fails() {
+        let mut next_lane_index = 0;
+        let mut free_lane_indices: Vec<usize> = Vec::new();
+
+        let error = create_indexed_lane_resource(
+            &mut next_lane_index,
+            &mut free_lane_indices,
+            2,
+            || -> Result<()> { bail!("transient session creation failure") },
+        )
+        .expect_err("failed creation should propagate the original error");
+
+        assert_eq!(error.to_string(), "transient session creation failure");
+        assert_eq!(next_lane_index, 0);
+        assert!(free_lane_indices.is_empty());
+
+        let (index, resource) =
+            create_indexed_lane_resource(&mut next_lane_index, &mut free_lane_indices, 2, || {
+                Ok("lane")
+            })
+            .expect("successful retry should reuse the unconsumed lane index");
+
+        assert_eq!(index, 0);
+        assert_eq!(resource, "lane");
+        assert_eq!(next_lane_index, 1);
+    }
+
+    #[test]
+    fn create_indexed_lane_resource_reuses_freed_indices_before_growing() {
+        // Simulate the wedge scenario: all lanes allocated, one lane
+        // freed via the discard path, next allocation must reuse the
+        // freed index rather than bailing with "all execution lanes
+        // are busy".
+        let mut next_lane_index = 0;
+        let mut free_lane_indices: Vec<usize> = Vec::new();
+        let lane_count = 2;
+
+        // Allocate both lanes.
+        let (a_idx, _) = create_indexed_lane_resource(
+            &mut next_lane_index,
+            &mut free_lane_indices,
+            lane_count,
+            || Ok("a"),
+        )
+        .expect("first allocation should succeed");
+        let (b_idx, _) = create_indexed_lane_resource(
+            &mut next_lane_index,
+            &mut free_lane_indices,
+            lane_count,
+            || Ok("b"),
+        )
+        .expect("second allocation should succeed");
+        assert_eq!(a_idx, 0);
+        assert_eq!(b_idx, 1);
+        assert_eq!(next_lane_index, 2);
+
+        // Pool is full at the high-water mark. A third allocation must
+        // fail.
+        let error = create_indexed_lane_resource(
+            &mut next_lane_index,
+            &mut free_lane_indices,
+            lane_count,
+            || Ok("c"),
+        )
+        .expect_err("allocating past lane_count should fail when no slots are free");
+        assert!(error.to_string().contains("all execution lanes are busy"));
+
+        // Discard one lane: the caller pushes its freed index onto the
+        // free list (this is what drop_session_timed does on the
+        // discard branch).
+        free_lane_indices.push(a_idx);
+
+        // The next allocation MUST reuse the freed index instead of
+        // bailing. This is the wedge regression: previously
+        // next_lane_index stayed at lane_count and every allocation
+        // failed forever.
+        let (reused_idx, _) = create_indexed_lane_resource(
+            &mut next_lane_index,
+            &mut free_lane_indices,
+            lane_count,
+            || Ok("c"),
+        )
+        .expect("allocation must reuse a freed index, not stay wedged");
+        assert_eq!(reused_idx, 0);
+        assert_eq!(next_lane_index, 2);
+        assert!(free_lane_indices.is_empty());
+    }
+
+    #[test]
+    fn create_indexed_lane_resource_returns_freed_index_on_create_failure() {
+        // If create() fails while consuming a freed index, the index
+        // must go back onto the free list so a retry can use it.
+        let mut next_lane_index = 1;
+        let mut free_lane_indices: Vec<usize> = vec![0];
+
+        let error = create_indexed_lane_resource(
+            &mut next_lane_index,
+            &mut free_lane_indices,
+            2,
+            || -> Result<()> { bail!("create failed mid-reuse") },
+        )
+        .expect_err("failed creation should propagate");
+        assert_eq!(error.to_string(), "create failed mid-reuse");
+        assert_eq!(next_lane_index, 1);
+        assert_eq!(free_lane_indices, vec![0]);
+
+        // A retry should now succeed using the same freed index.
+        let (idx, _) =
+            create_indexed_lane_resource(&mut next_lane_index, &mut free_lane_indices, 2, || {
+                Ok("retry")
+            })
+            .expect("retry should succeed");
+        assert_eq!(idx, 0);
+        assert_eq!(next_lane_index, 1);
+        assert!(free_lane_indices.is_empty());
+    }
+}
