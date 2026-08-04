@@ -1127,13 +1127,10 @@ fn prompt_fits_single_prefill_sample(prompt_token_count: usize, session_batch_si
 }
 
 fn abort_after_failed_receipt(
-    config: &crate::frontend::GenerationReceiptConfig,
-    abort: &GenerationAbort,
+    _config: &crate::frontend::GenerationReceiptConfig,
+    _abort: &GenerationAbort,
     receipt_result: OpenAiResult<()>,
 ) -> OpenAiResult<()> {
-    if receipt_result.is_err() {
-        let _ = config.sink().abort(abort);
-    }
     receipt_result
 }
 
@@ -1208,7 +1205,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_receipt_aborts_the_generation_lifecycle_once() {
+    fn failed_receipt_does_not_emit_an_uncertain_abort() {
         let sink = Arc::new(RecordingReceiptSink::default());
         let config = GenerationReceiptConfig::new(sink.clone());
         let abort = GenerationAbort {
@@ -1223,7 +1220,7 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert_eq!(sink.aborts.load(Ordering::SeqCst), 1);
+        assert_eq!(sink.aborts.load(Ordering::SeqCst), 0);
     }
 
     #[test]
