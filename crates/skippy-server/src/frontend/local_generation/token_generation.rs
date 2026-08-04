@@ -184,7 +184,7 @@ impl StageOpenAiBackend {
             .ensure_session_active(session_id)
             .map_err(openai_backend_error)?;
         let batch_size = runtime
-            .session_batch_size(session_id)
+            .admit_session_batch_size(session_id)
             .map_err(openai_backend_error)?;
         Ok(prompt_fits_single_prefill_sample(
             request.prompt_token_ids.len(),
@@ -760,7 +760,7 @@ impl StageOpenAiBackend {
                 .lock()
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
             runtime
-                .session_batch_size(session_id)
+                .admit_session_batch_size(session_id)
                 .map_err(openai_backend_error)?
                 .saturating_sub(1)
         } else {

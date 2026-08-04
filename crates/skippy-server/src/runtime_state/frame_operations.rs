@@ -114,8 +114,14 @@ impl RuntimeState {
         result
     }
 
-    pub fn session_batch_size(&mut self, session_id: &str) -> Result<usize> {
+    /// Returns a session's batch size, admitting a new session when necessary.
+    pub fn admit_session_batch_size(&mut self, session_id: &str) -> Result<usize> {
         self.session(session_id)?.batch_size()
+    }
+
+    /// Returns the batch size of an already admitted session.
+    pub fn active_session_batch_size(&self, session_id: &str) -> Result<usize> {
+        self.active_session(session_id)?.batch_size()
     }
 
     pub fn ensure_session_active(&mut self, session_id: &str) -> Result<()> {
