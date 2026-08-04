@@ -417,6 +417,7 @@ stop = ["END"]
         ),
         skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
         survey_telemetry: survey::SurveyTelemetry::disabled(),
+        serving_hooks_factory: None,
     };
     let settings = split_generation_load_settings(&spec).expect("split settings should resolve");
 
@@ -516,6 +517,7 @@ max_tokens = 222
         skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
         survey_telemetry: survey::SurveyTelemetry::disabled(),
         hook_policy: None,
+        serving_hooks_factory: None,
         http_bind_addr: "127.0.0.1:0".parse().expect("valid loopback address"),
     };
 

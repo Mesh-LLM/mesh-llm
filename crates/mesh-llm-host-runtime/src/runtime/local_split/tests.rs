@@ -1122,6 +1122,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
         ),
         skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
         survey_telemetry: survey::SurveyTelemetry::disabled(),
+        serving_hooks_factory: None,
     }))
     .await
     {

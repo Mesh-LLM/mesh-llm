@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -8,6 +10,7 @@ use crate::frontend::{StageOpenAiBackend, openai_backend_error};
 use crate::runtime_state::RuntimeState;
 
 const TOKEN_ID_DIGEST_DOMAIN: &[u8] = b"skippy-generation-token-ids-v1\0";
+const GENERATION_RECEIPT_QUEUE_CAPACITY: usize = 1_024;
 
 /// Why a successful local generation stopped.
 #[non_exhaustive]
@@ -124,15 +127,32 @@ pub trait GenerationReceiptSink: Send + Sync {
 /// deliberately opt-in and must remain disabled for timed measurements.
 #[derive(Clone)]
 pub struct GenerationReceiptConfig {
-    sink: Arc<dyn GenerationReceiptSink>,
+    sender: SyncSender<GenerationReceiptEvent>,
+    delivery_failures: Arc<AtomicU64>,
     export_full_state: bool,
 }
 
 impl GenerationReceiptConfig {
     /// Creates receipt delivery with full-state export disabled.
     pub fn new(sink: Arc<dyn GenerationReceiptSink>) -> Self {
+        let (sender, receiver) =
+            sync_channel::<GenerationReceiptEvent>(GENERATION_RECEIPT_QUEUE_CAPACITY);
+        let delivery_failures = Arc::new(AtomicU64::new(0));
+        let worker_delivery_failures = Arc::clone(&delivery_failures);
+        std::thread::Builder::new()
+            .name("skippy-generation-receipts".into())
+            .spawn(move || {
+                while let Ok(event) = receiver.recv() {
+                    if let Err(error) = event.deliver(sink.as_ref()) {
+                        worker_delivery_failures.fetch_add(1, Ordering::Relaxed);
+                        eprintln!("generation lifecycle delivery failed: {error:#}");
+                    }
+                }
+            })
+            .expect("generation lifecycle delivery thread must start");
         Self {
-            sink,
+            sender,
+            delivery_failures,
             export_full_state: false,
         }
     }
@@ -149,8 +169,54 @@ impl GenerationReceiptConfig {
         self.export_full_state
     }
 
-    pub(crate) fn sink(&self) -> &dyn GenerationReceiptSink {
-        self.sink.as_ref()
+    /// Number of lifecycle events that the queue could not accept or the sink rejected.
+    pub fn delivery_failures(&self) -> u64 {
+        self.delivery_failures.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn begin(&self, start: GenerationStart) {
+        self.enqueue(GenerationReceiptEvent::Begin(start));
+    }
+
+    pub(crate) fn committed(&self, commit: GenerationCommit) {
+        self.enqueue(GenerationReceiptEvent::Committed(commit));
+    }
+
+    pub(crate) fn abort(&self, abort: GenerationAbort) {
+        self.enqueue(GenerationReceiptEvent::Abort(abort));
+    }
+
+    pub(crate) fn record(&self, receipt: GenerationReceipt) {
+        self.enqueue(GenerationReceiptEvent::Record(receipt));
+    }
+
+    fn enqueue(&self, event: GenerationReceiptEvent) {
+        if let Err(error) = self.sender.try_send(event) {
+            self.delivery_failures.fetch_add(1, Ordering::Relaxed);
+            let reason = match error {
+                TrySendError::Full(_) => "queue is full",
+                TrySendError::Disconnected(_) => "delivery worker is unavailable",
+            };
+            eprintln!("generation lifecycle delivery dropped: {reason}");
+        }
+    }
+}
+
+enum GenerationReceiptEvent {
+    Begin(GenerationStart),
+    Committed(GenerationCommit),
+    Abort(GenerationAbort),
+    Record(GenerationReceipt),
+}
+
+impl GenerationReceiptEvent {
+    fn deliver(self, sink: &dyn GenerationReceiptSink) -> Result<()> {
+        match self {
+            Self::Begin(start) => sink.begin(&start),
+            Self::Committed(commit) => sink.committed(&commit),
+            Self::Abort(abort) => sink.abort(&abort),
+            Self::Record(receipt) => sink.record(&receipt),
+        }
     }
 }
 
@@ -293,7 +359,7 @@ impl StageOpenAiBackend {
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
             build_generation_receipt(&mut *runtime, delivery)?
         };
-        record_generation_receipt(config, &receipt)
+        record_generation_receipt(config, receipt)
     }
 }
 
@@ -332,9 +398,10 @@ fn build_generation_receipt(
 
 fn record_generation_receipt(
     config: &GenerationReceiptConfig,
-    receipt: &GenerationReceipt,
+    receipt: GenerationReceipt,
 ) -> OpenAiResult<()> {
-    config.sink().record(receipt).map_err(openai_backend_error)
+    config.record(receipt);
+    Ok(())
 }
 
 pub(crate) fn complete_generation_before_cleanup<T>(
@@ -376,6 +443,7 @@ fn duration_us(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+    use std::thread;
 
     use super::*;
 
@@ -418,6 +486,16 @@ mod tests {
             self.error
                 .map_or(Ok(()), |error| Err(anyhow::anyhow!(error)))
         }
+    }
+
+    fn wait_for_receipts(sink: &RecordingSink, expected: usize) {
+        for _ in 0..100 {
+            if sink.receipts.lock().unwrap().len() >= expected {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        panic!("timed out waiting for {expected} generation receipts");
     }
 
     #[test]
@@ -545,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn model_free_delivery_validates_position_exports_state_and_propagates_sink_errors() {
+    fn model_free_delivery_validates_position_exports_state_without_blocking_on_sink_errors() {
         let sink = Arc::new(RecordingSink::default());
         let config = GenerationReceiptConfig::new(sink.clone()).with_full_state_digest(true);
         let mut observation = GenerationReceiptObservation::new(1);
@@ -570,7 +648,8 @@ mod tests {
             },
         )
         .unwrap();
-        record_generation_receipt(&config, &receipt).unwrap();
+        record_generation_receipt(&config, receipt).unwrap();
+        wait_for_receipts(&sink, 1);
         let receipts = sink.receipts.lock().unwrap();
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].final_session_position, 4);
@@ -627,8 +706,14 @@ mod tests {
             },
         )
         .unwrap();
-        let sink_error = record_generation_receipt(&failing_config, &receipt).unwrap_err();
-        assert!(sink_error.to_string().contains("sink failed"));
+        record_generation_receipt(&failing_config, receipt).unwrap();
+        for _ in 0..100 {
+            if failing_config.delivery_failures() == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(failing_config.delivery_failures(), 1);
     }
 
     #[test]
@@ -662,9 +747,9 @@ mod tests {
 
     #[test]
     fn receipt_lifecycle_begins_before_generation_and_closes_before_cleanup() {
-        let source = include_str!("local_generation.rs");
+        let source = include_str!("local_generation/token_generation.rs");
         let begin = source
-            .find(".begin(&GenerationStart")
+            .find(".begin(GenerationStart")
             .expect("receipt lifecycle must begin before model execution");
         let generation = source
             .find("let result = (||")

@@ -43,6 +43,7 @@ pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
+    pub(super) serving_hooks_factory: Option<skippy_server::SharedModelServingHooksFactory>,
 }
 
 pub(super) struct SplitGenerationLoadSettings<'a> {
@@ -193,6 +194,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     let reporter_model_ref = model_ref.clone();
     let skippy_telemetry = spec.skippy_telemetry.clone();
     let guardrail_telemetry = spec.survey_telemetry.clone();
+    let serving_hooks_factory = spec.serving_hooks_factory.clone();
     let openai_guardrails =
         skippy::skippy_openai_guardrails_for_policy_handle(spec.openai_guardrail_policy.clone());
     let _ = emit_event(OutputEvent::ModelLoading {
@@ -207,7 +209,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             skippy_telemetry,
             Some(skippy_native_model_open_event_reporter(reporter_model_ref)),
             skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
-            None,
+            serving_hooks_factory,
         )
     })
     .await

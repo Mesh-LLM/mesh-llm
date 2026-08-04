@@ -448,15 +448,12 @@ impl StageOpenAiBackend {
             self.generation_receipt.as_ref(),
             receipt_prompt_token_ids.as_ref(),
         ) {
-            config
-                .sink()
-                .begin(&GenerationStart {
-                    request_id: ids.request_id,
-                    session_id: ids.session_id,
-                    agent_session_id: ids.agent_session_id.clone(),
-                    prompt_token_ids: prompt_token_ids.clone().into_boxed_slice(),
-                })
-                .map_err(openai_backend_error)?;
+            config.begin(GenerationStart {
+                request_id: ids.request_id,
+                session_id: ids.session_id,
+                agent_session_id: ids.agent_session_id.clone(),
+                prompt_token_ids: prompt_token_ids.clone().into_boxed_slice(),
+            });
         }
 
         let mut collector =
@@ -500,15 +497,12 @@ impl StageOpenAiBackend {
                     observation.record_token(current, ids.request_started_at.elapsed())?;
                 }
                 if let Some(config) = self.generation_receipt.as_ref() {
-                    config
-                        .sink()
-                        .committed(&GenerationCommit {
-                            request_id: ids.request_id,
-                            session_id: ids.session_id,
-                            generated_token_count: decoded_tokens.saturating_add(1),
-                            token_ids: vec![current].into_boxed_slice(),
-                        })
-                        .map_err(openai_backend_error)?;
+                    config.committed(GenerationCommit {
+                        request_id: ids.request_id,
+                        session_id: ids.session_id,
+                        generated_token_count: decoded_tokens.saturating_add(1),
+                        token_ids: vec![current].into_boxed_slice(),
+                    });
                 }
                 if collector.push_token(current)? == TokenControl::Stop {
                     if let Some(observation) = receipt_observation.as_mut() {
@@ -657,9 +651,28 @@ impl StageOpenAiBackend {
         let session_id = request.ids.session_id;
         let request_id = request.ids.request_id;
         let session_key = session_id.to_string();
+        let receipt_prompt_token_ids = self
+            .generation_receipt
+            .as_ref()
+            .map(|_| self.tokenize(&request.prompt.text))
+            .transpose()?;
+        if let (Some(config), Some(prompt_token_ids)) = (
+            self.generation_receipt.as_ref(),
+            receipt_prompt_token_ids.as_ref(),
+        ) {
+            config.begin(GenerationStart {
+                request_id,
+                session_id,
+                agent_session_id: request.ids.agent_session_id.clone(),
+                prompt_token_ids: prompt_token_ids.clone().into_boxed_slice(),
+            });
+        }
         let mut lane = request.lane_pool.checkout(&request.ids)?;
 
         let mut prompt_tokens = 0usize;
+        let mut receipt_observation = None;
+        let mut receipt_cancelled = false;
+        let mut receipt_model_generation_elapsed = None;
         let result = (|| {
             let prefill_timer = PhaseTimer::start();
             let prefill = {
@@ -724,6 +737,12 @@ impl StageOpenAiBackend {
             let max_tokens = request
                 .max_tokens
                 .resolve(prefill.position as usize, self.ctx_size)?;
+            receipt_observation = self.generation_receipt.as_ref().map(|_| {
+                GenerationReceiptObservation::new(
+                    usize::try_from(max_tokens)
+                        .expect("supported targets represent u32 token budgets as usize"),
+                )
+            });
 
             let message = generation_config_message(
                 request.wire_dtype,
@@ -876,9 +895,24 @@ impl StageOpenAiBackend {
                     .cancellation
                     .is_some_and(openai_frontend::CancellationToken::is_cancelled)
                 {
+                    receipt_cancelled = true;
                     break;
                 }
+                if let Some(observation) = receipt_observation.as_mut() {
+                    observation.record_token(current, request.ids.request_started_at.elapsed())?;
+                }
+                if let Some(config) = self.generation_receipt.as_ref() {
+                    config.committed(GenerationCommit {
+                        request_id,
+                        session_id,
+                        generated_token_count: decoded_tokens.saturating_add(1),
+                        token_ids: vec![current].into_boxed_slice(),
+                    });
+                }
                 if collector.push_token(current)? == TokenControl::Stop {
+                    if let Some(observation) = receipt_observation.as_mut() {
+                        observation.mark_callback_stop();
+                    }
                     decoded_tokens += 1;
                     break;
                 }
@@ -1032,9 +1066,25 @@ impl StageOpenAiBackend {
                 "llama_stage.forward_activation_bytes".to_string(),
                 json!(decode_forward_activation_bytes),
             );
+            receipt_model_generation_elapsed = Some(decode_timer.start_instant.elapsed());
             self.emit_openai_summary("stage.openai_decode", decode_timer, decode_attrs);
             Ok(())
         })();
+
+        let generation_succeeded = result.is_ok();
+        let receipt_result = self.finalize_generation_receipt(
+            LocalGenerationReceiptFinalization {
+                session_label: &session_key,
+                request_id,
+                session_id,
+                agent_session_id: request.ids.agent_session_id.as_deref(),
+                prompt_token_ids: receipt_prompt_token_ids.as_deref().unwrap_or_default(),
+                observation: receipt_observation,
+                cancelled: receipt_cancelled,
+                model_generation_elapsed: receipt_model_generation_elapsed,
+            },
+            generation_succeeded,
+        );
 
         let stop_result = write_stage_message(
             &mut lane.stream,
@@ -1092,6 +1142,7 @@ impl StageOpenAiBackend {
             _ => request.lane_pool.replace_lane(lane_id),
         }
         if result.is_ok() {
+            receipt_result?;
             stop_result?;
         }
         result?;

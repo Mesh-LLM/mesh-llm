@@ -11,12 +11,12 @@ use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::decode_token_phase;
 use crate::frontend::generation_receipt::{
-    GenerationReceiptObservation, complete_generation_before_cleanup,
+    GenerationReceiptObservation, GenerationStart, complete_generation_before_cleanup,
 };
 use crate::frontend::linear_proposal::{
     LinearProposalDiscardReason, LinearProposalExecutionParams, LinearProposalQueryOutcome,
-    execute_linear_proposal_with_terminal_discard, greedy_linear_proposal_admitted,
-    query_linear_proposal, report_linear_proposal_receipt,
+    LinearProposalQueryParams, execute_linear_proposal_with_terminal_discard,
+    greedy_linear_proposal_admitted, query_linear_proposal, report_linear_proposal_receipt,
 };
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
@@ -91,6 +91,14 @@ impl StageOpenAiBackend {
         let receipt_request_id = request.ids.request_id;
         let receipt_session_id = request.ids.session_id;
         let receipt_prompt_token_ids = request.prompt_token_ids;
+        if let Some(config) = self.generation_receipt.as_ref() {
+            config.begin(GenerationStart {
+                request_id: receipt_request_id,
+                session_id: receipt_session_id,
+                agent_session_id: request.ids.agent_session_id.clone(),
+                prompt_token_ids: receipt_prompt_token_ids.to_vec().into_boxed_slice(),
+            });
+        }
         let receipt_observation = self.generation_receipt.as_ref().map(|_| {
             RefCell::new(Some(GenerationReceiptObservation::new(
                 usize::try_from(request.max_tokens)
@@ -104,7 +112,7 @@ impl StageOpenAiBackend {
             if let Some(observation) = receipt_observation.as_ref()
                 && let Some(observation) = observation.borrow_mut().as_mut()
             {
-                observation.record_token(token_id)?;
+                observation.record_token(token_id, request.ids.request_started_at.elapsed())?;
             }
             let control = on_token(token_id)?;
             if control == TokenControl::Stop
@@ -136,18 +144,23 @@ impl StageOpenAiBackend {
         let receipt_observation = receipt_observation
             .as_ref()
             .and_then(|observation| observation.borrow_mut().take());
+        let generation_succeeded = result.is_ok();
         complete_generation_before_cleanup(
             result,
             || {
-                self.finalize_generation_receipt(LocalGenerationReceiptFinalization {
-                    session_label: &session_id,
-                    request_id: receipt_request_id,
-                    session_id: receipt_session_id,
-                    prompt_token_ids: receipt_prompt_token_ids,
-                    observation: receipt_observation,
-                    cancelled: receipt_cancelled,
-                    model_generation_elapsed: receipt_model_generation_elapsed,
-                })
+                self.finalize_generation_receipt(
+                    LocalGenerationReceiptFinalization {
+                        session_label: &session_id,
+                        request_id: receipt_request_id,
+                        session_id: receipt_session_id,
+                        agent_session_id: request.ids.agent_session_id.as_deref(),
+                        prompt_token_ids: receipt_prompt_token_ids,
+                        observation: receipt_observation,
+                        cancelled: receipt_cancelled,
+                        model_generation_elapsed: receipt_model_generation_elapsed,
+                    },
+                    generation_succeeded,
+                )
             },
             || self.cleanup_local_generation_session(&session_id, request.ids),
         )?;
@@ -848,12 +861,18 @@ impl StageOpenAiBackend {
         .map_err(|_| OpenAiError::backend("linear proposal base position exceeds u64"))?;
         let queried = match query_linear_proposal(
             config,
-            request.ids.request_id,
-            request.ids.session_id,
-            state.decoded_tokens,
-            committed_token_ids,
-            remaining_new_tokens,
-            state.linear_proposal_max_tokens,
+            LinearProposalQueryParams {
+                request_id: request.ids.request_id,
+                session_id: request.ids.session_id,
+                prompt_token_count: request.prompt_token_ids.len(),
+                decode_step: state.decoded_tokens,
+                committed_token_count: request
+                    .prompt_token_ids
+                    .len()
+                    .saturating_add(state.decoded_tokens),
+                remaining_new_tokens,
+                runtime_max_proposal_tokens: state.linear_proposal_max_tokens,
+            },
         )? {
             LinearProposalQueryOutcome::NoProposal => None,
             LinearProposalQueryOutcome::DeadlineExceeded {
