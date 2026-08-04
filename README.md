@@ -85,7 +85,7 @@ mesh-llm serve --auto --headless
 |---|---|---|
 | Try the public mesh | `mesh-llm serve --auto` | [docs/MESHES.md](docs/MESHES.md) |
 | Start a private mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M` | [docs/MESHES.md](docs/MESHES.md) |
-| Serve one model without mesh networking | `mesh-llm serve --local-model-only --model /models/model.gguf` | OpenAI API only on `127.0.0.1:9337` |
+| Serve one model without mesh networking | `mesh-llm serve --local-model-only --model /models/model.gguf` | OpenAI API defaults to `127.0.0.1:9337` (`--port` and `--listen-all` change it) |
 | Publish your own mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M --publish` | [docs/MESHES.md](docs/MESHES.md) |
 | Join by invite token | `mesh-llm serve --join <token>` | [docs/MESHES.md](docs/MESHES.md) |
 | Run an API-only client | `mesh-llm client --auto` | [docs/MESHES.md](docs/MESHES.md) |
@@ -134,6 +134,9 @@ lookup, the web console, or the management API. Add `--listen-all` only when the
 OpenAI endpoint must bind beyond loopback. Startup fails if the complete model
 does not fit within detected local capacity (or `--max-vram`); it never falls
 back to distributed serving.
+
+For `--local-model-only`, `--model`, `--gguf`, and `--mmproj` values must be
+absolute paths and must not be symlinks.
 
 ## Mixture-of-Agents (`model: "mesh"`) — experimental
 

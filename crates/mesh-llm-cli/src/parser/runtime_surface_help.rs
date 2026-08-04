@@ -18,6 +18,7 @@ pub fn runtime_surface_help(surface: RuntimeSurface) -> String {
             "      --log-format <FORMAT>    Terminal output format [default: pretty]\n\n",
             "Bare `mesh-llm serve` loads startup models from ~/.mesh-llm/config.toml.\n",
             "Add [[models]] there or pass --model / --gguf explicitly.\n",
+            "With --local-model-only, --model, --gguf, and --mmproj must be absolute, non-symlink paths.\n",
             "Run `mesh-llm --help-advanced` for the full runtime option surface.\n"
         )
         .to_string(),
