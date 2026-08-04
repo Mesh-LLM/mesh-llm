@@ -690,8 +690,8 @@ impl Collector for DefaultCollector {
                 } else {
                     let per_gpu: Vec<u64> = windows_per_gpu_vram(&windows_gpus);
                     let total: u64 = per_gpu.iter().sum();
+                    survey.gpu_vram = per_gpu;
                     if total > 0 {
-                        survey.gpu_vram = per_gpu;
                         let ram_offload = system_ram.saturating_sub(total);
                         survey.vram_bytes = total + (ram_offload as f64 * 0.90) as u64;
                     } else if system_ram > 0 {

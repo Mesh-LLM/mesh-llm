@@ -848,6 +848,16 @@ fn test_windows_per_gpu_vram_keeps_zero_vram_adapters_aligned() {
 }
 
 #[test]
+fn test_windows_per_gpu_vram_keeps_all_zero_adapters_aligned() {
+    let controllers = vec![
+        ("Virtual Display Adapter".to_string(), 0),
+        ("Headless Display Adapter".to_string(), 0),
+    ];
+
+    assert_eq!(windows_per_gpu_vram(&controllers), vec![0, 0]);
+}
+
+#[test]
 fn test_windows_zero_vram_adapter_does_not_shift_vram_onto_wrong_gpu() {
     let controllers = vec![
         ("Virtual Display Adapter".to_string(), 0),
