@@ -903,15 +903,15 @@ mod tests {
         let driver = PluginDriver::spawn(fake_active(Duration::from_millis(250))).unwrap();
         let started = Instant::now();
         let result = driver
-            .propose(LinearProposalQuery::new(
-                1,
-                2,
-                16,
-                16,
-                0,
-                8_192,
-                started + Duration::from_millis(5),
-            ))
+            .propose(LinearProposalQuery {
+                request_id: 1,
+                session_id: 2,
+                prompt_token_count: 16,
+                committed_token_count: 16,
+                decode_step: 0,
+                max_proposal_tokens: 8_192,
+                deadline: started + Duration::from_millis(5),
+            })
             .unwrap();
         let elapsed = started.elapsed();
 
