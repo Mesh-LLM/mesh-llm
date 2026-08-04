@@ -23,7 +23,7 @@ pub use cli::ServeBinaryArgs;
 pub use embedded::{
     EmbeddedRuntimeOptions, EmbeddedRuntimeStatus, EmbeddedServerHandle, EmbeddedServerStatus,
     EmbeddedState, SkippyRuntimeHandle, start_binary_stage, start_embedded_openai,
-    start_openai_backend, start_stage_http,
+    start_openai_backend, start_openai_backend_with_tokenizer, start_stage_http,
 };
 pub use frontend::{
     CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs,
