@@ -275,11 +275,14 @@ mod tests {
             prompt_token_count,
             Some(&sampling),
         )?;
-        let serial_predictions = verify_inputs
-            .iter()
-            .copied()
-            .map(|token| serial.decode_step_sampled(token, Some(&sampling)))
-            .collect::<Result<Vec<_>>>()?;
+        let mut serial_predictions = Vec::with_capacity(verify_inputs.len());
+        for (index, token) in verify_inputs.iter().copied().enumerate() {
+            let predicted = serial.decode_step_sampled(token, Some(&sampling))?;
+            serial_predictions.push(predicted);
+            if index + 1 < verify_inputs.len() && predicted != verify_inputs[index + 1] {
+                break;
+            }
+        }
         let serial_token_count = serial.token_count();
         let serial_native_position = serial.native_position()?;
         drop(serial);
@@ -293,15 +296,9 @@ mod tests {
         )?;
         let batched_predictions =
             batched.verify_tokens_sampled(&verify_inputs, Some(&sampling))?;
-        let canonical_prediction_count = verify_inputs[1..]
-            .iter()
-            .zip(&serial_predictions)
-            .position(|(proposed, predicted)| proposed != predicted)
-            .map_or(serial_predictions.len(), |mismatch| mismatch + 1);
-
         assert_eq!(
             batched_predictions,
-            serial_predictions[..canonical_prediction_count],
+            serial_predictions,
             "batched verification must stop at the first target mismatch"
         );
         assert_eq!(batched.token_count(), serial_token_count);
