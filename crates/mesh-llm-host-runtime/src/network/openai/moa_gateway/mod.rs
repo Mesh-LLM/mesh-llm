@@ -20,6 +20,42 @@ use tokio::net::TcpStream;
 
 pub use self::workers::build_moa_config;
 
+/// Fall back to serving a single real model when MoA cannot form a committee.
+///
+/// Picks any model advertised in the mesh (local or peer), rewrites the
+/// request's `model` from the virtual `"mesh"` name to it, and hands the stream
+/// back so the caller routes it as an ordinary single-model request. Returns
+/// `None` (503) only when the node genuinely has no model at all.
+async fn degrade_to_single_model(
+    node: &mesh::Node,
+    tcp_stream: TcpStream,
+    request: &mut proxy::BufferedHttpRequest,
+) -> Option<TcpStream> {
+    let Some(target) = node
+        .models_being_served()
+        .await
+        .into_iter()
+        .find(|m| m != moa::VIRTUAL_MODEL_NAME)
+    else {
+        let _ = proxy::send_503(tcp_stream, "no models available in the mesh").await;
+        return None;
+    };
+
+    tracing::info!("MoA: <2 workers, degrading model=mesh to single model {target}");
+
+    // Rewrite both surfaces the downstream router reads: the parsed
+    // `model_name` and the `model` field in the JSON body.
+    request.model_name = Some(target.clone());
+    if let Some(body) = request.body_json.as_mut()
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert("model".to_string(), serde_json::Value::String(target));
+    }
+
+    // Hand the stream back: the caller falls through to normal routing.
+    Some(tcp_stream)
+}
+
 /// Detect `model: "mesh"`, build a mesh-wide MoA config, run the turn,
 /// and write the HTTP response (JSON or SSE) directly to the stream.
 ///
@@ -55,8 +91,13 @@ pub async fn try_handle_moa(
     let enable_thinking = effective_enable_thinking_for_moa(&body_json);
 
     let Some(mut config) = build_moa_config(node, targets, required_tokens).await else {
-        let _ = proxy::send_503(tcp_stream, "MoA requires ≥2 models available in the mesh").await;
-        return None;
+        // Graceful degradation: MoA needs ≥2 workers, but a lone node (or a
+        // mesh with a single model) should still answer a `model=mesh`
+        // request rather than 503. Rewrite the virtual model to a real served
+        // model and fall through to normal single-model routing by handing the
+        // stream back. `mesh` thus works everywhere: passthrough on one node,
+        // committee once a second worker joins.
+        return degrade_to_single_model(node, tcp_stream, request).await;
     };
     config.enable_thinking = enable_thinking;
 
