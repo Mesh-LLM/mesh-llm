@@ -169,10 +169,13 @@ async fn chat_completions(
         let model = request.model.clone();
         let context = OpenAiRequestContext::new();
         let cancellation = context.cancellation_token();
-        let stream = backend_call(
+        let stream = backend_call_with_cancellation(
             &state,
             "chat_completion_stream",
-            state.backend.chat_completion_stream(request, context),
+            &context,
+            state
+                .backend
+                .chat_completion_stream(request, context.clone()),
         )
         .await?;
         let prelude = stream::once(async move { json_event(&ChatCompletionChunk::role(model)) });
@@ -187,11 +190,15 @@ async fn chat_completions(
             .chain(stream::once(async { done_event() }));
         Ok(sse_response(events, cancellation))
     } else {
+        let context = OpenAiRequestContext::new();
         Ok(Json(
-            backend_call(
+            backend_call_with_cancellation(
                 &state,
                 "chat_completion",
-                state.backend.chat_completion(request),
+                &context,
+                state
+                    .backend
+                    .chat_completion_with_context(request, context.clone()),
             )
             .await?,
         )
@@ -221,10 +228,13 @@ async fn responses(
             let context = OpenAiRequestContext::new();
             let cancellation = context.cancellation_token();
             let state_machine = Arc::new(Mutex::new(ResponseSseState::new(request.model.clone())));
-            let stream = backend_call(
+            let stream = backend_call_with_cancellation(
                 &state,
                 "responses_stream",
-                state.backend.chat_completion_stream(request, context),
+                &context,
+                state
+                    .backend
+                    .chat_completion_stream(request, context.clone()),
             )
             .await?;
             let body_state = state_machine.clone();
@@ -415,8 +425,16 @@ async fn responses(
             Ok(sse_response(events, cancellation))
         }
         _ => {
-            let response =
-                backend_call(&state, "responses", state.backend.chat_completion(request)).await?;
+            let context = OpenAiRequestContext::new();
+            let response = backend_call_with_cancellation(
+                &state,
+                "responses",
+                &context,
+                state
+                    .backend
+                    .chat_completion_with_context(request, context.clone()),
+            )
+            .await?;
             let translated = translate_chat_completion_response_to_responses(&response)?;
             Ok(Json(translated).into_response())
         }
@@ -435,10 +453,11 @@ async fn completions(
         let include_usage = request.include_usage();
         let context = OpenAiRequestContext::new();
         let cancellation = context.cancellation_token();
-        let stream = backend_call(
+        let stream = backend_call_with_cancellation(
             &state,
             "completion_stream",
-            state.backend.completion_stream(request, context),
+            &context,
+            state.backend.completion_stream(request, context.clone()),
         )
         .await?;
         let events = stream
@@ -452,10 +471,19 @@ async fn completions(
             .chain(stream::once(async { done_event() }));
         Ok(sse_response(events, cancellation))
     } else {
-        Ok(
-            Json(backend_call(&state, "completion", state.backend.completion(request)).await?)
-                .into_response(),
+        let context = OpenAiRequestContext::new();
+        Ok(Json(
+            backend_call_with_cancellation(
+                &state,
+                "completion",
+                &context,
+                state
+                    .backend
+                    .completion_with_context(request, context.clone()),
+            )
+            .await?,
         )
+        .into_response())
     }
 }
 
@@ -492,6 +520,59 @@ fn resolve_agent_session(
         (Some(header), _) => Ok(Some(header)),
         (None, protocol) => Ok(protocol),
     }
+}
+
+struct CancelOnDrop {
+    context: OpenAiRequestContext,
+    armed: bool,
+}
+
+impl CancelOnDrop {
+    fn new(context: &OpenAiRequestContext) -> Self {
+        Self {
+            context: context.clone(),
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            self.context.cancel();
+        }
+    }
+}
+
+async fn backend_call_with_cancellation<T, F>(
+    state: &FrontendState,
+    operation: &'static str,
+    context: &OpenAiRequestContext,
+    future: F,
+) -> OpenAiResult<T>
+where
+    F: Future<Output = OpenAiResult<T>>,
+{
+    let mut cancel_on_drop = CancelOnDrop::new(context);
+    let result = match state.config.backend_timeout {
+        Some(timeout) => match tokio::time::timeout(timeout, future).await {
+            Ok(result) => result,
+            Err(_) => {
+                context.cancel();
+                return Err(OpenAiError::timeout(format!(
+                    "{operation} timed out after {} ms",
+                    timeout.as_millis()
+                )));
+            }
+        },
+        None => future.await,
+    };
+    cancel_on_drop.disarm();
+    result
 }
 
 async fn backend_call<T, F>(
@@ -867,6 +948,42 @@ mod tests {
             unreachable!("agent-session tests use non-streaming requests")
         }
     }
+
+    struct NonStreamingCancellationBackend {
+        token: Arc<Mutex<Option<CancellationToken>>>,
+    }
+
+    #[async_trait]
+    impl OpenAiBackend for NonStreamingCancellationBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(vec![ModelObject::new("cancel-model")])
+        }
+
+        async fn chat_completion(
+            &self,
+            _request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            unreachable!("frontend must use the context-aware non-streaming path")
+        }
+
+        async fn chat_completion_with_context(
+            &self,
+            _request: ChatCompletionRequest,
+            context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            *self.token.lock().expect("token lock poisoned") = Some(context.cancellation_token());
+            std::future::pending().await
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            unreachable!("cancellation backend test only calls non-streaming")
+        }
+    }
+
     #[async_trait]
     impl OpenAiBackend for CancellationBackend {
         async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
@@ -1388,6 +1505,84 @@ mod tests {
         tokio::task::yield_now().await;
 
         assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn non_streaming_timeout_cancels_request_context() {
+        let token = Arc::new(Mutex::new(None));
+        let app = router_for_with_config(
+            Arc::new(NonStreamingCancellationBackend {
+                token: token.clone(),
+            }),
+            OpenAiFrontendConfig::default().with_backend_timeout(Duration::from_millis(5)),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "cancel-model",
+                            "messages": [{"role": "user", "content": "hello"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        let cancellation = token
+            .lock()
+            .expect("token lock poisoned")
+            .clone()
+            .expect("backend saw request context");
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn dropping_non_streaming_request_cancels_request_context() {
+        let token = Arc::new(Mutex::new(None));
+        let app = router_for_with_config(
+            Arc::new(NonStreamingCancellationBackend {
+                token: token.clone(),
+            }),
+            OpenAiFrontendConfig::default().without_backend_timeout(),
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "model": "cancel-model",
+                    "messages": [{"role": "user", "content": "hello"}]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let task = tokio::spawn(app.oneshot(request));
+
+        let cancellation = tokio::time::timeout(Duration::from_millis(100), async {
+            loop {
+                if let Some(token) = token.lock().expect("token lock poisoned").clone() {
+                    break token;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("backend received request context");
+        assert!(!cancellation.is_cancelled());
+
+        task.abort();
+        let _ = task.await;
+        tokio::time::timeout(Duration::from_millis(100), cancellation.cancelled())
+            .await
+            .expect("dropped request cancelled backend context");
     }
 
     #[tokio::test]
