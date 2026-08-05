@@ -51,6 +51,26 @@ use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::mpsc;
 use tokio::task;
 
+fn request_cancelled_error() -> OpenAiError {
+    OpenAiError::backend("request cancelled")
+}
+
+pub(in crate::frontend) async fn run_blocking_generation_worker<T, F>(
+    permit: OwnedSemaphorePermit,
+    context: OpenAiRequestContext,
+    work: F,
+) -> Result<T, task::JoinError>
+where
+    T: Send + 'static,
+    F: FnOnce(openai_frontend::CancellationToken) -> T + Send + 'static,
+{
+    task::spawn_blocking(move || {
+        let _permit = permit;
+        work(context.cancellation_token())
+    })
+    .await
+}
+
 #[async_trait]
 impl OpenAiBackend for StageOpenAiBackend {
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
@@ -59,7 +79,16 @@ impl OpenAiBackend for StageOpenAiBackend {
 
     async fn chat_completion(
         &self,
+        request: ChatCompletionRequest,
+    ) -> OpenAiResult<ChatCompletionResponse> {
+        self.chat_completion_with_context(request, OpenAiRequestContext::new())
+            .await
+    }
+
+    async fn chat_completion_with_context(
+        &self,
         mut request: ChatCompletionRequest,
+        context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse> {
         let ids = OpenAiGenerationIds::new(
             OpenAiCacheHints::from_chat_request(&request),
@@ -105,6 +134,7 @@ impl OpenAiBackend for StageOpenAiBackend {
                 request.stop.clone(),
                 sampling,
                 Some(request.clone()),
+                context,
                 ids.clone(),
             )
             .await?;
@@ -220,7 +250,16 @@ impl OpenAiBackend for StageOpenAiBackend {
         })))
     }
 
-    async fn completion(&self, mut request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+        self.completion_with_context(request, OpenAiRequestContext::new())
+            .await
+    }
+
+    async fn completion_with_context(
+        &self,
+        mut request: CompletionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<CompletionResponse> {
         let ids = OpenAiGenerationIds::new(
             OpenAiCacheHints::from_completion_request(&request),
             request.agent_session(),
@@ -251,6 +290,7 @@ impl OpenAiBackend for StageOpenAiBackend {
                 request.stop.clone(),
                 sampling,
                 None,
+                context,
                 ids.clone(),
             )
             .await?;
@@ -448,6 +488,7 @@ impl StageOpenAiBackend {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_generation(
         &self,
         prompt: PreparedGenerationPrompt,
@@ -455,10 +496,17 @@ impl StageOpenAiBackend {
         stop: Option<openai_frontend::StopSequence>,
         sampling: SamplingConfig,
         hook_request: Option<ChatCompletionRequest>,
+        context: OpenAiRequestContext,
         ids: OpenAiGenerationIds,
     ) -> OpenAiResult<GeneratedText> {
         let admit_timer = PhaseTimer::start();
-        let permit = self.acquire_generation_permit().await?;
+        let cancellation = context.cancellation_token();
+        let permit = tokio::select! {
+            permit = self.acquire_generation_permit() => permit?,
+            () = cancellation.cancelled() => {
+                return Err(request_cancelled_error());
+            }
+        };
         let mut admit_attrs = self.openai_attrs(&ids);
         admit_attrs.insert(
             "llama_stage.openai_phase".to_string(),
@@ -467,22 +515,32 @@ impl StageOpenAiBackend {
         self.emit_openai_phase("stage.openai_generation_admit", admit_timer, admit_attrs);
         let backend = self.clone();
         let hook_runtime = Some(tokio::runtime::Handle::current());
-        task::spawn_blocking(move || {
-            let _permit = permit;
-            backend.generate_text(
+        let worker_context = context.clone();
+        let result = run_blocking_generation_worker(permit, worker_context.clone(), move |token| {
+            let output = backend.generate_text(
                 prompt,
                 max_tokens,
                 stop.as_ref(),
                 sampling,
                 hook_request,
                 hook_runtime,
-                None,
+                Some(&token),
                 ids,
                 |_| Ok(()),
-            )
+            );
+            if worker_context.is_cancelled() {
+                Err(request_cancelled_error())
+            } else {
+                output
+            }
         })
         .await
-        .map_err(|error| OpenAiError::backend(format!("generation task failed: {error}")))?
+        .map_err(|error| OpenAiError::backend(format!("generation task failed: {error}")))?;
+        if context.is_cancelled() {
+            Err(request_cancelled_error())
+        } else {
+            result
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -500,7 +558,13 @@ impl StageOpenAiBackend {
         ids: OpenAiGenerationIds,
     ) -> OpenAiResult<GenerationStream> {
         let admit_timer = PhaseTimer::start();
-        let permit = self.acquire_generation_permit().await?;
+        let cancellation = context.cancellation_token();
+        let permit = tokio::select! {
+            permit = self.acquire_generation_permit() => permit?,
+            () = cancellation.cancelled() => {
+                return Err(request_cancelled_error());
+            }
+        };
         let mut admit_attrs = self.openai_attrs(&ids);
         admit_attrs.insert(
             "llama_stage.openai_phase".to_string(),
