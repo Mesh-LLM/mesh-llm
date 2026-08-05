@@ -205,7 +205,7 @@ async fn refined_drafts_are_what_reach_the_reducer() {
     );
     let cfg = config(
         &[("Qwen3-8B", a), ("Llama-3.1-8B", b), ("Ministral-8B", c)],
-        moa::RefinementPolicy::Auto,
+        moa::RefinementPolicy::Always,
         Duration::from_secs(5),
     );
 
@@ -251,7 +251,7 @@ async fn a_hanging_refiner_cannot_hold_the_turn() {
     let worker_timeout = Duration::from_millis(400);
     let cfg = config(
         &[("Qwen3-8B", a), ("Llama-3.1-8B", b), ("Ministral-8B", c)],
-        moa::RefinementPolicy::Auto,
+        moa::RefinementPolicy::Always,
         worker_timeout,
     );
 
@@ -285,7 +285,7 @@ async fn total_refinement_failure_falls_back_to_round_one() {
     );
     let cfg = config(
         &[("Qwen3-8B", a), ("Llama-3.1-8B", b), ("Ministral-8B", c)],
-        moa::RefinementPolicy::Auto,
+        moa::RefinementPolicy::Always,
         Duration::from_secs(5),
     );
 
@@ -331,7 +331,7 @@ async fn refinement_still_runs_under_production_grace() {
     );
     let cfg = config_with_grace(
         &[("Qwen3-8B", a), ("Llama-3.1-8B", b), ("Ministral-8B", c)],
-        moa::RefinementPolicy::Auto,
+        moa::RefinementPolicy::Always,
         Duration::from_secs(5),
         // The production default from `build_moa_config`.
         Duration::from_secs(3),
@@ -385,7 +385,7 @@ async fn straggling_peers_do_not_cost_the_refinement_round() {
     );
     let cfg = config_with_grace(
         &[("Qwen3-8B", a), ("Llama-3.1-8B", b), ("Ministral-8B", c)],
-        moa::RefinementPolicy::Auto,
+        moa::RefinementPolicy::Always,
         Duration::from_secs(5),
         grace,
     );

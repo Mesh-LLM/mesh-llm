@@ -62,23 +62,26 @@ pub(crate) fn refinement_expected(config: &GatewayConfig) -> bool {
             if config.models.len() < MIN_DRAFTS {
                 return false;
             }
-            // Refine when the drafts will be correlated — that is where the
-            // cross-peer round measurably pays:
-            //   * homogeneous pool (same model, incl. repeated instances or
-            //     quant variants): same-model 32B ×2 wins 48/2 with refinement
-            //     vs 35/10 without;
-            //   * all-small pool: 8B needs the round to beat its best member.
-            // A diverse pool that already has a big-tier synthesizer gains
-            // ~nothing from the extra fan-out (mid diverse: 49/6 layered vs
-            // 47/4 single-round), so skip it there to save the round-trip.
-            // See `evals/moa-openrouter/RESULTS.md`.
-            if worker::pool_is_homogeneous(&config.models) {
-                return true;
-            }
-            config
+            // The cross-peer refine round is an extra *serial* fan-out pass
+            // (draft -> synth -> refine -> synth). It only earns that cost in
+            // one measured case: a homogeneous pool at real scale, where the
+            // repeated same-model drafts are correlated enough that a round of
+            // cross-pollination helps (same-model 32B ×2: 48/2 with refine vs
+            // 35/10 without).
+            //
+            // It does NOT pay for small pools. The width sprint measured
+            // refine-vs-single-aggregation as null in every 8B cell (2/4/6,
+            // diverse and same); single aggregation alone is what wins there
+            // (6× diverse 8B, 12W/2L). And a diverse big pool gains ~nothing
+            // either (mid diverse 49/6 layered vs 47/4 single-round). So skip
+            // the round for any all-small pool and for diverse pools —
+            // matching Hermes' cheaper single-synth cadence where refine buys
+            // nothing. See `evals/moa-openrouter/RESULTS.md`.
+            let all_small = config
                 .models
                 .iter()
-                .all(|m| worker::model_name_is_small_tier(&m.name))
+                .all(|m| worker::model_name_is_small_tier(&m.name));
+            !all_small && worker::pool_is_homogeneous(&config.models)
         }
     }
 }
@@ -219,15 +222,17 @@ mod tests {
         }
     }
 
-    /// The measured case: an all-small pool beats its best member only with
-    /// the refinement round, so Auto must run it.
+    /// An all-small pool wins by WIDTH + single aggregation, not the refine
+    /// round: the width sprint measured refine-vs-single-aggregation null in
+    /// every 8B cell (2/4/6, diverse and same). So Auto skips the extra serial
+    /// pass here — single aggregation over a wide pool is what wins.
     #[test]
-    fn auto_refines_an_all_small_pool() {
+    fn auto_skips_an_all_small_pool() {
         let c = config(
             &["Qwen3-8B", "Llama-3.1-8B", "Ministral-8B"],
             RefinementPolicy::Auto,
         );
-        assert!(should_refine(&c, 3));
+        assert!(!should_refine(&c, 3));
     }
 
     /// A *diverse* pool with a big-tier synthesizer gains ~nothing from the
