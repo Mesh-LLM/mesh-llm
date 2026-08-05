@@ -100,8 +100,10 @@ def collect_commits(base: str, head: str) -> list[dict]:
     for offset in range(0, len(fields), len(field_names)):
         commit_fields = fields[offset : offset + len(field_names)]
         commit_fields[-1] = commit_fields[-1].rstrip("\n")
+        if len(commit_fields) != len(field_names):
+            raise RuntimeError("unexpected NUL-delimited git log record length")
         commits.append(
-            dict(zip(field_names, commit_fields))
+            dict(zip(field_names, commit_fields, strict=True))
         )
     return commits
 
