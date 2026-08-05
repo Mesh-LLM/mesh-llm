@@ -187,12 +187,14 @@ impl TokenizerCapability {
 }
 
 fn source_gguf_path(config: &StageConfig) -> Option<&Path> {
-    config
-        .source_model_path
-        .as_deref()
-        .or(config.model_path.as_deref())
-        .map(Path::new)
-        .filter(|path| path.is_file())
+    [
+        config.source_model_path.as_deref(),
+        config.model_path.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(Path::new)
+    .find(|path| path.is_file())
 }
 
 fn inventory_from_stage(
@@ -285,11 +287,51 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode, header::CONTENT_TYPE},
     };
+    use skippy_protocol::LoadMode;
     use tower::ServiceExt;
 
     use super::*;
 
     const SHA256: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn stage_config(source_model_path: Option<String>, model_path: Option<String>) -> StageConfig {
+        StageConfig {
+            run_id: "run".to_owned(),
+            topology_id: "topology".to_owned(),
+            model_id: "model".to_owned(),
+            package_ref: None,
+            manifest_sha256: None,
+            source_model_path,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path,
+            projector_path: None,
+            stage_id: "stage-0".to_owned(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 1,
+            ctx_size: 1_024,
+            lane_count: 1,
+            n_batch: None,
+            n_ubatch: None,
+            n_gpu_layers: 0,
+            mmap: None,
+            mlock: false,
+            cache_type_k: "f16".to_owned(),
+            cache_type_v: "f16".to_owned(),
+            flash_attn_type: Default::default(),
+            filter_tensors_on_load: false,
+            selected_device: None,
+            kv_cache: None,
+            native_mtp_enabled: true,
+            load_mode: LoadMode::RuntimeSlice,
+            bind_addr: "127.0.0.1:0".to_owned(),
+            upstream: None,
+            downstream: None,
+        }
+    }
 
     struct RecordingTokenizer {
         tokens: Vec<i32>,
@@ -428,6 +470,19 @@ mod tests {
             capability.tokenize(request).unwrap_err(),
             TokenizerCapabilityError::IdentityMismatch
         );
+    }
+
+    #[test]
+    fn source_gguf_path_falls_back_when_source_model_path_is_unavailable() {
+        let temp_dir = tempfile::tempdir().expect("create temporary GGUF directory");
+        let model_path = temp_dir.path().join("model.gguf");
+        std::fs::write(&model_path, []).expect("create temporary GGUF");
+        let config = stage_config(
+            Some(temp_dir.path().join("missing.gguf").display().to_string()),
+            Some(model_path.display().to_string()),
+        );
+
+        assert_eq!(source_gguf_path(&config), Some(model_path.as_path()));
     }
 
     #[test]
