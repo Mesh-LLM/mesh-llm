@@ -66,14 +66,20 @@ impl StageOpenAiBackend {
             },
         )? {
             LinearProposalQueryOutcome::NoProposal { source_telemetry } => {
-                self.emit_linear_proposal_source_telemetry(source_telemetry);
+                self.emit_linear_proposal_source_telemetry(
+                    source_telemetry,
+                    state.emit_token_debug,
+                );
                 None
             }
             LinearProposalQueryOutcome::DeadlineExceeded {
                 proposal_elapsed_us,
                 source_telemetry,
             } => {
-                self.emit_linear_proposal_source_telemetry(source_telemetry);
+                self.emit_linear_proposal_source_telemetry(
+                    source_telemetry,
+                    state.emit_token_debug,
+                );
                 let mut attrs = BTreeMap::new();
                 attrs.insert(
                     "llama_stage.linear_proposal.discard_reason".to_string(),
@@ -88,7 +94,10 @@ impl StageOpenAiBackend {
                 None
             }
             LinearProposalQueryOutcome::Ready(queried) => {
-                self.emit_linear_proposal_source_telemetry(queried.source_telemetry);
+                self.emit_linear_proposal_source_telemetry(
+                    queried.source_telemetry,
+                    state.emit_token_debug,
+                );
                 Some(queried)
             }
         };
@@ -188,13 +197,26 @@ impl StageOpenAiBackend {
     fn emit_linear_proposal_source_telemetry(
         &self,
         source_telemetry: Option<LinearProposalSourceTelemetry>,
+        emit_token_debug: bool,
     ) {
         let Some(source_telemetry) = source_telemetry else {
             return;
         };
         let mut attrs = BTreeMap::new();
         source_telemetry.insert_telemetry_attrs(&mut attrs);
-        self.telemetry
-            .emit("stage.openai_linear_proposal_source", attrs);
+        match source_telemetry.outcome {
+            crate::frontend::LinearProposalSourceOutcome::Ready
+            | crate::frontend::LinearProposalSourceOutcome::Abstained
+                if emit_token_debug =>
+            {
+                self.telemetry
+                    .emit_debug("stage.openai_linear_proposal_source", attrs);
+            }
+            crate::frontend::LinearProposalSourceOutcome::Ready
+            | crate::frontend::LinearProposalSourceOutcome::Abstained => {}
+            _ => self
+                .telemetry
+                .emit("stage.openai_linear_proposal_source", attrs),
+        }
     }
 }

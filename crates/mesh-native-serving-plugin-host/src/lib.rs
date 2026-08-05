@@ -7,7 +7,7 @@ use std::{
     ptr::NonNull,
     sync::{
         Arc, Condvar, Mutex, OnceLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{SyncSender, sync_channel},
     },
     thread::{self, JoinHandle},
@@ -22,7 +22,8 @@ use skippy_server::frontend::{
     GenerationReceipt, GenerationReceiptConfig, GenerationStart, LinearProposal,
     LinearProposalDiscardReason, LinearProposalDisposition, LinearProposalIngress,
     LinearProposalIngressConfig, LinearProposalQuery, LinearProposalReceipt,
-    LinearProposalSourceOutcome, LinearProposalSourceTelemetry, OpaqueProposalDecisionId,
+    LinearProposalSourceOutcome, LinearProposalSourceResponse, LinearProposalSourceTelemetry,
+    OpaqueProposalDecisionId,
 };
 use skippy_server::serving_hooks::{ModelServingHooks, ModelServingHooksFactory};
 use skippy_server::tokenizer::TokenizerCapability;
@@ -118,16 +119,13 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
         let active = ActivePlugin {
             definition: Arc::clone(&self.definition),
             instance: Some(instance),
-            proposal_token_buffer: vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS],
+            proposal_token_buffer: Mutex::new(vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS]),
         };
         let driver = Arc::new(PluginDriver::spawn(active)?);
         let lifecycle: Arc<dyn GenerationLifecycleIngress> = Arc::new(NativeLifecycleIngress {
             driver: Arc::clone(&driver),
         });
-        let proposals: Arc<dyn LinearProposalIngress> = Arc::new(NativeProposalIngress {
-            driver,
-            telemetry: Mutex::new(None),
-        });
+        let proposals: Arc<dyn LinearProposalIngress> = Arc::new(NativeProposalIngress { driver });
         Ok(ModelServingHooks::new(
             GenerationReceiptConfig::from_lifecycle_ingress(lifecycle),
             LinearProposalIngressConfig::new(
@@ -223,7 +221,7 @@ fn validate_table(table: &abi::NativeServingPluginV1) -> Result<String> {
 struct ActivePlugin {
     definition: Arc<LoadedDefinition>,
     instance: Option<NonNull<c_void>>,
-    proposal_token_buffer: Vec<i32>,
+    proposal_token_buffer: Mutex<Vec<i32>>,
 }
 
 // SAFETY: activation succeeds only for plugins implementing the ABI's
@@ -308,7 +306,7 @@ impl ActivePlugin {
         self.call_status("finish generation", status)
     }
 
-    fn propose(&mut self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
+    fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
         let event = abi::ProposalQuery {
             struct_size: size_of::<abi::ProposalQuery>(),
             request_id: query.request_id,
@@ -328,17 +326,17 @@ impl ActivePlugin {
     }
 
     fn poll_until_deadline(
-        &mut self,
+        &self,
         operation: abi::ProposalOperation,
         deadline: Instant,
         max_proposal_tokens: usize,
     ) -> Result<Option<LinearProposal>> {
-        let mut token_buffer = std::mem::take(&mut self.proposal_token_buffer);
+        let mut token_buffer = self
+            .proposal_token_buffer
+            .lock()
+            .map_err(|_| anyhow!("native serving plugin proposal token buffer lock poisoned"))?;
         let token_capacity = max_proposal_tokens.min(token_buffer.len());
-        let result =
-            self.poll_with_buffer(operation, deadline, &mut token_buffer[..token_capacity]);
-        self.proposal_token_buffer = token_buffer;
-        result
+        self.poll_with_buffer(operation, deadline, &mut token_buffer[..token_capacity])
     }
 
     fn poll_with_buffer(
@@ -475,22 +473,16 @@ impl GenerationLifecycleIngress for NativeLifecycleIngress {
 
 struct NativeProposalIngress {
     driver: Arc<PluginDriver>,
-    telemetry: Mutex<Option<LinearProposalSourceTelemetry>>,
 }
 
 impl LinearProposalIngress for NativeProposalIngress {
-    fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
+    fn propose(&self, query: LinearProposalQuery) -> Result<LinearProposalSourceResponse> {
         let response = self.driver.propose(query)?;
-        *self
-            .telemetry
-            .lock()
-            .map_err(|_| anyhow!("native serving plugin proposal telemetry lock poisoned"))? =
-            Some(response.telemetry);
-        response.proposal.map_err(anyhow::Error::msg)
-    }
-
-    fn take_proposal_telemetry(&self) -> Option<LinearProposalSourceTelemetry> {
-        self.telemetry.lock().ok()?.take()
+        let proposal = response.proposal.unwrap_or_default();
+        Ok(LinearProposalSourceResponse::with_telemetry(
+            proposal,
+            response.telemetry,
+        ))
     }
 
     fn report(&self, receipt: &LinearProposalReceipt) -> Result<()> {
@@ -530,36 +522,32 @@ struct QueuedPluginCommand {
     command: PluginCommand,
 }
 
-impl QueuedPluginCommand {
-    fn is_lifecycle(&self) -> bool {
-        matches!(
-            self.command,
-            PluginCommand::Begin(_)
-                | PluginCommand::Committed(_)
-                | PluginCommand::Abort(_)
-                | PluginCommand::Finish(_)
-        )
-    }
-
-    fn is_proposal(&self) -> bool {
-        matches!(self.command, PluginCommand::Proposal(_, _))
-    }
-}
-
 struct PluginCommandQueue {
     commands: Mutex<VecDeque<QueuedPluginCommand>>,
+    stopped: AtomicBool,
     available: Condvar,
 }
 
+#[derive(Debug)]
 enum PluginCommandQueueError {
     Full,
+    Stopped,
     Poisoned,
 }
 
 impl PluginCommandQueue {
+    fn new() -> Self {
+        Self {
+            commands: Mutex::new(VecDeque::with_capacity(PLUGIN_COMMAND_CAPACITY)),
+            stopped: AtomicBool::new(false),
+            available: Condvar::new(),
+        }
+    }
+
     fn enqueue(&self, command: PluginCommand) -> Result<()> {
         self.try_enqueue(command).map_err(|error| match error {
             PluginCommandQueueError::Full => anyhow!("native serving plugin command queue is full"),
+            PluginCommandQueueError::Stopped => anyhow!("native serving plugin worker stopped"),
             PluginCommandQueueError::Poisoned => {
                 anyhow!("native serving plugin command queue lock poisoned")
             }
@@ -574,6 +562,9 @@ impl PluginCommandQueue {
             .commands
             .lock()
             .map_err(|_| PluginCommandQueueError::Poisoned)?;
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(PluginCommandQueueError::Stopped);
+        }
         if commands.len() == PLUGIN_COMMAND_CAPACITY {
             return Err(PluginCommandQueueError::Full);
         }
@@ -583,6 +574,11 @@ impl PluginCommandQueue {
         });
         self.available.notify_one();
         Ok(())
+    }
+
+    fn mark_stopped(&self) {
+        self.stopped.store(true, Ordering::Release);
+        self.available.notify_all();
     }
 
     fn next(&self) -> QueuedPluginCommand {
@@ -602,55 +598,61 @@ impl PluginCommandQueue {
     }
 
     fn pop_next(commands: &mut VecDeque<QueuedPluginCommand>) -> Option<QueuedPluginCommand> {
-        let Some(proposal_index) = commands.iter().position(QueuedPluginCommand::is_proposal)
-        else {
-            return commands.pop_front();
-        };
-        if let Some(lifecycle_index) = commands
-            .iter()
-            .take(proposal_index)
-            .position(QueuedPluginCommand::is_lifecycle)
-        {
-            return commands.remove(lifecycle_index);
-        }
-        commands.remove(proposal_index)
+        // Lifecycle and proposal callbacks share this FIFO so every proposal
+        // observes its earlier committed state. Passive callbacks use their
+        // own worker and cannot delay either class.
+        commands.pop_front()
     }
 }
 
 struct PluginDriver {
     queue: Arc<PluginCommandQueue>,
+    passive_queue: Arc<PluginCommandQueue>,
+    active: Arc<ActivePlugin>,
     fatal_error: Arc<Mutex<Option<String>>>,
     lifecycle_delivery_failures: Arc<AtomicU64>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    passive_worker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl PluginDriver {
     fn spawn(active: ActivePlugin) -> Result<Self> {
-        let queue = Arc::new(PluginCommandQueue {
-            commands: Mutex::new(VecDeque::with_capacity(PLUGIN_COMMAND_CAPACITY)),
-            available: Condvar::new(),
-        });
+        let queue = Arc::new(PluginCommandQueue::new());
+        let passive_queue = Arc::new(PluginCommandQueue::new());
+        let active = Arc::new(active);
         let fatal_error = Arc::new(Mutex::new(None));
         let worker_fatal_error = Arc::clone(&fatal_error);
         let lifecycle_delivery_failures = Arc::new(AtomicU64::new(0));
         let worker_lifecycle_delivery_failures = Arc::clone(&lifecycle_delivery_failures);
         let worker_queue = Arc::clone(&queue);
+        let worker_passive_queue = Arc::clone(&passive_queue);
+        let worker_active = Arc::clone(&active);
         let worker = thread::Builder::new()
             .name("mesh-native-serving-plugin".to_string())
             .spawn(move || {
                 plugin_worker(
-                    active,
+                    worker_active,
                     worker_queue,
+                    worker_passive_queue,
                     worker_fatal_error,
                     worker_lifecycle_delivery_failures,
                 );
             })
             .context("spawn native serving plugin worker")?;
+        let passive_worker_queue = Arc::clone(&passive_queue);
+        let passive_worker_active = Arc::clone(&active);
+        let passive_worker = thread::Builder::new()
+            .name("mesh-native-serving-plugin-passive".to_string())
+            .spawn(move || plugin_passive_worker(passive_worker_active, passive_worker_queue))
+            .context("spawn native serving plugin passive worker")?;
         Ok(Self {
             queue,
+            passive_queue,
+            active,
             fatal_error,
             lifecycle_delivery_failures,
             worker: Mutex::new(Some(worker)),
+            passive_worker: Mutex::new(Some(passive_worker)),
         })
     }
 
@@ -672,11 +674,21 @@ impl PluginDriver {
 
     /// Deliver lifecycle cleanup even after an earlier callback failed.
     ///
-    /// This bypasses only the health gate. The command still uses the same
-    /// bounded deadline-aware queue and fails if the worker has stopped or is
-    /// full.
+    /// This bypasses only the health gate. The command still uses its bounded
+    /// callback queue and fails if that worker has stopped or is full.
     fn enqueue_recovery(&self, command: PluginCommand) -> Result<()> {
-        self.queue.enqueue(command)
+        self.queue_for(&command).enqueue(command)
+    }
+
+    fn queue_for(&self, command: &PluginCommand) -> &Arc<PluginCommandQueue> {
+        if matches!(
+            command,
+            PluginCommand::Report(_) | PluginCommand::Discard(_, _)
+        ) {
+            &self.passive_queue
+        } else {
+            &self.queue
+        }
     }
 
     fn lifecycle_delivery_failures(&self) -> u64 {
@@ -712,6 +724,9 @@ impl PluginDriver {
                         outcome: LinearProposalSourceOutcome::QueueFull,
                     },
                 });
+            }
+            Err(PluginCommandQueueError::Stopped) => {
+                bail!("native serving plugin worker stopped before accepting proposal")
             }
             Err(PluginCommandQueueError::Poisoned) => {
                 bail!("native serving plugin command queue lock poisoned")
@@ -751,11 +766,24 @@ fn elapsed_us(started: Instant) -> u64 {
 
 impl Drop for PluginDriver {
     fn drop(&mut self) {
+        self.stop_worker(&self.queue, &self.worker);
+        self.stop_worker(&self.passive_queue, &self.passive_worker);
+        if let Some(active) = Arc::get_mut(&mut self.active)
+            && let Err(error) = active.shutdown()
+        {
+            eprintln!("native serving plugin shutdown failed: {error:#}");
+        }
+    }
+}
+
+impl PluginDriver {
+    fn stop_worker(&self, queue: &Arc<PluginCommandQueue>, worker: &Mutex<Option<JoinHandle<()>>>) {
         let (reply, response) = sync_channel(1);
-        let queued = self.queue.enqueue(PluginCommand::Shutdown(reply)).is_ok();
-        if queued
-            && response.recv_timeout(CLEAN_SHUTDOWN_TIMEOUT).is_ok()
-            && let Ok(worker) = self.worker.get_mut()
+        let clean_shutdown = queue.enqueue(PluginCommand::Shutdown(reply)).is_ok()
+            && response.recv_timeout(CLEAN_SHUTDOWN_TIMEOUT).is_ok();
+        if (clean_shutdown || queue.stopped.load(Ordering::Acquire))
+            && let Ok(mut worker) = worker.lock()
+            && worker.as_ref().is_some_and(JoinHandle::is_finished)
             && let Some(worker) = worker.take()
         {
             let _ = worker.join();
@@ -763,12 +791,26 @@ impl Drop for PluginDriver {
     }
 }
 
-fn plugin_worker(
-    mut active: ActivePlugin,
+struct WorkerStopGuard {
     queue: Arc<PluginCommandQueue>,
+}
+
+impl Drop for WorkerStopGuard {
+    fn drop(&mut self) {
+        self.queue.mark_stopped();
+    }
+}
+
+fn plugin_worker(
+    active: Arc<ActivePlugin>,
+    queue: Arc<PluginCommandQueue>,
+    passive_queue: Arc<PluginCommandQueue>,
     fatal_error: Arc<Mutex<Option<String>>>,
     lifecycle_delivery_failures: Arc<AtomicU64>,
 ) {
+    let _stop_guard = WorkerStopGuard {
+        queue: Arc::clone(&queue),
+    };
     loop {
         let QueuedPluginCommand {
             enqueued_at,
@@ -795,6 +837,8 @@ fn plugin_worker(
                 let callback_started = Instant::now();
                 let result = active.propose(query);
                 let callback_elapsed_us = elapsed_us(callback_started);
+                let candidate_was_late =
+                    matches!(&result, Ok(Some(_))) && Instant::now() >= query.deadline;
                 let outcome = match &result {
                     Ok(Some(_)) if Instant::now() >= query.deadline => {
                         LinearProposalSourceOutcome::CandidateReturnedTooLate
@@ -804,13 +848,23 @@ fn plugin_worker(
                         LinearProposalSourceOutcome::DeadlineExceededInPlugin
                     }
                     Ok(None) => LinearProposalSourceOutcome::Abstained,
-                    Err(_) => LinearProposalSourceOutcome::Abstained,
+                    Err(_) => LinearProposalSourceOutcome::SourceError,
                 };
+                if candidate_was_late && let Ok(Some(proposal)) = &result {
+                    let _ = passive_queue.enqueue(PluginCommand::Discard(
+                        proposal.decision_id.as_bytes().to_vec(),
+                        LinearProposalDiscardReason::DeadlineExceeded,
+                    ));
+                }
                 let _ = reply.send(ProposalResponse {
-                    proposal: result
-                        .as_ref()
-                        .map(Clone::clone)
-                        .map_err(ToString::to_string),
+                    proposal: if candidate_was_late {
+                        Ok(None)
+                    } else {
+                        result
+                            .as_ref()
+                            .map(Clone::clone)
+                            .map_err(ToString::to_string)
+                    },
                     telemetry: LinearProposalSourceTelemetry {
                         queue_wait_us,
                         callback_elapsed_us,
@@ -819,14 +873,12 @@ fn plugin_worker(
                 });
                 (result.map(|_| ()), false, false)
             }
-            PluginCommand::Report(event) => (active.report(&event), false, false),
-            PluginCommand::Discard(decision_id, reason) => {
-                (active.discard(&decision_id, reason), false, false)
-            }
             PluginCommand::Shutdown(reply) => {
-                let result = active.shutdown();
-                let _ = reply.send(result.as_ref().map(|_| ()).map_err(ToString::to_string));
-                (result, true, false)
+                let _ = reply.send(Ok(()));
+                (Ok(()), true, false)
+            }
+            PluginCommand::Report(_) | PluginCommand::Discard(_, _) => {
+                unreachable!("passive plugin callbacks must use the passive worker queue")
             }
         };
         if lifecycle && result.is_err() {
@@ -840,6 +892,33 @@ fn plugin_worker(
         }
         if terminal {
             break;
+        }
+    }
+}
+
+fn plugin_passive_worker(active: Arc<ActivePlugin>, queue: Arc<PluginCommandQueue>) {
+    let _stop_guard = WorkerStopGuard {
+        queue: Arc::clone(&queue),
+    };
+    loop {
+        match queue.next().command {
+            PluginCommand::Report(event) => {
+                let _ = active.report(&event);
+            }
+            PluginCommand::Discard(decision_id, reason) => {
+                let _ = active.discard(&decision_id, reason);
+            }
+            PluginCommand::Shutdown(reply) => {
+                let _ = reply.send(Ok(()));
+                break;
+            }
+            PluginCommand::Begin(_)
+            | PluginCommand::Committed(_)
+            | PluginCommand::Abort(_)
+            | PluginCommand::Finish(_)
+            | PluginCommand::Proposal(_, _) => {
+                unreachable!("lifecycle and proposal callbacks must use the primary worker queue")
+            }
         }
     }
 }
@@ -961,6 +1040,8 @@ mod tests {
 
     struct FakeState {
         start_delay: Duration,
+        poll_delay: Duration,
+        poll_returns_candidate: bool,
         commit_delay: Duration,
         report_delay: Duration,
         begin_fails: bool,
@@ -1034,11 +1115,23 @@ mod tests {
     }
 
     unsafe extern "C" fn fake_poll_proposal(
-        _instance: abi::PluginInstance,
+        instance: abi::PluginInstance,
         _operation: abi::ProposalOperation,
-        _output: *mut abi::ProposalOutput,
+        output: *mut abi::ProposalOutput,
     ) -> abi::ProposalPollStatus {
-        abi::ProposalPollStatus::ABSTAIN
+        let state = unsafe { &*instance.cast::<FakeState>() };
+        thread::sleep(state.poll_delay);
+        if !state.poll_returns_candidate {
+            return abi::ProposalPollStatus::ABSTAIN;
+        }
+        let output = unsafe { &mut *output };
+        unsafe {
+            *output.decision_id = 7;
+            *output.token_ids = 42;
+        }
+        output.decision_id_length = 1;
+        output.token_length = 1;
+        abi::ProposalPollStatus::READY
     }
 
     unsafe extern "C" fn fake_cancel_proposal(
@@ -1148,6 +1241,8 @@ mod tests {
         let abort_count = Arc::new(AtomicUsize::new(0));
         let state = Box::new(FakeState {
             start_delay,
+            poll_delay: Duration::ZERO,
+            poll_returns_candidate: false,
             commit_delay,
             report_delay,
             begin_fails,
@@ -1158,11 +1253,22 @@ mod tests {
             ActivePlugin {
                 definition,
                 instance: NonNull::new(Box::into_raw(state).cast::<c_void>()),
-                proposal_token_buffer: vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS],
+                proposal_token_buffer: Mutex::new(vec![0; MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS]),
             },
             events,
             abort_count,
         )
+    }
+
+    fn fake_active_with_late_candidate(poll_delay: Duration) -> ActivePlugin {
+        let (active, _, _) =
+            fake_active_with_timing(Duration::ZERO, Duration::ZERO, Duration::ZERO, false);
+        let instance = active.instance.unwrap().as_ptr().cast::<FakeState>();
+        unsafe {
+            (*instance).poll_delay = poll_delay;
+            (*instance).poll_returns_candidate = true;
+        }
+        active
     }
 
     fn wait_for_event(events: &Mutex<Vec<&'static str>>, event: &str) {
@@ -1299,7 +1405,6 @@ mod tests {
             started.elapsed()
         );
 
-        thread::sleep(Duration::from_millis(50));
         let recovered = driver
             .propose(proposal_query(Instant::now() + Duration::from_millis(100)))
             .unwrap();
@@ -1312,42 +1417,105 @@ mod tests {
     }
 
     #[test]
-    fn queued_passive_discard_yields_to_the_next_proposal() {
+    fn running_passive_discard_cannot_delay_the_next_proposal() {
         let (active, events, _) = fake_active_with_timing(
             Duration::ZERO,
-            Duration::from_millis(40),
-            Duration::from_millis(20),
+            Duration::ZERO,
+            Duration::from_millis(100),
             false,
         );
         let driver = Arc::new(PluginDriver::spawn(active).unwrap());
-        let ingress = NativeLifecycleIngress {
-            driver: Arc::clone(&driver),
-        };
-        ingress
-            .try_submit(GenerationLifecycleObservation::Committed(
-                GenerationCommit {
-                    request_id: 1,
-                    session_id: 2,
-                    generated_token_count: 1,
-                    token_ids: vec![4].into_boxed_slice(),
-                },
-            ))
-            .unwrap();
-        wait_for_event(events.as_ref(), "commit");
         driver
             .enqueue(PluginCommand::Discard(
                 vec![1],
                 LinearProposalDiscardReason::PositionMismatch,
             ))
             .unwrap();
+        wait_for_event(events.as_ref(), "discard");
 
+        let started = Instant::now();
         let response = driver
-            .propose(proposal_query(Instant::now() + Duration::from_millis(100)))
+            .propose(proposal_query(started + Duration::from_millis(20)))
             .unwrap();
         assert!(response.proposal.unwrap().is_none());
-        let events = events.lock().unwrap();
-        assert_eq!(events[0], "commit");
-        assert_eq!(events[1], "proposal");
+        assert_eq!(
+            response.telemetry.outcome,
+            LinearProposalSourceOutcome::Abstained
+        );
+        assert!(started.elapsed() < Duration::from_millis(60));
+        assert_eq!(*events.lock().unwrap(), ["discard", "proposal"]);
+    }
+
+    #[test]
+    fn worker_reports_pre_dispatch_deadlines_without_running_the_callback() {
+        let (active, events, _) = fake_active_with_timing(
+            Duration::ZERO,
+            Duration::from_millis(40),
+            Duration::ZERO,
+            false,
+        );
+        let driver = PluginDriver::spawn(active).unwrap();
+        driver
+            .enqueue(PluginCommand::Committed(GenerationCommit {
+                request_id: 1,
+                session_id: 2,
+                generated_token_count: 1,
+                token_ids: vec![4].into_boxed_slice(),
+            }))
+            .unwrap();
+        wait_for_event(events.as_ref(), "commit");
+        let (reply, response) = sync_channel(1);
+        driver
+            .queue
+            .try_enqueue(PluginCommand::Proposal(
+                proposal_query(Instant::now() + Duration::from_millis(5)),
+                reply,
+            ))
+            .unwrap();
+
+        let response = response.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert!(response.proposal.unwrap().is_none());
+        assert_eq!(
+            response.telemetry.outcome,
+            LinearProposalSourceOutcome::DeadlineExceededBeforeDispatch
+        );
+        assert_eq!(*events.lock().unwrap(), ["commit"]);
+    }
+
+    #[test]
+    fn late_candidate_is_reported_and_not_forwarded_to_the_decode() {
+        let driver =
+            PluginDriver::spawn(fake_active_with_late_candidate(Duration::from_millis(20)))
+                .unwrap();
+        let (reply, response) = sync_channel(1);
+        driver
+            .queue
+            .try_enqueue(PluginCommand::Proposal(
+                proposal_query(Instant::now() + Duration::from_millis(5)),
+                reply,
+            ))
+            .unwrap();
+
+        let response = response.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert!(response.proposal.unwrap().is_none());
+        assert_eq!(
+            response.telemetry.outcome,
+            LinearProposalSourceOutcome::CandidateReturnedTooLate
+        );
+    }
+
+    #[test]
+    fn stopped_worker_rejects_lifecycle_delivery() {
+        let queue = PluginCommandQueue::new();
+        queue.mark_stopped();
+
+        assert!(matches!(
+            queue.try_enqueue(PluginCommand::Abort(GenerationAbort {
+                request_id: 1,
+                session_id: 2,
+            })),
+            Err(PluginCommandQueueError::Stopped)
+        ));
     }
 
     #[test]

@@ -278,24 +278,56 @@ impl LinearProposalReceipt {
     }
 }
 
+/// Per-request result from an in-process linear proposal source.
+///
+/// The telemetry travels with the corresponding request result so a shared
+/// source cannot accidentally attribute timings from one decode to another.
+pub struct LinearProposalSourceResponse {
+    proposal: Option<LinearProposal>,
+    telemetry: Option<LinearProposalSourceTelemetry>,
+}
+
+impl LinearProposalSourceResponse {
+    /// Creates a result without source-specific timing data.
+    #[must_use]
+    pub fn new(proposal: Option<LinearProposal>) -> Self {
+        Self {
+            proposal,
+            telemetry: None,
+        }
+    }
+
+    /// Creates a result with telemetry for this exact proposal request.
+    #[must_use]
+    pub fn with_telemetry(
+        proposal: Option<LinearProposal>,
+        telemetry: LinearProposalSourceTelemetry,
+    ) -> Self {
+        Self {
+            proposal,
+            telemetry: Some(telemetry),
+        }
+    }
+
+    fn into_parts(
+        self,
+    ) -> (
+        Option<LinearProposal>,
+        Option<LinearProposalSourceTelemetry>,
+    ) {
+        (self.proposal, self.telemetry)
+    }
+}
+
 /// In-process, source-neutral width-one proposal boundary.
 ///
 /// Implementations must honor `query.deadline`. Skippy independently rejects a
 /// proposal that arrives after it and calls `discard` so the source can resolve
 /// any pending decision without treating it as verified.
 pub trait LinearProposalIngress: Send + Sync {
-    /// Returns an optional bounded proposal for the committed query state.
-    fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>>;
-
-    /// Returns timing and outcome data for the most recent proposal query on
-    /// the calling thread.
-    ///
-    /// Sources that dispatch work asynchronously can use this to distinguish
-    /// queue delay and callback delay without exposing request identity or
-    /// source-private state to Skippy telemetry.
-    fn take_proposal_telemetry(&self) -> Option<LinearProposalSourceTelemetry> {
-        None
-    }
+    /// Returns an optional bounded proposal and telemetry for this exact
+    /// committed query state.
+    fn propose(&self, query: LinearProposalQuery) -> Result<LinearProposalSourceResponse>;
 
     /// Receives the target-authoritative outcome for a verified proposal.
     fn report(&self, receipt: &LinearProposalReceipt) -> Result<()>;
@@ -328,6 +360,8 @@ pub enum LinearProposalSourceOutcome {
     DeadlineExceededInPlugin,
     /// A plugin callback returned a candidate after the deadline.
     CandidateReturnedTooLate,
+    /// A plugin callback failed and was treated as a fail-open abstention.
+    SourceError,
 }
 
 impl LinearProposalSourceOutcome {
@@ -340,6 +374,7 @@ impl LinearProposalSourceOutcome {
             Self::DeadlineExceededBeforeDispatch => "deadline_exceeded_before_dispatch",
             Self::DeadlineExceededInPlugin => "deadline_exceeded_in_plugin",
             Self::CandidateReturnedTooLate => "candidate_returned_too_late",
+            Self::SourceError => "source_error",
         }
     }
 }
@@ -476,7 +511,7 @@ pub(crate) fn query_linear_proposal(
         .checked_add(config.deadline())
         .ok_or_else(|| OpenAiError::backend("linear proposal deadline overflow"))?;
     let proposal_started = Instant::now();
-    let proposal = config
+    let response = config
         .source()
         .propose(LinearProposalQuery::new(
             params.request_id,
@@ -489,7 +524,7 @@ pub(crate) fn query_linear_proposal(
         ))
         .map_err(openai_backend_error)?;
     let proposal_elapsed_us = elapsed_us(proposal_started);
-    let source_telemetry = config.source().take_proposal_telemetry();
+    let (proposal, source_telemetry) = response.into_parts();
     let Some(proposal) = proposal else {
         return Ok(LinearProposalQueryOutcome::NoProposal { source_telemetry });
     };
@@ -631,7 +666,7 @@ mod tests {
     }
 
     impl LinearProposalIngress for FakeIngress {
-        fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
+        fn propose(&self, query: LinearProposalQuery) -> Result<LinearProposalSourceResponse> {
             self.queries.lock().unwrap().push(RecordedQuery {
                 request_id: query.request_id,
                 session_id: query.session_id,
@@ -641,7 +676,9 @@ mod tests {
                 max_proposal_tokens: query.max_proposal_tokens,
             });
             thread::sleep(*self.delay.lock().unwrap());
-            Ok(self.proposal.lock().unwrap().take())
+            Ok(LinearProposalSourceResponse::new(
+                self.proposal.lock().unwrap().take(),
+            ))
         }
 
         fn report(&self, receipt: &LinearProposalReceipt) -> Result<()> {
