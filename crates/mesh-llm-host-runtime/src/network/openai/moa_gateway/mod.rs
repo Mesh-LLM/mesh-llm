@@ -103,6 +103,18 @@ pub async fn try_handle_moa(
         return None;
     };
 
+    // Contract check: `messages` must be a present, non-empty array. Without
+    // this a request like `{"model":"mesh"}` or a string `messages` field fell
+    // through to the workers, which fabricated a 200 answer from nothing
+    // (homelab API-1 defect). Reject before any model call.
+    match body_json.get("messages") {
+        Some(serde_json::Value::Array(msgs)) if !msgs.is_empty() => {}
+        _ => {
+            let _ = proxy::send_400(tcp_stream, "MoA requires a non-empty `messages` array").await;
+            return None;
+        }
+    }
+
     let enable_thinking = effective_enable_thinking_for_moa(&body_json);
 
     let Some(mut config) = build_moa_config(node, targets, required_tokens).await else {
