@@ -491,3 +491,39 @@ Outstanding before this is a merge-blocking claim:
 - a second judge model to bound single-judge risk
 - 2-node mesh validation (everything here is measured through the engine, not
   gossip)
+
+## Width sprint: many small models (2026-08-05)
+
+Aggregator = `qwen/qwen3-8b`, peers 8B-class, judge `gpt-4o-mini`,
+position-swapped + length-noted, 2 draws × 40 prompts, shipped committee path.
+Three arms per trial: single-aggregation (Hermes-shape, draft→synthesize),
+layered (Together-shape, draft→synth→refine→synth), and the refine-vs-single
+delta.
+
+| pool | single-agg vs solo | layered vs solo | refine vs single-agg |
+|---|---|---|---|
+| 2× 8B diverse | 2W/77T/1L, p=1.0 | 3W/74T/3L, p=1.0 | null |
+| 4× 8B diverse | 5W/73T/0L, p=0.06 | 6W/70T/2L, p=0.29 | 0W/77T/1L |
+| **6× 8B diverse** | **12W/65T/2L, p=0.013** | 9W/69T/1L, p=0.021 | 2W/76T/1L |
+| 6× qwen3-8b SAME | 4W/75T/1L, p=0.38 | 1W/79T/0L, p=1.0 | 1W/79T/0L |
+
+Findings:
+
+- **Width is the small-model lever.** A committee of six diverse 8B models
+  beats the single best member (12W/2L, p=0.013); four is only marginal
+  (p=0.06); two/three are null. The old `MAX_COMMITTEE_WORKERS = 4` throttled
+  exactly the pools that need width. Cap is now tier-aware: 6 for all-small, 4
+  when a verified big model is present.
+- **The refine round never earns its serial cost.** `refine vs single-agg` is
+  null in every cell (2/77/1 at N6). Hermes' single-aggregation cadence (one
+  synth, no refine pass) is >= Together's layered shape here, at half the
+  serial latency. The `RefinementPolicy` default should reconsider the extra
+  round for small pools.
+- **At 8B, diversity matters** (6 diverse 12W/2L vs 6 same 4W/1L, p=0.38),
+  unlike mid-scale where Self ≈ Mixed. Weaker models decorrelate their errors
+  better when they are genuinely different families; repeated draws of one 8B
+  do not supply enough independent signal.
+
+Open: 4B pools (is the floor lower or does it need even more width?), and
+whether dropping the refine round for small pools recovers latency without
+losing the width win.

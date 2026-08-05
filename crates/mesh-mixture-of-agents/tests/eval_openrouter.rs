@@ -2121,13 +2121,21 @@ async fn run_committee_trial(
         .await
         .unwrap_or_else(|| b.clone());
 
+    // The three comparisons are independent — judge them concurrently rather
+    // than three serial awaits (~3x faster on the judging phase).
+    let (b_vs_a, c_vs_a, c_vs_b) = tokio::join!(
+        judge_pair(backend, judge, prompt, &b, &a),
+        judge_pair(backend, judge, prompt, &c, &a),
+        judge_pair(backend, judge, prompt, &c, &b),
+    );
+
     Some(CommitteeTrial {
         draw,
         task_id: task_id.to_string(),
         category: category.to_string(),
-        b_vs_a: judge_pair(backend, judge, prompt, &b, &a).await,
-        c_vs_a: judge_pair(backend, judge, prompt, &c, &a).await,
-        c_vs_b: judge_pair(backend, judge, prompt, &c, &b).await,
+        b_vs_a,
+        c_vs_a,
+        c_vs_b,
         len_a: a.len(),
         len_b: b.len(),
         len_c: c.len(),

@@ -321,18 +321,40 @@ pub(super) async fn assemble_worker_pool(
     (backends, models)
 }
 
-/// Largest committee we will fan out to. Measured quality is flat past ~4
-/// diverse workers (evals/moa-openrouter/RESULTS.md), so more than this is pure
-/// latency/cost. A big shared mesh has standbys beyond this, not bigger turns.
-const MAX_COMMITTEE_WORKERS: usize = 4;
+/// Committee width caps, by pool tier. Measured (evals/moa-openrouter,
+/// aggregator = qwen3-8b, 8B-class peers):
+///
+/// - all-small pool: 6x diverse 8B beats solo (12W/2L, p=0.013); 4 is only
+///   marginal (5W/0L, p=0.06); 2 is null. Small, weak drafts need WIDTH — more
+///   independent proposals — before aggregation clears the best member.
+/// - big-tier present: a 24-32B pair already wins (49W/6L, p=2e-9); extra
+///   workers past ~4 are latency/cost with no measured gain.
+///
+/// So the cap scales with size: wide for small pools, tight when a big model is
+/// present.
+const COMMITTEE_CAP_SMALL: usize = 6;
+const COMMITTEE_CAP_BIG: usize = 4;
 
-/// Trim the pool to the best [`MAX_COMMITTEE_WORKERS`] by capability ranking.
+fn committee_cap(models: &[moa::ModelEntry], sizes: &HashMap<String, f64>) -> usize {
+    let has_big = models
+        .iter()
+        .any(|m| tier_for(&m.name, sizes) == SizeTier::Big);
+    if has_big {
+        COMMITTEE_CAP_BIG
+    } else {
+        COMMITTEE_CAP_SMALL
+    }
+}
+
+/// Trim the pool to the best workers for its tier (see [`committee_cap`]).
 async fn cap_committee(
     node: &mesh::Node,
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
 ) {
-    if models.len() <= MAX_COMMITTEE_WORKERS {
+    let sizes = gossiped_sizes(node).await;
+    let cap = committee_cap(models, &sizes);
+    if models.len() <= cap {
         return;
     }
     // Rank by verified size, NOT the tool-actor ranking. The committee serves
@@ -341,7 +363,6 @@ async fn cap_committee(
     // four small models whose metadata advertises tool use — the opposite of
     // the admission goal. Keep the largest verified models; a model with no
     // verified size ranks as weakest, and stable index breaks ties.
-    let sizes = gossiped_sizes(node).await;
     let mut ranked: Vec<usize> = (0..models.len()).collect();
     ranked.sort_by(|&a, &b| {
         let key = |i: usize| match tier_for(&models[i].name, &sizes) {
@@ -350,8 +371,7 @@ async fn cap_committee(
         };
         key(a).cmp(&key(b)).then_with(|| a.cmp(&b))
     });
-    let keep: std::collections::HashSet<usize> =
-        ranked.into_iter().take(MAX_COMMITTEE_WORKERS).collect();
+    let keep: std::collections::HashSet<usize> = ranked.into_iter().take(cap).collect();
 
     let mut kept_backends: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
     let mut kept_models: Vec<moa::ModelEntry> = Vec::new();
@@ -724,6 +744,35 @@ mod tests {
             3,
             "no verified big => all-small pool => nothing excluded"
         );
+    }
+
+    #[test]
+    fn committee_cap_is_wide_for_small_pools_tight_for_big() {
+        // All-small pool: cap is wide (6) so a 6× 8B mesh keeps its width —
+        // measured 12W/2L p=0.013 at width 6, only marginal at 4.
+        let small: Vec<moa::ModelEntry> = (0..8)
+            .map(|i| moa::ModelEntry {
+                name: "Qwen3-8B".to_string(),
+                backend_index: i,
+            })
+            .collect();
+        let sizes = sizes_of(&[("Qwen3-8B", 8.0)]);
+        assert_eq!(committee_cap(&small, &sizes), COMMITTEE_CAP_SMALL);
+
+        // A verified big model present -> tight cap (4); extra workers past a
+        // 24–32B pair buy nothing.
+        let mixed = vec![
+            moa::ModelEntry {
+                name: "Qwen3-32B".to_string(),
+                backend_index: 0,
+            },
+            moa::ModelEntry {
+                name: "Qwen3-8B".to_string(),
+                backend_index: 1,
+            },
+        ];
+        let sizes = sizes_of(&[("Qwen3-32B", 32.0), ("Qwen3-8B", 8.0)]);
+        assert_eq!(committee_cap(&mixed, &sizes), COMMITTEE_CAP_BIG);
     }
 
     #[test]
