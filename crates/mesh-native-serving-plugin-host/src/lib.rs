@@ -88,6 +88,12 @@ impl NativeServingPluginFactory {
 impl ModelServingHooksFactory for NativeServingPluginFactory {
     fn create(&self, tokenizer: TokenizerCapability) -> Result<ModelServingHooks> {
         let identity = tokenizer.identity();
+        let inventory = ActivationInventory::from_inventory(
+            tokenizer
+                .inventory()
+                .context("bound model does not expose a tokenizer inventory")?,
+        )?;
+        let inventory_view = inventory.view();
         let context = abi::ActivationContext {
             struct_size: size_of::<abi::ActivationContext>(),
             model_id: abi::ByteSlice::from_bytes(identity.model_id.as_bytes()),
@@ -95,6 +101,7 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
                 identity.source_model_sha256.as_bytes(),
             ),
             tokenizer_id: abi::ByteSlice::from_bytes(identity.tokenizer_id.as_bytes()),
+            tokenizer_inventory: &raw const inventory_view,
             config_path: path_slice(&self.config_path),
             state_directory: path_slice(&self.state_directory),
             proposal_deadline_ns: u64::try_from(self.proposal_deadline.as_nanos())
@@ -134,6 +141,49 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
                 MAX_NATIVE_PLUGIN_PROPOSAL_TOKENS,
             )?,
         ))
+    }
+}
+
+struct ActivationInventory {
+    entries: Vec<abi::TokenizerInventoryEntry>,
+}
+
+impl ActivationInventory {
+    fn from_inventory(inventory: &abi::TokenizerInventory) -> Result<Self> {
+        if inventory.schema_version != abi::TOKENIZER_INVENTORY_SCHEMA
+            || inventory.tokens.is_empty()
+        {
+            bail!("bound model exposes an unsupported or empty tokenizer inventory");
+        }
+        let entries = inventory
+            .tokens
+            .iter()
+            .map(|entry| {
+                let (piece_kind, bytes) = match &entry.piece {
+                    abi::TokenizerInventoryPiece::Bytes { bytes } => {
+                        (abi::TokenizerPieceKind::BYTES, bytes.as_slice())
+                    }
+                    abi::TokenizerInventoryPiece::Control { identity } => {
+                        (abi::TokenizerPieceKind::CONTROL, identity.as_bytes())
+                    }
+                };
+                abi::TokenizerInventoryEntry {
+                    id: entry.id,
+                    piece_kind,
+                    bytes: abi::ByteSlice::from_bytes(bytes),
+                }
+            })
+            .collect();
+        Ok(Self { entries })
+    }
+
+    fn view(&self) -> abi::TokenizerInventoryView {
+        abi::TokenizerInventoryView {
+            struct_size: size_of::<abi::TokenizerInventoryView>(),
+            schema_version: abi::TOKENIZER_INVENTORY_SCHEMA,
+            entries: self.entries.as_ptr(),
+            entry_count: self.entries.len(),
+        }
     }
 }
 
@@ -1037,6 +1087,32 @@ mod tests {
 
     static FAKE_NAME: &[u8] = b"test-serving-plugin";
     static CANCEL_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn tokenizer_inventory_view_borrows_host_owned_bytes_for_activation() {
+        let inventory = abi::TokenizerInventory {
+            schema_version: abi::TOKENIZER_INVENTORY_SCHEMA,
+            model_id: "glm".to_string(),
+            source_model_sha256: "a".repeat(64),
+            tokenizer_id: "gguf-source-sha256:test".to_string(),
+            tokens: vec![abi::TokenizerInventoryToken {
+                id: 0,
+                piece: abi::TokenizerInventoryPiece::Bytes {
+                    bytes: b"hello".to_vec(),
+                },
+            }],
+        };
+        let activation = ActivationInventory::from_inventory(&inventory).unwrap();
+        let view = activation.view();
+        assert_eq!(view.schema_version, abi::TOKENIZER_INVENTORY_SCHEMA);
+        assert_eq!(view.entry_count, 1);
+        let entry = unsafe { &*view.entries };
+        assert_eq!(entry.piece_kind, abi::TokenizerPieceKind::BYTES);
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(entry.bytes.pointer, entry.bytes.length) },
+            b"hello"
+        );
+    }
 
     struct FakeState {
         start_delay: Duration,

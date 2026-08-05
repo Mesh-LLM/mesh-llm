@@ -17,6 +17,29 @@ use std::ffi::{c_char, c_void};
 pub const NATIVE_SERVING_PLUGIN_ABI_V1: u32 = 1;
 pub const NATIVE_SERVING_PLUGIN_ENTRY_V1: &[u8] = b"mesh_native_serving_plugin_v1\0";
 pub const MAX_DECISION_ID_BYTES: usize = 64;
+pub const TOKENIZER_INVENTORY_SCHEMA: u32 = 1;
+
+/// Host-owned typed inventory. This Rust value never crosses the ABI directly.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenizerInventory {
+    pub schema_version: u32,
+    pub model_id: String,
+    pub source_model_sha256: String,
+    pub tokenizer_id: String,
+    pub tokens: Vec<TokenizerInventoryToken>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenizerInventoryToken {
+    pub id: u32,
+    pub piece: TokenizerInventoryPiece,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TokenizerInventoryPiece {
+    Bytes { bytes: Vec<u8> },
+    Control { identity: String },
+}
 
 pub type PluginInstance = *mut c_void;
 pub type ProposalOperation = u64;
@@ -36,6 +59,37 @@ impl ByteSlice {
             length: bytes.len(),
         }
     }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TokenizerPieceKind(pub u32);
+
+impl TokenizerPieceKind {
+    pub const BYTES: Self = Self(0);
+    pub const CONTROL: Self = Self(1);
+}
+
+/// Borrowed ABI view of one immutable native token. The referenced bytes are
+/// valid only for the duration of `activate`; a plugin must copy or transform
+/// them before it returns.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TokenizerInventoryEntry {
+    pub id: u32,
+    pub piece_kind: TokenizerPieceKind,
+    pub bytes: ByteSlice,
+}
+
+/// Borrowed ABI view of the complete vocabulary. The host owns the entries and
+/// their bytes and passes them only while activating the plugin.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TokenizerInventoryView {
+    pub struct_size: usize,
+    pub schema_version: u32,
+    pub entries: *const TokenizerInventoryEntry,
+    pub entry_count: usize,
 }
 
 #[repr(C)]
@@ -136,6 +190,7 @@ pub struct ActivationContext {
     pub model_id: ByteSlice,
     pub source_model_sha256: ByteSlice,
     pub tokenizer_id: ByteSlice,
+    pub tokenizer_inventory: *const TokenizerInventoryView,
     pub config_path: ByteSlice,
     pub state_directory: ByteSlice,
     pub proposal_deadline_ns: u64,
@@ -324,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn stable_contract_keeps_only_the_correlation_bound() {
+    fn initial_contract_is_v1() {
         assert_eq!(MAX_DECISION_ID_BYTES, 64);
         assert_eq!(NATIVE_SERVING_PLUGIN_ABI_V1, 1);
     }

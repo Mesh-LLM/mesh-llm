@@ -1,6 +1,7 @@
 use std::{
     error::Error,
     fmt,
+    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -11,6 +12,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
+use mesh_native_serving_plugin_api as native_plugin_api;
+use model_artifact::gguf::scan_gguf_tokenizer_inventory;
 use serde::{Deserialize, Serialize};
 use skippy_protocol::{
     StageConfig,
@@ -124,6 +127,7 @@ impl TokenizerSource for LoadedStageZeroTokenizer {
 pub struct TokenizerCapability {
     identity: TokenizerIdentity,
     source: Arc<dyn TokenizerSource>,
+    inventory: Option<Arc<native_plugin_api::TokenizerInventory>>,
 }
 
 impl TokenizerCapability {
@@ -136,21 +140,24 @@ impl TokenizerCapability {
             &config.model_id,
             config.source_model_sha256.as_deref(),
         )?;
-        Ok(Self::from_loaded_stage_zero(identity, runtime))
-    }
-
-    pub(crate) fn from_loaded_stage_zero(
-        identity: TokenizerIdentity,
-        runtime: Arc<Mutex<RuntimeState>>,
-    ) -> Self {
-        Self {
+        let source: Arc<dyn TokenizerSource> = Arc::new(LoadedStageZeroTokenizer { runtime });
+        let inventory = inventory_from_stage(config, &identity, source.as_ref()).map(Arc::new);
+        Ok(Self {
             identity,
-            source: Arc::new(LoadedStageZeroTokenizer { runtime }),
-        }
+            source,
+            inventory,
+        })
     }
 
     pub fn identity(&self) -> &TokenizerIdentity {
         &self.identity
+    }
+
+    /// A fully materialized, immutable native vocabulary, when the stage was
+    /// bound from a readable source GGUF. Inventory construction occurs while
+    /// binding the model, never from the decode proposal path.
+    pub fn inventory(&self) -> Option<&native_plugin_api::TokenizerInventory> {
+        self.inventory.as_deref()
     }
 
     pub fn tokenize(
@@ -177,6 +184,52 @@ impl TokenizerCapability {
             token_pieces,
         })
     }
+}
+
+fn source_gguf_path(config: &StageConfig) -> Option<&Path> {
+    [
+        config.source_model_path.as_deref(),
+        config.model_path.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(Path::new)
+    .find(|path| path.is_file())
+}
+
+fn inventory_from_stage(
+    config: &StageConfig,
+    identity: &TokenizerIdentity,
+    source: &dyn TokenizerSource,
+) -> Option<native_plugin_api::TokenizerInventory> {
+    let source_path = source_gguf_path(config)?;
+    let vocabulary = scan_gguf_tokenizer_inventory(source_path)?;
+    let token_ids = (0..vocabulary.tokens.len())
+        .map(|id| i32::try_from(id).ok())
+        .collect::<Option<Vec<_>>>()?;
+    let token_pieces = source.token_pieces(&token_ids).ok()?;
+    if token_pieces.len() != vocabulary.tokens.len() {
+        return None;
+    }
+    let mut tokens = Vec::with_capacity(vocabulary.tokens.len());
+    for (id, (token, bytes)) in vocabulary.tokens.into_iter().zip(token_pieces).enumerate() {
+        let id = u32::try_from(id).ok()?;
+        let piece = if token.is_control {
+            native_plugin_api::TokenizerInventoryPiece::Control {
+                identity: String::from_utf8(token.raw).ok()?,
+            }
+        } else {
+            native_plugin_api::TokenizerInventoryPiece::Bytes { bytes }
+        };
+        tokens.push(native_plugin_api::TokenizerInventoryToken { id, piece });
+    }
+    Some(native_plugin_api::TokenizerInventory {
+        schema_version: native_plugin_api::TOKENIZER_INVENTORY_SCHEMA,
+        model_id: identity.model_id.clone(),
+        source_model_sha256: identity.source_model_sha256.clone(),
+        tokenizer_id: identity.tokenizer_id.clone(),
+        tokens,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -234,11 +287,51 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode, header::CONTENT_TYPE},
     };
+    use skippy_protocol::LoadMode;
     use tower::ServiceExt;
 
     use super::*;
 
     const SHA256: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn stage_config(source_model_path: Option<String>, model_path: Option<String>) -> StageConfig {
+        StageConfig {
+            run_id: "run".to_owned(),
+            topology_id: "topology".to_owned(),
+            model_id: "model".to_owned(),
+            package_ref: None,
+            manifest_sha256: None,
+            source_model_path,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path,
+            projector_path: None,
+            stage_id: "stage-0".to_owned(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 1,
+            ctx_size: 1_024,
+            lane_count: 1,
+            n_batch: None,
+            n_ubatch: None,
+            n_gpu_layers: 0,
+            mmap: None,
+            mlock: false,
+            cache_type_k: "f16".to_owned(),
+            cache_type_v: "f16".to_owned(),
+            flash_attn_type: Default::default(),
+            filter_tensors_on_load: false,
+            selected_device: None,
+            kv_cache: None,
+            native_mtp_enabled: true,
+            load_mode: LoadMode::RuntimeSlice,
+            bind_addr: "127.0.0.1:0".to_owned(),
+            upstream: None,
+            downstream: None,
+        }
+    }
 
     struct RecordingTokenizer {
         tokens: Vec<i32>,
@@ -302,6 +395,7 @@ mod tests {
             TokenizerCapability {
                 identity: identity(),
                 source: source.clone(),
+                inventory: None,
             },
             source,
         )
@@ -376,6 +470,19 @@ mod tests {
             capability.tokenize(request).unwrap_err(),
             TokenizerCapabilityError::IdentityMismatch
         );
+    }
+
+    #[test]
+    fn source_gguf_path_falls_back_when_source_model_path_is_unavailable() {
+        let temp_dir = tempfile::tempdir().expect("create temporary GGUF directory");
+        let model_path = temp_dir.path().join("model.gguf");
+        std::fs::write(&model_path, []).expect("create temporary GGUF");
+        let config = stage_config(
+            Some(temp_dir.path().join("missing.gguf").display().to_string()),
+            Some(model_path.display().to_string()),
+        );
+
+        assert_eq!(source_gguf_path(&config), Some(model_path.as_path()));
     }
 
     #[test]

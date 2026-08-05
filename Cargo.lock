@@ -7486,6 +7486,8 @@ dependencies = [
  "clap",
  "futures-util",
  "libc",
+ "mesh-native-serving-plugin-api",
+ "model-artifact",
  "openai-frontend",
  "opentelemetry-proto",
  "serde",
