@@ -343,17 +343,14 @@ where
     F: FnMut(i32) -> OpenAiResult<bool>,
 {
     let required_predictions = proposal_tokens.len().saturating_add(1);
-    if predicted_tokens.len() < required_predictions {
-        return Err(OpenAiError::backend(format!(
-            "native MTP verify window returned too few tokens: got {} expected {}",
-            predicted_tokens.len(),
-            required_predictions
-        )));
-    }
-
     let mut accepted_proposal_tokens = 0usize;
     for (index, proposal_token) in proposal_tokens.iter().enumerate() {
-        let predicted = predicted_tokens[index];
+        let Some(&predicted) = predicted_tokens.get(index) else {
+            return Err(OpenAiError::backend(format!(
+                "native MTP verify window ended before a decision: got {} predictions after accepting {accepted_proposal_tokens} proposal tokens",
+                predicted_tokens.len()
+            )));
+        };
         let commit_count = index + 1;
         if predicted != *proposal_token {
             return Ok(NativeMtpVerifyWindowDecision {
@@ -371,6 +368,13 @@ where
                 rejected: false,
             });
         }
+    }
+
+    if predicted_tokens.len() < required_predictions {
+        return Err(OpenAiError::backend(format!(
+            "native MTP verify window omitted the boundary token after accepting every proposal token: got {} expected {required_predictions}",
+            predicted_tokens.len()
+        )));
     }
 
     Ok(NativeMtpVerifyWindowDecision {
@@ -633,11 +637,26 @@ mod tests {
     #[test]
     fn verify_window_commits_the_target_correction_after_rejection() {
         let decision =
-            classify_native_mtp_verify_window(&[11, 12], &[11, 42, 99], 0, 8, |_| Ok(false))
-                .unwrap();
+            classify_native_mtp_verify_window(&[11, 12], &[11, 42], 0, 8, |_| Ok(false)).unwrap();
 
         assert_eq!(decision.accepted_proposal_tokens, 1);
         assert_eq!(decision.commit_count, 2);
         assert!(decision.rejected);
+    }
+
+    #[test]
+    fn verify_window_rejects_a_prefix_that_ends_before_any_decision() {
+        let error =
+            classify_native_mtp_verify_window(&[11, 12], &[11], 0, 8, |_| Ok(false)).unwrap_err();
+
+        assert!(error.to_string().contains("ended before a decision"));
+    }
+
+    #[test]
+    fn verify_window_requires_a_boundary_after_full_acceptance() {
+        let error = classify_native_mtp_verify_window(&[11, 12], &[11, 12], 0, 8, |_| Ok(false))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("omitted the boundary token"));
     }
 }

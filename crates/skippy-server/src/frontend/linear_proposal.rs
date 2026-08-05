@@ -171,7 +171,8 @@ pub struct LinearProposalReceipt {
     pub accepted_proposal_tokens: usize,
     /// Target tokens committed to the response stream.
     pub committed_tokens: Box<[i32]>,
-    /// Prediction observed for every verification row.
+    /// Authoritative prediction prefix through the full-accept boundary or
+    /// first mismatch. Rejected branch-conditioned suffixes are not sampled.
     pub verification_row_predictions: Box<[i32]>,
     /// Prefix length of row predictions that remained canonical.
     pub canonical_prediction_count: usize,
