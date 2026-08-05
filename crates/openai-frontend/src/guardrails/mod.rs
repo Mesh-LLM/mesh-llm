@@ -75,6 +75,7 @@ impl GuardedOpenAiBackend {
     async fn guarded_chat_completion(
         &self,
         request: ChatCompletionRequest,
+        context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse> {
         let _guardrail_error_catalog = guardrail_error_catalog();
         let policy = self.policy.snapshot();
@@ -90,13 +91,15 @@ impl GuardedOpenAiBackend {
                     GuardrailTelemetryOutcome::PassThrough,
                     None,
                 );
-                self.backend.chat_completion(request).await
+                self.backend
+                    .chat_completion_with_context(request, context)
+                    .await
             }
             GuardrailRequestOutcome::Reject { kind } => Err(errors::guardrail_error(*kind)),
             GuardrailRequestOutcome::Guarded { backend_request } => {
                 if matches!(policy.mode, GuardrailMode::MetricsOnly) {
                     return self
-                        .metrics_only_chat_completion(request, &engine, &prepared)
+                        .metrics_only_chat_completion(request, &engine, &prepared, context)
                         .await;
                 }
 
@@ -107,7 +110,7 @@ impl GuardedOpenAiBackend {
                 loop {
                     let response = self
                         .backend
-                        .chat_completion(attempt_request.clone())
+                        .chat_completion_with_context(attempt_request.clone(), context.clone())
                         .await?;
                     let classified = engine.classify_response(&prepared, &response);
                     let contract = telemetry_contract(&prepared.state.request_contract);
@@ -165,8 +168,12 @@ impl GuardedOpenAiBackend {
         request: ChatCompletionRequest,
         engine: &GuardrailEngine,
         prepared: &state::PreparedGuardrailRequest,
+        context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse> {
-        let response = self.backend.chat_completion(request).await?;
+        let response = self
+            .backend
+            .chat_completion_with_context(request, context)
+            .await?;
         let classified = engine.classify_response(prepared, &response);
         self.record_outcome(
             prepared.state.mode,
@@ -303,7 +310,16 @@ impl OpenAiBackend for GuardedOpenAiBackend {
         &self,
         request: ChatCompletionRequest,
     ) -> OpenAiResult<ChatCompletionResponse> {
-        self.guarded_chat_completion(request).await
+        self.guarded_chat_completion(request, OpenAiRequestContext::new())
+            .await
+    }
+
+    async fn chat_completion_with_context(
+        &self,
+        request: ChatCompletionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<ChatCompletionResponse> {
+        self.guarded_chat_completion(request, context).await
     }
 
     async fn chat_completion_stream(
@@ -315,7 +331,16 @@ impl OpenAiBackend for GuardedOpenAiBackend {
     }
 
     async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
-        self.backend.completion(request).await
+        self.completion_with_context(request, OpenAiRequestContext::new())
+            .await
+    }
+
+    async fn completion_with_context(
+        &self,
+        request: CompletionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<CompletionResponse> {
+        self.backend.completion_with_context(request, context).await
     }
 
     async fn completion_stream(

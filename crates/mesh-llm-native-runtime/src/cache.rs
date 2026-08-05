@@ -108,21 +108,25 @@ impl NativeRuntimeCache {
             if !version_entry.file_type()?.is_dir() {
                 continue;
             }
-            for runtime_entry in fs::read_dir(version_entry.path())? {
-                let runtime_entry = runtime_entry?;
-                if !runtime_entry.file_type()?.is_dir() {
-                    continue;
-                }
-                if let Some(runtime) = installed_runtime_from_dir(&runtime_entry.path())? {
-                    installed.push(runtime);
-                }
-            }
+            installed.extend(installed_in_version_dir(&version_entry.path())?);
         }
         installed.sort_by(|left, right| {
             (&left.mesh_version, &left.native_runtime_id)
                 .cmp(&(&right.mesh_version, &right.native_runtime_id))
         });
         Ok(installed)
+    }
+
+    /// Returns strictly validated runtimes for one MeshLLM version.
+    ///
+    /// TODO(issue #1162): Remove this resolver-specific compatibility boundary
+    /// once the oldest supported upgrade path no longer contains pre-checksum
+    /// runtime caches, if full-cache resolver enumeration is safe again.
+    pub(crate) fn installed_for_version(
+        &self,
+        mesh_version: &str,
+    ) -> Result<Vec<InstalledNativeRuntime>> {
+        installed_in_version_dir(&self.root.join(mesh_version))
     }
 
     pub fn find_installed(
@@ -242,6 +246,26 @@ fn installed_runtime_from_dir(dir: &Path) -> Result<Option<InstalledNativeRuntim
     }))
 }
 
+fn installed_in_version_dir(version_dir: &Path) -> Result<Vec<InstalledNativeRuntime>> {
+    let mut installed = Vec::new();
+    if !version_dir.is_dir() {
+        return Ok(installed);
+    }
+    for runtime_entry in fs::read_dir(version_dir)
+        .with_context(|| format!("read native runtime cache {}", version_dir.display()))?
+    {
+        let runtime_entry = runtime_entry?;
+        if !runtime_entry.file_type()?.is_dir() {
+            continue;
+        }
+        if let Some(runtime) = installed_runtime_from_dir(&runtime_entry.path())? {
+            installed.push(runtime);
+        }
+    }
+    installed.sort_by(|left, right| left.native_runtime_id.cmp(&right.native_runtime_id));
+    Ok(installed)
+}
+
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
     fs::create_dir_all(target).with_context(|| format!("create {}", target.display()))?;
     for entry in fs::read_dir(source).with_context(|| format!("read {}", source.display()))? {
@@ -307,6 +331,53 @@ mod tests {
 
         assert_eq!(installed.mesh_version, "0.68.0");
         assert!(installed.path.ends_with("meshllm-native-linux-x86_64-cpu"));
+    }
+
+    #[test]
+    fn installed_for_version_ignores_legacy_cache_versions() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        write_runtime(
+            &cache.runtime_dir("0.75.0", "meshllm-native-linux-x86_64-cpu"),
+            "0.75.0",
+            "meshllm-native-linux-x86_64-cpu",
+        );
+
+        let legacy = cache.runtime_dir("0.74.0", "meshllm-native-linux-x86_64-cpu");
+        fs::create_dir_all(legacy.join("lib")).unwrap();
+        fs::write(legacy.join("lib/libmeshllm_ffi.so"), b"legacy runtime").unwrap();
+        fs::write(
+            legacy.join(NATIVE_RUNTIME_MANIFEST_FILE),
+            r#"{
+  "runtime": {
+    "id": "meshllm-native-linux-x86_64-cpu",
+    "mesh_version": "0.74.0",
+    "skippy_abi": "0.1.25",
+    "platform": {"os": "linux", "arch": "x86_64"},
+    "backend": {"kind": "cpu"},
+    "libraries": ["lib/libmeshllm_ffi.so"]
+  }
+}"#,
+        )
+        .unwrap();
+
+        let installed = cache.installed_for_version("0.75.0").unwrap();
+
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].mesh_version, "0.75.0");
+        assert!(cache.installed().is_err());
+    }
+
+    #[test]
+    fn installed_for_version_ignores_file_at_version_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        fs::create_dir_all(cache.root()).unwrap();
+        fs::write(cache.root().join("0.75.0"), b"partial cache artifact").unwrap();
+
+        let installed = cache.installed_for_version("0.75.0").unwrap();
+
+        assert!(installed.is_empty());
     }
 
     #[test]
