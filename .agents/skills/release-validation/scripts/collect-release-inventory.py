@@ -64,6 +64,20 @@ def require_local_tag(tag: str) -> str:
         ) from error
 
 
+def require_release_provenance(base_sha: str, head_sha: str) -> None:
+    origin_main = git("rev-parse", "--verify", "origin/main^{commit}")
+    if subprocess.run(
+        ["git", "merge-base", "--is-ancestor", head_sha, origin_main], check=False
+    ).returncode != 0:
+        raise RuntimeError(f"candidate {head_sha} is not reachable from origin/main")
+    if subprocess.run(
+        ["git", "merge-base", "--is-ancestor", base_sha, head_sha], check=False
+    ).returncode != 0:
+        raise RuntimeError(
+            f"previous release commit {base_sha} is not an ancestor of candidate {head_sha}"
+        )
+
+
 def collect_commits(base: str, head: str) -> list[dict]:
     delimiter = "\x1f"
     record = "\x1e"
@@ -71,7 +85,7 @@ def collect_commits(base: str, head: str) -> list[dict]:
         "git",
         "log",
         "--reverse",
-        f"--format=%H%x1f%aI%x1f%an%x1f%ae%x1f%s%x1f%b%x1e",
+        "--format=%H%x1f%aI%x1f%an%x1f%ae%x1f%s%x1f%b%x1e",
         f"{base}..{head}",
     )
     commits = []
@@ -169,6 +183,7 @@ def main() -> int:
         release = latest_release(args.repo, args.release_tag)
         base_sha = require_local_tag(release["tagName"])
         head_sha = git("rev-parse", f"{args.head}^{{commit}}")
+        require_release_provenance(base_sha, head_sha)
         manifest = {
             "schema_version": 1,
             "collected_at": datetime.now(timezone.utc).isoformat(),

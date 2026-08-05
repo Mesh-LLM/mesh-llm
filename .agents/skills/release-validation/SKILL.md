@@ -59,7 +59,12 @@ Read each applicable skill completely before acting:
 3. Inspect the latest published GitHub release, its tag, notes, assets, checksums,
    publication time, and release workflow conclusion. Distinguish stable,
    prerelease, draft, and manually superseded releases.
-4. Run `scripts/collect-release-inventory.py` from this skill to capture a raw
+4. Before collecting inventory, resolve the candidate SHA and previous-release
+   tag commit and require that the candidate SHA is reachable from `origin/main`
+   and the previous-release commit is an ancestor of the candidate. Fail closed
+   if `origin/main` is unavailable or either `git merge-base --is-ancestor`
+   check fails.
+5. Run `scripts/collect-release-inventory.py` from this skill to capture a raw
    JSON evidence manifest. If its exact release tag is missing locally, verify
    the configured remote URL and fetch that tag before rerunning. The script
    does not classify changes.

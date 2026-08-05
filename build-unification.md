@@ -237,7 +237,7 @@ certification.
 | Location | Required update |
 | --- | --- |
 | `AGENTS.md` | Replace “final binary per matrix row” architecture guidance with host matrix + runtime matrix + product-composition pipeline, including provenance and no-driver QA. |
-| `.agents/skills/distribution-certification/SKILL.md` | Revise release inventory and certification to download/verify host and runtime inputs, assert package ownership/layout, distinguish no-driver client readiness from GPU qualification, capture composed provenance, and preserve pre-existing state. |
+| `.agents/skills/release-validation/SKILL.md` | Revise release inventory and certification to download/verify host and runtime inputs, assert package ownership/layout, distinguish no-driver client readiness from GPU qualification, capture composed provenance, and preserve pre-existing state. |
 | `README.md` and `docs/native-packages.md` | Document composed package layout, host/runtime checksums, and package/image construction. |
 | `docs/gpu-runbooks.md`, `docs/release-checklist.md`, `docs/matrix.md`, `docs/tagging.md`, `docs/publishing.md` | Remove static-host assumptions; document the split between universal client smoke and device-qualified runtime smoke. |
 | `docs/packaging-readiness-gaps.md`, `docs/packaging-readiness-scorecard.md`, `docs/package-signing.md`, `docs/runner-capacity.md` | Update readiness, signing/provenance, and runner requirements for the three artifacts and two test tiers. |

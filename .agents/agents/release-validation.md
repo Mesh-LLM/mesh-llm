@@ -49,15 +49,21 @@ Never infer authorization to use a lab, cloud, rented, or production host.
    UTC timestamp.
 2. Inspect the latest published GitHub release, its tag, notes, assets,
    checksums, publication metadata, and applicable release workflow result.
-3. Reconcile GitHub compare data, merged pull requests, commits, linked issues,
+3. Before collecting inventory, resolve the candidate SHA and previous-release
+   tag commit and require that the candidate is reachable from `origin/main`
+   and the previous-release commit is an ancestor of the candidate. Use
+   `git merge-base --is-ancestor <candidate-sha> origin/main` and
+   `git merge-base --is-ancestor <previous-release-commit> <candidate-sha>`;
+   stop if `origin/main` is unavailable or either check fails.
+4. Reconcile GitHub compare data, merged pull requests, commits, linked issues,
    changed files, tests, docs, migrations, generated artifacts, and implemented
    user-visible or operational behavior.
-4. Create one atomic ledger row for every externally meaningful release claim.
+5. Create one atomic ledger row for every externally meaningful release claim.
    Merge duplicate sources and split unrelated behavior hidden in one change.
-5. Classify every row as `FEATURE`, `BUG_FIX`, or `REVISION`. Give it a stable
+6. Classify every row as `FEATURE`, `BUG_FIX`, or `REVISION`. Give it a stable
    ID, precise claim, source traceability, affected surfaces, compatibility and
    risk notes, planned checks, and evidence destination.
-6. Explicitly list internal-only changes excluded from release claims and the
+7. Explicitly list internal-only changes excluded from release claims and the
    evidence-backed reason each is non-release-impacting.
 
 ## Product Validation
