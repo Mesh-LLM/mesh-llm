@@ -8,7 +8,13 @@ mod tests {
         GGML_TYPE_F16, ModelInfo, NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig,
         StageModel, StageSession, Status, TensorRole, format_skippy_error,
     };
-    use std::{env, path::PathBuf};
+    use std::{
+        env,
+        path::PathBuf,
+        time::{Duration, Instant},
+    };
+
+    const TOOL_CALLS_JSON: &str = r#"[{"type":"function","function":{"name":"execute_bash","description":"Run a command.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}}]"#;
 
     fn correctness_model() -> Option<PathBuf> {
         env::var_os("SKIPPY_CORRECTNESS_MODEL").map(PathBuf::from)
@@ -47,12 +53,19 @@ mod tests {
     }
 
     fn open_correctness_model(model_path: &PathBuf) -> anyhow::Result<StageModel> {
+        open_correctness_model_with_context(model_path, 256)
+    }
+
+    fn open_correctness_model_with_context(
+        model_path: &PathBuf,
+        ctx_size: u32,
+    ) -> anyhow::Result<StageModel> {
         let layer_end = infer_layer_end(model_path)?;
         let config = RuntimeConfig {
             stage_index: 0,
             layer_start: 0,
             layer_end,
-            ctx_size: 256,
+            ctx_size,
             lane_count: 1,
             n_batch: None,
             n_ubatch: None,
@@ -72,6 +85,13 @@ mod tests {
             filter_tensors_on_load: false,
         };
         StageModel::open(model_path, &config)
+    }
+
+    fn tool_call_template_options() -> ChatTemplateJsonOptions {
+        ChatTemplateJsonOptions {
+            tools_json: Some(TOOL_CALLS_JSON.to_string()),
+            ..ChatTemplateJsonOptions::default()
+        }
     }
 
     #[test]
@@ -226,13 +246,7 @@ mod tests {
         let model = open_correctness_model(&model_path)?;
         let rendered = model.apply_chat_template_json(
             r#"[{"role":"user","content":"Call execute_bash."}]"#,
-            ChatTemplateJsonOptions {
-                tools_json: Some(
-                    r#"[{"type":"function","function":{"name":"execute_bash","description":"Run a command.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}}]"#
-                        .to_string(),
-                ),
-                ..ChatTemplateJsonOptions::default()
-            },
+            tool_call_template_options(),
         )?;
         let metadata: Value = serde_json::from_str(&rendered.metadata_json)?;
         assert!(
@@ -302,6 +316,171 @@ mod tests {
         batched.trim_session(serial_token_count)?;
         assert_eq!(batched.token_count(), serial_token_count);
         assert_eq!(batched.native_position()?, serial_native_position);
+        Ok(())
+    }
+
+    #[test]
+    fn long_resident_tool_context_preserves_grammar_and_native_mtp_acceptance() -> anyhow::Result<()>
+    {
+        const MIN_RESIDENT_TOKENS: usize = 8_192;
+        const CONTEXT_SIZE: u32 = 10_240;
+        // Resident prefixes reserve IDs immediately after the active lane IDs.
+        // A single-lane runtime uses `3`, matching the state-handoff harness.
+        const RESIDENT_PREFIX_ID: i32 = 3;
+
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        let model = open_correctness_model_with_context(&model_path, CONTEXT_SIZE)?;
+
+        let resident_sentence =
+            "The resident tool context records a completed command result cwd workspace. ";
+        let sentence_tokens = model.tokenize(resident_sentence, false)?;
+        assert!(
+            !sentence_tokens.is_empty(),
+            "resident context sentence must tokenize"
+        );
+        let mut resident_sentence_count = MIN_RESIDENT_TOKENS / sentence_tokens.len() + 1;
+        let (rendered, prompt_tokens) = loop {
+            let resident_context = resident_sentence.repeat(resident_sentence_count);
+            let rendered = model.apply_chat_template_json(
+                &format!(
+                    r#"[{{"role":"user","content":"Call execute_bash after this resident context: {resident_context}"}}]"#
+                ),
+                tool_call_template_options(),
+            )?;
+            let prompt_tokens = model.tokenize(&rendered.prompt, true)?;
+            if prompt_tokens.len() >= MIN_RESIDENT_TOKENS {
+                break (rendered, prompt_tokens);
+            }
+            let shortfall = MIN_RESIDENT_TOKENS - prompt_tokens.len();
+            resident_sentence_count +=
+                shortfall * resident_sentence_count / prompt_tokens.len() + 1;
+        };
+        let metadata: Value = serde_json::from_str(&rendered.metadata_json)?;
+        assert_eq!(
+            metadata.get("grammar_lazy").and_then(Value::as_bool),
+            Some(true),
+            "tool grammar must wait for its trigger"
+        );
+
+        assert!(
+            prompt_tokens.len() >= MIN_RESIDENT_TOKENS,
+            "expected at least {MIN_RESIDENT_TOKENS} resident tokens, got {}",
+            prompt_tokens.len()
+        );
+        assert!(
+            prompt_tokens.len() < CONTEXT_SIZE as usize,
+            "resident prompt must leave room for tool sampling"
+        );
+        let prompt_prefix = &prompt_tokens[..prompt_tokens.len() - 1];
+        let prompt_token_count = u64::try_from(prompt_tokens.len())?;
+        let last_prompt_token = *prompt_tokens.last().expect("checked nonempty prompt");
+        let sampling = SamplingConfig {
+            enabled: true,
+            temperature: 0.0,
+            top_p: 0.95,
+            top_k: 40,
+            min_p: 0.05,
+            ..SamplingConfig::default()
+        };
+
+        let mut prefix_owner = model.create_session()?;
+        prefix_owner.prefill_chunked(prompt_prefix)?;
+        prefix_owner.save_prefix(RESIDENT_PREFIX_ID, prompt_prefix.len() as u64)?;
+        drop(prefix_owner);
+
+        let mut verify_inputs = vec![last_prompt_token];
+        verify_inputs.extend(model.tokenize("<tool_call>", false)?);
+        verify_inputs.extend(model.tokenize(
+            "execute_bash<arg_key>command</arg_key><arg_value>pwd</arg_value></tool_call>",
+            false,
+        )?);
+
+        let mut serial =
+            model.create_session_from_resident_prefix(RESIDENT_PREFIX_ID, prompt_prefix)?;
+        serial.configure_chat_sampling(
+            &rendered.metadata_json,
+            prompt_token_count,
+            Some(&sampling),
+        )?;
+        let mut serial_predictions = Vec::with_capacity(verify_inputs.len());
+        for (index, token) in verify_inputs.iter().copied().enumerate() {
+            let predicted = serial.decode_step_sampled(token, Some(&sampling))?;
+            serial_predictions.push(predicted);
+            if index + 1 < verify_inputs.len() && predicted != verify_inputs[index + 1] {
+                break;
+            }
+        }
+        let serial_token_count = serial.token_count();
+        let serial_native_position = serial.native_position()?;
+        drop(serial);
+
+        let mut batched =
+            model.create_session_from_resident_prefix(RESIDENT_PREFIX_ID, prompt_prefix)?;
+        batched.configure_chat_sampling(
+            &rendered.metadata_json,
+            prompt_token_count,
+            Some(&sampling),
+        )?;
+        let batched_predictions = batched.verify_tokens_sampled(&verify_inputs, Some(&sampling))?;
+        assert_eq!(
+            batched_predictions, serial_predictions,
+            "resident-KV verification must stop at the first tool-grammar mismatch"
+        );
+        batched.trim_session(serial_token_count)?;
+        assert_eq!(batched.token_count(), serial_token_count);
+        assert_eq!(batched.native_position()?, serial_native_position);
+        drop(batched);
+
+        let mut native_mtp =
+            model.create_session_from_resident_prefix(RESIDENT_PREFIX_ID, prompt_prefix)?;
+        native_mtp.configure_chat_sampling(
+            &rendered.metadata_json,
+            prompt_token_count,
+            Some(&sampling),
+        )?;
+        let decode_started = Instant::now();
+        let (predicted, draft) =
+            native_mtp.decode_step_sampled_mtp(last_prompt_token, Some(&sampling), 4)?;
+        let resident_decode_elapsed = decode_started.elapsed();
+        assert!(
+            resident_decode_elapsed < Duration::from_secs(30),
+            "sampling after an 8k resident KV prefix took {resident_decode_elapsed:?}"
+        );
+        drop(native_mtp);
+
+        if let Some(draft) = draft {
+            let mut target =
+                model.create_session_from_resident_prefix(RESIDENT_PREFIX_ID, prompt_prefix)?;
+            target.configure_chat_sampling(
+                &rendered.metadata_json,
+                prompt_token_count,
+                Some(&sampling),
+            )?;
+            let mut target_inputs = vec![last_prompt_token, predicted];
+            target_inputs.extend(&draft.token_ids);
+            let target_predictions =
+                target.verify_tokens_sampled(&target_inputs, Some(&sampling))?;
+            assert_eq!(
+                target_predictions.first(),
+                Some(&predicted),
+                "resident target decode must agree with the native-MTP source token"
+            );
+            let accepted_draft_tokens = target_predictions
+                .iter()
+                .skip(1)
+                .zip(&draft.token_ids)
+                .take_while(|(target, draft)| target == draft)
+                .count();
+            assert!(
+                accepted_draft_tokens > 0,
+                "native MTP must accept a draft token after the resident tool context; draft={:?}, target={target_predictions:?}",
+                draft.token_ids
+            );
+        }
+
         Ok(())
     }
 
