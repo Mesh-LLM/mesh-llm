@@ -14,6 +14,10 @@ layout of the prefix understood by an older plugin. Removing or reordering
 fields, changing a field's type, or changing a callback signature requires a
 new versioned ABI table and continued support for the previous table.
 
+The V1 activation contract lends the complete native tokenizer inventory through
+`ActivationContext`. A plugin copies or transforms the inventory before
+returning from `activate`.
+
 Each proposal query carries the capacity Skippy can verify at that exact decode
 position. The native host adapter also applies a bounded implementation cap so
 a request cannot force an unbounded host allocation.
