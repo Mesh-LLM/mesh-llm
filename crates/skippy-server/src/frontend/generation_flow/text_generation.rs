@@ -76,6 +76,9 @@ impl StageOpenAiBackend {
             GENERATION_ADMISSION_TIMEOUT,
             cancellation,
         )?;
+        if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
+            return Err(OpenAiError::backend("request cancelled"));
+        }
         let mut token_admit_attrs = self.openai_attrs(&ids);
         token_admit_attrs.insert(
             "llama_stage.prompt_token_count".to_string(),

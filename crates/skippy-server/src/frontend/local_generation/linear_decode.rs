@@ -84,15 +84,15 @@ impl StageOpenAiBackend {
             }
             LinearProposalQueryOutcome::Ready(queried) => Some(queried),
         };
-        let Some(queried) = queried else {
-            return Ok(LinearProposalProgress::NotUsed);
-        };
         if request
             .cancellation
             .is_some_and(openai_frontend::CancellationToken::is_cancelled)
         {
             return Err(OpenAiError::backend("request cancelled"));
         }
+        let Some(queried) = queried else {
+            return Ok(LinearProposalProgress::NotUsed);
+        };
         let decision_id = queried.proposal.decision_id.clone();
         let receipt = execute_linear_proposal_with_terminal_discard(config, &decision_id, || {
             self.execute_local_linear_proposal(

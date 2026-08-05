@@ -214,12 +214,6 @@ impl StageOpenAiBackend {
                 }
             }
         }
-        if committed_tokens.is_empty() {
-            return Err(OpenAiError::backend(
-                "linear proposal classifier committed no target prediction",
-            ));
-        }
-
         let canonical_position = params
             .base_position
             .checked_add(
@@ -239,6 +233,12 @@ impl StageOpenAiBackend {
                 prompt_token_count: params.prompt_token_count,
             })
         })?;
+
+        if committed_tokens.is_empty() {
+            return Err(OpenAiError::backend(
+                "linear proposal classifier committed no target prediction",
+            ));
+        }
 
         Ok(Some(LinearProposalExecution {
             decision,
@@ -423,6 +423,26 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("synthetic callback failure")
+        );
+    }
+
+    #[test]
+    fn cancellation_error_is_returned_only_after_repair_runs() {
+        let repair_ran = Cell::new(false);
+        let result = finish_linear_proposal_after_repair(
+            Some(OpenAiError::backend("request cancelled")),
+            || {
+                repair_ran.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(repair_ran.get());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("request cancelled")
         );
     }
 }
