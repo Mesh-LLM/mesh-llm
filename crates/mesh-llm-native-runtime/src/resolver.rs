@@ -179,7 +179,9 @@ impl NativeRuntimeResolver {
                 artifacts.push(artifact);
             }
         }
-        for installed in self.cache.installed()? {
+        // Older cache versions can contain pre-checksum manifests (#1162), and
+        // they cannot satisfy this resolver's exact MeshLLM version anyway.
+        for installed in self.cache.installed_for_version(&self.mesh_version)? {
             let artifact = installed.manifest.runtime;
             if seen.insert(artifact_key(&artifact)) {
                 artifacts.push(artifact);
@@ -912,6 +914,53 @@ mod tests {
         .resolve(&RuntimeSelection::Recommended)
         .unwrap();
 
+        assert!(matches!(resolution.source, NativeRuntimeSource::Missing));
+    }
+
+    #[test]
+    fn legacy_cached_manifest_does_not_block_current_resolution() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        let legacy = cache.runtime_dir("0.67.0", "meshllm-runtime-linux-x86_64-cpu");
+        std::fs::create_dir_all(legacy.join("lib")).unwrap();
+        std::fs::write(legacy.join("lib/libllama.so"), b"legacy runtime").unwrap();
+        std::fs::write(
+            legacy.join(crate::NATIVE_RUNTIME_MANIFEST_FILE),
+            r#"{
+  "runtime": {
+    "id": "meshllm-runtime-linux-x86_64-cpu",
+    "mesh_version": "0.67.0",
+    "skippy_abi": "0.1.25",
+    "platform": {"os": "linux", "arch": "x86_64"},
+    "backend": {"kind": "cpu"},
+    "libraries": ["lib/libllama.so"]
+  }
+}"#,
+        )
+        .unwrap();
+
+        let resolution = NativeRuntimeResolver::new(
+            "0.68.0",
+            HostRuntimeProfile {
+                available_flavors: BTreeSet::from([NativeRuntimeBackendKind::Cpu]),
+                cuda: None,
+                ..profile()
+            },
+            NativeRuntimeReleaseManifest {
+                mesh_version: "0.68.0".to_string(),
+                skippy_abi: "0.1.25".to_string(),
+                artifacts: vec![artifact(
+                    "meshllm-runtime-linux-x86_64-cpu",
+                    NativeRuntimeBackend::cpu(),
+                )],
+            },
+            cache,
+        )
+        .with_skippy_abi_version("0.1.25")
+        .resolve(&RuntimeSelection::Recommended)
+        .unwrap();
+
+        assert_eq!(resolution.selected.id, "meshllm-runtime-linux-x86_64-cpu");
         assert!(matches!(resolution.source, NativeRuntimeSource::Missing));
     }
 }
