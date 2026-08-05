@@ -18,15 +18,13 @@ const SMALL_TIER_MAX_B: f64 = 10.0;
 
 /// Model size class used for the destructive admission/cap decisions.
 ///
-/// `Unknown` is deliberately distinct from `Big`: a model whose size we cannot
-/// verify must never be treated as strong, and must never be filtered out by
-/// admission. Guessing "big" from an unparseable name was how a small
-/// fine-tune could bypass the weak-worker filter (i386 P1).
+/// Only a verified gossiped GGUF size can make a model `Big`. A model with no
+/// verified size is `Small` — the weakest — so an unverifiable label can never
+/// masquerade as strong and displace a real big worker (i386 P1).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SizeTier {
     Small,
     Big,
-    Unknown,
 }
 
 /// Map of canonical base name → verified size (billions of params) as gossiped
@@ -57,17 +55,13 @@ async fn gossiped_sizes(node: &mesh::Node) -> HashMap<String, f64> {
 /// Tier a model: verified gossiped size first, model-name parse as a
 /// lower-confidence fallback, `Unknown` when neither yields a size.
 fn tier_for(name: &str, sizes: &HashMap<String, f64>) -> SizeTier {
-    if let Some(b) = sizes.get(&canonical_base_name(name)) {
-        return if *b < SMALL_TIER_MAX_B {
-            SizeTier::Small
-        } else {
-            SizeTier::Big
-        };
-    }
-    match mesh_llm_guardrails::model_param_size_b(name) {
-        Some(b) if (b as f64) < SMALL_TIER_MAX_B => SizeTier::Small,
-        Some(_) => SizeTier::Big,
-        None => SizeTier::Unknown,
+    // Verified gossiped GGUF size is the ONLY tiering signal (per i386 review).
+    // No name-based fallback: a model with no gossiped size is treated as the
+    // weakest (Small), so an unverifiable label can never masquerade as big and
+    // displace a real strong worker. `SMALL_TIER_MAX_B` splits small/big.
+    match sizes.get(&canonical_base_name(name)) {
+        Some(b) if *b >= SMALL_TIER_MAX_B => SizeTier::Big,
+        _ => SizeTier::Small,
     }
 }
 
@@ -337,16 +331,14 @@ async fn cap_committee(
     // ordinary answer turns where `tool_use` is irrelevant; ranking by it
     // (i386 P1) could evict a 32B/70B model with `tool_use=None` in favour of
     // four small models whose metadata advertises tool use — the opposite of
-    // the admission goal. Keep the largest verified models; `Unknown` sorts
-    // last (never preferred over a verified model) but ahead of nothing, and
-    // stable index breaks ties.
+    // the admission goal. Keep the largest verified models; a model with no
+    // verified size ranks as weakest, and stable index breaks ties.
     let sizes = gossiped_sizes(node).await;
     let mut ranked: Vec<usize> = (0..models.len()).collect();
     ranked.sort_by(|&a, &b| {
         let key = |i: usize| match tier_for(&models[i].name, &sizes) {
             SizeTier::Big => 0,
-            SizeTier::Unknown => 1,
-            SizeTier::Small => 2,
+            SizeTier::Small => 1,
         };
         key(a).cmp(&key(b)).then_with(|| a.cmp(&b))
     });
@@ -657,31 +649,32 @@ mod tests {
         assert_eq!(m.len(), 2);
     }
 
-    /// i386 P1: an unverified-size model must NOT be filtered, even next to
-    /// two verified big models. Unknown != Big and Unknown is never excluded.
+    /// i386: a model with NO verified GGUF size is the weakest (Small), so
+    /// next to two verified big models it is excluded like any other small
+    /// worker. An unverifiable label can never masquerade as big.
     #[test]
-    fn admission_never_filters_unknown_size_worker() {
+    fn admission_treats_unsized_worker_as_weakest() {
         let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-32B", "my-assistant"]);
-        // Only the two big models have gossiped sizes; "my-assistant" is
-        // unparseable and ungossiped -> Unknown.
+        // Only the two big models have gossiped sizes; "my-assistant" has none.
         let sizes = sizes_of(&[("Qwen3-32B", 32.0)]);
         apply_admission_control(&mut b, &mut m, &sizes);
-        assert_eq!(m.len(), 3, "unknown-size worker must not be excluded");
-        assert!(m.iter().any(|e| e.name == "my-assistant"));
+        assert_eq!(m.len(), 2, "unsized worker ranks weakest and is excluded");
+        assert!(m.iter().all(|e| e.name == "Qwen3-32B"));
     }
 
-    /// A model whose *name* parses as small but has NO verified size is still
-    /// Unknown (name parse is only a fallback here because model_param_size_b
-    /// yields None for names without an NNb token) — confirm the fallback
-    /// classifies a real small name as Small so admission still works without
-    /// gossip.
+    /// No gossiped sizes at all: every worker is weakest (Small), so it is an
+    /// all-small pool and admission excludes nothing (there is no verified big
+    /// to protect). Name is never consulted.
     #[test]
-    fn admission_falls_back_to_name_parse_without_gossip() {
+    fn admission_keeps_all_when_no_verified_sizes() {
         let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-32B", "Qwen3-8B"]);
-        // No gossiped sizes at all -> name-parse fallback.
         let sizes: HashMap<String, f64> = HashMap::new();
         apply_admission_control(&mut b, &mut m, &sizes);
-        assert_eq!(m.len(), 2, "name-parse fallback still tiers 8B as small");
+        assert_eq!(
+            m.len(),
+            3,
+            "no verified big => all-small pool => nothing excluded"
+        );
     }
 
     #[test]
