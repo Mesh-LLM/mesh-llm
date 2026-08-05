@@ -28,12 +28,28 @@ pub use self::workers::build_moa_config;
 /// `None` (503) only when the node genuinely has no model at all.
 async fn degrade_to_single_model(
     node: &mesh::Node,
+    targets: Option<&election::ModelTargets>,
     tcp_stream: TcpStream,
     request: &mut proxy::BufferedHttpRequest,
 ) -> Option<TcpStream> {
-    let Some(target) = node
-        .models_being_served()
-        .await
+    // Prefer the same source `/v1/models` and routing use — the local
+    // targets table (`callable_models`) — since `models_being_served()` can be
+    // empty at request time on a fresh serve node. Fall back to the gossiped
+    // served set for a pure client node that has no local targets.
+    // Try each source /v1/models draws from, cheapest-first: the local targets
+    // table (`callable_models`), the gossiped served set, then the node's own
+    // `serving_models` — the last is what a fresh serve node populates first
+    // (the others can lag at request time).
+    let mut candidates = targets
+        .map(super::ingress::callable_models)
+        .unwrap_or_default();
+    if candidates.is_empty() {
+        candidates = node.models_being_served().await;
+    }
+    if candidates.is_empty() {
+        candidates = node.serving_models().await;
+    }
+    let Some(target) = candidates
         .into_iter()
         .find(|m| m != moa::VIRTUAL_MODEL_NAME)
     else {
@@ -43,14 +59,13 @@ async fn degrade_to_single_model(
 
     tracing::info!("MoA: <2 workers, degrading model=mesh to single model {target}");
 
-    // Rewrite both surfaces the downstream router reads: the parsed
-    // `model_name` and the `model` field in the JSON body.
-    request.model_name = Some(target.clone());
-    if let Some(body) = request.body_json.as_mut()
-        && let Some(obj) = body.as_object_mut()
-    {
-        obj.insert("model".to_string(), serde_json::Value::String(target));
-    }
+    // Rewrite every surface the downstream router reads. The forwarded request
+    // is driven by `request.raw` (the raw HTTP bytes), so `rewrite_model_field`
+    // patches raw + body + Content-Length together — rewriting only
+    // `model_name`/`body_json` left `raw` saying "mesh", so the embedded
+    // frontend still saw the virtual model and 404'd.
+    proxy::rewrite_model_field(request, &target);
+    request.model_name = Some(target);
 
     // Hand the stream back: the caller falls through to normal routing.
     Some(tcp_stream)
@@ -97,7 +112,7 @@ pub async fn try_handle_moa(
         // model and fall through to normal single-model routing by handing the
         // stream back. `mesh` thus works everywhere: passthrough on one node,
         // committee once a second worker joins.
-        return degrade_to_single_model(node, tcp_stream, request).await;
+        return degrade_to_single_model(node, targets, tcp_stream, request).await;
     };
     config.enable_thinking = enable_thinking;
 
