@@ -1,20 +1,20 @@
-From e43d21d62c8fec577587d79c2cef954d49f46344 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Wed, 5 Aug 2026 01:59:17 +1000
+Date: Wed, 5 Aug 2026 15:33:46 +1000
 Subject: [PATCH] Stop chat grammar verification at the first mismatch
 
 ---
- src/skippy.cpp | 11 ++++++++++-
- 1 file changed, 10 insertions(+), 1 deletion(-)
+ src/skippy.cpp | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 46cf3a3a1..c7f6346b4 100644
+index 6942f08a4..cfc0bac8f 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
-@@ -6619,12 +6619,22 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
- 
-     if (session->stage_model->config.include_output) {
-         session->token_history.resize(session->token_history.size() - token_count);
+@@ -6631,12 +6631,22 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+             return SKIPPY_STATUS_RUNTIME_ERROR;
+         }
+         session->token_history.resize(history_size_before_verification);
 +        const bool stop_after_first_mismatch = session->grammar_sampler != nullptr;
 +        bool proposal_mismatched = false;
          for (size_t i = 0; i < token_count; ++i) {
@@ -35,5 +35,3 @@ index 46cf3a3a1..c7f6346b4 100644
              status = skippy_mtp_propose_next(
                      session,
                      output_tokens[token_count - 1],
--- 
-2.54.0 (Apple Git-157)
