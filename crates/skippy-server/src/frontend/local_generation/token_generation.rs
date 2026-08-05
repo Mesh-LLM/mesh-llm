@@ -125,6 +125,12 @@ impl StageOpenAiBackend {
             Ok(control)
         };
         let result = (|| {
+            if request
+                .cancellation
+                .is_some_and(openai_frontend::CancellationToken::is_cancelled)
+            {
+                return Err(OpenAiError::backend("request cancelled"));
+            }
             let prefill = self.prefill_prompt(&request, &session_id, &mut cache_stats)?;
             self.configure_chat_sampling_if_needed(
                 &request,
@@ -184,7 +190,7 @@ impl StageOpenAiBackend {
             .ensure_session_active(session_id)
             .map_err(openai_backend_error)?;
         let batch_size = runtime
-            .session_batch_size(session_id)
+            .admit_session_batch_size(session_id)
             .map_err(openai_backend_error)?;
         Ok(prompt_fits_single_prefill_sample(
             request.prompt_token_ids.len(),
@@ -742,6 +748,12 @@ impl StageOpenAiBackend {
             .expect("checked non-empty prompt");
         let mut stopped = false;
         if let Some(predicted) = prompt_prefill_sample {
+            if request
+                .cancellation
+                .is_some_and(openai_frontend::CancellationToken::is_cancelled)
+            {
+                return Err(OpenAiError::backend("request cancelled"));
+            }
             current = predicted;
             decoded_tokens += 1;
             stopped = emit_token(current)? == TokenControl::Stop;
@@ -760,7 +772,7 @@ impl StageOpenAiBackend {
                 .lock()
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
             runtime
-                .session_batch_size(session_id)
+                .admit_session_batch_size(session_id)
                 .map_err(openai_backend_error)?
                 .saturating_sub(1)
         } else {
