@@ -48,7 +48,7 @@ pub use self::guardrails::{
 pub use self::linear_proposal::{
     LinearProposal, LinearProposalDiscardReason, LinearProposalDisposition, LinearProposalIngress,
     LinearProposalIngressConfig, LinearProposalQuery, LinearProposalReceipt,
-    OpaqueProposalDecisionId,
+    LinearProposalSourceOutcome, LinearProposalSourceTelemetry, OpaqueProposalDecisionId,
 };
 pub use self::speculative::{
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,

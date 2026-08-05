@@ -1,13 +1,14 @@
 //! Loads one native serving plugin and adapts its stable ABI to Skippy hooks.
 
 use std::{
+    collections::VecDeque,
     ffi::{c_char, c_void},
     path::{Path, PathBuf},
     ptr::NonNull,
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
-        mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
+        mpsc::{SyncSender, sync_channel},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -21,7 +22,7 @@ use skippy_server::frontend::{
     GenerationReceipt, GenerationReceiptConfig, GenerationStart, LinearProposal,
     LinearProposalDiscardReason, LinearProposalDisposition, LinearProposalIngress,
     LinearProposalIngressConfig, LinearProposalQuery, LinearProposalReceipt,
-    OpaqueProposalDecisionId,
+    LinearProposalSourceOutcome, LinearProposalSourceTelemetry, OpaqueProposalDecisionId,
 };
 use skippy_server::serving_hooks::{ModelServingHooks, ModelServingHooksFactory};
 use skippy_server::tokenizer::TokenizerCapability;
@@ -123,7 +124,10 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
         let lifecycle: Arc<dyn GenerationLifecycleIngress> = Arc::new(NativeLifecycleIngress {
             driver: Arc::clone(&driver),
         });
-        let proposals: Arc<dyn LinearProposalIngress> = Arc::new(NativeProposalIngress { driver });
+        let proposals: Arc<dyn LinearProposalIngress> = Arc::new(NativeProposalIngress {
+            driver,
+            telemetry: Mutex::new(None),
+        });
         Ok(ModelServingHooks::new(
             GenerationReceiptConfig::from_lifecycle_ingress(lifecycle),
             LinearProposalIngressConfig::new(
@@ -471,11 +475,22 @@ impl GenerationLifecycleIngress for NativeLifecycleIngress {
 
 struct NativeProposalIngress {
     driver: Arc<PluginDriver>,
+    telemetry: Mutex<Option<LinearProposalSourceTelemetry>>,
 }
 
 impl LinearProposalIngress for NativeProposalIngress {
     fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
-        self.driver.propose(query)
+        let response = self.driver.propose(query)?;
+        *self
+            .telemetry
+            .lock()
+            .map_err(|_| anyhow!("native serving plugin proposal telemetry lock poisoned"))? =
+            Some(response.telemetry);
+        response.proposal.map_err(anyhow::Error::msg)
+    }
+
+    fn take_proposal_telemetry(&self) -> Option<LinearProposalSourceTelemetry> {
+        self.telemetry.lock().ok()?.take()
     }
 
     fn report(&self, receipt: &LinearProposalReceipt) -> Result<()> {
@@ -499,17 +514,111 @@ enum PluginCommand {
     Committed(GenerationCommit),
     Abort(GenerationAbort),
     Finish(GenerationReceipt),
-    Proposal(
-        LinearProposalQuery,
-        SyncSender<std::result::Result<Option<LinearProposal>, String>>,
-    ),
+    Proposal(LinearProposalQuery, SyncSender<ProposalResponse>),
     Report(LinearProposalReceipt),
     Discard(Vec<u8>, LinearProposalDiscardReason),
     Shutdown(SyncSender<std::result::Result<(), String>>),
 }
 
+struct ProposalResponse {
+    proposal: std::result::Result<Option<LinearProposal>, String>,
+    telemetry: LinearProposalSourceTelemetry,
+}
+
+struct QueuedPluginCommand {
+    enqueued_at: Instant,
+    command: PluginCommand,
+}
+
+impl QueuedPluginCommand {
+    fn is_lifecycle(&self) -> bool {
+        matches!(
+            self.command,
+            PluginCommand::Begin(_)
+                | PluginCommand::Committed(_)
+                | PluginCommand::Abort(_)
+                | PluginCommand::Finish(_)
+        )
+    }
+
+    fn is_proposal(&self) -> bool {
+        matches!(self.command, PluginCommand::Proposal(_, _))
+    }
+}
+
+struct PluginCommandQueue {
+    commands: Mutex<VecDeque<QueuedPluginCommand>>,
+    available: Condvar,
+}
+
+enum PluginCommandQueueError {
+    Full,
+    Poisoned,
+}
+
+impl PluginCommandQueue {
+    fn enqueue(&self, command: PluginCommand) -> Result<()> {
+        self.try_enqueue(command).map_err(|error| match error {
+            PluginCommandQueueError::Full => anyhow!("native serving plugin command queue is full"),
+            PluginCommandQueueError::Poisoned => {
+                anyhow!("native serving plugin command queue lock poisoned")
+            }
+        })
+    }
+
+    fn try_enqueue(
+        &self,
+        command: PluginCommand,
+    ) -> std::result::Result<(), PluginCommandQueueError> {
+        let mut commands = self
+            .commands
+            .lock()
+            .map_err(|_| PluginCommandQueueError::Poisoned)?;
+        if commands.len() == PLUGIN_COMMAND_CAPACITY {
+            return Err(PluginCommandQueueError::Full);
+        }
+        commands.push_back(QueuedPluginCommand {
+            enqueued_at: Instant::now(),
+            command,
+        });
+        self.available.notify_one();
+        Ok(())
+    }
+
+    fn next(&self) -> QueuedPluginCommand {
+        let mut commands = self
+            .commands
+            .lock()
+            .expect("native serving plugin command queue lock must not be poisoned");
+        loop {
+            if let Some(command) = Self::pop_next(&mut commands) {
+                return command;
+            }
+            commands = self
+                .available
+                .wait(commands)
+                .expect("native serving plugin command queue lock must not be poisoned");
+        }
+    }
+
+    fn pop_next(commands: &mut VecDeque<QueuedPluginCommand>) -> Option<QueuedPluginCommand> {
+        let Some(proposal_index) = commands.iter().position(QueuedPluginCommand::is_proposal)
+        else {
+            return commands.pop_front();
+        };
+        if let Some(lifecycle_index) = commands
+            .iter()
+            .take(proposal_index)
+            .position(QueuedPluginCommand::is_lifecycle)
+        {
+            return commands.remove(lifecycle_index);
+        }
+        commands.remove(proposal_index)
+    }
+}
+
 struct PluginDriver {
-    sender: SyncSender<PluginCommand>,
+    queue: Arc<PluginCommandQueue>,
     fatal_error: Arc<Mutex<Option<String>>>,
     lifecycle_delivery_failures: Arc<AtomicU64>,
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -517,24 +626,28 @@ struct PluginDriver {
 
 impl PluginDriver {
     fn spawn(active: ActivePlugin) -> Result<Self> {
-        let (sender, receiver) = sync_channel(PLUGIN_COMMAND_CAPACITY);
+        let queue = Arc::new(PluginCommandQueue {
+            commands: Mutex::new(VecDeque::with_capacity(PLUGIN_COMMAND_CAPACITY)),
+            available: Condvar::new(),
+        });
         let fatal_error = Arc::new(Mutex::new(None));
         let worker_fatal_error = Arc::clone(&fatal_error);
         let lifecycle_delivery_failures = Arc::new(AtomicU64::new(0));
         let worker_lifecycle_delivery_failures = Arc::clone(&lifecycle_delivery_failures);
+        let worker_queue = Arc::clone(&queue);
         let worker = thread::Builder::new()
             .name("mesh-native-serving-plugin".to_string())
             .spawn(move || {
                 plugin_worker(
                     active,
-                    receiver,
+                    worker_queue,
                     worker_fatal_error,
                     worker_lifecycle_delivery_failures,
                 );
             })
             .context("spawn native serving plugin worker")?;
         Ok(Self {
-            sender,
+            queue,
             fatal_error,
             lifecycle_delivery_failures,
             worker: Mutex::new(Some(worker)),
@@ -560,36 +673,71 @@ impl PluginDriver {
     /// Deliver lifecycle cleanup even after an earlier callback failed.
     ///
     /// This bypasses only the health gate. The command still uses the same
-    /// bounded FIFO queue and fails if the worker has stopped or is full.
+    /// bounded deadline-aware queue and fails if the worker has stopped or is
+    /// full.
     fn enqueue_recovery(&self, command: PluginCommand) -> Result<()> {
-        self.sender.try_send(command).map_err(|error| match error {
-            TrySendError::Full(_) => anyhow!("native serving plugin command queue is full"),
-            TrySendError::Disconnected(_) => anyhow!("native serving plugin worker stopped"),
-        })
+        self.queue.enqueue(command)
     }
 
     fn lifecycle_delivery_failures(&self) -> u64 {
         self.lifecycle_delivery_failures.load(Ordering::Relaxed)
     }
 
-    fn propose(&self, query: LinearProposalQuery) -> Result<Option<LinearProposal>> {
+    fn propose(&self, query: LinearProposalQuery) -> Result<ProposalResponse> {
         self.ensure_healthy()?;
         let deadline = query.deadline;
+        let submitted_at = Instant::now();
+        if submitted_at >= deadline {
+            return Ok(ProposalResponse {
+                proposal: Ok(None),
+                telemetry: LinearProposalSourceTelemetry {
+                    queue_wait_us: 0,
+                    callback_elapsed_us: 0,
+                    outcome: LinearProposalSourceOutcome::HostDeadlineExceeded,
+                },
+            });
+        }
         let (reply, response) = sync_channel(1);
-        match self.sender.try_send(PluginCommand::Proposal(query, reply)) {
+        match self
+            .queue
+            .try_enqueue(PluginCommand::Proposal(query, reply))
+        {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) => return Ok(None),
-            Err(TrySendError::Disconnected(_)) => {
-                bail!("native serving plugin worker stopped")
+            Err(PluginCommandQueueError::Full) => {
+                return Ok(ProposalResponse {
+                    proposal: Ok(None),
+                    telemetry: LinearProposalSourceTelemetry {
+                        queue_wait_us: 0,
+                        callback_elapsed_us: 0,
+                        outcome: LinearProposalSourceOutcome::QueueFull,
+                    },
+                });
+            }
+            Err(PluginCommandQueueError::Poisoned) => {
+                bail!("native serving plugin command queue lock poisoned")
             }
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Ok(None);
+            return Ok(ProposalResponse {
+                proposal: Ok(None),
+                telemetry: LinearProposalSourceTelemetry {
+                    queue_wait_us: elapsed_us(submitted_at),
+                    callback_elapsed_us: 0,
+                    outcome: LinearProposalSourceOutcome::HostDeadlineExceeded,
+                },
+            });
         }
         match response.recv_timeout(remaining) {
-            Ok(result) => result.map_err(anyhow::Error::msg),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Ok(result) => Ok(result),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(ProposalResponse {
+                proposal: Ok(None),
+                telemetry: LinearProposalSourceTelemetry {
+                    queue_wait_us: elapsed_us(submitted_at),
+                    callback_elapsed_us: 0,
+                    outcome: LinearProposalSourceOutcome::HostDeadlineExceeded,
+                },
+            }),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 bail!("native serving plugin worker stopped before replying")
             }
@@ -597,10 +745,14 @@ impl PluginDriver {
     }
 }
 
+fn elapsed_us(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
 impl Drop for PluginDriver {
     fn drop(&mut self) {
         let (reply, response) = sync_channel(1);
-        let queued = self.sender.try_send(PluginCommand::Shutdown(reply)).is_ok();
+        let queued = self.queue.enqueue(PluginCommand::Shutdown(reply)).is_ok();
         if queued
             && response.recv_timeout(CLEAN_SHUTDOWN_TIMEOUT).is_ok()
             && let Ok(worker) = self.worker.get_mut()
@@ -613,24 +765,58 @@ impl Drop for PluginDriver {
 
 fn plugin_worker(
     mut active: ActivePlugin,
-    receiver: Receiver<PluginCommand>,
+    queue: Arc<PluginCommandQueue>,
     fatal_error: Arc<Mutex<Option<String>>>,
     lifecycle_delivery_failures: Arc<AtomicU64>,
 ) {
-    while let Ok(command) = receiver.recv() {
+    loop {
+        let QueuedPluginCommand {
+            enqueued_at,
+            command,
+        } = queue.next();
         let (result, terminal, lifecycle) = match command {
             PluginCommand::Begin(event) => (active.begin(&event), false, true),
             PluginCommand::Committed(event) => (active.committed(&event), false, true),
             PluginCommand::Abort(event) => (active.abort(&event), false, true),
             PluginCommand::Finish(event) => (active.finish(&event), false, true),
             PluginCommand::Proposal(query, reply) => {
+                let queue_wait_us = elapsed_us(enqueued_at);
+                if Instant::now() >= query.deadline {
+                    let _ = reply.send(ProposalResponse {
+                        proposal: Ok(None),
+                        telemetry: LinearProposalSourceTelemetry {
+                            queue_wait_us,
+                            callback_elapsed_us: 0,
+                            outcome: LinearProposalSourceOutcome::DeadlineExceededBeforeDispatch,
+                        },
+                    });
+                    continue;
+                }
+                let callback_started = Instant::now();
                 let result = active.propose(query);
-                let _ = reply.send(
-                    result
+                let callback_elapsed_us = elapsed_us(callback_started);
+                let outcome = match &result {
+                    Ok(Some(_)) if Instant::now() >= query.deadline => {
+                        LinearProposalSourceOutcome::CandidateReturnedTooLate
+                    }
+                    Ok(Some(_)) => LinearProposalSourceOutcome::Ready,
+                    Ok(None) if Instant::now() >= query.deadline => {
+                        LinearProposalSourceOutcome::DeadlineExceededInPlugin
+                    }
+                    Ok(None) => LinearProposalSourceOutcome::Abstained,
+                    Err(_) => LinearProposalSourceOutcome::Abstained,
+                };
+                let _ = reply.send(ProposalResponse {
+                    proposal: result
                         .as_ref()
                         .map(Clone::clone)
                         .map_err(ToString::to_string),
-                );
+                    telemetry: LinearProposalSourceTelemetry {
+                        queue_wait_us,
+                        callback_elapsed_us,
+                        outcome,
+                    },
+                });
                 (result.map(|_| ()), false, false)
             }
             PluginCommand::Report(event) => (active.report(&event), false, false),
@@ -775,6 +961,8 @@ mod tests {
 
     struct FakeState {
         start_delay: Duration,
+        commit_delay: Duration,
+        report_delay: Duration,
         begin_fails: bool,
         events: Arc<Mutex<Vec<&'static str>>>,
         abort_count: Arc<AtomicUsize>,
@@ -813,6 +1001,7 @@ mod tests {
     ) -> abi::PluginStatus {
         let state = unsafe { &*instance.cast::<FakeState>() };
         state.events.lock().unwrap().push("commit");
+        thread::sleep(state.commit_delay);
         abi::PluginStatus::OK
     }
 
@@ -860,16 +1049,22 @@ mod tests {
     }
 
     unsafe extern "C" fn fake_report_proposal(
-        _instance: abi::PluginInstance,
+        instance: abi::PluginInstance,
         _event: *const abi::ProposalOutcome,
     ) -> abi::PluginStatus {
+        let state = unsafe { &*instance.cast::<FakeState>() };
+        state.events.lock().unwrap().push("report");
+        thread::sleep(state.report_delay);
         abi::PluginStatus::OK
     }
 
     unsafe extern "C" fn fake_discard_proposal(
-        _instance: abi::PluginInstance,
+        instance: abi::PluginInstance,
         _event: *const abi::ProposalDiscard,
     ) -> abi::PluginStatus {
+        let state = unsafe { &*instance.cast::<FakeState>() };
+        state.events.lock().unwrap().push("discard");
+        thread::sleep(state.report_delay);
         abi::PluginStatus::OK
     }
 
@@ -930,6 +1125,19 @@ mod tests {
         Arc<Mutex<Vec<&'static str>>>,
         Arc<AtomicUsize>,
     ) {
+        fake_active_with_timing(start_delay, Duration::ZERO, Duration::ZERO, begin_fails)
+    }
+
+    fn fake_active_with_timing(
+        start_delay: Duration,
+        commit_delay: Duration,
+        report_delay: Duration,
+        begin_fails: bool,
+    ) -> (
+        ActivePlugin,
+        Arc<Mutex<Vec<&'static str>>>,
+        Arc<AtomicUsize>,
+    ) {
         let table = Box::leak(Box::new(fake_table()));
         let definition = Arc::new(LoadedDefinition {
             _library: None,
@@ -940,6 +1148,8 @@ mod tests {
         let abort_count = Arc::new(AtomicUsize::new(0));
         let state = Box::new(FakeState {
             start_delay,
+            commit_delay,
+            report_delay,
             begin_fails,
             events: Arc::clone(&events),
             abort_count: Arc::clone(&abort_count),
@@ -953,6 +1163,18 @@ mod tests {
             events,
             abort_count,
         )
+    }
+
+    fn wait_for_event(events: &Mutex<Vec<&'static str>>, event: &str) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !events.lock().unwrap().contains(&event) {
+            assert!(Instant::now() < deadline, "timed out waiting for {event}");
+            thread::yield_now();
+        }
+    }
+
+    fn proposal_query(deadline: Instant) -> LinearProposalQuery {
+        LinearProposalQuery::new(1, 2, 1, 1, 0, 8, deadline)
     }
 
     #[test]
@@ -1025,13 +1247,107 @@ mod tests {
             .unwrap();
         let elapsed = started.elapsed();
 
-        assert!(result.is_none());
+        assert!(result.proposal.unwrap().is_none());
+        assert_eq!(
+            result.telemetry.outcome,
+            LinearProposalSourceOutcome::HostDeadlineExceeded
+        );
         assert!(
             elapsed < Duration::from_millis(150),
             "decode waited {elapsed:?} for a blocking plugin"
         );
         drop(driver);
         assert_eq!(CANCEL_COUNT.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn slow_commit_abstains_before_plugin_dispatch_and_later_positions_recover() {
+        let (active, events, _) = fake_active_with_timing(
+            Duration::ZERO,
+            Duration::from_millis(40),
+            Duration::ZERO,
+            false,
+        );
+        let driver = Arc::new(PluginDriver::spawn(active).unwrap());
+        let ingress = NativeLifecycleIngress {
+            driver: Arc::clone(&driver),
+        };
+        ingress
+            .try_submit(GenerationLifecycleObservation::Committed(
+                GenerationCommit {
+                    request_id: 1,
+                    session_id: 2,
+                    generated_token_count: 1,
+                    token_ids: vec![4].into_boxed_slice(),
+                },
+            ))
+            .unwrap();
+        wait_for_event(events.as_ref(), "commit");
+
+        let started = Instant::now();
+        let missed = driver
+            .propose(proposal_query(started + Duration::from_millis(5)))
+            .unwrap();
+        assert!(missed.proposal.unwrap().is_none());
+        assert_eq!(
+            missed.telemetry.outcome,
+            LinearProposalSourceOutcome::HostDeadlineExceeded
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(30),
+            "proposal wait exceeded its deadline: {:?}",
+            started.elapsed()
+        );
+
+        thread::sleep(Duration::from_millis(50));
+        let recovered = driver
+            .propose(proposal_query(Instant::now() + Duration::from_millis(100)))
+            .unwrap();
+        assert!(recovered.proposal.unwrap().is_none());
+        assert_eq!(
+            recovered.telemetry.outcome,
+            LinearProposalSourceOutcome::Abstained
+        );
+        assert_eq!(*events.lock().unwrap(), ["commit", "proposal"]);
+    }
+
+    #[test]
+    fn queued_passive_discard_yields_to_the_next_proposal() {
+        let (active, events, _) = fake_active_with_timing(
+            Duration::ZERO,
+            Duration::from_millis(40),
+            Duration::from_millis(20),
+            false,
+        );
+        let driver = Arc::new(PluginDriver::spawn(active).unwrap());
+        let ingress = NativeLifecycleIngress {
+            driver: Arc::clone(&driver),
+        };
+        ingress
+            .try_submit(GenerationLifecycleObservation::Committed(
+                GenerationCommit {
+                    request_id: 1,
+                    session_id: 2,
+                    generated_token_count: 1,
+                    token_ids: vec![4].into_boxed_slice(),
+                },
+            ))
+            .unwrap();
+        wait_for_event(events.as_ref(), "commit");
+        driver
+            .enqueue(PluginCommand::Discard(
+                vec![1],
+                LinearProposalDiscardReason::PositionMismatch,
+            ))
+            .unwrap();
+
+        let response = driver
+            .propose(proposal_query(Instant::now() + Duration::from_millis(100)))
+            .unwrap();
+        assert!(response.proposal.unwrap().is_none());
+        let events = events.lock().unwrap();
+        assert_eq!(events[0], "commit");
+        assert_eq!(events[1], "proposal");
     }
 
     #[test]
