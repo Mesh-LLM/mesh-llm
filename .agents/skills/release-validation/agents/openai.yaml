@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Validation"
+  short_description: "Validate MeshLLM release candidates end to end"
+  default_prompt: "Use $release-validation to validate the current MeshLLM release candidate on the specified real hosts and produce a formal evidence-backed report."

@@ -1,7 +1,10 @@
 # Repo Agent Skills
 
-Skills under `.skills/` are auto-picked-up by agents working in this repo.
-Each is a focused, current how-to; deeper reference lives in `docs/`.
+Skills under `.agents/skills/` are the canonical repo-local skills and are
+auto-picked-up by agents working in this repo. Each is a focused, current
+how-to; deeper reference lives in `docs/`.
+
+## Operator Workflows
 
 | Skill | Use when |
 |---|---|
@@ -23,5 +26,7 @@ Related docs: `docs/USAGE.md` (install/service/storage), `docs/CLI.md`
 (commands and model refs), `docs/MESHES.md` (mesh workflows),
 `docs/AGENTS.md` (agent clients), `docs/SKIPPY_SPLITS.md` (big-model splits).
 
-Maintainer-facing skills (skippy internals, patch queues, benchmarks, lab) live
-in `.agents/skills/`; plugin-shipped skills install via `mesh-llm skills install`.
+The other directories beside these operator workflows are maintainer-facing
+skills for release validation, Skippy internals, patch queues, benchmarks, CI,
+plugins, telemetry, and lab work. Plugin-shipped skills install via
+`mesh-llm skills install`.
