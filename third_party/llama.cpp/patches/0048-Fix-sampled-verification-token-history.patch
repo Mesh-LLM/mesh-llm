@@ -1,0 +1,55 @@
+From 4135fa4242ed73c96863e2f11dcf5187eaf2f039 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Wed, 5 Aug 2026 06:15:39 +1000
+Subject: [PATCH] Fix sampled verification token history
+
+---
+ src/skippy.cpp | 26 +++++++++++++++++++++++---
+ 1 file changed, 23 insertions(+), 3 deletions(-)
+
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 21db2b77d..bf7904bdc 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -5966,9 +5966,23 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+     }
+ 
+     if (session->stage_model->config.include_output) {
+-        const int32_t n_tokens = static_cast<int32_t>(token_count);
+-        for (int32_t i = 0; i < n_tokens; ++i) {
+-            output_tokens[i] = skippy_sample_token_ith(session, sampling, i);
++        // Native verification decodes and records the complete batch before
++        // sampling. Remove that eager append, then expose each input exactly
++        // once and in causal order as its row is sampled.
++        if (session->token_history.size() < token_count) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "sampled verification token history underflow");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        const size_t history_size_before_verification = session->token_history.size() - token_count;
++        if (session->sampling_accepted_token_count > history_size_before_verification) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "sampled verification history is behind sampler state");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        session->token_history.resize(history_size_before_verification);
++        for (size_t i = 0; i < token_count; ++i) {
++            skippy_record_tokens(session, &token_ids[i], 1);
++            const int32_t logits_index = static_cast<int32_t>(i);
++            output_tokens[i] = skippy_sample_token_ith(session, sampling, logits_index);
+         }
+         if (out_mtp_draft != nullptr && token_count > 0) {
+             status = skippy_mtp_propose_next(
+@@ -5981,6 +5995,12 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+                 return status;
+             }
+         }
++    } else {
++        if (session->sampling_accepted_token_count > session->token_history.size()) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "sampled verification history is behind sampler state");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        skippy_record_tokens(session, token_ids, token_count);
+     }
+ 
+     return skippy_success(out_error);
+-- 
+2.54.0 (Apple Git-157)
