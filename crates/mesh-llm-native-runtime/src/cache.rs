@@ -248,7 +248,7 @@ fn installed_runtime_from_dir(dir: &Path) -> Result<Option<InstalledNativeRuntim
 
 fn installed_in_version_dir(version_dir: &Path) -> Result<Vec<InstalledNativeRuntime>> {
     let mut installed = Vec::new();
-    if !version_dir.exists() {
+    if !version_dir.is_dir() {
         return Ok(installed);
     }
     for runtime_entry in fs::read_dir(version_dir)
@@ -366,6 +366,18 @@ mod tests {
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].mesh_version, "0.75.0");
         assert!(cache.installed().is_err());
+    }
+
+    #[test]
+    fn installed_for_version_ignores_file_at_version_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        fs::create_dir_all(cache.root()).unwrap();
+        fs::write(cache.root().join("0.75.0"), b"partial cache artifact").unwrap();
+
+        let installed = cache.installed_for_version("0.75.0").unwrap();
+
+        assert!(installed.is_empty());
     }
 
     #[test]
