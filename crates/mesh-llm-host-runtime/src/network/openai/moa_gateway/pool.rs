@@ -10,6 +10,66 @@ use super::workers::{LocalModelBackend, RemoteModelBackend};
 use crate::inference::election;
 use crate::mesh;
 use mesh_mixture_of_agents as moa;
+use std::collections::HashMap;
+
+/// Boundary between small- and big-tier in billions of parameters. Matches the
+/// old single-digit-B name heuristic (1–9B = small).
+const SMALL_TIER_MAX_B: f64 = 10.0;
+
+/// Model size class used for the destructive admission/cap decisions.
+///
+/// `Unknown` is deliberately distinct from `Big`: a model whose size we cannot
+/// verify must never be treated as strong, and must never be filtered out by
+/// admission. Guessing "big" from an unparseable name was how a small
+/// fine-tune could bypass the weak-worker filter (i386 P1).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SizeTier {
+    Small,
+    Big,
+    Unknown,
+}
+
+/// Map of canonical base name → verified size (billions of params) as gossiped
+/// by peers through `ServedModelMetadata.parameter_count_b`. In MoA the
+/// orchestrator has no peer GGUFs — this is the only authoritative size source.
+async fn gossiped_sizes(node: &mesh::Node) -> HashMap<String, f64> {
+    let mut by_base: HashMap<String, f64> = HashMap::new();
+    for descriptor in node.all_served_model_descriptors().await {
+        if let Some(b) = descriptor
+            .metadata
+            .as_ref()
+            .and_then(|m| m.parameter_count_b)
+        {
+            let base = canonical_base_name(&descriptor.identity.model_name);
+            by_base
+                .entry(base)
+                .and_modify(|e| {
+                    if b > *e {
+                        *e = b;
+                    }
+                })
+                .or_insert(b);
+        }
+    }
+    by_base
+}
+
+/// Tier a model: verified gossiped size first, model-name parse as a
+/// lower-confidence fallback, `Unknown` when neither yields a size.
+fn tier_for(name: &str, sizes: &HashMap<String, f64>) -> SizeTier {
+    if let Some(b) = sizes.get(&canonical_base_name(name)) {
+        return if *b < SMALL_TIER_MAX_B {
+            SizeTier::Small
+        } else {
+            SizeTier::Big
+        };
+    }
+    match mesh_llm_guardrails::model_param_size_b(name) {
+        Some(b) if (b as f64) < SMALL_TIER_MAX_B => SizeTier::Small,
+        Some(_) => SizeTier::Big,
+        None => SizeTier::Unknown,
+    }
+}
 
 /// Try each alias in `aliases` until one resolves to a backend, then stop.
 ///
@@ -231,7 +291,11 @@ pub(super) async fn assemble_worker_pool(
     // expected noise-to-harm. When tiers are mixed, keep only big-tier workers;
     // an all-small or all-big pool is untouched. A lone big model then serves
     // solo (fails the caller's <2 check), the safe outcome.
-    apply_admission_control(&mut backends, &mut models);
+    // Verified sizes gossiped by peers (metadata.parameter_count_b). The
+    // orchestrator has no peer GGUFs, so this is the only authoritative size
+    // source for the destructive admission/cap decisions.
+    let sizes = gossiped_sizes(node).await;
+    apply_admission_control(&mut backends, &mut models, &sizes);
 
     // Same-model fill: if only one model resolved but it is served by more than
     // one node, add the extra nodes as workers. Self-MoA shows repeated
@@ -269,9 +333,23 @@ async fn cap_committee(
     if models.len() <= MAX_COMMITTEE_WORKERS {
         return;
     }
-    // Rank strongest-first (gossiped tool_use, then size, then stable index),
-    // reusing the actor-selection ranking, and keep the top N.
-    let ranked = compute_actor_candidates(node, models).await;
+    // Rank by verified size, NOT the tool-actor ranking. The committee serves
+    // ordinary answer turns where `tool_use` is irrelevant; ranking by it
+    // (i386 P1) could evict a 32B/70B model with `tool_use=None` in favour of
+    // four small models whose metadata advertises tool use — the opposite of
+    // the admission goal. Keep the largest verified models; `Unknown` sorts
+    // last (never preferred over a verified model) but ahead of nothing, and
+    // stable index breaks ties.
+    let sizes = gossiped_sizes(node).await;
+    let mut ranked: Vec<usize> = (0..models.len()).collect();
+    ranked.sort_by(|&a, &b| {
+        let key = |i: usize| match tier_for(&models[i].name, &sizes) {
+            SizeTier::Big => 0,
+            SizeTier::Unknown => 1,
+            SizeTier::Small => 2,
+        };
+        key(a).cmp(&key(b)).then_with(|| a.cmp(&b))
+    });
     let keep: std::collections::HashSet<usize> =
         ranked.into_iter().take(MAX_COMMITTEE_WORKERS).collect();
 
@@ -344,14 +422,21 @@ async fn self_fill_from_extra_instances(
 fn apply_admission_control(
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
+    sizes: &HashMap<String, f64>,
 ) {
+    // Only *verified* big-tier models count as strong, and only *verified*
+    // small-tier models are eligible for exclusion. An `Unknown` size is never
+    // treated as strong (so it can't anchor the ">=2 big" gate) and is never
+    // filtered out (so an unverified label can't get a worker dropped). This
+    // is the i386 P1 fix: a destructive admission decision must rest on
+    // verified size, not a guessed tier.
     let big_count = models
         .iter()
-        .filter(|m| !moa::model_name_is_small_tier(&m.name))
+        .filter(|m| tier_for(&m.name, sizes) == SizeTier::Big)
         .count();
     let has_small = models
         .iter()
-        .any(|m| moa::model_name_is_small_tier(&m.name));
+        .any(|m| tier_for(&m.name, sizes) == SizeTier::Small);
     // Only exclude small-tier workers when doing so still leaves a committee
     // (>=2 big-tier). Measured:
     //   * 32B x2 + 8B  -> dropping the 8B leaves 32B x2, and the 8B added
@@ -368,9 +453,9 @@ fn apply_admission_control(
     let mut kept_backends: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
     let mut kept_models: Vec<moa::ModelEntry> = Vec::new();
     for m in models.iter() {
-        if moa::model_name_is_small_tier(&m.name) {
+        if tier_for(&m.name, sizes) == SizeTier::Small {
             tracing::info!(
-                "MoA: excluding small-tier worker {} (big-tier present)",
+                "MoA: excluding verified small-tier worker {} (>=2 big-tier present)",
                 m.name
             );
             continue;
@@ -507,12 +592,25 @@ mod tests {
         (b, m)
     }
 
+    /// Build a verified-size map keyed by canonical base name, as if gossiped.
+    fn sizes_of(entries: &[(&str, f64)]) -> HashMap<String, f64> {
+        entries
+            .iter()
+            .map(|(n, b)| (canonical_base_name(n), *b))
+            .collect()
+    }
+
     #[test]
     fn admission_drops_small_when_two_big_remain() {
         // Dropping the small workers still leaves a committee (2x 32B), and the
         // small drafts add nothing there — so exclude them.
         let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-32B", "Qwen3-8B", "Ministral-8B"]);
-        apply_admission_control(&mut b, &mut m);
+        let sizes = sizes_of(&[
+            ("Qwen3-32B", 32.0),
+            ("Qwen3-8B", 8.0),
+            ("Ministral-8B", 8.0),
+        ]);
+        apply_admission_control(&mut b, &mut m, &sizes);
         assert_eq!(m.len(), 2);
         assert!(m.iter().all(|e| e.name == "Qwen3-32B"));
         assert_eq!(b.len(), 2);
@@ -526,29 +624,64 @@ mod tests {
         // One strong + one weak: dropping the 8B leaves a solo 32B, but the
         // mixed committee beats solo (47W/27T/5L) — so keep the mix.
         let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-8B"]);
-        apply_admission_control(&mut b, &mut m);
+        let sizes = sizes_of(&[("Qwen3-32B", 32.0), ("Qwen3-8B", 8.0)]);
+        apply_admission_control(&mut b, &mut m, &sizes);
         assert_eq!(m.len(), 2, "must not collapse a lone-strong pool to solo");
     }
 
     #[test]
     fn admission_keeps_all_small_pool() {
         let (mut b, mut m) = pool(&["Qwen3-8B", "Llama-3.1-8B", "Ministral-8B"]);
-        apply_admission_control(&mut b, &mut m);
+        let sizes = sizes_of(&[
+            ("Qwen3-8B", 8.0),
+            ("Llama-3.1-8B", 8.0),
+            ("Ministral-8B", 8.0),
+        ]);
+        apply_admission_control(&mut b, &mut m, &sizes);
         assert_eq!(m.len(), 3);
     }
 
     #[test]
     fn admission_keeps_all_big_pool() {
         let (mut b, mut m) = pool(&["Qwen3-32B", "Mistral-Small-24B"]);
-        apply_admission_control(&mut b, &mut m);
+        let sizes = sizes_of(&[("Qwen3-32B", 32.0), ("Mistral-Small-24B", 24.0)]);
+        apply_admission_control(&mut b, &mut m, &sizes);
         assert_eq!(m.len(), 2);
     }
 
     #[test]
     fn admission_keeps_homogeneous_big_pool() {
         let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-32B"]);
-        apply_admission_control(&mut b, &mut m);
+        let sizes = sizes_of(&[("Qwen3-32B", 32.0)]);
+        apply_admission_control(&mut b, &mut m, &sizes);
         assert_eq!(m.len(), 2);
+    }
+
+    /// i386 P1: an unverified-size model must NOT be filtered, even next to
+    /// two verified big models. Unknown != Big and Unknown is never excluded.
+    #[test]
+    fn admission_never_filters_unknown_size_worker() {
+        let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-32B", "my-assistant"]);
+        // Only the two big models have gossiped sizes; "my-assistant" is
+        // unparseable and ungossiped -> Unknown.
+        let sizes = sizes_of(&[("Qwen3-32B", 32.0)]);
+        apply_admission_control(&mut b, &mut m, &sizes);
+        assert_eq!(m.len(), 3, "unknown-size worker must not be excluded");
+        assert!(m.iter().any(|e| e.name == "my-assistant"));
+    }
+
+    /// A model whose *name* parses as small but has NO verified size is still
+    /// Unknown (name parse is only a fallback here because model_param_size_b
+    /// yields None for names without an NNb token) — confirm the fallback
+    /// classifies a real small name as Small so admission still works without
+    /// gossip.
+    #[test]
+    fn admission_falls_back_to_name_parse_without_gossip() {
+        let (mut b, mut m) = pool(&["Qwen3-32B", "Qwen3-32B", "Qwen3-8B"]);
+        // No gossiped sizes at all -> name-parse fallback.
+        let sizes: HashMap<String, f64> = HashMap::new();
+        apply_admission_control(&mut b, &mut m, &sizes);
+        assert_eq!(m.len(), 2, "name-parse fallback still tiers 8B as small");
     }
 
     #[test]

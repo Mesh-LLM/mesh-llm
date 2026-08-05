@@ -24,11 +24,22 @@ pub(crate) fn served_model_metadata_for_path(
                 .parameter_size
                 .clone()
                 .or_else(|| parameter_size_from_text(model_name));
-            let parameter_count_b = parameter_count_b_from_text(&format!(
-                "{} {}",
-                model_name,
-                meta.parameter_size.as_deref().unwrap_or("")
-            ));
+            // Authoritative size: sum the GGUF tensor element counts. Name
+            // parsing is a lower-confidence fallback only when the file cannot
+            // be summed (e.g. remote-only model); a name that encodes no size
+            // then yields None (unknown), never a guessed tier.
+            let parameter_count_b = path
+                .exists()
+                .then(|| crate::models::gguf::scan_gguf_total_parameters(path))
+                .flatten()
+                .map(|total| total as f64 / 1e9)
+                .or_else(|| {
+                    parameter_count_b_from_text(&format!(
+                        "{} {}",
+                        model_name,
+                        meta.parameter_size.as_deref().unwrap_or("")
+                    ))
+                });
             let kv_head_count = meta.effective_kv_head_count();
             crate::mesh::ServedModelMetadata {
                 architecture: non_empty(meta.architecture),
