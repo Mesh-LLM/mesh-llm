@@ -291,14 +291,22 @@ pub(super) async fn assemble_worker_pool(
     let sizes = gossiped_sizes(node).await;
     apply_admission_control(&mut backends, &mut models, &sizes);
 
-    // Same-model fill: if only one model resolved but it is served by more than
-    // one node, add the extra nodes as workers. Self-MoA shows repeated
-    // sampling of one model ensembles as well as different models, so a mesh
-    // where every node serves the SAME model should still get MoA — the "add a
-    // modest node and it helps" case. Distinct remote endpoints only, never the
-    // same node twice, so the added capacity is real.
+    // Same-model fill: if only one model resolved but it is served by >=2
+    // DISTINCT physical endpoints, form a committee from them. Self-MoA shows
+    // repeated sampling of one model ensembles as well as different models, so
+    // a same-model mesh should still get MoA. Iron law: a single physical
+    // endpoint must never become a fake 2-worker committee — one node stays
+    // single-model.
     if models.len() == 1 {
-        self_fill_from_extra_instances(node, http, &mut backends, &mut models).await;
+        self_fill_from_extra_instances(
+            node,
+            targets,
+            required_tokens,
+            http,
+            &mut backends,
+            &mut models,
+        )
+        .await;
     }
 
     // Committee cap: fan-out cost is ~2N+1 model calls per turn (N drafts + N
@@ -377,7 +385,9 @@ const SELF_FILL_TARGET_WORKERS: usize = 2;
 /// MoA at all; without it `build_moa_config` returns None for such a mesh.
 async fn self_fill_from_extra_instances(
     node: &mesh::Node,
-    _http: &reqwest::Client,
+    targets: Option<&election::ModelTargets>,
+    required_tokens: Option<u32>,
+    http: &reqwest::Client,
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
 ) {
@@ -386,21 +396,60 @@ async fn self_fill_from_extra_instances(
     };
     let name = existing.name.clone();
 
+    // Rebuild the pool from DISTINCT physical endpoints serving this model:
+    // the local skippy port (if this node serves it and context fits) plus
+    // each distinct remote peer. `hosts_for_model` returns distinct peers, and
+    // the local endpoint is a different physical box from any of them, so no
+    // endpoint can appear twice.
+    //
+    // Iron law: a single physical endpoint must NEVER become a fake 2-worker
+    // committee. If fewer than two distinct endpoints serve the model we leave
+    // the pool as the single worker and MoA degrades to single-model serving.
+    let mut endpoints: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
+
+    if let Some(port) = targets.and_then(|t| {
+        t.targets.get(&name).and_then(|tv| {
+            tv.iter().find_map(|t| match t {
+                election::InferenceTarget::Local(p) => Some(*p),
+                _ => None,
+            })
+        })
+    }) {
+        let context_length = node.local_model_context_length(&name).await;
+        if context_selection::context_can_satisfy(required_tokens, context_length) {
+            endpoints.push(std::sync::Arc::new(LocalModelBackend {
+                port,
+                http: http.clone(),
+            }));
+        }
+    }
+
     for peer_id in node.hosts_for_model(&name).await {
-        if models.len() >= SELF_FILL_TARGET_WORKERS {
+        if endpoints.len() >= SELF_FILL_TARGET_WORKERS {
             break;
         }
-        let backend_idx = backends.len();
-        backends.push(std::sync::Arc::new(RemoteModelBackend {
+        endpoints.push(std::sync::Arc::new(RemoteModelBackend {
             node: node.clone(),
             peer_id,
         }));
-        models.push(moa::ModelEntry {
-            name: name.clone(),
-            backend_index: backend_idx,
-        });
-        tracing::info!("MoA: self-fill added instance of {name} from peer {peer_id}");
     }
+
+    if endpoints.len() < 2 {
+        return; // single physical endpoint -> stay single-model (iron law)
+    }
+    endpoints.truncate(SELF_FILL_TARGET_WORKERS);
+
+    tracing::info!(
+        "MoA: self-fill formed a {}-worker committee for {name} from distinct endpoints",
+        endpoints.len()
+    );
+    *backends = endpoints;
+    *models = (0..backends.len())
+        .map(|i| moa::ModelEntry {
+            name: name.clone(),
+            backend_index: i,
+        })
+        .collect();
 }
 
 /// Drop small-tier workers when any big-tier worker is present.
