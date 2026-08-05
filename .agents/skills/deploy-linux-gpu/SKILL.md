@@ -105,7 +105,10 @@ tmux server is killed/reaped. On managed GPU images that ship **supervisor**
 # the persistent node identity all resolve under that user's account.
 install_user="$(id -un)"
 install_home="$(getent passwd "$install_user" | cut -d: -f6)"
-test -n "$install_home" && test -x "$install_home/.local/bin/mesh-llm"
+if ! test -n "$install_home" || ! test -x "$install_home/.local/bin/mesh-llm"; then
+  echo "mesh-llm binary is missing from $install_home/.local/bin" >&2
+  exit 1
+fi
 
 sudo tee /etc/supervisor/conf.d/mesh-llm.conf >/dev/null <<EOF
 [program:mesh-llm]
@@ -169,10 +172,12 @@ local model specifically, pass its exact id from `/v1/models` instead of `auto`.
 ## Stop / clean up
 
 ```bash
-supervisorctl stop mesh-llm      # if under supervisor
-# or, for a tracked foreground/background run:
+# Tracked foreground/background run:
 mesh-llm stop
-# emergency only: use the PID reported for this instance by supervisorctl status
+# For a Supervisor-managed instance, stop Supervisor before any emergency kill:
+sudo supervisorctl stop mesh-llm
+# Emergency only if it remains alive: verify this is the intended instance/PID.
+sudo supervisorctl status mesh-llm
 kill -9 <mesh-llm-pid>
 ```
 

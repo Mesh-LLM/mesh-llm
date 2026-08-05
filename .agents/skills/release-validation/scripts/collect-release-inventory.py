@@ -79,25 +79,29 @@ def require_release_provenance(base_sha: str, head_sha: str) -> None:
 
 
 def collect_commits(base: str, head: str) -> list[dict]:
-    delimiter = "\x1f"
-    record = "\x1e"
     output = run(
         "git",
         "log",
+        "-z",
         "--reverse",
-        "--format=%H%x1f%aI%x1f%an%x1f%ae%x1f%s%x1f%b%x1e",
+        "--format=%H%x00%aI%x00%an%x00%ae%x00%s%x00%b",
         f"{base}..{head}",
     )
+    fields = output.split("\0")
+    if fields and fields[-1] == "":
+        fields.pop()
+    if not fields:
+        return []
+    field_names = ("sha", "authored_at", "author", "author_email", "subject", "body")
+    if len(fields) % len(field_names) != 0:
+        raise RuntimeError("could not parse NUL-delimited git log records")
+
     commits = []
-    for raw in output.split(record):
-        raw = raw.strip("\n")
-        if not raw:
-            continue
-        fields = raw.split(delimiter, 5)
-        if len(fields) != 6:
-            raise RuntimeError(f"could not parse git log record beginning {raw[:80]!r}")
+    for offset in range(0, len(fields), len(field_names)):
+        commit_fields = fields[offset : offset + len(field_names)]
+        commit_fields[-1] = commit_fields[-1].rstrip("\n")
         commits.append(
-            dict(zip(("sha", "authored_at", "author", "author_email", "subject", "body"), fields))
+            dict(zip(field_names, commit_fields))
         )
     return commits
 
