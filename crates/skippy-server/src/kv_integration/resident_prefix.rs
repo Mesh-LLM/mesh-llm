@@ -186,7 +186,7 @@ impl KvStageIntegration {
         runtime: &mut RuntimeState,
         session_id: &str,
     ) -> Result<ResidentPrefixEviction> {
-        let target_tokens = runtime.session_batch_size(session_id)? as u64;
+        let target_tokens = runtime.active_session_batch_size(session_id)? as u64;
         self.evict_resident_prefix_for_tokens(runtime, session_id, target_tokens)
     }
 

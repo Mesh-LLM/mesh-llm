@@ -24,6 +24,9 @@ impl StageOpenAiBackend {
         on_text_chunk: impl FnMut(&str) -> OpenAiResult<()>,
     ) -> OpenAiResult<GeneratedText> {
         let generation_timer = PhaseTimer::start();
+        if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
+            return Err(OpenAiError::backend("request cancelled"));
+        }
         if prompt.text.is_empty() {
             return Err(OpenAiError::invalid_request(
                 "request prompt/messages produced no text",
@@ -50,6 +53,9 @@ impl StageOpenAiBackend {
             .collect::<Vec<_>>();
         let tokenize_timer = PhaseTimer::start();
         let prompt_token_ids = self.tokenize(&prompt.text)?;
+        if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
+            return Err(OpenAiError::backend("request cancelled"));
+        }
         let mut tokenize_attrs = self.openai_attrs(&ids);
         tokenize_attrs.insert(
             "llama_stage.prompt_chars".to_string(),
@@ -65,10 +71,14 @@ impl StageOpenAiBackend {
         }
         let max_tokens = max_tokens.resolve(prompt_token_ids.len(), self.ctx_size)?;
         let token_admit_timer = PhaseTimer::start();
-        let token_budget_reservation = self.generation_token_budget.reserve(
+        let token_budget_reservation = self.generation_token_budget.reserve_cancellable(
             GenerationTokenBudgetRequest::new(prompt_token_ids.len(), max_tokens),
             GENERATION_ADMISSION_TIMEOUT,
+            cancellation,
         )?;
+        if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
+            return Err(OpenAiError::backend("request cancelled"));
+        }
         let mut token_admit_attrs = self.openai_attrs(&ids);
         token_admit_attrs.insert(
             "llama_stage.prompt_token_count".to_string(),
