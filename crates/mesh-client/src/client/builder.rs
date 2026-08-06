@@ -623,9 +623,12 @@ fn host_header(base_url: &str) -> Result<String, String> {
 }
 
 fn socket_addr(base_url: &str) -> Result<String, String> {
+    if base_url.starts_with("https://") {
+        return Err("HTTPS is not supported by the raw-TCP OpenAiHttp transport".to_string());
+    }
+
     base_url
         .strip_prefix("http://")
-        .or_else(|| base_url.strip_prefix("https://"))
         .unwrap_or(base_url)
         .trim_end_matches('/')
         .split('/')
@@ -637,9 +640,32 @@ fn socket_addr(base_url: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod relay_map_tests {
-    use super::relay_map_from_endpoint_addr;
+    use super::{relay_map_from_endpoint_addr, socket_addr};
     use iroh::{EndpointAddr, RelayUrl, SecretKey};
     use std::str::FromStr;
+
+    #[test]
+    fn openai_http_socket_addr_rejects_https() {
+        let error = socket_addr("https://example.com:9337/v1")
+            .expect_err("raw TCP transport must reject HTTPS URLs");
+
+        assert_eq!(
+            error,
+            "HTTPS is not supported by the raw-TCP OpenAiHttp transport"
+        );
+    }
+
+    #[test]
+    fn openai_http_socket_addr_preserves_plaintext_url_behavior() {
+        assert_eq!(
+            socket_addr("http://example.com:9337/v1/"),
+            Ok("example.com:9337".to_string())
+        );
+        assert_eq!(
+            socket_addr("example.com:9337/v1/"),
+            Ok("example.com:9337".to_string())
+        );
+    }
 
     #[test]
     fn endpoint_addr_relays_preserve_default_qad() {
