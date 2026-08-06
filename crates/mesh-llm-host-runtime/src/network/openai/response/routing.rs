@@ -3,6 +3,7 @@ use super::dispatch::relay_attempted_response;
 use super::probe::{probe_http_response, probe_http_response_local};
 use crate::mesh;
 use crate::network::openai::request_normalize::ResponseAdapter;
+use crate::network::openai::request_parse::prepare_peer_forwarded_request;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
@@ -97,7 +98,19 @@ pub(in crate::network::openai) async fn route_remote_attempt(
 ) -> RouteAttemptResult {
     match node.open_http_tunnel(host_id).await {
         Ok((mut quic_send, mut quic_recv)) => {
-            if let Err(err) = quic_send.write_all(prefetched).await {
+            // Caller credentials are meaningful at ingress, not on a remote peer.
+            // Keep local runtime and plugin forwarding unchanged.
+            let peer_request = match prepare_peer_forwarded_request(prefetched) {
+                Ok(request) => request,
+                Err(err) => {
+                    tracing::warn!(
+                        "API proxy: refusing to forward malformed request to host {}: {err}",
+                        host_id.fmt_short()
+                    );
+                    return RouteAttemptResult::RetryableUnavailable;
+                }
+            };
+            if let Err(err) = quic_send.write_all(&peer_request).await {
                 tracing::warn!(
                     "API proxy: failed to forward buffered request to host {}: {err}",
                     host_id.fmt_short()

@@ -191,11 +191,11 @@ pub(super) async fn read_http_request_with_limits(
             .or(value.n_predict)
     });
     let raw = finalize_forwarded_request(
-        raw,
-        header_end,
+        &raw,
         parsed.expects_continue,
         Some(&rewrite.request_path),
         rewrite.rewritten_body.as_deref(),
+        &[],
     )?;
     let body_len_bytes = body.len();
     let body_bytes = if body.is_empty() { None } else { Some(body) };
@@ -355,17 +355,19 @@ fn body_limits_for_path(path: &str, default: HttpReadLimits) -> HttpReadLimits {
 }
 
 fn finalize_forwarded_request(
-    mut raw: Vec<u8>,
-    header_end: usize,
+    raw: &[u8],
     strip_expect: bool,
     rewritten_path: Option<&str>,
     rewritten_body: Option<&[u8]>,
+    omitted_headers: &[&str],
 ) -> Result<Vec<u8>> {
-    let original_body = raw.split_off(header_end);
     // Re-parse with httparse so we iterate over validated header structs.
     let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut req = httparse::Request::new(&mut headers_buf);
-    let _ = req.parse(&raw).context("re-parse headers for forwarding")?;
+    let header_end = match req.parse(raw).context("re-parse headers for forwarding")? {
+        httparse::Status::Complete(header_end) => header_end,
+        httparse::Status::Partial => bail!("incomplete HTTP headers for forwarding"),
+    };
 
     let method = req.method.unwrap_or("GET");
     let path = rewritten_path.unwrap_or_else(|| req.path.unwrap_or("/"));
@@ -375,7 +377,11 @@ fn finalize_forwarded_request(
 
     for header in req.headers.iter() {
         let name = header.name;
-        if name.eq_ignore_ascii_case("connection") {
+        if name.eq_ignore_ascii_case("connection")
+            || omitted_headers
+                .iter()
+                .any(|omitted| name.eq_ignore_ascii_case(omitted))
+        {
             continue;
         }
         if strip_expect && name.eq_ignore_ascii_case("expect") {
@@ -399,8 +405,19 @@ fn finalize_forwarded_request(
     rebuilt.push_str("Connection: close\r\n\r\n");
 
     let mut forwarded = rebuilt.into_bytes();
-    forwarded.extend_from_slice(rewritten_body.unwrap_or(&original_body));
+    forwarded.extend_from_slice(rewritten_body.unwrap_or(&raw[header_end..]));
     Ok(forwarded)
+}
+
+/// Rebuild a request for a remote peer without forwarding ingress credentials.
+pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
+    const CALLER_CREDENTIAL_HEADERS: &[&str] = &[
+        "authorization",
+        "proxy-authorization",
+        "x-api-key",
+        "api-key",
+    ];
+    finalize_forwarded_request(raw, false, None, None, CALLER_CREDENTIAL_HEADERS)
 }
 
 /// Read from the stream until httparse can fully parse the request headers.
@@ -839,6 +856,34 @@ fn public_huggingface_model_ref(repo: &str, artifact: Option<&str>) -> Option<St
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn peer_forwarding_strips_credentials_and_preserves_headers_and_body() {
+        let body = br#"{"model":"test","input":"Authorization: keep in body"}"#;
+        let mut raw = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\naUtHoRiZaTiOn: Bearer caller-secret\r\nX-Trace-Id: trace-123\r\nPROXY-AUTHORIZATION: Basic proxy-secret\r\nX-API-Key: anthropic-secret\r\napi-key: azure-secret\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(body);
+
+        let forwarded = prepare_peer_forwarded_request(&raw).unwrap();
+
+        let mut expected = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nX-Trace-Id: trace-123\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        expected.extend_from_slice(body);
+        assert_eq!(forwarded, expected);
+    }
+
+    #[test]
+    fn peer_forwarding_rejects_incomplete_headers() {
+        let raw = b"GET /v1/models HTTP/1.1\r\nAuthorization: Bearer caller-secret\r\n";
+
+        assert!(prepare_peer_forwarded_request(raw).is_err());
+    }
 
     fn catalog_model_ref_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
         mesh::ServedModelDescriptor {
