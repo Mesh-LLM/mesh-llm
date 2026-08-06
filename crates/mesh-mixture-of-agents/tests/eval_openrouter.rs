@@ -2187,9 +2187,15 @@ fn e2e_config(pool: &[String], api_key: &str) -> GatewayConfig {
         worker_timeout: Duration::from_secs(90),
         hedge_delay: Duration::from_secs(5),
         reducer_timeout: Duration::from_secs(60),
-        // Production defaults — including the grace that must not forfeit
-        // the refinement round.
-        first_answer_grace: Duration::from_secs(3),
+        // Production private-mesh default is now 10s (widened from 3s so the
+        // committee completes before grace arms on fast infra).
+        // `MOA_E2E_GRACE_SECS=0` disables grace entirely for isolation tests.
+        first_answer_grace: Duration::from_secs(
+            std::env::var("MOA_E2E_GRACE_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+        ),
         strong_patience: Duration::from_secs(20),
         enable_thinking: Some(false),
         actor_candidates: Vec::new(),

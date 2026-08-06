@@ -285,12 +285,25 @@ pub fn pack_for_reducer_selected(
     // second clause stops it averaging in confidently-wrong inputs. We add
     // per-worker attribution and per-payload length bounds (below), which
     // Together omits.
-    let mut system_parts = vec![
-        augmented_system_prompt_for_mode(session, has_tools),
-        String::new(),
-        format!("Multiple models analyzed this request. Reason for synthesis: {reason}"),
-        synthesis_instruction(has_tools),
-    ];
+    // The reducer is the synthesizer, not one of the parallel answerers. Giving
+    // it the *worker* preamble ("multiple models are answering in parallel;
+    // give your most complete answer") on top of the synthesis instruction is
+    // contradictory framing: it tells the model to both draft and aggregate. A
+    // 32B reconciles it; an 8B reducer does not. So the reducer gets the
+    // agent's own system prompt (tool guidance only when this is a tool turn)
+    // plus the synthesis instruction — matching the harness configuration that
+    // measured 12W/2L on a 6x8B pool.
+    let mut system_parts: Vec<String> = Vec::new();
+    if let Some(sp) = session.system_prompt() {
+        system_parts.push(sp);
+        system_parts.push(String::new());
+    }
+    if has_tools {
+        system_parts.push(format!(
+            "Multiple models analyzed this request. Reason for synthesis: {reason}"
+        ));
+    }
+    system_parts.push(synthesis_instruction(has_tools));
 
     // Worker outputs
     system_parts.push(String::new());

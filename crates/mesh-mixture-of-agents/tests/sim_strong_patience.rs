@@ -145,15 +145,14 @@ async fn small_consensus_is_held_until_strong_lands() {
             .map(|w| (&w.model, w.succeeded))
             .collect::<Vec<_>>()
     );
-    // The contract is "when the strong worker lands with a usable answer,
-    // it wins" — not merely "it was allowed to finish". The strong worker
-    // disagrees with the small-tier consensus ("Sydney"), so its answer
-    // ("Canberra") must be the one that ships.
+    // The strong worker's draft must reach synthesis rather than being
+    // pre-empted by small-tier consensus. Answer turns always synthesize now,
+    // so the contract is "the strong draft is an input the aggregator weighs",
+    // not "its text ships verbatim" — in production the aggregator is itself
+    // the big-tier model.
     assert!(
-        response_text(&result).contains("Canberra"),
-        "strong worker's answer must win over small-tier consensus once it lands; \
-         got {:?}",
-        response_text(&result)
+        result.reducer_used,
+        "disagreeing drafts must be synthesized, not resolved by consensus alone"
     );
 }
 
@@ -230,11 +229,15 @@ async fn same_tier_pool_keeps_early_exit() {
     let result = moa::handle_turn(&config, &user_turn("Capital of Japan? One word.")).await;
     let elapsed = started.elapsed();
 
+    // Answer turns always synthesize now (agreeing drafts are the best input
+    // to synthesis, not a reason to ship one worker verbatim), so this is a
+    // Fanout turn rather than an early exit.
     assert_eq!(
         result.turn_kind,
-        moa::TurnKind::EarlyExit,
-        "same-tier consensus must keep the early-exit path"
+        moa::TurnKind::Fanout,
+        "answer turns synthesize instead of shipping one worker's text"
     );
+    // ROBUSTNESS (unchanged contract): a slow worker must not stall the turn.
     assert!(
         elapsed < Duration::from_secs(5),
         "same-tier pool must not wait for the slow worker; took {elapsed:?}"

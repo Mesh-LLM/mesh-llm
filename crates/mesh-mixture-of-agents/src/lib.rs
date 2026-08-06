@@ -370,7 +370,18 @@ async fn handle_query(
     // stub that drags the refined answer down. Measured end-to-end, production's
     // tiered budgets produced ~3.1k-char answers against a ~4.1k-char solo
     // baseline; the study that showed the gain gave every peer the full budget.
-    let uniform_packing = refinement::refinement_expected(config);
+    // Full-budget drafts for every answer-turn worker. Role tiers (Fast 256 /
+    // Specialist 512 / Strong 1024) existed only so the cheap worker could
+    // answer the grace fast-path quickly with a short reply — but grace no
+    // longer finalizes answer turns (it collects, then synthesizes), so a
+    // truncated draft is now pure downside: it is an *input* to synthesis, and
+    // a 256-token stub drags the aggregated answer down. Measured: an all-small
+    // pool lost 5W/31L through the shipped path with role-tiered drafts
+    // (3399-char MoA vs 4064 solo) while the full-budget harness won 12W/2L on
+    // the same pool. A big pool tolerated tiering only because its aggregator
+    // is strong enough to rebuild a full answer from stubs. See
+    // `evals/moa-openrouter/RESULTS.md`.
+    let uniform_packing = grace_mode == GraceMode::Answer;
     for assignment in &assignments {
         let pack_role = if uniform_packing {
             worker::WorkerRole::Generalist
@@ -434,10 +445,16 @@ async fn handle_query(
             } else {
                 1
             },
-            // When refinement is expected, grace is a deadline on collecting,
-            // not a verdict: finalizing there shipped one 8B answer and skipped
-            // the round in 79/80 measured end-to-end turns.
-            grace_finalizes: !refinement::refinement_expected(config),
+            // Grace finalizes (ships one worker's answer and stops) ONLY on
+            // tool turns, where a fast validated tool call keeps agent loops
+            // snappy. On answer turns grace is a *collection deadline*: stop
+            // waiting for the slow tail, but still synthesize what arrived
+            // instead of shipping one worker's answer. Finalizing answer turns
+            // shipped a single (often role-truncated) answer and skipped
+            // synthesis — measured 80/80 early-exit at capable scale, turning a
+            // 61W/3L committee win into a 26W/40L loss. See
+            // `evals/moa-openrouter/RESULTS.md`.
+            grace_finalizes: grace_mode == GraceMode::Tool,
         },
     )
     .await;
@@ -452,7 +469,6 @@ async fn handle_query(
     // early-exit source, the answer grace, is a timeout rather than a quality
     // signal; when refinement is expected it is configured above to bound the
     // gather without finalizing, so it no longer pre-empts this round.)
-    let mut refined_this_turn = false;
     if early_decision.is_none()
         && refinement::should_refine(config, outputs.len())
         && let Some((refined, refine_summaries)) =
@@ -465,7 +481,6 @@ async fn handle_query(
         );
         outputs = refined;
         summaries.extend(refine_summaries);
-        refined_this_turn = true;
     }
 
     if outputs.is_empty() {
@@ -484,25 +499,31 @@ async fn handle_query(
     let took_early_exit = early_decision.is_some();
     let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs));
 
-    // After a refinement round, always synthesize.
+    // Always synthesize a multi-worker answer turn — never ship one worker's
+    // text verbatim.
     //
-    // `arbitrate` returns `Answer(payload)` when the drafts agree — it ships
-    // one worker's text verbatim. That is the right cheap path for raw round-1
-    // answers, but after refinement it discards the round we just paid for and
-    // hands back whichever single small model happened to represent the
-    // cluster. Measured end-to-end over two runs: on turns where the reducer
-    // was skipped MoA won 0 of 20 and lost at ~3x the rate of turns that
-    // synthesized (29-33% vs 9-14%). It is a pure loss mode.
+    // `arbitrate` returns `Answer(payload)` when the drafts agree, which ships
+    // whichever single worker represented the cluster. That is the whole
+    // harness-vs-shipped gap: the eval rig always synthesizes (draft ->
+    // aggregate) and a 6x8B pool wins 12W/2L, while the shipped path shipped one
+    // 8B verbatim on agreement and lost (6W/19L on the same pool). A weak 8B
+    // answer alone loses to a full-budget solo; an aggregation of six beats it.
+    // The synthesizer sees every draft and produces the fuller, better answer —
+    // agreeing drafts are the best possible input to it, not a reason to skip.
     //
-    // Refined drafts agreeing is not a reason to skip synthesis; it is the
-    // best possible input to it.
-    let decision = if refined_this_turn && matches!(decision, arbiter::Decision::Answer(_)) {
-        arbiter::Decision::NeedsReducer {
-            reason: format!("{} refined drafts to synthesize", outputs.len()),
-        }
-    } else {
-        decision
-    };
+    // Applies to answer turns with >=2 successful workers. Tool turns keep
+    // their own routing (single best actor). A single surviving worker has
+    // nothing to synthesize, so it still ships directly.
+    let is_answer_turn = grace_mode == GraceMode::Answer;
+    let decision =
+        if is_answer_turn && outputs.len() >= 2 && matches!(decision, arbiter::Decision::Answer(_))
+        {
+            arbiter::Decision::NeedsReducer {
+                reason: format!("{} drafts to synthesize", outputs.len()),
+            }
+        } else {
+            decision
+        };
     let (response_body, reducer_used, reducer_attempts) = resolve_decision(
         config,
         DecisionResolution {

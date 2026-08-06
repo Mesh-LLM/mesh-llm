@@ -250,7 +250,15 @@ fn patience_profile(public_mesh: bool) -> PatienceProfile {
         }
     } else {
         PatienceProfile {
-            first_answer_grace: std::time::Duration::from_secs(3),
+            // Widened 3s -> 10s: at 3s a fast small worker landed inside the
+            // window while a larger peer was still generating, so grace armed
+            // and (before the finalize fix) shipped the small answer, skipping
+            // synthesis on ~every turn. 10s lets a normal committee complete
+            // and synthesize; grace still bounds a genuinely stuck tail. Paired
+            // with grace-finalizes-on-tool-turns-only, so even if it does fire
+            // on an answer turn it synthesizes what arrived rather than shipping
+            // one worker. See `evals/moa-openrouter/RESULTS.md`.
+            first_answer_grace: std::time::Duration::from_secs(10),
             strong_patience: std::time::Duration::from_secs(20),
         }
     }
