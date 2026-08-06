@@ -507,13 +507,20 @@ delta.
 | **6× 8B diverse** | **12W/65T/2L, p=0.013** | 9W/69T/1L, p=0.021 | 2W/76T/1L |
 | 6× qwen3-8b SAME | 4W/75T/1L, p=0.38 | 1W/79T/0L, p=1.0 | 1W/79T/0L |
 
-Findings:
+> **WITHDRAWN — see "Withdrawal: the 6x8B small-pool win did not replicate" at
+> the end of this file.** The 6× 8B cell below did not reproduce (3W/76T/1L,
+> p=0.63 on a re-run of the same rig, same tasks, same pool), and the shipped
+> path measured a *loss* at every small width. All-small pools now serve their
+> best member instead of convening a committee. The rest of this section is kept
+> for the record; do not cite the 6× 8B number.
 
-- **Width is the small-model lever.** A committee of six diverse 8B models
+Findings (as originally written; the first is withdrawn):
+
+- ~~**Width is the small-model lever.** A committee of six diverse 8B models
   beats the single best member (12W/2L, p=0.013); four is only marginal
-  (p=0.06); two/three are null. The old `MAX_COMMITTEE_WORKERS = 4` throttled
-  exactly the pools that need width. Cap is now tier-aware: 6 for all-small, 4
-  when a verified big model is present.
+  (p=0.06); two/three are null.~~ Withdrawn: rested on ~14 decided trials out of
+  80 and did not replicate. The tier-aware cap (6 all-small / 4 with a verified
+  big) is retained, but an all-small pool no longer forms a committee at all.
 - **The refine round never earns its serial cost.** `refine vs single-agg` is
   null in every cell (2/77/1 at N6). Hermes' single-aggregation cadence (one
   synth, no refine pass) is >= Together's layered shape here, at half the
