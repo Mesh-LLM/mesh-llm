@@ -2607,3 +2607,139 @@ async fn survives_mesh_faults() {
         );
     }
 }
+
+/// Does a tool turn stay healthy when a real multi-model pool is present?
+///
+/// The tool path is deliberately asymmetric: it routes to the single best
+/// tool-caller rather than fanning out and voting, because voting on tool calls
+/// measured null-to-harmful. That design decision is only safe if the structured
+/// `tool_calls` still come back intact when several models are available — the
+/// actor has to be selected and its call must survive arbitration rather than
+/// the turn collapsing or the arguments getting mangled.
+///
+/// So this asserts the *contract*, not a quality delta: with a multi-model pool
+/// on the wire, a tool prompt produces a well-formed tool call, and a "no tool
+/// needed" prompt does not invent one. It also records `x-moa`-equivalent turn
+/// facts (workers dispatched, actor count) so the single-actor behaviour is
+/// visible rather than assumed.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live network + cost; run explicitly with --ignored"]
+async fn e2e_tool_turns_stay_healthy_with_a_multi_model_pool() {
+    let Some(key) = api_key_or_skip("e2e_tool_turns_stay_healthy_with_a_multi_model_pool") else {
+        return;
+    };
+    let pool = small_mesh_pool();
+    assert!(
+        pool.len() >= 2,
+        "this test is about MULTI-model pools; got {pool:?}"
+    );
+    let config = e2e_config(&pool, &key);
+    let tools = agent_tools();
+
+    println!(
+        "\n=== tool turns through handle_turn, pool of {} ===",
+        pool.len()
+    );
+    for m in &pool {
+        println!("  peer: {m}");
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+
+    for task in tool_tasks() {
+        let body = user_turn(task.prompt, Some(tools.clone()));
+        let started = Instant::now();
+        let result = moa::handle_turn(&config, &body).await;
+        let elapsed = started.elapsed();
+
+        let calls = response_tool_calls(&result.response_body);
+        let text = response_text(&result.response_body);
+        let dispatched = result.worker_summaries.len();
+        let ok = result
+            .worker_summaries
+            .iter()
+            .filter(|w| w.succeeded)
+            .count();
+
+        println!(
+            "\n[{}] kind={:?} dispatched={} ok={} reducer={} {:.1}s",
+            task.name,
+            result.turn_kind,
+            dispatched,
+            ok,
+            result.reducer_used,
+            elapsed.as_secs_f64(),
+        );
+        for (n, a) in &calls {
+            println!("   tool_call: {n}({a})");
+        }
+        if calls.is_empty() {
+            println!("   text: {:?}", truncate(&text, 100));
+        }
+
+        match task.expect_tool {
+            // A tool is expected: exactly one well-formed call, correct name,
+            // arguments must be valid JSON (a mangled call is the failure mode
+            // this test exists to catch).
+            Some(expected) => {
+                if calls.is_empty() {
+                    failures.push(format!("{}: expected a tool call, got none", task.name));
+                    continue;
+                }
+                if calls.len() > 1 {
+                    failures.push(format!(
+                        "{}: expected one tool call, got {}",
+                        task.name,
+                        calls.len()
+                    ));
+                }
+                let (name, args) = &calls[0];
+                if serde_json::from_str::<Value>(args).is_err() {
+                    failures.push(format!(
+                        "{}: arguments are not valid JSON: {args:?}",
+                        task.name
+                    ));
+                }
+                // The tool chosen can legitimately differ from the single-model
+                // expectation (any of the offered tools is a defensible first
+                // move), so only flag a name that is not an offered tool at all.
+                if !agent_tools_names().iter().any(|t| t == name) {
+                    failures.push(format!(
+                        "{}: called {name:?}, which is not an offered tool",
+                        task.name
+                    ));
+                }
+                if name != expected {
+                    println!("   note: chose {name:?}, single-model baseline expects {expected:?}");
+                }
+            }
+            // No tool needed: must not invent one.
+            None => {
+                if !calls.is_empty() {
+                    failures.push(format!(
+                        "{}: invented a tool call on a no-tool prompt: {:?}",
+                        task.name, calls[0]
+                    ));
+                }
+                if text.trim().is_empty() {
+                    failures.push(format!("{}: no answer text produced", task.name));
+                }
+            }
+        }
+
+        if result.turn_kind == moa::TurnKind::Failed {
+            failures.push(format!("{}: turn failed outright", task.name));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "tool-turn contract violations with a {}-model pool:\n  {}",
+        pool.len(),
+        failures.join("\n  ")
+    );
+    println!(
+        "\nOK: tool turns healthy across a {}-model pool",
+        pool.len()
+    );
+}
