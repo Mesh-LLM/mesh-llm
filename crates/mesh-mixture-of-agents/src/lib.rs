@@ -449,19 +449,19 @@ async fn handle_query(
                     .len()
                     .saturating_sub(1)
                     .max(refinement::MIN_DRAFTS)
-            } else if grace_mode == GraceMode::Answer {
-                // Synthesis quality scales with WIDTH — that is the whole
-                // small-pool finding (6x 8B beats its best member, 4x is
-                // marginal, 2x is null). Arming grace on the first answer let
-                // it stop collecting at ~2 of 6, synthesizing a committee too
-                // narrow to win. Collect all but one draft.
-                //
-                // No MIN_DRAFTS floor here: on a 2-model pool that would demand
-                // both answers, so a single slow peer could never be graced past
-                // and would stall the turn to `worker_timeout`. `N-1` always
-                // leaves one straggler tolerable.
-                config.models.len().saturating_sub(1).max(1)
             } else {
+                // 1, deliberately: `min_grace_answers` gates whether grace can
+                // ARM at all, so any higher value is a liveness hazard. Setting
+                // it to N-1 on an answer turn meant a 6-worker pool where two
+                // public-mesh peers never returned could never arm grace (only
+                // 4 answers ever arrive), so the turn rode `worker_timeout`
+                // instead — measured 61s on a public mesh against 3-11s for the
+                // released build, for a SHORTER answer.
+                //
+                // Width comes from the grace WINDOW (10s), not from a count
+                // gate: healthy peers all land inside it, and a dead peer costs
+                // 10s rather than 60s. This is also the configuration the
+                // capable-pool win was measured under (71W/8T/1L).
                 1
             },
             // Grace finalizes (ships one worker's answer and stops) ONLY on
