@@ -285,7 +285,7 @@ impl PredictionReturnSinks {
             .streams
             .lock()
             .map_err(|_| anyhow!("prediction return sinks lock poisoned"))?;
-        if streams.len() >= MAX_PENDING_PREDICTION_RETURN_SINKS {
+        if !streams.contains_key(&key) && streams.len() >= MAX_PENDING_PREDICTION_RETURN_SINKS {
             bail!("too many pending prediction return sinks");
         }
         streams.insert(key, stream);
