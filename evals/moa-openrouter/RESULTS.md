@@ -527,3 +527,52 @@ Findings:
 Open: 4B pools (is the floor lower or does it need even more width?), and
 whether dropping the refine round for small pools recovers latency without
 losing the width win.
+
+## Withdrawal: the 6x8B small-pool win did not replicate (2026-08-06)
+
+The width-sprint headline ("6x diverse 8B beats its best member, 12W/65T/2L,
+p=0.013") is **withdrawn**. Re-running the same rig on the same 40 tasks, same
+pool, same judge gives **3W/76T/1L (p=0.63)**, with 11 of 40 tasks flipping
+verdict. The original rested on ~14 decided trials out of 80 (the rest ties) and
+was a single unreplicated run selected from a width sweep; correcting for the
+four pool widths compared puts it at roughly p=0.05 even on its own terms.
+
+It was real arithmetic on real data, but never a robust effect, and it should
+not have been published as a headline from one run.
+
+### What the shipped path actually does at small scale
+
+Through `moa::handle_turn` at production defaults, 8B-class peers with an 8B
+reducer, vs the pool's best member alone (40 prompts x 2 draws, out-of-family
+position-swapped judge, length logged):
+
+| pool | result | decided | p |
+|---|---|---|---|
+| 2x 8B | 0W/43T/37L | 37 | <0.0001 |
+| 4x 8B | 5W/63T/12L | 17 | 0.14 |
+| 6x 8B | 5W/52T/23L | 28 | 0.0009 |
+
+MoA answers are consistently shorter (3236-3372 chars vs ~4070 solo). The
+committee never won at any width. Note the capable pool wins 28/29 of decided
+trials where the MoA answer is *shorter*, which rules out "this judge simply
+prefers longer answers" as the explanation.
+
+**Action:** all-small pools no longer convene a committee; they collapse to the
+best member and the caller degrades to serving it directly.
+
+**Scope of the claim:** this measures a weak reducer synthesizing weak drafts.
+It is not evidence that small-model MoA cannot work. The untested cell is small
+peers with a *strong* reducer (the capable pool confounds peer strength with
+reducer strength). If a mesh gains a big-tier model the pool is no longer
+all-small and MoA engages again.
+
+### Known methodology limitations
+
+- `judge_pair` collapses genuine ties, position disagreements, and API/parse
+  failures into the same `0` result, so "tie" is a garbage bucket and tie counts
+  cannot be interpreted as agreement.
+- Significance is computed per draw (80) rather than per prompt cluster (40),
+  which overstates confidence; the capable-pool result survives either way, the
+  small-pool ones are marginal.
+- `pool[0]` is assumed to be the strongest member rather than verified.
+- Single judge model.
