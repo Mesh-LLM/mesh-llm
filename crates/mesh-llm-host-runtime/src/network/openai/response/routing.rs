@@ -2,8 +2,8 @@ use super::common::{ResponseRetryPolicy, RouteAttemptResult, retryable_route_res
 use super::dispatch::relay_attempted_response;
 use super::probe::{probe_http_response, probe_http_response_local};
 use crate::mesh;
+use crate::network::openai::forwarded_request::prepare_peer_forwarded_request;
 use crate::network::openai::request_normalize::ResponseAdapter;
-use crate::network::openai::request_parse::prepare_peer_forwarded_request;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
@@ -96,44 +96,60 @@ pub(in crate::network::openai) async fn route_remote_attempt(
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> RouteAttemptResult {
-    match node.open_http_tunnel(host_id).await {
-        Ok((mut quic_send, mut quic_recv)) => {
-            // Caller credentials are meaningful at ingress, not on a remote peer.
-            // Keep local runtime and plugin forwarding unchanged.
-            let peer_request = match prepare_peer_forwarded_request(prefetched) {
-                Ok(request) => request,
-                Err(err) => {
-                    tracing::warn!(
-                        "API proxy: refusing to forward malformed request to host {}: {err}",
-                        host_id.fmt_short()
-                    );
-                    return RouteAttemptResult::RetryableUnavailable;
-                }
-            };
-            if let Err(err) = quic_send.write_all(&peer_request).await {
-                tracing::warn!(
-                    "API proxy: failed to forward buffered request to host {}: {err}",
-                    host_id.fmt_short()
-                );
-                return RouteAttemptResult::RetryableUnavailable;
-            }
-            route_remote_attempt_after_forward(
-                tcp_stream,
-                &mut quic_recv,
-                host_id,
-                retry_policy,
-                response_adapter,
-            )
-            .await
-        }
+    let (mut quic_send, mut quic_recv) = match node.open_http_tunnel(host_id).await {
+        Ok(tunnel) => tunnel,
         Err(err) => {
             tracing::warn!(
                 "API proxy: can't tunnel to host {}: {err}",
                 host_id.fmt_short()
             );
-            retryable_route_result_from_error(&err)
+            return retryable_route_result_from_error(&err);
         }
+    };
+
+    if forward_peer_request(&mut quic_send, host_id, prefetched)
+        .await
+        .is_err()
+    {
+        return RouteAttemptResult::RetryableUnavailable;
     }
+
+    route_remote_attempt_after_forward(
+        tcp_stream,
+        &mut quic_recv,
+        host_id,
+        retry_policy,
+        response_adapter,
+    )
+    .await
+}
+
+async fn forward_peer_request(
+    quic_send: &mut iroh::endpoint::SendStream,
+    host_id: iroh::EndpointId,
+    prefetched: &[u8],
+) -> Result<(), ()> {
+    // Caller credentials are meaningful at ingress, not on a remote peer.
+    let peer_request = match prepare_peer_forwarded_request(prefetched) {
+        Ok(request) => request,
+        Err(err) => {
+            tracing::warn!(
+                "API proxy: refusing to forward malformed request to host {}: {err}",
+                host_id.fmt_short()
+            );
+            return Err(());
+        }
+    };
+
+    if let Err(err) = quic_send.write_all(&peer_request).await {
+        tracing::warn!(
+            "API proxy: failed to forward buffered request to host {}: {err}",
+            host_id.fmt_short()
+        );
+        return Err(());
+    }
+
+    Ok(())
 }
 
 async fn route_remote_attempt_after_forward(
