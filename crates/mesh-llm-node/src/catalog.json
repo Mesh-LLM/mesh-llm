@@ -256,6 +256,32 @@
     }
   },
   {
+    "name": "Qwen3.6-27B-UD-Q4_K_XL",
+    "file": "Qwen3.6-27B-UD-Q4_K_XL.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/main/Qwen3.6-27B-UD-Q4_K_XL.gguf",
+    "size": "16.4GB",
+    "description": "Qwen3.6 27B dense, vision + text, strong reasoning and coding",
+    "draft": null,
+    "extra_files": [],
+    "mmproj": {
+      "file": "Qwen3.6-27B-mmproj-BF16.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/main/mmproj-BF16.gguf"
+    }
+  },
+  {
+    "name": "Qwen3.6-35B-A3B-UD-Q4_K_XL",
+    "file": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+    "size": "20.8GB",
+    "description": "Qwen3.6 35B MoE (3B active), vision + text, fast reasoning and coding",
+    "draft": null,
+    "extra_files": [],
+    "mmproj": {
+      "file": "Qwen3.6-35B-A3B-mmproj-BF16.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/mmproj-BF16.gguf"
+    }
+  },
+  {
     "name": "Qwen3-Coder-Next-Q4_K_M",
     "file": "Qwen3-Coder-Next-Q4_K_M-00001-of-00004.gguf",
     "url": "https://huggingface.co/Qwen/Qwen3-Coder-Next-GGUF/resolve/main/Qwen3-Coder-Next-Q4_K_M/Qwen3-Coder-Next-Q4_K_M-00001-of-00004.gguf",
