@@ -436,12 +436,31 @@ async fn handle_query(
             // at 2 of 4, while the study that measured the gain refined over
             // every draft. Wait for all but one, so a single straggler still
             // cannot hold the turn and `worker_timeout` still bounds the wait.
+            // Synthesis quality scales with WIDTH — that is the whole small-pool
+            // finding (6x 8B beats its best member, 4x is marginal, 2x is null).
+            // Arming grace on the first answer let it stop collecting at ~2 of 6,
+            // synthesizing a committee too narrow to win. Wait for all but one
+            // draft on any multi-worker answer turn, so a single straggler still
+            // cannot hold the turn and `worker_timeout` remains the hard bound.
+            // Tool turns keep the fast path (first valid proposal wins).
             min_grace_answers: if refinement::refinement_expected(config) {
                 config
                     .models
                     .len()
                     .saturating_sub(1)
                     .max(refinement::MIN_DRAFTS)
+            } else if grace_mode == GraceMode::Answer {
+                // Synthesis quality scales with WIDTH — that is the whole
+                // small-pool finding (6x 8B beats its best member, 4x is
+                // marginal, 2x is null). Arming grace on the first answer let
+                // it stop collecting at ~2 of 6, synthesizing a committee too
+                // narrow to win. Collect all but one draft.
+                //
+                // No MIN_DRAFTS floor here: on a 2-model pool that would demand
+                // both answers, so a single slow peer could never be graced past
+                // and would stall the turn to `worker_timeout`. `N-1` always
+                // leaves one straggler tolerable.
+                config.models.len().saturating_sub(1).max(1)
             } else {
                 1
             },

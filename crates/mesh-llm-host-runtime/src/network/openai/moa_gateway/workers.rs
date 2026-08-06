@@ -574,12 +574,16 @@ mod tests {
     }
 
     /// Private-mesh timings are the tuned defaults and must not drift silently.
+    /// Grace is 10s (widened from 3s): at 3s a fast worker landed inside the
+    /// window while a larger peer was still generating, so grace armed and the
+    /// committee never synthesized — measured 80/80 early-exit at capable
+    /// scale. See `evals/moa-openrouter/RESULTS.md`.
     #[test]
     fn private_mesh_keeps_the_tuned_defaults() {
         let private = patience_profile(false);
         assert_eq!(
             private.first_answer_grace,
-            std::time::Duration::from_secs(3)
+            std::time::Duration::from_secs(10)
         );
         assert_eq!(private.strong_patience, std::time::Duration::from_secs(20));
     }

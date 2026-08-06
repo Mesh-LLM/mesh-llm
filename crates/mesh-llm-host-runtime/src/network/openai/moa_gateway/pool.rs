@@ -309,6 +309,30 @@ pub(super) async fn assemble_worker_pool(
         .await;
     }
 
+    // All-small pools do not convene a committee.
+    //
+    // Measured through the shipped path (evals/moa-openrouter/RESULTS.md),
+    // 8B-class peers with an 8B reducer, vs the pool's best member alone:
+    //   2x 8B:  0W/43T/37L   4x 8B: see RESULTS   6x 8B: 5W/52T/23L (p=0.0009)
+    // The committee never won and lost roughly a third of decided trials, with
+    // consistently shorter answers. A capable pool is the opposite (71W/8T/1L,
+    // p<0.0001), so this is a statement about *this* configuration — a weak
+    // reducer synthesizing weak drafts — not about small-model MoA in general.
+    // The untested cell is small peers with a strong reducer; if a mesh gains a
+    // big-tier model the pool stops being all-small and MoA engages again.
+    //
+    // So: fall back to best-member routing rather than ship a measured
+    // regression. Keeping the strongest worker means `build_moa_config` sees a
+    // single model and the caller degrades to serving it directly.
+    if !models.is_empty()
+        && models
+            .iter()
+            .all(|m| tier_for(&m.name, &sizes) == SizeTier::Small)
+    {
+        keep_best_member_only(&mut backends, &mut models, &sizes);
+        return (backends, models);
+    }
+
     // Committee cap: fan-out cost is ~2N+1 model calls per turn (N drafts + N
     // refines + 1 synthesis), and measured quality is flat past ~4 workers
     // while latency and spend keep climbing. On a big shared mesh (say 20
@@ -334,6 +358,47 @@ pub(super) async fn assemble_worker_pool(
 /// present.
 const COMMITTEE_CAP_SMALL: usize = 6;
 const COMMITTEE_CAP_BIG: usize = 4;
+
+/// Reduce an all-small pool to its single strongest member, so the caller
+/// degrades to serving that model directly instead of convening a committee
+/// that measured worse than the member alone.
+fn keep_best_member_only(
+    backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
+    models: &mut Vec<moa::ModelEntry>,
+    sizes: &HashMap<String, f64>,
+) {
+    // Largest verified size wins; unsized models rank last, stable index
+    // breaks ties (same ordering rule as `cap_committee`).
+    let best = (0..models.len())
+        .max_by(|&a, &b| {
+            let key = |i: usize| {
+                sizes
+                    .get(&canonical_base_name(&models[i].name))
+                    .copied()
+                    .unwrap_or(0.0)
+            };
+            key(a)
+                .partial_cmp(&key(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.cmp(&a))
+        })
+        .unwrap_or(0);
+
+    tracing::info!(
+        "MoA: all-small pool ({} workers) — serving best member {} directly \
+         (committee measured worse than the member alone)",
+        models.len(),
+        models[best].name,
+    );
+
+    let backend = backends[models[best].backend_index].clone();
+    let name = models[best].name.clone();
+    *backends = vec![backend];
+    *models = vec![moa::ModelEntry {
+        name,
+        backend_index: 0,
+    }];
+}
 
 fn committee_cap(models: &[moa::ModelEntry], sizes: &HashMap<String, f64>) -> usize {
     let has_big = models
@@ -659,6 +724,36 @@ mod tests {
             .iter()
             .map(|(n, b)| (canonical_base_name(n), *b))
             .collect()
+    }
+
+    #[test]
+    fn all_small_pool_keeps_only_the_best_member() {
+        // Measured: an all-small committee never beat its best member and lost
+        // ~a third of decided trials (2x8B 0W/37L; 6x8B 5W/23L p=0.0009). So an
+        // all-small pool collapses to the single strongest member and the
+        // caller degrades to serving it directly.
+        let (mut b, mut m) = pool(&["Qwen3-8B", "Llama-3.1-8B", "Qwen3.5-9B"]);
+        let sizes = sizes_of(&[
+            ("Qwen3-8B", 8.0),
+            ("Llama-3.1-8B", 8.0),
+            ("Qwen3.5-9B", 9.0),
+        ]);
+        keep_best_member_only(&mut b, &mut m, &sizes);
+        assert_eq!(m.len(), 1, "all-small pool must collapse to one member");
+        assert_eq!(m[0].name, "Qwen3.5-9B", "largest verified size wins");
+        assert_eq!(b.len(), 1);
+        assert_eq!(m[0].backend_index, 0, "backend index reindexed");
+    }
+
+    #[test]
+    fn best_member_falls_back_to_stable_order_when_unsized() {
+        // No verified sizes: every member ranks equal, so the stable first
+        // entry is kept rather than an arbitrary one.
+        let (mut b, mut m) = pool(&["alpha-model", "beta-model"]);
+        let sizes = sizes_of(&[]);
+        keep_best_member_only(&mut b, &mut m, &sizes);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].name, "alpha-model");
     }
 
     #[test]
