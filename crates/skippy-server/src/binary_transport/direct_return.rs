@@ -46,6 +46,11 @@ pub struct PredictionReturnHub {
     waiters: Mutex<HashMap<PredictionReturnKey, mpsc::Sender<Result<StageReply, String>>>>,
 }
 
+// Return sinks normally wait only until the matching generation reaches the
+// final stage. Bound unmatched opens so they cannot retain sockets indefinitely
+// without limit; a rejected preferred sink uses the existing reverse fallback.
+const MAX_PENDING_PREDICTION_RETURN_SINKS: usize = 64;
+
 #[derive(Default)]
 pub(crate) struct PredictionReturnSinks {
     streams: Mutex<HashMap<PredictionReturnKey, TcpStream>>,
@@ -276,10 +281,14 @@ impl PredictionReturnSinks {
             bail!("expected prediction return open message");
         }
         let key = PredictionReturnKey::new(open.request_id, open.session_id);
-        self.streams
+        let mut streams = self
+            .streams
             .lock()
-            .map_err(|_| anyhow!("prediction return sinks lock poisoned"))?
-            .insert(key, stream);
+            .map_err(|_| anyhow!("prediction return sinks lock poisoned"))?;
+        if streams.len() >= MAX_PENDING_PREDICTION_RETURN_SINKS {
+            bail!("too many pending prediction return sinks");
+        }
+        streams.insert(key, stream);
         Ok(())
     }
 
@@ -583,6 +592,45 @@ mod tests {
             .unwrap()
             .expect("registered prediction return sink");
         assert_eq!(stream.peer_addr().unwrap(), client.local_addr().unwrap());
+    }
+
+    #[test]
+    fn prediction_return_sinks_enforce_and_release_the_pending_limit() {
+        let sinks = PredictionReturnSinks::default();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+
+        for request_id in 0..MAX_PENDING_PREDICTION_RETURN_SINKS as u64 {
+            let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (server, _) = listener.accept().unwrap();
+            sinks
+                .insert_opened_sink(prediction_return_open_message(request_id, 1), server)
+                .unwrap();
+            drop(client);
+        }
+
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let error = sinks
+            .insert_opened_sink(prediction_return_open_message(u64::MAX, 1), server)
+            .expect_err("pending prediction return sink limit must be enforced");
+        assert!(error.to_string().contains("too many pending"));
+        assert_eq!(
+            sinks.streams.lock().unwrap().len(),
+            MAX_PENDING_PREDICTION_RETURN_SINKS
+        );
+        drop(client);
+
+        sinks.remove(0, 1);
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        sinks
+            .insert_opened_sink(prediction_return_open_message(u64::MAX, 1), server)
+            .expect("released capacity must admit the next sink");
+        assert_eq!(
+            sinks.streams.lock().unwrap().len(),
+            MAX_PENDING_PREDICTION_RETURN_SINKS
+        );
+        drop(client);
     }
 
     #[test]
