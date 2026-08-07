@@ -3,9 +3,11 @@
 ## Status
 
 Implemented in the commit immediately preceding this document on this
-branch. Written after live end-to-end testing (an external-relay plugin
-serving an LM Studio model through the mesh) surfaced a gap in how a
-plugin-only node — one with zero local (downloaded) models, whose only
+branch. Written after live end-to-end testing — a single node running an
+external-relay plugin, serving an LM Studio model through that node's own
+local proxy (not yet exercised through an actual inbound mesh tunnel from
+another peer; see "Deliberately deferred" below) — surfaced a gap in how
+a plugin-only node — one with zero local (downloaded) models, whose only
 inference capacity comes from a plugin endpoint (e.g.
 `inference: [openai_http(...)]`) — is treated by the rest of the mesh.
 
@@ -108,10 +110,13 @@ completing.
   probing anything itself, so the short poll interval doesn't add
   flapping risk beyond what that debouncing already provides.
 
-Both changes are two small, unconditional additions at a single call site
-in `run_auto()`'s existing startup path — no new machinery, no threading
-through the passive-listener/model-selection context that an earlier
-version of this fix (written against an older fork base, before the
+Both changes land at a single call site in `run_auto()`'s existing startup
+path: the tunnel-port fix is an unconditional one-line addition; the
+host-role watcher is new (if small) background machinery, started
+conditionally (skipped for `--client` nodes, which have no compute to
+offer regardless of plugin state). Neither threads through the
+passive-listener/model-selection context that an earlier version of this
+fix (written against an older fork base, before the
 daemon-lifecycle-reconciliation refactor landed upstream) needed and that
 would have been dead weight added to an already-dead code path.
 
