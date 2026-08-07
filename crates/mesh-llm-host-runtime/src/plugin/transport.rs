@@ -13,7 +13,20 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
-const PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT: Duration = Duration::from_secs(10);
+// An "external relay" style plugin (one whose real inference traffic
+// bypasses this IPC channel entirely, going through its own HTTP proxy
+// instead — see `openai_http(...).managed_by_plugin(false)` plugins)
+// generates no application-level IPC traffic of its own. The supervisor's
+// periodic `HealthRequest` (see `health::HEALTH_CHECK_INTERVAL_SECS`) is the
+// *only* guaranteed traffic such a plugin's connection ever sees, so this
+// timeout must comfortably outlast that cadence — a timeout shorter than
+// the health-check interval would disconnect every idle-but-healthy relay
+// plugin as falsely idle before its next probe ever arrives. 4x the health
+// interval plus a fixed floor covers a slow/jittery tick without staying
+// pinned to an arbitrarily large value.
+const PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT: Duration = Duration::from_secs(
+    (super::health::HEALTH_CHECK_INTERVAL_SECS * 4) + 30,
+);
 const PLUGIN_ENVELOPE_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT: Duration =
     Duration::from_secs(super::REQUEST_TIMEOUT_SECS);
