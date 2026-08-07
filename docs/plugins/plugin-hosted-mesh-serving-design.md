@@ -83,14 +83,30 @@ completing.
   nodes) that polls `plugin_manager.inference_models()` on a short
   interval and promotes to `NodeRole::Host { http_port: api_port }` when
   it's non-empty, demoting back to `Worker` when it becomes empty again.
-  It only ever touches a `Host` role it set itself (tracked via a local
-  flag, not the node's live role) — never one a local model is
-  responsible for, so a node that has both isn't affected by this
-  watcher's demotion path. `inference_models()` reads the plugin
-  manager's own already-debounced health state (see `plugin::health`'s
-  startup-grace/failure-threshold logic) rather than probing anything
-  itself, so the short poll interval doesn't add flapping risk beyond
-  what that debouncing already provides.
+  It tracks whether *it* performed the last promotion via a task-local
+  flag and only demotes when that flag is set, but this is a soft
+  safeguard, not real ownership tracking — `node.set_role()` is a plain,
+  unconditional overwrite with no concept of "who claimed this role and
+  why," and a local model's `Host { http_port }` (`startup_handles.rs`)
+  uses the identical `http_port` value this watcher does (both derive it
+  from the same `api_port`), so the role value alone can't distinguish
+  the two callers. The demotion path additionally checks
+  `node.models_being_served()` is empty before actually changing the
+  role, so a node that starts serving a local model *after* this watcher
+  promoted it won't have that model's `Host` status pulled out from under
+  it once the plugin's models later disappear — but this is a targeted
+  patch for the one race that's currently reachable, not a general
+  ownership mechanism. A node with more complex overlapping
+  local-model/plugin lifecycles than "plugin promotes first, local model
+  starts being served later" isn't fully covered by this. Buzz's relay
+  feature (the motivating use case) never sets a local `model_id`, so it
+  doesn't exercise this at all; a caller that does mix both should treat
+  this watcher's demotion behavior as best-effort until a real
+  ownership-aware transition mechanism exists. `inference_models()` reads
+  the plugin manager's own already-debounced health state (see
+  `plugin::health`'s startup-grace/failure-threshold logic) rather than
+  probing anything itself, so the short poll interval doesn't add
+  flapping risk beyond what that debouncing already provides.
 
 Both changes are two small, unconditional additions at a single call site
 in `run_auto()`'s existing startup path — no new machinery, no threading
@@ -101,6 +117,16 @@ would have been dead weight added to an already-dead code path.
 
 ## Deliberately deferred
 
+- **Real ownership tracking for `NodeRole::Host`.** Nothing in `mesh::Node`
+  currently tracks *why* a node is `Host` — `set_role()` is a plain
+  overwrite. The plugin-host-role watcher's task-local flag plus a
+  `models_being_served()` check (see above) closes the one race that's
+  reachable today, but a real fix would give `NodeRole::Host` (or a
+  parallel piece of state) an explicit set of claimants — local model
+  load, plugin health, potentially others later — and only clear the role
+  when the last claimant releases it. That's a bigger, more invasive
+  change than this fix's scope; worth doing if a node mixing local models
+  and plugins becomes a real use case rather than a theoretical one.
 - **Capacity/VRAM-based host ordering.** `order_remote_hosts_by_context`
   and related host-ranking logic (used when multiple peers can serve the
   same model) is built around real local VRAM/context-window numbers. A

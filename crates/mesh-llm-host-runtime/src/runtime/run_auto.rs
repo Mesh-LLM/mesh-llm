@@ -1200,18 +1200,41 @@ fn spawn_plugin_host_role_watcher(node: mesh::Node, plugin_manager: plugin::Plug
         let mut plugin_promoted_role = false;
         loop {
             tokio::time::sleep(PLUGIN_HOST_ROLE_WATCH_INTERVAL).await;
-            let has_plugin_models = plugin_manager
-                .inference_models()
-                .await
-                .map(|models| !models.is_empty())
-                .unwrap_or(false);
+            let has_plugin_models = match plugin_manager.inference_models().await {
+                Ok(models) => !models.is_empty(),
+                Err(error) => {
+                    // A read failure isn't the same as "no models" — treating
+                    // it as such would demote a healthy Host role (or block
+                    // a legitimate promotion) on what's likely a transient
+                    // hiccup. Skip this tick; the next one re-evaluates from
+                    // scratch.
+                    tracing::warn!(
+                        %error,
+                        "plugin host-role watcher: failed to read plugin inference models, skipping this tick"
+                    );
+                    continue;
+                }
+            };
             if has_plugin_models && !plugin_promoted_role {
                 if node.role().await == NodeRole::Worker {
                     node.set_role(NodeRole::Host { http_port }).await;
                     plugin_promoted_role = true;
                 }
             } else if !has_plugin_models && plugin_promoted_role {
-                if node.role().await == (NodeRole::Host { http_port }) {
+                // `http_port` is identical whether a local model or a
+                // plugin is the reason this node is `Host` (both derive it
+                // from the same `api_port`), so the role value alone can't
+                // tell the two apart. If a local model has since started
+                // being served, it may now be the one relying on `Host`
+                // status — don't pull the role out from under it just
+                // because this watcher's own earlier promotion is now
+                // stale. `plugin_promoted_role` still resets either way:
+                // whatever happens, an "I own this promotion" claim from
+                // when plugin models were present is no longer accurate
+                // once they're gone.
+                let role_is_still_ours = node.role().await == (NodeRole::Host { http_port })
+                    && node.models_being_served().await.is_empty();
+                if role_is_still_ours {
                     node.set_role(NodeRole::Worker).await;
                 }
                 plugin_promoted_role = false;
