@@ -1167,6 +1167,59 @@ pub(super) struct RunAutoContext {
         Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 }
 
+const PLUGIN_HOST_ROLE_WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Promotes this node to `NodeRole::Host` whenever a loaded plugin is
+/// advertising at least one inference model, and demotes it back to
+/// `Worker` when that stops being true.
+///
+/// `NodeRole::Host { http_port }` is required for any *other* peer's
+/// `hosts_for_model()` to consider this node as a route candidate at all
+/// (`mesh/peer_state.rs`) — but it's otherwise only ever set once, as a
+/// side effect of a local model finishing load (`startup_handles.rs`). A
+/// node whose only inference capacity comes from a plugin (no local model
+/// ever loads) would otherwise never become `Host`, so it would be
+/// filtered out of every peer's routing consideration regardless of what
+/// its gossip payload advertises — gossip already correctly includes
+/// plugin-provided models (`mesh/gossip.rs`'s `plugin_inference_models`),
+/// so this was purely a role-eligibility gap, not a discovery gap.
+///
+/// Only promotes/demotes a role this watcher itself set (tracked via
+/// `plugin_promoted_role`, not the node's live role) — it never touches a
+/// `Host` role a local model is responsible for. A node running both a
+/// local model and a plugin isn't exercised by this watcher; a caller
+/// mixing both would need real "why is this node Host" tracking instead
+/// of this single-writer assumption.
+///
+/// `inference_models()` reads the plugin manager's already-debounced
+/// health state (see `plugin::health`'s startup-grace/failure-threshold
+/// logic) rather than probing anything itself, so polling it on a short
+/// interval doesn't introduce new flapping risk.
+fn spawn_plugin_host_role_watcher(node: mesh::Node, plugin_manager: plugin::PluginManager, http_port: u16) {
+    tokio::spawn(async move {
+        let mut plugin_promoted_role = false;
+        loop {
+            tokio::time::sleep(PLUGIN_HOST_ROLE_WATCH_INTERVAL).await;
+            let has_plugin_models = plugin_manager
+                .inference_models()
+                .await
+                .map(|models| !models.is_empty())
+                .unwrap_or(false);
+            if has_plugin_models && !plugin_promoted_role {
+                if node.role().await == NodeRole::Worker {
+                    node.set_role(NodeRole::Host { http_port }).await;
+                    plugin_promoted_role = true;
+                }
+            } else if !has_plugin_models && plugin_promoted_role {
+                if node.role().await == (NodeRole::Host { http_port }) {
+                    node.set_role(NodeRole::Worker).await;
+                }
+                plugin_promoted_role = false;
+            }
+        }
+    });
+}
+
 #[expect(
     clippy::cognitive_complexity,
     reason = "run_auto is the top-level runtime orchestration path and preserves startup/shutdown ordering"
@@ -1243,6 +1296,22 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
 
     let tunnel_mgr =
         tunnel::Manager::start(node.clone(), channels.rpc, channels.http, channels.stage).await?;
+    // Set unconditionally, not only as a side effect of a local model
+    // finishing load (see `startup_handles.rs`'s three call sites, which
+    // remain and are now redundant-but-harmless — same node, same
+    // `api_port`, for the lifetime of the process). The api proxy this
+    // points at is already bound and already answers correctly with no
+    // models loaded, so an inbound tunneled request arriving before any
+    // model is ready gets a normal "not available" response instead of
+    // being silently dropped (the previous behavior whenever this was
+    // still 0 — see `network/tunnel.rs`'s `port == 0` early-return). This
+    // is what lets a plugin-only node (no local model ever loads) accept
+    // inbound requests at all; see `spawn_plugin_host_role_watcher` below
+    // for the other half — whether peers actually route here.
+    tunnel_mgr.set_http_port(api_port);
+    if !is_client {
+        spawn_plugin_host_role_watcher(node.clone(), plugin_manager.clone(), api_port);
+    }
 
     // Election publishes per-model targets
     let (target_tx, target_rx) = tokio::sync::watch::channel(election::ModelTargets::default());
