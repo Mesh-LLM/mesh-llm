@@ -92,8 +92,8 @@ fn local_generation_commit_helper_preserves_ordered_counts() {
     let config = GenerationReceiptConfig::new(sink.clone());
     let mut generated_token_count = 0;
 
-    commit_local_generation_token(Some(&config), 11, 22, &mut generated_token_count, 33);
-    commit_local_generation_token(Some(&config), 11, 22, &mut generated_token_count, 44);
+    commit_local_generation_token(Some(&config), 11, 22, &mut generated_token_count, 33).unwrap();
+    commit_local_generation_token(Some(&config), 11, 22, &mut generated_token_count, 44).unwrap();
 
     let commits = sink.commits.lock().unwrap();
     assert_eq!(commits.len(), 2);
