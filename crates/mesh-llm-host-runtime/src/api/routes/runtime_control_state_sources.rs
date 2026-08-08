@@ -80,9 +80,9 @@ fn gpu_state(gpus: &[crate::system::hardware::GpuFacts]) -> RuntimeOptionsState 
 fn native_backend_state() -> RuntimeOptionsState {
     let mut kinds = crate::system::native_runtime_install::host_runtime_profile().available_flavors;
     if let Ok(cache) = crate::system::native_runtime_install::default_native_runtime_cache()
-        && let Ok(installed) = cache.installed()
+        && let Ok(scan) = cache.installed_lenient()
     {
-        for runtime in installed {
+        for runtime in scan.runtimes {
             kinds.insert(runtime.manifest.runtime.backend.kind);
         }
     }

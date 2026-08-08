@@ -60,6 +60,7 @@ pub(super) struct DecodeState {
     pub(super) generation_hooks_active: bool,
     pub(super) linear_proposal_max_tokens: usize,
     pub(super) linear_context_tokens: Option<Vec<i32>>,
+    pub(super) pending_linear_proposal_tokens: Vec<i32>,
     pub(super) emit_token_debug: bool,
     pub(super) native_mtp_options: NativeMtpDecodeOptions,
     pub(super) native_mtp: NativeMtpVerifier,
@@ -747,6 +748,7 @@ impl StageOpenAiBackend {
             .last()
             .expect("checked non-empty prompt");
         let mut stopped = false;
+        let mut pending_linear_proposal_tokens = Vec::new();
         if let Some(predicted) = prompt_prefill_sample {
             if request
                 .cancellation
@@ -756,6 +758,7 @@ impl StageOpenAiBackend {
             }
             current = predicted;
             decoded_tokens += 1;
+            pending_linear_proposal_tokens.push(current);
             stopped = emit_token(current)? == TokenControl::Stop;
         }
         let hook_request = request.hook_request.take();
@@ -785,6 +788,9 @@ impl StageOpenAiBackend {
             }
             tokens
         });
+        if linear_proposal_max_tokens == 0 {
+            pending_linear_proposal_tokens.clear();
+        }
         Ok(DecodeState {
             decoded_tokens,
             current,
@@ -801,6 +807,7 @@ impl StageOpenAiBackend {
             generation_hooks_active,
             linear_proposal_max_tokens,
             linear_context_tokens,
+            pending_linear_proposal_tokens,
             emit_token_debug: self.telemetry.is_debug_enabled(),
             native_mtp_options: NativeMtpDecodeOptions::from_config(request.speculative),
             native_mtp: NativeMtpVerifier::default(),
@@ -834,9 +841,11 @@ impl StageOpenAiBackend {
                 LinearProposalProgress::Stop => break,
                 LinearProposalProgress::NotUsed => {}
             }
-            if self.decode_one_token(request, session_id, &mut state, emit_token)?
-                == TokenControl::Stop
-            {
+            let control = self.decode_one_token(request, session_id, &mut state, emit_token)?;
+            if state.linear_proposal_max_tokens > 0 {
+                state.pending_linear_proposal_tokens.push(state.current);
+            }
+            if control == TokenControl::Stop {
                 break;
             }
         }

@@ -16,6 +16,20 @@ SCRIPT = ROOT / "scripts" / "publish-crates.sh"
 
 
 class PublishCratesScriptTests(unittest.TestCase):
+    def test_publish_verification_uses_dynamic_llama_link_mode(self) -> None:
+        with PublishCratesFixture() as fixture:
+            fixture.write_curl_statuses({})
+            fixture.write_fake_cargo()
+            fixture.write_fake_sleep()
+            fixture.write_fake_date()
+
+            result = fixture.run(["--dry-run", "--allow-dirty"])
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            link_modes = fixture.read_log("cargo-link-mode.log").splitlines()
+            self.assertTrue(link_modes)
+            self.assertEqual(set(link_modes), {"dynamic"})
+
     def test_retries_cargo_publish_429_then_continues_chain(self) -> None:
         with PublishCratesFixture() as fixture:
             fixture.write_curl_statuses({})
@@ -226,6 +240,7 @@ for arg in "$@"; do
     prev="$arg"
 done
 echo "$*" >> "{self.tmp_path}/cargo.log"
+echo "${{LLAMA_STAGE_LINK_MODE:-}}" >> "{self.tmp_path}/cargo-link-mode.log"
 case "$crate" in
 {self._cargo_case_arms(fail_cases, failure_path)}
 esac

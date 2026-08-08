@@ -115,7 +115,8 @@ pub struct GenerationCommit {
 pub trait GenerationReceiptSink: Send + Sync {
     fn begin(&self, start: &GenerationStart) -> Result<()>;
 
-    /// Observes canonical target tokens submitted before the next proposal lookup.
+    /// Optionally observes canonical target-token deltas for integrations that
+    /// need lifecycle notifications outside the local proposal hot path.
     fn committed(&self, commit: &GenerationCommit) -> Result<()>;
 
     fn abort(&self, abort: &GenerationAbort) -> Result<()>;

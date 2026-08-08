@@ -244,6 +244,73 @@ fn lifecycle_ingress_shares_plugin_queue_order_with_proposals() {
 }
 
 #[test]
+fn proposal_applies_pending_tokens_before_lookup() {
+    let (active, events) = fake_active_with_events(Duration::ZERO);
+    active
+        .begin(&GenerationStart {
+            request_id: 1,
+            session_id: 2,
+            agent_session_id: None,
+            prompt_token_ids: Arc::from([3]),
+        })
+        .unwrap();
+    let result = active
+        .propose(
+            LinearProposalQuery::new(
+                1,
+                2,
+                1,
+                3,
+                2,
+                8,
+                Instant::now() + Duration::from_millis(100),
+            )
+            .with_pending_token_ids(vec![4, 5].into_boxed_slice()),
+        )
+        .unwrap();
+
+    assert!(result.is_none());
+    assert_eq!(*events.lock().unwrap(), ["begin", "commit", "proposal"]);
+}
+
+#[test]
+fn blocking_commit_cannot_extend_the_proposal_deadline() {
+    let (active, _, _) = fake_active_with_timing(
+        Duration::ZERO,
+        Duration::from_millis(250),
+        Duration::ZERO,
+        false,
+    );
+    let driver = Arc::new(PluginDriver::spawn(active).unwrap());
+    let ingress = NativeLifecycleIngress {
+        driver: Arc::clone(&driver),
+    };
+    ingress
+        .try_submit(GenerationLifecycleObservation::Started(GenerationStart {
+            request_id: 1,
+            session_id: 2,
+            agent_session_id: None,
+            prompt_token_ids: Arc::from([3]),
+        }))
+        .unwrap();
+
+    let started = Instant::now();
+    let result = driver
+        .propose(
+            LinearProposalQuery::new(1, 2, 1, 2, 1, 8, started + Duration::from_millis(5))
+                .with_pending_token_ids(vec![4].into_boxed_slice()),
+        )
+        .unwrap();
+
+    assert!(result.proposal.unwrap().is_none());
+    assert!(
+        started.elapsed() < Duration::from_millis(150),
+        "proposal waited {:?} for a blocking commit",
+        started.elapsed()
+    );
+}
+
+#[test]
 fn lifecycle_callback_failure_is_observed_without_poisoning_the_driver() {
     let (active, _, _) = fake_active_with_options(Duration::ZERO, true);
     let driver = Arc::new(PluginDriver::spawn(active).unwrap());
@@ -333,12 +400,12 @@ fn dropping_the_driver_drains_its_backlog_and_shuts_the_plugin_down() {
     );
     let observations = fake_observations(&active);
     let driver = PluginDriver::spawn(active).unwrap();
-    for _ in 0..20 {
+    for generated_token_count in 1..=20 {
         driver
             .enqueue(PluginCommand::Committed(GenerationCommit {
                 request_id: 1,
                 session_id: 2,
-                generated_token_count: 1,
+                generated_token_count,
                 token_ids: vec![4].into_boxed_slice(),
             }))
             .unwrap();
