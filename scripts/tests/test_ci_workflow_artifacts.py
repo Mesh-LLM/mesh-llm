@@ -136,6 +136,13 @@ class CiWorkflowArtifactTests(unittest.TestCase):
                 )
                 self.assertIn(image, runtime)
                 self.assertIn(backend_env, runtime)
+                if backend == "cuda":
+                    self.assertIn(
+                        "LLAMA_STAGE_BUILD_DIR: "
+                        ".deps/llama-build/build-stage-abi-dynamic-cuda-"
+                        "sm61_75_80_86_87_89_90",
+                        runtime,
+                    )
                 self.assertIn(
                     "uses: ./.github/actions/prepare-native-runtime-input",
                     runtime,

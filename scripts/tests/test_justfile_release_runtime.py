@@ -50,6 +50,14 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
             self.recipe("release-build-aarch64-cuda"),
         )
         self.assertIn(
+            "if [[ \"$cuda_version\" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'",
+            self.recipe("release-build-cuda"),
+        )
+        self.assertIn(
+            "if [[ \"$cuda_version\" == 13.* ]]; then echo '75;80;86;87;89;90;110'",
+            self.recipe("release-build-aarch64-cuda"),
+        )
+        self.assertIn(
             'release-build-cuda-windows cuda_arch="61;75;80;86;87;89;90"',
             contents,
         )

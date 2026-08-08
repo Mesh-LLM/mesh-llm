@@ -557,6 +557,14 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             linux_cuda,
         )
         self.assertIn(
+            "cuda_architectures: '75;80;86;87;89;90;100;103;120;121'",
+            linux_cuda,
+        )
+        self.assertIn(
+            "cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'",
+            linux_cuda,
+        )
+        self.assertIn(
             "cuda_architectures: '61;75;80;86;87;89;90'",
             windows_cuda,
         )

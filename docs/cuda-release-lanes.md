@@ -29,7 +29,7 @@ workflow builds both.
 
 | Asset suffix | Toolkit | Arch coverage | Driver requirement |
 |---|---|---|---|
-| `-cuda` (primary) | CUDA 12.6.3 | sm_61, sm_75, sm_80, sm_86, sm_87, sm_89, sm_90 (Pascal → Hopper) | R535+ (CUDA 12.2 native) |
+| `-cuda` (primary) | CUDA 12.9.2 | sm_61, sm_75, sm_80, sm_86, sm_87, sm_89, sm_90 (Pascal → Hopper) | R535+ (CUDA 12.2 native) |
 | `-cuda-blackwell` | CUDA 12.8 | sm_75..sm_90 plus sm_100, sm_120 (adds Blackwell) | R550+ (CUDA 12.4 native) |
 
 - **Primary `-cuda`** covers the currently-deployed A30/A100/Ada/Hopper
