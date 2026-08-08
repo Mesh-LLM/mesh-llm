@@ -49,9 +49,33 @@ use crate::{
 
 const AGENT_SESSION_HEADER_ENV: &str = "MESH_AGENT_SESSION_HEADER";
 
-fn configured_agent_session_header() -> Option<HeaderName> {
-    let value = std::env::var(AGENT_SESSION_HEADER_ENV).ok()?;
+fn parse_agent_session_header(value: &str) -> Option<HeaderName> {
     HeaderName::from_bytes(value.as_bytes()).ok()
+}
+
+fn configured_agent_session_header() -> Option<HeaderName> {
+    let value = match std::env::var(AGENT_SESSION_HEADER_ENV) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            tracing::warn!(
+                env = AGENT_SESSION_HEADER_ENV,
+                "ignoring non-UTF-8 trusted agent-session header configuration"
+            );
+            return None;
+        }
+    };
+    match parse_agent_session_header(&value) {
+        Some(header) => Some(header),
+        None => {
+            tracing::warn!(
+                env = AGENT_SESSION_HEADER_ENV,
+                value = %value,
+                "ignoring invalid trusted agent-session header configuration"
+            );
+            None
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -722,6 +746,19 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[test]
+    fn trusted_agent_session_header_parser_accepts_valid_names() {
+        assert_eq!(
+            parse_agent_session_header("x-litellm-session-id"),
+            Some(HeaderName::from_static("x-litellm-session-id"))
+        );
+    }
+
+    #[test]
+    fn trusted_agent_session_header_parser_rejects_invalid_names() {
+        assert!(parse_agent_session_header("not a header").is_none());
+    }
     use crate::{
         FinishReason,
         backend::{
