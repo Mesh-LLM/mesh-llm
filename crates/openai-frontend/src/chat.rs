@@ -5,8 +5,9 @@ use serde_json::Value;
 
 use crate::{
     common::{
-        FinishReason, PromptCacheRetention, ReasoningConfig, ReasoningEffort, StopSequence,
-        StreamOptions, Usage, completion_id, now_unix_secs,
+        AgentSessionIdentity, FinishReason, PromptCacheRetention, ReasoningConfig, ReasoningEffort,
+        StopSequence, StreamOptions, Usage, agent_session_metadata, agent_session_source_metadata,
+        completion_id, now_unix_secs, set_agent_session_metadata,
     },
     errors::OpenAiError,
 };
@@ -45,6 +46,20 @@ pub struct ChatCompletionRequest {
 }
 
 impl ChatCompletionRequest {
+    pub(crate) fn set_agent_session(&mut self, identity: Option<AgentSessionIdentity>) {
+        set_agent_session_metadata(&mut self.extra, identity);
+    }
+
+    #[must_use]
+    pub fn agent_session(&self) -> Option<&str> {
+        agent_session_metadata(&self.extra)
+    }
+
+    #[must_use]
+    pub fn agent_session_source(&self) -> Option<&str> {
+        agent_session_source_metadata(&self.extra)
+    }
+
     pub fn effective_max_tokens(&self) -> Option<u32> {
         self.max_completion_tokens.or(self.max_tokens)
     }

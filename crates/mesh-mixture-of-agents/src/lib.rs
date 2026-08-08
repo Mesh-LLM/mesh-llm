@@ -41,8 +41,10 @@ pub mod context;
 mod fanout;
 pub mod normalize;
 mod reducer;
+mod refinement;
 pub mod session;
 mod tool_guard;
+mod tool_turn;
 pub mod worker;
 
 pub use backend::{HttpBackend, ModelBackend, ModelEntry, SamplingParams, apply_enable_thinking};
@@ -57,7 +59,7 @@ use serde_json::{Value, json};
 use session::Session;
 use std::time::{Duration, Instant};
 use worker::WorkerRole;
-pub use worker::{strip_thinking, truncate_chars};
+pub use worker::{model_name_is_small_tier, strip_thinking, truncate_chars};
 
 const SAME_TOOL_FORCE_ANSWER_THRESHOLD: usize = 3;
 
@@ -104,6 +106,66 @@ pub struct GatewayConfig {
     /// populates this from the caller's `reasoning_effort` / `enable_thinking`
     /// / `reasoning.enabled` knobs so MoA users get a single switch.
     pub enable_thinking: Option<bool>,
+    /// Actor priority order for tool turns and synthesis, as indices into
+    /// [`Self::models`], best actor first.
+    ///
+    /// In the asymmetric (Hermes-style) tool path the *actor* is the model
+    /// that actually emits the tool call; references only advise. The actor
+    /// should be the best available tool-caller, which is a host-side judgement
+    /// combining gossiped `tool_use` capability, model size, and recent peer
+    /// health — signals the engine crate cannot see. The host computes the
+    /// ordering and passes it here.
+    ///
+    /// Empty (the default) means "no host guidance": the engine falls back to
+    /// its name-derived size tier (big-tier first), preserving prior behaviour
+    /// for tests and any caller that doesn't populate it.
+    pub actor_candidates: Vec<usize>,
+    /// Whether tool turns gather advisory references before the actor acts.
+    pub reference_policy: ReferencePolicy,
+    /// Whether text turns run a cross-peer refinement round before synthesis.
+    pub refinement_policy: RefinementPolicy,
+}
+
+/// When a text turn should run a cross-peer refinement round (Together's
+/// `layers`): every worker sees all round-1 drafts and rewrites its answer
+/// before the reducer synthesizes.
+///
+/// Measured over 40 preregistered reasoning prompts x 3 draws
+/// (`evals/moa-openrouter/RESULTS.md`): a pool of four 8B-class models beat its
+/// own best member **only** with this round — single-round synthesis was
+/// indistinguishable from the aggregator acting solo (26/75/19, p=0.37) while
+/// refine-then-synthesize won (42/66/12, p=5.2e-05). With a 32B aggregator the
+/// round adds much less over single-round synthesis (p=0.015), so it is not
+/// worth a second fan-out there.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RefinementPolicy {
+    /// Refine when the pool is all small-tier — the case where the round is
+    /// what makes the collective beat its best member.
+    #[default]
+    Auto,
+    /// Always run the refinement round.
+    Always,
+    /// Never refine: synthesize the round-1 drafts directly.
+    Never,
+}
+
+/// When the asymmetric tool path should gather advisory references.
+///
+/// Measured on 40 preregistered tool tasks x 10 draws (see
+/// `evals/moa-openrouter/RESULTS.md`): with correct advisor packing, references
+/// are worth +0.017 net uplift to a weak actor but -0.037 to a strong one. They
+/// help where the actor has headroom and cost where it is already reliable, so
+/// the useful default is to gate on actor strength rather than always or never.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ReferencePolicy {
+    /// Gather references only when the acting model looks weak enough to
+    /// benefit. Cheapest correct default.
+    #[default]
+    Auto,
+    /// Always gather references, regardless of actor strength.
+    Always,
+    /// Never gather references: the actor acts alone (Hermes' `enabled: false`).
+    Never,
 }
 
 // ─── Turn result ─────────────────────────────────────────────────────
@@ -163,9 +225,9 @@ pub struct WorkerSummary {
 }
 
 #[derive(Debug, Clone)]
-struct ForcedToolChoice {
-    name: String,
-    fallback_arguments: Value,
+pub(crate) struct ForcedToolChoice {
+    pub(crate) name: String,
+    pub(crate) fallback_arguments: Value,
 }
 
 struct DecisionResolution<'a> {
@@ -241,9 +303,44 @@ async fn handle_query(
     forced_tool: Option<&ForcedToolChoice>,
     start: Instant,
 ) -> TurnResult {
+    // Tool-bearing turns take the asymmetric (Hermes-style) path: references
+    // advise tool-free, the best tool-caller acts. Tool authority tracks
+    // capability, not a majority vote — see `tool_turn`. Text-only turns keep
+    // the symmetric fan-out + synthesis-on-divergence path below.
+    if has_tools || forced_tool.is_some() {
+        return tool_turn::handle_tool_query(config, session, allowed_tools, forced_tool, start)
+            .await;
+    }
+
     let assignments = worker::assign_roles(&config.models);
     let grace_mode = grace_mode_for_turn(session, has_tools);
-    let query_uses_tools = forced_tool.is_some() || matches!(grace_mode, GraceMode::Tool);
+
+    // If the caller gave us tools, the workers get tools. Full stop.
+    //
+    // This used to be `matches!(grace_mode, GraceMode::Tool)`, which routed
+    // the decision through `looks_like_tool_intent` — a keyword match against
+    // the user's text ("read ", "search ", "file", "directory", ...). Two
+    // separate concerns were riding on one flag: whether tools are *available*
+    // and whether the chat-only answer grace applies.
+    //
+    // Recorded agentic traces show how badly that misfires
+    // (`evals/moa-openrouter/agentic.jsonl`). "The test suite is failing. Find
+    // out which test fails and why" matches no phrase, so every worker was
+    // dispatched without tool schemas — while the same prompt, given tools,
+    // produced 53 tool calls across 9 models. Same for "Is this project's test
+    // suite passing?" (32) and "Find every place MeshError::Timeout is
+    // constructed in this repo." (20). Five of ten recorded tool scenarios had
+    // tools silently withheld.
+    //
+    // Worse, this flag is also passed to the arbiter as its `has_tools`, so a
+    // pool that unanimously proposed a tool fell through to the answer path and
+    // leaked the proposal's payload text — an agent harness received the prose
+    // "calling search" instead of a `search` tool call.
+    //
+    // Tool availability is now the caller's declaration. `grace_mode` keeps
+    // using the heuristic, which is where a guess is actually appropriate: it
+    // only tunes how long we wait before shipping a partial answer.
+    let query_uses_tools = forced_tool.is_some() || has_tools;
     let selected_tool_names = if let Some(tool) = forced_tool {
         vec![tool.name.clone()]
     } else if query_uses_tools {
@@ -266,10 +363,34 @@ async fn handle_query(
     let mut dispatched: Vec<fanout::DispatchedWorker> = Vec::with_capacity(assignments.len());
 
     let enable_thinking = config.enable_thinking;
+    // Role tiers (Fast 256 tokens, Specialist 512, Strong 1024) encode a
+    // capability spread so the cheap worker can answer the grace path quickly.
+    // A homogeneous pool has no such spread, and when refinement is expected
+    // every draft is an *input* to the round — a 256-token draft is a ~1000-char
+    // stub that drags the refined answer down. Measured end-to-end, production's
+    // tiered budgets produced ~3.1k-char answers against a ~4.1k-char solo
+    // baseline; the study that showed the gain gave every peer the full budget.
+    // Full-budget drafts for every answer-turn worker. Role tiers (Fast 256 /
+    // Specialist 512 / Strong 1024) existed only so the cheap worker could
+    // answer the grace fast-path quickly with a short reply — but grace no
+    // longer finalizes answer turns (it collects, then synthesizes), so a
+    // truncated draft is now pure downside: it is an *input* to synthesis, and
+    // a 256-token stub drags the aggregated answer down. Measured: an all-small
+    // pool lost 5W/31L through the shipped path with role-tiered drafts
+    // (3399-char MoA vs 4064 solo) while the full-budget harness won 12W/2L on
+    // the same pool. A big pool tolerated tiering only because its aggregator
+    // is strong enough to rebuild a full answer from stubs. See
+    // `evals/moa-openrouter/RESULTS.md`.
+    let uniform_packing = grace_mode == GraceMode::Answer;
     for assignment in &assignments {
+        let pack_role = if uniform_packing {
+            worker::WorkerRole::Generalist
+        } else {
+            assignment.role
+        };
         let packed = context::pack_for_worker_selected(
             session,
-            assignment.role,
+            pack_role,
             query_uses_tools,
             &selected_tool_names,
         );
@@ -300,19 +421,86 @@ async fn handle_query(
         });
     }
 
-    let (outputs, summaries, early_decision) = gather_workers_incremental(
+    let (mut outputs, mut summaries, early_decision) = gather_workers_incremental(
         &mut join_set,
         &dispatched,
-        query_uses_tools,
         allowed_tools,
         session.tools(),
         fanout::GatherPolicy {
             first_answer_grace: config.first_answer_grace,
             grace_mode,
             strong_patience: config.strong_patience,
+            // Refinement quality scales with how many perspectives it gets.
+            // MIN_DRAFTS (2) is the minimum for the round to *run*, not a good
+            // target to collect: on a 4-model pool it let grace stop gathering
+            // at 2 of 4, while the study that measured the gain refined over
+            // every draft. Wait for all but one, so a single straggler still
+            // cannot hold the turn and `worker_timeout` still bounds the wait.
+            // Synthesis quality scales with WIDTH — that is the whole small-pool
+            // finding (6x 8B beats its best member, 4x is marginal, 2x is null).
+            // Arming grace on the first answer let it stop collecting at ~2 of 6,
+            // synthesizing a committee too narrow to win. Wait for all but one
+            // draft on any multi-worker answer turn, so a single straggler still
+            // cannot hold the turn and `worker_timeout` remains the hard bound.
+            // Tool turns keep the fast path (first valid proposal wins).
+            min_grace_answers: if refinement::refinement_expected(config) {
+                config
+                    .models
+                    .len()
+                    .saturating_sub(1)
+                    .max(refinement::MIN_DRAFTS)
+            } else {
+                // 1, deliberately: `min_grace_answers` gates whether grace can
+                // ARM at all, so any higher value is a liveness hazard. Setting
+                // it to N-1 on an answer turn meant a 6-worker pool where two
+                // public-mesh peers never returned could never arm grace (only
+                // 4 answers ever arrive), so the turn rode `worker_timeout`
+                // instead — measured 61s on a public mesh against 3-11s for the
+                // released build, for a SHORTER answer.
+                //
+                // Width comes from the grace WINDOW (10s), not from a count
+                // gate: healthy peers all land inside it, and a dead peer costs
+                // 10s rather than 60s. This is also the configuration the
+                // capable-pool win was measured under (71W/8T/1L).
+                1
+            },
+            // Grace finalizes (ships one worker's answer and stops) ONLY on
+            // tool turns, where a fast validated tool call keeps agent loops
+            // snappy. On answer turns grace is a *collection deadline*: stop
+            // waiting for the slow tail, but still synthesize what arrived
+            // instead of shipping one worker's answer. Finalizing answer turns
+            // shipped a single (often role-truncated) answer and skipped
+            // synthesis — measured 80/80 early-exit at capable scale, turning a
+            // 61W/3L committee win into a 26W/40L loss. See
+            // `evals/moa-openrouter/RESULTS.md`.
+            grace_finalizes: grace_mode == GraceMode::Tool,
         },
     )
     .await;
+
+    // Cross-peer refinement (Together's `layers`): each worker rewrites its
+    // answer after seeing the others'. Runs only for pool shapes where it
+    // measurably pays (`evals/moa-openrouter/RESULTS.md`), and is best-effort —
+    // on shortfall we keep the round-1 outputs.
+    //
+    // An `early_decision` here means the workers actually *agreed* — that is a
+    // real signal and the cheap path, so it still short-circuits. (The other
+    // early-exit source, the answer grace, is a timeout rather than a quality
+    // signal; when refinement is expected it is configured above to bound the
+    // gather without finalizing, so it no longer pre-empts this round.)
+    if early_decision.is_none()
+        && refinement::should_refine(config, outputs.len())
+        && let Some((refined, refine_summaries)) =
+            refinement::refine_round(config, session, &outputs).await
+    {
+        tracing::info!(
+            "moa: refinement round produced {} draft(s) from {}",
+            refined.len(),
+            outputs.len(),
+        );
+        outputs = refined;
+        summaries.extend(refine_summaries);
+    }
 
     if outputs.is_empty() {
         return TurnResult {
@@ -328,7 +516,33 @@ async fn handle_query(
     // Capture whether we took the early-exit path BEFORE we resolve the
     // decision: the arbiter never runs when early_decision is Some.
     let took_early_exit = early_decision.is_some();
-    let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs, query_uses_tools));
+    let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs));
+
+    // Always synthesize a multi-worker answer turn — never ship one worker's
+    // text verbatim.
+    //
+    // `arbitrate` returns `Answer(payload)` when the drafts agree, which ships
+    // whichever single worker represented the cluster. That is the whole
+    // harness-vs-shipped gap: the eval rig always synthesizes (draft ->
+    // aggregate) and a 6x8B pool wins 12W/2L, while the shipped path shipped one
+    // 8B verbatim on agreement and lost (6W/19L on the same pool). A weak 8B
+    // answer alone loses to a full-budget solo; an aggregation of six beats it.
+    // The synthesizer sees every draft and produces the fuller, better answer —
+    // agreeing drafts are the best possible input to it, not a reason to skip.
+    //
+    // Applies to answer turns with >=2 successful workers. Tool turns keep
+    // their own routing (single best actor). A single surviving worker has
+    // nothing to synthesize, so it still ships directly.
+    let is_answer_turn = grace_mode == GraceMode::Answer;
+    let decision =
+        if is_answer_turn && outputs.len() >= 2 && matches!(decision, arbiter::Decision::Answer(_))
+        {
+            arbiter::Decision::NeedsReducer {
+                reason: format!("{} drafts to synthesize", outputs.len()),
+            }
+        } else {
+            decision
+        };
     let (response_body, reducer_used, reducer_attempts) = resolve_decision(
         config,
         DecisionResolution {
@@ -427,7 +641,10 @@ fn looks_like_tool_intent(text: &str) -> bool {
         .any(|phrase| text.contains(phrase))
 }
 
-fn selected_tool_names_for_turn(session: &Session, allowed_tools: &[String]) -> Vec<String> {
+pub(crate) fn selected_tool_names_for_turn(
+    session: &Session,
+    allowed_tools: &[String],
+) -> Vec<String> {
     let available = if allowed_tools.is_empty() {
         session.tool_names()
     } else {
@@ -1129,7 +1346,7 @@ async fn resolve_decision(
 
 // ─── Response builders ───────────────────────────────────────────────
 
-fn best_answer(outputs: &[WorkerOutput]) -> String {
+pub(crate) fn best_answer(outputs: &[WorkerOutput]) -> String {
     outputs
         .iter()
         .filter(|o| {
@@ -1146,7 +1363,7 @@ fn best_answer(outputs: &[WorkerOutput]) -> String {
         .unwrap_or_default()
 }
 
-fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
+pub(crate) fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
     let answer = best_answer(outputs);
     if answer.is_empty() {
         error_response(
@@ -1158,7 +1375,7 @@ fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
     }
 }
 
-fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
+pub(crate) fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
     if let (true, Some(name)) = (has_tools, output.tool_name.as_ref()) {
         let args = output.tool_arguments.as_ref().unwrap_or(&Value::Null);
         return tool_call_response(name, args);
@@ -1194,7 +1411,7 @@ fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
 ///
 /// The ingress layer is responsible for choosing the HTTP status; this
 /// body is the in-band signal.
-fn error_response(message: &str, code: &str) -> Value {
+pub(crate) fn error_response(message: &str, code: &str) -> Value {
     json!({
         "id": format!("chatcmpl-moa-{}", short_id()),
         "object": "chat.completion",
@@ -1240,7 +1457,7 @@ pub const MOA_ERR_ALL_REDUCERS_FAILED: &str = "all_reducers_failed";
 /// MoA only received silence directives or uncertainty after reduction.
 pub const MOA_ERR_NO_USABLE_ANSWER: &str = "no_usable_answer";
 
-fn chat_response(content: &str) -> Value {
+pub(crate) fn chat_response(content: &str) -> Value {
     json!({
         "id": format!("chatcmpl-moa-{}", short_id()),
         "object": "chat.completion",
@@ -1254,7 +1471,7 @@ fn chat_response(content: &str) -> Value {
     })
 }
 
-fn tool_call_response(name: &str, arguments: &Value) -> Value {
+pub(crate) fn tool_call_response(name: &str, arguments: &Value) -> Value {
     // OpenAI tool-call `arguments` is a JSON-object *string*. Three input
     // shapes have to collapse to a valid object string here:
     //
@@ -1316,6 +1533,7 @@ mod response_builder_tests {
             model: model.to_string(),
             role: WorkerRole::Fast,
             elapsed_ms: 1,
+            truncated: false,
         }
     }
 
@@ -1370,6 +1588,7 @@ mod response_builder_tests {
             model: "reducer".to_string(),
             role: WorkerRole::Reducer,
             elapsed_ms: 1,
+            truncated: false,
         }
     }
 
@@ -1574,6 +1793,9 @@ mod response_builder_tests {
             first_answer_grace: Duration::from_millis(10),
             strong_patience: Duration::ZERO,
             enable_thinking: Some(false),
+            actor_candidates: Vec::new(),
+            reference_policy: Default::default(),
+            refinement_policy: Default::default(),
         };
         let forced_tool = ForcedToolChoice {
             name: "lookup_probe_fact".to_string(),

@@ -603,7 +603,7 @@ async fn route_request(
         }
 
         // Local candidates available — route normally.
-        if ctx.targets.candidates(model_name).len() > 1 {
+        if !request.is_tokenize_request() && ctx.targets.candidates(model_name).len() > 1 {
             request.ensure_body_json();
         }
         let routed = proxy::route_model_request(
@@ -637,8 +637,7 @@ async fn prepare_auto_route_decision(
     ctx: &IngressRouteContext<'_>,
     descriptors: &[crate::mesh::ServedModelDescriptor],
 ) -> Result<AutoRouteDecision, ()> {
-    let required_tokens =
-        proxy::request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
+    let required_tokens = proxy::request_context_budget(request);
     match resolve_auto_routed_model(
         ctx.node,
         request,
@@ -744,6 +743,14 @@ enum MoaInterceptResult {
     /// Not an MoA request — caller should continue with normal routing,
     /// reusing the returned stream.
     NotMoa(tokio::net::TcpStream),
+    /// MoA could not form a committee but degraded `model=mesh` to a real
+    /// single model (already rewritten on the request). Caller routes it
+    /// normally, but must use this model rather than the stale
+    /// `decision.effective_model` (still "mesh").
+    Degraded {
+        stream: tokio::net::TcpStream,
+        model: Option<String>,
+    },
 }
 
 /// Dispatch to the MoA gateway when `model == "mesh"`. Self-gates on the
@@ -757,14 +764,15 @@ async fn try_handle_moa_intercept(
     if decision.effective_model.as_deref() != Some(moa::VIRTUAL_MODEL_NAME) {
         return MoaInterceptResult::NotMoa(tcp_stream);
     }
-    // `try_handle_moa` self-gates on the model name and consumes the
-    // stream when it accepts. The outer gate above guarantees the gate
-    // matches, so the inner call always returns `None` here — the stream
-    // is gone, either with the MoA response, a 503, or a 400. Discard
-    // the return value explicitly. The previous shape kept an
-    // `if let Some(_) = … { tracing::error!(...) }` branch that could
-    // never fire and made the control flow confusing to read.
-    let _ = crate::network::openai::moa_gateway::try_handle_moa(
+    // `try_handle_moa` self-gates on the model name. It consumes the stream and
+    // returns `None` when it owns the response (a MoA turn, a 400, or — no
+    // model at all — a 503). But when it cannot form a committee yet still has
+    // a model to serve, it degrades: it rewrites `model=mesh` to a real model
+    // (on `request`) and hands the stream *back* as `Some`, so a lone node
+    // answers as an ordinary single-model request instead of erroring. In that
+    // case the pre-computed `decision.effective_model` is stale ("mesh"), so we
+    // carry the degraded model name out for the caller to route on.
+    match crate::network::openai::moa_gateway::try_handle_moa(
         ctx.route.node,
         tcp_stream,
         request,
@@ -772,9 +780,18 @@ async fn try_handle_moa_intercept(
         Some(ctx.route.targets),
         decision.required_tokens,
     )
-    .await;
-    proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
-    MoaInterceptResult::Handled
+    .await
+    {
+        Some(stream) => MoaInterceptResult::Degraded {
+            stream,
+            model: request.model_name.clone(),
+        },
+        None => {
+            proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids)
+                .await;
+            MoaInterceptResult::Handled
+        }
+    }
 }
 
 async fn handle_buffered_api_request(
@@ -818,14 +835,25 @@ async fn handle_buffered_api_request(
         }
     };
 
+    // Effective model for downstream routing. Normally the pre-computed
+    // decision, but a degraded MoA turn overrides it with the single model it
+    // fell back to (the decision still says "mesh").
+    let mut routing_model = decision.effective_model.clone();
     let tcp_stream = match try_handle_moa_intercept(tcp_stream, &mut request, &ctx, &decision).await
     {
         MoaInterceptResult::Handled => return,
         MoaInterceptResult::NotMoa(stream) => stream,
+        MoaInterceptResult::Degraded { stream, model } => {
+            routing_model = model;
+            stream
+        }
     };
 
     let mut tcp_stream = tcp_stream;
-    if try_pipeline_route(&mut tcp_stream, &mut request, &ctx.route, &decision).await {
+    // A degraded turn is a plain single-model request; skip the pipeline
+    // classifier (computed against "mesh") and route it directly.
+    let degraded = routing_model != decision.effective_model;
+    if !degraded && try_pipeline_route(&mut tcp_stream, &mut request, &ctx.route, &decision).await {
         proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
         return;
     }
@@ -834,7 +862,7 @@ async fn handle_buffered_api_request(
         tcp_stream,
         &mut request,
         &ctx.route,
-        decision.effective_model.as_deref(),
+        routing_model.as_deref(),
         decision.required_tokens,
     )
     .await;
@@ -999,6 +1027,24 @@ pub(crate) fn callable_models(targets: &election::ModelTargets) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn large_tokenize_request(model: &str) -> proxy::BufferedHttpRequest {
+        proxy::BufferedHttpRequest {
+            raw: b"unchanged tokenizer wire".to_vec(),
+            method: "POST".to_owned(),
+            path: "/v1/tokenize".to_owned(),
+            client_path: "/v1/tokenize".to_owned(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: 140_000,
+            completion_tokens: None,
+            stream: None,
+            model_name: Some(model.to_owned()),
+            request_object_request_ids: Vec::new(),
+            response_adapter: proxy::ResponseAdapter::None,
+        }
+    }
 
     #[test]
     fn parse_model_with_profile_with_named_profile() {
@@ -1182,6 +1228,67 @@ mod tests {
                 true,  // listeners_ready - HTTP listeners are up and accepting connections
             ),
             DaemonState::ReadyIdle,
+        );
+    }
+
+    #[tokio::test]
+    async fn api_proxy_tokenizer_route_ignores_generation_context_budget() {
+        let model = "acme/code-model:Q4_K_M";
+        let mut request = large_tokenize_request(model);
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .expect("test node should start");
+        node.set_model_runtime_context_length(model, Some(32_768))
+            .await;
+        let target = election::InferenceTarget::Local(19_337);
+        let mut targets = election::ModelTargets::default();
+        targets
+            .targets
+            .insert(model.to_owned(), vec![target.clone()]);
+        let affinity = affinity::AffinityRouter::new();
+        let ctx = IngressRouteContext {
+            node: &node,
+            targets: &targets,
+            affinity: &affinity,
+            plugin_manager: None,
+        };
+        let raw_before_decision = request.raw.clone();
+
+        let generation_budget = proxy::request_budget_tokens_from_parts(
+            request.body_len_bytes,
+            request.completion_tokens,
+        );
+        assert!(generation_budget.is_some_and(|tokens| tokens > 32_768));
+        assert!(
+            crate::network::openai::routing_rank::order_targets_by_context(
+                &node,
+                model,
+                generation_budget,
+                std::slice::from_ref(&target),
+            )
+            .await
+            .is_empty(),
+            "a generation budget would incorrectly reject the tokenizer target"
+        );
+
+        let decision = prepare_auto_route_decision(&mut request, &ctx, &[])
+            .await
+            .expect("tokenizer route should not enter media auto-routing");
+        assert_eq!(decision.effective_model.as_deref(), Some(model));
+        assert_eq!(decision.required_tokens, None);
+        assert_eq!(request.raw, raw_before_decision);
+        assert!(request.body_json.is_none());
+        assert!(!request.body_json_attempted);
+        assert_eq!(proxy::request_context_budget(&request), None);
+        assert_eq!(
+            crate::network::openai::routing_rank::order_targets_by_context(
+                &node,
+                model,
+                proxy::request_context_budget(&request),
+                std::slice::from_ref(&target),
+            )
+            .await,
+            vec![target]
         );
     }
 }

@@ -23,6 +23,30 @@ use std::time::Duration;
 /// running a stale binary that 502s on tool calls) doesn't take down
 /// the whole reducer step.
 pub(crate) fn reducer_candidates(config: &GatewayConfig) -> Vec<(String, usize)> {
+    // Host-provided actor priority wins. In the asymmetric tool path the actor
+    // is the model that actually emits the tool call, so it must be the best
+    // available tool-caller — a judgement the host makes from gossiped
+    // `tool_use` capability, model size, and peer health, none of which this
+    // crate can see. `actor_candidates` are indices into `config.models`,
+    // best-first; we translate them to `(name, backend_index)` and skip any
+    // stale/out-of-range index defensively.
+    if !config.actor_candidates.is_empty() {
+        let ordered: Vec<(String, usize)> = config
+            .actor_candidates
+            .iter()
+            .filter_map(|&i| config.models.get(i))
+            .map(|m| (m.name.clone(), m.backend_index))
+            .collect();
+        if !ordered.is_empty() {
+            return ordered;
+        }
+        // Every provided index was stale — fall through to the size heuristic
+        // rather than return empty and fail the turn.
+    }
+
+    // No host guidance (or all indices stale): fall back to name-derived size
+    // tier, big-tier first. Preserves prior behaviour for tests and callers
+    // that don't populate `actor_candidates`.
     let mut big = Vec::new();
     let mut small = Vec::new();
     for m in &config.models {
@@ -127,7 +151,11 @@ pub(crate) async fn hedged_reducer_call(
                 SamplingParams::reducer().with_thinking(enable_thinking),
             )
             .await;
-            (name, result)
+            // The reducer's output *is* the final response, so there is no
+            // later arbitration step that could act on truncation. Keep the
+            // text; the 2048-token reducer budget is well clear of the
+            // worker budget where truncation actually bites.
+            (name, result.map(|reply| reply.text))
         });
     };
 

@@ -23,6 +23,7 @@ pub mod proto {
     pub use mesh_llm_protocol::proto::*;
 }
 
+use anyhow::Result;
 pub use crypto::{
     ReleaseAttestationClaims, ReleaseAttestationStatus, ReleaseAttestationSummary,
     ReleaseBuildAttestation, ReleaseSignerTrustStore, TrustedReleaseSigner,
@@ -37,8 +38,6 @@ pub use mesh::requirements::{
     NodeVersionBounds, PeerReleaseAttestationStatus, ProtocolGenerationBounds,
     ReleaseAttestationRequirement, SignedBootstrapToken, SignedMeshGenesisPolicy,
 };
-
-use anyhow::Result;
 use std::path::Path;
 
 pub const BUILD_VERSION: &str = mesh_llm_build_info::BUILD_VERSION;

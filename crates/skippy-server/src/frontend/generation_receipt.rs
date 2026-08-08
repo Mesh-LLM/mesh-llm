@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -8,6 +10,7 @@ use crate::frontend::{StageOpenAiBackend, openai_backend_error};
 use crate::runtime_state::RuntimeState;
 
 const TOKEN_ID_DIGEST_DOMAIN: &[u8] = b"skippy-generation-token-ids-v1\0";
+const GENERATION_RECEIPT_QUEUE_CAPACITY: usize = 1_024;
 
 /// Why a successful local generation stopped.
 #[non_exhaustive]
@@ -39,12 +42,18 @@ pub struct GenerationReceipt {
     pub request_id: u64,
     /// OpenAI session identity.
     pub session_id: u64,
+    /// Stable caller-supplied agent session, when admitted at the OpenAI
+    /// boundary. Authentication remains an endpoint concern. This is distinct
+    /// from Mesh's request-scoped runtime session.
+    pub agent_session_id: Option<Box<str>>,
     /// Number of target-tokenized prompt-text IDs supplied to local generation.
     ///
     /// For multimodal requests, media embeddings have no token IDs and are not included.
     pub prompt_token_count: usize,
     /// Stable digest of the target-tokenized prompt-text IDs.
     pub prompt_token_digest: [u8; 32],
+    /// Exact target-tokenized prompt-text IDs supplied to local generation.
+    pub prompt_token_ids: Arc<[i32]>,
     /// Target-authoritative generated token IDs in callback order.
     pub generated_token_ids: Box<[i32]>,
     /// Canonical runtime position captured before session teardown.
@@ -53,14 +62,154 @@ pub struct GenerationReceipt {
     pub termination: GenerationTermination,
     /// Time spent in model generation, excluding receipt delivery.
     pub model_generation_elapsed_us: u64,
+    /// Backend request-start to first generated-token availability.
+    pub request_to_first_token_us: Option<u64>,
+    /// Backend request-start to each generated-token availability, in token order.
+    pub request_to_token_emission_us: Box<[u64]>,
     /// Optional digest of the target runtime's full exported state.
     pub full_state: Option<GenerationStateDigest>,
 }
 
-/// Receives one successful local-generation result before its runtime session is dropped.
+/// Target-authoritative beginning of one local generation lifecycle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenerationStart {
+    pub request_id: u64,
+    pub session_id: u64,
+    /// Stable caller-supplied agent session admitted at the OpenAI boundary.
+    pub agent_session_id: Option<Box<str>>,
+    pub prompt_token_ids: Arc<[i32]>,
+}
+
+/// Target-authoritative termination of a generation that produced no final
+/// receipt. The proposal/session adapter uses this boundary to close durable
+/// request state instead of leaving later requests blocked behind it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GenerationAbort {
+    pub request_id: u64,
+    pub session_id: u64,
+}
+
+/// A canonical target-token delta committed during an active generation.
+///
+/// This is a model-neutral producer observation. It deliberately carries no
+/// consumer-specific state: integrations receive only the target-owned
+/// request identity, canonical position, and token delta. Normal runtime event
+/// adapters must reduce it to bounded counts rather than forwarding token IDs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenerationCommit {
+    pub request_id: u64,
+    pub session_id: u64,
+    /// Total generated canonical tokens after applying `token_ids`.
+    pub generated_token_count: usize,
+    pub token_ids: Box<[i32]>,
+}
+
+/// Receives the complete local-generation lifecycle before runtime teardown.
+///
+/// The producer submits `begin` before exactly one `record` or `abort`. The
+/// compatibility adapter is bounded, asynchronous, at-most-once, and not
+/// durable: queue saturation, worker shutdown, or sink failure increments the
+/// delivery-failure counter and can drop an observation. Integrations that
+/// require shared ordering or custom backpressure should implement
+/// [`GenerationLifecycleIngress`] directly.
 pub trait GenerationReceiptSink: Send + Sync {
+    fn begin(&self, start: &GenerationStart) -> Result<()>;
+
+    /// Observes canonical target tokens submitted before the next proposal lookup.
+    fn committed(&self, commit: &GenerationCommit) -> Result<()>;
+
+    fn abort(&self, abort: &GenerationAbort) -> Result<()>;
+
     /// Records one successful local-generation receipt.
     fn record(&self, receipt: &GenerationReceipt) -> Result<()>;
+}
+
+/// One producer-side observation from Skippy's authoritative generation path.
+///
+/// This is deliberately not a runtime domain event or a consumer projection.
+/// Some variants contain exact token IDs for serving integrations that require
+/// canonical model evidence. An adapter into a normal runtime event pipeline
+/// must project only bounded, privacy-safe summaries and must not forward those
+/// token IDs or their prompt-derived digest.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GenerationLifecycleObservation {
+    Started(GenerationStart),
+    Committed(GenerationCommit),
+    Aborted(GenerationAbort),
+    Completed(GenerationReceipt),
+}
+
+impl GenerationLifecycleObservation {
+    fn deliver_to(self, sink: &dyn GenerationReceiptSink) -> Result<()> {
+        match self {
+            Self::Started(start) => sink.begin(&start),
+            Self::Committed(commit) => sink.committed(&commit),
+            Self::Aborted(abort) => sink.abort(&abort),
+            Self::Completed(receipt) => sink.record(&receipt),
+        }
+    }
+}
+
+/// Nonblocking ingress for authoritative generation observations.
+///
+/// Implementations must copy or take ownership of the observation and return
+/// promptly. They must not perform formatting, I/O, telemetry export, or call
+/// arbitrary application subscribers inline. The future runtime event system
+/// can implement this boundary as an adapter into its bounded ingress without
+/// changing Skippy's generation loops.
+pub trait GenerationLifecycleIngress: Send + Sync {
+    fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()>;
+
+    /// Asynchronous delivery failures observed after a successful submission.
+    fn delivery_failures(&self) -> u64 {
+        0
+    }
+}
+
+struct QueuedGenerationReceiptSink {
+    sender: SyncSender<GenerationLifecycleObservation>,
+    delivery_failures: Arc<AtomicU64>,
+}
+
+impl QueuedGenerationReceiptSink {
+    fn new(sink: Arc<dyn GenerationReceiptSink>) -> Self {
+        let (sender, receiver) =
+            sync_channel::<GenerationLifecycleObservation>(GENERATION_RECEIPT_QUEUE_CAPACITY);
+        let delivery_failures = Arc::new(AtomicU64::new(0));
+        let worker_delivery_failures = Arc::clone(&delivery_failures);
+        std::thread::Builder::new()
+            .name("skippy-generation-receipts".into())
+            .spawn(move || {
+                while let Ok(observation) = receiver.recv() {
+                    if observation.deliver_to(sink.as_ref()).is_err() {
+                        worker_delivery_failures.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            })
+            .expect("generation lifecycle delivery thread must start");
+        Self {
+            sender,
+            delivery_failures,
+        }
+    }
+}
+
+impl GenerationLifecycleIngress for QueuedGenerationReceiptSink {
+    fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()> {
+        self.sender
+            .try_send(observation)
+            .map_err(|error| match error {
+                TrySendError::Full(_) => anyhow::anyhow!("generation lifecycle queue is full"),
+                TrySendError::Disconnected(_) => {
+                    anyhow::anyhow!("generation lifecycle delivery worker is unavailable")
+                }
+            })
+    }
+
+    fn delivery_failures(&self) -> u64 {
+        self.delivery_failures.load(Ordering::Relaxed)
+    }
 }
 
 /// Optional local-generation observation.
@@ -70,15 +219,30 @@ pub trait GenerationReceiptSink: Send + Sync {
 /// deliberately opt-in and must remain disabled for timed measurements.
 #[derive(Clone)]
 pub struct GenerationReceiptConfig {
-    sink: Arc<dyn GenerationReceiptSink>,
+    ingress: Arc<dyn GenerationLifecycleIngress>,
+    submission_failures: Arc<AtomicU64>,
+    recording_failures: Arc<AtomicU64>,
     export_full_state: bool,
 }
 
 impl GenerationReceiptConfig {
-    /// Creates receipt delivery with full-state export disabled.
+    /// Creates queued receipt delivery with full-state export disabled.
+    ///
+    /// The sink is always invoked from an isolated worker. Event-pipeline
+    /// integrations should use [`Self::from_lifecycle_ingress`] instead.
     pub fn new(sink: Arc<dyn GenerationReceiptSink>) -> Self {
+        Self::from_lifecycle_ingress(Arc::new(QueuedGenerationReceiptSink::new(sink)))
+    }
+
+    /// Uses an existing bounded, nonblocking lifecycle ingress.
+    ///
+    /// This avoids adding a second queue when the host already owns delivery,
+    /// ordering, backpressure, and health accounting.
+    pub fn from_lifecycle_ingress(ingress: Arc<dyn GenerationLifecycleIngress>) -> Self {
         Self {
-            sink,
+            ingress,
+            submission_failures: Arc::new(AtomicU64::new(0)),
+            recording_failures: Arc::new(AtomicU64::new(0)),
             export_full_state: false,
         }
     }
@@ -95,8 +259,43 @@ impl GenerationReceiptConfig {
         self.export_full_state
     }
 
-    pub(crate) fn sink(&self) -> &dyn GenerationReceiptSink {
-        self.sink.as_ref()
+    /// Number of rejected submissions or asynchronous downstream delivery failures.
+    pub fn delivery_failures(&self) -> u64 {
+        self.submission_failures
+            .load(Ordering::Relaxed)
+            .saturating_add(self.ingress.delivery_failures())
+    }
+
+    /// Number of local receipt-bookkeeping violations. These failures disable
+    /// receipt recording for the affected generation but never fail inference.
+    pub fn recording_failures(&self) -> u64 {
+        self.recording_failures.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn observation(&self, max_tokens: usize) -> GenerationReceiptObservation {
+        GenerationReceiptObservation::new(max_tokens, Arc::clone(&self.recording_failures))
+    }
+
+    pub(crate) fn begin(&self, start: GenerationStart) {
+        self.enqueue(GenerationLifecycleObservation::Started(start));
+    }
+
+    pub(crate) fn committed(&self, commit: GenerationCommit) {
+        self.enqueue(GenerationLifecycleObservation::Committed(commit));
+    }
+
+    pub(crate) fn abort(&self, abort: GenerationAbort) {
+        self.enqueue(GenerationLifecycleObservation::Aborted(abort));
+    }
+
+    pub(crate) fn record(&self, receipt: GenerationReceipt) {
+        self.enqueue(GenerationLifecycleObservation::Completed(receipt));
+    }
+
+    fn enqueue(&self, observation: GenerationLifecycleObservation) {
+        if self.ingress.try_submit(observation).is_err() {
+            self.submission_failures.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -118,7 +317,10 @@ pub fn generation_token_id_digest(token_ids: &[i32]) -> [u8; 32] {
 
 pub(crate) struct GenerationReceiptObservation {
     generated_token_ids: Vec<i32>,
+    token_emission_elapsed: Vec<Duration>,
     max_tokens: usize,
+    recording_failures: Arc<AtomicU64>,
+    recording_enabled: bool,
     termination: Option<GenerationTermination>,
     model_generation_elapsed: Option<Duration>,
 }
@@ -128,7 +330,8 @@ pub(crate) struct LocalGenerationReceiptDelivery<'a> {
     pub(crate) session_label: &'a str,
     pub(crate) request_id: u64,
     pub(crate) session_id: u64,
-    pub(crate) prompt_token_ids: &'a [i32],
+    pub(crate) agent_session_id: Option<&'a str>,
+    pub(crate) prompt_token_ids: Arc<[i32]>,
     pub(crate) observation: GenerationReceiptObservation,
 }
 
@@ -148,23 +351,45 @@ impl GenerationReceiptRuntime for RuntimeState {
 }
 
 impl GenerationReceiptObservation {
-    pub(crate) fn new(max_tokens: usize) -> Self {
+    fn new(max_tokens: usize, recording_failures: Arc<AtomicU64>) -> Self {
         Self {
             generated_token_ids: Vec::with_capacity(max_tokens.min(4_096)),
+            token_emission_elapsed: Vec::with_capacity(max_tokens.min(4_096)),
             max_tokens,
+            recording_failures,
+            recording_enabled: true,
             termination: None,
             model_generation_elapsed: None,
         }
     }
 
-    pub(crate) fn record_token(&mut self, token_id: i32) -> OpenAiResult<()> {
+    pub(crate) fn record_token(&mut self, token_id: i32, request_elapsed: Duration) {
+        if !self.recording_enabled {
+            return;
+        }
         if self.generated_token_ids.len() >= self.max_tokens {
-            return Err(OpenAiError::backend(
-                "generation receipt observed more tokens than the request budget",
-            ));
+            self.reject_recording();
+            return;
+        }
+        if self
+            .token_emission_elapsed
+            .last()
+            .is_some_and(|prior| request_elapsed < *prior)
+        {
+            self.reject_recording();
+            return;
         }
         self.generated_token_ids.push(token_id);
-        Ok(())
+        self.token_emission_elapsed.push(request_elapsed);
+    }
+
+    fn reject_recording(&mut self) {
+        self.recording_enabled = false;
+        self.recording_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_recording_enabled(&self) -> bool {
+        self.recording_enabled
     }
 
     pub(crate) fn mark_callback_stop(&mut self) {
@@ -185,10 +410,18 @@ impl GenerationReceiptObservation {
         let model_generation_elapsed = self.model_generation_elapsed.ok_or_else(|| {
             OpenAiError::backend("generation receipt is missing model-generation timing")
         })?;
+        let request_to_token_emission_us = self
+            .token_emission_elapsed
+            .into_iter()
+            .map(duration_us)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Ok(FinishedGenerationObservation {
             generated_token_ids: self.generated_token_ids.into_boxed_slice(),
             termination: self.termination.unwrap_or(GenerationTermination::MaxTokens),
             model_generation_elapsed_us: duration_us(model_generation_elapsed),
+            request_to_first_token_us: request_to_token_emission_us.first().copied(),
+            request_to_token_emission_us,
         })
     }
 }
@@ -197,6 +430,8 @@ struct FinishedGenerationObservation {
     generated_token_ids: Box<[i32]>,
     termination: GenerationTermination,
     model_generation_elapsed_us: u64,
+    request_to_first_token_us: Option<u64>,
+    request_to_token_emission_us: Box<[u64]>,
 }
 
 impl StageOpenAiBackend {
@@ -212,7 +447,7 @@ impl StageOpenAiBackend {
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
             build_generation_receipt(&mut *runtime, delivery)?
         };
-        record_generation_receipt(config, &receipt)
+        record_generation_receipt(config, receipt)
     }
 }
 
@@ -235,21 +470,26 @@ fn build_generation_receipt(
     Ok(GenerationReceipt {
         request_id: delivery.request_id,
         session_id: delivery.session_id,
+        agent_session_id: delivery.agent_session_id.map(Into::into),
         prompt_token_count: delivery.prompt_token_ids.len(),
-        prompt_token_digest: generation_token_id_digest(delivery.prompt_token_ids),
+        prompt_token_digest: generation_token_id_digest(&delivery.prompt_token_ids),
+        prompt_token_ids: delivery.prompt_token_ids,
         generated_token_ids: observation.generated_token_ids,
         final_session_position,
         termination: observation.termination,
         model_generation_elapsed_us: observation.model_generation_elapsed_us,
+        request_to_first_token_us: observation.request_to_first_token_us,
+        request_to_token_emission_us: observation.request_to_token_emission_us,
         full_state,
     })
 }
 
 fn record_generation_receipt(
     config: &GenerationReceiptConfig,
-    receipt: &GenerationReceipt,
+    receipt: GenerationReceipt,
 ) -> OpenAiResult<()> {
-    config.sink().record(receipt).map_err(openai_backend_error)
+    config.record(receipt);
+    Ok(())
 }
 
 pub(crate) fn complete_generation_before_cleanup<T>(
@@ -257,15 +497,15 @@ pub(crate) fn complete_generation_before_cleanup<T>(
     deliver_receipt: impl FnOnce() -> OpenAiResult<()>,
     cleanup: impl FnOnce(),
 ) -> OpenAiResult<T> {
-    let receipt_result = if generation_result.is_ok() {
-        deliver_receipt()
-    } else {
-        Ok(())
-    };
+    let receipt_result = deliver_receipt();
     cleanup();
-    let output = generation_result?;
-    receipt_result?;
-    Ok(output)
+    match generation_result {
+        Ok(output) => {
+            receipt_result?;
+            Ok(output)
+        }
+        Err(primary) => Err(primary),
+    }
 }
 
 fn state_digest(bytes: &[u8]) -> OpenAiResult<GenerationStateDigest> {
@@ -284,8 +524,13 @@ fn duration_us(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+    use std::thread;
 
     use super::*;
+
+    fn test_observation(max_tokens: usize) -> GenerationReceiptObservation {
+        GenerationReceiptObservation::new(max_tokens, Arc::new(AtomicU64::new(0)))
+    }
 
     struct FakeRuntime {
         position: Result<u64, &'static str>,
@@ -308,12 +553,48 @@ mod tests {
         error: Option<&'static str>,
     }
 
+    #[derive(Default)]
+    struct RecordingIngress {
+        observations: Mutex<Vec<GenerationLifecycleObservation>>,
+        error: Option<&'static str>,
+    }
+
+    impl GenerationLifecycleIngress for RecordingIngress {
+        fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()> {
+            self.observations.lock().unwrap().push(observation);
+            self.error
+                .map_or(Ok(()), |error| Err(anyhow::anyhow!(error)))
+        }
+    }
+
     impl GenerationReceiptSink for RecordingSink {
+        fn begin(&self, _start: &GenerationStart) -> Result<()> {
+            Ok(())
+        }
+
+        fn committed(&self, _commit: &GenerationCommit) -> Result<()> {
+            Ok(())
+        }
+
+        fn abort(&self, _abort: &GenerationAbort) -> Result<()> {
+            Ok(())
+        }
+
         fn record(&self, receipt: &GenerationReceipt) -> Result<()> {
             self.receipts.lock().unwrap().push(receipt.clone());
             self.error
                 .map_or(Ok(()), |error| Err(anyhow::anyhow!(error)))
         }
+    }
+
+    fn wait_for_receipts(sink: &RecordingSink, expected: usize) {
+        for _ in 0..100 {
+            if sink.receipts.lock().unwrap().len() >= expected {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        panic!("timed out waiting for {expected} generation receipts");
     }
 
     #[test]
@@ -331,34 +612,127 @@ mod tests {
     }
 
     #[test]
+    fn typed_ingress_preserves_authoritative_observation_order_without_an_adapter_queue() {
+        let ingress = Arc::new(RecordingIngress::default());
+        let config = GenerationReceiptConfig::from_lifecycle_ingress(ingress.clone());
+        config.begin(GenerationStart {
+            request_id: 1,
+            session_id: 2,
+            agent_session_id: None,
+            prompt_token_ids: Arc::from([3, 4]),
+        });
+        config.committed(GenerationCommit {
+            request_id: 1,
+            session_id: 2,
+            generated_token_count: 1,
+            token_ids: vec![5].into_boxed_slice(),
+        });
+        config.abort(GenerationAbort {
+            request_id: 1,
+            session_id: 2,
+        });
+
+        let observations = ingress.observations.lock().unwrap();
+        assert!(matches!(
+            observations.as_slice(),
+            [
+                GenerationLifecycleObservation::Started(_),
+                GenerationLifecycleObservation::Committed(_),
+                GenerationLifecycleObservation::Aborted(_)
+            ]
+        ));
+        assert_eq!(config.delivery_failures(), 0);
+    }
+
+    #[test]
+    fn typed_ingress_rejection_is_accounted_without_failing_generation() {
+        let ingress = Arc::new(RecordingIngress {
+            observations: Mutex::new(Vec::new()),
+            error: Some("ingress full"),
+        });
+        let config = GenerationReceiptConfig::from_lifecycle_ingress(ingress);
+        config.abort(GenerationAbort {
+            request_id: 1,
+            session_id: 2,
+        });
+        assert_eq!(config.delivery_failures(), 1);
+    }
+
+    #[test]
+    fn receipt_prompt_evidence_preserves_exact_signed_token_ids() {
+        let prompt = [-1, 0, 7, i32::MAX];
+        let receipt = GenerationReceipt {
+            request_id: 1,
+            session_id: 2,
+            agent_session_id: None,
+            prompt_token_count: prompt.len(),
+            prompt_token_digest: generation_token_id_digest(&prompt),
+            prompt_token_ids: Arc::from(prompt),
+            generated_token_ids: vec![9].into_boxed_slice(),
+            final_session_position: 4,
+            termination: GenerationTermination::MaxTokens,
+            model_generation_elapsed_us: 3,
+            request_to_first_token_us: Some(1),
+            request_to_token_emission_us: vec![1].into_boxed_slice(),
+            full_state: None,
+        };
+        assert_eq!(receipt.prompt_token_ids.as_ref(), prompt);
+        assert_eq!(receipt.prompt_token_count, receipt.prompt_token_ids.len());
+        assert_eq!(
+            receipt.prompt_token_digest,
+            generation_token_id_digest(&receipt.prompt_token_ids)
+        );
+        assert_eq!(
+            receipt.generated_token_ids.len(),
+            receipt.request_to_token_emission_us.len()
+        );
+        assert_eq!(
+            receipt.request_to_first_token_us,
+            receipt.request_to_token_emission_us.first().copied()
+        );
+    }
+
+    #[test]
     fn observation_keeps_the_callback_stopping_token() {
-        let mut observation = GenerationReceiptObservation::new(3);
-        observation.record_token(7).unwrap();
-        observation.record_token(8).unwrap();
+        let mut observation = test_observation(3);
+        observation.record_token(7, Duration::from_micros(11));
+        observation.record_token(8, Duration::from_micros(17));
         observation.mark_callback_stop();
         observation.set_model_generation_elapsed(Duration::from_micros(42));
         let finished = observation.finish().unwrap();
         assert_eq!(&*finished.generated_token_ids, &[7, 8]);
         assert_eq!(finished.termination, GenerationTermination::CallbackStop);
         assert_eq!(finished.model_generation_elapsed_us, 42);
+        assert_eq!(finished.request_to_first_token_us, Some(11));
+        assert_eq!(&*finished.request_to_token_emission_us, &[11, 17]);
     }
 
     #[test]
-    fn observation_is_bounded_by_the_resolved_token_budget() {
-        let mut observation = GenerationReceiptObservation::new(1);
-        observation.record_token(7).unwrap();
-        assert!(
-            observation
-                .record_token(8)
-                .unwrap_err()
-                .to_string()
-                .contains("more tokens than the request budget")
-        );
+    fn observation_bookkeeping_failure_is_counted_without_failing_generation() {
+        let config =
+            GenerationReceiptConfig::from_lifecycle_ingress(Arc::new(RecordingIngress::default()));
+        let mut observation = config.observation(1);
+        observation.record_token(7, Duration::ZERO);
+        observation.record_token(8, Duration::from_micros(1));
+        observation.record_token(9, Duration::from_micros(2));
+        assert_eq!(config.recording_failures(), 1);
+        assert_eq!(observation.generated_token_ids, [7]);
+    }
+
+    #[test]
+    fn observation_rejects_non_monotonic_token_timing() {
+        let config =
+            GenerationReceiptConfig::from_lifecycle_ingress(Arc::new(RecordingIngress::default()));
+        let mut observation = config.observation(2);
+        observation.record_token(7, Duration::from_micros(2));
+        observation.record_token(8, Duration::from_micros(1));
+        assert_eq!(config.recording_failures(), 1);
+        assert_eq!(observation.generated_token_ids, [7]);
     }
 
     #[test]
     fn cancellation_precedes_default_max_token_termination() {
-        let mut observation = GenerationReceiptObservation::new(1);
+        let mut observation = test_observation(1);
         observation.mark_cancelled();
         observation.set_model_generation_elapsed(Duration::ZERO);
         assert_eq!(
@@ -366,12 +740,12 @@ mod tests {
             GenerationTermination::Cancelled
         );
 
-        let mut max_tokens = GenerationReceiptObservation::new(0);
+        let mut max_tokens = test_observation(0);
         max_tokens.set_model_generation_elapsed(Duration::ZERO);
-        assert_eq!(
-            max_tokens.finish().unwrap().termination,
-            GenerationTermination::MaxTokens
-        );
+        let finished = max_tokens.finish().unwrap();
+        assert_eq!(finished.termination, GenerationTermination::MaxTokens);
+        assert_eq!(finished.request_to_first_token_us, None);
+        assert!(finished.request_to_token_emission_us.is_empty());
     }
 
     #[test]
@@ -386,11 +760,11 @@ mod tests {
     }
 
     #[test]
-    fn model_free_delivery_validates_position_exports_state_and_propagates_sink_errors() {
+    fn model_free_delivery_validates_position_exports_state_without_blocking_on_sink_errors() {
         let sink = Arc::new(RecordingSink::default());
         let config = GenerationReceiptConfig::new(sink.clone()).with_full_state_digest(true);
-        let mut observation = GenerationReceiptObservation::new(1);
-        observation.record_token(9).unwrap();
+        let mut observation = test_observation(1);
+        observation.record_token(9, Duration::from_micros(5));
         observation.set_model_generation_elapsed(Duration::from_micros(17));
         let mut runtime = FakeRuntime {
             position: Ok(4),
@@ -403,16 +777,22 @@ mod tests {
                 session_label: "session",
                 request_id: 2,
                 session_id: 3,
-                prompt_token_ids: &[4, 5, 6],
+                agent_session_id: Some("agent-session"),
+                prompt_token_ids: Arc::from([4, 5, 6]),
                 observation,
             },
         )
         .unwrap();
-        record_generation_receipt(&config, &receipt).unwrap();
+        record_generation_receipt(&config, receipt).unwrap();
+        wait_for_receipts(&sink, 1);
         let receipts = sink.receipts.lock().unwrap();
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].final_session_position, 4);
         assert_eq!(receipts[0].generated_token_ids.as_ref(), &[9]);
+        assert_eq!(
+            receipts[0].agent_session_id.as_deref(),
+            Some("agent-session")
+        );
         assert_eq!(
             receipts[0].full_state.as_ref().unwrap().blake3_digest,
             *blake3::hash(b"state").as_bytes()
@@ -429,9 +809,10 @@ mod tests {
                 session_label: "session",
                 request_id: 2,
                 session_id: 3,
-                prompt_token_ids: &[],
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([]),
                 observation: {
-                    let mut observation = GenerationReceiptObservation::new(0);
+                    let mut observation = test_observation(0);
                     observation.set_model_generation_elapsed(Duration::ZERO);
                     observation
                 },
@@ -445,7 +826,7 @@ mod tests {
             error: Some("sink failed"),
         });
         let failing_config = GenerationReceiptConfig::new(failing_sink);
-        let mut observation = GenerationReceiptObservation::new(0);
+        let mut observation = test_observation(0);
         observation.set_model_generation_elapsed(Duration::ZERO);
         let receipt = build_generation_receipt(
             &mut runtime,
@@ -454,13 +835,20 @@ mod tests {
                 session_label: "session",
                 request_id: 2,
                 session_id: 3,
-                prompt_token_ids: &[],
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([]),
                 observation,
             },
         )
         .unwrap();
-        let sink_error = record_generation_receipt(&failing_config, &receipt).unwrap_err();
-        assert!(sink_error.to_string().contains("sink failed"));
+        record_generation_receipt(&failing_config, receipt).unwrap();
+        for _ in 0..100 {
+            if failing_config.delivery_failures() == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(failing_config.delivery_failures(), 1);
     }
 
     #[test]
@@ -482,13 +870,66 @@ mod tests {
         let generation_error = complete_generation_before_cleanup::<()>(
             Err(OpenAiError::backend("generation failed")),
             || {
-                events.lock().unwrap().push("receipt");
+                events.lock().unwrap().push("abort");
                 Ok(())
             },
             || events.lock().unwrap().push("cleanup"),
         )
         .unwrap_err();
         assert!(generation_error.to_string().contains("generation failed"));
-        assert_eq!(*events.lock().unwrap(), ["cleanup"]);
+        assert_eq!(*events.lock().unwrap(), ["abort", "cleanup"]);
+    }
+
+    #[test]
+    fn lifecycle_observations_close_before_cleanup() {
+        #[derive(Clone)]
+        struct OrderedIngress(Arc<Mutex<Vec<&'static str>>>);
+
+        impl GenerationLifecycleIngress for OrderedIngress {
+            fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()> {
+                let label = match observation {
+                    GenerationLifecycleObservation::Started(_) => "started",
+                    GenerationLifecycleObservation::Committed(_) => "committed",
+                    GenerationLifecycleObservation::Aborted(_) => "aborted",
+                    GenerationLifecycleObservation::Completed(_) => "completed",
+                };
+                self.0.lock().unwrap().push(label);
+                Ok(())
+            }
+        }
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let config = GenerationReceiptConfig::from_lifecycle_ingress(Arc::new(OrderedIngress(
+            Arc::clone(&events),
+        )));
+        config.begin(GenerationStart {
+            request_id: 1,
+            session_id: 2,
+            agent_session_id: None,
+            prompt_token_ids: Arc::from([3]),
+        });
+        config.committed(GenerationCommit {
+            request_id: 1,
+            session_id: 2,
+            generated_token_count: 1,
+            token_ids: Box::new([4]),
+        });
+        complete_generation_before_cleanup(
+            Ok(()),
+            || {
+                config.abort(GenerationAbort {
+                    request_id: 1,
+                    session_id: 2,
+                });
+                Ok(())
+            },
+            || events.lock().unwrap().push("cleanup"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            ["started", "committed", "aborted", "cleanup"]
+        );
     }
 }

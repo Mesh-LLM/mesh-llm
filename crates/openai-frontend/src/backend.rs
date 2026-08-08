@@ -8,6 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures_core::Stream;
+use tokio::sync::Notify;
 
 use crate::{
     chat::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse},
@@ -23,9 +24,15 @@ pub type CompletionStream =
 
 pub type OpenAiResult<T> = Result<T, OpenAiError>;
 
+#[derive(Debug, Default)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    notify: Notify,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CancellationToken {
-    cancelled: Arc<AtomicBool>,
+    state: Arc<CancellationState>,
 }
 
 impl CancellationToken {
@@ -34,11 +41,23 @@ impl CancellationToken {
     }
 
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
+        if !self.state.cancelled.swap(true, Ordering::AcqRel) {
+            self.state.notify.notify_waiters();
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
+        self.state.cancelled.load(Ordering::Acquire)
+    }
+
+    pub async fn cancelled(&self) {
+        loop {
+            let notified = self.state.notify.notified();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -74,6 +93,14 @@ pub trait OpenAiBackend: Send + Sync + 'static {
         request: ChatCompletionRequest,
     ) -> OpenAiResult<ChatCompletionResponse>;
 
+    async fn chat_completion_with_context(
+        &self,
+        request: ChatCompletionRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<ChatCompletionResponse> {
+        self.chat_completion(request).await
+    }
+
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
@@ -84,6 +111,14 @@ pub trait OpenAiBackend: Send + Sync + 'static {
         Err(OpenAiError::unsupported(
             "/v1/completions is not supported by this backend",
         ))
+    }
+
+    async fn completion_with_context(
+        &self,
+        request: CompletionRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<CompletionResponse> {
+        self.completion(request).await
     }
 
     async fn completion_stream(

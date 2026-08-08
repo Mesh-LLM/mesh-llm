@@ -102,7 +102,7 @@ bucket. It does not export prompt text, completion text, schemas, tool
 arguments, raw tool names, reserved sentinel names, request paths, endpoints, or
 hostnames.
 
-Guardrail v1 is validated emulation, not hard constrained decoding. Streaming is
+Guardrail v1 validates native runtime output, not hard constrained decoding. Streaming is
 pass-through, no tool execution happens inside the guardrail layer, and real
 tools plus strict structured output stays unsupported in v1. See
 `docs/design/OPENAI_GUARDRAILS.md` for the rollout contract and evidence path.

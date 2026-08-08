@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub mod tokenizer;
+
 pub mod binary;
 pub mod proto {
     pub mod stage {

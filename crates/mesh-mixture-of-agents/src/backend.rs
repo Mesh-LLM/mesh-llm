@@ -138,6 +138,47 @@ impl ModelBackend for HttpBackend {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
+
+            // Some OpenAI-compatible endpoints *require* reasoning and reject
+            // our thinking-disable flags outright. Observed against
+            // minimax-m2.5: `HTTP 400: Reasoning is mandatory for this
+            // endpoint`, which killed that worker on 12/12 recorded requests
+            // until the flags were dropped. A strict endpoint must cost us a
+            // slightly slower worker, not the whole worker.
+            if status.as_u16() == 400
+                && text.to_ascii_lowercase().contains("reasoning")
+                && sampling.enable_thinking == Some(false)
+            {
+                tracing::info!(
+                    "moa: {model} rejected thinking-disable flags, retrying without them"
+                );
+                let mut retry_body = body.clone();
+                if let Some(obj) = retry_body.as_object_mut() {
+                    obj.remove("reasoning_effort");
+                    obj.remove("chat_template_kwargs");
+                }
+                let retry = self
+                    .http
+                    .post(&url)
+                    .json(&retry_body)
+                    .timeout(timeout)
+                    .send()
+                    .await
+                    .map_err(|e| format!("request failed: {e}"))?;
+                let retry_status = retry.status();
+                if !retry_status.is_success() {
+                    let retry_text = retry.text().await.unwrap_or_default();
+                    return Err(format!(
+                        "HTTP {retry_status}: {}",
+                        crate::worker::truncate_chars(&retry_text, 200)
+                    ));
+                }
+                return retry
+                    .json::<Value>()
+                    .await
+                    .map_err(|e| format!("response parse: {e}"));
+            }
+
             return Err(format!(
                 "HTTP {status}: {}",
                 crate::worker::truncate_chars(&text, 200)
@@ -164,6 +205,27 @@ pub struct ModelEntry {
 
 // ─── Backend call + text extraction ──────────────────────────────────
 
+/// A successful backend call: the extracted assistant text plus the
+/// transport-level facts the arbiter needs that the text alone can't carry.
+#[derive(Debug, Clone)]
+pub struct BackendReply {
+    pub text: String,
+    /// `choices[0].finish_reason == "length"` — the backend cut this
+    /// response off at the token limit. See [`crate::normalize::WorkerOutput::truncated`].
+    pub truncated: bool,
+}
+
+impl BackendReply {
+    /// A complete (non-truncated) reply. Convenience for tests and for
+    /// call sites that synthesize replies rather than receiving them.
+    pub fn complete(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            truncated: false,
+        }
+    }
+}
+
 /// Call a backend and extract the assistant text from the response.
 /// Retries once on HTTP 429 (rate limit) after the server's `retry-after`
 /// delay (default 1s).
@@ -175,7 +237,7 @@ pub(crate) async fn call_backend(
     max_tokens: u32,
     timeout: Duration,
     sampling: SamplingParams,
-) -> Result<String, String> {
+) -> Result<BackendReply, String> {
     match backend
         .chat_completion(model, messages, tools, max_tokens, timeout, sampling)
         .await
@@ -262,10 +324,20 @@ fn parse_retry_after(err: &str) -> Option<u64> {
 /// an empty string — or worse, panics in `.unwrap()` chains. Use
 /// `.pointer()` so a malformed response surfaces as a structured `Err`
 /// rather than a hidden empty answer.
-fn extract_text_from_response(resp: &Value) -> Result<String, String> {
+fn extract_text_from_response(resp: &Value) -> Result<BackendReply, String> {
     let message = resp
         .pointer("/choices/0/message")
         .ok_or_else(|| "malformed response: missing choices[0].message".to_string())?;
+
+    // The backend stopped at the token limit. Recorded open-model traces
+    // show this on 15/140 responses, so it is a normal operating condition
+    // rather than an edge case. Carry it out so the arbiter can refuse to
+    // return a half-finished sentence verbatim.
+    let truncated = resp
+        .pointer("/choices/0/finish_reason")
+        .and_then(Value::as_str)
+        == Some("length");
+    let reply = |text: String| BackendReply { text, truncated };
 
     // Native tool_calls → KV format for normalizer
     let first_tool_call = message
@@ -281,9 +353,12 @@ fn extract_text_from_response(resp: &Value) -> Result<String, String> {
             .pointer("/function/arguments")
             .and_then(|a| a.as_str())
             .unwrap_or("{}");
-        return Ok(format!(
+        // A tool call that parsed into name + arguments is structurally
+        // complete even if the backend hit the token limit emitting it, so
+        // this path is never marked truncated.
+        return Ok(BackendReply::complete(format!(
             "kind: tool_proposal\ntool: {name}\narguments: {args}\nconfidence: 0.9\npayload: calling {name}",
-        ));
+        )));
     }
 
     let content = message
@@ -294,12 +369,12 @@ fn extract_text_from_response(resp: &Value) -> Result<String, String> {
 
     let stripped = worker::strip_thinking(&content);
     if !stripped.is_empty() {
-        return Ok(stripped);
+        return Ok(reply(stripped));
     }
 
     let thinking = worker::extract_thinking(&content);
     if !thinking.is_empty() {
-        return Ok(thinking);
+        return Ok(reply(thinking));
     }
 
     let reasoning = message
@@ -307,7 +382,7 @@ fn extract_text_from_response(resp: &Value) -> Result<String, String> {
         .and_then(|r| r.as_str())
         .unwrap_or("");
     if !reasoning.is_empty() {
-        return Ok(reasoning.to_string());
+        return Ok(reply(reasoning.to_string()));
     }
 
     Err("empty response".into())

@@ -46,7 +46,13 @@ pub(crate) fn sanitize_success_response(
     classified: &ClassifiedGuardrailResponse,
 ) -> Option<ChatCompletionResponse> {
     match classified.category {
-        GuardrailResponseCategory::ValidToolCalls => Some(response.clone()),
+        GuardrailResponseCategory::ValidToolCalls => Some(rewrite_response(
+            response,
+            None,
+            classified.visible_content.clone(),
+            classified.tool_calls.clone(),
+            classified.finish_reason,
+        )),
         GuardrailResponseCategory::ValidSyntheticRespond => Some(rewrite_response(
             response,
             None,

@@ -33,6 +33,7 @@ mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.72.1"  }
 mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.72.1"  }
 mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.72.1", features = ["host-io"]  }
 mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.72.1"  }
+mesh-native-serving-plugin-host = { path = "../mesh-native-serving-plugin-host", version = "0.72.1" }
 mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.72.1"  }
 mesh-llm-guardrails = { path = "../mesh-llm-guardrails", version = "0.72.1"  }
 mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.72.1"  }

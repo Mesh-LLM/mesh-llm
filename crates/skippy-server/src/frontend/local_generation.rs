@@ -1,3 +1,5 @@
+mod decode_step;
+mod linear_decode;
 #[cfg(test)]
 mod tests;
 mod token_generation;
@@ -12,13 +14,15 @@ use crate::frontend::generation_receipt::{
 };
 use openai_frontend::OpenAiResult;
 use serde_json::json;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(super) struct LocalGenerationReceiptFinalization<'a> {
     pub(super) session_label: &'a str,
     pub(super) request_id: u64,
     pub(super) session_id: u64,
-    pub(super) prompt_token_ids: &'a [i32],
+    pub(super) agent_session_id: Option<&'a str>,
+    pub(super) prompt_token_ids: Arc<[i32]>,
     pub(super) observation: Option<GenerationReceiptObservation>,
     pub(super) cancelled: bool,
     pub(super) model_generation_elapsed: Option<Duration>,
@@ -28,6 +32,7 @@ impl StageOpenAiBackend {
     pub(super) fn finalize_generation_receipt(
         &self,
         mut finalization: LocalGenerationReceiptFinalization<'_>,
+        generation_succeeded: bool,
     ) -> OpenAiResult<()> {
         if let Some(observation) = finalization.observation.as_mut() {
             if finalization.cancelled {
@@ -37,18 +42,40 @@ impl StageOpenAiBackend {
                 observation.set_model_generation_elapsed(elapsed);
             }
         }
-        match (self.generation_receipt.as_ref(), finalization.observation) {
-            (Some(config), Some(observation)) => {
+        let Some(config) = self.generation_receipt.as_ref() else {
+            return Ok(());
+        };
+        if !generation_succeeded {
+            config.abort(crate::frontend::GenerationAbort {
+                request_id: finalization.request_id,
+                session_id: finalization.session_id,
+            });
+            return Ok(());
+        }
+        if finalization
+            .observation
+            .as_ref()
+            .is_some_and(|observation| !observation.is_recording_enabled())
+        {
+            config.abort(crate::frontend::GenerationAbort {
+                request_id: finalization.request_id,
+                session_id: finalization.session_id,
+            });
+            return Ok(());
+        }
+        match finalization.observation {
+            Some(observation) => {
                 self.deliver_local_generation_receipt(LocalGenerationReceiptDelivery {
                     config,
                     session_label: finalization.session_label,
                     request_id: finalization.request_id,
                     session_id: finalization.session_id,
+                    agent_session_id: finalization.agent_session_id,
                     prompt_token_ids: finalization.prompt_token_ids,
                     observation,
                 })
             }
-            _ => Ok(()),
+            None => Ok(()),
         }
     }
 

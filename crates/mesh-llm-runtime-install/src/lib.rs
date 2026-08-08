@@ -705,6 +705,68 @@ mod tests {
     }
 
     #[test]
+    fn legacy_cached_manifest_does_not_block_valid_bundle_install() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = temp.path().join("bundle");
+        let profile = host_runtime_profile();
+        let mut artifact = artifact_with_sha(None);
+        artifact.id = "valid-bundle-runtime".to_string();
+        artifact.platform.os = profile.os;
+        artifact.platform.arch = profile.arch;
+        artifact.platform.target = profile.target_triple;
+        artifact.url = None;
+        artifact.sha256 = None;
+        std::fs::create_dir_all(bundle.join("lib")).unwrap();
+        std::fs::write(bundle.join("lib/libllama.so"), b"valid runtime").unwrap();
+        NativeRuntimeManifest {
+            runtime: artifact.clone(),
+        }
+        .write_to_dir(&bundle)
+        .unwrap();
+
+        let install = |cache_dir: PathBuf| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(install_native_runtime(NativeRuntimeInstallOptions {
+                    selection: RuntimeSelection::Id(artifact.id.clone()),
+                    bundle_dirs: vec![bundle.clone()],
+                    cache_dir: Some(cache_dir),
+                    bundle_install_policy:
+                        NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache,
+                    allow_download: false,
+                    ..Default::default()
+                }))
+        };
+
+        install(temp.path().join("fresh-cache"))
+            .expect("the valid bundle should install into a fresh cache");
+
+        let polluted_cache = temp.path().join("polluted-cache");
+        let legacy_runtime = polluted_cache.join("0.74.0/legacy-cache-runtime");
+        std::fs::create_dir_all(legacy_runtime.join("lib")).unwrap();
+        std::fs::write(legacy_runtime.join("lib/libllama.so"), b"legacy runtime").unwrap();
+        std::fs::write(
+            legacy_runtime.join(NATIVE_RUNTIME_MANIFEST_FILE),
+            r#"{
+  "runtime": {
+    "id": "legacy-cache-runtime",
+    "mesh_version": "0.74.0",
+    "skippy_abi": "0.1.25",
+    "platform": {"os": "windows", "arch": "x86_64"},
+    "backend": {"kind": "vulkan"},
+    "libraries": ["lib/libllama.so"]
+  }
+}"#,
+        )
+        .unwrap();
+
+        install(polluted_cache)
+            .expect("a legacy cached manifest must not block the valid bundle install");
+    }
+
+    #[test]
     fn bundled_runtime_is_used_in_place_without_cache_copy() {
         let bundle = tempfile::tempdir().unwrap();
         let cache_root = tempfile::tempdir().unwrap();

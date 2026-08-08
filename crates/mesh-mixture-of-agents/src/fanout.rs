@@ -9,6 +9,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::backend::BackendReply;
 use crate::enforce_tool_call_contract;
 use crate::worker::WorkerRole;
 use crate::{WorkerSummary, arbiter, normalize};
@@ -36,6 +37,25 @@ pub(crate) struct GatherPolicy {
     pub grace_mode: GraceMode,
     /// See [`crate::GatewayConfig::strong_patience`].
     pub strong_patience: Duration,
+    /// How many qualifying answers must be in hand before the answer grace may
+    /// fire. Normally 1 — ship the good answer, stop waiting for the tail.
+    ///
+    /// Raised when a refinement round is expected, so grace cannot trip before
+    /// there is enough material to refine with.
+    pub min_grace_answers: usize,
+    /// Whether grace expiry *finalizes* the turn or merely *stops collecting*.
+    ///
+    /// Normally true: grace ships the best answer in hand and the turn is done.
+    ///
+    /// False when a refinement round is expected. Grace is a deadline on
+    /// waiting, not a quality signal — but finalizing there skips refinement,
+    /// which on a small pool is the only step that beats the best member.
+    /// Measured end-to-end through `handle_turn`, finalizing grace made MoA
+    /// *lose* 7/8/65 to a single small model: 79 of 80 turns exited at grace
+    /// with a lone 8B answer and never refined. With this false, grace still
+    /// bounds the round-1 wait, then the turn proceeds to refine and
+    /// synthesize what arrived.
+    pub grace_finalizes: bool,
 }
 
 /// Identifier for a worker we dispatched. Used to reconcile the
@@ -47,10 +67,17 @@ pub(crate) struct DispatchedWorker {
     pub role: WorkerRole,
 }
 
+/// What a spawned worker task yields: `(model, role, reply, elapsed_ms)`.
+///
+/// The reply carries [`BackendReply::truncated`] alongside the text so the
+/// arbiter can tell a complete answer from one the backend cut off at the
+/// token limit. Flattening this to a bare `String` is what previously let
+/// a half-finished sentence compete as a normal answer.
+pub(crate) type WorkerTaskResult = (String, WorkerRole, Result<BackendReply, String>, u64);
+
 pub(crate) async fn gather_workers_incremental(
-    join_set: &mut tokio::task::JoinSet<(String, WorkerRole, Result<String, String>, u64)>,
+    join_set: &mut tokio::task::JoinSet<WorkerTaskResult>,
     dispatched: &[DispatchedWorker],
-    has_tools: bool,
     allowed_tools: &[String],
     tools: Option<&Value>,
     policy: GatherPolicy,
@@ -63,6 +90,8 @@ pub(crate) async fn gather_workers_incremental(
         first_answer_grace,
         grace_mode,
         strong_patience,
+        min_grace_answers,
+        grace_finalizes,
     } = policy;
     let total_workers = dispatched.len();
     let mut outputs = Vec::new();
@@ -101,9 +130,15 @@ pub(crate) async fn gather_workers_incremental(
         }
         match grace_mode {
             GraceMode::Disabled => false,
-            GraceMode::Answer => outs.iter().any(|o| {
-                o.kind == normalize::OutputKind::Answer && o.confidence >= GRACE_MIN_CONFIDENCE
-            }),
+            GraceMode::Answer => {
+                outs.iter()
+                    .filter(|o| {
+                        o.kind == normalize::OutputKind::Answer
+                            && o.confidence >= GRACE_MIN_CONFIDENCE
+                    })
+                    .count()
+                    >= min_grace_answers.max(1)
+            }
             GraceMode::Tool => outs.iter().any(|o| {
                 o.kind == normalize::OutputKind::ToolProposal
                     && o.tool_name.is_some()
@@ -141,18 +176,26 @@ pub(crate) async fn gather_workers_incremental(
             join = join_set.join_next() => join,
             _ = tokio::time::sleep(grace_remaining), if armed => {
                 tracing::info!(
-                    "moa: grace early-exit after {}ms (grace={}ms), {} pending",
+                    "moa: grace expiry after {}ms (grace={}ms), {} pending, finalize={}",
                     dispatched_at.elapsed().as_millis(),
                     first_answer_grace.as_millis(),
                     total_workers.saturating_sub(total_finished),
+                    grace_finalizes,
                 );
+                drain_after_early_exit(join_set, &mut summaries).await;
+                reconcile_dispatched(dispatched, &mut summaries);
+                // When a refinement round is expected, grace is only a deadline
+                // on *collecting*: stop waiting for the tail, but let the turn
+                // refine and synthesize what arrived instead of shipping one
+                // worker's answer.
+                if !grace_finalizes {
+                    return (outputs, summaries, None);
+                }
                 let decision = match grace_mode {
                     GraceMode::Answer => grace_answer_decision(&outputs),
                     GraceMode::Tool => grace_tool_decision(&outputs),
                     GraceMode::Disabled => unreachable!("disabled grace cannot be armed"),
                 };
-                drain_after_early_exit(join_set, &mut summaries).await;
-                reconcile_dispatched(dispatched, &mut summaries);
                 return (outputs, summaries, Some(decision));
             }
             _ = tokio::time::sleep(patience_remaining), if gate_holding => {
@@ -166,7 +209,6 @@ pub(crate) async fn gather_workers_incremental(
                     &outputs,
                     total_workers,
                     total_finished,
-                    has_tools,
                     arbiter::StrongGate::Off,
                 ) {
                     drain_after_early_exit(join_set, &mut summaries).await;
@@ -182,22 +224,32 @@ pub(crate) async fn gather_workers_incremental(
         };
 
         match join_result {
-            Ok((model, role, Ok(text), elapsed)) => {
+            Ok((model, role, Ok(reply), elapsed)) => {
                 total_finished += 1;
                 if role == WorkerRole::Strong {
                     strong_finished = true;
                 }
                 let mut normalized =
-                    normalize::normalize_worker_output(&text, &model, role, elapsed);
+                    normalize::normalize_worker_output(&reply.text, &model, role, elapsed);
+                // Truncation is a transport fact the text can't carry: a
+                // response cut off at the token limit looks like a normal
+                // answer to the parser. Stamp it so the arbiter can keep it
+                // out of consensus and out of verbatim responses.
+                normalized.truncated = reply.truncated;
                 enforce_tool_call_contract(&mut normalized, allowed_tools, tools, &model);
                 tracing::info!(
-                    "moa: worker {} ({}) → {:?} conf={:.2} ({}ms, {} chars)",
+                    "moa: worker {} ({}) → {:?} conf={:.2} ({}ms, {} chars{})",
                     model,
                     role.label(),
                     normalized.kind,
                     normalized.confidence,
                     elapsed,
-                    text.len(),
+                    reply.text.len(),
+                    if normalized.truncated {
+                        ", TRUNCATED"
+                    } else {
+                        ""
+                    },
                 );
                 summaries.push(WorkerSummary {
                     model: model.clone(),
@@ -213,7 +265,6 @@ pub(crate) async fn gather_workers_incremental(
                     &outputs,
                     total_workers,
                     total_finished,
-                    has_tools,
                     strong_gate(strong_finished, dispatched_at.elapsed()),
                 ) {
                     drain_after_early_exit(join_set, &mut summaries).await;
@@ -246,7 +297,6 @@ pub(crate) async fn gather_workers_incremental(
                     &outputs,
                     total_workers,
                     total_finished,
-                    has_tools,
                     strong_gate(strong_finished, dispatched_at.elapsed()),
                 ) {
                     drain_after_early_exit(join_set, &mut summaries).await;
@@ -273,6 +323,99 @@ pub(crate) async fn gather_workers_incremental(
 
     reconcile_dispatched(dispatched, &mut summaries);
     (outputs, summaries, None)
+}
+
+/// Gather **references** for the asymmetric (Hermes-style) tool path.
+///
+/// References run tool-free and only advise; the actor acts afterwards. So
+/// unlike [`gather_workers_incremental`] this does no arbitration, no
+/// consensus, no early-exit — it just collects whatever advice arrives within
+/// a bounded window and returns it.
+///
+/// The bound is the whole point on a mixed/public mesh: we must not wait for
+/// perfect when good-enough advice is already in hand. We stop as soon as
+/// *either* `min_references` usable outputs have arrived *or* `deadline`
+/// elapses (or every reference finishes), then abort the stragglers. An empty
+/// result is legal — the actor proceeds on the user request alone.
+pub(crate) async fn gather_references(
+    join_set: &mut tokio::task::JoinSet<WorkerTaskResult>,
+    dispatched: &[DispatchedWorker],
+    deadline: Duration,
+    min_references: usize,
+) -> (Vec<WorkerOutput>, Vec<WorkerSummary>) {
+    let mut outputs = Vec::new();
+    let mut summaries = Vec::new();
+    let started = Instant::now();
+
+    loop {
+        // Enough advice already, or we've waited long enough: stop.
+        if !outputs.is_empty() && outputs.len() >= min_references {
+            break;
+        }
+        let remaining = deadline.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            tracing::info!(
+                "moa: reference deadline reached after {}ms with {} advisor(s)",
+                started.elapsed().as_millis(),
+                outputs.len(),
+            );
+            break;
+        }
+
+        let join_result = tokio::select! {
+            biased;
+            join = join_set.join_next() => join,
+            _ = tokio::time::sleep(remaining) => {
+                tracing::info!(
+                    "moa: reference deadline ({}ms) elapsed with {} advisor(s)",
+                    deadline.as_millis(),
+                    outputs.len(),
+                );
+                break;
+            }
+        };
+
+        let Some(join_result) = join_result else {
+            break; // all references finished
+        };
+
+        match join_result {
+            Ok((model, role, Ok(reply), elapsed)) => {
+                let mut normalized =
+                    normalize::normalize_worker_output(&reply.text, &model, role, elapsed);
+                normalized.truncated = reply.truncated;
+                // No `enforce_tool_call_contract`: references ran tool-free, so
+                // any tool-shaped text is advice, not an executable proposal.
+                summaries.push(WorkerSummary {
+                    model,
+                    role,
+                    succeeded: true,
+                    elapsed_ms: elapsed,
+                    output_kind: Some(normalized.kind),
+                    confidence: Some(normalized.confidence),
+                });
+                outputs.push(normalized);
+            }
+            Ok((model, role, Err(e), elapsed)) => {
+                tracing::warn!("moa: reference {model} ({}) failed: {e}", role.label());
+                summaries.push(WorkerSummary {
+                    model,
+                    role,
+                    succeeded: false,
+                    elapsed_ms: elapsed,
+                    output_kind: None,
+                    confidence: None,
+                });
+            }
+            Err(e) => {
+                tracing::warn!("moa: reference task panicked or was cancelled: {e}");
+            }
+        }
+    }
+
+    drain_after_early_exit(join_set, &mut summaries).await;
+    reconcile_dispatched(dispatched, &mut summaries);
+    (outputs, summaries)
 }
 
 fn grace_answer_decision(outputs: &[WorkerOutput]) -> arbiter::Decision {
@@ -347,7 +490,7 @@ fn grace_tool_decision(outputs: &[WorkerOutput]) -> arbiter::Decision {
 /// those are reconciled by [`reconcile_dispatched`] using the dispatch
 /// list.
 async fn drain_after_early_exit(
-    join_set: &mut tokio::task::JoinSet<(String, WorkerRole, Result<String, String>, u64)>,
+    join_set: &mut tokio::task::JoinSet<WorkerTaskResult>,
     summaries: &mut Vec<WorkerSummary>,
 ) {
     join_set.abort_all();
@@ -417,12 +560,33 @@ mod tests {
         .to_string()
     }
 
+    /// Spawn a worker that yields complete (non-truncated) text. Truncation
+    /// behavior has its own helper below so existing tests keep asserting
+    /// the same thing they always did.
     fn spawn_worker(
-        join_set: &mut tokio::task::JoinSet<(String, WorkerRole, Result<String, String>, u64)>,
+        join_set: &mut tokio::task::JoinSet<WorkerTaskResult>,
         model: &str,
         role: WorkerRole,
         delay_ms: u64,
         result: Result<String, String>,
+    ) -> DispatchedWorker {
+        spawn_worker_reply(
+            join_set,
+            model,
+            role,
+            delay_ms,
+            result.map(BackendReply::complete),
+        )
+    }
+
+    /// Spawn a worker yielding a full [`BackendReply`], so a test can set
+    /// `truncated`.
+    fn spawn_worker_reply(
+        join_set: &mut tokio::task::JoinSet<WorkerTaskResult>,
+        model: &str,
+        role: WorkerRole,
+        delay_ms: u64,
+        result: Result<BackendReply, String>,
     ) -> DispatchedWorker {
         let model_owned = model.to_string();
         let result_clone = result.clone();
@@ -470,13 +634,14 @@ mod tests {
         let (outputs, summaries, decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            false, // has_tools
             &[],
             None,
             GatherPolicy {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -526,13 +691,14 @@ mod tests {
         let (outputs, _summaries, decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            true, // has_tools
             &[],
             None,
             GatherPolicy {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -577,13 +743,14 @@ mod tests {
         let (outputs, _summaries, _decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            true,
             &[],
             None,
             GatherPolicy {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Disabled,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -620,13 +787,14 @@ mod tests {
         let (_outputs, _summaries, decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            true,
             &["read".to_string()],
             None,
             GatherPolicy {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Tool,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -678,13 +846,14 @@ mod tests {
         let (outputs, _summaries, _decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            false, // has_tools
             &[],
             None,
             GatherPolicy {
                 first_answer_grace: Duration::ZERO,
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -729,13 +898,14 @@ mod tests {
         let (outputs, _summaries, _decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            false,
             &[],
             None,
             GatherPolicy {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -785,13 +955,14 @@ mod tests {
         let (outputs, _summaries, decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            false,
             &[],
             None,
             GatherPolicy {
                 first_answer_grace: Duration::from_millis(50),
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;
@@ -849,13 +1020,14 @@ mod tests {
         let (_outputs, _summaries, decision) = gather_workers_incremental(
             &mut js,
             &dispatched,
-            false,
             &[],
             None,
             GatherPolicy {
                 first_answer_grace: Duration::from_millis(100),
                 grace_mode: GraceMode::Answer,
                 strong_patience: Duration::ZERO,
+                min_grace_answers: 1,
+                grace_finalizes: true,
             },
         )
         .await;

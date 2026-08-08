@@ -2,6 +2,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
+use std::{thread, time::Duration};
 
 use anyhow::{Result, bail};
 use skippy_protocol::{LoadMode, StageConfig};
@@ -20,8 +21,8 @@ use crate::frontend::local_generation::{
     native_mtp_dispatch_counts_for_test, prompt_fits_single_prefill_sample,
 };
 use crate::frontend::{
-    EmbeddedOpenAiRequestDefaults, GenerationReceipt, GenerationReceiptConfig,
-    GenerationReceiptSink, GenerationTermination,
+    EmbeddedOpenAiRequestDefaults, GenerationAbort, GenerationCommit, GenerationReceipt,
+    GenerationReceiptConfig, GenerationReceiptSink, GenerationStart, GenerationTermination,
 };
 use crate::runtime_state::load_runtime;
 use crate::telemetry::{Telemetry, TelemetryLevel};
@@ -33,6 +34,18 @@ struct RecordingReceiptSink {
 }
 
 impl GenerationReceiptSink for RecordingReceiptSink {
+    fn begin(&self, _start: &GenerationStart) -> Result<()> {
+        Ok(())
+    }
+
+    fn committed(&self, _commit: &GenerationCommit) -> Result<()> {
+        Ok(())
+    }
+
+    fn abort(&self, _abort: &GenerationAbort) -> Result<()> {
+        Ok(())
+    }
+
     fn record(&self, receipt: &GenerationReceipt) -> Result<()> {
         self.receipts.lock().unwrap().push(receipt.clone());
         if self.fail.load(Ordering::Relaxed) {
@@ -40,6 +53,16 @@ impl GenerationReceiptSink for RecordingReceiptSink {
         }
         Ok(())
     }
+}
+
+fn wait_for_receipts(sink: &RecordingReceiptSink, expected: usize) {
+    for _ in 0..100 {
+        if sink.receipts.lock().unwrap().len() >= expected {
+            return;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    panic!("timed out waiting for {expected} generation receipts");
 }
 
 #[test]
@@ -58,7 +81,7 @@ fn local_native_mtp_decode_uses_non_frame_runtime_api() {
 }
 
 #[test]
-fn local_generation_delivers_receipt_before_cleanup_and_propagates_sink_errors() -> Result<()> {
+fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_errors() -> Result<()> {
     let Some(model_path) = std::env::var_os("SKIPPY_GENERATION_RECEIPT_MODEL") else {
         eprintln!("skipping: SKIPPY_GENERATION_RECEIPT_MODEL is not set");
         return Ok(());
@@ -140,8 +163,11 @@ fn local_generation_delivers_receipt_before_cleanup_and_propagates_sink_errors()
         decode_frame_batcher,
     };
     let sampling = SamplingConfig::default();
-    let prompt_token_ids = [1];
-    let ids = OpenAiGenerationIds::new(OpenAiCacheHints::default());
+    // A multi-token prompt takes the whole-prompt prefill path. Keep this
+    // above one token so the test exercises a fresh runtime session before
+    // its batch size is queried.
+    let prompt_token_ids = [1, 2];
+    let ids = OpenAiGenerationIds::new(OpenAiCacheHints::default(), None);
     let mut emitted = Vec::new();
     backend.generate_local_tokens(
         LocalGeneration {
@@ -162,6 +188,7 @@ fn local_generation_delivers_receipt_before_cleanup_and_propagates_sink_errors()
         },
     )?;
 
+    wait_for_receipts(&sink, 1);
     let receipts = sink.receipts.lock().unwrap();
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].request_id, ids.request_id);
@@ -182,8 +209,8 @@ fn local_generation_delivers_receipt_before_cleanup_and_propagates_sink_errors()
     );
 
     sink.fail.store(true, Ordering::Relaxed);
-    let failing_ids = OpenAiGenerationIds::new(OpenAiCacheHints::default());
-    let error = match backend.generate_local_tokens(
+    let failing_ids = OpenAiGenerationIds::new(OpenAiCacheHints::default(), None);
+    backend.generate_local_tokens(
         LocalGeneration {
             prompt_token_ids: &prompt_token_ids,
             max_tokens: 1,
@@ -197,15 +224,8 @@ fn local_generation_delivers_receipt_before_cleanup_and_propagates_sink_errors()
             ids: &failing_ids,
         },
         |_| Ok(TokenControl::Continue),
-    ) {
-        Ok(_) => panic!("sink failure should fail local generation"),
-        Err(error) => error,
-    };
-    assert!(
-        error
-            .to_string()
-            .contains("synthetic generation receipt sink failure")
-    );
+    )?;
+    wait_for_receipts(&sink, 2);
     assert!(
         runtime
             .lock()

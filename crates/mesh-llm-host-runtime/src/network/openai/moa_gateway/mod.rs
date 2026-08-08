@@ -20,6 +20,57 @@ use tokio::net::TcpStream;
 
 pub use self::workers::build_moa_config;
 
+/// Fall back to serving a single real model when MoA cannot form a committee.
+///
+/// Picks any model advertised in the mesh (local or peer), rewrites the
+/// request's `model` from the virtual `"mesh"` name to it, and hands the stream
+/// back so the caller routes it as an ordinary single-model request. Returns
+/// `None` (503) only when the node genuinely has no model at all.
+async fn degrade_to_single_model(
+    node: &mesh::Node,
+    targets: Option<&election::ModelTargets>,
+    tcp_stream: TcpStream,
+    request: &mut proxy::BufferedHttpRequest,
+) -> Option<TcpStream> {
+    // Prefer the same source `/v1/models` and routing use — the local
+    // targets table (`callable_models`) — since `models_being_served()` can be
+    // empty at request time on a fresh serve node. Fall back to the gossiped
+    // served set for a pure client node that has no local targets.
+    // Try each source /v1/models draws from, cheapest-first: the local targets
+    // table (`callable_models`), the gossiped served set, then the node's own
+    // `serving_models` — the last is what a fresh serve node populates first
+    // (the others can lag at request time).
+    let mut candidates = targets
+        .map(super::ingress::callable_models)
+        .unwrap_or_default();
+    if candidates.is_empty() {
+        candidates = node.models_being_served().await;
+    }
+    if candidates.is_empty() {
+        candidates = node.serving_models().await;
+    }
+    let Some(target) = candidates
+        .into_iter()
+        .find(|m| m != moa::VIRTUAL_MODEL_NAME)
+    else {
+        let _ = proxy::send_503(tcp_stream, "no models available in the mesh").await;
+        return None;
+    };
+
+    tracing::info!("MoA: <2 workers, degrading model=mesh to single model {target}");
+
+    // Rewrite every surface the downstream router reads. The forwarded request
+    // is driven by `request.raw` (the raw HTTP bytes), so `rewrite_model_field`
+    // patches raw + body + Content-Length together — rewriting only
+    // `model_name`/`body_json` left `raw` saying "mesh", so the embedded
+    // frontend still saw the virtual model and 404'd.
+    proxy::rewrite_model_field(request, &target);
+    request.model_name = Some(target);
+
+    // Hand the stream back: the caller falls through to normal routing.
+    Some(tcp_stream)
+}
+
 /// Detect `model: "mesh"`, build a mesh-wide MoA config, run the turn,
 /// and write the HTTP response (JSON or SSE) directly to the stream.
 ///
@@ -52,11 +103,28 @@ pub async fn try_handle_moa(
         return None;
     };
 
+    // Contract check: `messages` must be a present, non-empty array. Without
+    // this a request like `{"model":"mesh"}` or a string `messages` field fell
+    // through to the workers, which fabricated a 200 answer from nothing
+    // (homelab API-1 defect). Reject before any model call.
+    match body_json.get("messages") {
+        Some(serde_json::Value::Array(msgs)) if !msgs.is_empty() => {}
+        _ => {
+            let _ = proxy::send_400(tcp_stream, "MoA requires a non-empty `messages` array").await;
+            return None;
+        }
+    }
+
     let enable_thinking = effective_enable_thinking_for_moa(&body_json);
 
     let Some(mut config) = build_moa_config(node, targets, required_tokens).await else {
-        let _ = proxy::send_503(tcp_stream, "MoA requires ≥2 models available in the mesh").await;
-        return None;
+        // Graceful degradation: MoA needs ≥2 workers, but a lone node (or a
+        // mesh with a single model) should still answer a `model=mesh`
+        // request rather than 503. Rewrite the virtual model to a real served
+        // model and fall through to normal single-model routing by handing the
+        // stream back. `mesh` thus works everywhere: passthrough on one node,
+        // committee once a second worker joins.
+        return degrade_to_single_model(node, targets, tcp_stream, request).await;
     };
     config.enable_thinking = enable_thinking;
 
@@ -65,6 +133,7 @@ pub async fn try_handle_moa(
 }
 
 pub(in crate::network::openai) mod context_selection;
+mod pool;
 mod progress;
 mod streaming;
 mod workers;

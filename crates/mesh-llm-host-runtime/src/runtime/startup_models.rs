@@ -28,6 +28,7 @@ pub(super) struct StartupMeshCreationState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct StartupModelSpec {
     pub(super) model_ref: PathBuf,
+    pub(super) declared_ref: Option<String>,
     pub(super) mmproj_ref: Option<PathBuf>,
     pub(super) ctx_size: Option<u32>,
     pub(super) gpu_id: Option<String>,
@@ -488,6 +489,7 @@ pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
             "client" | "--client" => options.client = true,
             "--auto" => options.auto = true,
             "--publish" => options.publish = true,
+            "--local-model-only" => options.local_model_only = true,
             "--discover" => options.discover = Some(next_test_arg(&mut iter, arg).to_string()),
             "--split" => options.split = true,
             "--require-release-attestation" => options.require_release_attestation = true,
@@ -597,6 +599,7 @@ pub(super) fn build_startup_model_specs(
             }
             specs.push(StartupModelSpec {
                 model_ref: path.clone(),
+                declared_ref: None,
                 mmproj_ref: None,
                 ctx_size: options.ctx_size,
                 gpu_id: None,
@@ -613,6 +616,7 @@ pub(super) fn build_startup_model_specs(
         for model in &options.model {
             specs.push(StartupModelSpec {
                 model_ref: model.clone(),
+                declared_ref: None,
                 mmproj_ref: None,
                 ctx_size: options.ctx_size,
                 gpu_id: None,
@@ -634,9 +638,53 @@ pub(super) fn build_startup_model_specs(
         return Ok(specs);
     }
 
+    let default_model_path = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.hardware.as_ref())
+        .and_then(|hardware| hardware.model_path.as_ref());
+    if config.models.len() > 1 && default_model_path.is_some() {
+        anyhow::bail!(
+            "defaults.hardware.model_path cannot be used when multiple logical models are configured; set hardware.model_path on each model"
+        );
+    }
+
     for model in &config.models {
+        let configured_model_path = model
+            .hardware
+            .as_ref()
+            .and_then(|hardware| hardware.model_path.as_ref())
+            .or(default_model_path);
+        let (model_ref, declared_ref) = if let Some(configured_path) = configured_model_path {
+            let path = PathBuf::from(configured_path);
+            if !path.is_absolute() {
+                anyhow::bail!(
+                    "configured hardware.model_path for {} must be absolute: {}",
+                    model.model,
+                    path.display()
+                );
+            }
+            let metadata = std::fs::symlink_metadata(&path).with_context(|| {
+                format!(
+                    "configured hardware.model_path for {} is unavailable: {}",
+                    model.model,
+                    path.display()
+                )
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                anyhow::bail!(
+                    "configured hardware.model_path for {} must be a non-symlink file: {}",
+                    model.model,
+                    path.display()
+                );
+            }
+            (path, Some(model.model.clone()))
+        } else {
+            (PathBuf::from(model.model.clone()), None)
+        };
         specs.push(StartupModelSpec {
-            model_ref: PathBuf::from(model.model.clone()),
+            model_ref,
+            declared_ref,
             mmproj_ref: model.mmproj.as_ref().map(PathBuf::from),
             ctx_size: options.ctx_size.or(model.ctx_size),
             gpu_id: model.gpu_id.clone(),
@@ -657,14 +705,79 @@ pub(super) async fn resolve_startup_models(
     specs: &[StartupModelSpec],
     _split: bool,
 ) -> Result<Vec<StartupModelPlan>> {
+    resolve_startup_models_with_package_discovery(specs).await
+}
+
+/// Resolve startup models for the direct local serving topology.
+///
+/// The direct topology never falls back to a distributed layer package. It
+/// resolves the requested model itself and later rejects the launch if that
+/// complete model does not fit on the local machine.
+pub(super) async fn resolve_local_model_only_startup_models(
+    specs: &[StartupModelSpec],
+) -> Result<Vec<StartupModelPlan>> {
     let mut plans = Vec::with_capacity(specs.len());
     for spec in specs {
-        let requested_ref = spec.model_ref.to_string_lossy();
+        let resolved_path = resolve_pinned_local_file(&spec.model_ref, "model")?;
+        let mmproj_path = spec
+            .mmproj_ref
+            .as_ref()
+            .map(|path| resolve_pinned_local_file(path, "multimodal projector"))
+            .transpose()?;
+        let declared_ref = spec
+            .declared_ref
+            .clone()
+            .unwrap_or_else(|| models::model_ref_for_path(&resolved_path));
+        plans.push(StartupModelPlan {
+            declared_ref,
+            resolved_path,
+            mmproj_path,
+            ctx_size: spec.ctx_size,
+            gpu_id: spec.gpu_id.clone(),
+            pinned_gpu: None,
+            parallel: spec.parallel,
+            cache_type_k: spec.cache_type_k.clone(),
+            cache_type_v: spec.cache_type_v.clone(),
+            n_batch: spec.n_batch,
+            n_ubatch: spec.n_ubatch,
+            flash_attention: spec.flash_attention,
+            profile: spec.profile.clone(),
+        });
+    }
+    Ok(plans)
+}
+
+fn resolve_pinned_local_file(path: &Path, label: &str) -> Result<PathBuf> {
+    anyhow::ensure!(
+        path.is_absolute(),
+        "--local-model-only requires an absolute local {label} path: {}",
+        path.display()
+    );
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("pinned local {label} is unavailable: {}", path.display()))?;
+    anyhow::ensure!(
+        !metadata.file_type().is_symlink() && metadata.is_file(),
+        "--local-model-only requires a non-symlink {label} file: {}",
+        path.display()
+    );
+    path.canonicalize()
+        .with_context(|| format!("canonicalize pinned local {label}: {}", path.display()))
+}
+
+async fn resolve_startup_models_with_package_discovery(
+    specs: &[StartupModelSpec],
+) -> Result<Vec<StartupModelPlan>> {
+    let mut plans = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let requested_ref = spec
+            .declared_ref
+            .clone()
+            .unwrap_or_else(|| spec.model_ref.to_string_lossy().into_owned());
 
         // Check the remote catalog for a pre-split layer package before
         // downloading a remote monolithic GGUF. Auto-split can decide to split
         // later, so layer-package discovery must not depend on `--split`.
-        let requested_ref_for_catalog = requested_ref.to_string();
+        let requested_ref_for_catalog = requested_ref.clone();
         let model_ref_for_catalog = spec.model_ref.clone();
         let resolved_path = if let Some(package_ref) = tokio::task::spawn_blocking(move || {
             resolve_split_layer_package(&requested_ref_for_catalog, &model_ref_for_catalog)
@@ -681,24 +794,28 @@ pub(super) async fn resolve_startup_models(
             Some(mmproj) => Some(resolve_model(mmproj).await?),
             None => None,
         };
-        let declared_ref = find_remote_catalog_model_exact_blocking(requested_ref.to_string())
-            .await
-            .map(|model| models::remote_catalog_model_ref(&model))
-            .unwrap_or_else(|| {
-                // For hf:// layer package refs, use the requested ref as the model ref
-                // rather than trying to parse the hf:// URL as a filesystem path.
-                let path_str = resolved_path.to_string_lossy();
-                if path_str.starts_with("hf://") {
-                    requested_ref.to_string()
-                } else if resolved_path.join("model-package.json").is_file() {
-                    // Layer package directory: read the canonical model_id from the manifest
-                    // so that all nodes agree on the model name regardless of local path.
-                    read_layer_package_model_id(&resolved_path)
-                        .unwrap_or_else(|| models::model_ref_for_path(&resolved_path))
-                } else {
-                    models::model_ref_for_path(&resolved_path)
-                }
-            });
+        let declared_ref = if let Some(declared_ref) = &spec.declared_ref {
+            declared_ref.clone()
+        } else {
+            find_remote_catalog_model_exact_blocking(requested_ref.clone())
+                .await
+                .map(|model| models::remote_catalog_model_ref(&model))
+                .unwrap_or_else(|| {
+                    // For hf:// layer package refs, use the requested ref as the model ref
+                    // rather than trying to parse the hf:// URL as a filesystem path.
+                    let path_str = resolved_path.to_string_lossy();
+                    if path_str.starts_with("hf://") {
+                        requested_ref.clone()
+                    } else if resolved_path.join("model-package.json").is_file() {
+                        // Layer package directory: read the canonical model_id from the manifest
+                        // so that all nodes agree on the model name regardless of local path.
+                        read_layer_package_model_id(&resolved_path)
+                            .unwrap_or_else(|| models::model_ref_for_path(&resolved_path))
+                    } else {
+                        models::model_ref_for_path(&resolved_path)
+                    }
+                })
+        };
         plans.push(StartupModelPlan {
             declared_ref,
             resolved_path,

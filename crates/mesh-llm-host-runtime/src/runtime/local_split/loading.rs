@@ -16,6 +16,7 @@ use crate::runtime::survey;
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
+use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -43,6 +44,7 @@ pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
+    pub(super) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
 }
 
 pub(super) struct SplitGenerationLoadSettings<'a> {
@@ -193,6 +195,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     let reporter_model_ref = model_ref.clone();
     let skippy_telemetry = spec.skippy_telemetry.clone();
     let guardrail_telemetry = spec.survey_telemetry.clone();
+    let serving_hooks_factory = spec.serving_hooks_factory.clone();
     let openai_guardrails =
         skippy::skippy_openai_guardrails_for_policy_handle(spec.openai_guardrail_policy.clone());
     let _ = emit_event(OutputEvent::ModelLoading {
@@ -207,6 +210,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             skippy_telemetry,
             Some(skippy_native_model_open_event_reporter(reporter_model_ref)),
             skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
+            serving_hooks_factory,
         )
     })
     .await
@@ -215,7 +219,7 @@ pub(super) async fn load_split_runtime_generation_inner(
         model: model_ref,
         bytes: None,
     });
-    let http = handle.start_http(alloc_local_port().await?);
+    let http = handle.start_http(alloc_local_port().await?)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
     let capabilities = models::runtime_verified_model_capabilities(
         spec.model_ref,
@@ -279,7 +283,12 @@ pub(super) async fn load_downstream_split_runtime_stages(
             spec.node,
             stage.node_id,
             &load,
-            stage_source_prepare_timeout(spec.package, stage),
+            stage_source_prepare_timeout(
+                spec.model_path,
+                spec.package,
+                stage,
+                downstream.is_none(),
+            )?,
         )
         .await
         .with_context(|| {
@@ -332,19 +341,44 @@ pub(super) async fn load_downstream_split_runtime_stages(
 }
 
 pub(super) fn stage_source_prepare_timeout(
+    model_path: &Path,
     package: &skippy::SkippyPackageIdentity,
     stage: &RuntimeSliceStagePlan,
-) -> Duration {
-    let package_layers = u64::from(package.layer_count.max(1));
-    let stage_layers = u64::from(stage.layer_end.saturating_sub(stage.layer_start).max(1));
-    let estimated_stage_bytes = package
-        .source_model_bytes
-        .saturating_mul(stage_layers)
-        .div_ceil(package_layers);
-    let transfer_secs = estimated_stage_bytes.div_ceil(STAGE_SOURCE_MIN_BYTES_PER_SEC);
-    Duration::from_secs(transfer_secs)
+    include_output: bool,
+) -> Result<Duration> {
+    let assigned_bytes = if model_path.is_dir() {
+        crate::models::artifact_transfer::required_stage_package_bytes(
+            model_path,
+            &package.package_ref,
+            &package.manifest_sha256,
+            crate::models::artifact_transfer::StageArtifactSelection {
+                layer_start: stage.layer_start,
+                layer_end: stage.layer_end,
+                include_embeddings: stage.layer_start == 0,
+                include_output,
+                include_projectors: stage.layer_start == 0,
+            },
+        )?
+    } else if package.layer_weight_bytes.len() == package.layer_count as usize {
+        package
+            .layer_weight_bytes
+            .get(stage.layer_start as usize..stage.layer_end as usize)
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .fold(0_u64, u64::saturating_add)
+    } else {
+        let package_layers = u64::from(package.layer_count.max(1));
+        let stage_layers = u64::from(stage.layer_end.saturating_sub(stage.layer_start).max(1));
+        package
+            .source_model_bytes
+            .saturating_mul(stage_layers)
+            .div_ceil(package_layers)
+    };
+    let transfer_secs = assigned_bytes.div_ceil(STAGE_SOURCE_MIN_BYTES_PER_SEC);
+    Ok(Duration::from_secs(transfer_secs)
         .saturating_add(STAGE_SOURCE_PREPARE_ALLOWANCE)
-        .max(MIN_STAGE_SOURCE_PREPARE_TIMEOUT)
+        .max(MIN_STAGE_SOURCE_PREPARE_TIMEOUT))
 }
 
 pub(super) fn split_runtime_stage_load_request(

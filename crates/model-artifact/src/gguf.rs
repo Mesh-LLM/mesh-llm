@@ -121,15 +121,20 @@ fn read_bounded_len(f: &mut std::fs::File, max: u64, label: &str) -> std::io::Re
 }
 
 fn read_gguf_string(f: &mut std::fs::File) -> std::io::Result<String> {
-    let len = read_bounded_len(f, MAX_GGUF_STRING_BYTES, "string")?;
-    let mut buf = vec![0u8; len];
-    f.read_exact(&mut buf)?;
+    let buf = read_gguf_bytes(f, "string")?;
     String::from_utf8(buf).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "invalid UTF-8 in GGUF string",
         )
     })
+}
+
+fn read_gguf_bytes(f: &mut std::fs::File, label: &str) -> std::io::Result<Vec<u8>> {
+    let len = read_bounded_len(f, MAX_GGUF_STRING_BYTES, label)?;
+    let mut buf = vec![0u8; len];
+    f.read_exact(&mut buf)?;
+    Ok(buf)
 }
 
 fn skip_gguf_value(f: &mut std::fs::File, typ: GgufType) -> std::io::Result<()> {
@@ -312,6 +317,20 @@ pub struct GgufTensorByteProfile {
     pub file_overhead_bytes: u64,
 }
 
+/// The tokenizer vocabulary exposed by a source GGUF header. Non-control
+/// entries intentionally retain their raw bytes: many GGUF vocabularies are
+/// not valid UTF-8 and must never be round-tripped through text.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GgufTokenizerInventory {
+    pub tokens: Vec<GgufTokenizerToken>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GgufTokenizerToken {
+    pub raw: Vec<u8>,
+    pub is_control: bool,
+}
+
 #[derive(Clone, Debug)]
 struct GgufTensorInfo {
     name: String,
@@ -488,6 +507,102 @@ pub fn scan_gguf_projector_meta(path: &Path) -> Option<GgufProjectorMeta> {
     Some(meta)
 }
 
+fn read_string_array(f: &mut std::fs::File, typ: GgufType) -> std::io::Result<Vec<Vec<u8>>> {
+    if typ != GgufType::Array {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "tokenizer tokens must be a GGUF array",
+        ));
+    }
+    if GgufType::from_u32(read_u32(f)?) != Some(GgufType::String) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "tokenizer tokens must be an array of strings",
+        ));
+    }
+    let count = read_bounded_len(f, MAX_GGUF_ARRAY_ELEMENTS, "tokenizer token array")?;
+    let mut tokens = Vec::new();
+    tokens.try_reserve(count).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "tokenizer token array requires too much memory",
+        )
+    })?;
+    for _ in 0..count {
+        tokens.push(read_gguf_bytes(f, "tokenizer token")?);
+    }
+    Ok(tokens)
+}
+
+fn read_token_type_array(f: &mut std::fs::File, typ: GgufType) -> std::io::Result<Vec<u32>> {
+    if typ != GgufType::Array {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "tokenizer token types must be a GGUF array",
+        ));
+    }
+    let element_type = GgufType::from_u32(read_u32(f)?).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "bad tokenizer token type")
+    })?;
+    let count = read_bounded_len(f, MAX_GGUF_ARRAY_ELEMENTS, "tokenizer token type array")?;
+    let mut types = Vec::new();
+    types.try_reserve(count).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "tokenizer token type array requires too much memory",
+        )
+    })?;
+    for _ in 0..count {
+        let value = read_gguf_value_as_u32(f, element_type)?.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unsupported tokenizer token type element",
+            )
+        })?;
+        types.push(value);
+    }
+    Ok(types)
+}
+
+/// Reads a source GGUF's tokenizer vocabulary and its control-token markers.
+/// This scans metadata only and rejects malformed or incomplete inventories.
+pub fn scan_gguf_tokenizer_inventory(path: &Path) -> Option<GgufTokenizerInventory> {
+    let GgufHeader {
+        file: mut f, n_kv, ..
+    } = open_gguf_header(path)?;
+    let mut raw_tokens = None;
+    let mut token_types = None;
+
+    for _ in 0..n_kv {
+        let key = read_gguf_string(&mut f).ok()?;
+        let typ = GgufType::from_u32(read_u32(&mut f).ok()?)?;
+        match key.as_str() {
+            "tokenizer.ggml.tokens" => raw_tokens = Some(read_string_array(&mut f, typ).ok()?),
+            "tokenizer.ggml.token_type" => {
+                token_types = Some(read_token_type_array(&mut f, typ).ok()?);
+            }
+            _ => skip_gguf_value(&mut f, typ).ok()?,
+        }
+    }
+
+    let raw_tokens = raw_tokens?;
+    let token_types = token_types.unwrap_or_else(|| vec![0; raw_tokens.len()]);
+    if raw_tokens.is_empty() || raw_tokens.len() != token_types.len() {
+        return None;
+    }
+    Some(GgufTokenizerInventory {
+        tokens: raw_tokens
+            .into_iter()
+            .zip(token_types)
+            // GGML's stable token type value for an explicit control boundary.
+            .map(|(raw, token_type)| GgufTokenizerToken {
+                raw,
+                is_control: token_type == 3,
+            })
+            .collect(),
+    })
+}
+
 fn align_offset(value: u64, alignment: u32) -> u64 {
     let alignment = u64::from(alignment.max(1));
     let remainder = value % alignment;
@@ -526,6 +641,43 @@ fn read_tensor_infos(
         tensors.push(GgufTensorInfo { name, offset });
     }
     Ok(tensors)
+}
+
+/// Sum the element counts of every tensor in a GGUF file → total stored
+/// parameter count. Reads only the header and tensor-info table (dimensions),
+/// never tensor data.
+///
+/// This is the authoritative model size: the exact number of stored weights,
+/// independent of the file name. Name parsing (`NNb` in the model id) is a
+/// brittle fallback — aliases and fine-tunes need not encode a size, names can
+/// carry unrelated digits, and an unparseable name must read as *unknown*, not
+/// as a guessed tier. Returns `None` on any parse failure (→ unknown).
+pub fn scan_gguf_total_parameters(path: &Path) -> Option<u64> {
+    let GgufHeader {
+        file: mut f,
+        n_tensors,
+        n_kv,
+    } = open_gguf_header(path)?;
+
+    skip_all_kv_pairs(&mut f, n_kv)?;
+
+    let mut total: u64 = 0;
+    for _ in 0..n_tensors {
+        let _name = read_gguf_string(&mut f).ok()?;
+        let n_dims = read_u32(&mut f).ok()?;
+        if n_dims > MAX_GGUF_TENSOR_DIMS {
+            return None;
+        }
+        let mut elements: u64 = 1;
+        for _ in 0..n_dims {
+            let dim = read_u64(&mut f).ok()?;
+            elements = elements.checked_mul(dim)?;
+        }
+        let _ggml_type = read_u32(&mut f).ok()?;
+        let _offset = read_u64(&mut f).ok()?;
+        total = total.checked_add(elements)?;
+    }
+    Some(total)
 }
 
 /// Scan GGUF tensor names and return whether any tensor matches the predicate.
@@ -697,6 +849,11 @@ mod tests {
         bytes.extend_from_slice(value.as_bytes());
     }
 
+    fn push_gguf_bytes(bytes: &mut Vec<u8>, value: &[u8]) {
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value);
+    }
+
     fn push_u32_kv(bytes: &mut Vec<u8>, key: &str, value: u32) {
         push_gguf_string(bytes, key);
         bytes.extend_from_slice(&(GgufType::Uint32 as u32).to_le_bytes());
@@ -716,6 +873,39 @@ mod tests {
         for value in values {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
+    }
+
+    fn push_tokenizer_inventory_kvs(bytes: &mut Vec<u8>) {
+        push_gguf_string(bytes, "tokenizer.ggml.tokens");
+        bytes.extend_from_slice(&(GgufType::Array as u32).to_le_bytes());
+        push_array_header(bytes, GgufType::String, 2);
+        push_gguf_bytes(bytes, b"hello");
+        push_gguf_bytes(bytes, b"<eos>");
+
+        push_gguf_string(bytes, "tokenizer.ggml.token_type");
+        bytes.extend_from_slice(&(GgufType::Array as u32).to_le_bytes());
+        push_array_header(bytes, GgufType::Uint32, 2);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+    }
+
+    #[test]
+    fn scan_gguf_tokenizer_inventory_preserves_bytes_and_controls() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&2i64.to_le_bytes());
+        push_tokenizer_inventory_kvs(&mut bytes);
+
+        let path = write_bytes("model-artifact-gguf-tokenizer", &bytes);
+        let inventory = scan_gguf_tokenizer_inventory(&path).expect("should parse tokenizer");
+        assert_eq!(inventory.tokens.len(), 2);
+        assert_eq!(inventory.tokens[0].raw, b"hello");
+        assert!(!inventory.tokens[0].is_control);
+        assert_eq!(inventory.tokens[1].raw, b"<eos>");
+        assert!(inventory.tokens[1].is_control);
+        let _ = std::fs::remove_file(path);
     }
 
     fn push_tensor_info(bytes: &mut Vec<u8>, name: &str, offset: u64) {

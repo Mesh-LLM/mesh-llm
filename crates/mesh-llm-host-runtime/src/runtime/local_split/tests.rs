@@ -617,6 +617,15 @@ fn stage_source_prepare_timeout_scales_with_assigned_package_bytes() {
     let package = skippy::SkippyPackageIdentity {
         source_model_bytes: 975_000_000_000,
         layer_count: 66,
+        layer_weight_bytes: (0..66)
+            .map(|index| {
+                if index < 39 {
+                    20_000_000_000
+                } else {
+                    5_000_000_000
+                }
+            })
+            .collect(),
         ..package(66)
     };
     let small_stage = RuntimeSliceStagePlan {
@@ -636,8 +645,11 @@ fn stage_source_prepare_timeout_scales_with_assigned_package_bytes() {
         parameter_bytes: 0,
     };
 
-    let small_timeout = stage_source_prepare_timeout(&package, &small_stage);
-    let large_timeout = stage_source_prepare_timeout(&package, &large_stage);
+    let model_path = Path::new("/nonexistent/direct.gguf");
+    let small_timeout =
+        stage_source_prepare_timeout(model_path, &package, &small_stage, true).unwrap();
+    let large_timeout =
+        stage_source_prepare_timeout(model_path, &package, &large_stage, false).unwrap();
 
     assert!(small_timeout > MIN_STAGE_SOURCE_PREPARE_TIMEOUT);
     assert!(large_timeout > small_timeout);
@@ -1122,6 +1134,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
         ),
         skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
         survey_telemetry: survey::SurveyTelemetry::disabled(),
+        serving_hooks_factory: None,
     }))
     .await
     {

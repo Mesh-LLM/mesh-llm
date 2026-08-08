@@ -14,7 +14,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{DefaultBodyLimit, State, rejection::JsonRejection},
-    http::{HeaderValue, Method, Request, StatusCode, Uri, header::HeaderName},
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header::HeaderName},
     middleware::{self, Next},
     response::{
         IntoResponse, Response,
@@ -31,6 +31,7 @@ use crate::{
         CancellationToken, OpenAiBackend, OpenAiRequestContext, OpenAiResult, SharedBackend,
     },
     chat::{ChatCompletionChunk, ChatCompletionRequest},
+    common::{AgentSessionIdentity, AgentSessionSource},
     completions::CompletionRequest,
     errors::OpenAiError,
     models::ModelsResponse,
@@ -52,10 +53,13 @@ struct FrontendState {
     config: OpenAiFrontendConfig,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiFrontendConfig {
     pub max_request_body_bytes: usize,
     pub backend_timeout: Option<Duration>,
+    /// Header accepted as stable agent-session identity from the endpoint's
+    /// trusted immediate upstream. `None` disables header-derived identity.
+    pub agent_session_header: Option<HeaderName>,
 }
 
 impl OpenAiFrontendConfig {
@@ -76,6 +80,11 @@ impl OpenAiFrontendConfig {
         self.backend_timeout = None;
         self
     }
+
+    pub fn with_agent_session_header(mut self, header: HeaderName) -> Self {
+        self.agent_session_header = Some(header);
+        self
+    }
 }
 
 impl Default for OpenAiFrontendConfig {
@@ -83,6 +92,7 @@ impl Default for OpenAiFrontendConfig {
         Self {
             max_request_body_bytes: Self::DEFAULT_MAX_REQUEST_BODY_BYTES,
             backend_timeout: Some(Self::DEFAULT_BACKEND_TIMEOUT),
+            agent_session_header: None,
         }
     }
 }
@@ -148,19 +158,24 @@ async fn models(State(state): State<FrontendState>) -> Result<Json<ModelsRespons
 
 async fn chat_completions(
     State(state): State<FrontendState>,
+    headers: HeaderMap,
     payload: Result<Json<ChatCompletionRequest>, JsonRejection>,
 ) -> Result<Response, OpenAiError> {
-    let Json(request) = json_payload(payload)?;
+    let Json(mut request) = json_payload(payload)?;
+    request.set_agent_session(agent_session_from_header(&state.config, &headers)?);
     request.validate()?;
     if request.stream {
         let include_usage = request.include_usage();
         let model = request.model.clone();
         let context = OpenAiRequestContext::new();
         let cancellation = context.cancellation_token();
-        let stream = backend_call(
+        let stream = backend_call_with_cancellation(
             &state,
             "chat_completion_stream",
-            state.backend.chat_completion_stream(request, context),
+            &context,
+            state
+                .backend
+                .chat_completion_stream(request, context.clone()),
         )
         .await?;
         let prelude = stream::once(async move { json_event(&ChatCompletionChunk::role(model)) });
@@ -175,11 +190,15 @@ async fn chat_completions(
             .chain(stream::once(async { done_event() }));
         Ok(sse_response(events, cancellation))
     } else {
+        let context = OpenAiRequestContext::new();
         Ok(Json(
-            backend_call(
+            backend_call_with_cancellation(
                 &state,
                 "chat_completion",
-                state.backend.chat_completion(request),
+                &context,
+                state
+                    .backend
+                    .chat_completion_with_context(request, context.clone()),
             )
             .await?,
         )
@@ -189,23 +208,33 @@ async fn chat_completions(
 
 async fn responses(
     State(state): State<FrontendState>,
+    headers: HeaderMap,
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Response, OpenAiError> {
     let Json(mut value) = json_payload(payload)?;
     let normalization = normalize_openai_compat_request("/v1/responses", &mut value)?;
-    let request: ChatCompletionRequest = serde_json::from_value(value).map_err(|error| {
+    let mut request: ChatCompletionRequest = serde_json::from_value(value).map_err(|error| {
         OpenAiError::invalid_request(format!("invalid Responses request: {error}"))
     })?;
+    let header_session = agent_session_from_header(&state.config, &headers)?;
+    let responses_session = normalization
+        .agent_session_id
+        .map(|id| AgentSessionIdentity::new(id, AgentSessionSource::ResponsesConversation))
+        .transpose()?;
+    request.set_agent_session(resolve_agent_session(header_session, responses_session)?);
     request.validate()?;
     match normalization.response_adapter {
         ResponseAdapterMode::OpenAiResponsesStream => {
             let context = OpenAiRequestContext::new();
             let cancellation = context.cancellation_token();
             let state_machine = Arc::new(Mutex::new(ResponseSseState::new(request.model.clone())));
-            let stream = backend_call(
+            let stream = backend_call_with_cancellation(
                 &state,
                 "responses_stream",
-                state.backend.chat_completion_stream(request, context),
+                &context,
+                state
+                    .backend
+                    .chat_completion_stream(request, context.clone()),
             )
             .await?;
             let body_state = state_machine.clone();
@@ -396,8 +425,16 @@ async fn responses(
             Ok(sse_response(events, cancellation))
         }
         _ => {
-            let response =
-                backend_call(&state, "responses", state.backend.chat_completion(request)).await?;
+            let context = OpenAiRequestContext::new();
+            let response = backend_call_with_cancellation(
+                &state,
+                "responses",
+                &context,
+                state
+                    .backend
+                    .chat_completion_with_context(request, context.clone()),
+            )
+            .await?;
             let translated = translate_chat_completion_response_to_responses(&response)?;
             Ok(Json(translated).into_response())
         }
@@ -406,18 +443,21 @@ async fn responses(
 
 async fn completions(
     State(state): State<FrontendState>,
+    headers: HeaderMap,
     payload: Result<Json<CompletionRequest>, JsonRejection>,
 ) -> Result<Response, OpenAiError> {
-    let Json(request) = json_payload(payload)?;
+    let Json(mut request) = json_payload(payload)?;
+    request.set_agent_session(agent_session_from_header(&state.config, &headers)?);
     request.validate()?;
     if request.stream {
         let include_usage = request.include_usage();
         let context = OpenAiRequestContext::new();
         let cancellation = context.cancellation_token();
-        let stream = backend_call(
+        let stream = backend_call_with_cancellation(
             &state,
             "completion_stream",
-            state.backend.completion_stream(request, context),
+            &context,
+            state.backend.completion_stream(request, context.clone()),
         )
         .await?;
         let events = stream
@@ -431,11 +471,108 @@ async fn completions(
             .chain(stream::once(async { done_event() }));
         Ok(sse_response(events, cancellation))
     } else {
-        Ok(
-            Json(backend_call(&state, "completion", state.backend.completion(request)).await?)
-                .into_response(),
+        let context = OpenAiRequestContext::new();
+        Ok(Json(
+            backend_call_with_cancellation(
+                &state,
+                "completion",
+                &context,
+                state
+                    .backend
+                    .completion_with_context(request, context.clone()),
+            )
+            .await?,
         )
+        .into_response())
     }
+}
+
+fn agent_session_from_header(
+    config: &OpenAiFrontendConfig,
+    headers: &HeaderMap,
+) -> OpenAiResult<Option<AgentSessionIdentity>> {
+    let Some(name) = config.agent_session_header.as_ref() else {
+        return Ok(None);
+    };
+    let Some(value) = headers.get(name) else {
+        return Ok(None);
+    };
+    let value = value.to_str().map_err(|_| {
+        OpenAiError::invalid_request("configured agent-session header is not valid UTF-8")
+    })?;
+    AgentSessionIdentity::new(
+        value,
+        AgentSessionSource::TrustedHeader(name.as_str().to_owned()),
+    )
+    .map(Some)
+}
+
+fn resolve_agent_session(
+    header: Option<AgentSessionIdentity>,
+    protocol: Option<AgentSessionIdentity>,
+) -> OpenAiResult<Option<AgentSessionIdentity>> {
+    match (header, protocol) {
+        (Some(header), Some(protocol)) if header.id() != protocol.id() => {
+            Err(OpenAiError::invalid_request(
+                "trusted agent-session header conflicts with Responses conversation identity",
+            ))
+        }
+        (Some(header), _) => Ok(Some(header)),
+        (None, protocol) => Ok(protocol),
+    }
+}
+
+struct CancelOnDrop {
+    context: OpenAiRequestContext,
+    armed: bool,
+}
+
+impl CancelOnDrop {
+    fn new(context: &OpenAiRequestContext) -> Self {
+        Self {
+            context: context.clone(),
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            self.context.cancel();
+        }
+    }
+}
+
+async fn backend_call_with_cancellation<T, F>(
+    state: &FrontendState,
+    operation: &'static str,
+    context: &OpenAiRequestContext,
+    future: F,
+) -> OpenAiResult<T>
+where
+    F: Future<Output = OpenAiResult<T>>,
+{
+    let mut cancel_on_drop = CancelOnDrop::new(context);
+    let result = match state.config.backend_timeout {
+        Some(timeout) => match tokio::time::timeout(timeout, future).await {
+            Ok(result) => result,
+            Err(_) => {
+                context.cancel();
+                return Err(OpenAiError::timeout(format!(
+                    "{operation} timed out after {} ms",
+                    timeout.as_millis()
+                )));
+            }
+        },
+        None => future.await,
+    };
+    cancel_on_drop.disarm();
+    result
 }
 
 async fn backend_call<T, F>(
@@ -780,6 +917,73 @@ mod tests {
         token: Arc<Mutex<Option<CancellationToken>>>,
     }
 
+    #[derive(Default)]
+    struct SessionCaptureBackend {
+        requests: Arc<Mutex<Vec<ChatCompletionRequest>>>,
+    }
+
+    #[async_trait]
+    impl OpenAiBackend for SessionCaptureBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(vec![ModelObject::new("capture-model")])
+        }
+
+        async fn chat_completion(
+            &self,
+            request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            self.requests.lock().unwrap().push(request.clone());
+            Ok(ChatCompletionResponse::new(
+                request.model,
+                "ok",
+                Usage::new(1, 1),
+            ))
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            unreachable!("agent-session tests use non-streaming requests")
+        }
+    }
+
+    struct NonStreamingCancellationBackend {
+        token: Arc<Mutex<Option<CancellationToken>>>,
+    }
+
+    #[async_trait]
+    impl OpenAiBackend for NonStreamingCancellationBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(vec![ModelObject::new("cancel-model")])
+        }
+
+        async fn chat_completion(
+            &self,
+            _request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            unreachable!("frontend must use the context-aware non-streaming path")
+        }
+
+        async fn chat_completion_with_context(
+            &self,
+            _request: ChatCompletionRequest,
+            context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            *self.token.lock().expect("token lock poisoned") = Some(context.cancellation_token());
+            std::future::pending().await
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            unreachable!("cancellation backend test only calls non-streaming")
+        }
+    }
+
     #[async_trait]
     impl OpenAiBackend for CancellationBackend {
         async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
@@ -969,6 +1173,134 @@ mod tests {
         let body = response_body_json(response).await;
         assert_eq!(body["error"]["type"], "server_error");
         assert_eq!(body["error"]["code"], "timeout");
+    }
+
+    #[tokio::test]
+    async fn configured_trusted_header_reaches_backend_as_agent_session_identity() {
+        let backend = Arc::new(SessionCaptureBackend::default());
+        let app = router_for_with_config(
+            backend.clone(),
+            OpenAiFrontendConfig::default()
+                .with_agent_session_header(HeaderName::from_static("x-litellm-session-id")),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("x-litellm-session-id", "agent-thread-42")
+                    .body(Body::from(
+                        json!({
+                            "model": "capture-model",
+                            "messages": [{"role": "user", "content": "hello"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = backend.requests.lock().unwrap();
+        assert_eq!(requests[0].agent_session(), Some("agent-thread-42"));
+        assert_eq!(
+            requests[0].agent_session_source(),
+            Some("x-litellm-session-id")
+        );
+    }
+
+    #[tokio::test]
+    async fn unconfigured_session_header_is_ignored() {
+        let backend = Arc::new(SessionCaptureBackend::default());
+        let app = router_for(backend.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("x-litellm-session-id", "untrusted-thread")
+                    .body(Body::from(
+                        json!({
+                            "model": "capture-model",
+                            "messages": [{"role": "user", "content": "hello"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            backend.requests.lock().unwrap()[0]
+                .agent_session()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_conversation_is_normalized_without_leaking_into_chat_body() {
+        let backend = Arc::new(SessionCaptureBackend::default());
+        let app = router_for(backend.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "capture-model",
+                            "conversation": {"id": "conversation-7"},
+                            "input": "hello"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = backend.requests.lock().unwrap();
+        assert_eq!(requests[0].agent_session(), Some("conversation-7"));
+        assert_eq!(
+            requests[0].agent_session_source(),
+            Some("responses.conversation")
+        );
+        assert!(!requests[0].extra.contains_key("conversation"));
+    }
+
+    #[tokio::test]
+    async fn conflicting_header_and_responses_conversation_fail_closed() {
+        let backend = Arc::new(SessionCaptureBackend::default());
+        let app = router_for_with_config(
+            backend.clone(),
+            OpenAiFrontendConfig::default()
+                .with_agent_session_header(HeaderName::from_static("x-litellm-session-id")),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .header("x-litellm-session-id", "header-session")
+                    .body(Body::from(
+                        json!({
+                            "model": "capture-model",
+                            "conversation": {"id": "body-session"},
+                            "input": "hello"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(backend.requests.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1173,6 +1505,84 @@ mod tests {
         tokio::task::yield_now().await;
 
         assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn non_streaming_timeout_cancels_request_context() {
+        let token = Arc::new(Mutex::new(None));
+        let app = router_for_with_config(
+            Arc::new(NonStreamingCancellationBackend {
+                token: token.clone(),
+            }),
+            OpenAiFrontendConfig::default().with_backend_timeout(Duration::from_millis(5)),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "cancel-model",
+                            "messages": [{"role": "user", "content": "hello"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        let cancellation = token
+            .lock()
+            .expect("token lock poisoned")
+            .clone()
+            .expect("backend saw request context");
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn dropping_non_streaming_request_cancels_request_context() {
+        let token = Arc::new(Mutex::new(None));
+        let app = router_for_with_config(
+            Arc::new(NonStreamingCancellationBackend {
+                token: token.clone(),
+            }),
+            OpenAiFrontendConfig::default().without_backend_timeout(),
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "model": "cancel-model",
+                    "messages": [{"role": "user", "content": "hello"}]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let task = tokio::spawn(app.oneshot(request));
+
+        let cancellation = tokio::time::timeout(Duration::from_millis(100), async {
+            loop {
+                if let Some(token) = token.lock().expect("token lock poisoned").clone() {
+                    break token;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("backend received request context");
+        assert!(!cancellation.is_cancelled());
+
+        task.abort();
+        let _ = task.await;
+        tokio::time::timeout(Duration::from_millis(100), cancellation.cancelled())
+            .await
+            .expect("dropped request cancelled backend context");
     }
 
     #[tokio::test]

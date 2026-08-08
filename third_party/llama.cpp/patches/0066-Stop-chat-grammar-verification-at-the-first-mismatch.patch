@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Wed, 5 Aug 2026 15:33:46 +1000
+Subject: [PATCH] Stop chat grammar verification at the first mismatch
+
+---
+ src/skippy.cpp | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/skippy.cpp b/src/skippy.cpp
+index 6942f08a4..cfc0bac8f 100644
+--- a/src/skippy.cpp
++++ b/src/skippy.cpp
+@@ -6631,12 +6631,22 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+             return SKIPPY_STATUS_RUNTIME_ERROR;
+         }
+         session->token_history.resize(history_size_before_verification);
++        const bool stop_after_first_mismatch = session->grammar_sampler != nullptr;
++        bool proposal_mismatched = false;
+         for (size_t i = 0; i < token_count; ++i) {
+             skippy_record_tokens(session, &token_ids[i], 1);
+             const int32_t logits_index = static_cast<int32_t>(i);
+             output_tokens[i] = skippy_sample_token_ith(session, sampling, logits_index);
++            if (stop_after_first_mismatch && i + 1 < token_count && output_tokens[i] != token_ids[i + 1]) {
++                // Later rows are conditioned on a rejected token and are not
++                // authoritative predictions. Stop advancing the sampler and
++                // grammar state through that rejected suffix.
++                proposal_mismatched = true;
++                *out_token_count = i + 1;
++                break;
++            }
+         }
+-        if (out_mtp_draft != nullptr && token_count > 0) {
++        if (out_mtp_draft != nullptr && token_count > 0 && !proposal_mismatched) {
+             status = skippy_mtp_propose_next(
+                     session,
+                     output_tokens[token_count - 1],

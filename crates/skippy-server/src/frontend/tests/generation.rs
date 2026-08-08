@@ -1,4 +1,6 @@
 use super::*;
+use crate::frontend::backend::run_blocking_generation_worker;
+use std::sync::atomic::AtomicBool;
 
 fn assert_generation_rate_limit(error: OpenAiError, message_fragment: &str) {
     assert_eq!(error.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -100,6 +102,70 @@ async fn generation_admission_waits_for_released_lane() {
     drop(permit);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_worker_stops_before_the_next_request_acquires_the_only_lane() {
+    let generation_limit = Arc::new(Semaphore::new(1));
+    let queue_depth = Arc::new(AtomicUsize::new(0));
+    let first_permit = acquire_generation_permit_with_queue(
+        generation_limit.clone(),
+        queue_depth.clone(),
+        1,
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    let first_context = OpenAiRequestContext::new();
+    let worker_started = Arc::new(AtomicBool::new(false));
+    let worker_stopped = Arc::new(AtomicBool::new(false));
+    let started = worker_started.clone();
+    let stopped = worker_stopped.clone();
+    let first_worker = tokio::spawn(run_blocking_generation_worker(
+        first_permit,
+        first_context.clone(),
+        move |cancellation| {
+            started.store(true, Ordering::Release);
+            while !cancellation.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            stopped.store(true, Ordering::Release);
+        },
+    ));
+
+    tokio::time::timeout(Duration::from_millis(100), async {
+        while !worker_started.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("first generation worker started");
+
+    let second_limit = generation_limit.clone();
+    let second_queue_depth = queue_depth.clone();
+    let second = tokio::spawn(async move {
+        let permit = acquire_generation_permit_with_queue(
+            second_limit,
+            second_queue_depth,
+            1,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert!(
+            worker_stopped.load(Ordering::Acquire),
+            "the first worker must stop before its permit is released"
+        );
+        drop(permit);
+    });
+
+    first_context.cancel();
+    tokio::time::timeout(Duration::from_millis(200), second)
+        .await
+        .expect("second request acquired the lane promptly")
+        .unwrap();
+    first_worker.await.unwrap().unwrap();
+    assert_eq!(generation_limit.available_permits(), 1);
+}
+
 #[test]
 fn trims_at_first_stop_sequence() {
     assert_eq!(trim_at_stop("hello END world", &["END"]), "hello ");
@@ -188,7 +254,7 @@ fn maps_generation_exhaustion_to_length_finish_reason() {
 #[test]
 fn generation_ids_are_unique_under_fast_creation() {
     let ids = (0..1024)
-        .map(|_| OpenAiGenerationIds::new(OpenAiCacheHints::default()))
+        .map(|_| OpenAiGenerationIds::new(OpenAiCacheHints::default(), None))
         .collect::<Vec<_>>();
     let mut sessions = std::collections::BTreeSet::new();
     let mut requests = std::collections::BTreeSet::new();

@@ -11,6 +11,7 @@ pub mod instance;
 mod instance_lifecycle;
 mod interactive;
 mod local;
+mod local_model_only;
 mod local_package;
 mod local_split;
 mod model_lifecycle;
@@ -48,16 +49,17 @@ pub(crate) use self::instance_lifecycle::{
 };
 use self::interactive::InitialPromptMode;
 use self::local::{
-    LocalRuntimeModelHandle, LocalRuntimeModelStartSpec, ManagedModelController,
-    OpenAiGuardrailPolicyHandle, RuntimeEvent, SplitCoordinatorAck, SplitCoordinatorEvent,
-    SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan, add_runtime_local_target,
-    add_serving_assignment, advertise_model_ready, local_process_payload,
+    LocalOpenAiModelStartSpec, LocalRuntimeModelHandle, LocalRuntimeModelStartSpec,
+    ManagedModelController, OpenAiGuardrailPolicyHandle, RuntimeEvent, SplitCoordinatorAck,
+    SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan,
+    add_runtime_local_target, add_serving_assignment, advertise_model_ready, local_process_payload,
     openai_guardrail_policy_handle, remove_runtime_local_target, remove_serving_assignment,
     resolved_model_name, runtime_model_planning_bytes, set_advertised_model_context,
     set_openai_guardrail_policy_mode, set_runtime_verified_served_model_capabilities,
-    start_runtime_local_model, start_runtime_split_model, startup_runtime_plan,
-    stop_split_generation_cleanup, withdraw_advertised_model,
+    start_local_openai_model, start_runtime_local_model, start_runtime_split_model,
+    startup_runtime_plan, stop_split_generation_cleanup, withdraw_advertised_model,
 };
+use self::local_model_only::*;
 pub(crate) use self::model_reconciliation::{
     DesiredRuntimeIntent, IntentPersistence, IntentSource, ModelIntent,
     ModelTargetReconciliationAction, ModelTargetReconciliationCandidate,
