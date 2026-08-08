@@ -87,7 +87,7 @@ fn single_prefill_sample_requires_prompt_to_fit_session_batch() {
 }
 
 #[test]
-fn local_generation_commits_advance_before_the_next_proposal_boundary() {
+fn local_generation_commit_helper_preserves_ordered_counts() {
     let sink = Arc::new(RecordingReceiptSink::default());
     let config = GenerationReceiptConfig::new(sink.clone());
     let mut generated_token_count = 0;
@@ -95,7 +95,6 @@ fn local_generation_commits_advance_before_the_next_proposal_boundary() {
     commit_local_generation_token(Some(&config), 11, 22, &mut generated_token_count, 33);
     commit_local_generation_token(Some(&config), 11, 22, &mut generated_token_count, 44);
 
-    wait_for_commits(&sink, 2);
     let commits = sink.commits.lock().unwrap();
     assert_eq!(commits.len(), 2);
     assert_eq!(commits[0].request_id, 11);

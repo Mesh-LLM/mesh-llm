@@ -42,7 +42,7 @@ pub(super) fn commit_local_generation_token(
         return;
     };
     *generated_token_count = generated_token_count.saturating_add(1);
-    config.committed(GenerationCommit {
+    config.committed_before_proposal(GenerationCommit {
         request_id,
         session_id,
         generated_token_count: *generated_token_count,

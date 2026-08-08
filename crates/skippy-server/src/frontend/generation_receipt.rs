@@ -161,29 +161,56 @@ impl GenerationLifecycleObservation {
 pub trait GenerationLifecycleIngress: Send + Sync {
     fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()>;
 
+    /// Submits an observation and waits until it has been delivered. Direct
+    /// ingresses can use their ordered submission path; queued adapters
+    /// override this to avoid dropping a commit when their queue is full.
+    fn submit_ordered(&self, observation: GenerationLifecycleObservation) -> Result<()> {
+        self.try_submit(observation)?;
+        self.flush()
+    }
+
+    /// Waits until all observations submitted before this call have been
+    /// delivered. Direct ingresses are already ordered at submission time;
+    /// queued adapters override this to provide an explicit boundary.
+    fn flush(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Asynchronous delivery failures observed after a successful submission.
     fn delivery_failures(&self) -> u64 {
         0
     }
 }
 
+enum QueuedGenerationLifecycleMessage {
+    Observation(GenerationLifecycleObservation),
+    Barrier(SyncSender<Result<()>>),
+}
+
 struct QueuedGenerationReceiptSink {
-    sender: SyncSender<GenerationLifecycleObservation>,
+    sender: SyncSender<QueuedGenerationLifecycleMessage>,
     delivery_failures: Arc<AtomicU64>,
 }
 
 impl QueuedGenerationReceiptSink {
     fn new(sink: Arc<dyn GenerationReceiptSink>) -> Self {
         let (sender, receiver) =
-            sync_channel::<GenerationLifecycleObservation>(GENERATION_RECEIPT_QUEUE_CAPACITY);
+            sync_channel::<QueuedGenerationLifecycleMessage>(GENERATION_RECEIPT_QUEUE_CAPACITY);
         let delivery_failures = Arc::new(AtomicU64::new(0));
         let worker_delivery_failures = Arc::clone(&delivery_failures);
         std::thread::Builder::new()
             .name("skippy-generation-receipts".into())
             .spawn(move || {
-                while let Ok(observation) = receiver.recv() {
-                    if observation.deliver_to(sink.as_ref()).is_err() {
-                        worker_delivery_failures.fetch_add(1, Ordering::Relaxed);
+                while let Ok(message) = receiver.recv() {
+                    match message {
+                        QueuedGenerationLifecycleMessage::Observation(observation) => {
+                            if observation.deliver_to(sink.as_ref()).is_err() {
+                                worker_delivery_failures.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        QueuedGenerationLifecycleMessage::Barrier(completion) => {
+                            let _ = completion.send(Ok(()));
+                        }
                     }
                 }
             })
@@ -198,7 +225,7 @@ impl QueuedGenerationReceiptSink {
 impl GenerationLifecycleIngress for QueuedGenerationReceiptSink {
     fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()> {
         self.sender
-            .try_send(observation)
+            .try_send(QueuedGenerationLifecycleMessage::Observation(observation))
             .map_err(|error| match error {
                 TrySendError::Full(_) => anyhow::anyhow!("generation lifecycle queue is full"),
                 TrySendError::Disconnected(_) => {
@@ -209,6 +236,23 @@ impl GenerationLifecycleIngress for QueuedGenerationReceiptSink {
 
     fn delivery_failures(&self) -> u64 {
         self.delivery_failures.load(Ordering::Relaxed)
+    }
+
+    fn flush(&self) -> Result<()> {
+        let (completion, completed) = sync_channel(0);
+        self.sender
+            .send(QueuedGenerationLifecycleMessage::Barrier(completion))
+            .map_err(|_| anyhow::anyhow!("generation lifecycle delivery worker is unavailable"))?;
+        completed
+            .recv()
+            .map_err(|_| anyhow::anyhow!("generation lifecycle delivery worker is unavailable"))?
+    }
+
+    fn submit_ordered(&self, observation: GenerationLifecycleObservation) -> Result<()> {
+        self.sender
+            .send(QueuedGenerationLifecycleMessage::Observation(observation))
+            .map_err(|_| anyhow::anyhow!("generation lifecycle delivery worker is unavailable"))?;
+        self.flush()
     }
 }
 
@@ -282,6 +326,19 @@ impl GenerationReceiptConfig {
 
     pub(crate) fn committed(&self, commit: GenerationCommit) {
         self.enqueue(GenerationLifecycleObservation::Committed(commit));
+    }
+
+    /// Commits a token and waits until the lifecycle ingress has delivered it.
+    /// Local generation uses this before the next proposal lookup so consumers
+    /// cannot observe a stale canonical position.
+    pub(crate) fn committed_before_proposal(&self, commit: GenerationCommit) {
+        if self
+            .ingress
+            .submit_ordered(GenerationLifecycleObservation::Committed(commit))
+            .is_err()
+        {
+            self.submission_failures.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     pub(crate) fn abort(&self, abort: GenerationAbort) {
