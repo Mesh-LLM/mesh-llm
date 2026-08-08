@@ -149,6 +149,9 @@ to an OTLP record.
 | `mesh_llm.guardrail.attempt_bucket` | guardrail outcome | Bounded retry bucket: `1`, `2`, or `3_plus`. |
 | `llama_stage.verify_window.direct_return_upstream_opened` | Skippy decode summary | Boolean indicating that the preferred upstream-opened v10 prediction-return sink completed its handshake. |
 | `llama_stage.verify_window.direct_return_reverse_fallback` | Skippy decode summary | Boolean indicating that the final stage used the bounded reverse-open v10 prediction-return fallback after the preferred sink was unavailable. |
+| `llama_stage.linear_proposal.source_queue_wait_us` | Skippy linear proposal source | Queue wait in microseconds; contains no request, session, token, or plugin identity. |
+| `llama_stage.linear_proposal.source_callback_us` | Skippy linear proposal source | Plugin callback duration in microseconds; contains no request, session, token, or plugin identity. |
+| `llama_stage.linear_proposal.source_outcome` | Skippy linear proposal source | Bounded outcome enum: `ready`, `abstained`, `host_deadline_exceeded`, `queue_full`, `deadline_exceeded_before_dispatch`, `deadline_exceeded_in_plugin`, `candidate_returned_too_late`, or `source_error`. Ready/abstained events use token-debug sampling; deadline, pressure, late-candidate, and source-error outcomes are emitted unconditionally. |
 
 ## Review Checklist
 

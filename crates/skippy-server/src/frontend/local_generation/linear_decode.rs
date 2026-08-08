@@ -4,13 +4,13 @@ use std::time::Duration;
 use openai_frontend::{OpenAiError, OpenAiResult};
 use serde_json::json;
 
-use crate::frontend::LinearProposalDisposition;
 use crate::frontend::generation::{LocalGeneration, StageOpenAiBackend, TokenControl};
 use crate::frontend::linear_proposal::{
     LinearProposalDiscardReason, LinearProposalExecutionParams, LinearProposalQueryOutcome,
     LinearProposalQueryParams, execute_linear_proposal_with_terminal_discard,
     query_linear_proposal, report_linear_proposal_receipt,
 };
+use crate::frontend::{LinearProposalDisposition, LinearProposalSourceTelemetry};
 
 use super::token_generation::{DecodeState, LinearProposalProgress};
 
@@ -65,10 +65,21 @@ impl StageOpenAiBackend {
                 runtime_max_proposal_tokens: state.linear_proposal_max_tokens,
             },
         )? {
-            LinearProposalQueryOutcome::NoProposal => None,
+            LinearProposalQueryOutcome::NoProposal { source_telemetry } => {
+                self.emit_linear_proposal_source_telemetry(
+                    source_telemetry,
+                    state.emit_token_debug,
+                );
+                None
+            }
             LinearProposalQueryOutcome::DeadlineExceeded {
                 proposal_elapsed_us,
+                source_telemetry,
             } => {
+                self.emit_linear_proposal_source_telemetry(
+                    source_telemetry,
+                    state.emit_token_debug,
+                );
                 let mut attrs = BTreeMap::new();
                 attrs.insert(
                     "llama_stage.linear_proposal.discard_reason".to_string(),
@@ -82,7 +93,13 @@ impl StageOpenAiBackend {
                     .emit("stage.openai_linear_proposal_late", attrs);
                 None
             }
-            LinearProposalQueryOutcome::Ready(queried) => Some(queried),
+            LinearProposalQueryOutcome::Ready(queried) => {
+                self.emit_linear_proposal_source_telemetry(
+                    queried.source_telemetry,
+                    state.emit_token_debug,
+                );
+                Some(queried)
+            }
         };
         if request
             .cancellation
@@ -174,6 +191,32 @@ impl StageOpenAiBackend {
             Ok(LinearProposalProgress::Stop)
         } else {
             Ok(LinearProposalProgress::Continue)
+        }
+    }
+
+    fn emit_linear_proposal_source_telemetry(
+        &self,
+        source_telemetry: Option<LinearProposalSourceTelemetry>,
+        emit_token_debug: bool,
+    ) {
+        let Some(source_telemetry) = source_telemetry else {
+            return;
+        };
+        let mut attrs = BTreeMap::new();
+        source_telemetry.insert_telemetry_attrs(&mut attrs);
+        match source_telemetry.outcome {
+            crate::frontend::LinearProposalSourceOutcome::Ready
+            | crate::frontend::LinearProposalSourceOutcome::Abstained
+                if emit_token_debug =>
+            {
+                self.telemetry
+                    .emit_debug("stage.openai_linear_proposal_source", attrs);
+            }
+            crate::frontend::LinearProposalSourceOutcome::Ready
+            | crate::frontend::LinearProposalSourceOutcome::Abstained => {}
+            _ => self
+                .telemetry
+                .emit("stage.openai_linear_proposal_source", attrs),
         }
     }
 }
