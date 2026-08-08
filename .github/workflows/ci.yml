@@ -1019,8 +1019,8 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
     env:
       LLAMA_STAGE_BACKEND: cuda
-      LLAMA_STAGE_CUDA_ARCHITECTURES: "75;80;86;87;89;90"
-      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-cuda-sm75_80_86_87_89_90
+      LLAMA_STAGE_CUDA_ARCHITECTURES: "61;75;80;86;87;89;90"
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-cuda-sm61_75_80_86_87_89_90
       MESH_CUDA_VERSION: "12.9.2"
       MESH_LLM_CUDA_TOOLKIT_MAJOR: "12"
       # CI containers have no GPU driver (libcuda.so.1). Disable VMM and NCCL
