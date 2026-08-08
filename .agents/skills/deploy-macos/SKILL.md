@@ -73,7 +73,7 @@ SIGKILL the binary on launch (exit 137). After every scp:
 
 ```bash
 codesign -s - ~/bin/mesh-llm
-xattr -cr ~/bin/
+xattr -cr ~/bin/mesh-llm
 ```
 
 Verify: `xattr ~/bin/mesh-llm` should print nothing. Note codesign changes the
@@ -147,8 +147,8 @@ instead of `auto`.
 
 ```bash
 mesh-llm stop        # scoped stop of tracked instances (preferred)
-# emergency only:
-pkill -9 -f mesh-llm
+# emergency only: use the PID for the specific instance being validated
+kill -9 <mesh-llm-pid>
 ```
 
 A clean stop removes the instance runtime dir under `~/.mesh-llm/runtime/`.

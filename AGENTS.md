@@ -222,8 +222,8 @@ Other top-level directories:
 - `docs/skippy/` — Skippy family certification, configuration, benchmarks, parity.
 - `docs/plugins/` — Plugin architecture docs and plans.
 - `docs/specs/` — Focused behavior specs for individual features.
-- `.skills/` — Repo agent skills (per-platform deploy, mesh-join, connect-agents); auto-picked-up by agents.
-- `.agents/skills/` — Maintainer-facing agent skills (skippy internals, patch queues, benchmarks).
+- `.agents/agents/release-validation.md` — Canonical Markdown definition for the selectable release-validation specialist; it uses the canonical release-validation skill in `.agents/skills/`.
+- `.agents/skills/` — Canonical repo-local agent skills, including per-platform deploy, mesh operations, release validation, Skippy internals, patch queues, and benchmarks.
 - `sdk/` — SDK packaging for Node, Swift, Kotlin.
 - `fly/` — Fly.io deployment (console + API client apps).
 - `tools/relay-fly-legacy/` — Archived self-hosted iroh relay reference; production uses services.iroh.computer.
@@ -544,8 +544,9 @@ just bundle    # /tmp/mesh-llm-bundle.tar.gz — single mesh-llm binary
 # scp bundle to remote, tar xzf, then on macOS: codesign -s - mesh-llm && xattr -cr <dir>
 ```
 
-For the full per-platform deploy flows, see the repo skills `.skills/deploy-macos/`,
-`.skills/deploy-linux-gpu/`, and `.skills/deploy-windows/`.
+For the full per-platform deploy flows, see the repo skills
+`.agents/skills/deploy-macos/`, `.agents/skills/deploy-linux-gpu/`, and
+`.agents/skills/deploy-windows/`.
 
 ### Cleanup
 
