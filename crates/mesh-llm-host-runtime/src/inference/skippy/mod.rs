@@ -55,6 +55,7 @@ pub use materialization::{
     prune_unpinned_materialized_stages, remove_materialized_stages_for_sources,
     resolve_hf_package_to_local,
 };
+pub(crate) use package::direct_gguf_source_paths;
 pub use package::{
     SkippyPackageIdentity, identity_from_layer_package, synthetic_direct_gguf_package,
 };

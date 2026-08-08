@@ -172,10 +172,7 @@ fn synthetic_manifest_sha256(input: SyntheticManifestInput<'_>) -> Result<String
     Ok(hex_lower(&Sha256::digest(bytes)))
 }
 
-fn direct_gguf_source_files(
-    model_path: &Path,
-    digest_cache: Option<&SidecarDigestCache>,
-) -> Result<Vec<SkippyPackageSourceFile>> {
+pub(crate) fn direct_gguf_source_paths(model_path: &Path) -> Result<Vec<PathBuf>> {
     let canonical = model_path
         .canonicalize()
         .with_context(|| format!("canonicalize GGUF path {}", model_path.display()))?;
@@ -183,8 +180,7 @@ fn direct_gguf_source_files(
         anyhow::bail!("GGUF path has no UTF-8 filename: {}", canonical.display());
     };
     let Some(shard) = model_ref::split_gguf_shard_info(file_name) else {
-        let file = source_file(&canonical, digest_cache)?;
-        return Ok(vec![file]);
+        return Ok(vec![canonical]);
     };
     anyhow::ensure!(
         shard.part == "00001",
@@ -206,7 +202,7 @@ fn direct_gguf_source_files(
     for index in 1..=total {
         let shard_name = format!("{}-{index:05}-of-{:05}.gguf", shard.prefix, total);
         let path = parent.join(shard_name);
-        files.push(source_file(&path, digest_cache).with_context(|| {
+        files.push(path.canonicalize().with_context(|| {
             format!(
                 "read split GGUF shard {index}/{total} for {}",
                 canonical.display()
@@ -214,6 +210,16 @@ fn direct_gguf_source_files(
         })?);
     }
     Ok(files)
+}
+
+fn direct_gguf_source_files(
+    model_path: &Path,
+    digest_cache: Option<&SidecarDigestCache>,
+) -> Result<Vec<SkippyPackageSourceFile>> {
+    direct_gguf_source_paths(model_path)?
+        .into_iter()
+        .map(|path| source_file(&path, digest_cache))
+        .collect()
 }
 
 fn source_file(
