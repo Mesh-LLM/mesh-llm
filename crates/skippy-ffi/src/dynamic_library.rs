@@ -16,10 +16,28 @@ fn format_load_error(path: &Path, error: &libloading::Error) -> String {
             os_error,
         ),
         None => format!(
-            "failed to load native runtime library {}: {} (OS error 0)",
+            "failed to load native runtime library {}: {} (OS error {})",
             path.display(),
             error,
+            source_less_os_error_label(error),
         ),
+    }
+}
+
+fn source_less_os_error_label(error: &libloading::Error) -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        if matches!(error, libloading::Error::LoadLibraryExWUnknown) {
+            "0"
+        } else {
+            "unavailable"
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = error;
+        "unavailable"
     }
 }
 
@@ -51,13 +69,41 @@ mod tests {
     #[test]
     fn load_error_includes_library_path_and_os_error() {
         let path = Path::new("mesh-llm-missing-native-runtime.dll");
-        let error = match unsafe { Library::new(path) } {
+        let expected_error = match unsafe { Library::new(path) } {
             Ok(_) => panic!("unexpectedly loaded missing test library"),
             Err(error) => error,
         };
 
-        let message = format_load_error(path, &error);
+        let message =
+            unsafe { super::load(path) }.expect_err("unexpectedly loaded missing test library");
         assert!(message.contains(path.to_string_lossy().as_ref()));
         assert!(message.contains("OS error"));
+        assert!(message.contains(&expected_error.to_string()));
+
+        if let Some(os_error) = std::error::Error::source(&expected_error)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            && let Some(code) = os_error.raw_os_error()
+        {
+            assert!(message.contains(&format!("OS error {code}")));
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn source_less_non_windows_errors_report_unavailable_os_error() {
+        let path = Path::new("mesh-llm-missing-native-runtime.dll");
+        let message = format_load_error(path, &libloading::Error::DlOpenUnknown);
+
+        assert!(message.contains("OS error unavailable"));
+        assert!(!message.contains("OS error 0"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn unknown_windows_errors_report_os_error_zero() {
+        let path = Path::new("mesh-llm-missing-native-runtime.dll");
+        let message = format_load_error(path, &libloading::Error::LoadLibraryExWUnknown);
+
+        assert!(message.contains("OS error 0"));
     }
 }
