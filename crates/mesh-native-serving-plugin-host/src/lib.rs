@@ -469,13 +469,35 @@ impl ActivePlugin {
         if !query.pending_token_ids.is_empty() {
             let generated_token_count = query
                 .committed_token_count
-                .saturating_sub(query.prompt_token_count);
-            self.commit_tokens(
-                query.request_id,
-                query.session_id,
-                generated_token_count,
-                &query.pending_token_ids,
-            )?;
+                .checked_sub(query.prompt_token_count)
+                .context(
+                    "native serving plugin proposal committed token count precedes prompt token count",
+                )?;
+            let key = (query.request_id, query.session_id);
+            let tracked_generated_token_count = self
+                .committed_generated_tokens
+                .lock()
+                .map_err(|_| anyhow!("native serving plugin commit state lock poisoned"))?
+                .get(&key)
+                .copied()
+                .context("native serving plugin proposal has no active generation state")?;
+            if generated_token_count < tracked_generated_token_count {
+                bail!("native serving plugin proposal rewound the tracked generated-token prefix");
+            }
+            if generated_token_count > tracked_generated_token_count {
+                let delta = generated_token_count - tracked_generated_token_count;
+                if delta != query.pending_token_ids.len() {
+                    bail!(
+                        "native serving plugin proposal pending-token count does not match the uncommitted suffix"
+                    );
+                }
+                self.commit_tokens(
+                    query.request_id,
+                    query.session_id,
+                    generated_token_count,
+                    &query.pending_token_ids,
+                )?;
+            }
         }
         let event = abi::ProposalQuery {
             struct_size: size_of::<abi::ProposalQuery>(),
@@ -894,5 +916,130 @@ mod tests {
                 .to_string()
                 .contains("table size")
         );
+    }
+
+    #[test]
+    fn proposal_does_not_recommit_tokens_already_delivered_by_lifecycle() {
+        let (active, events) = test_support::fake_active_with_events(Duration::ZERO);
+        active
+            .begin(&GenerationStart {
+                request_id: 1,
+                session_id: 2,
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([3]),
+            })
+            .unwrap();
+        active
+            .committed(&GenerationCommit {
+                request_id: 1,
+                session_id: 2,
+                generated_token_count: 1,
+                token_ids: vec![4].into_boxed_slice(),
+            })
+            .unwrap();
+
+        let result = active
+            .propose(
+                LinearProposalQuery::new(
+                    1,
+                    2,
+                    1,
+                    2,
+                    1,
+                    8,
+                    Instant::now() + Duration::from_millis(100),
+                )
+                .with_pending_token_ids(vec![4].into_boxed_slice()),
+            )
+            .unwrap();
+
+        assert!(result.is_none());
+        assert_eq!(*events.lock().unwrap(), ["begin", "commit", "proposal"]);
+    }
+
+    #[test]
+    fn proposal_rejects_missing_generation_state() {
+        let (active, _) = test_support::fake_active_with_events(Duration::ZERO);
+        let error = active
+            .propose(
+                LinearProposalQuery::new(
+                    1,
+                    2,
+                    1,
+                    2,
+                    1,
+                    8,
+                    Instant::now() + Duration::from_millis(100),
+                )
+                .with_pending_token_ids(vec![4].into_boxed_slice()),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("no active generation state"));
+    }
+
+    #[test]
+    fn proposal_rejects_a_rewound_generation_prefix() {
+        let (active, _) = test_support::fake_active_with_events(Duration::ZERO);
+        active
+            .begin(&GenerationStart {
+                request_id: 1,
+                session_id: 2,
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([3]),
+            })
+            .unwrap();
+        active
+            .committed(&GenerationCommit {
+                request_id: 1,
+                session_id: 2,
+                generated_token_count: 2,
+                token_ids: vec![4, 5].into_boxed_slice(),
+            })
+            .unwrap();
+
+        let error = active
+            .propose(
+                LinearProposalQuery::new(
+                    1,
+                    2,
+                    1,
+                    2,
+                    1,
+                    8,
+                    Instant::now() + Duration::from_millis(100),
+                )
+                .with_pending_token_ids(vec![4].into_boxed_slice()),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("rewound"));
+    }
+
+    #[test]
+    fn proposal_rejects_an_inconsistent_pending_suffix() {
+        let (active, _) = test_support::fake_active_with_events(Duration::ZERO);
+        active
+            .begin(&GenerationStart {
+                request_id: 1,
+                session_id: 2,
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([3]),
+            })
+            .unwrap();
+
+        let error = active
+            .propose(
+                LinearProposalQuery::new(
+                    1,
+                    2,
+                    1,
+                    3,
+                    1,
+                    8,
+                    Instant::now() + Duration::from_millis(100),
+                )
+                .with_pending_token_ids(vec![4].into_boxed_slice()),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("pending-token count"));
     }
 }
