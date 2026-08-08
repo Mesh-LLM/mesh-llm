@@ -24,10 +24,11 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 // plugin as falsely idle before its next probe ever arrives. 4x the health
 // interval plus a fixed floor covers a slow/jittery tick without staying
 // pinned to an arbitrarily large value.
-const PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT: Duration = Duration::from_secs(
-    (super::health::HEALTH_CHECK_INTERVAL_SECS * 4) + 30,
-);
+const PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT: Duration =
+    Duration::from_secs((super::health::HEALTH_CHECK_INTERVAL_SECS * 4) + 30);
 const PLUGIN_ENVELOPE_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const PLUGIN_ENVELOPE_TEST_READ_TIMEOUT: Duration = Duration::from_secs(1);
 const PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT: Duration =
     Duration::from_secs(super::REQUEST_TIMEOUT_SECS);
 
@@ -423,28 +424,38 @@ pub(crate) async fn read_envelope_from_reader<R>(stream: &mut R) -> Result<super
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    read_envelope_from_reader_with_timeouts(
+        stream,
+        PLUGIN_ENVELOPE_TEST_READ_TIMEOUT,
+        PLUGIN_ENVELOPE_TEST_READ_TIMEOUT,
+    )
+    .await
+}
+
+#[cfg(test)]
+async fn read_envelope_from_reader_with_timeouts<R>(
+    stream: &mut R,
+    prefix_timeout: Duration,
+    body_timeout: Duration,
+) -> Result<super::proto::Envelope>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
     let mut len_buf = [0u8; 4];
     tokio::time::timeout(
-        PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT,
+        prefix_timeout,
         AsyncReadExt::read_exact(stream, &mut len_buf),
     )
     .await
-    .map_err(|_| {
-        anyhow!("timeout reading plugin frame prefix after {PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT:?}")
-    })??;
+    .map_err(|_| anyhow!("timeout reading plugin frame prefix after {prefix_timeout:?}"))??;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > 16 * 1024 * 1024 {
         bail!("Plugin frame too large");
     }
     let mut body = vec![0u8; len];
-    tokio::time::timeout(
-        PLUGIN_ENVELOPE_BODY_READ_TIMEOUT,
-        AsyncReadExt::read_exact(stream, &mut body),
-    )
-    .await
-    .map_err(|_| {
-        anyhow!("timeout reading plugin frame body after {PLUGIN_ENVELOPE_BODY_READ_TIMEOUT:?}")
-    })??;
+    tokio::time::timeout(body_timeout, AsyncReadExt::read_exact(stream, &mut body))
+        .await
+        .map_err(|_| anyhow!("timeout reading plugin frame body after {body_timeout:?}"))??;
     Ok(prost::Message::decode(body.as_slice())?)
 }
 

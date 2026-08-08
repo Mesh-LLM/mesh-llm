@@ -1,4 +1,5 @@
 use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
+use super::plugin_host_role;
 use super::startup_identity::{emit_private_mesh_name_warning, handle_public_identity_transition};
 use super::status::mesh_guardrail_mode_to_openai;
 use super::{
@@ -1167,82 +1168,6 @@ pub(super) struct RunAutoContext {
         Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 }
 
-const PLUGIN_HOST_ROLE_WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Promotes this node to `NodeRole::Host` whenever a loaded plugin is
-/// advertising at least one inference model, and demotes it back to
-/// `Worker` when that stops being true.
-///
-/// `NodeRole::Host { http_port }` is required for any *other* peer's
-/// `hosts_for_model()` to consider this node as a route candidate at all
-/// (`mesh/peer_state.rs`) — but it's otherwise only ever set once, as a
-/// side effect of a local model finishing load (`startup_handles.rs`). A
-/// node whose only inference capacity comes from a plugin (no local model
-/// ever loads) would otherwise never become `Host`, so it would be
-/// filtered out of every peer's routing consideration regardless of what
-/// its gossip payload advertises — gossip already correctly includes
-/// plugin-provided models (`mesh/gossip.rs`'s `plugin_inference_models`),
-/// so this was purely a role-eligibility gap, not a discovery gap.
-///
-/// Only promotes/demotes a role this watcher itself set (tracked via
-/// `plugin_promoted_role`, not the node's live role) — it never touches a
-/// `Host` role a local model is responsible for. A node running both a
-/// local model and a plugin isn't exercised by this watcher; a caller
-/// mixing both would need real "why is this node Host" tracking instead
-/// of this single-writer assumption.
-///
-/// `inference_models()` reads the plugin manager's already-debounced
-/// health state (see `plugin::health`'s startup-grace/failure-threshold
-/// logic) rather than probing anything itself, so polling it on a short
-/// interval doesn't introduce new flapping risk.
-fn spawn_plugin_host_role_watcher(node: mesh::Node, plugin_manager: plugin::PluginManager, http_port: u16) {
-    tokio::spawn(async move {
-        let mut plugin_promoted_role = false;
-        loop {
-            tokio::time::sleep(PLUGIN_HOST_ROLE_WATCH_INTERVAL).await;
-            let has_plugin_models = match plugin_manager.inference_models().await {
-                Ok(models) => !models.is_empty(),
-                Err(error) => {
-                    // A read failure isn't the same as "no models" — treating
-                    // it as such would demote a healthy Host role (or block
-                    // a legitimate promotion) on what's likely a transient
-                    // hiccup. Skip this tick; the next one re-evaluates from
-                    // scratch.
-                    tracing::warn!(
-                        %error,
-                        "plugin host-role watcher: failed to read plugin inference models, skipping this tick"
-                    );
-                    continue;
-                }
-            };
-            if has_plugin_models && !plugin_promoted_role {
-                if node.role().await == NodeRole::Worker {
-                    node.set_role(NodeRole::Host { http_port }).await;
-                    plugin_promoted_role = true;
-                }
-            } else if !has_plugin_models && plugin_promoted_role {
-                // `http_port` is identical whether a local model or a
-                // plugin is the reason this node is `Host` (both derive it
-                // from the same `api_port`), so the role value alone can't
-                // tell the two apart. If a local model has since started
-                // being served, it may now be the one relying on `Host`
-                // status — don't pull the role out from under it just
-                // because this watcher's own earlier promotion is now
-                // stale. `plugin_promoted_role` still resets either way:
-                // whatever happens, an "I own this promotion" claim from
-                // when plugin models were present is no longer accurate
-                // once they're gone.
-                let role_is_still_ours = node.role().await == (NodeRole::Host { http_port })
-                    && node.models_being_served().await.is_empty();
-                if role_is_still_ours {
-                    node.set_role(NodeRole::Worker).await;
-                }
-                plugin_promoted_role = false;
-            }
-        }
-    });
-}
-
 #[expect(
     clippy::cognitive_complexity,
     reason = "run_auto is the top-level runtime orchestration path and preserves startup/shutdown ordering"
@@ -1333,7 +1258,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     // for the other half — whether peers actually route here.
     tunnel_mgr.set_http_port(api_port);
     if !is_client {
-        spawn_plugin_host_role_watcher(node.clone(), plugin_manager.clone(), api_port);
+        plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
     }
 
     // Election publishes per-model targets

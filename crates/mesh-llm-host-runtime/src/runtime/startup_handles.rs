@@ -18,7 +18,7 @@ use super::{
 };
 use crate::api;
 use crate::inference::{election, skippy};
-use crate::mesh::{self, NodeRole};
+use crate::mesh;
 use crate::network::tunnel;
 use crate::plugin;
 use crate::runtime::interactive;
@@ -951,6 +951,9 @@ pub(super) async fn startup_shutdown_local_model_loop(
         task.abort();
         let _ = task.await;
     }
+    ctx.node
+        .release_host_role(mesh::HostRoleClaim::LocalModel)
+        .await;
     if !state.survey_exited_unexpectedly {
         ctx.survey_telemetry
             .record_unload(&state.survey_loaded_model);
@@ -1517,9 +1520,7 @@ pub(super) async fn startup_publish_loaded_runtime(
 ) {
     let payload = startup_register_loaded_runtime(ctx, loaded_name, handle).await;
     ctx.node
-        .set_role(NodeRole::Host {
-            http_port: ctx.api_port,
-        })
+        .claim_host_role(mesh::HostRoleClaim::LocalModel, ctx.api_port)
         .await;
     refresh_dashboard_context_usage(ctx.dashboard_context_usage, loaded_name, handle).await;
     publish_runtime_llama_slots(

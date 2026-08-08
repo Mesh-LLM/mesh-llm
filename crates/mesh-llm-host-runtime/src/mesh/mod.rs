@@ -133,6 +133,7 @@ pub use identity_persistence::{
     load_node_key_from_path, mark_was_public, save_last_mesh_id, save_node_key_to_path,
     was_previously_public,
 };
+pub(crate) use node::{HostRoleClaim, PeerDownReport, peer_down_endpoint_id};
 #[expect(
     unused_imports,
     reason = "public compatibility re-export for existing mesh node callers"
@@ -140,7 +141,6 @@ pub use identity_persistence::{
 pub use node::{
     LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_vram_bytes_capped,
 };
-pub(crate) use node::{PeerDownReport, peer_down_endpoint_id};
 pub(crate) use peer_state::{
     ControlListenerLifecycle, DEAD_PEER_TTL, MeshState, PEER_DOWN_REPORTER_COOLDOWN_SECS,
     PEER_STALE_SECS, resolve_peer_leaving,

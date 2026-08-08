@@ -11,7 +11,7 @@ use crate::plugin;
 use crate::proto::node::{GossipFrame, NodeRole, PeerAnnouncement, RouteTableRequest};
 use serial_test::serial;
 use skippy_protocol::proto::stage as skippy_stage_proto;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use tokio::sync::{mpsc, watch};
 
 mod direct_path;
@@ -418,6 +418,7 @@ async fn make_test_node_with_requirements(
             recent_mesh_rejections: VecDeque::new(),
         })),
         role: Arc::new(Mutex::new(role)),
+        host_role_claims: Arc::new(Mutex::new(BTreeMap::new())),
         models: Arc::new(Mutex::new(Vec::new())),
         model_source: Arc::new(Mutex::new(None)),
         serving_models: Arc::new(Mutex::new(Vec::new())),
