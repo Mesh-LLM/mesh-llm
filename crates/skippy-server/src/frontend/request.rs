@@ -291,6 +291,12 @@ pub(super) fn chat_template_options(
             .enable_thinking
             .or_else(|| default_reasoning_enabled(defaults.reasoning_enabled))
             .or_else(|| default_reasoning_budget_enabled(defaults.reasoning_budget)),
+        chat_template_kwargs: (!reasoning.chat_template_kwargs.is_empty())
+            .then(|| serde_json::to_string(&reasoning.chat_template_kwargs))
+            .transpose()
+            .map_err(|error| {
+                OpenAiError::backend(format!("serialize chat template kwargs: {error}"))
+            })?,
         ..ChatTemplateOptions::default()
     })
 }

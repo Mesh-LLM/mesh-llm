@@ -170,6 +170,29 @@ mod tests {
     }
 
     #[test]
+    fn chat_template_kwargs_are_accepted_by_native_renderer_when_model_is_configured()
+    -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping chat kwargs smoke: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        let model = open_correctness_model(&model_path)?;
+        let rendered = model.apply_chat_template_json(
+            r#"[{"role":"user","content":"Say hi."}]"#,
+            ChatTemplateJsonOptions {
+                chat_template_kwargs: Some(
+                    r#"{"reasoning_effort":"max","mesh_test_mode":7}"#.to_string(),
+                ),
+                ..ChatTemplateJsonOptions::default()
+            },
+        )?;
+
+        assert!(!rendered.prompt.is_empty());
+        assert!(!rendered.metadata_json.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn format_skippy_error_omits_abi_envelope() {
         let err = format_skippy_error(Status::RuntimeError, "something broke");
         assert!(

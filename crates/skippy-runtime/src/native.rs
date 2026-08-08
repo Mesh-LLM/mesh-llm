@@ -448,6 +448,7 @@ impl StageModel {
                 add_assistant,
                 enable_thinking: None,
                 reasoning_format: None,
+                ..ChatTemplateOptions::default()
             },
         )
     }
@@ -560,6 +561,16 @@ impl StageModel {
             .as_ref()
             .map(|value| value.as_ptr())
             .unwrap_or(ptr::null());
+        let chat_template_kwargs = options
+            .chat_template_kwargs
+            .as_deref()
+            .map(CString::new)
+            .transpose()
+            .context("chat template kwargs contain an interior NUL byte")?;
+        let chat_template_kwargs_ptr = chat_template_kwargs
+            .as_ref()
+            .map(|value| value.as_ptr())
+            .unwrap_or(ptr::null());
 
         let mut prompt_bytes = 0usize;
         let mut metadata_bytes = 0usize;
@@ -575,6 +586,7 @@ impl StageModel {
                 options.enable_thinking.unwrap_or(true),
                 options.parallel_tool_calls,
                 reasoning_format_ptr,
+                chat_template_kwargs_ptr,
                 ptr::null_mut(),
                 0,
                 &mut prompt_bytes,
@@ -604,6 +616,7 @@ impl StageModel {
                 options.enable_thinking.unwrap_or(true),
                 options.parallel_tool_calls,
                 reasoning_format_ptr,
+                chat_template_kwargs_ptr,
                 prompt.as_mut_ptr().cast(),
                 prompt.len(),
                 &mut prompt_bytes,
