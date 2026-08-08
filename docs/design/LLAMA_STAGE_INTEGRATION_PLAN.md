@@ -14,8 +14,11 @@ The current native Skippy source is organized by capability. `include/skippy.h`
 is the umbrella API; independently compilable public C headers live under
 `include/skippy/`, while implementations and private C++ headers live under
 `src/skippy/`. New work extends the owning capability module instead of growing
-`src/skippy.cpp`. Source include paths are allowed to break, but exported binary
-ABI changes still require a version bump and synchronized Rust FFI constants.
+or recreating the retired `src/skippy.cpp`. The patch queue mirrors those
+functional boundaries directly; it must not defer source organization to a
+terminal refactor patch. Source include paths are allowed to break, but exported
+binary ABI changes still require a version bump and synchronized Rust FFI
+constants.
 
 ## Purpose
 
