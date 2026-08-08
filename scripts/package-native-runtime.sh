@@ -260,8 +260,23 @@ gpu_benchmark_tool_path() {
     fi
 }
 
+hip_offload_arch_args() {
+    local raw arch
+    local -a arches=()
+    raw="${LLAMA_STAGE_AMDGPU_TARGETS:-${SKIPPY_AMDGPU_TARGETS:-}}"
+    [[ -n "$raw" ]] || return 0
+
+    raw="${raw//;/ }"
+    raw="${raw//,/ }"
+    read -r -a arches <<< "$raw"
+    for arch in "${arches[@]}"; do
+        [[ -n "$arch" ]] && printf -- '--offload-arch=%s\n' "$arch"
+    done
+}
+
 build_gpu_benchmark_tool() {
-    local tool_rel tool_path source_root compiler
+    local tool_rel tool_path source_root compiler arch_arg
+    local -a hip_arch_args=()
     case "$BACKEND" in
         cuda|cuda-blackwell|rocm|hip|metal) ;;
         *) return 0 ;;
@@ -279,7 +294,11 @@ build_gpu_benchmark_tool() {
             ;;
         rocm|hip)
             compiler="${HIPCC:-hipcc}"
-            "$compiler" -O3 -std=c++17 "$source_root/hip/membench-fingerprint.hip" -o "$tool_path"
+            while IFS= read -r arch_arg; do
+                hip_arch_args+=("$arch_arg")
+            done < <(hip_offload_arch_args)
+            "$compiler" -O3 -std=c++17 "${hip_arch_args[@]}" \
+                "$source_root/hip/membench-fingerprint.hip" -o "$tool_path"
             ;;
         metal)
             compiler="${CC:-clang}"
