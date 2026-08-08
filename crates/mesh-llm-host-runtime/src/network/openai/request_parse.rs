@@ -5,6 +5,7 @@ use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+use super::forwarded_request::finalize_forwarded_request;
 use super::request_normalize::{
     ResponseAdapter, normalize_openai_compat_request, resolve_request_object_references,
 };
@@ -191,11 +192,11 @@ pub(super) async fn read_http_request_with_limits(
             .or(value.n_predict)
     });
     let raw = finalize_forwarded_request(
-        raw,
-        header_end,
+        &raw,
         parsed.expects_continue,
         Some(&rewrite.request_path),
         rewrite.rewritten_body.as_deref(),
+        &[],
     )?;
     let body_len_bytes = body.len();
     let body_bytes = if body.is_empty() { None } else { Some(body) };
@@ -352,55 +353,6 @@ fn body_limits_for_path(path: &str, default: HttpReadLimits) -> HttpReadLimits {
     } else {
         default
     }
-}
-
-fn finalize_forwarded_request(
-    mut raw: Vec<u8>,
-    header_end: usize,
-    strip_expect: bool,
-    rewritten_path: Option<&str>,
-    rewritten_body: Option<&[u8]>,
-) -> Result<Vec<u8>> {
-    let original_body = raw.split_off(header_end);
-    // Re-parse with httparse so we iterate over validated header structs.
-    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
-    let mut req = httparse::Request::new(&mut headers_buf);
-    let _ = req.parse(&raw).context("re-parse headers for forwarding")?;
-
-    let method = req.method.unwrap_or("GET");
-    let path = rewritten_path.unwrap_or_else(|| req.path.unwrap_or("/"));
-    let version = req.version.unwrap_or(1);
-
-    let mut rebuilt = format!("{method} {path} HTTP/1.{version}\r\n");
-
-    for header in req.headers.iter() {
-        let name = header.name;
-        if name.eq_ignore_ascii_case("connection") {
-            continue;
-        }
-        if strip_expect && name.eq_ignore_ascii_case("expect") {
-            continue;
-        }
-        if rewritten_body.is_some()
-            && (name.eq_ignore_ascii_case("content-length")
-                || name.eq_ignore_ascii_case("transfer-encoding"))
-        {
-            continue;
-        }
-        let value = std::str::from_utf8(header.value).unwrap_or("");
-        rebuilt.push_str(&format!("{name}: {value}\r\n"));
-    }
-    if let Some(body) = rewritten_body {
-        rebuilt.push_str(&format!("Content-Length: {}\r\n", body.len()));
-    }
-
-    // The proxy buffers exactly one request for routing, so force a single-request
-    // connection contract upstream instead of reusing the client connection blindly.
-    rebuilt.push_str("Connection: close\r\n\r\n");
-
-    let mut forwarded = rebuilt.into_bytes();
-    forwarded.extend_from_slice(rewritten_body.unwrap_or(&original_body));
-    Ok(forwarded)
 }
 
 /// Read from the stream until httparse can fully parse the request headers.
