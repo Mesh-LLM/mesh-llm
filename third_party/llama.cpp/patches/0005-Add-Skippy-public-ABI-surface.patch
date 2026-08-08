@@ -1,4 +1,4 @@
-From 6d984a90bca6b5e477a6f06af1397979dd0830b3 Mon Sep 17 00:00:00 2001
+From b812175da476014a7884b89b29dfc0a81d9ffd86 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 17:06:42 +1000
 Subject: [PATCH 05/12] Add Skippy public ABI surface
@@ -10,9 +10,9 @@ Subject: [PATCH 05/12] Add Skippy public ABI surface
  include/skippy/events.h        |  95 ++++++++++++++++++
  include/skippy/model_package.h |  87 +++++++++++++++++
  include/skippy/runtime.h       | 172 +++++++++++++++++++++++++++++++++
- src/skippy/abi.cpp             |  47 +++++++++
+ src/skippy/abi.cpp             |  48 +++++++++
  src/skippy/errors.h            |  44 +++++++++
- 8 files changed, 604 insertions(+)
+ 8 files changed, 605 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/common.h
  create mode 100644 include/skippy/devices.h
@@ -573,10 +573,10 @@ index 000000000..17fbd2a28
 +#endif // SKIPPY_RUNTIME_H
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
 new file mode 100644
-index 000000000..753379044
+index 000000000..0ec72958e
 --- /dev/null
 +++ b/src/skippy/abi.cpp
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,48 @@
 +#include "skippy/common.h"
 +
 +#include <cstdlib>
@@ -608,6 +608,8 @@ index 000000000..753379044
 +           SKIPPY_FEATURE_PACKAGE_PART_LOAD |
 +           SKIPPY_FEATURE_GENERATION_SIGNALS |
 +           SKIPPY_FEATURE_EXTERNAL_MEDIA_PREFILL |
++           SKIPPY_FEATURE_CHAT_TEMPLATE_TOOLS |
++           SKIPPY_FEATURE_CHAT_SAMPLING_GRAMMAR |
 +           SKIPPY_FEATURE_RUNTIME_EVENTS |
 +           SKIPPY_FEATURE_BACKEND_DEVICES |
 +           SKIPPY_FEATURE_NATIVE_MTP_N1 |
@@ -623,7 +625,6 @@ index 000000000..753379044
 +    std::free(const_cast<char *>(error->message));
 +    delete error;
 +}
-+
 diff --git a/src/skippy/errors.h b/src/skippy/errors.h
 new file mode 100644
 index 000000000..e3e7cb38d
