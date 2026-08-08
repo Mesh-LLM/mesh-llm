@@ -159,8 +159,32 @@ impl NativeRuntimeCache {
                     continue;
                 }
                 let runtime_dir = runtime_entry.path();
-                if !runtime_dir.join(NATIVE_RUNTIME_MANIFEST_FILE).exists() {
-                    continue;
+                let manifest_path = runtime_dir.join(NATIVE_RUNTIME_MANIFEST_FILE);
+                match fs::metadata(&manifest_path) {
+                    Ok(metadata) if metadata.is_file() => {}
+                    Ok(_) => {
+                        scan.skipped.push(SkippedNativeRuntime {
+                            path: runtime_dir,
+                            reason: format!("{NATIVE_RUNTIME_MANIFEST_FILE} is not a regular file"),
+                        });
+                        continue;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        scan.skipped.push(SkippedNativeRuntime {
+                            path: runtime_dir,
+                            reason: format!("{NATIVE_RUNTIME_MANIFEST_FILE} is missing"),
+                        });
+                        continue;
+                    }
+                    Err(error) => {
+                        scan.skipped.push(SkippedNativeRuntime {
+                            path: runtime_dir,
+                            reason: format!(
+                                "read {NATIVE_RUNTIME_MANIFEST_FILE} metadata: {error}"
+                            ),
+                        });
+                        continue;
+                    }
                 }
                 match installed_runtime_from_dir(&runtime_dir) {
                     Ok(Some(runtime)) => scan.runtimes.push(runtime),
@@ -471,6 +495,36 @@ mod tests {
         );
         // The strict scan still fails on the same cache; startup must not use it.
         assert!(cache.installed().is_err());
+    }
+
+    #[test]
+    fn installed_lenient_reports_runtime_dir_without_manifest_as_skipped() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        write_runtime(
+            &cache.runtime_dir("0.75.0", "meshllm-native-linux-x86_64-cpu"),
+            "0.75.0",
+            "meshllm-native-linux-x86_64-cpu",
+        );
+
+        let orphan = cache.runtime_dir("0.75.0", "meshllm-native-linux-x86_64-vulkan");
+        fs::create_dir_all(orphan.join("lib")).unwrap();
+        fs::write(orphan.join("lib/libmeshllm_ffi.so"), b"orphan runtime").unwrap();
+
+        let scan = cache.installed_lenient().unwrap();
+
+        assert_eq!(scan.runtimes.len(), 1);
+        assert_eq!(
+            scan.runtimes[0].native_runtime_id,
+            "meshllm-native-linux-x86_64-cpu"
+        );
+        assert_eq!(scan.skipped.len(), 1);
+        assert_eq!(scan.skipped[0].path, orphan);
+        assert!(
+            scan.skipped[0].reason.contains("missing"),
+            "unexpected skip reason: {}",
+            scan.skipped[0].reason
+        );
     }
 
     #[test]
