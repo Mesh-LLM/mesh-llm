@@ -29,6 +29,7 @@ pub enum CandidateRejection {
     CudaProfileMissing,
     CudaToolkitMajorMismatch { required: u32, installed: Vec<u32> },
     CudaToolkitMajorAboveDriver { required: u32, driver_max: u32 },
+    CudaToolkitNotDetected { required: u32 },
     CudaGpuArchUnsupported { supported: Vec<String> },
     RocmProfileMissing,
     RocmGpuArchUnsupported { supported: Vec<String> },
@@ -445,9 +446,17 @@ fn evaluate_cuda_toolkit_major(
         return;
     }
 
-    // No installed-toolkit evidence at all: fall back to the driver bound
-    // rather than rejecting every CUDA runtime on the host.
+    // Host-linked runtime with no detected toolkit: reject rather than guess.
+    //
+    // Accepting here would let a driver-only profile pick a runtime whose
+    // libraries cannot be resolved, which is exactly the failure this check
+    // exists to prevent. A wrong choice surfaces as a bare
+    // `libcudart.so.<major>: cannot open shared object file` at load; refusing
+    // instead keeps the reason visible and actionable. Hosts with a toolkit
+    // installed somewhere the loader cannot see it can set
+    // `MESH_LLM_CUDA_TOOLKIT_MAJORS`.
     if cuda.toolkit_majors.is_empty() {
+        reasons.push(CandidateRejection::CudaToolkitNotDetected { required });
         return;
     }
 
@@ -459,13 +468,29 @@ fn evaluate_cuda_toolkit_major(
     }
 }
 
-/// True when the artifact ships its own CUDA runtime libraries and therefore
-/// does not depend on a host toolkit.
+/// True when the artifact ships the CUDA runtime libraries it links against and
+/// therefore does not depend on a host toolkit.
+///
+/// Requires the complete set the runtime loads (`cudart`, `cublas`,
+/// `cublasLt`). A single bundled library does not make an artifact self
+/// contained: shipping `cudart` alone still leaves `cublas` to the host.
 fn artifact_bundles_cuda_runtime(artifact: &NativeRuntimeArtifact) -> bool {
-    artifact.libraries.iter().any(|library| {
+    let mut cudart = false;
+    let mut cublas = false;
+    let mut cublas_lt = false;
+    for library in &artifact.libraries {
         let name = library.rsplit('/').next().unwrap_or(library).to_lowercase();
-        name.starts_with("cudart") || name.starts_with("libcudart")
-    })
+        let name = name.strip_prefix("lib").unwrap_or(&name);
+        // `cublaslt` is checked first so it is not shadowed by `cublas`.
+        if name.starts_with("cublaslt") {
+            cublas_lt = true;
+        } else if name.starts_with("cublas") {
+            cublas = true;
+        } else if name.starts_with("cudart") {
+            cudart = true;
+        }
+    }
+    cudart && cublas && cublas_lt
 }
 
 fn evaluate_rocm_requirements(
@@ -717,12 +742,18 @@ mod tests {
     #[test]
     fn self_contained_cuda_runtime_is_accepted_on_newer_driver() {
         let mut host = profile();
+        host.os = "windows".to_string();
         let cuda = host.cuda.as_mut().unwrap();
         cuda.toolkit_majors = BTreeSet::new();
         cuda.driver_max_major = Some(13);
 
         let mut bundled = cuda_runtime("meshllm-runtime-windows-x86_64-cuda12", 12, &["sm_90"]);
-        bundled.libraries.push("lib/cudart64_12.dll".to_string());
+        bundled.platform.os = "windows".to_string();
+        bundled.libraries.extend([
+            "lib/cudart64_12.dll".to_string(),
+            "lib/cublas64_12.dll".to_string(),
+            "lib/cublasLt64_12.dll".to_string(),
+        ]);
 
         let manifest = NativeRuntimeReleaseManifest {
             mesh_version: "0.68.0".to_string(),
@@ -740,14 +771,41 @@ mod tests {
         );
     }
 
-    /// With no installed-toolkit evidence at all, fall back to the driver bound
-    /// rather than rejecting every CUDA runtime.
+    /// Bundling only part of the CUDA library set does not make an artifact
+    /// self contained: `cublas` would still have to come from the host.
     #[test]
-    fn missing_toolkit_evidence_falls_back_to_driver_bound() {
+    fn partially_bundled_cuda_runtime_is_not_treated_as_self_contained() {
+        let mut host = profile();
+        host.os = "windows".to_string();
+        let cuda = host.cuda.as_mut().unwrap();
+        cuda.toolkit_majors = BTreeSet::new();
+        cuda.driver_max_major = Some(13);
+
+        let mut partial = cuda_runtime("meshllm-runtime-windows-x86_64-cuda12", 12, &["sm_90"]);
+        partial.platform.os = "windows".to_string();
+        partial.libraries.push("lib/cudart64_12.dll".to_string());
+
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            skippy_abi: "0.1.25".to_string(),
+            artifacts: vec![partial],
+        };
+
+        assert!(
+            select_native_runtime(&manifest, &host, "0.68.0", &RuntimeSelection::Recommended)
+                .is_none()
+        );
+    }
+
+    /// A host-linked runtime must not be selected when no CUDA toolkit was
+    /// detected. Accepting on driver evidence alone reproduces the
+    /// `libcudart.so.<major>: cannot open shared object file` failure.
+    #[test]
+    fn host_linked_runtime_is_rejected_without_detected_toolkit() {
         let mut host = profile();
         let cuda = host.cuda.as_mut().unwrap();
         cuda.toolkit_majors = BTreeSet::new();
-        cuda.driver_max_major = Some(12);
+        cuda.driver_max_major = Some(13);
 
         let manifest = NativeRuntimeReleaseManifest {
             mesh_version: "0.68.0".to_string(),
@@ -759,11 +817,38 @@ mod tests {
             )],
         };
 
+        assert!(
+            select_native_runtime(&manifest, &host, "0.68.0", &RuntimeSelection::Recommended)
+                .is_none()
+        );
+    }
+
+    /// The same host still falls back to CPU rather than being left with no
+    /// runtime at all.
+    #[test]
+    fn undetected_toolkit_falls_back_to_cpu_runtime() {
+        let mut host = profile();
+        let cuda = host.cuda.as_mut().unwrap();
+        cuda.toolkit_majors = BTreeSet::new();
+        cuda.driver_max_major = Some(13);
+
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            skippy_abi: "0.1.25".to_string(),
+            artifacts: vec![
+                artifact(
+                    "meshllm-runtime-linux-x86_64-cpu",
+                    NativeRuntimeBackend::cpu(),
+                ),
+                cuda_runtime("meshllm-runtime-linux-x86_64-cuda12", 12, &["sm_90"]),
+            ],
+        };
+
         let selected =
             select_native_runtime(&manifest, &host, "0.68.0", &RuntimeSelection::Recommended)
                 .unwrap();
 
-        assert_eq!(selected.artifact.id, "meshllm-runtime-linux-x86_64-cuda12");
+        assert_eq!(selected.artifact.id, "meshllm-runtime-linux-x86_64-cpu");
     }
 
     #[test]

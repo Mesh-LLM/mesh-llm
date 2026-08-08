@@ -378,6 +378,13 @@ fn format_rejection(reason: &CandidateRejection) -> String {
                 "CUDA driver too old: runtime requires CUDA {required}, driver supports up to CUDA {driver_max}"
             )
         }
+        CandidateRejection::CudaToolkitNotDetected { required } => {
+            format!(
+                "no CUDA toolkit detected: runtime requires CUDA {required} libraries \
+                 (libcudart, libcublas, libcublasLt) on the loader path; \
+                 set MESH_LLM_CUDA_TOOLKIT_MAJORS if the toolkit is installed elsewhere"
+            )
+        }
         CandidateRejection::CudaGpuArchUnsupported { supported } => {
             format!(
                 "CUDA GPU architecture unsupported: runtime supports {}",

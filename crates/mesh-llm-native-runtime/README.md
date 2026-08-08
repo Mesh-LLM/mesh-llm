@@ -126,6 +126,7 @@ let profile = HostRuntimeProfile {
     gpus: Vec::new(),
     cuda: Some(HostCudaProfile {
         toolkit_majors: BTreeSet::from([12]),
+        driver_max_major: Some(12),
         driver_version: None,
         gpu_arches: BTreeSet::from(["sm_90".to_string()]),
     }),

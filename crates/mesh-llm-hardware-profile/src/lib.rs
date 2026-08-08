@@ -332,43 +332,83 @@ fn detect_cuda_profile(gpus: &[HostGpuProfile]) -> Option<HostCudaProfile> {
     })
 }
 
-/// CUDA toolkit majors with runtime libraries actually present on this host.
+/// CUDA toolkit majors that the dynamic loader can actually resolve on this
+/// host.
 ///
-/// Linux native runtimes link against `libcudart.so.<major>` without bundling
-/// it, so this is the set that can really be loaded. Windows runtimes ship
-/// their own copies and do not depend on this.
+/// Linux native runtimes link `libcudart`/`libcublas`/`libcublasLt` without
+/// bundling them, so a runtime only loads when the loader itself can find a
+/// matching-major copy of all three. Deliberately probe the loader's own view
+/// — the `ldconfig` cache and `LD_LIBRARY_PATH` — rather than guessing from
+/// installation directory names: a `/usr/local/cuda-13` directory can exist
+/// with no usable libraries, and a toolkit that the loader cannot see cannot
+/// be loaded no matter where it lives.
 fn installed_cuda_toolkit_majors() -> BTreeSet<u32> {
-    let mut majors = BTreeSet::new();
+    let mut evidence: BTreeMap<u32, CudaLibraryEvidence> = BTreeMap::new();
     if let Some(output) = command_output("ldconfig", &["-p"]) {
-        majors.extend(cuda_majors_from_soname_listing(&output));
+        for token in output.split_whitespace() {
+            record_cuda_soname(&mut evidence, token);
+        }
     }
-    for base in ["/usr/local/cuda", "/usr/local"] {
-        let Ok(entries) = std::fs::read_dir(base) else {
+    for dir in loader_search_dirs() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if let Some(rest) = name.strip_prefix("cuda-")
-                && let Some(major) = leading_major_version(rest)
-            {
-                majors.insert(major);
-            }
+            record_cuda_soname(&mut evidence, &entry.file_name().to_string_lossy());
         }
     }
-    majors
+    evidence
+        .into_iter()
+        .filter(|(_, found)| found.is_complete())
+        .map(|(major, _)| major)
+        .collect()
 }
 
-/// Extract CUDA majors from `libcudart.so.<major>` sonames in a listing.
-fn cuda_majors_from_soname_listing(output: &str) -> BTreeSet<u32> {
-    let mut majors = BTreeSet::new();
-    for token in output.split_whitespace() {
-        if let Some(rest) = token.strip_prefix("libcudart.so.")
-            && let Some(major) = leading_major_version(rest)
-        {
-            majors.insert(major);
-        }
+/// Directories the loader searches ahead of its cache.
+fn loader_search_dirs() -> Vec<String> {
+    let Ok(value) = std::env::var("LD_LIBRARY_PATH") else {
+        return Vec::new();
+    };
+    value
+        .split(':')
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Per-major record of which CUDA runtime libraries were found.
+#[derive(Default)]
+struct CudaLibraryEvidence {
+    cudart: bool,
+    cublas: bool,
+    cublas_lt: bool,
+}
+
+impl CudaLibraryEvidence {
+    /// A native runtime needs all three, so partial installs do not count.
+    fn is_complete(&self) -> bool {
+        self.cudart && self.cublas && self.cublas_lt
     }
-    majors
+}
+
+fn record_cuda_soname(evidence: &mut BTreeMap<u32, CudaLibraryEvidence>, token: &str) {
+    let name = token.rsplit('/').next().unwrap_or(token);
+    // `libcublasLt.so.` is checked first so it is not shadowed by `libcublas`.
+    for prefix in ["libcudart.so.", "libcublasLt.so.", "libcublas.so."] {
+        let Some(rest) = name.strip_prefix(prefix) else {
+            continue;
+        };
+        let Some(major) = leading_major_version(rest) else {
+            continue;
+        };
+        let found = evidence.entry(major).or_default();
+        match prefix {
+            "libcudart.so." => found.cudart = true,
+            "libcublasLt.so." => found.cublas_lt = true,
+            _ => found.cublas = true,
+        }
+        return;
+    }
 }
 
 fn detect_rocm_profile(gpus: &[HostGpuProfile]) -> Option<HostRocmProfile> {
