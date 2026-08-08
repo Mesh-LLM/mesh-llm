@@ -1,4 +1,4 @@
-From 9289ca9c28ddfcfe6d7c5cf7cab9cc297cd82e9e Mon Sep 17 00:00:00 2001
+From 77c21acdd795e0259a60f58197a52efff937b8dc Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
 Subject: [PATCH 10/11] Add Skippy tokenization and stage chat
