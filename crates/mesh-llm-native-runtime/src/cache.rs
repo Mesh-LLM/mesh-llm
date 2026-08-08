@@ -29,6 +29,22 @@ pub struct InstalledNativeRuntime {
     pub manifest: NativeRuntimeManifest,
 }
 
+/// A cache entry that could not be read as a valid installed runtime during a
+/// lenient scan, together with the reason it was skipped.
+#[derive(Clone, Debug)]
+pub struct SkippedNativeRuntime {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+/// Result of leniently enumerating the runtime cache: every readable runtime
+/// plus every entry that had to be skipped.
+#[derive(Debug, Default)]
+pub struct LenientInstalledScan {
+    pub runtimes: Vec<InstalledNativeRuntime>,
+    pub skipped: Vec<SkippedNativeRuntime>,
+}
+
 impl InstalledNativeRuntime {
     /// Resolve the manifest-verified GPU benchmark helper inside this runtime.
     pub fn gpu_benchmark_tool(&self) -> Result<PathBuf> {
@@ -115,6 +131,52 @@ impl NativeRuntimeCache {
                 .cmp(&(&right.mesh_version, &right.native_runtime_id))
         });
         Ok(installed)
+    }
+
+    /// Enumerates the whole cache leniently: entries whose manifests are
+    /// missing, malformed, or fail checksum verification are collected as
+    /// skipped instead of failing the scan.
+    ///
+    /// Startup paths must use this instead of [`Self::installed`] so a stale
+    /// entry written by an older MeshLLM version (pre-checksum manifests,
+    /// issue #1162) can never abort runtime resolution while a valid runtime
+    /// is present or installable.
+    pub fn installed_lenient(&self) -> Result<LenientInstalledScan> {
+        let mut scan = LenientInstalledScan::default();
+        if !self.root.exists() {
+            return Ok(scan);
+        }
+        for version_entry in fs::read_dir(&self.root)
+            .with_context(|| format!("read native runtime cache {}", self.root.display()))?
+        {
+            let version_entry = version_entry?;
+            if !version_entry.file_type()?.is_dir() {
+                continue;
+            }
+            for runtime_entry in fs::read_dir(version_entry.path())? {
+                let runtime_entry = runtime_entry?;
+                if !runtime_entry.file_type()?.is_dir() {
+                    continue;
+                }
+                let runtime_dir = runtime_entry.path();
+                if !runtime_dir.join(NATIVE_RUNTIME_MANIFEST_FILE).exists() {
+                    continue;
+                }
+                match installed_runtime_from_dir(&runtime_dir) {
+                    Ok(Some(runtime)) => scan.runtimes.push(runtime),
+                    Ok(None) => {}
+                    Err(error) => scan.skipped.push(SkippedNativeRuntime {
+                        path: runtime_dir,
+                        reason: format!("{error:#}"),
+                    }),
+                }
+            }
+        }
+        scan.runtimes.sort_by(|left, right| {
+            (&left.mesh_version, &left.native_runtime_id)
+                .cmp(&(&right.mesh_version, &right.native_runtime_id))
+        });
+        Ok(scan)
     }
 
     /// Returns strictly validated runtimes for one MeshLLM version.
@@ -365,6 +427,49 @@ mod tests {
 
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].mesh_version, "0.75.0");
+        assert!(cache.installed().is_err());
+    }
+
+    #[test]
+    fn installed_lenient_skips_legacy_manifest_and_keeps_valid_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        write_runtime(
+            &cache.runtime_dir("0.75.0", "meshllm-native-linux-x86_64-cpu"),
+            "0.75.0",
+            "meshllm-native-linux-x86_64-cpu",
+        );
+
+        let legacy = cache.runtime_dir("0.74.0", "meshllm-native-linux-x86_64-cpu");
+        fs::create_dir_all(legacy.join("lib")).unwrap();
+        fs::write(legacy.join("lib/libmeshllm_ffi.so"), b"legacy runtime").unwrap();
+        fs::write(
+            legacy.join(NATIVE_RUNTIME_MANIFEST_FILE),
+            r#"{
+  "runtime": {
+    "id": "meshllm-native-linux-x86_64-cpu",
+    "mesh_version": "0.74.0",
+    "skippy_abi": "0.1.25",
+    "platform": {"os": "linux", "arch": "x86_64"},
+    "backend": {"kind": "cpu"},
+    "libraries": ["lib/libmeshllm_ffi.so"]
+  }
+}"#,
+        )
+        .unwrap();
+
+        let scan = cache.installed_lenient().unwrap();
+
+        assert_eq!(scan.runtimes.len(), 1);
+        assert_eq!(scan.runtimes[0].mesh_version, "0.75.0");
+        assert_eq!(scan.skipped.len(), 1);
+        assert_eq!(scan.skipped[0].path, legacy);
+        assert!(
+            scan.skipped[0].reason.contains("checksum"),
+            "unexpected skip reason: {}",
+            scan.skipped[0].reason
+        );
+        // The strict scan still fails on the same cache; startup must not use it.
         assert!(cache.installed().is_err());
     }
 
