@@ -7,7 +7,9 @@ use crate::frontend::generation::OpenAiGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TokenControl;
-use crate::frontend::generation_receipt::{GenerationStart, complete_generation_before_cleanup};
+use crate::frontend::generation_receipt::{
+    GenerationCommit, GenerationStart, complete_generation_before_cleanup,
+};
 use crate::frontend::linear_proposal::greedy_linear_proposal_admitted;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
@@ -28,6 +30,25 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sample};
+
+pub(super) fn commit_local_generation_token(
+    config: Option<&crate::frontend::GenerationReceiptConfig>,
+    request_id: u64,
+    session_id: u64,
+    generated_token_count: &mut usize,
+    token_id: i32,
+) {
+    let Some(config) = config else {
+        return;
+    };
+    *generated_token_count = generated_token_count.saturating_add(1);
+    config.committed(GenerationCommit {
+        request_id,
+        session_id,
+        generated_token_count: *generated_token_count,
+        token_ids: vec![token_id].into_boxed_slice(),
+    });
+}
 
 struct PromptPrefillResult {
     prompt_prefill_sample: Option<i32>,
@@ -109,12 +130,20 @@ impl StageOpenAiBackend {
         let mut receipt_cancelled = false;
         let mut receipt_model_generation_elapsed = None;
         let mut cache_stats = GenerationCacheStats::default();
+        let mut lifecycle_committed_token_count = 0usize;
         let mut emit_token = |token_id| {
             if let Some(observation) = receipt_observation.as_ref()
                 && let Some(observation) = observation.borrow_mut().as_mut()
             {
                 observation.record_token(token_id, request.ids.request_started_at.elapsed());
             }
+            commit_local_generation_token(
+                self.generation_receipt.as_ref(),
+                receipt_request_id,
+                receipt_session_id,
+                &mut lifecycle_committed_token_count,
+                token_id,
+            );
             let control = on_token(token_id)?;
             if control == TokenControl::Stop
                 && let Some(observation) = receipt_observation.as_ref()

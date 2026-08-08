@@ -17,6 +17,7 @@ use crate::frontend::generation::{
     LocalGeneration, OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds, StageOpenAiBackend,
     TokenControl,
 };
+use crate::frontend::local_generation::token_generation::commit_local_generation_token;
 use crate::frontend::local_generation::{
     native_mtp_dispatch_counts_for_test, prompt_fits_single_prefill_sample,
 };
@@ -30,6 +31,7 @@ use crate::telemetry::{Telemetry, TelemetryLevel};
 #[derive(Default)]
 struct RecordingReceiptSink {
     receipts: Mutex<Vec<GenerationReceipt>>,
+    commits: Mutex<Vec<GenerationCommit>>,
     fail: AtomicBool,
 }
 
@@ -38,7 +40,8 @@ impl GenerationReceiptSink for RecordingReceiptSink {
         Ok(())
     }
 
-    fn committed(&self, _commit: &GenerationCommit) -> Result<()> {
+    fn committed(&self, commit: &GenerationCommit) -> Result<()> {
+        self.commits.lock().unwrap().push(commit.clone());
         Ok(())
     }
 
@@ -65,12 +68,44 @@ fn wait_for_receipts(sink: &RecordingReceiptSink, expected: usize) {
     panic!("timed out waiting for {expected} generation receipts");
 }
 
+fn wait_for_commits(sink: &RecordingReceiptSink, expected: usize) {
+    for _ in 0..100 {
+        if sink.commits.lock().unwrap().len() >= expected {
+            return;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    panic!("timed out waiting for {expected} generation commits");
+}
+
 #[test]
 fn single_prefill_sample_requires_prompt_to_fit_session_batch() {
     assert!(!prompt_fits_single_prefill_sample(0, 2048));
     assert!(!prompt_fits_single_prefill_sample(1, 2048));
     assert!(prompt_fits_single_prefill_sample(2048, 2048));
     assert!(!prompt_fits_single_prefill_sample(2049, 2048));
+}
+
+#[test]
+fn local_generation_commits_advance_before_the_next_proposal_boundary() {
+    let sink = Arc::new(RecordingReceiptSink::default());
+    let config = GenerationReceiptConfig::new(sink.clone());
+    let mut generated_token_count = 0;
+
+    commit_local_generation_token(Some(&config), 11, 22, &mut generated_token_count, 33);
+    commit_local_generation_token(Some(&config), 11, 22, &mut generated_token_count, 44);
+
+    wait_for_commits(&sink, 2);
+    let commits = sink.commits.lock().unwrap();
+    assert_eq!(commits.len(), 2);
+    assert_eq!(commits[0].request_id, 11);
+    assert_eq!(commits[0].session_id, 22);
+    assert_eq!(commits[0].generated_token_count, 1);
+    assert_eq!(commits[0].token_ids.as_ref(), [33]);
+    assert_eq!(commits[1].request_id, 11);
+    assert_eq!(commits[1].session_id, 22);
+    assert_eq!(commits[1].generated_token_count, 2);
+    assert_eq!(commits[1].token_ids.as_ref(), [44]);
 }
 
 #[test]
@@ -188,7 +223,17 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         },
     )?;
 
+    wait_for_commits(&sink, emitted.len());
     wait_for_receipts(&sink, 1);
+    let commits = sink.commits.lock().unwrap();
+    assert_eq!(commits.len(), emitted.len());
+    for (index, (commit, token_id)) in commits.iter().zip(&emitted).enumerate() {
+        assert_eq!(commit.request_id, ids.request_id);
+        assert_eq!(commit.session_id, ids.session_id);
+        assert_eq!(commit.generated_token_count, index + 1);
+        assert_eq!(commit.token_ids.as_ref(), [*token_id]);
+    }
+    drop(commits);
     let receipts = sink.receipts.lock().unwrap();
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].request_id, ids.request_id);
